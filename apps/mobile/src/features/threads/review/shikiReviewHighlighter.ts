@@ -1,3 +1,5 @@
+import { createHighlighterCore, type HighlighterCore } from "@shikijs/core";
+import { createJavaScriptRegexEngine } from "@shikijs/engine-javascript";
 import { getFiletypeFromFileName } from "@pierre/diffs/utils";
 
 import {
@@ -20,7 +22,7 @@ export interface ReviewHighlightedFile {
   readonly deletionLines: ReadonlyArray<ReadonlyArray<ReviewHighlightedToken>>;
 }
 
-const SHIKI_THEME_BY_SCHEME = {
+const SHIKI_THEME_NAME_BY_SCHEME = {
   light: "github-light-default",
   dark: "github-dark-default",
 } as const;
@@ -31,19 +33,119 @@ const REVIEW_HIGHLIGHTER_DISABLE_RESULT_CACHE = resolveReviewHighlighterBooleanF
   process.env.EXPO_PUBLIC_REVIEW_HIGHLIGHTER_DISABLE_CACHE,
   false,
 );
-
 const highlightCache = new Map<string, Promise<ReviewHighlightedFile>>();
 const resolvedHighlightCache = new Map<string, ReviewHighlightedFile>();
 const loadedLanguages = new Set<string>(["text"]);
-type ShikiHighlighter = {
-  loadLanguage: (...langs: string[]) => Promise<void>;
-  codeToTokensBase: (
-    code: string,
-    options: { readonly lang: string; readonly theme: string },
-  ) => Promise<Array<Array<{ content: string; color?: string; fontStyle?: number }>>>;
+const languageLoadingPromises = new Map<string, Promise<boolean>>();
+const languageImports: Partial<Record<string, () => Promise<unknown>>> = {
+  javascript: () => import("@shikijs/langs/javascript"),
+  typescript: () => import("@shikijs/langs/typescript"),
+  jsx: () => import("@shikijs/langs/jsx"),
+  tsx: () => import("@shikijs/langs/tsx"),
+  python: () => import("@shikijs/langs/python"),
+  rust: () => import("@shikijs/langs/rust"),
+  go: () => import("@shikijs/langs/go"),
+  java: () => import("@shikijs/langs/java"),
+  kotlin: () => import("@shikijs/langs/kotlin"),
+  swift: () => import("@shikijs/langs/swift"),
+  "objective-c": () => import("@shikijs/langs/objective-c"),
+  c: () => import("@shikijs/langs/c"),
+  cpp: () => import("@shikijs/langs/cpp"),
+  csharp: () => import("@shikijs/langs/csharp"),
+  php: () => import("@shikijs/langs/php"),
+  ruby: () => import("@shikijs/langs/ruby"),
+  lua: () => import("@shikijs/langs/lua"),
+  perl: () => import("@shikijs/langs/perl"),
+  r: () => import("@shikijs/langs/r"),
+  dart: () => import("@shikijs/langs/dart"),
+  scala: () => import("@shikijs/langs/scala"),
+  elixir: () => import("@shikijs/langs/elixir"),
+  haskell: () => import("@shikijs/langs/haskell"),
+  clojure: () => import("@shikijs/langs/clojure"),
+  ocaml: () => import("@shikijs/langs/ocaml"),
+  fsharp: () => import("@shikijs/langs/fsharp"),
+  erlang: () => import("@shikijs/langs/erlang"),
+  zig: () => import("@shikijs/langs/zig"),
+  nim: () => import("@shikijs/langs/nim"),
+  html: () => import("@shikijs/langs/html"),
+  css: () => import("@shikijs/langs/css"),
+  scss: () => import("@shikijs/langs/scss"),
+  less: () => import("@shikijs/langs/less"),
+  xml: () => import("@shikijs/langs/xml"),
+  svg: () => import("@shikijs/langs/xml"),
+  vue: () => import("@shikijs/langs/vue"),
+  svelte: () => import("@shikijs/langs/svelte"),
+  astro: () => import("@shikijs/langs/astro"),
+  json: () => import("@shikijs/langs/json"),
+  jsonc: () => import("@shikijs/langs/jsonc"),
+  yaml: () => import("@shikijs/langs/yaml"),
+  toml: () => import("@shikijs/langs/toml"),
+  ini: () => import("@shikijs/langs/ini"),
+  bash: () => import("@shikijs/langs/bash"),
+  shellscript: () => import("@shikijs/langs/shellscript"),
+  powershell: () => import("@shikijs/langs/powershell"),
+  fish: () => import("@shikijs/langs/fish"),
+  sql: () => import("@shikijs/langs/sql"),
+  graphql: () => import("@shikijs/langs/graphql"),
+  prisma: () => import("@shikijs/langs/prisma"),
+  docker: () => import("@shikijs/langs/docker"),
+  hcl: () => import("@shikijs/langs/hcl"),
+  nix: () => import("@shikijs/langs/nix"),
+  markdown: () => import("@shikijs/langs/markdown"),
+  mdx: () => import("@shikijs/langs/mdx"),
+  tex: () => import("@shikijs/langs/tex"),
+  diff: () => import("@shikijs/langs/diff"),
+  regex: () => import("@shikijs/langs/regex"),
+  viml: () => import("@shikijs/langs/viml"),
+  makefile: () => import("@shikijs/langs/makefile"),
+  cmake: () => import("@shikijs/langs/cmake"),
+  groovy: () => import("@shikijs/langs/groovy"),
 };
-let highlighterPromise: Promise<ShikiHighlighter> | null = null;
+
+const languageAliases: Record<string, string> = {
+  js: "javascript",
+  mjs: "javascript",
+  cjs: "javascript",
+  ts: "typescript",
+  mts: "typescript",
+  cts: "typescript",
+  py: "python",
+  rb: "ruby",
+  rs: "rust",
+  sh: "bash",
+  zsh: "bash",
+  shell: "shellscript",
+  yml: "yaml",
+  md: "markdown",
+  "c++": "cpp",
+  "c#": "csharp",
+  cs: "csharp",
+  dockerfile: "docker",
+  vim: "viml",
+  objc: "objective-c",
+  objectivec: "objective-c",
+  "obj-c": "objective-c",
+  ps1: "powershell",
+  pwsh: "powershell",
+  hs: "haskell",
+  ex: "elixir",
+  exs: "elixir",
+  erl: "erlang",
+  clj: "clojure",
+  ml: "ocaml",
+  fs: "fsharp",
+  tf: "hcl",
+  make: "makefile",
+  plain: "text",
+  plaintext: "text",
+  txt: "text",
+};
+let highlighterPromise: Promise<HighlighterCore> | null = null;
 let activeHighlighterEnginePromise: Promise<ReviewHighlighterEngine> | null = null;
+
+type LoadedLanguageModule = {
+  default: Parameters<HighlighterCore["loadLanguage"]>[0];
+};
 
 function resolveReviewHighlighterBooleanFlag(
   value: string | undefined,
@@ -103,15 +205,20 @@ function joinPatchLines(lines: ReadonlyArray<string>): string {
   return lines.map(stripTrailingNewline).join("\n");
 }
 
-async function getHighlighter() {
+async function getHighlighter(): Promise<HighlighterCore> {
   if (!highlighterPromise) {
-    const configuredHighlighterPromise = import("shiki").then(async (shikiModule) => {
+    const configuredHighlighterPromise = Promise.all([
+      import("@shikijs/themes/github-light-default"),
+      import("@shikijs/themes/github-dark-default"),
+    ]).then(async ([lightThemeModule, darkThemeModule]) => {
       let nativeEngineAvailable = false;
 
       logReviewHighlighterDiagnostic("initializing", {
         preference: REVIEW_HIGHLIGHTER_ENGINE_PREFERENCE,
         resultCacheDisabled: REVIEW_HIGHLIGHTER_DISABLE_RESULT_CACHE,
       });
+
+      const themes = [lightThemeModule.default, darkThemeModule.default];
 
       if (REVIEW_HIGHLIGHTER_ENGINE_PREFERENCE !== "javascript") {
         try {
@@ -121,22 +228,17 @@ async function getHighlighter() {
           logReviewHighlighterDiagnostic("checked native engine availability", {
             nativeEngineAvailable,
           });
+
           if (nativeEngineAvailable) {
-            const createHighlighter = shikiModule.createBundledHighlighter({
-              langs: shikiModule.bundledLanguages,
-              themes: shikiModule.bundledThemes,
-              engine: () => {
-                logReviewHighlighterDiagnostic("creating native regex engine");
-                return nativeEngineModule.createNativeEngine();
-              },
-            });
-            const highlighter = await createHighlighter({
-              themes: [SHIKI_THEME_BY_SCHEME.light, SHIKI_THEME_BY_SCHEME.dark],
+            logReviewHighlighterDiagnostic("creating native regex engine");
+            const highlighter = await createHighlighterCore({
+              themes,
               langs: [],
+              engine: nativeEngineModule.createNativeEngine(),
             });
             logReviewHighlighterDiagnostic("using native engine");
             return {
-              highlighter: highlighter as unknown as ShikiHighlighter,
+              highlighter,
               engine: "native" as const,
             };
           }
@@ -157,54 +259,105 @@ async function getHighlighter() {
         REVIEW_HIGHLIGHTER_ENGINE_PREFERENCE,
         nativeEngineAvailable,
       );
-      const createHighlighter = shikiModule.createBundledHighlighter({
-        langs: shikiModule.bundledLanguages,
-        themes: shikiModule.bundledThemes,
-        engine: () => shikiModule.createJavaScriptRegexEngine(),
-      });
-      const highlighter = await createHighlighter({
-        themes: [SHIKI_THEME_BY_SCHEME.light, SHIKI_THEME_BY_SCHEME.dark],
+      const highlighter = await createHighlighterCore({
+        themes,
         langs: [],
+        engine: createJavaScriptRegexEngine(),
       });
       logReviewHighlighterDiagnostic("using javascript engine", {
         resolvedEngine: engine,
       });
       return {
-        highlighter: highlighter as unknown as ShikiHighlighter,
+        highlighter,
         engine,
       };
     });
 
-    highlighterPromise = configuredHighlighterPromise.then((result) => result.highlighter);
-    activeHighlighterEnginePromise = configuredHighlighterPromise.then((result) => result.engine);
+    highlighterPromise = configuredHighlighterPromise
+      .then((result) => result.highlighter)
+      .catch((error) => {
+        highlighterPromise = null;
+        activeHighlighterEnginePromise = null;
+        throw error;
+      });
+    activeHighlighterEnginePromise = configuredHighlighterPromise
+      .then((result) => result.engine)
+      .catch((error) => {
+        activeHighlighterEnginePromise = null;
+        throw error;
+      });
   }
 
-  return highlighterPromise as Promise<ShikiHighlighter>;
+  return highlighterPromise;
 }
 
 export async function getActiveReviewHighlighterEngine(): Promise<ReviewHighlighterEngine> {
   await getHighlighter();
-  return (activeHighlighterEnginePromise ??
-    Promise.resolve("javascript")) as Promise<ReviewHighlighterEngine>;
+  return activeHighlighterEnginePromise ?? Promise.resolve("javascript");
+}
+
+function resolveLanguageAlias(language: string): string {
+  const normalized = language.toLowerCase();
+  return languageAliases[normalized] ?? normalized;
+}
+
+async function loadSingleLanguage(
+  highlighter: HighlighterCore,
+  language: string,
+): Promise<boolean> {
+  if (loadedLanguages.has(language)) {
+    return true;
+  }
+
+  const existingPromise = languageLoadingPromises.get(language);
+  if (existingPromise) {
+    return existingPromise;
+  }
+
+  const importer = languageImports[language];
+  if (!importer) {
+    return false;
+  }
+
+  const loadingPromise = (async () => {
+    try {
+      const languageModule = (await importer()) as LoadedLanguageModule;
+      await highlighter.loadLanguage(languageModule.default);
+      loadedLanguages.add(language);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      languageLoadingPromises.delete(language);
+    }
+  })();
+
+  languageLoadingPromises.set(language, loadingPromise);
+  return loadingPromise;
 }
 
 async function resolveLanguageFromPath(
   path: string,
   languageHint: string | null = null,
 ): Promise<string> {
-  const candidate = languageHint ?? getFiletypeFromFileName(path);
-  if (!candidate || candidate === "text" || candidate === "ansi") {
+  const detectedLanguage = languageHint ?? getFiletypeFromFileName(path);
+  if (!detectedLanguage) {
+    return "text";
+  }
+
+  const candidate = resolveLanguageAlias(detectedLanguage);
+  if (candidate === "text" || candidate === "ansi") {
+    return "text";
+  }
+
+  if (!(candidate in languageImports)) {
     return "text";
   }
 
   const highlighter = await getHighlighter();
-  if (!loadedLanguages.has(candidate)) {
-    try {
-      await highlighter.loadLanguage(candidate);
-      loadedLanguages.add(candidate);
-    } catch {
-      return "text";
-    }
+  const loaded = await loadSingleLanguage(highlighter, resolveLanguageAlias(candidate));
+  if (!loaded) {
+    return "text";
   }
 
   return candidate;
@@ -236,12 +389,12 @@ async function highlightLines(
   }
 
   const highlighter = await getHighlighter();
-  const tokenLines = await highlighter.codeToTokensBase(code, { lang: language, theme });
+  const tokenLines = highlighter.codeToTokensBase(code, { lang: language, theme });
   return normalizeHighlightedLines(tokenLines);
 }
 
 function getHighlightCacheKey(file: ReviewRenderableFile, theme: ReviewDiffTheme): string {
-  return `${SHIKI_THEME_BY_SCHEME[theme]}:${file.cacheKey}`;
+  return `${SHIKI_THEME_NAME_BY_SCHEME[theme]}:${file.cacheKey}`;
 }
 
 export function getCachedHighlightedReviewFile(
@@ -259,7 +412,7 @@ export async function highlightReviewFile(
   file: ReviewRenderableFile,
   theme: ReviewDiffTheme,
 ): Promise<ReviewHighlightedFile> {
-  const shikiTheme = SHIKI_THEME_BY_SCHEME[theme];
+  const shikiTheme = SHIKI_THEME_NAME_BY_SCHEME[theme];
   const cacheKey = getHighlightCacheKey(file, theme);
   if (!REVIEW_HIGHLIGHTER_DISABLE_RESULT_CACHE) {
     const resolved = resolvedHighlightCache.get(cacheKey);
@@ -303,7 +456,7 @@ export async function highlightReviewSelectedLines(input: {
   }
 
   const language = await resolveLanguageFromPath(input.filePath, input.languageHint ?? null);
-  const shikiTheme = SHIKI_THEME_BY_SCHEME[input.theme];
+  const shikiTheme = SHIKI_THEME_NAME_BY_SCHEME[input.theme];
   const additionLikeLines = input.lines
     .filter((line) => line.change !== "delete")
     .map((line) => `${line.content}\n`);
