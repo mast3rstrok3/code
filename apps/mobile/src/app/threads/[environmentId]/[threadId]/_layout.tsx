@@ -65,6 +65,16 @@ export default function ThreadLayout() {
           sheetGrabberVisible: true,
         }}
       />
+      <Stack.Screen
+        name="terminal"
+        options={{
+          animation: "slide_from_right",
+          contentStyle: { backgroundColor: "#050505" },
+          headerBackButtonDisplayMode: "minimal",
+          headerShown: true,
+          headerShadowVisible: false,
+        }}
+      />
     </Stack>
   );
 }

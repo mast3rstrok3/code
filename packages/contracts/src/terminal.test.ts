@@ -212,6 +212,17 @@ describe("TerminalEvent", () => {
     ).toBe(true);
   });
 
+  it("accepts closed events", () => {
+    expect(
+      decodes(TerminalEvent, {
+        type: "closed",
+        threadId: "thread-1",
+        terminalId: DEFAULT_TERMINAL_ID,
+        createdAt: new Date().toISOString(),
+      }),
+    ).toBe(true);
+  });
+
   it("accepts activity events", () => {
     expect(
       decodes(TerminalEvent, {

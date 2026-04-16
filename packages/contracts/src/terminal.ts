@@ -120,6 +120,11 @@ const TerminalExitedEvent = Schema.Struct({
   exitSignal: Schema.NullOr(Schema.Int),
 });
 
+const TerminalClosedEvent = Schema.Struct({
+  ...TerminalEventBaseSchema.fields,
+  type: Schema.Literal("closed"),
+});
+
 const TerminalErrorEvent = Schema.Struct({
   ...TerminalEventBaseSchema.fields,
   type: Schema.Literal("error"),
@@ -147,6 +152,7 @@ export const TerminalEvent = Schema.Union([
   TerminalStartedEvent,
   TerminalOutputEvent,
   TerminalExitedEvent,
+  TerminalClosedEvent,
   TerminalErrorEvent,
   TerminalClearedEvent,
   TerminalRestartedEvent,

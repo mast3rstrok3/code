@@ -17,6 +17,7 @@ import { useGitStatus } from "../../../state/use-git-status";
 import { useThreadSelection } from "../../../state/use-thread-selection";
 import { useSelectedThreadGitActions } from "../use-selected-thread-git-actions";
 import { useSelectedThreadGitState } from "../use-selected-thread-git-state";
+import { useSelectedThreadWorktree } from "../use-selected-thread-worktree";
 import { MetaCard, SheetListRow, menuItemIconName, statusSummary } from "./gitSheetComponents";
 
 export function GitOverviewSheet() {
@@ -26,7 +27,8 @@ export function GitOverviewSheet() {
     environmentId: string;
     threadId: string;
   }>();
-  const { selectedThread, selectedThreadProject } = useThreadSelection();
+  const { selectedThread } = useThreadSelection();
+  const { selectedThreadCwd, selectedThreadWorktreePath } = useSelectedThreadWorktree();
   const gitState = useSelectedThreadGitState();
   const gitActions = useSelectedThreadGitActions();
 
@@ -35,11 +37,11 @@ export function GitOverviewSheet() {
 
   const gitStatus = useGitStatus({
     environmentId: selectedThread?.environmentId ?? "",
-    cwd: selectedThread?.worktreePath ?? selectedThreadProject?.workspaceRoot ?? null,
+    cwd: selectedThreadCwd,
   });
 
   const currentBranchLabel = gitStatus.data?.branch ?? selectedThread?.branch ?? "Detached HEAD";
-  const currentWorktreePath = selectedThread?.worktreePath ?? null;
+  const currentWorktreePath = selectedThreadWorktreePath;
   const gitOperationLabel = gitState.gitOperationLabel;
   const busy = gitOperationLabel !== null;
   const isRepo = gitStatus.data?.isRepo ?? true;

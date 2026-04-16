@@ -23,8 +23,8 @@ import { cn } from "../../../lib/cn";
 import { useThemeColor } from "../../../lib/useThemeColor";
 import { getEnvironmentClient } from "../../../state/use-remote-environment-registry";
 import { useSelectedThreadDetail } from "../../../state/use-thread-detail";
-import { useThreadSelection } from "../../../state/use-thread-selection";
 import { useThreadDraftForThread } from "../use-thread-composer-state";
+import { useSelectedThreadWorktree } from "../use-selected-thread-worktree";
 import {
   getCachedReviewParsedDiff,
   setReviewGitSections,
@@ -445,7 +445,6 @@ export function ReviewSheet() {
   }>();
   const { draftMessage } = useThreadDraftForThread({ environmentId, threadId });
   const reviewCache = useReviewCacheForThread({ environmentId, threadId });
-  const { selectedThreadProject } = useThreadSelection();
   const selectedThread = useSelectedThreadDetail();
   const [loadingTurnIds, setLoadingTurnIds] = useState<Record<string, boolean>>({});
   const [loadingGitDiffs, setLoadingGitDiffs] = useState(false);
@@ -464,8 +463,9 @@ export function ReviewSheet() {
   const highlightQueueActiveRef = useRef(false);
   const highlightableFilesByIdRef = useRef<ReadonlyMap<string, ReviewRenderableFile>>(new Map());
   const selectedThemeRef = useRef<ReviewDiffTheme>(selectedTheme);
+  const { selectedThreadCwd } = useSelectedThreadWorktree();
 
-  const cwd = selectedThread?.worktreePath ?? selectedThreadProject?.workspaceRoot ?? null;
+  const cwd = selectedThreadCwd;
   const readyCheckpoints = useMemo(
     () => getReadyReviewCheckpoints(selectedThread?.checkpoints ?? []),
     [selectedThread?.checkpoints],

@@ -13,6 +13,7 @@ export * from "./gitActions.ts";
 export * from "./gitActionState.ts";
 export * from "./gitBranchState.ts";
 export * from "./gitStatusState.ts";
+export * from "./terminalSessionState.ts";
 export * from "./transportError.ts";
 export * from "./wsRpcProtocol.ts";
 export * from "./wsTransport.ts";

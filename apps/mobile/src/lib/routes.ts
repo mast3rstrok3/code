@@ -29,6 +29,18 @@ export function buildThreadReviewRoutePath(
   return `${buildThreadRoutePath(input)}/review`;
 }
 
+export function buildThreadTerminalRoutePath(
+  input: ThreadRouteInput | PlainThreadRouteInput,
+  terminalId?: string | null,
+): string {
+  const basePath = `${buildThreadRoutePath(input)}/terminal`;
+  if (!terminalId) {
+    return basePath;
+  }
+
+  return `${basePath}?terminalId=${encodeURIComponent(terminalId)}`;
+}
+
 export function dismissRoute(router: Router) {
   if (router.canGoBack()) {
     router.back();

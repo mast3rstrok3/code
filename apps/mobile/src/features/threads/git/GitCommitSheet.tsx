@@ -9,13 +9,15 @@ import { useGitStatus } from "../../../state/use-git-status";
 import { useThreadSelection } from "../../../state/use-thread-selection";
 import { useSelectedThreadGitActions } from "../use-selected-thread-git-actions";
 import { useSelectedThreadGitState } from "../use-selected-thread-git-state";
+import { useSelectedThreadWorktree } from "../use-selected-thread-worktree";
 import { SheetActionButton } from "./gitSheetComponents";
 
 export function GitCommitSheet() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const isDarkMode = useColorScheme() === "dark";
-  const { selectedThread, selectedThreadProject } = useThreadSelection();
+  const { selectedThread } = useThreadSelection();
+  const { selectedThreadCwd } = useSelectedThreadWorktree();
   const gitState = useSelectedThreadGitState();
   const gitActions = useSelectedThreadGitActions();
 
@@ -27,7 +29,7 @@ export function GitCommitSheet() {
 
   const gitStatus = useGitStatus({
     environmentId: selectedThread?.environmentId ?? "",
-    cwd: selectedThread?.worktreePath ?? selectedThreadProject?.workspaceRoot ?? null,
+    cwd: selectedThreadCwd,
   });
 
   const busy = gitState.gitOperationLabel !== null;

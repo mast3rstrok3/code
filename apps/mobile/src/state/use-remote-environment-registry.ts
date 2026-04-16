@@ -23,6 +23,7 @@ import { appAtomRegistry } from "./atom-registry";
 import { type ConnectedEnvironmentSummary, type EnvironmentSession } from "./remote-runtime-types";
 import { environmentRuntimeManager, useEnvironmentRuntimeStates } from "./use-environment-runtime";
 import { shellSnapshotManager } from "./use-shell-snapshot";
+import { terminalSessionManager } from "./use-terminal-session";
 
 const environmentSessions = new Map<string, EnvironmentSession>();
 const environmentConnectionListeners = new Set<() => void>();
@@ -154,6 +155,7 @@ export async function disconnectEnvironment(
   notifyEnvironmentConnectionListeners();
   await session?.connection.dispose();
   shellSnapshotManager.invalidate({ environmentId });
+  terminalSessionManager.invalidateEnvironment(environmentId);
   environmentRuntimeManager.invalidate({ environmentId });
 
   if (options?.removeSaved) {
@@ -244,7 +246,9 @@ export async function connectSavedEnvironment(
     onShellResubscribe: (environmentId) => {
       shellSnapshotManager.markPending({ environmentId });
     },
-    applyTerminalEvent: () => undefined,
+    applyTerminalEvent: (event, environmentId) => {
+      terminalSessionManager.applyEvent({ environmentId }, event);
+    },
     onConfigSnapshot: (serverConfig) => {
       environmentRuntimeManager.patch({ environmentId: connection.environmentId }, (runtime) => ({
         ...runtime,
@@ -333,6 +337,7 @@ export function useRemoteEnvironmentBootstrap() {
       environmentSessions.clear();
       environmentRuntimeManager.invalidate();
       shellSnapshotManager.invalidate();
+      terminalSessionManager.invalidate();
       notifyEnvironmentConnectionListeners();
     };
   }, []);

@@ -114,6 +114,14 @@ const config: ExpoConfig = {
         },
       },
     ],
+    [
+      "expo-build-properties",
+      {
+        ios: {
+          deploymentTarget: "16.1",
+        },
+      },
+    ],
     "expo-secure-store",
     "expo-router",
     "./plugins/withAndroidCleartextTraffic.cjs",

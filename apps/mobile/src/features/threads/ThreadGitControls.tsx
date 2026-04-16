@@ -1,4 +1,4 @@
-import type { GitRunStackedActionResult, GitStatusResult } from "@t3tools/contracts";
+import type { GitRunStackedActionResult, GitStatusResult, ProjectScript } from "@t3tools/contracts";
 import {
   type GitActionRequestInput,
   requiresDefaultBranchConfirmation,
@@ -9,6 +9,14 @@ import Stack from "expo-router/stack";
 import { useCallback, useMemo } from "react";
 import { Alert, Linking } from "react-native";
 import { buildThreadReviewRoutePath } from "../../lib/routes";
+import {
+  basename,
+  getTerminalLabel,
+  getTerminalStatusLabel,
+  projectScriptMenuIcon,
+  projectScriptMenuLabel,
+  type TerminalMenuSession,
+} from "./terminalMenu";
 
 function truncateMiddle(value: string, maxLength: number): string {
   if (value.length <= maxLength) {
@@ -55,6 +63,12 @@ export function ThreadGitControls(props: {
   readonly currentBranch: string | null;
   readonly gitStatus: GitStatusResult | null;
   readonly gitOperationLabel: string | null;
+  readonly canOpenTerminal: boolean;
+  readonly projectScripts: ReadonlyArray<ProjectScript>;
+  readonly terminalSessions: ReadonlyArray<TerminalMenuSession>;
+  readonly onOpenTerminal: (terminalId?: string | null) => void;
+  readonly onOpenNewTerminal: () => void;
+  readonly onRunProjectScript: (script: ProjectScript) => Promise<void>;
   readonly onPull: () => Promise<void>;
   readonly onRunAction: (input: GitActionRequestInput) => Promise<GitRunStackedActionResult | null>;
 }) {
@@ -167,6 +181,54 @@ export function ThreadGitControls(props: {
 
   return (
     <Stack.Toolbar placement="right">
+      <Stack.Toolbar.Menu icon="terminal" disabled={!props.canOpenTerminal} separateBackground>
+        {props.projectScripts.length > 0 ? (
+          <Stack.Toolbar.Menu icon="play" inline title="Project scripts">
+            <Stack.Toolbar.Label>Project scripts</Stack.Toolbar.Label>
+            {props.projectScripts.map((script) => (
+              <Stack.Toolbar.MenuAction
+                key={script.id}
+                icon={projectScriptMenuIcon(script.icon)}
+                onPress={() => void props.onRunProjectScript(script)}
+                subtitle={script.command}
+              >
+                <Stack.Toolbar.Label>{projectScriptMenuLabel(script)}</Stack.Toolbar.Label>
+              </Stack.Toolbar.MenuAction>
+            ))}
+          </Stack.Toolbar.Menu>
+        ) : (
+          <Stack.Toolbar.MenuAction
+            icon="play"
+            disabled
+            onPress={() => {}}
+            subtitle="This project has no saved scripts yet"
+          >
+            <Stack.Toolbar.Label>No project scripts</Stack.Toolbar.Label>
+          </Stack.Toolbar.MenuAction>
+        )}
+        <Stack.Toolbar.Menu icon="terminal" inline title="Terminals">
+          <Stack.Toolbar.Label>Terminals</Stack.Toolbar.Label>
+          {props.terminalSessions.map((session) => (
+            <Stack.Toolbar.MenuAction
+              key={session.terminalId}
+              icon="terminal"
+              onPress={() => props.onOpenTerminal(session.terminalId)}
+              subtitle={[getTerminalStatusLabel({ status: session.status }), basename(session.cwd)]
+                .filter(Boolean)
+                .join(" · ")}
+            >
+              <Stack.Toolbar.Label>{getTerminalLabel(session.terminalId)}</Stack.Toolbar.Label>
+            </Stack.Toolbar.MenuAction>
+          ))}
+          <Stack.Toolbar.MenuAction
+            icon="plus"
+            onPress={props.onOpenNewTerminal}
+            subtitle="Start another shell for this thread"
+          >
+            <Stack.Toolbar.Label>Open new terminal</Stack.Toolbar.Label>
+          </Stack.Toolbar.MenuAction>
+        </Stack.Toolbar.Menu>
+      </Stack.Toolbar.Menu>
       <Stack.Toolbar.Menu icon="point.topleft.down.curvedto.point.bottomright.up">
         <Stack.Toolbar.MenuAction
           icon="point.topleft.down.curvedto.point.bottomright.up"

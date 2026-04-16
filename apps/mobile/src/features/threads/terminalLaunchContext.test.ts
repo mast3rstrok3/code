@@ -1,0 +1,61 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  resolvePreferredThreadWorktreePath,
+  resolveTerminalOpenLocation,
+} from "./terminalLaunchContext";
+
+describe("resolvePreferredThreadWorktreePath", () => {
+  it("prefers thread detail worktree paths over thread shell paths", () => {
+    expect(
+      resolvePreferredThreadWorktreePath({
+        threadShellWorktreePath: "/repo/root",
+        threadDetailWorktreePath: "/repo/worktrees/feature",
+      }),
+    ).toBe("/repo/worktrees/feature");
+  });
+
+  it("falls back to the thread shell worktree path when detail is unavailable", () => {
+    expect(
+      resolvePreferredThreadWorktreePath({
+        threadShellWorktreePath: "/repo/worktrees/feature",
+        threadDetailWorktreePath: null,
+      }),
+    ).toBe("/repo/worktrees/feature");
+  });
+});
+
+describe("resolveTerminalOpenLocation", () => {
+  it("uses the thread detail worktree path before the workspace root for a fresh mobile open", () => {
+    expect(
+      resolveTerminalOpenLocation({
+        terminalSnapshot: null,
+        activeSessionSnapshot: null,
+        workspaceRoot: "/repo/root",
+        threadShellWorktreePath: null,
+        threadDetailWorktreePath: "/repo/worktrees/feature",
+      }),
+    ).toEqual({
+      cwd: "/repo/worktrees/feature",
+      worktreePath: "/repo/worktrees/feature",
+    });
+  });
+
+  it("preserves the running terminal snapshot cwd when attaching to an existing session", () => {
+    expect(
+      resolveTerminalOpenLocation({
+        terminalSnapshot: null,
+        activeSessionSnapshot: {
+          cwd: "/repo/worktrees/feature",
+          worktreePath: "/repo/worktrees/feature",
+        },
+        workspaceRoot: "/repo/root",
+        threadShellWorktreePath: null,
+        threadDetailWorktreePath: "/repo/worktrees/other",
+      }),
+    ).toEqual({
+      cwd: "/repo/worktrees/feature",
+      worktreePath: "/repo/worktrees/feature",
+    });
+  });
+});

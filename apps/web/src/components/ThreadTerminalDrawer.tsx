@@ -602,16 +602,21 @@ export function TerminalViewport({
         return;
       }
 
-      const details = [
-        typeof event.exitCode === "number" ? `code ${event.exitCode}` : null,
-        typeof event.exitSignal === "number" ? `signal ${event.exitSignal}` : null,
-      ]
-        .filter((value): value is string => value !== null)
-        .join(", ");
-      writeSystemMessage(
-        activeTerminal,
-        details.length > 0 ? `Process exited (${details})` : "Process exited",
-      );
+      if (event.type === "closed") {
+        writeSystemMessage(activeTerminal, "Terminal closed");
+      } else {
+        const details = [
+          typeof event.exitCode === "number" ? `code ${event.exitCode}` : null,
+          typeof event.exitSignal === "number" ? `signal ${event.exitSignal}` : null,
+        ]
+          .filter((value): value is string => value !== null)
+          .join(", ");
+        writeSystemMessage(
+          activeTerminal,
+          details.length > 0 ? `Process exited (${details})` : "Process exited",
+        );
+      }
+
       if (hasHandledExitRef.current) {
         return;
       }

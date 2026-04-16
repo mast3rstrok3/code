@@ -10,12 +10,14 @@ import { useGitStatus } from "../../../state/use-git-status";
 import { useThreadSelection } from "../../../state/use-thread-selection";
 import { useSelectedThreadGitActions } from "../use-selected-thread-git-actions";
 import { useSelectedThreadGitState } from "../use-selected-thread-git-state";
+import { useSelectedThreadWorktree } from "../use-selected-thread-worktree";
 import { SheetActionButton } from "./gitSheetComponents";
 
 export function GitBranchesSheet() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { selectedThread, selectedThreadProject } = useThreadSelection();
+  const { selectedThread } = useThreadSelection();
+  const { selectedThreadCwd, selectedThreadWorktreePath } = useSelectedThreadWorktree();
   const gitState = useSelectedThreadGitState();
   const gitActions = useSelectedThreadGitActions();
 
@@ -27,11 +29,11 @@ export function GitBranchesSheet() {
 
   const gitStatus = useGitStatus({
     environmentId: selectedThread?.environmentId ?? "",
-    cwd: selectedThread?.worktreePath ?? selectedThreadProject?.workspaceRoot ?? null,
+    cwd: selectedThreadCwd,
   });
 
   const currentBranchLabel = gitStatus.data?.branch ?? selectedThread?.branch ?? "Detached HEAD";
-  const currentWorktreePath = selectedThread?.worktreePath ?? null;
+  const currentWorktreePath = selectedThreadWorktreePath;
   const availableBranches = gitState.selectedThreadBranches;
   const branchesLoading = gitState.selectedThreadBranchesLoading;
   const busy = gitState.gitOperationLabel !== null;

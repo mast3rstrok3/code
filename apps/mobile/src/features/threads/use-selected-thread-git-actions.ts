@@ -25,9 +25,11 @@ import { gitActionManager, showGitActionResult } from "../../state/use-git-actio
 import { gitBranchManager } from "../../state/use-git-branches";
 import { gitStatusManager } from "../../state/use-git-status";
 import { useThreadSelection } from "../../state/use-thread-selection";
+import { useSelectedThreadWorktree } from "./use-selected-thread-worktree";
 
 export function useSelectedThreadGitActions() {
   const { selectedThread, selectedThreadProject } = useThreadSelection();
+  const { selectedThreadCwd, selectedThreadWorktreePath } = useSelectedThreadWorktree();
 
   const selectedThreadGitRootCwd = selectedThreadProject?.workspaceRoot ?? null;
 
@@ -61,8 +63,7 @@ export function useSelectedThreadGitActions() {
         return null;
       }
 
-      const cwd =
-        options?.cwd ?? selectedThread.worktreePath ?? selectedThreadProject.workspaceRoot;
+      const cwd = options?.cwd ?? selectedThreadCwd;
       if (!cwd) {
         return null;
       }
@@ -86,7 +87,7 @@ export function useSelectedThreadGitActions() {
         return null;
       }
     },
-    [selectedThread, selectedThreadProject],
+    [selectedThread, selectedThreadCwd, selectedThreadProject],
   );
 
   useEffect(() => {
@@ -109,7 +110,7 @@ export function useSelectedThreadGitActions() {
         return null;
       }
 
-      const cwd = selectedThread.worktreePath ?? selectedThreadProject.workspaceRoot;
+      const cwd = selectedThreadCwd;
       if (!cwd) {
         return null;
       }
@@ -128,7 +129,7 @@ export function useSelectedThreadGitActions() {
         return null;
       }
     },
-    [selectedThread, selectedThreadProject],
+    [selectedThread, selectedThreadCwd, selectedThreadProject],
   );
 
   const refreshSelectedThreadBranches = useCallback(async (): Promise<ReadonlyArray<GitBranch>> => {
@@ -204,12 +205,12 @@ export function useSelectedThreadGitActions() {
           cwd,
           nextThreadState: {
             branch: result?.branch ?? thread.branch,
-            worktreePath: thread.worktreePath,
+            worktreePath: selectedThreadWorktreePath,
           },
         });
       });
     },
-    [runSelectedThreadGitMutation, syncSelectedThreadBranchState],
+    [runSelectedThreadGitMutation, selectedThreadWorktreePath, syncSelectedThreadBranchState],
   );
 
   const onCreateSelectedThreadBranch = useCallback(
@@ -227,12 +228,12 @@ export function useSelectedThreadGitActions() {
           cwd,
           nextThreadState: {
             branch: result?.branch ?? thread.branch,
-            worktreePath: thread.worktreePath,
+            worktreePath: selectedThreadWorktreePath,
           },
         });
       });
     },
-    [runSelectedThreadGitMutation, syncSelectedThreadBranchState],
+    [runSelectedThreadGitMutation, selectedThreadWorktreePath, syncSelectedThreadBranchState],
   );
 
   const onCreateSelectedThreadWorktree = useCallback(
@@ -316,7 +317,7 @@ export function useSelectedThreadGitActions() {
             cwd,
             nextThreadState: {
               branch: result.branch.name,
-              worktreePath: thread.worktreePath,
+              worktreePath: selectedThreadWorktreePath,
             },
           });
           return result;
@@ -326,7 +327,12 @@ export function useSelectedThreadGitActions() {
         return result;
       });
     },
-    [refreshSelectedThreadGitStatus, runSelectedThreadGitMutation, syncSelectedThreadBranchState],
+    [
+      refreshSelectedThreadGitStatus,
+      runSelectedThreadGitMutation,
+      selectedThreadWorktreePath,
+      syncSelectedThreadBranchState,
+    ],
   );
 
   return {

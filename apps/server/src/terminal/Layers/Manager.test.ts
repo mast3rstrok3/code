@@ -472,6 +472,32 @@ it.layer(
     }),
   );
 
+  it.effect("restarts a running session when open is called with a different cwd", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter, logsDir, baseDir } = yield* createManager();
+      const originalCwd = path.join(baseDir, "original");
+      const differentCwd = path.join(baseDir, "different");
+      yield* makeDirectory(originalCwd);
+      yield* makeDirectory(differentCwd);
+
+      yield* manager.open(openInput({ cwd: originalCwd }));
+      const firstProcess = ptyAdapter.processes[0];
+      expect(firstProcess).toBeDefined();
+      if (!firstProcess) return;
+
+      firstProcess.emitData("before reopen\n");
+      yield* waitFor(pathExists(historyLogPath(logsDir)));
+
+      const reopened = yield* manager.open(openInput({ cwd: differentCwd }));
+
+      expect(ptyAdapter.spawnInputs).toHaveLength(2);
+      assert.equal(firstProcess.killed, true);
+      assert.equal(reopened.cwd, differentCwd);
+      assert.equal(reopened.history, "");
+      yield* waitFor(Effect.map(readFileString(historyLogPath(logsDir)), (text) => text === ""));
+    }),
+  );
+
   it.effect("propagates explicit worktree metadata through snapshots and lifecycle events", () =>
     Effect.gen(function* () {
       const { manager, getEvents, baseDir } = yield* createManager();
@@ -849,6 +875,21 @@ it.layer(
       assert.equal(process.killSignals[0], "SIGTERM");
       expect(process.killSignals).toContain("SIGKILL");
     }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("publishes closed events when terminals are explicitly closed", () =>
+    Effect.gen(function* () {
+      const { manager, getEvents } = yield* createManager();
+      yield* manager.open(openInput({ terminalId: "default" }));
+      yield* manager.open(openInput({ terminalId: "sidecar" }));
+
+      yield* manager.close({ threadId: "thread-1" });
+
+      const closedEvents = (yield* getEvents).filter(
+        (event): event is Extract<TerminalEvent, { type: "closed" }> => event.type === "closed",
+      );
+      expect(closedEvents.map((event) => event.terminalId).sort()).toEqual(["default", "sidecar"]);
+    }),
   );
 
   it.effect("evicts oldest inactive terminal sessions when retention limit is exceeded", () =>
