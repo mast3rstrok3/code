@@ -16,9 +16,9 @@ import {
   convertPastedImagesToAttachments,
   pasteComposerClipboard,
   pickComposerImages,
-} from "../../lib/composerImages";
-import type { DraftComposerImageAttachment } from "../../lib/composerImages";
-import { scopedRequestKey, scopedThreadKey } from "../../lib/scopedEntities";
+} from "../lib/composerImages";
+import type { DraftComposerImageAttachment } from "../lib/composerImages";
+import { scopedRequestKey, scopedThreadKey } from "../lib/scopedEntities";
 import {
   buildPendingUserInputAnswers,
   buildThreadFeed,
@@ -27,18 +27,18 @@ import {
   setPendingUserInputCustomAnswer,
   type PendingUserInputDraftAnswer,
   type QueuedThreadMessage,
-} from "../../lib/threadActivity";
-import { uuidv4 } from "../../lib/uuid";
-import { appAtomRegistry } from "../../state/atom-registry";
-import type { ConnectedEnvironmentSummary } from "../../state/remote-runtime-types";
+} from "../lib/threadActivity";
+import { uuidv4 } from "../lib/uuid";
+import { appAtomRegistry } from "../state/atom-registry";
+import type { ConnectedEnvironmentSummary } from "../state/remote-runtime-types";
 import {
   getEnvironmentClient,
   setPendingConnectionError,
   useRemoteConnectionStatus,
-} from "../../state/use-remote-environment-registry";
-import { useRemoteCatalog } from "../../state/use-remote-catalog";
-import { useSelectedThreadDetail } from "../../state/use-thread-detail";
-import { useThreadSelection } from "../../state/use-thread-selection";
+} from "../state/use-remote-environment-registry";
+import { useRemoteCatalog } from "../state/use-remote-catalog";
+import { useSelectedThreadDetail } from "../state/use-thread-detail";
+import { useThreadSelection } from "../state/use-thread-selection";
 
 const draftMessageByThreadKeyAtom = Atom.make<Record<string, string>>({}).pipe(
   Atom.keepAlive,

@@ -14,16 +14,16 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import ImageViewing from "react-native-image-viewing";
 
-import { AppText as Text, AppTextInput as TextInput } from "../../../components/AppText";
-import { ComposerAttachmentStrip } from "../../../components/ComposerAttachmentStrip";
-import { ControlPill } from "../../../components/ControlPill";
-import { cn } from "../../../lib/cn";
-import type { DraftComposerImageAttachment } from "../../../lib/composerImages";
-import { convertPastedImagesToAttachments, pickComposerImages } from "../../../lib/composerImages";
-import { useThemeColor } from "../../../lib/useThemeColor";
-import { useNativePaste } from "../../../hooks/useNativePaste";
-import { setPendingConnectionError } from "../../../state/use-remote-environment-registry";
-import { appendReviewCommentToDraft } from "../use-thread-composer-state";
+import { AppText as Text, AppTextInput as TextInput } from "../../components/AppText";
+import { ComposerAttachmentStrip } from "../../components/ComposerAttachmentStrip";
+import { ControlPill } from "../../components/ControlPill";
+import { cn } from "../../lib/cn";
+import type { DraftComposerImageAttachment } from "../../lib/composerImages";
+import { convertPastedImagesToAttachments, pickComposerImages } from "../../lib/composerImages";
+import { useThemeColor } from "../../lib/useThemeColor";
+import { useNativePaste } from "../../lib/useNativePaste";
+import { setPendingConnectionError } from "../../state/use-remote-environment-registry";
+import { appendReviewCommentToDraft } from "../../state/use-thread-composer-state";
 import {
   clearReviewCommentTarget,
   formatReviewCommentContext,
@@ -228,7 +228,7 @@ export function ReviewCommentComposerSheet() {
                           >
                             {lineNumber ?? ""}
                           </Text>
-                          <View className="min-w-0 flex-1 flex-shrink-0 px-1 py-1">
+                          <View className="min-w-0 flex-1 shrink-0 px-1 py-1">
                             <DiffTokenText
                               fallback={line.content}
                               tokens={highlightedLinesById[line.id] ?? null}

@@ -16,7 +16,7 @@ import {
   projectScriptMenuIcon,
   projectScriptMenuLabel,
   type TerminalMenuSession,
-} from "./terminalMenu";
+} from "../terminal/terminalMenu";
 
 function truncateMiddle(value: string, maxLength: number): string {
   if (value.length <= maxLength) {

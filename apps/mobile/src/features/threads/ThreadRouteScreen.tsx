@@ -29,19 +29,19 @@ import {
   buildTerminalMenuSessions,
   nextTerminalId,
   resolveProjectScriptTerminalId,
-} from "./terminalMenu";
+} from "../terminal/terminalMenu";
 import {
   resolvePreferredThreadWorktreePath,
   stagePendingTerminalLaunch,
-} from "./terminalLaunchContext";
+} from "../terminal/terminalLaunchContext";
 import { ThreadDetailScreen } from "./ThreadDetailScreen";
 import { ThreadGitControls } from "./ThreadGitControls";
 import { ThreadNavigationDrawer } from "./ThreadNavigationDrawer";
-import { useSelectedThreadCommands } from "./use-selected-thread-commands";
-import { useSelectedThreadGitActions } from "./use-selected-thread-git-actions";
-import { useSelectedThreadGitState } from "./use-selected-thread-git-state";
-import { useSelectedThreadWorktree } from "./use-selected-thread-worktree";
-import { useThreadComposerState } from "./use-thread-composer-state";
+import { useSelectedThreadCommands } from "../../state/use-selected-thread-commands";
+import { useSelectedThreadGitActions } from "../../state/use-selected-thread-git-actions";
+import { useSelectedThreadGitState } from "../../state/use-selected-thread-git-state";
+import { useSelectedThreadWorktree } from "../../state/use-selected-thread-worktree";
+import { useThreadComposerState } from "../../state/use-thread-composer-state";
 
 function firstRouteParam(value: string | string[] | undefined): string | null {
   if (Array.isArray(value)) {

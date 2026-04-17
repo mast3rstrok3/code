@@ -3,8 +3,8 @@ import { useAtomValue } from "@effect/atom-react";
 import { EnvironmentId, ThreadId, type GitReviewDiffSection } from "@t3tools/contracts";
 import { Atom } from "effect/unstable/reactivity";
 
-import { scopedThreadKey } from "../../../lib/scopedEntities";
-import { appAtomRegistry } from "../../../state/atom-registry";
+import { scopedThreadKey } from "../../lib/scopedEntities";
+import { appAtomRegistry } from "../../state/atom-registry";
 import { buildReviewParsedDiff, type ReviewParsedDiff } from "./reviewModel";
 
 const EMPTY_GIT_REVIEW_SECTIONS = Object.freeze<ReadonlyArray<GitReviewDiffSection>>([]);

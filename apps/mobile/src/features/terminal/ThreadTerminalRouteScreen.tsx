@@ -20,8 +20,8 @@ import {
 } from "../../state/use-terminal-session";
 import { useThreadSelection } from "../../state/use-thread-selection";
 import { useSelectedThreadDetail } from "../../state/use-thread-detail";
-import { TerminalSurface } from "../../native/terminal/NativeTerminalSurface";
-import { getPierreTerminalTheme } from "../../native/terminal/terminalTheme";
+import { TerminalSurface } from "./NativeTerminalSurface";
+import { getPierreTerminalTheme } from "./terminalTheme";
 import { loadPreferences, savePreferencesPatch } from "../../lib/storage";
 import {
   getTerminalBufferReplayKey,

@@ -18,13 +18,13 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { AppText as Text } from "../../../components/AppText";
-import { cn } from "../../../lib/cn";
-import { useThemeColor } from "../../../lib/useThemeColor";
-import { getEnvironmentClient } from "../../../state/use-remote-environment-registry";
-import { useSelectedThreadDetail } from "../../../state/use-thread-detail";
-import { useThreadDraftForThread } from "../use-thread-composer-state";
-import { useSelectedThreadWorktree } from "../use-selected-thread-worktree";
+import { AppText as Text } from "../../components/AppText";
+import { cn } from "../../lib/cn";
+import { useThemeColor } from "../../lib/useThemeColor";
+import { getEnvironmentClient } from "../../state/use-remote-environment-registry";
+import { useSelectedThreadDetail } from "../../state/use-thread-detail";
+import { useThreadDraftForThread } from "../../state/use-thread-composer-state";
+import { useSelectedThreadWorktree } from "../../state/use-selected-thread-worktree";
 import {
   getCachedReviewParsedDiff,
   setReviewGitSections,
@@ -261,7 +261,7 @@ const ReviewLineRow = memo(function ReviewLineRow(props: {
       >
         {lineNumber ?? ""}
       </Text>
-      <View className="min-w-0 flex-1 flex-shrink-0 px-1 py-1">
+      <View className="min-w-0 flex-1 shrink-0 px-1 py-1">
         <DiffTokenText
           tokens={props.tokens}
           fallback={props.line.content}

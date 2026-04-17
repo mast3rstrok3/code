@@ -18,7 +18,7 @@ import { ProviderIcon } from "../../components/ProviderIcon";
 import { convertPastedImagesToAttachments, pickComposerImages } from "../../lib/composerImages";
 import { buildThreadRoutePath } from "../../lib/routes";
 import { useRemoteCatalog } from "../../state/use-remote-catalog";
-import { useNativePaste } from "../../hooks/useNativePaste";
+import { useNativePaste } from "../../lib/useNativePaste";
 import { CLAUDE_AGENT_EFFORT_OPTIONS } from "./claudeEffortOptions";
 import { branchBadgeLabel, useNewTaskFlow } from "./new-task-flow-provider";
 import { useProjectActions } from "./use-project-actions";

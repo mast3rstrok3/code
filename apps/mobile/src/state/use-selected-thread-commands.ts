@@ -9,13 +9,10 @@ import {
   type RuntimeMode,
 } from "@t3tools/contracts";
 
-import { uuidv4 } from "../../lib/uuid";
-import { environmentRuntimeManager } from "../../state/use-environment-runtime";
-import {
-  getEnvironmentClient,
-  useRemoteEnvironmentState,
-} from "../../state/use-remote-environment-registry";
-import { useThreadSelection } from "../../state/use-thread-selection";
+import { uuidv4 } from "../lib/uuid";
+import { environmentRuntimeManager } from "./use-environment-runtime";
+import { getEnvironmentClient, useRemoteEnvironmentState } from "./use-remote-environment-registry";
+import { useThreadSelection } from "./use-thread-selection";
 
 export function useSelectedThreadCommands(input: {
   readonly activePendingUserInput: {

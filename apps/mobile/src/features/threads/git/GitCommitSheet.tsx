@@ -7,9 +7,9 @@ import { useThemeColor } from "../../../lib/useThemeColor";
 import { AppText as Text, AppTextInput as TextInput } from "../../../components/AppText";
 import { useGitStatus } from "../../../state/use-git-status";
 import { useThreadSelection } from "../../../state/use-thread-selection";
-import { useSelectedThreadGitActions } from "../use-selected-thread-git-actions";
-import { useSelectedThreadGitState } from "../use-selected-thread-git-state";
-import { useSelectedThreadWorktree } from "../use-selected-thread-worktree";
+import { useSelectedThreadGitActions } from "../../../state/use-selected-thread-git-actions";
+import { useSelectedThreadGitState } from "../../../state/use-selected-thread-git-state";
+import { useSelectedThreadWorktree } from "../../../state/use-selected-thread-worktree";
 import { SheetActionButton } from "./gitSheetComponents";
 
 export function GitCommitSheet() {

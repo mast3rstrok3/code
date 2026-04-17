@@ -6,8 +6,8 @@ import { View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text } from "../../../components/AppText";
-import { useSelectedThreadGitActions } from "../use-selected-thread-git-actions";
-import { useSelectedThreadGitState } from "../use-selected-thread-git-state";
+import { useSelectedThreadGitActions } from "../../../state/use-selected-thread-git-actions";
+import { useSelectedThreadGitState } from "../../../state/use-selected-thread-git-state";
 import { SheetActionButton } from "./gitSheetComponents";
 
 export function GitConfirmSheet() {

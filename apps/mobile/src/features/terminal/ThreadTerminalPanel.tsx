@@ -6,8 +6,8 @@ import { Pressable, View } from "react-native";
 import { AppText as Text } from "../../components/AppText";
 import { getEnvironmentClient } from "../../state/use-remote-environment-registry";
 import { useTerminalSession, useTerminalSessionTarget } from "../../state/use-terminal-session";
-import { TerminalSurface } from "../../native/terminal/NativeTerminalSurface";
-import { hasNativeTerminalSurface } from "../../native/terminal/nativeTerminalModule";
+import { TerminalSurface } from "./NativeTerminalSurface";
+import { hasNativeTerminalSurface } from "./nativeTerminalModule";
 
 interface ThreadTerminalPanelProps {
   readonly environmentId: string;

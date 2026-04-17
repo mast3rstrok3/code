@@ -1,6 +1,6 @@
 import { Platform, Text as NativeText, View } from "react-native";
 
-import { cn } from "../../../lib/cn";
+import { cn } from "../../lib/cn";
 
 import type { ReviewRenderableLineRow } from "./reviewModel";
 import type { ReviewHighlightedToken } from "./shikiReviewHighlighter";

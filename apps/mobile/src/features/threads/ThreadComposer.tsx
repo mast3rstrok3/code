@@ -35,7 +35,7 @@ import { ProviderIcon } from "../../components/ProviderIcon";
 import type { DraftComposerImageAttachment } from "../../lib/composerImages";
 import { buildModelOptions, groupByProvider } from "../../lib/modelOptions";
 import type { RemoteClientConnectionState } from "../../lib/connection";
-import { useNativePaste } from "../../hooks/useNativePaste";
+import { useNativePaste } from "../../lib/useNativePaste";
 import {
   insertRankedSearchResult,
   normalizeSearchQuery,

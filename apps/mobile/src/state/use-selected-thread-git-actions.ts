@@ -16,15 +16,12 @@ import {
   sanitizeFeatureBranchName,
 } from "@t3tools/shared/git";
 
-import { uuidv4 } from "../../lib/uuid";
-import {
-  getEnvironmentClient,
-  setPendingConnectionError,
-} from "../../state/use-remote-environment-registry";
-import { gitActionManager, showGitActionResult } from "../../state/use-git-action-state";
-import { gitBranchManager } from "../../state/use-git-branches";
-import { gitStatusManager } from "../../state/use-git-status";
-import { useThreadSelection } from "../../state/use-thread-selection";
+import { uuidv4 } from "../lib/uuid";
+import { getEnvironmentClient, setPendingConnectionError } from "./use-remote-environment-registry";
+import { gitActionManager, showGitActionResult } from "./use-git-action-state";
+import { gitBranchManager } from "./use-git-branches";
+import { gitStatusManager } from "./use-git-status";
+import { useThreadSelection } from "./use-thread-selection";
 import { useSelectedThreadWorktree } from "./use-selected-thread-worktree";
 
 export function useSelectedThreadGitActions() {
