@@ -12,12 +12,14 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   type ServerConfig,
+  type TerminalMetadataStreamEvent,
   type ServerLifecycleWelcomePayload,
   type ThreadId,
   type TurnId,
   WS_METHODS,
   OrchestrationSessionStatus,
   DEFAULT_SERVER_SETTINGS,
+  DEFAULT_TERMINAL_ID,
   ServerConfig as ServerConfigSchema,
 } from "@t3tools/contracts";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime";
@@ -55,7 +57,8 @@ import { getServerConfig } from "../rpc/serverState";
 import { getRouter } from "../router";
 import { deriveLogicalProjectKeyFromSettings } from "../logicalProject";
 import { selectBootstrapCompleteForActiveEnvironment, useStore } from "../store";
-import { useTerminalStateStore } from "../terminalStateStore";
+import { terminalSessionManager } from "../terminalSessionState";
+import { useTerminalUiStateStore } from "../terminalUiStateStore";
 import { useUiStateStore } from "../uiStateStore";
 import { createAuthenticatedSessionHandlers } from "../../test/authHttpHandlers";
 import { BrowserWsRpcHarness, type NormalizedWsRpcRequestBody } from "../../test/wsRpcHarness";
@@ -101,6 +104,7 @@ interface TestFixture {
   snapshot: OrchestrationReadModel;
   serverConfig: ServerConfig;
   welcome: ServerLifecycleWelcomePayload;
+  terminalMetadataEvents: ReadonlyArray<TerminalMetadataStreamEvent>;
 }
 
 let fixture: TestFixture;
@@ -398,6 +402,7 @@ function buildFixture(snapshot: OrchestrationReadModel): TestFixture {
       bootstrapProjectId: PROJECT_ID,
       bootstrapThreadId: THREAD_ID,
     },
+    terminalMetadataEvents: [],
   };
 }
 
@@ -1691,6 +1696,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
               ]
             : [];
         }
+        if (request._tag === WS_METHODS.subscribeTerminalMetadata) {
+          return fixture.terminalMetadataEvents;
+        }
         return [];
       },
     });
@@ -1724,12 +1732,9 @@ describe("ChatView timeline estimator parity (full app)", () => {
       projectOrder: [],
       threadLastVisitedAtById: {},
     });
-    useTerminalStateStore.persist.clearStorage();
-    useTerminalStateStore.setState({
-      terminalStateByThreadKey: {},
-      terminalLaunchContextByThreadKey: {},
-      terminalEventEntriesByKey: {},
-      nextTerminalEventId: 1,
+    useTerminalUiStateStore.persist.clearStorage();
+    useTerminalUiStateStore.setState({
+      terminalUiStateByThreadKey: {},
     });
   });
 
@@ -1906,22 +1911,15 @@ describe("ChatView timeline estimator parity (full app)", () => {
       });
     }
 
-    useTerminalStateStore.setState({
-      terminalStateByThreadKey: {
+    useTerminalUiStateStore.setState({
+      terminalUiStateByThreadKey: {
         [THREAD_KEY]: {
           terminalOpen: true,
           terminalHeight: 280,
           terminalIds: ["default"],
-          runningTerminalIds: [],
           activeTerminalId: "default",
           terminalGroups: [{ id: "group-default", terminalIds: ["default"] }],
           activeTerminalGroupId: "group-default",
-        },
-      },
-      terminalLaunchContextByThreadKey: {
-        [THREAD_KEY]: {
-          cwd: "/repo/project",
-          worktreePath: null,
         },
       },
     });
@@ -2483,8 +2481,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
   });
 
   it("sends bootstrap turn-starts and waits for server setup on first-send worktree drafts", async () => {
-    useTerminalStateStore.setState({
-      terminalStateByThreadKey: {},
+    useTerminalUiStateStore.setState({
+      terminalUiStateByThreadKey: {},
     });
     useComposerDraftStore.setState({
       draftThreadsByThreadKey: {
@@ -2987,8 +2985,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
   });
 
   it("shows the send state once bootstrap dispatch is in flight", async () => {
-    useTerminalStateStore.setState({
-      terminalStateByThreadKey: {},
+    useTerminalUiStateStore.setState({
+      terminalUiStateByThreadKey: {},
     });
     useComposerDraftStore.setState({
       draftThreadsByThreadKey: {
@@ -3803,6 +3801,67 @@ describe("ChatView timeline estimator parity (full app)", () => {
           const tooltip = document.querySelector<HTMLElement>('[data-slot="tooltip-popup"]');
           expect(tooltip).not.toBeNull();
           expect(tooltip?.textContent).toContain(THREAD_TITLE);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows the sidebar terminal indicator from terminal metadata activity", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-terminal-metadata-indicator" as MessageId,
+        targetText: "terminal metadata indicator target",
+      }),
+      configureFixture: (nextFixture) => {
+        nextFixture.terminalMetadataEvents = [
+          {
+            type: "upsert",
+            terminal: {
+              threadId: THREAD_ID,
+              terminalId: DEFAULT_TERMINAL_ID,
+              cwd: "/repo/project",
+              worktreePath: null,
+              status: "running",
+              pid: 123,
+              exitCode: null,
+              exitSignal: null,
+              hasRunningSubprocess: true,
+              updatedAt: isoAt(1_200),
+            },
+          },
+        ];
+      },
+    });
+
+    try {
+      await vi.waitFor(
+        () => {
+          expect(
+            terminalSessionManager.listSessions({
+              environmentId: LOCAL_ENVIRONMENT_ID,
+              threadId: THREAD_ID,
+            }),
+          ).toMatchObject([
+            {
+              state: {
+                hasRunningSubprocess: true,
+              },
+            },
+          ]);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await vi.waitFor(
+        () => {
+          const terminalIndicator = document.querySelector<HTMLElement>(
+            '[aria-label="Terminal process running"]',
+          );
+          expect(terminalIndicator).not.toBeNull();
         },
         { timeout: 8_000, interval: 16 },
       );
