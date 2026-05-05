@@ -85,7 +85,9 @@ function createTestClient() {
       runStackedAction: vi.fn(async () => ({}) as any),
       resolvePullRequest: vi.fn(async () => undefined),
       preparePullRequestThread: vi.fn(async () => undefined),
-      getReviewDiffs: vi.fn(async () => undefined),
+    },
+    review: {
+      getDiffPreview: vi.fn(async () => undefined),
     },
   } as unknown as WsRpcClient;
 

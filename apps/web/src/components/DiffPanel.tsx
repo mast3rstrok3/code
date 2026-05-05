@@ -1,5 +1,4 @@
-import { parsePatchFiles } from "@pierre/diffs";
-import { FileDiff, type FileDiffMetadata, Virtualizer } from "@pierre/diffs/react";
+import { FileDiff, Virtualizer } from "@pierre/diffs/react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { scopeThreadRef } from "@t3tools/client-runtime";
@@ -29,8 +28,13 @@ import { readLocalApi } from "../localApi";
 import { resolvePathLinkTarget } from "../terminal-links";
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
 import { useTheme } from "../hooks/useTheme";
-import { buildPatchCacheKey } from "../lib/diffRendering";
-import { resolveDiffThemeName } from "../lib/diffRendering";
+import {
+  buildFileDiffRenderKey,
+  getDiffCollapseIconClassName,
+  getRenderablePatch,
+  resolveDiffThemeName,
+  resolveFileDiffPath,
+} from "../lib/diffRendering";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { selectProjectByRef, useStore } from "../store";
 import { createThreadSelectorByRef } from "../storeSelectors";
@@ -106,76 +110,6 @@ const DIFF_PANEL_UNSAFE_CSS = `
   text-decoration-color: currentColor;
 }
 `;
-
-type RenderablePatch =
-  | {
-      kind: "files";
-      files: FileDiffMetadata[];
-    }
-  | {
-      kind: "raw";
-      text: string;
-      reason: string;
-    };
-
-function getRenderablePatch(
-  patch: string | undefined,
-  cacheScope = "diff-panel",
-): RenderablePatch | null {
-  if (!patch) return null;
-  const normalizedPatch = patch.trim();
-  if (normalizedPatch.length === 0) return null;
-
-  try {
-    const parsedPatches = parsePatchFiles(
-      normalizedPatch,
-      buildPatchCacheKey(normalizedPatch, cacheScope),
-    );
-    const files = parsedPatches.flatMap((parsedPatch) => parsedPatch.files);
-    if (files.length > 0) {
-      return { kind: "files", files };
-    }
-
-    return {
-      kind: "raw",
-      text: normalizedPatch,
-      reason: "Unsupported diff format. Showing raw patch.",
-    };
-  } catch {
-    return {
-      kind: "raw",
-      text: normalizedPatch,
-      reason: "Failed to parse patch. Showing raw patch.",
-    };
-  }
-}
-
-function resolveFileDiffPath(fileDiff: FileDiffMetadata): string {
-  const raw = fileDiff.name ?? fileDiff.prevName ?? "";
-  if (raw.startsWith("a/") || raw.startsWith("b/")) {
-    return raw.slice(2);
-  }
-  return raw;
-}
-
-function buildFileDiffRenderKey(fileDiff: FileDiffMetadata): string {
-  return fileDiff.cacheKey ?? `${fileDiff.prevName ?? "none"}:${fileDiff.name}`;
-}
-
-function getDiffCollapseIconClassName(fileDiff: FileDiffMetadata): string {
-  switch (fileDiff.type) {
-    case "new":
-      return "text-[var(--diffs-addition-base)]";
-    case "deleted":
-      return "text-[var(--diffs-deletion-base)]";
-    case "change":
-    case "rename-pure":
-    case "rename-changed":
-      return "text-[var(--diffs-modified-base)]";
-    default:
-      return "text-muted-foreground/80";
-  }
-}
 
 interface DiffPanelProps {
   mode?: DiffPanelMode;

@@ -875,9 +875,9 @@ export function ReviewSheet() {
     setLoadingGitDiffs(true);
     setError(null);
     try {
-      const result = await client.git.getReviewDiffs({ cwd });
+      const result = await client.review.getDiffPreview({ cwd });
       if (reviewCache.threadKey) {
-        setReviewGitSections(reviewCache.threadKey, result.sections);
+        setReviewGitSections(reviewCache.threadKey, result.sources);
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Failed to load review diffs.");

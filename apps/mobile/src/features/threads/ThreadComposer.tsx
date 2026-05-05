@@ -58,6 +58,29 @@ export const COMPOSER_COLLAPSED_CHROME = 68;
  */
 export const COMPOSER_EXPANDED_CHROME = 174;
 
+/**
+ * Height of the expanded-only toolbar below the text surface.
+ * Used by the feed inset because KeyboardAvoidingLegendList only accounts for
+ * keyboard height; the floating toolbar remains an additional overlay.
+ */
+export const COMPOSER_EXPANDED_TOOLBAR_CHROME = 54;
+
+function withModelSelectionOption(
+  selection: ModelSelection,
+  id: string,
+  value: string | boolean | undefined,
+): ModelSelection {
+  const options = (selection.options ?? []).filter((option) => option.id !== id);
+  if (value !== undefined) {
+    options.push({ id, value });
+  }
+  if (options.length === 0) {
+    const { options: _options, ...rest } = selection;
+    return rest as ModelSelection;
+  }
+  return { ...selection, options } as ModelSelection;
+}
+
 export interface ThreadComposerProps {
   readonly draftMessage: string;
   readonly draftAttachments: ReadonlyArray<DraftComposerImageAttachment>;

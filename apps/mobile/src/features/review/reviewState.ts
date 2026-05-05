@@ -1,13 +1,13 @@
 import { useAtomValue } from "@effect/atom-react";
 
-import type { EnvironmentId, GitReviewDiffSection, ThreadId } from "@t3tools/contracts";
+import type { EnvironmentId, ReviewDiffPreviewSource, ThreadId } from "@t3tools/contracts";
 import { Atom } from "effect/unstable/reactivity";
 
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { buildReviewParsedDiff, type ReviewParsedDiff } from "./reviewModel";
 
-const EMPTY_GIT_REVIEW_SECTIONS = Object.freeze<ReadonlyArray<GitReviewDiffSection>>([]);
+const EMPTY_GIT_REVIEW_SECTIONS = Object.freeze<ReadonlyArray<ReviewDiffPreviewSource>>([]);
 const EMPTY_REVIEW_TURN_DIFFS = Object.freeze<Readonly<Record<string, string>>>({});
 const EMPTY_REVIEW_SECTION_FILE_IDS = Object.freeze<
   Readonly<Record<string, ReadonlyArray<string> | undefined>>
@@ -134,7 +134,7 @@ export function useReviewCacheForThread(input: {
 
 export function setReviewGitSections(
   threadKey: string,
-  sections: ReadonlyArray<GitReviewDiffSection>,
+  sections: ReadonlyArray<ReviewDiffPreviewSource>,
 ): void {
   appAtomRegistry.set(reviewGitSectionsByThreadKeyAtom(threadKey), sections);
 }

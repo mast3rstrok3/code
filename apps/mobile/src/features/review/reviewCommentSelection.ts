@@ -20,7 +20,19 @@ export interface ReviewInlineComment {
   readonly endIndex: number;
   readonly rangeLabel: string;
   readonly text: string;
+  readonly diff: string;
 }
+
+export type ReviewCommentMessageSegment =
+  | {
+      readonly kind: "text";
+      readonly id: string;
+      readonly text: string;
+    }
+  | {
+      readonly kind: "review-comment";
+      readonly comment: ReviewInlineComment;
+    };
 
 let currentTarget: ReviewCommentTarget | null = null;
 const listeners = new Set<() => void>();
@@ -189,6 +201,38 @@ function extractReviewCommentText(rawBody: string): string {
   return commentBody.trim();
 }
 
+function extractReviewCommentDiff(rawBody: string): string {
+  const match = rawBody.match(/```diff\s*\n([\s\S]*?)\n```/);
+  return match?.[1]?.trim() ?? "";
+}
+
+function parseReviewInlineComment(
+  rawAttributes: string,
+  rawBody: string,
+  index: number,
+): ReviewInlineComment | null {
+  const attributes = readReviewCommentAttributes(rawAttributes);
+  const startIndex = readNonNegativeInteger(attributes.startIndex);
+  const endIndex = readNonNegativeInteger(attributes.endIndex);
+  const filePath = attributes.filePath?.trim();
+  const sectionId = attributes.sectionId?.trim();
+  if (!filePath || !sectionId || startIndex === null || endIndex === null) {
+    return null;
+  }
+
+  return {
+    id: `review-comment:${index}:${sectionId}:${filePath}:${startIndex}:${endIndex}`,
+    sectionId,
+    sectionTitle: attributes.sectionTitle?.trim() || "Review",
+    filePath,
+    startIndex: Math.min(startIndex, endIndex),
+    endIndex: Math.max(startIndex, endIndex),
+    rangeLabel: attributes.rangeLabel?.trim() || "line",
+    text: extractReviewCommentText(rawBody),
+    diff: extractReviewCommentDiff(rawBody),
+  };
+}
+
 export function formatReviewCommentContext(target: ReviewCommentTarget, comment: string): string {
   const rangeLabel = formatReviewSelectedRangeLabel(target);
   return [
@@ -217,25 +261,57 @@ export function countReviewCommentContexts(value: string): number {
 export function parseReviewInlineComments(value: string): ReadonlyArray<ReviewInlineComment> {
   const comments: ReviewInlineComment[] = [];
   for (const [index, match] of Array.from(value.matchAll(REVIEW_COMMENT_BLOCK_PATTERN)).entries()) {
-    const attributes = readReviewCommentAttributes(match[1] ?? "");
-    const startIndex = readNonNegativeInteger(attributes.startIndex);
-    const endIndex = readNonNegativeInteger(attributes.endIndex);
-    const filePath = attributes.filePath?.trim();
-    const sectionId = attributes.sectionId?.trim();
-    if (!filePath || !sectionId || startIndex === null || endIndex === null) {
+    const comment = parseReviewInlineComment(match[1] ?? "", match[2] ?? "", index);
+    if (!comment) {
       continue;
     }
 
-    comments.push({
-      id: `review-comment:${index}:${sectionId}:${filePath}:${startIndex}:${endIndex}`,
-      sectionId,
-      sectionTitle: attributes.sectionTitle?.trim() || "Review",
-      filePath,
-      startIndex: Math.min(startIndex, endIndex),
-      endIndex: Math.max(startIndex, endIndex),
-      rangeLabel: attributes.rangeLabel?.trim() || "line",
-      text: extractReviewCommentText(match[2] ?? ""),
-    });
+    comments.push(comment);
   }
   return comments;
+}
+
+export function parseReviewCommentMessageSegments(
+  value: string,
+): ReadonlyArray<ReviewCommentMessageSegment> {
+  const segments: ReviewCommentMessageSegment[] = [];
+  let cursor = 0;
+  let parsedCommentIndex = 0;
+
+  for (const match of value.matchAll(REVIEW_COMMENT_BLOCK_PATTERN)) {
+    const matchIndex = match.index ?? 0;
+    const beforeText = value.slice(cursor, matchIndex);
+    if (beforeText.length > 0) {
+      segments.push({
+        kind: "text",
+        id: `review-comment-text:${cursor}`,
+        text: beforeText,
+      });
+    }
+
+    const comment = parseReviewInlineComment(match[1] ?? "", match[2] ?? "", parsedCommentIndex);
+    if (comment) {
+      segments.push({ kind: "review-comment", comment });
+      parsedCommentIndex += 1;
+    } else {
+      segments.push({
+        kind: "text",
+        id: `review-comment-invalid:${matchIndex}`,
+        text: match[0],
+      });
+    }
+
+    cursor = matchIndex + match[0].length;
+  }
+
+  const rest = value.slice(cursor);
+  if (rest.length > 0) {
+    segments.push({
+      kind: "text",
+      id: `review-comment-text:${cursor}`,
+      text: rest,
+    });
+  }
+
+  return segments;
 }

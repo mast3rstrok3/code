@@ -9,8 +9,8 @@ import tsxLanguage from "@shikijs/langs/tsx";
 import typescriptLanguage from "@shikijs/langs/typescript";
 import yamlLanguage from "@shikijs/langs/yaml";
 
-import type { NativeReviewDiffRow, NativeReviewDiffToken } from "./nativeReviewDiffModule";
-import type { NativeReviewDiffFile, NativeReviewDiffLanguage } from "./nativeReviewDiffParser";
+import type { NativeReviewDiffFile, NativeReviewDiffLanguage } from "./nativeReviewDiffTypes";
+import type { NativeReviewDiffRow, NativeReviewDiffToken } from "./nativeReviewDiffSurface";
 
 export type NativeReviewDiffHighlightScheme = "light" | "dark";
 export type NativeReviewDiffHighlightEngine = "native" | "javascript";

@@ -1,9 +1,9 @@
 import { parsePatchFiles, type ChangeTypes, type FileDiffMetadata } from "@pierre/diffs/utils";
-import type { GitReviewDiffSection, OrchestrationCheckpointSummary } from "@t3tools/contracts";
+import type { OrchestrationCheckpointSummary, ReviewDiffPreviewSource } from "@t3tools/contracts";
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
 
-export type ReviewSectionKind = "turn" | "dirty" | "base";
+export type ReviewSectionKind = "turn" | "working-tree" | "branch-range";
 
 export interface ReviewSectionItem {
   readonly id: string;
@@ -149,8 +149,8 @@ const readyCheckpointOrder = Order.make<OrchestrationCheckpointSummary>(
   compareCheckpointTurnCountDescending,
 );
 
-function gitSubtitle(section: GitReviewDiffSection): string | null {
-  if (section.kind === "dirty") {
+function gitSubtitle(section: ReviewDiffPreviewSource): string | null {
+  if (section.kind === "working-tree") {
     return "Tracked, staged, and untracked worktree changes";
   }
   if (section.baseRef) {
@@ -520,7 +520,7 @@ export function getReadyReviewCheckpoints(
 
 export function buildReviewSectionItems(input: {
   readonly checkpoints: ReadonlyArray<OrchestrationCheckpointSummary>;
-  readonly gitSections: ReadonlyArray<GitReviewDiffSection>;
+  readonly gitSections: ReadonlyArray<ReviewDiffPreviewSource>;
   readonly turnDiffById: Readonly<Record<string, string | undefined>>;
   readonly loadingTurnIds: Readonly<Record<string, boolean | undefined>>;
 }): ReadonlyArray<ReviewSectionItem> {

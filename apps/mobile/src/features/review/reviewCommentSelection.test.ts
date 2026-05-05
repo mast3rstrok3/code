@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   countReviewCommentContexts,
   formatReviewCommentContext,
+  parseReviewCommentMessageSegments,
   parseReviewInlineComments,
   type ReviewCommentTarget,
 } from "./reviewCommentSelection";
@@ -54,7 +55,27 @@ describe("review comment serialization", () => {
         startIndex: 0,
         endIndex: 1,
         text: "Please keep this configurable.",
+        diff: expect.stringContaining("-const retryLimit = 2;"),
       }),
     ]);
+  });
+
+  it("splits chat text into review comment segments", () => {
+    const serialized = `Before\n${formatReviewCommentContext(makeTarget(), "Please keep this configurable.")}\nAfter`;
+    const segments = parseReviewCommentMessageSegments(serialized);
+
+    expect(segments).toHaveLength(3);
+    expect(segments[0]).toEqual(expect.objectContaining({ kind: "text", text: "Before\n" }));
+    expect(segments[1]).toEqual(
+      expect.objectContaining({
+        kind: "review-comment",
+        comment: expect.objectContaining({
+          filePath: "apps/demo/src/main.ts",
+          text: "Please keep this configurable.",
+          diff: expect.stringContaining("+const retryLimit = 4;"),
+        }),
+      }),
+    );
+    expect(segments[2]).toEqual(expect.objectContaining({ kind: "text", text: "\nAfter" }));
   });
 });

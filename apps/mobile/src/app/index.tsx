@@ -79,11 +79,6 @@ export default function HomeRouteScreen() {
 
       <Stack.Toolbar placement="right">
         <Stack.Toolbar.Button
-          icon="ladybug"
-          onPress={() => router.push("/debug/native-review-diff")}
-          separateBackground
-        />
-        <Stack.Toolbar.Button
           icon="network"
           onPress={() => router.push("/connections")}
           separateBackground

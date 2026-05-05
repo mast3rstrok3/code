@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   MessageId,
   TurnId,
-  type GitReviewDiffSection,
   type OrchestrationCheckpointSummary,
+  type ReviewDiffPreviewSource,
 } from "@t3tools/contracts";
 
 import {
@@ -62,20 +62,26 @@ describe("buildReviewSectionItems", () => {
         completedAt: "2026-04-02T00:00:00.000Z",
       }),
     ];
-    const gitSections: GitReviewDiffSection[] = [
+    const gitSections: ReviewDiffPreviewSource[] = [
       {
-        kind: "dirty",
+        id: "working-tree",
+        kind: "working-tree",
         title: "Dirty worktree",
         baseRef: "HEAD",
         headRef: null,
         diff: "diff --git a/a.ts b/a.ts",
+        diffHash: "hash-dirty",
+        truncated: false,
       },
       {
-        kind: "base",
+        id: "branch-range",
+        kind: "branch-range",
         title: "Against main",
         baseRef: "main",
         headRef: "feature",
         diff: "diff --git a/a.ts b/a.ts",
+        diffHash: "hash-base",
+        truncated: false,
       },
     ];
 
@@ -91,7 +97,12 @@ describe("buildReviewSectionItems", () => {
       },
     });
 
-    expect(items.map((item) => item.id)).toEqual(["turn:2", "turn:1", "git:dirty", "git:base"]);
+    expect(items.map((item) => item.id)).toEqual([
+      "turn:2",
+      "turn:1",
+      "git:working-tree",
+      "git:branch-range",
+    ]);
     expect(items[0]).toMatchObject({ isLoading: true, diff: null });
     expect(items[1]).toMatchObject({
       isLoading: false,

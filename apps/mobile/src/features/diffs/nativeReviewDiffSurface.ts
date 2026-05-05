@@ -127,7 +127,6 @@ export interface NativeReviewDiffViewProps extends ViewProps {
 }
 
 let cachedNativeReviewDiffView: ComponentType<NativeReviewDiffViewProps> | undefined;
-let cachedNativeReviewDiffModuleName: typeof NATIVE_REVIEW_DIFF_MODULE_NAME | undefined;
 
 function getExpoViewConfig(moduleName: string) {
   return (globalThis as typeof globalThis & ExpoGlobalWithViewConfig).expo?.getViewConfig?.(
@@ -152,10 +151,5 @@ export function resolveNativeReviewDiffView(): ComponentType<NativeReviewDiffVie
     return null;
   }
 
-  cachedNativeReviewDiffModuleName = NATIVE_REVIEW_DIFF_MODULE_NAME;
   return cachedNativeReviewDiffView ?? null;
-}
-
-export function getResolvedNativeReviewDiffModuleName() {
-  return cachedNativeReviewDiffModuleName ?? null;
 }

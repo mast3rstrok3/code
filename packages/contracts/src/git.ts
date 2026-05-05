@@ -184,11 +184,6 @@ export const VcsInitInput = Schema.Struct({
 });
 export type VcsInitInput = typeof VcsInitInput.Type;
 
-export const GitReviewDiffsInput = Schema.Struct({
-  cwd: TrimmedNonEmptyStringSchema,
-});
-export type GitReviewDiffsInput = typeof GitReviewDiffsInput.Type;
-
 // RPC Results
 
 const VcsStatusChangeRequest = Schema.Struct({
@@ -284,25 +279,6 @@ export const VcsSwitchRefResult = Schema.Struct({
   refName: Schema.NullOr(TrimmedNonEmptyStringSchema),
 });
 export type VcsSwitchRefResult = typeof VcsSwitchRefResult.Type;
-
-export const GitReviewDiffKind = Schema.Literals(["dirty", "base"]);
-export type GitReviewDiffKind = typeof GitReviewDiffKind.Type;
-
-export const GitReviewDiffSection = Schema.Struct({
-  kind: GitReviewDiffKind,
-  title: TrimmedNonEmptyStringSchema,
-  baseRef: Schema.NullOr(TrimmedNonEmptyStringSchema),
-  headRef: Schema.NullOr(TrimmedNonEmptyStringSchema),
-  diff: Schema.String,
-});
-export type GitReviewDiffSection = typeof GitReviewDiffSection.Type;
-
-export const GitReviewDiffsResult = Schema.Struct({
-  cwd: TrimmedNonEmptyStringSchema,
-  generatedAt: Schema.String,
-  sections: Schema.Array(GitReviewDiffSection),
-});
-export type GitReviewDiffsResult = typeof GitReviewDiffsResult.Type;
 
 export const GitRunStackedActionResult = Schema.Struct({
   action: GitStackedAction,

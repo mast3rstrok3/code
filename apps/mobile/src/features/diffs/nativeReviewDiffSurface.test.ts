@@ -28,7 +28,7 @@ describe("resolveNativeReviewDiffView", () => {
   });
 
   it("returns null when the native review diff view config is unavailable", async () => {
-    const { resolveNativeReviewDiffView } = await import("./nativeReviewDiffModule");
+    const { resolveNativeReviewDiffView } = await import("./nativeReviewDiffSurface");
     expect(resolveNativeReviewDiffView()).toBeNull();
     expect(expoModulesCoreMocks.requireNativeViewManager).not.toHaveBeenCalled();
   });
@@ -36,7 +36,7 @@ describe("resolveNativeReviewDiffView", () => {
   it("returns the native review diff view when the view config is installed", async () => {
     setExpoViewConfigAvailable();
     expoModulesCoreMocks.requireNativeViewManager.mockReturnValue(nativeView);
-    const { resolveNativeReviewDiffView } = await import("./nativeReviewDiffModule");
+    const { resolveNativeReviewDiffView } = await import("./nativeReviewDiffSurface");
     expect(resolveNativeReviewDiffView()).toBe(nativeView);
     expect(expoModulesCoreMocks.requireNativeViewManager).toHaveBeenCalledWith(
       "T3ReviewDiffSurface",
@@ -53,7 +53,7 @@ describe("resolveNativeReviewDiffView", () => {
       }),
     } as unknown as typeof globalThis.expo;
     expoModulesCoreMocks.requireNativeViewManager.mockReturnValue(nativeView);
-    const { resolveNativeReviewDiffView } = await import("./nativeReviewDiffModule");
+    const { resolveNativeReviewDiffView } = await import("./nativeReviewDiffSurface");
     expect(resolveNativeReviewDiffView()).toBeNull();
     expect(expoModulesCoreMocks.requireNativeViewManager).not.toHaveBeenCalled();
   });
@@ -63,7 +63,7 @@ describe("resolveNativeReviewDiffView", () => {
     expoModulesCoreMocks.requireNativeViewManager.mockImplementation(() => {
       throw new Error("boom");
     });
-    const { resolveNativeReviewDiffView } = await import("./nativeReviewDiffModule");
+    const { resolveNativeReviewDiffView } = await import("./nativeReviewDiffSurface");
     expect(resolveNativeReviewDiffView()).toBeNull();
   });
 });

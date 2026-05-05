@@ -15,8 +15,11 @@ import {
   Image,
   Pressable,
   ScrollView,
+  StyleSheet,
   Text as NativeText,
   type ColorValue,
+  useColorScheme,
+  useWindowDimensions,
   View,
 } from "react-native";
 import { TouchableOpacity } from "react-native-gesture-handler";
@@ -26,6 +29,19 @@ import { useThemeColor } from "../../lib/useThemeColor";
 
 import { AppText as Text } from "../../components/AppText";
 import { EmptyState } from "../../components/EmptyState";
+import {
+  parseReviewCommentMessageSegments,
+  type ReviewInlineComment,
+} from "../review/reviewCommentSelection";
+import { resolveNativeReviewDiffView } from "../diffs/nativeReviewDiffSurface";
+import {
+  buildNativeReviewDiffData,
+  createNativeReviewDiffTheme,
+  NATIVE_REVIEW_DIFF_CONTENT_WIDTH,
+  NATIVE_REVIEW_DIFF_ROW_HEIGHT,
+  NATIVE_REVIEW_DIFF_STYLE,
+} from "../review/nativeReviewDiffAdapter";
+import { buildReviewParsedDiff } from "../review/reviewModel";
 import { cn } from "../../lib/cn";
 import type { MobileLayoutVariant } from "../../lib/mobileLayout";
 import type { ThreadFeedEntry } from "../../lib/threadActivity";
@@ -99,6 +115,38 @@ interface MarkdownStyleSet {
   readonly theme: PartialMarkdownTheme;
   readonly styles: NodeStyleOverrides;
   readonly renderers: CustomRenderers;
+}
+
+interface ReviewCommentColors {
+  readonly background: ColorValue;
+  readonly border: ColorValue;
+  readonly mutedBackground: ColorValue;
+  readonly text: ColorValue;
+  readonly mutedText: ColorValue;
+  readonly codeBackground: ColorValue;
+}
+
+function useReviewCommentColors(): ReviewCommentColors {
+  const colorScheme = useColorScheme();
+  const isDark = colorScheme === "dark";
+  const background = isDark ? "#151515" : "#ffffff";
+  const border = isDark ? "#2a2a2a" : "#d7d7d7";
+  const mutedBackground = isDark ? "#242424" : "#f2f2f2";
+  const text = isDark ? "#f3f3f3" : "#111111";
+  const mutedText = isDark ? "#8f8f8f" : "#666666";
+  const codeBackground = isDark ? "#0f0f0f" : "#ffffff";
+
+  return useMemo(
+    () => ({
+      background,
+      border,
+      mutedBackground,
+      text,
+      mutedText,
+      codeBackground,
+    }),
+    [background, border, codeBackground, mutedBackground, mutedText, text],
+  );
 }
 
 function useMarkdownStyles(): MarkdownStyleSets {
@@ -357,6 +405,8 @@ function renderFeedEntry(
     readonly iconSubtleColor: string | import("react-native").ColorValue;
     readonly userBubbleColor: string | import("react-native").ColorValue;
     readonly markdownStyles: MarkdownStyleSets;
+    readonly reviewCommentColors: ReviewCommentColors;
+    readonly reviewCommentBubbleWidth: number;
   },
 ) {
   const entry = info.item;
@@ -368,23 +418,24 @@ function renderFeedEntry(
     const styles = isUser ? markdownStyles.user : markdownStyles.assistant;
     const timestampLabel = `${relativeTime(message.createdAt)}${message.streaming ? " • live" : ""}`;
     const attachments = message.attachments ?? [];
+    const hasReviewCommentContext = message.text.includes("<review_comment");
 
     if (isUser) {
       return (
-        <View className="mb-3.5 items-end gap-1.5">
+        <View className="mb-5 items-end">
           <View
             className="max-w-[85%] gap-2 rounded-[22px] rounded-br-[6px] px-3.5 py-2.5"
-            style={{ backgroundColor: userBubbleColor }}
+            style={{
+              backgroundColor: userBubbleColor,
+              ...(hasReviewCommentContext ? { width: props.reviewCommentBubbleWidth } : null),
+            }}
           >
             {message.text.trim().length > 0 ? (
-              <Markdown
-                options={{ gfm: true }}
-                renderers={styles.renderers}
-                styles={styles.styles}
-                theme={styles.theme}
-              >
-                {message.text}
-              </Markdown>
+              <UserMessageContent
+                text={message.text}
+                markdownStyles={styles}
+                reviewCommentColors={props.reviewCommentColors}
+              />
             ) : null}
             {attachments.map((attachment) => {
               const uri = messageImageUrl(props.httpBaseUrl, attachment.id);
@@ -410,7 +461,7 @@ function renderFeedEntry(
               );
             })}
           </View>
-          <Text className="px-1 text-right font-t3-medium text-xs text-neutral-600 dark:text-neutral-400">
+          <Text className="mt-1.5 px-1 text-right font-t3-medium text-xs text-neutral-600 dark:text-neutral-400">
             {timestampLabel}
           </Text>
         </View>
@@ -424,7 +475,7 @@ function renderFeedEntry(
     }
 
     return (
-      <View className="mb-3.5 gap-1.5 px-1">
+      <View className="mb-5 px-1">
         {message.text.trim().length > 0 ? (
           <Markdown
             options={{ gfm: true }}
@@ -448,6 +499,7 @@ function renderFeedEntry(
             <TouchableOpacity
               key={attachment.id}
               activeOpacity={0.7}
+              className="mt-1.5"
               onPress={() => props.onPressImage(uri, headers)}
             >
               <Image
@@ -458,7 +510,7 @@ function renderFeedEntry(
             </TouchableOpacity>
           );
         })}
-        <Text className="font-t3-medium text-xs text-neutral-600 dark:text-neutral-400">
+        <Text className="mt-1.5 font-t3-medium text-xs text-neutral-600 dark:text-neutral-400">
           {timestampLabel}
         </Text>
       </View>
@@ -467,7 +519,7 @@ function renderFeedEntry(
 
   if (entry.type === "queued-message") {
     return (
-      <View className="mb-3.5 gap-1.5 items-end">
+      <View className="mb-5 items-end">
         <View
           className="max-w-[85%] gap-2 rounded-[22px] rounded-br-[6px] px-3.5 py-2.5 opacity-60"
           style={{ backgroundColor: userBubbleColor }}
@@ -482,7 +534,7 @@ function renderFeedEntry(
             </Text>
           ) : null}
         </View>
-        <Text className="px-1 text-right font-t3-medium text-xs text-neutral-600 dark:text-neutral-400">
+        <Text className="mt-1.5 px-1 text-right font-t3-medium text-xs text-neutral-600 dark:text-neutral-400">
           {entry.sending ? "dispatching" : `${relativeTime(entry.createdAt)} • pending`}
         </Text>
       </View>
@@ -555,11 +607,226 @@ function renderFeedEntry(
   );
 }
 
+function UserMessageContent(props: {
+  readonly text: string;
+  readonly markdownStyles: MarkdownStyleSet;
+  readonly reviewCommentColors: ReviewCommentColors;
+}) {
+  const segments = parseReviewCommentMessageSegments(props.text);
+  const hasReviewComment = segments.some((segment) => segment.kind === "review-comment");
+  if (!hasReviewComment) {
+    return (
+      <Markdown
+        options={{ gfm: true }}
+        renderers={props.markdownStyles.renderers}
+        styles={props.markdownStyles.styles}
+        theme={props.markdownStyles.theme}
+      >
+        {props.text}
+      </Markdown>
+    );
+  }
+
+  return (
+    <View className="w-full gap-2">
+      {segments.map((segment) => {
+        if (segment.kind === "review-comment") {
+          return (
+            <ReviewCommentCard
+              key={segment.comment.id}
+              comment={segment.comment}
+              colors={props.reviewCommentColors}
+            />
+          );
+        }
+
+        const text = segment.text.trim();
+        if (text.length === 0) {
+          return null;
+        }
+
+        return (
+          <Markdown
+            key={segment.id}
+            options={{ gfm: true }}
+            renderers={props.markdownStyles.renderers}
+            styles={props.markdownStyles.styles}
+            theme={props.markdownStyles.theme}
+          >
+            {text}
+          </Markdown>
+        );
+      })}
+    </View>
+  );
+}
+
+const ReviewCommentCard = memo(function ReviewCommentCard(props: {
+  readonly comment: ReviewInlineComment;
+  readonly colors: ReviewCommentColors;
+}) {
+  const colorScheme = useColorScheme();
+  const appearanceScheme = colorScheme === "light" ? "light" : "dark";
+  const NativeReviewDiffView = resolveNativeReviewDiffView();
+  const patch = useMemo(() => buildReviewCommentPatch(props.comment), [props.comment]);
+  const parsedDiff = useMemo(
+    () => buildReviewParsedDiff(patch, `thread-review-comment:${props.comment.id}`),
+    [patch, props.comment.id],
+  );
+  const nativeReviewDiffData = useMemo(() => buildNativeReviewDiffData(parsedDiff), [parsedDiff]);
+  const compactNativeRows = useMemo(
+    () => nativeReviewDiffData.rows.filter((row) => row.kind !== "file"),
+    [nativeReviewDiffData.rows],
+  );
+  const nativeReviewDiffTheme = useMemo(
+    () => createNativeReviewDiffTheme(appearanceScheme),
+    [appearanceScheme],
+  );
+  const nativeRowsJson = useMemo(() => JSON.stringify(compactNativeRows), [compactNativeRows]);
+  const nativeThemeJson = useMemo(
+    () => JSON.stringify(nativeReviewDiffTheme),
+    [nativeReviewDiffTheme],
+  );
+  const nativeStyleJson = useMemo(() => JSON.stringify(NATIVE_REVIEW_DIFF_STYLE), []);
+  const nativeDiffHeight = useMemo(
+    () =>
+      Math.min(
+        360,
+        Math.max(
+          112,
+          compactNativeRows.length * NATIVE_REVIEW_DIFF_ROW_HEIGHT +
+            NATIVE_REVIEW_DIFF_STYLE.fileHeaderVerticalMargin,
+        ),
+      ),
+    [compactNativeRows.length],
+  );
+  const shouldRenderNativeDiff = NativeReviewDiffView != null && compactNativeRows.length > 0;
+
+  return (
+    <View
+      className="w-full overflow-hidden rounded-[16px] border"
+      style={{
+        backgroundColor: props.colors.background,
+        borderColor: props.colors.border,
+        borderCurve: "continuous",
+      }}
+    >
+      <View
+        className="flex-row items-center gap-2 border-b px-3 py-2"
+        style={{ borderColor: props.colors.border }}
+      >
+        <View
+          className="size-6 items-center justify-center rounded-[7px]"
+          style={{ backgroundColor: props.colors.mutedBackground, borderCurve: "continuous" }}
+        >
+          <SymbolView
+            name="doc.text"
+            size={13}
+            tintColor={props.colors.mutedText}
+            type="monochrome"
+          />
+        </View>
+        <View className="min-w-0 flex-1">
+          <Text
+            className="font-mono text-[12px] leading-[16px]"
+            numberOfLines={1}
+            style={{ color: props.colors.text }}
+          >
+            {compactFileName(props.comment.filePath)}
+          </Text>
+        </View>
+      </View>
+      {shouldRenderNativeDiff ? (
+        <View
+          className="border-t"
+          collapsable={false}
+          style={{
+            backgroundColor: nativeReviewDiffTheme.background,
+            borderColor: props.colors.border,
+            height: nativeDiffHeight,
+          }}
+        >
+          <NativeReviewDiffView
+            collapsable={false}
+            style={StyleSheet.absoluteFillObject}
+            appearanceScheme={appearanceScheme}
+            contentWidth={NATIVE_REVIEW_DIFF_CONTENT_WIDTH}
+            rowHeight={NATIVE_REVIEW_DIFF_ROW_HEIGHT}
+            rowsJson={nativeRowsJson}
+            styleJson={nativeStyleJson}
+            themeJson={nativeThemeJson}
+          />
+        </View>
+      ) : props.comment.diff.trim().length > 0 ? (
+        <ScrollView
+          horizontal
+          nestedScrollEnabled
+          directionalLockEnabled
+          showsHorizontalScrollIndicator={false}
+          bounces={false}
+          className="border-t"
+          style={{ backgroundColor: props.colors.codeBackground, borderColor: props.colors.border }}
+          contentContainerStyle={{ padding: 10 }}
+        >
+          <NativeText
+            selectable
+            style={{
+              color: props.colors.text,
+              fontFamily: "ui-monospace",
+              fontSize: 12,
+              lineHeight: 18,
+            }}
+          >
+            {props.comment.diff.trim()}
+          </NativeText>
+        </ScrollView>
+      ) : null}
+      {props.comment.text.length > 0 ? (
+        <View className="border-t px-3 py-3" style={{ borderColor: props.colors.border }}>
+          <Text
+            selectable
+            className="text-[15px] leading-[21px]"
+            style={{ color: props.colors.text }}
+          >
+            {props.comment.text}
+          </Text>
+        </View>
+      ) : null}
+    </View>
+  );
+});
+
+function buildReviewCommentPatch(comment: ReviewInlineComment): string {
+  const diff = comment.diff.trim();
+  if (!diff) {
+    return "";
+  }
+
+  if (diff.startsWith("diff --git ")) {
+    return diff;
+  }
+
+  const normalizedPath = comment.filePath.replaceAll("\\", "/");
+  return [
+    `diff --git a/${normalizedPath} b/${normalizedPath}`,
+    `--- a/${normalizedPath}`,
+    `+++ b/${normalizedPath}`,
+    diff,
+  ].join("\n");
+}
+
+function compactFileName(filePath: string): string {
+  const normalized = filePath.replaceAll("\\", "/");
+  const lastSlashIndex = normalized.lastIndexOf("/");
+  return lastSlashIndex >= 0 ? normalized.slice(lastSlashIndex + 1) : normalized;
+}
+
 const IOS_NAV_BAR_HEIGHT = 44;
 
 export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const listRef = useRef<LegendListRef>(null);
   const copyFeedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { width: viewportWidth } = useWindowDimensions();
   const [copiedRowId, setCopiedRowId] = useState<string | null>(null);
   const [expandedWorkGroups, setExpandedWorkGroups] = useState<Record<string, boolean>>({});
   const [expandedImage, setExpandedImage] = useState<{
@@ -567,29 +834,21 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     headers?: Record<string, string>;
   } | null>(null);
   const horizontalPadding = props.layoutVariant === "split" ? 20 : 16;
+  const contentWidth = Math.max(0, viewportWidth - horizontalPadding * 2);
+  const reviewCommentBubbleWidth = Math.min(Math.max(280, contentWidth * 0.85), contentWidth);
   const insets = useSafeAreaInsets();
   const topContentInset = insets.top + IOS_NAV_BAR_HEIGHT;
+  const bottomContentInset = props.contentBottomInset ?? 18;
 
   const iconSubtleColor = useThemeColor("--color-icon-subtle");
   const userBubbleColor = useThemeColor("--color-user-bubble");
   const markdownStyles = useMarkdownStyles();
+  const reviewCommentColors = useReviewCommentColors();
 
   useEffect(() => {
     setCopiedRowId(null);
     setExpandedWorkGroups({});
   }, [props.threadId]);
-
-  // Scroll to end when the composer expands (keyboard opens) so the latest
-  // message stays visible above the taller composer + keyboard.
-  useEffect(() => {
-    if (props.composerExpanded && props.feed.length > 0) {
-      // Small delay to let KAV + layout settle before scrolling
-      const timer = setTimeout(() => {
-        void listRef.current?.scrollToEnd({ animated: true });
-      }, 100);
-      return () => clearTimeout(timer);
-    }
-  }, [props.composerExpanded, props.feed.length]);
 
   useEffect(() => {
     return () => {
@@ -636,6 +895,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         iconSubtleColor,
         userBubbleColor,
         markdownStyles,
+        reviewCommentColors,
+        reviewCommentBubbleWidth,
       }),
     [
       copiedRowId,
@@ -643,6 +904,8 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       iconSubtleColor,
       userBubbleColor,
       markdownStyles,
+      reviewCommentColors,
+      reviewCommentBubbleWidth,
       onCopyWorkRow,
       onPressImage,
       onToggleWorkGroup,
@@ -656,13 +919,12 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       <ScrollView
         style={{ flex: 1 }}
         contentInsetAdjustmentBehavior="never"
-        contentInset={{ top: topContentInset }}
+        contentInset={{ top: topContentInset, bottom: bottomContentInset }}
         contentOffset={{ x: 0, y: -topContentInset }}
-        scrollIndicatorInsets={{ top: topContentInset }}
+        scrollIndicatorInsets={{ top: topContentInset, bottom: bottomContentInset }}
         contentContainerStyle={{
           flexGrow: 1,
           paddingHorizontal: horizontalPadding,
-          paddingBottom: props.contentBottomInset ?? 18,
         }}
       >
         <EmptyState
@@ -681,13 +943,16 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         style={{ flex: 1 }}
         alignItemsAtEnd
         contentInsetAdjustmentBehavior="never"
-        contentInset={{ top: topContentInset }}
-        scrollIndicatorInsets={{ top: topContentInset }}
+        contentInset={{ top: topContentInset, bottom: bottomContentInset }}
+        scrollIndicatorInsets={{ top: topContentInset, bottom: bottomContentInset }}
         data={props.feed as ThreadFeedEntry[]}
         renderItem={renderItem}
         keyExtractor={(entry) => `${entry.type}:${entry.id}`}
+        getItemType={(entry) =>
+          entry.type === "message" ? `message:${entry.message.role}` : entry.type
+        }
         keyboardShouldPersistTaps="handled"
-        estimatedItemSize={80}
+        estimatedItemSize={180}
         initialScrollAtEnd
         maintainScrollAtEnd={{
           on: { layout: true, itemLayout: true, dataChange: true },
@@ -699,7 +964,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         contentContainerStyle={{
           paddingTop: 12,
           paddingHorizontal: horizontalPadding,
-          paddingBottom: props.contentBottomInset ?? 18,
         }}
       />
 

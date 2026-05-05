@@ -99,7 +99,9 @@ export interface WsRpcClient {
     readonly preparePullRequestThread: RpcUnaryMethod<
       typeof WS_METHODS.gitPreparePullRequestThread
     >;
-    readonly getReviewDiffs: RpcUnaryMethod<typeof WS_METHODS.gitGetReviewDiffs>;
+  };
+  readonly review: {
+    readonly getDiffPreview: RpcUnaryMethod<typeof WS_METHODS.reviewGetDiffPreview>;
   };
   readonly server: {
     readonly getConfig: RpcUnaryNoArgMethod<typeof WS_METHODS.serverGetConfig>;
@@ -218,8 +220,10 @@ export function createWsRpcClient(
         transport.request((client) => client[WS_METHODS.gitResolvePullRequest](input)),
       preparePullRequestThread: (input) =>
         transport.request((client) => client[WS_METHODS.gitPreparePullRequestThread](input)),
-      getReviewDiffs: (input) =>
-        transport.request((client) => client[WS_METHODS.gitGetReviewDiffs](input)),
+    },
+    review: {
+      getDiffPreview: (input) =>
+        transport.request((client) => client[WS_METHODS.reviewGetDiffPreview](input)),
     },
     server: {
       getConfig: () => transport.request((client) => client[WS_METHODS.serverGetConfig]({})),

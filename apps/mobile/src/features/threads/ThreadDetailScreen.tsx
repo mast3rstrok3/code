@@ -33,6 +33,7 @@ import { PendingUserInputCard } from "./PendingUserInputCard";
 import {
   COMPOSER_COLLAPSED_CHROME,
   COMPOSER_EXPANDED_CHROME,
+  COMPOSER_EXPANDED_TOOLBAR_CHROME,
   ThreadComposer,
 } from "./ThreadComposer";
 import { ThreadFeed } from "./ThreadFeed";
@@ -213,7 +214,9 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const layoutVariant = props.layoutVariant ?? "compact";
   const isSplitLayout = layoutVariant === "split";
   useStreamingHaptics(props.selectedThread.id, props.selectedThreadFeed);
-  const feedBottomInset = Math.max(estimatedOverlayHeight, measuredOverlayHeight) + 8;
+  const expandedToolbarInset = composerExpanded ? COMPOSER_EXPANDED_TOOLBAR_CHROME : 0;
+  const feedBottomInset =
+    Math.max(estimatedOverlayHeight, measuredOverlayHeight) + expandedToolbarInset + 8;
 
   const completeDrawerGesture = useCallback(() => {
     void Haptics.selectionAsync();
