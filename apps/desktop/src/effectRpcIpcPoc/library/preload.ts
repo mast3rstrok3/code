@@ -1,5 +1,3 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
-
 import {
   EFFECT_RPC_IPC_CHANNELS,
   EFFECT_RPC_IPC_RENDERER_BRIDGE_KEY,
@@ -13,16 +11,20 @@ export interface ElectronLikeIpcRenderer {
   readonly send: (channel: string, frame: EffectRpcIpcRendererFrame) => void;
   readonly on: (
     channel: string,
-    listener: (event: IpcRendererEvent, frame: unknown) => void,
+    listener: (event: unknown, frame: unknown) => void,
   ) => ElectronLikeIpcRenderer;
   readonly off?: (
     channel: string,
-    listener: (event: IpcRendererEvent, frame: unknown) => void,
+    listener: (event: unknown, frame: unknown) => void,
   ) => ElectronLikeIpcRenderer;
   readonly removeListener?: (
     channel: string,
-    listener: (event: IpcRendererEvent, frame: unknown) => void,
+    listener: (event: unknown, frame: unknown) => void,
   ) => ElectronLikeIpcRenderer;
+}
+
+export interface ElectronLikeContextBridge {
+  readonly exposeInMainWorld: (apiKey: string, api: EffectRpcIpcRendererBridge) => void;
 }
 
 export function makeEffectRpcIpcPreloadBridge(
@@ -37,7 +39,7 @@ export function makeEffectRpcIpcPreloadBridge(
       electronIpcRenderer.send(channels.rendererToMain, frame);
     },
     subscribe: (listener) => {
-      const wrapped = (_event: IpcRendererEvent, frame: unknown) => {
+      const wrapped = (_event: unknown, frame: unknown) => {
         if (isEffectRpcIpcMainFrame(frame)) {
           listener(frame);
         }
@@ -51,10 +53,17 @@ export function makeEffectRpcIpcPreloadBridge(
   };
 }
 
-contextBridge.exposeInMainWorld(
-  EFFECT_RPC_IPC_RENDERER_BRIDGE_KEY,
-  makeEffectRpcIpcPreloadBridge(ipcRenderer),
-);
+export function exposeEffectRpcIpcPreloadBridge(options: {
+  readonly contextBridge: ElectronLikeContextBridge;
+  readonly ipcRenderer: ElectronLikeIpcRenderer;
+  readonly globalKey?: string;
+  readonly channels?: typeof EFFECT_RPC_IPC_CHANNELS;
+}): void {
+  options.contextBridge.exposeInMainWorld(
+    options.globalKey ?? EFFECT_RPC_IPC_RENDERER_BRIDGE_KEY,
+    makeEffectRpcIpcPreloadBridge(options.ipcRenderer, options.channels),
+  );
+}
 
 function removeIpcListener<TListener>(
   target: {

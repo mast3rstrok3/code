@@ -1,4 +1,4 @@
-import { Effect, Schema, Stream } from "effect";
+import { Effect, Schema } from "effect";
 import { RpcClient } from "effect/unstable/rpc";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
@@ -59,37 +59,6 @@ export const DesktopIpcPocRpcGroup = RpcGroup.make(
   DesktopIpcPocEchoRpc,
   DesktopIpcPocSubscribeTicksRpc,
 );
-
-export const makeDesktopIpcPocHandlersLayer = (options?: {
-  readonly appVersion?: string;
-  readonly platform?: string;
-  readonly now?: () => Date;
-}) => {
-  const now = options?.now ?? (() => new Date());
-
-  return DesktopIpcPocRpcGroup.toLayer(
-    DesktopIpcPocRpcGroup.of({
-      [DESKTOP_IPC_POC_METHODS.getRuntimeInfo]: () =>
-        Effect.succeed({
-          appVersion: options?.appVersion ?? "0.0.0-poc",
-          platform: options?.platform ?? process.platform,
-          ipcTransport: "electron-ipc" as const,
-        }),
-      [DESKTOP_IPC_POC_METHODS.echo]: (input) =>
-        Effect.sync(() => ({
-          text: input.text,
-          echoedAt: now().toISOString(),
-        })),
-      [DESKTOP_IPC_POC_METHODS.subscribeTicks]: (input) =>
-        Stream.fromIterable(
-          Array.from({ length: Math.max(0, Math.floor(input.take)) }, (_, index) => ({
-            sequence: index + 1,
-            label: `tick:${index + 1}`,
-          })),
-        ),
-    }),
-  );
-};
 
 export const makeDesktopIpcPocClient = RpcClient.make(DesktopIpcPocRpcGroup);
 type DesktopIpcPocClientFactory = typeof makeDesktopIpcPocClient;

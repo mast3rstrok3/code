@@ -1,58 +1,38 @@
 import { Effect, Stream } from "effect";
-import { RpcClient, RpcServer } from "effect/unstable/rpc";
 import { describe, expect, it } from "vitest";
 
 import {
-  DESKTOP_IPC_POC_METHODS,
-  DesktopIpcPocRpcGroup,
-  makeDesktopIpcPocClient,
-  makeDesktopIpcPocHandlersLayer,
-} from "./effectRpcIpcPoc/protocol.ts";
-import {
-  getEffectRpcIpcRendererBridge,
-  makeEffectRpcIpcRendererPort,
-  makeEffectRpcIpcRendererProtocol,
-} from "./effectRpcIpcPoc/client.ts";
-import { makeEffectRpcIpcMainProtocol } from "./effectRpcIpcPoc/main.ts";
-import { EFFECT_RPC_IPC_RENDERER_BRIDGE_KEY } from "./effectRpcIpcPoc/ipc.ts";
+  loadDesktopIpcPocSnapshot,
+  makeDesktopIpcPocBrowserClient,
+} from "./effectRpcIpcPoc/example/browser-client.ts";
+import { runDesktopIpcPocRpcServer } from "./effectRpcIpcPoc/example/main.ts";
+import { DESKTOP_IPC_POC_METHODS } from "./effectRpcIpcPoc/example/protocol.ts";
+import { EFFECT_RPC_IPC_RENDERER_BRIDGE_KEY } from "./effectRpcIpcPoc/library/ipc.ts";
 import type {
   EffectRpcIpcMainFrame,
   EffectRpcIpcMainSource,
   EffectRpcIpcRendererFrame,
-} from "./effectRpcIpcPoc/ipc.ts";
+} from "./effectRpcIpcPoc/library/ipc.ts";
 
 describe("effect RPC over Electron IPC proof of concept", () => {
-  it("round-trips unary requests through the renderer/main protocol pair", async () => {
+  it("runs the end-to-end consumer example over the Electron IPC transport", async () => {
     const ipc = new InMemoryEffectRpcIpc();
 
     const result = await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const mainProtocol = yield* makeEffectRpcIpcMainProtocol(ipc.mainPort);
+          yield* runDesktopIpcPocRpcServer({
+            port: ipc.mainPort,
+            appVersion: "1.2.3",
+            platform: "test-os",
+            now: () => new Date("2026-05-06T12:00:00.000Z"),
+          });
 
-          yield* RpcServer.make(DesktopIpcPocRpcGroup).pipe(
-            Effect.provideService(RpcServer.Protocol, mainProtocol),
-            Effect.provide(
-              makeDesktopIpcPocHandlersLayer({
-                appVersion: "1.2.3",
-                platform: "test-os",
-                now: () => new Date("2026-05-06T12:00:00.000Z"),
-              }),
-            ),
-            Effect.forkScoped,
-          );
-
-          const rendererProtocol = yield* makeEffectRpcIpcRendererProtocol(
-            makeEffectRpcIpcRendererPort(getEffectRpcIpcRendererBridge(ipc.rendererGlobal)),
-          );
-          const client = yield* makeDesktopIpcPocClient.pipe(
-            Effect.provideService(RpcClient.Protocol, rendererProtocol),
-          );
-
-          const runtimeInfo = yield* client[DESKTOP_IPC_POC_METHODS.getRuntimeInfo]({});
-          const echo = yield* client[DESKTOP_IPC_POC_METHODS.echo]({ text: "hello ipc" });
-
-          return { runtimeInfo, echo };
+          return yield* loadDesktopIpcPocSnapshot({
+            globalObject: ipc.rendererGlobal,
+            echoText: "hello ipc",
+            ticks: 3,
+          });
         }),
       ),
     );
@@ -67,29 +47,29 @@ describe("effect RPC over Electron IPC proof of concept", () => {
         text: "hello ipc",
         echoedAt: "2026-05-06T12:00:00.000Z",
       },
+      ticks: [
+        { sequence: 1, label: "tick:1" },
+        { sequence: 2, label: "tick:2" },
+        { sequence: 3, label: "tick:3" },
+      ],
     });
   });
 
-  it("keeps Effect RPC streaming semantics over the same IPC envelope", async () => {
+  it("lets browser code consume the generated Effect RPC client directly", async () => {
     const ipc = new InMemoryEffectRpcIpc();
 
     const ticks = await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const mainProtocol = yield* makeEffectRpcIpcMainProtocol(ipc.mainPort);
+          yield* runDesktopIpcPocRpcServer({
+            port: ipc.mainPort,
+            appVersion: "0.0.0-test",
+            platform: "test-os",
+          });
 
-          yield* RpcServer.make(DesktopIpcPocRpcGroup).pipe(
-            Effect.provideService(RpcServer.Protocol, mainProtocol),
-            Effect.provide(makeDesktopIpcPocHandlersLayer()),
-            Effect.forkScoped,
-          );
-
-          const rendererProtocol = yield* makeEffectRpcIpcRendererProtocol(
-            makeEffectRpcIpcRendererPort(getEffectRpcIpcRendererBridge(ipc.rendererGlobal)),
-          );
-          const client = yield* makeDesktopIpcPocClient.pipe(
-            Effect.provideService(RpcClient.Protocol, rendererProtocol),
-          );
+          const client = yield* makeDesktopIpcPocBrowserClient({
+            globalObject: ipc.rendererGlobal,
+          });
 
           return yield* client[DESKTOP_IPC_POC_METHODS.subscribeTicks]({ take: 3 }).pipe(
             Stream.runCollect,
