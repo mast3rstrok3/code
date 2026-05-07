@@ -6,11 +6,10 @@
  *
  * @module Open
  */
-import { spawn } from "node:child_process";
-
 import { EDITORS, OpenError, type EditorId } from "@t3tools/contracts";
 import { isCommandAvailable, type CommandAvailabilityOptions } from "@t3tools/shared/shell";
 import { Context, Effect, Layer } from "effect";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 // ==============================
 // Definitions
@@ -182,44 +181,43 @@ export const resolveEditorLaunch = Effect.fn("resolveEditorLaunch")(function* (
   return { command: fileManagerCommandForPlatform(platform), args: [input.cwd] };
 });
 
-export const launchDetached = (launch: EditorLaunch) =>
+const launchDetachedWithSpawner = (
+  launch: EditorLaunch,
+  spawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
+) =>
   Effect.gen(function* () {
     if (!isCommandAvailable(launch.command)) {
       return yield* new OpenError({ message: `Editor command not found: ${launch.command}` });
     }
 
-    yield* Effect.callback<void, OpenError>((resume) => {
-      let child;
-      try {
-        const isWin32 = process.platform === "win32";
-        child = spawn(
-          launch.command,
-          isWin32 ? launch.args.map((a) => `"${a}"`) : [...launch.args],
-          {
-            detached: true,
-            stdio: "ignore",
-            shell: isWin32,
-          },
-        );
-      } catch (error) {
-        return resume(
-          Effect.fail(new OpenError({ message: "failed to spawn detached process", cause: error })),
-        );
-      }
-
-      const handleSpawn = () => {
-        child.unref();
-        resume(Effect.void);
-      };
-
-      child.once("spawn", handleSpawn);
-      child.once("error", (cause) =>
-        resume(Effect.fail(new OpenError({ message: "failed to spawn detached process", cause }))),
+    const isWin32 = process.platform === "win32";
+    const child = yield* spawner
+      .spawn(
+        ChildProcess.make(launch.command, isWin32 ? launch.args.map((a) => `"${a}"`) : [
+          ...launch.args,
+        ], {
+          detached: true,
+          stdin: "ignore",
+          stdout: "ignore",
+          stderr: "ignore",
+          shell: isWin32,
+        }),
+      )
+      .pipe(
+        Effect.mapError(
+          (cause) => new OpenError({ message: "failed to spawn detached process", cause }),
+        ),
       );
-    });
+    yield* child.unref;
   });
 
+export const launchDetached = (launch: EditorLaunch) =>
+  Effect.flatMap(ChildProcessSpawner.ChildProcessSpawner, (spawner) =>
+    launchDetachedWithSpawner(launch, spawner),
+  );
+
 const make = Effect.gen(function* () {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const open = yield* Effect.tryPromise({
     try: () => import("open"),
     catch: (cause) => new OpenError({ message: "failed to load browser opener", cause }),
@@ -231,7 +229,10 @@ const make = Effect.gen(function* () {
         try: () => open.default(target),
         catch: (cause) => new OpenError({ message: "Browser auto-open failed", cause }),
       }),
-    openInEditor: (input) => Effect.flatMap(resolveEditorLaunch(input), launchDetached),
+    openInEditor: (input) =>
+      Effect.flatMap(resolveEditorLaunch(input), (launch) =>
+        launchDetachedWithSpawner(launch, spawner)
+      ),
   } satisfies OpenShape;
 });
 

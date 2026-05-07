@@ -1,7 +1,8 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { assertSuccess } from "@effect/vitest/utils";
-import { FileSystem, Path, Effect } from "effect";
+import { FileSystem, Path, Effect, Layer, Sink, Stream } from "effect";
+import { ChildProcessSpawner } from "effect/unstable/process";
 
 import {
   isCommandAvailable,
@@ -475,20 +476,52 @@ it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
 });
 
 it.layer(NodeServices.layer)("launchDetached", (it) => {
-  it.effect("resolves when command can be spawned", () =>
+  it.effect("spawns through the Effect child process service", () =>
     Effect.gen(function* () {
+      let capturedCommand: unknown;
+      let unrefCalled = false;
+      const spawner = ChildProcessSpawner.make((command) =>
+        Effect.sync(() => {
+          capturedCommand = command;
+          return ChildProcessSpawner.makeHandle({
+            pid: ChildProcessSpawner.ProcessId(123),
+            exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+            isRunning: Effect.succeed(false),
+            kill: () => Effect.void,
+            unref: Effect.sync(() => {
+              unrefCalled = true;
+            }),
+            stdin: Sink.drain,
+            stdout: Stream.empty,
+            stderr: Stream.empty,
+            all: Stream.empty,
+            getInputFd: () => Sink.drain,
+            getOutputFd: () => Stream.empty,
+          });
+        }),
+      );
+
       const result = yield* launchDetached({
         command: process.execPath,
         args: ["-e", "process.exit(0)"],
-      }).pipe(Effect.result);
+      }).pipe(
+        Effect.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner)),
+        Effect.result,
+      );
+
       assertSuccess(result, undefined);
+      assert.isTrue(unrefCalled);
+      assert.deepInclude(capturedCommand as Record<string, unknown>, {
+        command: process.execPath,
+        args: ["-e", "process.exit(0)"],
+      });
     }),
   );
 
   it.effect("rejects when command does not exist", () =>
     Effect.gen(function* () {
       const result = yield* launchDetached({
-        command: `t3code-no-such-command-${Date.now()}`,
+        command: "t3code-no-such-command-effect-child-process",
         args: [],
       }).pipe(Effect.result);
       assert.equal(result._tag, "Failure");
