@@ -54,9 +54,6 @@ function reviewDiffHash(diff: string): string {
   return createHash("sha256").update(diff).digest("hex");
 }
 
-function splitNullSeparatedPaths(output: string, includeEmpty: boolean): ReadonlyArray<string> {
-  return output.split("\0").filter((path) => (includeEmpty ? true : path.length > 0));
-}
 const STATUS_UPSTREAM_REFRESH_FAILURE_COOLDOWN = Duration.seconds(5);
 const STATUS_UPSTREAM_REFRESH_CACHE_CAPACITY = 2_048;
 const STATUS_UPSTREAM_REFRESH_ENV = Object.freeze({
@@ -201,6 +198,23 @@ function paginateBranches(input: {
     nextCursor,
     totalCount,
   };
+}
+
+function splitNullSeparatedPaths(input: string, truncated: boolean): string[] {
+  const parts = input.split("\0");
+  if (parts.length === 0) return [];
+
+  if (truncated && parts[parts.length - 1]?.length) {
+    parts.pop();
+  }
+
+  return parts.filter((value) => value.length > 0);
+}
+
+export function splitNullSeparatedGitStdoutPaths(
+  result: Pick<GitVcsDriver.ExecuteGitResult, "stdout" | "stdoutTruncated">,
+): string[] {
+  return splitNullSeparatedPaths(result.stdout, result.stdoutTruncated);
 }
 
 function sanitizeRemoteName(value: string): string {
@@ -1649,7 +1663,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   });
 
   const readUntrackedReviewDiffs = Effect.fn("readUntrackedReviewDiffs")(function* (cwd: string) {
-    const untrackedOutput = yield* runGitStdoutWithOptions(
+    const untrackedResult = yield* executeGit(
       "GitVcsDriver.readUntrackedReviewDiffs.list",
       cwd,
       ["ls-files", "--others", "--exclude-standard", "-z"],
@@ -1658,9 +1672,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         truncateOutputAtMaxBytes: true,
       },
     );
-    const untrackedPaths = splitNullSeparatedPaths(untrackedOutput, false);
+    const untrackedPaths = splitNullSeparatedGitStdoutPaths(untrackedResult);
     if (untrackedPaths.length === 0) {
-      return { diff: "", truncated: false };
+      return { diff: "", truncated: untrackedResult.stdoutTruncated };
     }
 
     const diffs = yield* Effect.forEach(
@@ -1684,7 +1698,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         .map((result) => result.stdout)
         .filter((diff) => diff.trim().length > 0)
         .join("\n"),
-      truncated: diffs.some((result) => result.stdoutTruncated),
+      truncated: untrackedResult.stdoutTruncated || diffs.some((result) => result.stdoutTruncated),
     };
   });
 
