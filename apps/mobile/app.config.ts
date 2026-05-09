@@ -49,6 +49,7 @@ function resolveAppVariant(value: string | undefined): AppVariant {
 }
 
 const variant = VARIANT_CONFIG[APP_VARIANT];
+const allowsCleartextTraffic = APP_VARIANT === "development";
 
 const config: ExpoConfig = {
   name: variant.appName,
@@ -77,9 +78,13 @@ const config: ExpoConfig = {
     supportsTablet: true,
     bundleIdentifier: variant.iosBundleIdentifier,
     infoPlist: {
-      NSAppTransportSecurity: {
-        NSAllowsArbitraryLoads: true,
-      },
+      ...(allowsCleartextTraffic
+        ? {
+            NSAppTransportSecurity: {
+              NSAllowsArbitraryLoads: true,
+            },
+          }
+        : {}),
       ITSAppUsesNonExemptEncryption: false,
     },
   },
@@ -128,7 +133,7 @@ const config: ExpoConfig = {
     ],
     "expo-secure-store",
     "expo-router",
-    "./plugins/withAndroidCleartextTraffic.cjs",
+    ...(allowsCleartextTraffic ? ["./plugins/withAndroidCleartextTraffic.cjs"] : []),
   ],
   extra: {
     appVariant: APP_VARIANT,

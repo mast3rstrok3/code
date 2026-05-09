@@ -2223,7 +2223,17 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
           unsubscribe?.();
           unsubscribe = null;
         };
-      });
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.flatMap(
+            Effect.sync(() => {
+              unsubscribe?.();
+              unsubscribe = null;
+            }),
+            () => Effect.failCause(cause),
+          ),
+        ),
+      );
     };
 
     const write: TerminalManagerShape["write"] = Effect.fn("terminal.write")(function* (input) {

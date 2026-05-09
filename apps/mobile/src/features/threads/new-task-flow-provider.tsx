@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   EnvironmentId,
@@ -152,6 +152,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>("local");
   const [selectedBranchName, setSelectedBranchName] = useState<string | null>(null);
   const [selectedWorktreePath, setSelectedWorktreePath] = useState<string | null>(null);
+  const branchLoadVersionRef = useRef(0);
   const [prompt, setPrompt] = useState("");
   const [attachments, setAttachments] = useState<ReadonlyArray<DraftComposerImageAttachment>>([]);
   const [submitting, setSubmitting] = useState(false);
@@ -329,11 +330,16 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   }, [availableBranches, branchQuery]);
 
   const setProject = useCallback((project: EnvironmentScopedProjectShell) => {
+    const nextProjectKey = scopedProjectKey(project.environmentId, project.id);
+    branchLoadVersionRef.current += 1;
     setSelectedEnvironmentId(project.environmentId);
-    setSelectedProjectKey(scopedProjectKey(project.environmentId, project.id));
+    setSelectedProjectKey(nextProjectKey);
+    setSelectedBranchName(null);
+    setSelectedWorktreePath(null);
   }, []);
 
   const selectEnvironment = useCallback((environmentId: EnvironmentId) => {
+    branchLoadVersionRef.current += 1;
     setSelectedEnvironmentId(environmentId);
     setSelectedProjectKey(null);
     setSelectedBranchName(null);
@@ -355,12 +361,17 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       return;
     }
 
+    const loadVersion = ++branchLoadVersionRef.current;
+    const projectKey = scopedProjectKey(selectedProject.environmentId, selectedProject.id);
     try {
       const result = await vcsRefManager.load({
         environmentId: selectedProject.environmentId,
         cwd: selectedProject.workspaceRoot,
         query: null,
       });
+      if (loadVersion !== branchLoadVersionRef.current || selectedProjectKey !== projectKey) {
+        return;
+      }
       setPendingConnectionError(null);
       const branches = pipe(
         result?.refs ?? [],
@@ -377,9 +388,12 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         }
       }
     } catch {
+      if (loadVersion !== branchLoadVersionRef.current) {
+        return;
+      }
       setPendingConnectionError("Failed to load branches.");
     }
-  }, [selectedBranchName, selectedProject, workspaceMode]);
+  }, [selectedBranchName, selectedProject, selectedProjectKey, workspaceMode]);
 
   const value = useMemo<NewTaskFlowContextValue>(
     () => ({

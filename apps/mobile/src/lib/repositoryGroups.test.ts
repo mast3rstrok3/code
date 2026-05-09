@@ -108,10 +108,74 @@ describe("groupProjectsByRepository", () => {
       threadCount: 2,
     });
     expect(
-      groups[0]?.projects
-        .map((entry) => entry.project.environmentId)
-        .toSorted((left, right) => left.localeCompare(right)),
-    ).toEqual(["env-local", "env-staging"]);
+      groups[0]?.projects.map((entry) => ({
+        environmentId: entry.project.environmentId,
+        latestActivityAt: entry.latestActivityAt,
+        threads: entry.threads.map((thread) => thread.id),
+      })),
+    ).toEqual([
+      {
+        environmentId: "env-local",
+        latestActivityAt: "2026-04-03T12:00:00.000Z",
+        threads: ["thread-1"],
+      },
+      {
+        environmentId: "env-staging",
+        latestActivityAt: "2026-04-02T12:00:00.000Z",
+        threads: ["thread-2"],
+      },
+    ]);
+    expect(groups[0]?.latestActivityAt).toBe("2026-04-03T12:00:00.000Z");
+  });
+
+  it("orders threads, projects, and repository groups by latest activity", () => {
+    const projects = [
+      makeProject({
+        environmentId: EnvironmentId.make("env-local"),
+        id: ProjectId.make("older-project"),
+        title: "Older",
+      }),
+      makeProject({
+        environmentId: EnvironmentId.make("env-local"),
+        id: ProjectId.make("newer-project"),
+        title: "Newer",
+      }),
+    ];
+
+    const threads = [
+      makeThread({
+        environmentId: EnvironmentId.make("env-local"),
+        id: ThreadId.make("older-thread"),
+        projectId: ProjectId.make("older-project"),
+        title: "Older thread",
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+        updatedAt: "2026-04-02T12:00:00.000Z",
+      }),
+      makeThread({
+        environmentId: EnvironmentId.make("env-local"),
+        id: ThreadId.make("newer-thread"),
+        projectId: ProjectId.make("older-project"),
+        title: "Newer thread",
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+        updatedAt: "2026-04-04T12:00:00.000Z",
+      }),
+      makeThread({
+        environmentId: EnvironmentId.make("env-local"),
+        id: ThreadId.make("newest-thread"),
+        projectId: ProjectId.make("newer-project"),
+        title: "Newest thread",
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+        updatedAt: "2026-04-05T12:00:00.000Z",
+      }),
+    ];
+
+    const groups = groupProjectsByRepository({ projects, threads });
+
+    expect(groups.map((group) => group.title)).toEqual(["Newer", "Older"]);
+    expect(groups[1]?.projects[0]?.threads.map((thread) => thread.id)).toEqual([
+      "newer-thread",
+      "older-thread",
+    ]);
   });
 
   it("falls back to a scoped project key when repository identity is unavailable", () => {

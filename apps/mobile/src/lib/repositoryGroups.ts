@@ -8,6 +8,8 @@ import {
   EnvironmentScopedThreadShell,
 } from "@t3tools/client-runtime";
 
+const DateDescending = Order.flip(Order.Date);
+
 export interface MobileRepositoryProjectGroup {
   readonly key: string;
   readonly project: EnvironmentScopedProjectShell;
@@ -83,7 +85,7 @@ export function groupProjectsByRepository(input: {
     const threads = Arr.sortWith(
       threadsByProjectKey.get(projectKey) ?? [],
       (s) => new Date(s.updatedAt ?? s.createdAt),
-      Order.Date,
+      DateDescending,
     );
 
     const latestActivityAt = deriveProjectLatestActivity(project, threads);
@@ -123,10 +125,10 @@ export function groupProjectsByRepository(input: {
       projects: Arr.sortWith(
         [...existing.projects, projectGroup],
         (s) => new Date(s.latestActivityAt),
-        Order.Date,
+        DateDescending,
       ),
     });
   }
 
-  return Arr.sortWith([...grouped.values()], (s) => new Date(s.latestActivityAt), Order.Date);
+  return Arr.sortWith(grouped.values(), (s) => new Date(s.latestActivityAt), DateDescending);
 }

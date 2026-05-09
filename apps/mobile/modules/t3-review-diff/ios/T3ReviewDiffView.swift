@@ -768,6 +768,7 @@ private final class ReviewDiffContentView: UIView, UIGestureRecognizerDelegate {
     didSet {
       tokenColorsByHex.removeAll()
       tokenAttributedStringsByRowId.removeAll()
+      setNeedsDisplayForVisibleBounds()
     }
   }
   private(set) var contentHeight: CGFloat = 0
@@ -1007,6 +1008,10 @@ private final class ReviewDiffContentView: UIView, UIGestureRecognizerDelegate {
     }
 
     let point = gesture.location(in: self)
+    if let stickyHeader = stickyFileHeaderTarget(), stickyHeader.rect.contains(point) {
+      return
+    }
+
     guard let rowIndex = rowIndex(at: verticalOffset + point.y),
           rows.indices.contains(rowIndex) else {
       return
@@ -1418,6 +1423,10 @@ private final class ReviewDiffContentView: UIView, UIGestureRecognizerDelegate {
     deceleratingFileId = nil
     horizontalVelocity = 0
     lastDecelerationTimestamp = 0
+  }
+
+  deinit {
+    stopHorizontalDeceleration()
   }
 
   override func draw(_ rect: CGRect) {
@@ -1914,7 +1923,6 @@ private final class ReviewDiffContentView: UIView, UIGestureRecognizerDelegate {
     let change = row.change ?? "context"
     rowBackground(for: change).setFill()
     context.fill(rect)
-    drawSelectionOverlay(row, rect: rect, context: context)
 
     if change == "add" {
       theme.addBar.setFill()
@@ -1925,6 +1933,8 @@ private final class ReviewDiffContentView: UIView, UIGestureRecognizerDelegate {
         context: context
       )
     }
+
+    drawSelectionOverlay(row, rect: rect, context: context)
 
     let lineNumber = row.newLineNumber ?? row.oldLineNumber
     if let lineNumber {

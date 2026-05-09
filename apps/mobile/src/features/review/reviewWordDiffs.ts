@@ -208,7 +208,7 @@ export function applyDiffRangesToTokens(
       return;
     }
 
-    while ((ranges[rangeIndex]?.end ?? 0) <= tokenStart) {
+    while (rangeIndex < ranges.length && ranges[rangeIndex]!.end <= tokenStart) {
       rangeIndex += 1;
     }
 

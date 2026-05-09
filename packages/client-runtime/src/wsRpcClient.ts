@@ -23,6 +23,16 @@ interface StreamSubscriptionOptions {
   readonly onResubscribe?: () => void;
 }
 
+function subscriptionOptions(
+  options: StreamSubscriptionOptions | undefined,
+  tag: string,
+): StreamSubscriptionOptions & { readonly tag: string } {
+  return {
+    ...options,
+    tag,
+  };
+}
+
 type RpcUnaryMethod<TTag extends RpcTag> =
   RpcMethod<TTag> extends (input: any, options?: any) => Effect.Effect<infer TSuccess, any, any>
     ? (input: RpcInput<TTag>) => Promise<TSuccess>
@@ -145,7 +155,7 @@ export function createWsRpcClient(
         transport.subscribe(
           (client) => client[WS_METHODS.terminalAttach](input),
           listener,
-          options,
+          subscriptionOptions(options, WS_METHODS.terminalAttach),
         ),
       write: (input) => transport.request((client) => client[WS_METHODS.terminalWrite](input)),
       resize: (input) => transport.request((client) => client[WS_METHODS.terminalResize](input)),
@@ -156,7 +166,7 @@ export function createWsRpcClient(
         transport.subscribe(
           (client) => client[WS_METHODS.subscribeTerminalMetadata]({}),
           listener,
-          options,
+          subscriptionOptions(options, WS_METHODS.subscribeTerminalMetadata),
         ),
     },
     projects: {
@@ -184,7 +194,7 @@ export function createWsRpcClient(
             current = applyGitStatusStreamEvent(current, event);
             listener(current);
           },
-          options,
+          subscriptionOptions(options, WS_METHODS.subscribeVcsStatus),
         );
       },
       runStackedAction: async (input, options) => {
@@ -238,19 +248,19 @@ export function createWsRpcClient(
         transport.subscribe(
           (client) => client[WS_METHODS.subscribeServerConfig]({}),
           listener,
-          options,
+          subscriptionOptions(options, WS_METHODS.subscribeServerConfig),
         ),
       subscribeLifecycle: (listener, options) =>
         transport.subscribe(
           (client) => client[WS_METHODS.subscribeServerLifecycle]({}),
           listener,
-          options,
+          subscriptionOptions(options, WS_METHODS.subscribeServerLifecycle),
         ),
       subscribeAuthAccess: (listener, options) =>
         transport.subscribe(
           (client) => client[WS_METHODS.subscribeAuthAccess]({}),
           listener,
-          options,
+          subscriptionOptions(options, WS_METHODS.subscribeAuthAccess),
         ),
     },
     orchestration: {
@@ -264,13 +274,13 @@ export function createWsRpcClient(
         transport.subscribe(
           (client) => client[ORCHESTRATION_WS_METHODS.subscribeShell]({}),
           listener,
-          options,
+          subscriptionOptions(options, ORCHESTRATION_WS_METHODS.subscribeShell),
         ),
       subscribeThread: (input, listener, options) =>
         transport.subscribe(
           (client) => client[ORCHESTRATION_WS_METHODS.subscribeThread](input),
           listener,
-          options,
+          subscriptionOptions(options, ORCHESTRATION_WS_METHODS.subscribeThread),
         ),
     },
   };

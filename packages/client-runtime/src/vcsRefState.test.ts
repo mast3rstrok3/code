@@ -252,6 +252,31 @@ describe("createVcsRefManager", () => {
     expect(manager.getSnapshot(queriedTarget)).toEqual(EMPTY_VCS_REF_STATE);
   });
 
+  it("invalidates target in-flight loads before they can write stale data", async () => {
+    const firstLoad = deferred<VcsListRefsResult>();
+    let callCount = 0;
+    const listRefs = vi.fn((async () => {
+      callCount += 1;
+      return callCount === 1 ? firstLoad.promise : SECOND_PAGE;
+    }) satisfies VcsRefClient["listRefs"]);
+    const client = { listRefs } satisfies VcsRefClient;
+    const manager = createVcsRefManager({
+      getRegistry: () => atomRegistry,
+      getClient: () => client,
+    });
+
+    const staleLoad = manager.load(TARGET, client);
+    manager.invalidate(TARGET);
+    const freshLoad = manager.load(TARGET, client);
+
+    expect(listRefs).toHaveBeenCalledTimes(2);
+
+    firstLoad.resolve(FIRST_PAGE);
+    await expect(staleLoad).resolves.toEqual(FIRST_PAGE);
+    await expect(freshLoad).resolves.toEqual(SECOND_PAGE);
+    expect(manager.getSnapshot(TARGET).data).toEqual(SECOND_PAGE);
+  });
+
   it("watches refs with a ref-counted client-change subscription", async () => {
     const mock = createMockClient();
     let listener: () => void = noop;

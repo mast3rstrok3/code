@@ -389,14 +389,22 @@ export function createVcsRefManager(config: VcsRefManagerConfig) {
     if (target) {
       const targetKey = getVcsRefTargetKey(target);
       if (targetKey !== null) {
+        bumpLoadVersion(targetKey);
         setState(targetKey, EMPTY_VCS_REF_STATE);
+        for (const key of inFlight.keys()) {
+          if (key.startsWith(`${targetKey}:`)) {
+            inFlight.delete(key);
+          }
+        }
       }
       return;
     }
 
     for (const key of knownVcsRefKeys) {
+      bumpLoadVersion(key);
       setState(key, EMPTY_VCS_REF_STATE);
     }
+    inFlight.clear();
   }
 
   function invalidateScope(scope: VcsRefScope): void {

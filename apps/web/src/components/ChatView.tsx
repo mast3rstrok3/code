@@ -989,6 +989,10 @@ export default function ChatView(props: ChatViewProps) {
     () => activeThreadKnownSessions.map((session) => session.target.terminalId),
     [activeThreadKnownSessions],
   );
+  const activeKnownTerminalIds = useMemo(
+    () => [...new Set([...activeServerOrderedTerminalIds, ...terminalUiState.terminalIds])],
+    [activeServerOrderedTerminalIds, terminalUiState.terminalIds],
+  );
   const reconcileTerminalIds = useTerminalUiStateStore((state) => state.reconcileTerminalIds);
   const activeThreadRef = useMemo(
     () => (activeThread ? scopeThreadRef(activeThread.environmentId, activeThread.id) : null),
@@ -2012,7 +2016,7 @@ export default function ChatView(props: ChatViewProps) {
     if (!api) {
       return;
     }
-    const terminalId = nextTerminalId(activeServerOrderedTerminalIds);
+    const terminalId = nextTerminalId(activeKnownTerminalIds);
     storeSplitTerminal(activeThreadRef, terminalId);
     setTerminalFocusRequestId((value) => value + 1);
     void (async () => {
@@ -2033,7 +2037,7 @@ export default function ChatView(props: ChatViewProps) {
     })();
   }, [
     activeProject,
-    activeServerOrderedTerminalIds,
+    activeKnownTerminalIds,
     activeThreadId,
     activeThreadRef,
     activeThreadWorktreePath,
@@ -2054,7 +2058,7 @@ export default function ChatView(props: ChatViewProps) {
     if (!api) {
       return;
     }
-    const terminalId = nextTerminalId(activeServerOrderedTerminalIds);
+    const terminalId = nextTerminalId(activeKnownTerminalIds);
     storeNewTerminal(activeThreadRef, terminalId);
     setTerminalFocusRequestId((value) => value + 1);
     void (async () => {
@@ -2075,7 +2079,7 @@ export default function ChatView(props: ChatViewProps) {
     })();
   }, [
     activeProject,
-    activeServerOrderedTerminalIds,
+    activeKnownTerminalIds,
     activeThreadId,
     activeThreadRef,
     activeThreadWorktreePath,
@@ -2087,7 +2091,7 @@ export default function ChatView(props: ChatViewProps) {
     (terminalId: string) => {
       const api = readEnvironmentApi(environmentId);
       if (!activeThreadId || !api || !activeThreadRef) return;
-      const isFinalTerminal = activeServerOrderedTerminalIds.length <= 1;
+      const isFinalTerminal = activeKnownTerminalIds.length <= 1;
       const fallbackExitWrite = () =>
         api.terminal
           .write({ threadId: activeThreadId, terminalId, data: "exit\n" })
@@ -2111,13 +2115,7 @@ export default function ChatView(props: ChatViewProps) {
       storeCloseTerminal(activeThreadRef, terminalId);
       setTerminalFocusRequestId((value) => value + 1);
     },
-    [
-      activeThreadId,
-      activeThreadRef,
-      activeServerOrderedTerminalIds,
-      environmentId,
-      storeCloseTerminal,
-    ],
+    [activeThreadId, activeThreadRef, activeKnownTerminalIds, environmentId, storeCloseTerminal],
   );
   const runProjectScript = useCallback(
     async (
@@ -2140,9 +2138,7 @@ export default function ChatView(props: ChatViewProps) {
       }
       const targetCwd = options?.cwd ?? gitCwd ?? activeProject.cwd;
       const baseTerminalId =
-        terminalUiState.activeTerminalId ||
-        activeServerOrderedTerminalIds[0] ||
-        DEFAULT_THREAD_TERMINAL_ID;
+        terminalUiState.activeTerminalId || activeKnownTerminalIds[0] || DEFAULT_THREAD_TERMINAL_ID;
       const isBaseTerminalBusy = runningTerminalIds.includes(baseTerminalId);
       const wantsNewTerminal = Boolean(options?.preferNewTerminal) || isBaseTerminalBusy;
       const shouldCreateNewTerminal = wantsNewTerminal;
@@ -2167,7 +2163,7 @@ export default function ChatView(props: ChatViewProps) {
         ...(options?.env ? { extraEnv: options.env } : {}),
       });
       const targetTerminalId = shouldCreateNewTerminal
-        ? nextTerminalId(activeServerOrderedTerminalIds)
+        ? nextTerminalId(activeKnownTerminalIds)
         : baseTerminalId;
       const openTerminalInput: TerminalOpenInput = shouldCreateNewTerminal
         ? {
@@ -2219,7 +2215,7 @@ export default function ChatView(props: ChatViewProps) {
       storeSetActiveTerminal,
       setLastInvokedScriptByProjectId,
       environmentId,
-      activeServerOrderedTerminalIds,
+      activeKnownTerminalIds,
       runningTerminalIds,
       terminalUiState.activeTerminalId,
     ],

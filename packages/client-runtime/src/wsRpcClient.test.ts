@@ -3,6 +3,7 @@ import type {
   VcsStatusRemoteResult,
   VcsStatusStreamEvent,
 } from "@t3tools/contracts";
+import { ORCHESTRATION_WS_METHODS, ThreadId, WS_METHODS } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("./wsTransport.ts", () => ({
@@ -125,6 +126,38 @@ describe("createWsRpcClient", () => {
           hasWorkingTreeChanges: true,
         },
       ],
+    ]);
+  });
+
+  it("tags stream subscriptions for targeted resubscribe handling", () => {
+    const subscribe = vi.fn(() => () => undefined);
+    const transport = {
+      dispose: vi.fn(async () => undefined),
+      reconnect: vi.fn(async () => undefined),
+      request: vi.fn(),
+      requestStream: vi.fn(),
+      subscribe,
+    } satisfies Pick<
+      WsTransport,
+      "dispose" | "reconnect" | "request" | "requestStream" | "subscribe"
+    >;
+
+    const client = createWsRpcClient(transport as unknown as WsTransport);
+    const listener = vi.fn();
+
+    client.terminal.onMetadata(listener);
+    client.vcs.onStatus({ cwd: "/repo" }, listener);
+    client.server.subscribeConfig(listener);
+    client.orchestration.subscribeThread({ threadId: ThreadId.make("thread-1") }, listener);
+
+    const subscribeCalls = subscribe.mock.calls as unknown as Array<
+      readonly [unknown, unknown, { readonly tag?: string }?]
+    >;
+    expect(subscribeCalls.map((call) => call[2]?.tag)).toEqual([
+      WS_METHODS.subscribeTerminalMetadata,
+      WS_METHODS.subscribeVcsStatus,
+      WS_METHODS.subscribeServerConfig,
+      ORCHESTRATION_WS_METHODS.subscribeThread,
     ]);
   });
 });

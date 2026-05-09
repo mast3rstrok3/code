@@ -59,4 +59,35 @@ describe("applyDiffRangesToTokens", () => {
       },
     ]);
   });
+
+  it("skips exhausted ranges when later tokens start after the last range", () => {
+    const tokens = [
+      {
+        content: "a",
+        color: "#fff",
+        fontStyle: null,
+      },
+      {
+        content: "b",
+        color: "#fff",
+        fontStyle: null,
+      },
+    ];
+
+    const nextTokens = applyDiffRangesToTokens(tokens, [{ start: 0, end: 1 }]);
+
+    expect(nextTokens).toEqual([
+      {
+        content: "a",
+        color: "#fff",
+        fontStyle: null,
+        diffHighlight: true,
+      },
+      {
+        content: "b",
+        color: "#fff",
+        fontStyle: null,
+      },
+    ]);
+  });
 });

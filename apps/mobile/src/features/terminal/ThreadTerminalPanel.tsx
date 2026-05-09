@@ -1,6 +1,6 @@
 import { DEFAULT_TERMINAL_ID, type EnvironmentId, type ThreadId } from "@t3tools/contracts";
 import { SymbolView } from "expo-symbols";
-import { memo, useCallback, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Pressable, View } from "react-native";
 
 import { AppText as Text } from "../../components/AppText";
@@ -41,6 +41,8 @@ export const ThreadTerminalPanel = memo(function ThreadTerminalPanel(
     cols: DEFAULT_TERMINAL_COLS,
     rows: DEFAULT_TERMINAL_ROWS,
   });
+  const lastGridSizeRef = useRef(lastGridSize);
+  lastGridSizeRef.current = lastGridSize;
 
   const terminalKey = `${props.environmentId}:${props.threadId}:${terminalId}`;
   const isRunning = terminal.status === "running" || terminal.status === "starting";
@@ -73,13 +75,11 @@ export const ThreadTerminalPanel = memo(function ThreadTerminalPanel(
         terminalId,
         cwd: props.cwd,
         worktreePath: props.worktreePath,
-        cols: lastGridSize.cols,
-        rows: lastGridSize.rows,
+        cols: lastGridSizeRef.current.cols,
+        rows: lastGridSizeRef.current.rows,
       },
     });
   }, [
-    lastGridSize.cols,
-    lastGridSize.rows,
     props.cwd,
     props.environmentId,
     props.threadId,

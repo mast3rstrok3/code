@@ -1351,6 +1351,27 @@ it.layer(
     }),
   );
 
+  it.effect("removes terminal metadata subscriptions when initial delivery fails", () =>
+    Effect.gen(function* () {
+      const { manager } = yield* createManager();
+      yield* manager.open(openInput({ threadId: "existing-thread" }));
+
+      const leakedLiveEvents = yield* Ref.make(0);
+      const exit = yield* Effect.exit(
+        manager.subscribeMetadata((event) =>
+          event.type === "snapshot"
+            ? Effect.die("snapshot listener failed")
+            : Ref.update(leakedLiveEvents, (count) => count + 1),
+        ),
+      );
+
+      expect(Exit.isFailure(exit)).toBe(true);
+
+      yield* manager.open(openInput({ threadId: "new-thread" }));
+      expect(yield* Ref.get(leakedLiveEvents)).toBe(0);
+    }),
+  );
+
   it.effect(
     "streams attach snapshots followed by live events without duplicate start snapshots",
     () =>
