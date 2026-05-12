@@ -6,6 +6,10 @@ import type {
   EnvironmentId,
 } from "@t3tools/contracts";
 import { ThreadId, type TerminalAttachInput } from "@t3tools/contracts";
+import * as Arr from "effect/Array";
+import { pipe } from "effect/Function";
+import * as Order from "effect/Order";
+import * as Result from "effect/Result";
 import { Atom, type AtomRegistry } from "effect/unstable/reactivity";
 
 export interface TerminalSessionState {
@@ -109,6 +113,13 @@ const knownTerminalMetadataEnvironmentIds = new Set<EnvironmentId>();
 const knownTerminalBufferTargets = new Map<string, KnownTerminalSessionTarget>();
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
+const terminalIdOrder = Order.make<string>(
+  (left, right) => left.localeCompare(right, undefined, { numeric: true }) as -1 | 0 | 1,
+);
+const knownTerminalSessionOrder = Order.mapInput(
+  terminalIdOrder,
+  (session: KnownTerminalSession) => session.target.terminalId,
+);
 
 export const terminalSessionMetadataAtom = Atom.family((environmentId: EnvironmentId) => {
   knownTerminalMetadataEnvironmentIds.add(environmentId);
@@ -251,26 +262,25 @@ function listKnownSessionsFromMetadata(
   getBuffer: (target: KnownTerminalSessionTarget) => TerminalBufferState,
   filter?: Partial<KnownTerminalSessionTarget>,
 ): ReadonlyArray<KnownTerminalSession> {
-  return Object.values(metadata)
-    .filter(({ target }) => {
+  return pipe(
+    Object.values(metadata),
+    Arr.filterMap(({ target, summary }) => {
       if (filter?.environmentId && target.environmentId !== filter.environmentId) {
-        return false;
+        return Result.failVoid;
       }
       if (filter?.threadId && target.threadId !== filter.threadId) {
-        return false;
+        return Result.failVoid;
       }
       if (filter?.terminalId && target.terminalId !== filter.terminalId) {
-        return false;
+        return Result.failVoid;
       }
-      return true;
-    })
-    .map(({ target, summary }) => ({
-      target,
-      state: combineSessionState(summary, getBuffer(target)),
-    }))
-    .sort((left, right) =>
-      left.target.terminalId.localeCompare(right.target.terminalId, undefined, { numeric: true }),
-    );
+      return Result.succeed({
+        target,
+        state: combineSessionState(summary, getBuffer(target)),
+      });
+    }),
+    Arr.sort(knownTerminalSessionOrder),
+  );
 }
 
 export const terminalSessionStateAtom = Atom.family((target: KnownTerminalSessionTarget) =>
@@ -299,16 +309,18 @@ export const knownTerminalSessionsAtom = Atom.family((filter: KnownTerminalSessi
 
 export const runningTerminalIdsAtom = Atom.family((filter: KnownTerminalSessionListFilter) =>
   Atom.make((get) => {
-    return Object.values(get(terminalSessionMetadataAtom(filter.environmentId)))
-      .filter(
-        (entry) =>
-          entry.target.environmentId === filter.environmentId &&
-          (filter.threadId === null || entry.target.threadId === filter.threadId) &&
-          (filter.terminalId === null || entry.target.terminalId === filter.terminalId) &&
-          entry.summary.hasRunningSubprocess,
-      )
-      .map((entry) => entry.target.terminalId)
-      .sort();
+    return pipe(
+      Object.values(get(terminalSessionMetadataAtom(filter.environmentId))),
+      Arr.filterMap((entry) =>
+        entry.target.environmentId === filter.environmentId &&
+        (filter.threadId === null || entry.target.threadId === filter.threadId) &&
+        (filter.terminalId === null || entry.target.terminalId === filter.terminalId) &&
+        entry.summary.hasRunningSubprocess
+          ? Result.succeed(entry.target.terminalId)
+          : Result.failVoid,
+      ),
+      Arr.sort(Order.String),
+    );
   }).pipe(
     Atom.keepAlive,
     Atom.withLabel(`terminal-session:running-terminal-ids:${JSON.stringify(filter)}`),
@@ -540,8 +552,12 @@ export function createTerminalSessionManager(config: TerminalSessionManagerConfi
       return listKnownSessionsFromMetadata(getMetadata(filter.environmentId), getBuffer, filter);
     }
 
-    return [...knownTerminalMetadataEnvironmentIds].flatMap((environmentId) =>
-      listKnownSessionsFromMetadata(getMetadata(environmentId), getBuffer, filter),
+    return pipe(
+      knownTerminalMetadataEnvironmentIds,
+      Arr.fromIterable,
+      Arr.flatMap((environmentId) =>
+        listKnownSessionsFromMetadata(getMetadata(environmentId), getBuffer, filter),
+      ),
     );
   }
 

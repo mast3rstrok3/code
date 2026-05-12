@@ -268,15 +268,17 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       ];
       const builtIn = allBuiltIn.filter((item) => item.command.includes(q));
 
-      const providerCommands: ComposerCommandItem[] = (selectedProviderStatus?.slashCommands ?? [])
-        .filter((cmd) => cmd.name.toLowerCase().includes(q))
-        .map((cmd) => ({
+      const providerCommands: ComposerCommandItem[] = [];
+      for (const cmd of selectedProviderStatus?.slashCommands ?? []) {
+        if (!cmd.name.toLowerCase().includes(q)) continue;
+        providerCommands.push({
           id: `pcmd:${cmd.name}`,
           type: "provider-slash-command" as const,
           command: cmd,
           label: `/${cmd.name}`,
           description: cmd.description ?? "",
-        }));
+        });
+      }
 
       return [...builtIn, ...providerCommands];
     }

@@ -44,13 +44,13 @@ export function GitBranchesSheet() {
   );
   const [worktreeBranchName, setWorktreeBranchName] = useState("");
 
-  const disabledExistingBranches = new Set(
-    availableBranches
-      .filter(
-        (branch) => branch.worktreePath !== null && branch.worktreePath !== currentWorktreePath,
-      )
-      .map((branch) => branch.name),
-  );
+  const disabledExistingBranchNames: Array<string> = [];
+  for (const branch of availableBranches) {
+    if (branch.worktreePath !== null && branch.worktreePath !== currentWorktreePath) {
+      disabledExistingBranchNames.push(branch.name);
+    }
+  }
+  const disabledExistingBranches = new Set(disabledExistingBranchNames);
 
   return (
     <ScrollView

@@ -1,7 +1,11 @@
 import { EnvironmentId, type OrchestrationShellSnapshot } from "@t3tools/contracts";
+import * as Arr from "effect/Array";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import { pipe } from "effect/Function";
+import * as Order from "effect/Order";
 import * as Option from "effect/Option";
+import * as Result from "effect/Result";
 import { AsyncResult, Atom, type AtomRegistry } from "effect/unstable/reactivity";
 
 export type ArchivedSnapshotEntry = {
@@ -22,20 +26,24 @@ export interface ArchivedThreadsSnapshotState {
 const ARCHIVED_THREADS_ENVIRONMENT_KEY_SEPARATOR = "\u001f";
 const DEFAULT_ARCHIVED_THREADS_STALE_TIME_MS = 5_000;
 const DEFAULT_ARCHIVED_THREADS_IDLE_TTL_MS = 5 * 60_000;
+const environmentIdOrder = Order.String as Order.Order<EnvironmentId>;
 
 export function makeArchivedThreadsEnvironmentKey(
   environmentIds: ReadonlyArray<EnvironmentId>,
 ): string {
-  return environmentIds.toSorted().join(ARCHIVED_THREADS_ENVIRONMENT_KEY_SEPARATOR);
+  return pipe(environmentIds, Arr.sort(environmentIdOrder), (sortedEnvironmentIds) =>
+    sortedEnvironmentIds.join(ARCHIVED_THREADS_ENVIRONMENT_KEY_SEPARATOR),
+  );
 }
 
 export function parseArchivedThreadsEnvironmentKey(key: string): ReadonlyArray<EnvironmentId> {
   if (key.length === 0) {
     return [];
   }
-  return key
-    .split(ARCHIVED_THREADS_ENVIRONMENT_KEY_SEPARATOR)
-    .map((environmentId) => EnvironmentId.make(environmentId));
+  return pipe(
+    key.split(ARCHIVED_THREADS_ENVIRONMENT_KEY_SEPARATOR),
+    Arr.map((environmentId) => EnvironmentId.make(environmentId)),
+  );
 }
 
 export function readArchivedThreadsSnapshotState(
@@ -70,18 +78,26 @@ export function createArchivedThreadsManager(config: {
     return Atom.make(
       Effect.promise(async (): Promise<ReadonlyArray<ArchivedSnapshotEntry>> => {
         const snapshots = await Promise.all(
-          parseArchivedThreadsEnvironmentKey(environmentKey).map(async (environmentId) => {
-            const client = config.getClient(environmentId);
-            if (!client) {
-              return null;
-            }
-            return {
-              environmentId,
-              snapshot: await client.getArchivedShellSnapshot(),
-            };
-          }),
+          pipe(
+            parseArchivedThreadsEnvironmentKey(environmentKey),
+            Arr.map(async (environmentId) => {
+              const client = config.getClient(environmentId);
+              if (!client) {
+                return null;
+              }
+              return {
+                environmentId,
+                snapshot: await client.getArchivedShellSnapshot(),
+              };
+            }),
+          ),
         );
-        return snapshots.filter((snapshot) => snapshot !== null);
+        return pipe(
+          snapshots,
+          Arr.filterMap((snapshot) =>
+            snapshot !== null ? Result.succeed(snapshot) : Result.failVoid,
+          ),
+        );
       }),
     ).pipe(
       Atom.swr({

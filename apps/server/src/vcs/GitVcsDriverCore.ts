@@ -1694,10 +1694,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     );
 
     return {
-      diff: diffs
-        .map((result) => result.stdout)
-        .filter((diff) => diff.trim().length > 0)
-        .join("\n"),
+      diff: Arr.filterMap(diffs, (result) =>
+        result.stdout.trim().length > 0 ? Result.succeed(result.stdout) : Result.failVoid,
+      ).join("\n"),
       truncated: untrackedResult.stdoutTruncated || diffs.some((result) => result.stdoutTruncated),
     };
   });

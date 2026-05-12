@@ -1001,12 +1001,15 @@ export async function highlightReviewSelectedLines(input: {
   const language =
     loadedLanguage ?? (await resolveLanguageFromPath(input.filePath, input.languageHint ?? null));
   const shikiTheme = SHIKI_THEME_NAME_BY_SCHEME[input.theme];
-  const additionLikeLines = input.lines
-    .filter((line) => line.change !== "delete")
-    .map((line) => `${line.content}\n`);
-  const deletionLines = input.lines
-    .filter((line) => line.change === "delete")
-    .map((line) => `${line.content}\n`);
+  const additionLikeLines: string[] = [];
+  const deletionLines: string[] = [];
+  for (const line of input.lines) {
+    if (line.change === "delete") {
+      deletionLines.push(`${line.content}\n`);
+    } else {
+      additionLikeLines.push(`${line.content}\n`);
+    }
+  }
   const [additionTokens, deletionTokens] = await Promise.all([
     highlightLines(joinPatchLines(additionLikeLines), language, shikiTheme),
     highlightLines(joinPatchLines(deletionLines), language, shikiTheme),

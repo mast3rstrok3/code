@@ -1,5 +1,6 @@
 import { Link, Stack } from "expo-router";
 import { SymbolView } from "expo-symbols";
+import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { useMemo } from "react";
 import { Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -21,26 +22,29 @@ export default function NewTaskRoute() {
     () => groupProjectsByRepository({ projects, threads }),
     [projects, threads],
   );
-  const items = useMemo(
-    () =>
-      repositoryGroups
-        .map((group) => {
-          const project = group.projects[0]?.project;
-          if (!project) {
-            return null;
-          }
-
-          return {
-            environmentId: project.environmentId,
-            id: project.id,
-            key: group.key,
-            title: project.title,
-            workspaceRoot: project.workspaceRoot,
-          };
-        })
-        .filter((entry) => entry !== null),
-    [repositoryGroups],
-  );
+  const items = useMemo(() => {
+    const nextItems: Array<{
+      readonly environmentId: EnvironmentId;
+      readonly id: ProjectId;
+      readonly key: string;
+      readonly title: string;
+      readonly workspaceRoot: string;
+    }> = [];
+    for (const group of repositoryGroups) {
+      const project = group.projects[0]?.project;
+      if (!project) {
+        continue;
+      }
+      nextItems.push({
+        environmentId: project.environmentId,
+        id: project.id,
+        key: group.key,
+        title: project.title,
+        workspaceRoot: project.workspaceRoot,
+      });
+    }
+    return nextItems;
+  }, [repositoryGroups]);
 
   return (
     <View collapsable={false} className="flex-1 bg-sheet">

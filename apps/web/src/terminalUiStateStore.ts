@@ -409,12 +409,13 @@ function closeThreadTerminal(
         "")
       : normalized.activeTerminalId;
 
-  const terminalGroups = normalized.terminalGroups
-    .map((group) => ({
-      ...group,
-      terminalIds: group.terminalIds.filter((id) => id !== terminalId),
-    }))
-    .filter((group) => group.terminalIds.length > 0);
+  const terminalGroups: ThreadTerminalGroup[] = [];
+  for (const group of normalized.terminalGroups) {
+    const terminalIds = group.terminalIds.filter((id) => id !== terminalId);
+    if (terminalIds.length > 0) {
+      terminalGroups.push({ ...group, terminalIds });
+    }
+  }
 
   const nextActiveTerminalGroupId =
     terminalGroups.find((group) => group.terminalIds.includes(nextActiveTerminalId))?.id ??
