@@ -2,7 +2,7 @@
   "version": 1,
   "policies": [
     {
-      "t3CodeRange": ">=0.0.0",
+      "t3CodeRange": ">=0.0.24",
       "driver": "codex",
       "recommendedRange": ">=0.129.0",
       "recommendedVersion": "0.129.0",
@@ -20,7 +20,7 @@
       ]
     },
     {
-      "t3CodeRange": ">=0.0.0",
+      "t3CodeRange": ">=0.0.24",
       "driver": "claudeAgent",
       "recommendedRange": ">=0.2.111",
       "recommendedVersion": "0.2.111",
@@ -33,11 +33,16 @@
       ]
     },
     {
-      "t3CodeRange": ">=0.0.0",
+      "t3CodeRange": ">=0.0.24",
       "driver": "opencode",
-      "recommendedRange": ">=1.14.19",
-      "recommendedVersion": "1.14.19",
+      "recommendedRange": ">=1.14.19 <1.14.41",
+      "recommendedVersion": "1.14.40",
       "ranges": [
+        {
+          "status": "supported",
+          "range": ">1.14.40",
+          "label": "Known incompatible OpenCode harness"
+        },
         {
           "status": "supported",
           "range": ">=1.14.19",
@@ -51,7 +56,7 @@
       ]
     },
     {
-      "t3CodeRange": ">=0.0.0",
+      "t3CodeRange": ">=0.0.24",
       "driver": "cursor",
       "recommendedRange": ">=2026.05.09",
       "recommendedVersion": "2026.05.09",
