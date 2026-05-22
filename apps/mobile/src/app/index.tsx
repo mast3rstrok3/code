@@ -1,38 +1,12 @@
 import { Stack, useRouter } from "expo-router";
-import { type ComponentProps, useState } from "react";
-import { Pressable, Text as RNText, View, useColorScheme } from "react-native";
-import { SymbolView } from "expo-symbols";
+import { useState } from "react";
+import { Text as RNText, View, useColorScheme } from "react-native";
 import { useThemeColor } from "../lib/useThemeColor";
 
 import { buildThreadRoutePath } from "../lib/routes";
 import { useRemoteCatalog } from "../state/use-remote-catalog";
 import { useRemoteEnvironmentState } from "../state/use-remote-environment-registry";
 import { HomeScreen } from "../features/home/HomeScreen";
-import type { RemoteCatalogState } from "../state/use-remote-catalog";
-
-function resolveHeaderStatus(state: RemoteCatalogState): {
-  readonly icon: ComponentProps<typeof SymbolView>["name"];
-  readonly color: string;
-  readonly label: string;
-} {
-  if (state.isLoadingSavedConnections) {
-    return { icon: "hourglass", color: "#737373", label: "Loading environments" };
-  }
-  if (state.connectionError) {
-    return { icon: "exclamationmark.triangle.fill", color: "#ef4444", label: "Environment error" };
-  }
-  if (state.connectionState === "ready") {
-    return { icon: "checkmark.circle.fill", color: "#22c55e", label: "Environment online" };
-  }
-  if (state.connectionState === "connecting" || state.connectionState === "reconnecting") {
-    return {
-      icon: "arrow.triangle.2.circlepath",
-      color: "#f59e0b",
-      label: "Environment connecting",
-    };
-  }
-  return { icon: "wifi.slash", color: "#ef4444", label: "Environment offline" };
-}
 
 /* ─── Route screen ───────────────────────────────────────────────────── */
 
@@ -44,7 +18,6 @@ export default function HomeRouteScreen() {
 
   const isDark = useColorScheme() === "dark";
   const iconColor = String(useThemeColor("--color-icon"));
-  const status = resolveHeaderStatus(catalogState);
 
   return (
     <>
@@ -105,15 +78,16 @@ export default function HomeRouteScreen() {
       </Stack.Toolbar>
 
       <Stack.Toolbar placement="right">
-        <Stack.Toolbar.View hidesSharedBackground>
-          <Pressable
-            accessibilityLabel={status.label}
-            className="h-11 w-11 items-center justify-center rounded-full bg-card active:opacity-70"
+        <Stack.Toolbar.Menu icon="ellipsis.circle" separateBackground>
+          <Stack.Toolbar.Label>More</Stack.Toolbar.Label>
+          <Stack.Toolbar.MenuAction
+            icon="desktopcomputer"
             onPress={() => router.push("/connections")}
+            subtitle="Manage connected hosts"
           >
-            <SymbolView name={status.icon} size={21} tintColor={status.color} type="monochrome" />
-          </Pressable>
-        </Stack.Toolbar.View>
+            <Stack.Toolbar.Label>Environments</Stack.Toolbar.Label>
+          </Stack.Toolbar.MenuAction>
+        </Stack.Toolbar.Menu>
       </Stack.Toolbar>
 
       {/* Bottom toolbar: search + compose, visually split like iMessage */}

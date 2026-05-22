@@ -1,3 +1,5 @@
+import { readHostedPairingRequest } from "@t3tools/shared/remote";
+
 const MOBILE_PAIRING_URL_PARAM = "pairingUrl";
 
 export function buildPairingUrl(host: string, code: string): string {
@@ -21,6 +23,14 @@ export function parsePairingUrl(url: string): { host: string; code: string } {
 
   try {
     const parsed = new URL(trimmed);
+    const hostedPairingRequest = readHostedPairingRequest(parsed);
+    if (hostedPairingRequest) {
+      return {
+        host: hostedPairingRequest.host.replace(/\/$/, ""),
+        code: hostedPairingRequest.token,
+      };
+    }
+
     const hashParams = new URLSearchParams(parsed.hash.slice(1));
     const hashToken = hashParams.get("token");
     const queryToken = parsed.searchParams.get("token");

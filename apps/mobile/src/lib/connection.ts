@@ -2,8 +2,9 @@ import { EnvironmentId } from "@t3tools/contracts";
 import {
   bootstrapRemoteBearerSession,
   fetchRemoteEnvironmentDescriptor,
-  resolveRemotePairingTarget,
-} from "@t3tools/shared/remote";
+} from "@t3tools/client-runtime";
+import { resolveRemotePairingTarget } from "@t3tools/shared/remote";
+import { mobileRemoteHttpRuntime } from "./runtime";
 
 export interface RemoteConnectionInput {
   readonly pairingUrl: string;
@@ -33,14 +34,18 @@ export async function bootstrapRemoteConnection(
     pairingUrl: input.pairingUrl,
   });
 
-  const descriptor = await fetchRemoteEnvironmentDescriptor({
-    httpBaseUrl: target.httpBaseUrl,
-  });
+  const descriptor = await mobileRemoteHttpRuntime.runPromise(
+    fetchRemoteEnvironmentDescriptor({
+      httpBaseUrl: target.httpBaseUrl,
+    }),
+  );
 
-  const bootstrap = await bootstrapRemoteBearerSession({
-    httpBaseUrl: target.httpBaseUrl,
-    credential: target.credential,
-  });
+  const bootstrap = await mobileRemoteHttpRuntime.runPromise(
+    bootstrapRemoteBearerSession({
+      httpBaseUrl: target.httpBaseUrl,
+      credential: target.credential,
+    }),
+  );
 
   return {
     environmentId: descriptor.environmentId,

@@ -9,6 +9,7 @@ const mockBootstrapRemoteBearerSession = vi.fn();
 const mockFetchRemoteSessionState = vi.fn();
 const mockIsRemoteEnvironmentAuthHttpError = vi.fn((_: unknown) => false);
 const mockResolveRemoteWebSocketConnectionUrl = vi.fn();
+const mockRemoteHttpRunPromise = vi.fn((effect: Promise<unknown>) => effect);
 const mockBootstrapSshBearerSession = vi.fn();
 const mockFetchSshSessionState = vi.fn();
 const mockPersistSavedEnvironmentRecord = vi.fn();
@@ -56,16 +57,15 @@ const mockClientGetConfig = vi.fn(async () => ({
   },
 }));
 
-vi.mock("../remote/target", () => ({
+vi.mock("@t3tools/shared/remote", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@t3tools/shared/remote")>()),
   resolveRemotePairingTarget: mockResolveRemotePairingTarget,
 }));
 
-vi.mock("../remote/api", () => ({
-  bootstrapRemoteBearerSession: mockBootstrapRemoteBearerSession,
-  fetchRemoteEnvironmentDescriptor: mockFetchRemoteEnvironmentDescriptor,
-  fetchRemoteSessionState: mockFetchRemoteSessionState,
-  isRemoteEnvironmentAuthHttpError: mockIsRemoteEnvironmentAuthHttpError,
-  resolveRemoteWebSocketConnectionUrl: mockResolveRemoteWebSocketConnectionUrl,
+vi.mock("../../lib/runtime", () => ({
+  remoteHttpRuntime: {
+    runPromise: mockRemoteHttpRunPromise,
+  },
 }));
 
 vi.mock("~/localApi", () => ({
@@ -113,6 +113,7 @@ vi.mock("@t3tools/client-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@t3tools/client-runtime")>();
   return {
     ...actual,
+    bootstrapRemoteBearerSession: mockBootstrapRemoteBearerSession,
     createWsRpcClient: vi.fn(() => ({
       server: {
         getConfig: mockClientGetConfig,
@@ -124,6 +125,10 @@ vi.mock("@t3tools/client-runtime", async (importOriginal) => {
         subscribeThread: vi.fn(() => () => {}),
       },
     })),
+    fetchRemoteEnvironmentDescriptor: mockFetchRemoteEnvironmentDescriptor,
+    fetchRemoteSessionState: mockFetchRemoteSessionState,
+    isRemoteEnvironmentAuthHttpError: mockIsRemoteEnvironmentAuthHttpError,
+    resolveRemoteWebSocketConnectionUrl: mockResolveRemoteWebSocketConnectionUrl,
   };
 });
 

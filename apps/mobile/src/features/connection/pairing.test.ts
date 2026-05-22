@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { extractPairingUrlFromQrPayload } from "./pairing";
+import { extractPairingUrlFromQrPayload, parsePairingUrl } from "./pairing";
 
 describe("extractPairingUrlFromQrPayload", () => {
   it("trims raw pairing urls from qr payloads", () => {
@@ -21,5 +21,18 @@ describe("extractPairingUrlFromQrPayload", () => {
     expect(() => extractPairingUrlFromQrPayload("   ")).toThrow(
       "Scanned QR code did not contain a pairing URL.",
     );
+  });
+});
+
+describe("parsePairingUrl", () => {
+  it("reads hosted pairing links into backend host fields", () => {
+    expect(
+      parsePairingUrl(
+        "https://app.t3.codes/pair?host=https%3A%2F%2Fdesktop.tailnet.ts.net%2F#token=pairing-token",
+      ),
+    ).toEqual({
+      host: "https://desktop.tailnet.ts.net",
+      code: "pairing-token",
+    });
   });
 });

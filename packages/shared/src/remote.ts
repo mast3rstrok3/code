@@ -1,17 +1,11 @@
-import type {
-  AuthBearerBootstrapResult,
-  AuthSessionState,
-  AuthWebSocketTokenResult,
-  ExecutionEnvironmentDescriptor,
-} from "@t3tools/contracts";
-
 const PAIRING_TOKEN_PARAM = "token";
+const HOSTED_PAIRING_HOST_PARAM = "host";
+const HOSTED_PAIRING_LABEL_PARAM = "label";
 
-function readHashParams(url: URL): URLSearchParams {
-  return new URLSearchParams(url.hash.startsWith("#") ? url.hash.slice(1) : url.hash);
-}
+const readHashParams = (url: URL): URLSearchParams =>
+  new URLSearchParams(url.hash.startsWith("#") ? url.hash.slice(1) : url.hash);
 
-function normalizeRemoteBaseUrl(rawValue: string): URL {
+const normalizeRemoteBaseUrl = (rawValue: string): URL => {
   const trimmed = rawValue.trim();
   if (!trimmed) {
     throw new Error("Enter a backend URL.");
@@ -26,9 +20,9 @@ function normalizeRemoteBaseUrl(rawValue: string): URL {
   url.search = "";
   url.hash = "";
   return url;
-}
+};
 
-function toHttpBaseUrl(url: URL): string {
+const toHttpBaseUrl = (url: URL): string => {
   const next = new URL(url.toString());
   if (next.protocol === "ws:") {
     next.protocol = "http:";
@@ -39,9 +33,9 @@ function toHttpBaseUrl(url: URL): string {
   next.search = "";
   next.hash = "";
   return next.toString();
-}
+};
 
-function toWsBaseUrl(url: URL): string {
+const toWsBaseUrl = (url: URL): string => {
   const next = new URL(url.toString());
   if (next.protocol === "http:") {
     next.protocol = "ws:";
@@ -52,84 +46,7 @@ function toWsBaseUrl(url: URL): string {
   next.search = "";
   next.hash = "";
   return next.toString();
-}
-
-function remoteEndpointUrl(httpBaseUrl: string, pathname: string): string {
-  const url = new URL(httpBaseUrl);
-  url.pathname = pathname;
-  url.search = "";
-  url.hash = "";
-  return url.toString();
-}
-
-async function readRemoteAuthErrorMessage(
-  response: Response,
-  fallbackMessage: string,
-): Promise<string> {
-  const text = await response.text();
-  if (!text) {
-    return fallbackMessage;
-  }
-
-  try {
-    const parsed = JSON.parse(text) as { readonly error?: string };
-    if (typeof parsed.error === "string" && parsed.error.length > 0) {
-      return parsed.error;
-    }
-  } catch {
-    // Fall back to raw text below.
-  }
-
-  return text;
-}
-
-async function fetchRemoteJson<T>(input: {
-  readonly httpBaseUrl: string;
-  readonly pathname: string;
-  readonly method?: "GET" | "POST";
-  readonly bearerToken?: string;
-  readonly body?: unknown;
-}): Promise<T> {
-  const requestUrl = remoteEndpointUrl(input.httpBaseUrl, input.pathname);
-  let response: Response;
-  try {
-    response = await fetch(requestUrl, {
-      method: input.method ?? "GET",
-      headers: {
-        ...(input.body !== undefined ? { "content-type": "application/json" } : {}),
-        ...(input.bearerToken ? { authorization: `Bearer ${input.bearerToken}` } : {}),
-      },
-      ...(input.body !== undefined ? { body: JSON.stringify(input.body) } : {}),
-    });
-  } catch (error) {
-    throw new Error(
-      `Failed to fetch remote auth endpoint ${requestUrl} (${(error as Error).message}).`,
-      { cause: error },
-    );
-  }
-
-  if (!response.ok) {
-    throw new RemoteEnvironmentAuthHttpError(
-      await readRemoteAuthErrorMessage(
-        response,
-        `Remote auth request failed (${response.status}).`,
-      ),
-      response.status,
-    );
-  }
-
-  return (await response.json()) as T;
-}
-
-export class RemoteEnvironmentAuthHttpError extends Error {
-  readonly status: number;
-
-  constructor(message: string, status: number) {
-    super(message);
-    this.name = "RemoteEnvironmentAuthHttpError";
-    this.status = status;
-  }
-}
+};
 
 export interface ResolvedRemotePairingTarget {
   readonly credential: string;
@@ -137,7 +54,13 @@ export interface ResolvedRemotePairingTarget {
   readonly wsBaseUrl: string;
 }
 
-export function getPairingTokenFromUrl(url: URL): string | null {
+export interface HostedPairingRequest {
+  readonly host: string;
+  readonly token: string;
+  readonly label: string;
+}
+
+export const getPairingTokenFromUrl = (url: URL): string | null => {
   const hashToken = readHashParams(url).get(PAIRING_TOKEN_PARAM)?.trim() ?? "";
   if (hashToken.length > 0) {
     return hashToken;
@@ -145,9 +68,9 @@ export function getPairingTokenFromUrl(url: URL): string | null {
 
   const searchToken = url.searchParams.get(PAIRING_TOKEN_PARAM)?.trim() ?? "";
   return searchToken.length > 0 ? searchToken : null;
-}
+};
 
-export function stripPairingTokenFromUrl(url: URL): URL {
+export const stripPairingTokenFromUrl = (url: URL): URL => {
   const next = new URL(url.toString());
   const hashParams = readHashParams(next);
   if (hashParams.has(PAIRING_TOKEN_PARAM)) {
@@ -156,23 +79,49 @@ export function stripPairingTokenFromUrl(url: URL): URL {
   }
   next.searchParams.delete(PAIRING_TOKEN_PARAM);
   return next;
-}
+};
 
-export function setPairingTokenOnUrl(url: URL, credential: string): URL {
+export const setPairingTokenOnUrl = (url: URL, credential: string): URL => {
   const next = new URL(url.toString());
   next.searchParams.delete(PAIRING_TOKEN_PARAM);
   next.hash = new URLSearchParams([[PAIRING_TOKEN_PARAM, credential]]).toString();
   return next;
-}
+};
 
-export function resolveRemotePairingTarget(input: {
+export const readHostedPairingRequest = (url: URL): HostedPairingRequest | null => {
+  const host = url.searchParams.get(HOSTED_PAIRING_HOST_PARAM)?.trim() ?? "";
+  const token = getPairingTokenFromUrl(url)?.trim() ?? "";
+  const label = url.searchParams.get(HOSTED_PAIRING_LABEL_PARAM)?.trim() ?? "";
+
+  if (!host || !token) {
+    return null;
+  }
+
+  return {
+    host,
+    token,
+    label,
+  };
+};
+
+export const resolveRemotePairingTarget = (input: {
   readonly pairingUrl?: string;
   readonly host?: string;
   readonly pairingCode?: string;
-}): ResolvedRemotePairingTarget {
+}): ResolvedRemotePairingTarget => {
   const pairingUrl = input.pairingUrl?.trim() ?? "";
   if (pairingUrl.length > 0) {
     const url = new URL(pairingUrl);
+    const hostedPairingRequest = readHostedPairingRequest(url);
+    if (hostedPairingRequest) {
+      const hostedBackendUrl = normalizeRemoteBaseUrl(hostedPairingRequest.host);
+      return {
+        credential: hostedPairingRequest.token,
+        httpBaseUrl: toHttpBaseUrl(hostedBackendUrl),
+        wsBaseUrl: toWsBaseUrl(hostedBackendUrl),
+      };
+    }
+
     const credential = getPairingTokenFromUrl(url) ?? "";
     if (!credential) {
       throw new Error("Pairing URL is missing its token.");
@@ -199,65 +148,4 @@ export function resolveRemotePairingTarget(input: {
     httpBaseUrl: toHttpBaseUrl(normalizedHost),
     wsBaseUrl: toWsBaseUrl(normalizedHost),
   };
-}
-
-export async function bootstrapRemoteBearerSession(input: {
-  readonly httpBaseUrl: string;
-  readonly credential: string;
-}): Promise<AuthBearerBootstrapResult> {
-  return fetchRemoteJson<AuthBearerBootstrapResult>({
-    httpBaseUrl: input.httpBaseUrl,
-    pathname: "/api/auth/bootstrap/bearer",
-    method: "POST",
-    body: {
-      credential: input.credential,
-    },
-  });
-}
-
-export async function fetchRemoteSessionState(input: {
-  readonly httpBaseUrl: string;
-  readonly bearerToken: string;
-}): Promise<AuthSessionState> {
-  return fetchRemoteJson<AuthSessionState>({
-    httpBaseUrl: input.httpBaseUrl,
-    pathname: "/api/auth/session",
-    bearerToken: input.bearerToken,
-  });
-}
-
-export async function fetchRemoteEnvironmentDescriptor(input: {
-  readonly httpBaseUrl: string;
-}): Promise<ExecutionEnvironmentDescriptor> {
-  return fetchRemoteJson<ExecutionEnvironmentDescriptor>({
-    httpBaseUrl: input.httpBaseUrl,
-    pathname: "/.well-known/t3/environment",
-  });
-}
-
-export async function issueRemoteWebSocketToken(input: {
-  readonly httpBaseUrl: string;
-  readonly bearerToken: string;
-}): Promise<AuthWebSocketTokenResult> {
-  return fetchRemoteJson<AuthWebSocketTokenResult>({
-    httpBaseUrl: input.httpBaseUrl,
-    pathname: "/api/auth/ws-token",
-    method: "POST",
-    bearerToken: input.bearerToken,
-  });
-}
-
-export async function resolveRemoteWebSocketConnectionUrl(input: {
-  readonly wsBaseUrl: string;
-  readonly httpBaseUrl: string;
-  readonly bearerToken: string;
-}): Promise<string> {
-  const issued = await issueRemoteWebSocketToken({
-    httpBaseUrl: input.httpBaseUrl,
-    bearerToken: input.bearerToken,
-  });
-  const url = new URL(input.wsBaseUrl);
-  url.pathname = "/ws";
-  url.searchParams.set("wsToken", issued.token);
-  return url.toString();
-}
+};

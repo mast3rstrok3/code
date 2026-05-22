@@ -9,9 +9,9 @@ import {
   createWsRpcClient,
   EnvironmentConnectionState,
   WsTransport,
+  resolveRemoteWebSocketConnectionUrl,
 } from "@t3tools/client-runtime";
 import type { EnvironmentId } from "@t3tools/contracts";
-import { resolveRemoteWebSocketConnectionUrl } from "@t3tools/shared/remote";
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
 import * as Option from "effect/Option";
@@ -28,6 +28,7 @@ import {
   saveConnection,
 } from "../lib/storage";
 import { appAtomRegistry } from "./atom-registry";
+import { mobileRemoteHttpRuntime } from "../lib/runtime";
 import {
   drainEnvironmentSessions,
   notifyEnvironmentConnectionListeners,
@@ -213,11 +214,13 @@ export async function connectSavedEnvironment(
 
   const transport = new WsTransport(
     () =>
-      resolveRemoteWebSocketConnectionUrl({
-        wsBaseUrl: connection.wsBaseUrl,
-        httpBaseUrl: connection.httpBaseUrl,
-        bearerToken: connection.bearerToken,
-      }),
+      mobileRemoteHttpRuntime.runPromise(
+        resolveRemoteWebSocketConnectionUrl({
+          wsBaseUrl: connection.wsBaseUrl,
+          httpBaseUrl: connection.httpBaseUrl,
+          bearerToken: connection.bearerToken,
+        }),
+      ),
     {
       onAttempt: () => {
         environmentRuntimeManager.patch({ environmentId: connection.environmentId }, (previous) => {

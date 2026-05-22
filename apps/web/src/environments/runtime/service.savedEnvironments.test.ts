@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mockCreateEnvironmentConnection = vi.fn();
 const mockCreateWsRpcClient = vi.fn();
 const mockFetchRemoteSessionState = vi.fn();
+const mockResolveRemoteWebSocketConnectionUrl = vi.fn(() => "ws://remote.example.test");
+const mockRemoteHttpRunPromise = vi.fn((effect: Promise<unknown>) => effect);
 const mockWaitForSavedEnvironmentRegistryHydration = vi.fn();
 const mockListSavedEnvironmentRecords = vi.fn();
 const mockSavedEnvironmentRegistrySubscribe = vi.fn();
@@ -28,11 +30,10 @@ vi.mock("../primary", () => ({
   })),
 }));
 
-vi.mock("../remote/api", () => ({
-  bootstrapRemoteBearerSession: vi.fn(),
-  fetchRemoteEnvironmentDescriptor: vi.fn(),
-  fetchRemoteSessionState: mockFetchRemoteSessionState,
-  resolveRemoteWebSocketConnectionUrl: vi.fn(() => "ws://remote.example.test"),
+vi.mock("../../lib/runtime", () => ({
+  remoteHttpRuntime: {
+    runPromise: mockRemoteHttpRunPromise,
+  },
 }));
 
 vi.mock("./catalog", () => ({
@@ -71,6 +72,8 @@ vi.mock("@t3tools/client-runtime", async (importOriginal) => {
   return {
     ...actual,
     createWsRpcClient: mockCreateWsRpcClient,
+    fetchRemoteSessionState: mockFetchRemoteSessionState,
+    resolveRemoteWebSocketConnectionUrl: mockResolveRemoteWebSocketConnectionUrl,
   };
 });
 

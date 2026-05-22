@@ -12,6 +12,11 @@ import {
 import {
   createWsRpcClient as createBaseWsRpcClient,
   type WsRpcClient,
+  bootstrapRemoteBearerSession,
+  fetchRemoteEnvironmentDescriptor,
+  fetchRemoteSessionState,
+  isRemoteEnvironmentAuthHttpError,
+  resolveRemoteWebSocketConnectionUrl,
 } from "@t3tools/client-runtime";
 
 import { type QueryClient } from "@tanstack/react-query";
@@ -33,14 +38,8 @@ import { ensureLocalApi } from "~/localApi";
 import { collectActiveTerminalUiThreadKeys } from "~/lib/terminalUiStateCleanup";
 import { deriveOrchestrationBatchEffects } from "~/orchestrationEventEffects";
 import { getPrimaryKnownEnvironment } from "../primary";
-import {
-  bootstrapRemoteBearerSession,
-  fetchRemoteEnvironmentDescriptor,
-  fetchRemoteSessionState,
-  isRemoteEnvironmentAuthHttpError,
-  resolveRemoteWebSocketConnectionUrl,
-} from "../remote/api";
-import { resolveRemotePairingTarget } from "../remote/target";
+import { remoteHttpRuntime } from "../../lib/runtime";
+
 import {
   getSavedEnvironmentRecord,
   hasSavedEnvironmentRegistryHydrated,
@@ -75,6 +74,7 @@ import {
 import { getClientSettings } from "~/hooks/useSettings";
 import { subscribeTerminalMetadata, terminalSessionManager } from "../../terminalSessionState";
 import { resetWsReconnectBackoff } from "~/rpc/wsConnectionState";
+import { resolveRemotePairingTarget } from "@t3tools/shared/remote";
 
 type EnvironmentServiceState = {
   readonly queryClient: QueryClient;
@@ -1164,11 +1164,13 @@ function createSavedEnvironmentClient(
               record.httpBaseUrl,
               bearerToken,
             )
-          : await resolveRemoteWebSocketConnectionUrl({
-              wsBaseUrl: record.wsBaseUrl,
-              httpBaseUrl: record.httpBaseUrl,
-              bearerToken,
-            });
+          : await remoteHttpRuntime.runPromise(
+              resolveRemoteWebSocketConnectionUrl({
+                wsBaseUrl: record.wsBaseUrl,
+                httpBaseUrl: record.httpBaseUrl,
+                bearerToken,
+              }),
+            );
       },
       {
         getConnectionLabel: () => getSavedEnvironmentRecord(environmentId)?.label ?? null,
@@ -1224,10 +1226,12 @@ async function refreshSavedEnvironmentMetadata(
     configHint ? Promise.resolve(configHint) : client.server.getConfig(),
     record.desktopSsh
       ? fetchDesktopSshSessionState(record.httpBaseUrl, bearerToken)
-      : fetchRemoteSessionState({
-          httpBaseUrl: record.httpBaseUrl,
-          bearerToken,
-        }),
+      : remoteHttpRuntime.runPromise(
+          fetchRemoteSessionState({
+            httpBaseUrl: record.httpBaseUrl,
+            bearerToken,
+          }),
+        ),
   ]);
 
   useSavedEnvironmentRuntimeStore.getState().patch(record.environmentId, {
@@ -1671,9 +1675,11 @@ export async function addSavedEnvironment(input: {
   });
   const descriptor = input.desktopSsh
     ? await fetchDesktopSshEnvironmentDescriptor(resolvedTarget.httpBaseUrl)
-    : await fetchRemoteEnvironmentDescriptor({
-        httpBaseUrl: resolvedTarget.httpBaseUrl,
-      });
+    : await remoteHttpRuntime.runPromise(
+        fetchRemoteEnvironmentDescriptor({
+          httpBaseUrl: resolvedTarget.httpBaseUrl,
+        }),
+      );
   const environmentId = descriptor.environmentId;
   const registrySnapshot = snapshotSavedEnvironmentRegistry([environmentId]);
   const existingRecord =
@@ -1684,10 +1690,12 @@ export async function addSavedEnvironment(input: {
 
   const bearerSession = input.desktopSsh
     ? await bootstrapDesktopSshBearerSession(resolvedTarget.httpBaseUrl, resolvedTarget.credential)
-    : await bootstrapRemoteBearerSession({
-        httpBaseUrl: resolvedTarget.httpBaseUrl,
-        credential: resolvedTarget.credential,
-      });
+    : await remoteHttpRuntime.runPromise(
+        bootstrapRemoteBearerSession({
+          httpBaseUrl: resolvedTarget.httpBaseUrl,
+          credential: resolvedTarget.credential,
+        }),
+      );
 
   const record: SavedEnvironmentRecord = {
     environmentId,
