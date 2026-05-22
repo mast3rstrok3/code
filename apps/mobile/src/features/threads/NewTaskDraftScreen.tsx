@@ -438,14 +438,18 @@ export function NewTaskDraftScreen(props: {
       </View>
 
       <View style={{ flex: 1, paddingHorizontal: 20, paddingTop: 8 }}>
-        <TextInputWrapper onPaste={(payload) => void handleNativePaste(payload)}>
+        <TextInputWrapper
+          onPaste={(payload) => void handleNativePaste(payload)}
+          style={{ flex: 1 }}
+        >
           <TextInput
             multiline
             value={flow.prompt}
             onChangeText={flow.setPrompt}
             placeholder={`Describe a coding task in ${selectedProject.title}`}
             textAlignVertical="top"
-            className="flex-1 border-0 bg-transparent text-[18px] leading-[28px]"
+            className="h-full flex-1 border-0 bg-transparent text-[18px] leading-[28px]"
+            style={{ flex: 1 }}
           />
         </TextInputWrapper>
       </View>

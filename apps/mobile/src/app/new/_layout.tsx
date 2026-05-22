@@ -18,6 +18,10 @@ export default function NewTaskLayout() {
         }}
       >
         <Stack.Screen name="index" options={{ animation: "none" }} />
+        <Stack.Screen
+          name="add-project"
+          options={{ animation: "slide_from_right", headerShown: false }}
+        />
         <Stack.Screen name="draft" options={{ animation: "slide_from_right" }} />
       </Stack>
     </NewTaskFlowProvider>

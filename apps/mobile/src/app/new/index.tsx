@@ -142,13 +142,21 @@ export default function NewTaskRoute() {
                   Add environment
                 </Text>
               </Pressable>
-            ) : null}
+            ) : (
+              <Pressable
+                className="mt-1 rounded-full bg-primary px-4 py-2.5 active:opacity-70"
+                onPress={() => router.push("/new/add-project")}
+              >
+                <Text className="text-[13px] font-t3-bold text-primary-foreground">
+                  Add new project
+                </Text>
+              </Pressable>
+            )}
           </View>
         ) : (
           <View collapsable={false} className="overflow-hidden rounded-[24px] bg-card">
             {items.map((item, index) => {
               const isFirst = index === 0;
-              const isLast = index === items.length - 1;
 
               return (
                 <Link
@@ -172,8 +180,8 @@ export default function NewTaskRoute() {
                       borderTopColor: borderSubtleColor,
                       borderTopLeftRadius: isFirst ? 24 : 0,
                       borderTopRightRadius: isFirst ? 24 : 0,
-                      borderBottomLeftRadius: isLast ? 24 : 0,
-                      borderBottomRightRadius: isLast ? 24 : 0,
+                      borderBottomLeftRadius: 0,
+                      borderBottomRightRadius: 0,
                     }}
                   >
                     <View className="flex-row items-center justify-between gap-3">
@@ -198,6 +206,33 @@ export default function NewTaskRoute() {
                 </Link>
               );
             })}
+            <Pressable
+              className="bg-card"
+              style={{
+                paddingHorizontal: 16,
+                paddingVertical: 18,
+                borderTopWidth: 1,
+                borderTopColor: borderSubtleColor,
+                borderBottomLeftRadius: 24,
+                borderBottomRightRadius: 24,
+              }}
+              onPress={() => router.push("/new/add-project")}
+            >
+              <View className="flex-row items-center justify-between gap-3">
+                <View className="h-[22px] w-[22px] items-center justify-center rounded-full bg-subtle">
+                  <SymbolView name="plus" size={13} tintColor={accentColor} type="monochrome" />
+                </View>
+                <View className="flex-1">
+                  <Text className="text-[18px] font-t3-bold">Add new project</Text>
+                </View>
+                <SymbolView
+                  name="chevron.right"
+                  size={14}
+                  tintColor={chevronColor}
+                  type="monochrome"
+                />
+              </View>
+            </Pressable>
           </View>
         )}
       </ScrollView>
