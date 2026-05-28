@@ -1,4 +1,4 @@
-import { SignInButton, UserButton, useAuth, useClerk } from "@clerk/react";
+import { UserButton, Waitlist, useAuth, useClerk } from "@clerk/react";
 import { useSignIn, useSignUp } from "@clerk/react/legacy";
 import { RELAY_CLERK_TOKEN_OPTIONS } from "@t3tools/shared/relayAuth";
 import type { RelayClientEnvironmentRecord } from "@t3tools/contracts/relay";
@@ -80,11 +80,35 @@ export function CloudSettingsPanel() {
     );
   }
 
-  return <CloudSettingsPanelInner />;
+  return <ConfiguredCloudSettingsPanel />;
+}
+
+function ConfiguredCloudSettingsPanel() {
+  const { isLoaded, isSignedIn } = useAuth();
+
+  if (!isLoaded) {
+    return null;
+  }
+
+  return isSignedIn ? <CloudSettingsPanelInner /> : <CloudWaitlistPanel />;
+}
+
+function CloudWaitlistPanel() {
+  return (
+    <SettingsPageContainer className="min-h-full items-center justify-center">
+      <Waitlist />
+      {isElectron ? (
+        <div className="flex flex-col items-center gap-3 text-xs text-muted-foreground">
+          <p>Already approved? Sign in through the desktop app.</p>
+          <DesktopCloudSignInButton />
+        </div>
+      ) : null}
+    </SettingsPageContainer>
+  );
 }
 
 function CloudSettingsPanelInner() {
-  const { getToken, isSignedIn, userId } = useAuth();
+  const { getToken, userId } = useAuth();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const savedEnvironmentCount = useSavedEnvironmentRegistryStore(
     (state) => Object.keys(state.byId).length,
@@ -104,7 +128,7 @@ function CloudSettingsPanelInner() {
   }).length;
   const linkedCloudUserId = primaryLinkState?.cloudUserId ?? null;
   const hasCloudAccountMismatch = Boolean(
-    isSignedIn && userId && linkedCloudUserId && linkedCloudUserId !== userId,
+    userId && linkedCloudUserId && linkedCloudUserId !== userId,
   );
 
   const refreshPrimaryLinkState = useCallback(() => {
@@ -130,10 +154,6 @@ function CloudSettingsPanelInner() {
   }, [refreshPrimaryLinkState]);
 
   const refreshManagedEnvironments = useCallback(async () => {
-    if (!isSignedIn) {
-      setManagedEnvironments([]);
-      return;
-    }
     setIsLoadingManaged(true);
     try {
       const token = await getToken(RELAY_CLERK_TOKEN_OPTIONS);
@@ -153,7 +173,7 @@ function CloudSettingsPanelInner() {
     } finally {
       setIsLoadingManaged(false);
     }
-  }, [getToken, isSignedIn]);
+  }, [getToken]);
 
   useEffect(() => {
     void refreshManagedEnvironments();
@@ -280,102 +300,89 @@ function CloudSettingsPanelInner() {
       <SettingsSection title="T3 Cloud" icon={<CloudIcon className="size-3.5" />}>
         <SettingsRow
           title="Cloud account"
-          description="Signing in enables relay notifications and managed tunnel connections."
-          control={isSignedIn ? <UserButton /> : <CloudSignInControl />}
+          description="Approved users can sign in for relay notifications and managed tunnel connections."
+          control={<UserButton />}
         />
-        {isSignedIn ? (
-          <SettingsRow
-            title="Linked environments"
-            description={
-              hasCloudAccountMismatch
-                ? `Linked as ${linkedCloudUserId}; signed in as ${userId}.`
-                : "Grant linked environments a relay credential for APNs agent activity updates."
-            }
-            status={
-              linkStateError ??
-              (linkedCloudUserId
-                ? `Linked as ${linkedCloudUserId}`
-                : `${linkableEnvironmentCount} linkable environment${linkableEnvironmentCount === 1 ? "" : "s"} (${savedEnvironmentCount} saved)`)
-            }
-            control={
-              <div className="flex items-center gap-2">
-                {linkedCloudUserId ? (
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    disabled={isUnlinking}
-                    onClick={() => void unlinkPrimaryEnvironment()}
-                  >
-                    {isUnlinking ? "Unlinking..." : "Unlink"}
-                  </Button>
-                ) : null}
+        <SettingsRow
+          title="Linked environments"
+          description={
+            hasCloudAccountMismatch
+              ? `Linked as ${linkedCloudUserId}; signed in as ${userId}.`
+              : "Grant linked environments a relay credential for APNs agent activity updates."
+          }
+          status={
+            linkStateError ??
+            (linkedCloudUserId
+              ? `Linked as ${linkedCloudUserId}`
+              : `${linkableEnvironmentCount} linkable environment${linkableEnvironmentCount === 1 ? "" : "s"} (${savedEnvironmentCount} saved)`)
+          }
+          control={
+            <div className="flex items-center gap-2">
+              {linkedCloudUserId ? (
                 <Button
                   size="sm"
-                  disabled={
-                    isLinking ||
-                    isUnlinking ||
-                    linkableEnvironmentCount === 0 ||
-                    hasCloudAccountMismatch
-                  }
-                  onClick={() => void linkEnvironments()}
+                  variant="secondary"
+                  disabled={isUnlinking}
+                  onClick={() => void unlinkPrimaryEnvironment()}
                 >
-                  {isLinking ? "Linking..." : "Link"}
+                  {isUnlinking ? "Unlinking..." : "Unlink"}
                 </Button>
-              </div>
-            }
-          />
-        ) : null}
-        {isSignedIn ? (
+              ) : null}
+              <Button
+                size="sm"
+                disabled={
+                  isLinking ||
+                  isUnlinking ||
+                  linkableEnvironmentCount === 0 ||
+                  hasCloudAccountMismatch
+                }
+                onClick={() => void linkEnvironments()}
+              >
+                {isLinking ? "Linking..." : "Link"}
+              </Button>
+            </div>
+          }
+        />
+        <SettingsRow
+          title="Managed tunnel environments"
+          description="Connect to linked environments through T3 Cloud from this frontend."
+          status={
+            isLoadingManaged
+              ? "Loading..."
+              : `${managedEnvironments.length} available environment${managedEnvironments.length === 1 ? "" : "s"}`
+          }
+          control={
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={isLoadingManaged}
+              onClick={() => void refreshManagedEnvironments()}
+            >
+              Refresh
+            </Button>
+          }
+        />
+        {managedEnvironments.map((environment) => (
           <SettingsRow
-            title="Managed tunnel environments"
-            description="Connect to linked environments through T3 Cloud from this frontend."
-            status={
-              isLoadingManaged
-                ? "Loading..."
-                : `${managedEnvironments.length} available environment${managedEnvironments.length === 1 ? "" : "s"}`
-            }
+            key={environment.environmentId}
+            title={environment.label}
+            description={environment.endpoint.httpBaseUrl}
             control={
               <Button
                 size="sm"
-                variant="secondary"
-                disabled={isLoadingManaged}
-                onClick={() => void refreshManagedEnvironments()}
+                disabled={connectingEnvironmentId !== null}
+                onClick={() => void connectManagedEnvironment(environment)}
               >
-                Refresh
+                {connectingEnvironmentId === environment.environmentId
+                  ? "Connecting..."
+                  : "Connect"}
               </Button>
             }
           />
-        ) : null}
-        {isSignedIn
-          ? managedEnvironments.map((environment) => (
-              <SettingsRow
-                key={environment.environmentId}
-                title={environment.label}
-                description={environment.endpoint.httpBaseUrl}
-                control={
-                  <Button
-                    size="sm"
-                    disabled={connectingEnvironmentId !== null}
-                    onClick={() => void connectManagedEnvironment(environment)}
-                  >
-                    {connectingEnvironmentId === environment.environmentId
-                      ? "Connecting..."
-                      : "Connect"}
-                  </Button>
-                }
-              />
-            ))
-          : null}
+        ))}
       </SettingsSection>
     </SettingsPageContainer>
   );
-}
-
-function CloudSignInControl() {
-  if (isElectron) {
-    return <DesktopCloudSignInButton />;
-  }
-  return <SignInButton mode="modal" />;
 }
 
 function DesktopCloudSignInButton() {

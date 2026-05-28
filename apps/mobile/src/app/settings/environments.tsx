@@ -49,7 +49,6 @@ export default function SettingsEnvironmentsRouteScreen() {
     null,
   );
 
-  const primaryFg = useThemeColor("--color-primary-foreground");
   const accentColor = useThemeColor("--color-icon-muted");
   const iconColor = useThemeColor("--color-icon");
 
@@ -141,11 +140,15 @@ export default function SettingsEnvironmentsRouteScreen() {
           title: "Environments",
           headerRight: () => (
             <Link href="/settings/environment-new" asChild>
-              <Pressable className="h-10 w-10 items-center justify-center rounded-full bg-primary active:opacity-70">
+              <Pressable
+                accessibilityLabel="Add environment"
+                accessibilityRole="button"
+                className="h-10 w-10 items-center justify-center active:opacity-70"
+              >
                 <SymbolView
                   name="plus"
                   size={18}
-                  tintColor={primaryFg}
+                  tintColor={iconColor}
                   type="monochrome"
                   weight="semibold"
                 />

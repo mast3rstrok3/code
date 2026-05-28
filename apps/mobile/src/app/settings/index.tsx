@@ -1,7 +1,7 @@
 import { useAuth, useUser, useUserProfileModal } from "@clerk/expo";
 import * as Notifications from "expo-notifications";
 import { RELAY_CLERK_TOKEN_OPTIONS } from "@t3tools/shared/relayAuth";
-import { Link, Stack } from "expo-router";
+import { Link, Stack, useRouter } from "expo-router";
 import { SymbolView } from "expo-symbols";
 import * as Effect from "effect/Effect";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -13,7 +13,6 @@ import { AppText as Text } from "../../components/AppText";
 import { setLiveActivityUpdatesEnabled } from "../../features/agent-awareness/liveActivityPreferences";
 import { requestAgentNotificationPermission } from "../../features/agent-awareness/notificationPermissions";
 import { refreshAgentAwarenessRegistration } from "../../features/agent-awareness/remoteRegistration";
-import { useNativeClerkAuthModal } from "../../features/cloud/useNativeClerkAuthModal";
 import { mobileRuntime } from "../../lib/runtime";
 import { loadPreferences } from "../../lib/storage";
 import { useThemeColor } from "../../lib/useThemeColor";
@@ -24,9 +23,9 @@ type LiveActivityStatus = "checking" | "enabled" | "disabled" | "signed-out" | "
 
 export default function SettingsRouteScreen() {
   const insets = useSafeAreaInsets();
+  const { push } = useRouter();
   const { getToken, isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
   const { user } = useUser();
-  const { isAvailable: isAuthModalAvailable, presentAuth } = useNativeClerkAuthModal();
   const { isAvailable: isUserProfileModalAvailable, presentUserProfile } = useUserProfileModal();
   const { savedConnectionsById } = useRemoteEnvironmentState();
   const [notificationStatus, setNotificationStatus] = useState<NotificationStatus>("checking");
@@ -37,7 +36,7 @@ export default function SettingsRouteScreen() {
   const environmentCount = connections.length;
   const accountLabel = useMemo(() => {
     if (!isLoaded) return "Checking";
-    if (!isSignedIn) return "Signed out";
+    if (!isSignedIn) return "Request access";
     return user?.primaryEmailAddress?.emailAddress ?? "Signed in";
   }, [isLoaded, isSignedIn, user?.primaryEmailAddress?.emailAddress]);
 
@@ -72,10 +71,6 @@ export default function SettingsRouteScreen() {
       },
     );
   }, [isLoaded, isSignedIn]);
-
-  const presentAuthFromSettings = useCallback(() => {
-    return presentAuth();
-  }, [presentAuth]);
 
   const requestNotifications = useCallback(async () => {
     try {
@@ -125,14 +120,14 @@ export default function SettingsRouteScreen() {
 
   const promptSignIn = useCallback(() => {
     Alert.alert(
-      "Sign in to T3 Cloud",
-      "Live Activity updates require a T3 Cloud account so relay can deliver updates to this device.",
+      "Request T3 Cloud access",
+      "Live Activity updates require approved T3 Cloud access so relay can deliver updates to this device.",
       [
         { text: "Cancel", style: "cancel" },
-        { text: "Sign in", onPress: () => void presentAuthFromSettings() },
+        { text: "Continue", onPress: () => push("/settings/waitlist") },
       ],
     );
-  }, [presentAuthFromSettings]);
+  }, [push]);
 
   const linkEnvironments = useCallback(async () => {
     if (!isSignedIn) {
@@ -225,14 +220,7 @@ export default function SettingsRouteScreen() {
   const openAccount = useCallback(() => {
     if (!isLoaded) return;
     if (!isSignedIn) {
-      if (isAuthModalAvailable) {
-        void presentAuthFromSettings();
-        return;
-      }
-      Alert.alert(
-        "T3 Cloud unavailable",
-        "Native T3 Cloud sign-in is not available in this build.",
-      );
+      push("/settings/waitlist");
       return;
     }
     if (isUserProfileModalAvailable) {
@@ -243,14 +231,7 @@ export default function SettingsRouteScreen() {
       "T3 Cloud unavailable",
       "Native T3 Cloud account management is not available in this build.",
     );
-  }, [
-    isAuthModalAvailable,
-    isLoaded,
-    isSignedIn,
-    isUserProfileModalAvailable,
-    presentAuthFromSettings,
-    presentUserProfile,
-  ]);
+  }, [isLoaded, isSignedIn, isUserProfileModalAvailable, presentUserProfile, push]);
 
   return (
     <View collapsable={false} className="flex-1 bg-sheet">
@@ -266,14 +247,19 @@ export default function SettingsRouteScreen() {
           paddingTop: 16,
         }}
       >
-        <SettingsSection title="Account">
-          <SettingsRow
-            icon="person.crop.circle"
-            label="T3 Account"
-            value={accountLabel}
-            onPress={openAccount}
-          />
-        </SettingsSection>
+        <View className="gap-3">
+          <SettingsSection title="Account">
+            <SettingsRow
+              icon="person.crop.circle"
+              label="T3 Account"
+              value={accountLabel}
+              onPress={openAccount}
+            />
+          </SettingsSection>
+          <Text className="px-2 text-[13px] leading-[18px] text-foreground-muted">
+            T3 Code works locally without signing in. Cloud features are optional.
+          </Text>
+        </View>
 
         <SettingsSection title="Configuration">
           <SettingsRow
@@ -313,10 +299,6 @@ export default function SettingsRouteScreen() {
             <Text className="text-[17px] text-foreground-muted">Alpha</Text>
           </View>
         </SettingsSection>
-
-        <Text className="px-2 text-center text-[13px] leading-[18px] text-foreground-muted">
-          T3 Code works locally without signing in. Cloud features are optional.
-        </Text>
       </ScrollView>
     </View>
   );
@@ -396,7 +378,7 @@ function SettingsSwitchRow(props: {
   readonly onValueChange: (value: boolean) => void;
 }) {
   const icon = useThemeColor("--color-icon");
-  const primary = String(useThemeColor("--color-primary"));
+  const activeTrack = String(useThemeColor("--color-switch-active"));
   const track = String(useThemeColor("--color-secondary-border"));
 
   return (
@@ -410,7 +392,7 @@ function SettingsSwitchRow(props: {
         disabled={props.disabled}
         ios_backgroundColor={track}
         onValueChange={props.onValueChange}
-        trackColor={{ false: track, true: primary }}
+        trackColor={{ false: track, true: activeTrack }}
         value={props.value}
       />
     </View>

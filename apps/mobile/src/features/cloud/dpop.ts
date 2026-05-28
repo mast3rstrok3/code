@@ -78,9 +78,7 @@ export const mobileCryptoLayer = Layer.succeed(
       Effect.promise(async () => {
         const input = new Uint8Array(data.length);
         input.set(data);
-        return new Uint8Array(
-          await ExpoCrypto.digest(toExpoDigestAlgorithm(algorithm), input.buffer),
-        );
+        return new Uint8Array(await ExpoCrypto.digest(toExpoDigestAlgorithm(algorithm), input));
       }),
   }),
 );

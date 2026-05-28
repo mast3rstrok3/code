@@ -32,6 +32,10 @@ export default function SettingsLayout() {
         name="environment-new"
         options={{ animation: "slide_from_right", title: "Add Environment" }}
       />
+      <Stack.Screen
+        name="waitlist"
+        options={{ animation: "slide_from_right", title: "Join the waitlist" }}
+      />
     </Stack>
   );
 }

@@ -2,6 +2,7 @@ import * as NodeCrypto from "node:crypto";
 
 import { vi } from "vitest";
 import { describe, expect, it } from "@effect/vitest";
+import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import { verifyDpopProof } from "@t3tools/shared/dpop";
 
@@ -22,10 +23,14 @@ vi.mock("expo-crypto", () => ({
   getRandomBytes: (byteCount: number) => new Uint8Array(NodeCrypto.randomBytes(byteCount)),
   getRandomBytesAsync: (byteCount: number) =>
     Promise.resolve(new Uint8Array(NodeCrypto.randomBytes(byteCount))),
-  digest: (algorithm: string, data: ArrayBuffer) =>
-    Promise.resolve(
-      new Uint8Array(NodeCrypto.createHash(algorithm).update(new Uint8Array(data)).digest()).buffer,
-    ),
+  digest: (algorithm: string, data: unknown) => {
+    if (!(data instanceof Uint8Array)) {
+      return Promise.reject(new TypeError("expo-crypto digest data must be a typed array."));
+    }
+    return Promise.resolve(
+      new Uint8Array(NodeCrypto.createHash(algorithm).update(data).digest()).buffer,
+    );
+  },
 }));
 
 const secureStore = new Map<string, string>();
@@ -60,6 +65,17 @@ function proofHtu(proof: string): string {
 }
 
 describe("mobile DPoP", () => {
+  it.effect("passes typed-array digest input through the Expo Crypto adapter", () =>
+    Effect.gen(function* () {
+      const crypto = yield* Crypto.Crypto;
+      const digest = yield* crypto.digest("SHA-256", new TextEncoder().encode("typed-array"));
+
+      expect(Buffer.from(digest).toString("hex")).toBe(
+        NodeCrypto.createHash("sha256").update("typed-array").digest("hex"),
+      );
+    }).pipe(Effect.provide(mobileCryptoLayer)),
+  );
+
   it.effect("persists and reuses the installation proof key", () =>
     Effect.gen(function* () {
       secureStore.clear();

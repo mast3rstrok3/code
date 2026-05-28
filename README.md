@@ -50,6 +50,8 @@ Observability guide: [docs/observability.md](./docs/observability.md)
 
 Relay observability: [docs/relay-observability.md](./docs/relay-observability.md)
 
+T3 Cloud Clerk setup: [docs/t3-cloud-clerk.md](./docs/t3-cloud-clerk.md)
+
 ## If you REALLY want to contribute still.... read this first
 
 Before local development, prepare the environment and install dependencies:

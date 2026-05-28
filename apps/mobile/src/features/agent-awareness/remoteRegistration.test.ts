@@ -57,10 +57,14 @@ vi.mock("expo-crypto", () => ({
   getRandomBytes: (byteCount: number) => new Uint8Array(NodeCrypto.randomBytes(byteCount)),
   getRandomBytesAsync: (byteCount: number) =>
     Promise.resolve(new Uint8Array(NodeCrypto.randomBytes(byteCount))),
-  digest: (algorithm: string, data: ArrayBuffer) =>
-    Promise.resolve(
-      new Uint8Array(NodeCrypto.createHash(algorithm).update(new Uint8Array(data)).digest()).buffer,
-    ),
+  digest: (algorithm: string, data: unknown) => {
+    if (!(data instanceof Uint8Array)) {
+      return Promise.reject(new TypeError("expo-crypto digest data must be a typed array."));
+    }
+    return Promise.resolve(
+      new Uint8Array(NodeCrypto.createHash(algorithm).update(data).digest()).buffer,
+    );
+  },
 }));
 
 vi.mock("expo-secure-store", () => ({

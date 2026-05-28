@@ -48,6 +48,11 @@ function AppNavigator() {
     sheetGrabberVisible: true,
   };
 
+  const settingsSheetScreenOptions = {
+    ...connectionSheetScreenOptions,
+    sheetAllowedDetents: [0.7],
+  };
+
   if (isLoadingSavedConnection) {
     return <LoadingScreen message="Loading remote workspace…" />;
   }
@@ -69,8 +74,7 @@ function AppNavigator() {
             headerShadowVisible: false,
           }}
         />
-        <Stack.Screen name="settings" options={connectionSheetScreenOptions} />
-        <Stack.Screen name="cloud" options={connectionSheetScreenOptions} />
+        <Stack.Screen name="settings" options={settingsSheetScreenOptions} />
         <Stack.Screen name="connections" options={connectionSheetScreenOptions} />
         <Stack.Screen name="new" options={newTaskScreenOptions} />
         <Stack.Screen
