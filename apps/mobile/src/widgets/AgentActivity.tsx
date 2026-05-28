@@ -40,7 +40,7 @@ export interface AgentActivityProps {
 
 function AgentActivity(
   props: AgentActivityProps,
-  _environment: LiveActivityEnvironment,
+  environment: LiveActivityEnvironment,
 ): LiveActivityLayout {
   "widget";
 
@@ -49,8 +49,13 @@ function AgentActivity(
   const row2 = props.activities[2];
   const updatedAt = formatAgentActivityUpdatedAtLabel(props.updatedAt);
   const activeLabel = `${props.activeCount} active`;
-  const tint =
-    row0?.phase === "waiting_for_approval" || row0?.phase === "waiting_for_input"
+  const isLight = environment.colorScheme === "light";
+  const primaryForeground = isLight ? "#0f172a" : "#ffffff";
+  const secondaryForeground = isLight ? "#475569" : "#cbd5e1";
+  const mutedForeground = isLight ? "#64748b" : "#94a3b8";
+  const tint = environment.isLuminanceReduced
+    ? secondaryForeground
+    : row0?.phase === "waiting_for_approval" || row0?.phase === "waiting_for_input"
       ? "#f97316"
       : row0?.phase === "failed"
         ? "#ef4444"
@@ -61,10 +66,14 @@ function AgentActivity(
       <VStack modifiers={[padding({ all: 14 })]}>
         <HStack>
           <VStack>
-            <Text modifiers={[font({ weight: "bold", size: 15 }), foregroundStyle("#ffffff")]}>
+            <Text
+              modifiers={[font({ weight: "bold", size: 15 }), foregroundStyle(primaryForeground)]}
+            >
               {props.title}
             </Text>
-            <Text modifiers={[font({ size: 12 }), foregroundStyle("#cbd5e1"), lineLimit(1)]}>
+            <Text
+              modifiers={[font({ size: 12 }), foregroundStyle(secondaryForeground), lineLimit(1)]}
+            >
               {props.subtitle}
             </Text>
           </VStack>
@@ -79,13 +88,15 @@ function AgentActivity(
               <Text
                 modifiers={[
                   font({ weight: "bold", size: 13 }),
-                  foregroundStyle("#ffffff"),
+                  foregroundStyle(primaryForeground),
                   lineLimit(1),
                 ]}
               >
                 {row0.threadTitle}
               </Text>
-              <Text modifiers={[font({ size: 11 }), foregroundStyle("#cbd5e1"), lineLimit(1)]}>
+              <Text
+                modifiers={[font({ size: 11 }), foregroundStyle(secondaryForeground), lineLimit(1)]}
+              >
                 {row0.projectTitle} - {row0.modelTitle}
               </Text>
             </VStack>
@@ -101,13 +112,15 @@ function AgentActivity(
               <Text
                 modifiers={[
                   font({ weight: "bold", size: 13 }),
-                  foregroundStyle("#ffffff"),
+                  foregroundStyle(primaryForeground),
                   lineLimit(1),
                 ]}
               >
                 {row1.threadTitle}
               </Text>
-              <Text modifiers={[font({ size: 11 }), foregroundStyle("#cbd5e1"), lineLimit(1)]}>
+              <Text
+                modifiers={[font({ size: 11 }), foregroundStyle(secondaryForeground), lineLimit(1)]}
+              >
                 {row1.projectTitle} - {row1.modelTitle}
               </Text>
             </VStack>
@@ -123,13 +136,15 @@ function AgentActivity(
               <Text
                 modifiers={[
                   font({ weight: "bold", size: 13 }),
-                  foregroundStyle("#ffffff"),
+                  foregroundStyle(primaryForeground),
                   lineLimit(1),
                 ]}
               >
                 {row2.threadTitle}
               </Text>
-              <Text modifiers={[font({ size: 11 }), foregroundStyle("#cbd5e1"), lineLimit(1)]}>
+              <Text
+                modifiers={[font({ size: 11 }), foregroundStyle(secondaryForeground), lineLimit(1)]}
+              >
                 {row2.projectTitle} - {row2.modelTitle}
               </Text>
             </VStack>
@@ -139,7 +154,7 @@ function AgentActivity(
             </Text>
           </HStack>
         ) : null}
-        <Text modifiers={[font({ size: 11 }), foregroundStyle("#94a3b8")]}>
+        <Text modifiers={[font({ size: 11 }), foregroundStyle(mutedForeground)]}>
           Updated {updatedAt}
         </Text>
       </VStack>
@@ -147,7 +162,9 @@ function AgentActivity(
     bannerSmall: (
       <VStack modifiers={[padding({ all: 12 })]}>
         <HStack>
-          <Text modifiers={[font({ weight: "bold", size: 13 }), foregroundStyle("#ffffff")]}>
+          <Text
+            modifiers={[font({ weight: "bold", size: 13 }), foregroundStyle(primaryForeground)]}
+          >
             {props.title}
           </Text>
           <Spacer minLength={6} />
@@ -160,13 +177,15 @@ function AgentActivity(
             <Text
               modifiers={[
                 font({ weight: "bold", size: 12 }),
-                foregroundStyle("#ffffff"),
+                foregroundStyle(primaryForeground),
                 lineLimit(1),
               ]}
             >
               {row0.threadTitle}
             </Text>
-            <Text modifiers={[font({ size: 11 }), foregroundStyle("#cbd5e1"), lineLimit(1)]}>
+            <Text
+              modifiers={[font({ size: 11 }), foregroundStyle(secondaryForeground), lineLimit(1)]}
+            >
               {row0.projectTitle} - {row0.status}
             </Text>
           </VStack>
@@ -194,17 +213,23 @@ function AgentActivity(
     expandedCenter: row0 ? (
       <VStack>
         <Text
-          modifiers={[font({ weight: "bold", size: 12 }), foregroundStyle("#ffffff"), lineLimit(1)]}
+          modifiers={[
+            font({ weight: "bold", size: 12 }),
+            foregroundStyle(primaryForeground),
+            lineLimit(1),
+          ]}
         >
           {row0.threadTitle}
         </Text>
-        <Text modifiers={[font({ size: 11 }), foregroundStyle("#cbd5e1"), lineLimit(1)]}>
+        <Text modifiers={[font({ size: 11 }), foregroundStyle(secondaryForeground), lineLimit(1)]}>
           {row0.projectTitle} - {row0.status}
         </Text>
       </VStack>
     ) : null,
     expandedTrailing: (
-      <Text modifiers={[font({ size: 11 }), foregroundStyle("#cbd5e1")]}>Updated {updatedAt}</Text>
+      <Text modifiers={[font({ size: 11 }), foregroundStyle(secondaryForeground)]}>
+        Updated {updatedAt}
+      </Text>
     ),
     expandedBottom: (
       <VStack modifiers={[padding({ all: 8 })]}>
@@ -214,13 +239,15 @@ function AgentActivity(
               <Text
                 modifiers={[
                   font({ weight: "bold", size: 13 }),
-                  foregroundStyle("#ffffff"),
+                  foregroundStyle(primaryForeground),
                   lineLimit(1),
                 ]}
               >
                 {row0.threadTitle}
               </Text>
-              <Text modifiers={[font({ size: 11 }), foregroundStyle("#cbd5e1"), lineLimit(1)]}>
+              <Text
+                modifiers={[font({ size: 11 }), foregroundStyle(secondaryForeground), lineLimit(1)]}
+              >
                 {row0.projectTitle} - {row0.modelTitle}
               </Text>
             </VStack>
@@ -236,13 +263,15 @@ function AgentActivity(
               <Text
                 modifiers={[
                   font({ weight: "bold", size: 13 }),
-                  foregroundStyle("#ffffff"),
+                  foregroundStyle(primaryForeground),
                   lineLimit(1),
                 ]}
               >
                 {row1.threadTitle}
               </Text>
-              <Text modifiers={[font({ size: 11 }), foregroundStyle("#cbd5e1"), lineLimit(1)]}>
+              <Text
+                modifiers={[font({ size: 11 }), foregroundStyle(secondaryForeground), lineLimit(1)]}
+              >
                 {row1.projectTitle} - {row1.modelTitle}
               </Text>
             </VStack>
@@ -258,13 +287,15 @@ function AgentActivity(
               <Text
                 modifiers={[
                   font({ weight: "bold", size: 13 }),
-                  foregroundStyle("#ffffff"),
+                  foregroundStyle(primaryForeground),
                   lineLimit(1),
                 ]}
               >
                 {row2.threadTitle}
               </Text>
-              <Text modifiers={[font({ size: 11 }), foregroundStyle("#cbd5e1"), lineLimit(1)]}>
+              <Text
+                modifiers={[font({ size: 11 }), foregroundStyle(secondaryForeground), lineLimit(1)]}
+              >
                 {row2.projectTitle} - {row2.modelTitle}
               </Text>
             </VStack>

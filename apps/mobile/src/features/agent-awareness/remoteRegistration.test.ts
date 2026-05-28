@@ -1,3 +1,5 @@
+/// <reference types="node" />
+
 import * as NodeCrypto from "node:crypto";
 
 import { beforeEach, vi } from "vitest";
