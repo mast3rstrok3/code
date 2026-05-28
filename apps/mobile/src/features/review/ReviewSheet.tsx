@@ -353,7 +353,7 @@ export function ReviewSheet() {
                 key={`${reviewCache.threadKey}:${selectedSection.id}`}
                 collapsable={false}
                 testID="review-native-diff-view"
-                style={StyleSheet.absoluteFillObject}
+                style={StyleSheet.absoluteFill}
                 appearanceScheme={selectedTheme}
                 collapsedFileIdsJson={nativeBridge.collapsedFileIdsJson}
                 collapsedCommentIdsJson={nativeBridge.collapsedCommentIdsJson}

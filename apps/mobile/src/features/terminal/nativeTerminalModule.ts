@@ -1,6 +1,6 @@
 import type { ComponentType } from "react";
 import type { NativeSyntheticEvent, ViewProps } from "react-native";
-import { requireNativeViewManager } from "expo-modules-core";
+import { requireNativeView } from "expo";
 
 const NATIVE_TERMINAL_MODULE_NAME = "T3TerminalSurface";
 
@@ -50,7 +50,7 @@ export function resolveNativeTerminalSurfaceView(): ComponentType<NativeTerminal
   }
 
   try {
-    cachedNativeTerminalSurfaceView = requireNativeViewManager<NativeTerminalSurfaceProps>(
+    cachedNativeTerminalSurfaceView = requireNativeView<NativeTerminalSurfaceProps>(
       NATIVE_TERMINAL_MODULE_NAME,
     );
   } catch {

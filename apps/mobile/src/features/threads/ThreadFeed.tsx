@@ -748,7 +748,7 @@ const ReviewCommentCard = memo(function ReviewCommentCard(props: {
         >
           <NativeReviewDiffView
             collapsable={false}
-            style={StyleSheet.absoluteFillObject}
+            style={StyleSheet.absoluteFill}
             appearanceScheme={appearanceScheme}
             contentWidth={NATIVE_REVIEW_DIFF_CONTENT_WIDTH}
             rowHeight={NATIVE_REVIEW_DIFF_ROW_HEIGHT}

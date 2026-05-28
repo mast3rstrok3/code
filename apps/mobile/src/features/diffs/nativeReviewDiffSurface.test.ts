@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const expoModulesCoreMocks = vi.hoisted(() => ({
-  requireNativeViewManager: vi.fn(),
+const expoMocks = vi.hoisted(() => ({
+  requireNativeView: vi.fn(),
 }));
 const nativeView = () => null;
 const originalExpo = globalThis.expo;
@@ -12,8 +12,8 @@ function setExpoViewConfigAvailable() {
   } as unknown as typeof globalThis.expo;
 }
 
-vi.mock("expo-modules-core", () => ({
-  requireNativeViewManager: expoModulesCoreMocks.requireNativeViewManager,
+vi.mock("expo", () => ({
+  requireNativeView: expoMocks.requireNativeView,
 }));
 
 describe("resolveNativeReviewDiffView", () => {
@@ -30,17 +30,15 @@ describe("resolveNativeReviewDiffView", () => {
   it("returns null when the native review diff view config is unavailable", async () => {
     const { resolveNativeReviewDiffView } = await import("./nativeReviewDiffSurface");
     expect(resolveNativeReviewDiffView()).toBeNull();
-    expect(expoModulesCoreMocks.requireNativeViewManager).not.toHaveBeenCalled();
+    expect(expoMocks.requireNativeView).not.toHaveBeenCalled();
   });
 
   it("returns the native review diff view when the view config is installed", async () => {
     setExpoViewConfigAvailable();
-    expoModulesCoreMocks.requireNativeViewManager.mockReturnValue(nativeView);
+    expoMocks.requireNativeView.mockReturnValue(nativeView);
     const { resolveNativeReviewDiffView } = await import("./nativeReviewDiffSurface");
     expect(resolveNativeReviewDiffView()).toBe(nativeView);
-    expect(expoModulesCoreMocks.requireNativeViewManager).toHaveBeenCalledWith(
-      "T3ReviewDiffSurface",
-    );
+    expect(expoMocks.requireNativeView).toHaveBeenCalledWith("T3ReviewDiffSurface");
   });
 
   it("does not fall back to stale legacy native review diff view names", async () => {
@@ -52,15 +50,15 @@ describe("resolveNativeReviewDiffView", () => {
         return null;
       }),
     } as unknown as typeof globalThis.expo;
-    expoModulesCoreMocks.requireNativeViewManager.mockReturnValue(nativeView);
+    expoMocks.requireNativeView.mockReturnValue(nativeView);
     const { resolveNativeReviewDiffView } = await import("./nativeReviewDiffSurface");
     expect(resolveNativeReviewDiffView()).toBeNull();
-    expect(expoModulesCoreMocks.requireNativeViewManager).not.toHaveBeenCalled();
+    expect(expoMocks.requireNativeView).not.toHaveBeenCalled();
   });
 
   it("returns null when the view manager cannot be required", async () => {
     setExpoViewConfigAvailable();
-    expoModulesCoreMocks.requireNativeViewManager.mockImplementation(() => {
+    expoMocks.requireNativeView.mockImplementation(() => {
       throw new Error("boom");
     });
     const { resolveNativeReviewDiffView } = await import("./nativeReviewDiffSurface");

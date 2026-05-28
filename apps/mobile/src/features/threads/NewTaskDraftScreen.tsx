@@ -1,8 +1,8 @@
-import { MenuView } from "@react-native-menu/menu";
+import { MenuView } from "@expo/ui/community/menu";
 import { useRouter } from "expo-router";
 import { TextInputWrapper } from "expo-paste-input";
 import { useCallback, useEffect, useMemo } from "react";
-import { View, useColorScheme } from "react-native";
+import { View } from "react-native";
 import { KeyboardStickyView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useThemeColor } from "../../lib/useThemeColor";
@@ -46,7 +46,6 @@ export function NewTaskDraftScreen(props: {
   const flow = useNewTaskFlow();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const isDarkMode = useColorScheme() === "dark";
   const controlsBottomPadding = Math.max(insets.bottom, 10);
   const { logicalProjects, selectedProject, setProject } = flow;
 
@@ -449,7 +448,6 @@ export function NewTaskDraftScreen(props: {
             <MenuView
               actions={modelMenuActions}
               onPressAction={({ nativeEvent }) => handleModelMenuAction(nativeEvent.event)}
-              themeVariant={isDarkMode ? "dark" : "light"}
             >
               <ControlPill
                 iconNode={
@@ -460,21 +458,18 @@ export function NewTaskDraftScreen(props: {
             <MenuView
               actions={optionsMenuActions}
               onPressAction={({ nativeEvent }) => handleOptionsMenuAction(nativeEvent.event)}
-              themeVariant={isDarkMode ? "dark" : "light"}
             >
               <ControlPill icon="slider.horizontal.3" />
             </MenuView>
             <MenuView
               actions={environmentMenuActions}
               onPressAction={({ nativeEvent }) => handleEnvironmentMenuAction(nativeEvent.event)}
-              themeVariant={isDarkMode ? "dark" : "light"}
             >
               <ControlPill icon="desktopcomputer" />
             </MenuView>
             <MenuView
               actions={workspaceMenuActions}
               onPressAction={({ nativeEvent }) => handleWorkspaceMenuAction(nativeEvent.event)}
-              themeVariant={isDarkMode ? "dark" : "light"}
             >
               <ControlPill icon="point.topleft.down.curvedto.point.bottomright.up" />
             </MenuView>

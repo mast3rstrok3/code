@@ -67,11 +67,6 @@ const config: ExpoConfig = {
     checkAutomatically: "ON_LOAD",
     fallbackToCacheTimeout: 0,
   },
-  splash: {
-    image: "./assets/splash-icon.png",
-    resizeMode: "contain",
-    backgroundColor: "#ffffff",
-  },
   ios: {
     icon: variant.iosIcon,
     supportsTablet: true,
@@ -124,12 +119,13 @@ const config: ExpoConfig = {
       "expo-build-properties",
       {
         ios: {
-          deploymentTarget: "16.1",
+          deploymentTarget: "16.4",
         },
       },
     ],
     "expo-secure-store",
     "expo-router",
+    "expo-font",
     "./plugins/withAndroidCleartextTraffic.cjs",
   ],
   extra: {

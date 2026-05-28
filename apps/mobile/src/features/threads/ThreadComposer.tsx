@@ -1,5 +1,5 @@
 import { isLiquidGlassSupported, LiquidGlassView } from "@callstack/liquid-glass";
-import { MenuView } from "@react-native-menu/menu";
+import { MenuView } from "@expo/ui/community/menu";
 import type {
   EnvironmentId,
   ModelSelection,
@@ -766,14 +766,12 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
             <MenuView
               actions={modelMenuActions}
               onPressAction={({ nativeEvent }) => handleModelMenuAction(nativeEvent.event)}
-              themeVariant={isDarkMode ? "dark" : "light"}
             >
               <ControlPill iconNode={<ProviderIcon provider={modelProvider} size={16} />} />
             </MenuView>
             <MenuView
               actions={optionsMenuActions}
               onPressAction={({ nativeEvent }) => handleOptionsMenuAction(nativeEvent.event)}
-              themeVariant={isDarkMode ? "dark" : "light"}
             >
               <ControlPill icon="slider.horizontal.3" />
             </MenuView>

@@ -1,6 +1,6 @@
 import type { ComponentType } from "react";
 import type { NativeSyntheticEvent, ViewProps } from "react-native";
-import { requireNativeViewManager } from "expo-modules-core";
+import { requireNativeView } from "expo";
 
 const NATIVE_REVIEW_DIFF_MODULE_NAME = "T3ReviewDiffSurface";
 
@@ -144,7 +144,7 @@ export function resolveNativeReviewDiffView(): ComponentType<NativeReviewDiffVie
   }
 
   try {
-    cachedNativeReviewDiffView = requireNativeViewManager<NativeReviewDiffViewProps>(
+    cachedNativeReviewDiffView = requireNativeView<NativeReviewDiffViewProps>(
       NATIVE_REVIEW_DIFF_MODULE_NAME,
     );
   } catch {
