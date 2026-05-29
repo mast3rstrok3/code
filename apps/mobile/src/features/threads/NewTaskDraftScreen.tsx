@@ -3,7 +3,7 @@ import { useRouter } from "expo-router";
 import { TextInputWrapper } from "expo-paste-input";
 import { useCallback, useEffect, useMemo } from "react";
 import { View } from "react-native";
-import { KeyboardStickyView } from "react-native-keyboard-controller";
+import { KeyboardStickyView, useKeyboardState } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useThemeColor } from "../../lib/useThemeColor";
 
@@ -46,7 +46,8 @@ export function NewTaskDraftScreen(props: {
   const flow = useNewTaskFlow();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const controlsBottomPadding = Math.max(insets.bottom, 10);
+  const isKeyboardVisible = useKeyboardState((state) => state.isVisible);
+  const controlsBottomPadding = isKeyboardVisible ? 8 : Math.max(insets.bottom, 10);
   const { logicalProjects, selectedProject, setProject } = flow;
 
   const borderColor = useThemeColor("--color-border");
@@ -443,7 +444,7 @@ export function NewTaskDraftScreen(props: {
               />
             </View>
           ) : null}
-          <View className="flex-row items-center justify-between gap-2 px-4 pb-1 pt-4">
+          <View className="flex-row items-center justify-between gap-2 px-4 pt-2">
             <ControlPill icon="plus" onPress={() => void handlePickImages()} />
             <MenuView
               actions={modelMenuActions}
