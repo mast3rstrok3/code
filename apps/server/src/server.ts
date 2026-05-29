@@ -64,7 +64,11 @@ import * as SourceControlRepositoryService from "./sourceControl/SourceControlRe
 import { ProjectSetupScriptRunnerLive } from "./project/Layers/ProjectSetupScriptRunner.ts";
 import { ObservabilityLive } from "./observability/Layers/Observability.ts";
 import { ServerEnvironmentLive } from "./environment/Layers/ServerEnvironment.ts";
-import { authHttpApiLayer } from "./auth/http.ts";
+import {
+  authHttpApiLayer,
+  environmentOwnerAuthLayer,
+  environmentSessionAuthLayer,
+} from "./auth/http.ts";
 import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore.ts";
 import { ServerAuthLive } from "./auth/Layers/ServerAuth.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
@@ -293,6 +297,8 @@ export const makeRoutesLayer = Layer.mergeAll(
     Layer.provide(authHttpApiLayer),
     Layer.provide(orchestrationHttpApiLayer),
     Layer.provide(serverEnvironmentHttpApiLayer),
+    Layer.provide(environmentSessionAuthLayer),
+    Layer.provide(environmentOwnerAuthLayer),
   ),
   attachmentsRouteLayer,
   otlpTracesProxyRouteLayer,

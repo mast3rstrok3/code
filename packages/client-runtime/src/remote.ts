@@ -1,5 +1,5 @@
-import {
-  EnvironmentHttpApi,
+import { EnvironmentHttpApi, EnvironmentHttpCommonError } from "@t3tools/contracts";
+import type {
   EnvironmentHttpBadRequestError,
   EnvironmentHttpForbiddenError,
   EnvironmentHttpInternalServerError,
@@ -15,10 +15,7 @@ import { FetchHttpClient, HttpClient, HttpClientError } from "effect/unstable/ht
 import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
 
 const DEFAULT_REMOTE_REQUEST_TIMEOUT_MS = 10_000;
-const isEnvironmentHttpBadRequestError = Schema.is(EnvironmentHttpBadRequestError);
-const isEnvironmentHttpUnauthorizedError = Schema.is(EnvironmentHttpUnauthorizedError);
-const isEnvironmentHttpForbiddenError = Schema.is(EnvironmentHttpForbiddenError);
-const isEnvironmentHttpInternalServerError = Schema.is(EnvironmentHttpInternalServerError);
+const isEnvironmentHttpCommonError = Schema.is(EnvironmentHttpCommonError);
 
 const remoteEndpointUrl = (httpBaseUrl: string, pathname: string): string => {
   const url = new URL(httpBaseUrl);
@@ -104,13 +101,16 @@ const failRemoteRequest = (
   if (cause instanceof RemoteEnvironmentAuthTimeoutError) {
     return Effect.fail(cause);
   }
-  if (
-    isEnvironmentHttpBadRequestError(cause) ||
-    isEnvironmentHttpUnauthorizedError(cause) ||
-    isEnvironmentHttpForbiddenError(cause) ||
-    isEnvironmentHttpInternalServerError(cause)
-  ) {
+  if (isEnvironmentHttpCommonError(cause)) {
     return Effect.fail(cause);
+  }
+  if (Schema.isSchemaError(cause)) {
+    return Effect.fail(
+      new RemoteEnvironmentAuthInvalidJsonError({
+        message: `Remote auth endpoint returned an invalid response from ${requestUrl}.`,
+        cause,
+      }),
+    );
   }
   if (HttpClientError.isHttpClientError(cause) && cause.response !== undefined) {
     const response = cause.response;
@@ -121,7 +121,7 @@ const failRemoteRequest = (
     }
     return Effect.fail(
       new RemoteEnvironmentAuthInvalidJsonError({
-        message: `Remote auth endpoint returned invalid JSON from ${requestUrl}.`,
+        message: `Remote auth endpoint returned an invalid response from ${requestUrl}.`,
         cause,
       }),
     );

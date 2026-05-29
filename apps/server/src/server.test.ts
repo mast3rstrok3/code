@@ -1274,6 +1274,28 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("issues pairing credentials for owner bearer sessions", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const bearerToken = yield* getAuthenticatedBearerSessionToken();
+      const response = yield* HttpClient.post("/api/auth/pairing-token", {
+        headers: {
+          authorization: `Bearer ${bearerToken}`,
+        },
+        body: yield* HttpBody.json({ label: "Hosted web" }),
+      });
+      const body = (yield* response.json) as {
+        readonly credential: string;
+        readonly label?: string;
+      };
+
+      assert.equal(response.status, 200);
+      assert.isTrue(body.credential.length > 0);
+      assert.equal(body.label, "Hosted web");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("rejects unauthenticated pairing credential requests", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();
@@ -1364,7 +1386,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assert.equal(pairedResponse.status, 403);
       assert.equal(pairedBody._tag, "EnvironmentHttpForbiddenError");
-      assert.equal(pairedBody.message, "Only owner sessions can create pairing credentials.");
+      assert.equal(pairedBody.message, "Only owner sessions can manage network access.");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

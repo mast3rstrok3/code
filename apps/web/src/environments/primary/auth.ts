@@ -5,12 +5,8 @@ import type {
   AuthSessionId,
   AuthSessionState,
 } from "@t3tools/contracts";
-import {
-  EnvironmentHttpBadRequestError,
-  EnvironmentHttpForbiddenError,
-  EnvironmentHttpInternalServerError,
-  EnvironmentHttpUnauthorizedError,
-} from "@t3tools/contracts";
+import { EnvironmentHttpCommonError } from "@t3tools/contracts";
+import type { EnvironmentHttpCommonError as EnvironmentHttpCommonErrorType } from "@t3tools/contracts";
 import { makeEnvironmentHttpApiClient } from "@t3tools/client-runtime";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -33,10 +29,7 @@ export class BootstrapHttpError extends Data.TaggedError("BootstrapHttpError")<{
 }> {}
 const isBootstrapHttpError = (u: unknown): u is BootstrapHttpError =>
   Predicate.isTagged(u, "BootstrapHttpError");
-const isEnvironmentHttpBadRequestError = Schema.is(EnvironmentHttpBadRequestError);
-const isEnvironmentHttpUnauthorizedError = Schema.is(EnvironmentHttpUnauthorizedError);
-const isEnvironmentHttpForbiddenError = Schema.is(EnvironmentHttpForbiddenError);
-const isEnvironmentHttpInternalServerError = Schema.is(EnvironmentHttpInternalServerError);
+const isEnvironmentHttpCommonError = Schema.is(EnvironmentHttpCommonError);
 
 export interface ServerPairingLinkRecord {
   readonly id: string;
@@ -122,30 +115,29 @@ export async function fetchSessionState(): Promise<AuthSessionState> {
 }
 
 function readHttpApiStatus(error: unknown): number | null {
-  if (isEnvironmentHttpBadRequestError(error)) {
-    return 400;
-  }
-  if (isEnvironmentHttpUnauthorizedError(error)) {
-    return 401;
-  }
-  if (isEnvironmentHttpForbiddenError(error)) {
-    return 403;
-  }
-  if (isEnvironmentHttpInternalServerError(error)) {
-    return 500;
+  if (isEnvironmentHttpCommonError(error)) {
+    return readEnvironmentHttpErrorStatus(error);
   }
   return HttpClientError.isHttpClientError(error) && error.response !== undefined
     ? error.response.status
     : null;
 }
 
+function readEnvironmentHttpErrorStatus(error: EnvironmentHttpCommonErrorType): number {
+  switch (error._tag) {
+    case "EnvironmentHttpBadRequestError":
+      return 400;
+    case "EnvironmentHttpUnauthorizedError":
+      return 401;
+    case "EnvironmentHttpForbiddenError":
+      return 403;
+    case "EnvironmentHttpInternalServerError":
+      return 500;
+  }
+}
+
 function readHttpApiErrorMessage(error: unknown, fallbackMessage: string): string {
-  if (
-    isEnvironmentHttpBadRequestError(error) ||
-    isEnvironmentHttpUnauthorizedError(error) ||
-    isEnvironmentHttpForbiddenError(error) ||
-    isEnvironmentHttpInternalServerError(error)
-  ) {
+  if (isEnvironmentHttpCommonError(error)) {
     return error.message;
   }
   return fallbackMessage;
@@ -290,6 +282,7 @@ export async function createServerPairingCredential(
       makeEnvironmentHttpApiClient(resolvePrimaryEnvironmentHttpUrl("/")).pipe(
         Effect.flatMap((client) =>
           client.auth.pairingCredential({
+            headers: {},
             payload: trimmedLabel ? { label: trimmedLabel } : {},
           }),
         ),
@@ -310,7 +303,7 @@ export async function listServerPairingLinks(): Promise<ReadonlyArray<ServerPair
   try {
     const pairingLinks = await primaryHttpRuntime.runPromise(
       makeEnvironmentHttpApiClient(resolvePrimaryEnvironmentHttpUrl("/")).pipe(
-        Effect.flatMap((client) => client.auth.pairingLinks()),
+        Effect.flatMap((client) => client.auth.pairingLinks({ headers: {} })),
       ),
     );
     return pairingLinks.map((pairingLink) => {
@@ -353,7 +346,7 @@ export async function revokeServerPairingLink(id: string): Promise<void> {
   try {
     await primaryHttpRuntime.runPromise(
       makeEnvironmentHttpApiClient(resolvePrimaryEnvironmentHttpUrl("/")).pipe(
-        Effect.flatMap((client) => client.auth.revokePairingLink({ payload: { id } })),
+        Effect.flatMap((client) => client.auth.revokePairingLink({ headers: {}, payload: { id } })),
       ),
     );
   } catch (error) {
@@ -373,7 +366,7 @@ export async function listServerClientSessions(): Promise<
   try {
     const clientSessions = await primaryHttpRuntime.runPromise(
       makeEnvironmentHttpApiClient(resolvePrimaryEnvironmentHttpUrl("/")).pipe(
-        Effect.flatMap((client) => client.auth.clients()),
+        Effect.flatMap((client) => client.auth.clients({ headers: {} })),
       ),
     );
     return clientSessions.map((clientSession) => ({
@@ -406,7 +399,9 @@ export async function revokeServerClientSession(sessionId: AuthSessionId): Promi
   try {
     await primaryHttpRuntime.runPromise(
       makeEnvironmentHttpApiClient(resolvePrimaryEnvironmentHttpUrl("/")).pipe(
-        Effect.flatMap((client) => client.auth.revokeClient({ payload: { sessionId } })),
+        Effect.flatMap((client) =>
+          client.auth.revokeClient({ headers: {}, payload: { sessionId } }),
+        ),
       ),
     );
   } catch (error) {
@@ -424,7 +419,7 @@ export async function revokeOtherServerClientSessions(): Promise<number> {
   try {
     const result = await primaryHttpRuntime.runPromise(
       makeEnvironmentHttpApiClient(resolvePrimaryEnvironmentHttpUrl("/")).pipe(
-        Effect.flatMap((client) => client.auth.revokeOtherClients()),
+        Effect.flatMap((client) => client.auth.revokeOtherClients({ headers: {} })),
       ),
     );
     return result.revokedCount;

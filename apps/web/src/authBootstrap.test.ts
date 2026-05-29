@@ -1,4 +1,5 @@
 import type { DesktopBridge } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 function jsonResponse(body: unknown, init?: ResponseInit) {
@@ -39,8 +40,49 @@ function sessionResponse(body: unknown, init?: ResponseInit) {
   return jsonResponse(body, init);
 }
 
+function expectFetchRequest(
+  fetchMock: ReturnType<typeof vi.fn<typeof fetch>>,
+  index: number,
+  expected: {
+    readonly url: string;
+    readonly credentials?: RequestCredentials;
+    readonly method?: string;
+    readonly body?: string;
+    readonly headers?: Record<string, string>;
+  },
+) {
+  const call = fetchMock.mock.calls[index];
+  expect(call).toBeDefined();
+  if (!call) {
+    return;
+  }
+
+  const [input, init] = call;
+  expect(String(input)).toBe(expected.url);
+  expect(init).toEqual(
+    expect.objectContaining({
+      ...(expected.credentials === undefined ? {} : { credentials: expected.credentials }),
+      ...(expected.method === undefined ? {} : { method: expected.method }),
+    }),
+  );
+  if (expected.headers !== undefined) {
+    expect(init?.headers).toEqual(expect.objectContaining(expected.headers));
+  }
+  if (expected.body !== undefined) {
+    const body = init?.body;
+    expect(
+      typeof body === "string"
+        ? body
+        : body instanceof Uint8Array
+          ? new TextDecoder().decode(body)
+          : body,
+    ).toBe(expected.body);
+  }
+}
+
 describe("resolveInitialServerAuthGateState", () => {
   beforeEach(() => {
+    vi.resetModules();
     vi.restoreAllMocks();
     vi.useRealTimers();
     installTestBrowser("http://localhost/");
@@ -71,6 +113,7 @@ describe("resolveInitialServerAuthGateState", () => {
       .mockResolvedValueOnce(
         jsonResponse({
           authenticated: true,
+          role: "owner",
           sessionMethod: "browser-session-cookie",
           expiresAt: "2026-04-05T00:00:00.000Z",
         }),
@@ -105,9 +148,20 @@ describe("resolveInitialServerAuthGateState", () => {
     await Promise.all([resolveInitialServerAuthGateState(), resolveInitialServerAuthGateState()]);
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("http://localhost:3773/api/auth/session");
-    expect(fetchMock.mock.calls[1]?.[0]).toBe("http://localhost:3773/api/auth/bootstrap");
-    expect(fetchMock.mock.calls[2]?.[0]).toBe("http://localhost:3773/api/auth/session");
+    expectFetchRequest(fetchMock, 0, {
+      url: "http://localhost:3773/api/auth/session",
+      credentials: "include",
+    });
+    expectFetchRequest(fetchMock, 1, {
+      url: "http://localhost:3773/api/auth/bootstrap",
+      credentials: "include",
+      method: "POST",
+      body: JSON.stringify({ credential: "desktop-bootstrap-token" }),
+    });
+    expectFetchRequest(fetchMock, 2, {
+      url: "http://localhost:3773/api/auth/session",
+      credentials: "include",
+    });
   });
 
   it("uses https fetch urls when the primary environment uses wss", async () => {
@@ -138,7 +192,8 @@ describe("resolveInitialServerAuthGateState", () => {
       },
     });
 
-    expect(fetchMock).toHaveBeenCalledWith("https://remote.example.com/api/auth/session", {
+    expectFetchRequest(fetchMock, 0, {
+      url: "https://remote.example.com/api/auth/session",
       credentials: "include",
     });
   });
@@ -170,7 +225,8 @@ describe("resolveInitialServerAuthGateState", () => {
       },
     });
 
-    expect(fetchMock).toHaveBeenCalledWith("http://localhost:5735/api/auth/session", {
+    expectFetchRequest(fetchMock, 0, {
+      url: "http://localhost:5735/api/auth/session",
       credentials: "include",
     });
   });
@@ -211,7 +267,8 @@ describe("resolveInitialServerAuthGateState", () => {
       },
     });
 
-    expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:5733/api/auth/session", {
+    expectFetchRequest(fetchMock, 0, {
+      url: "http://127.0.0.1:5733/api/auth/session",
       credentials: "include",
     });
   });
@@ -314,6 +371,7 @@ describe("resolveInitialServerAuthGateState", () => {
       .mockResolvedValueOnce(
         jsonResponse({
           authenticated: true,
+          role: "client",
           sessionMethod: "browser-session-cookie",
           expiresAt: "2026-04-05T00:00:00.000Z",
         }),
@@ -357,7 +415,8 @@ describe("resolveInitialServerAuthGateState", () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
       jsonResponse(
         {
-          error: "Invalid bootstrap credential.",
+          _tag: "EnvironmentHttpUnauthorizedError",
+          message: "Invalid bootstrap credential.",
         },
         {
           status: 401,
@@ -371,9 +430,10 @@ describe("resolveInitialServerAuthGateState", () => {
     await expect(submitServerAuthCredential("bad-token")).rejects.toThrow(
       "Invalid pairing token. Check the token and try again.",
     );
-    expect(fetchMock).toHaveBeenCalledWith("http://localhost/api/auth/bootstrap", {
-      body: JSON.stringify({ credential: "bad-token" }),
+    expectFetchRequest(fetchMock, 0, {
+      url: "http://localhost/api/auth/bootstrap",
       credentials: "include",
+      body: JSON.stringify({ credential: "bad-token" }),
       headers: {
         "content-type": "application/json",
       },
@@ -399,6 +459,7 @@ describe("resolveInitialServerAuthGateState", () => {
       .mockResolvedValueOnce(
         jsonResponse({
           authenticated: true,
+          role: "owner",
           sessionMethod: "browser-session-cookie",
           expiresAt: "2026-04-05T00:00:00.000Z",
         }),
@@ -448,8 +509,14 @@ describe("resolveInitialServerAuthGateState", () => {
       status: "authenticated",
     });
     expect(fetchMock).toHaveBeenCalledTimes(4);
-    expect(fetchMock.mock.calls[2]?.[0]).toBe("http://localhost:3773/api/auth/session");
-    expect(fetchMock.mock.calls[3]?.[0]).toBe("http://localhost:3773/api/auth/session");
+    expectFetchRequest(fetchMock, 2, {
+      url: "http://localhost:3773/api/auth/session",
+      credentials: "include",
+    });
+    expectFetchRequest(fetchMock, 3, {
+      url: "http://localhost:3773/api/auth/session",
+      credentials: "include",
+    });
   });
 
   it("memoizes the authenticated gate state after the first successful read", async () => {
@@ -505,15 +572,17 @@ describe("resolveInitialServerAuthGateState", () => {
 
     const { createServerPairingCredential } = await import("./environments/primary");
 
-    await expect(createServerPairingCredential("Julius iPhone")).resolves.toEqual({
+    const credential = await createServerPairingCredential("Julius iPhone");
+    expect(credential).toMatchObject({
       id: "pairing-link-1",
       credential: "pairing-token",
       label: "Julius iPhone",
-      expiresAt: "2026-04-05T00:00:00.000Z",
     });
-    expect(fetchMock).toHaveBeenCalledWith("http://localhost/api/auth/pairing-token", {
-      body: JSON.stringify({ label: "Julius iPhone" }),
+    expect(DateTime.formatIso(credential.expiresAt)).toBe("2026-04-05T00:00:00.000Z");
+    expectFetchRequest(fetchMock, 0, {
+      url: "http://localhost/api/auth/pairing-token",
       credentials: "include",
+      body: JSON.stringify({ label: "Julius iPhone" }),
       headers: {
         "content-type": "application/json",
       },

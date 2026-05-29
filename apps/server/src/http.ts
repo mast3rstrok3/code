@@ -81,12 +81,13 @@ const requireAuthenticatedRequest = Effect.gen(function* () {
 export const serverEnvironmentHttpApiLayer = HttpApiBuilder.group(
   EnvironmentHttpApi,
   "metadata",
-  (handlers) =>
-    handlers.handle("descriptor", () =>
-      Effect.service(ServerEnvironment).pipe(
-        Effect.flatMap((serverEnvironment) => serverEnvironment.getDescriptor),
-      ),
-    ),
+  Effect.fnUntraced(function* (handlers) {
+    const serverEnvironment = yield* ServerEnvironment;
+    const descriptorHandler = Effect.fn("environment.metadata.descriptor")(function* () {
+      return yield* serverEnvironment.getDescriptor;
+    });
+    return handlers.handle("descriptor", descriptorHandler);
+  }),
 );
 
 class DecodeOtlpTraceRecordsError extends Data.TaggedError("DecodeOtlpTraceRecordsError")<{

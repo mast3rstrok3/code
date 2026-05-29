@@ -1,7 +1,10 @@
+import * as Context from "effect/Context";
+import type * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
 import * as HttpApiEndpoint from "effect/unstable/httpapi/HttpApiEndpoint";
 import * as HttpApiGroup from "effect/unstable/httpapi/HttpApiGroup";
+import * as HttpApiMiddleware from "effect/unstable/httpapi/HttpApiMiddleware";
 import * as HttpApiSchema from "effect/unstable/httpapi/HttpApiSchema";
 
 import {
@@ -14,9 +17,12 @@ import {
   AuthPairingLink,
   AuthRevokeClientSessionInput,
   AuthRevokePairingLinkInput,
+  AuthSessionRole,
   AuthSessionState,
   AuthWebSocketTokenResult,
+  ServerAuthSessionMethod,
 } from "./auth.ts";
+import { AuthSessionId } from "./baseSchemas.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import {
   ClientOrchestrationCommand,
@@ -56,6 +62,14 @@ export class EnvironmentHttpInternalServerError extends Schema.TaggedErrorClass<
   },
 ) {}
 
+export const EnvironmentHttpCommonError = Schema.Union([
+  EnvironmentHttpBadRequestError,
+  EnvironmentHttpUnauthorizedError,
+  EnvironmentHttpForbiddenError,
+  EnvironmentHttpInternalServerError,
+]);
+export type EnvironmentHttpCommonError = typeof EnvironmentHttpCommonError.Type;
+
 const EnvironmentHttpBadRequestErrorResponse = EnvironmentHttpBadRequestError.pipe(
   HttpApiSchema.status("BadRequest"),
 );
@@ -82,6 +96,38 @@ const EnvironmentHttpOrchestrationErrors = [
   EnvironmentHttpForbiddenErrorResponse,
   EnvironmentHttpInternalServerErrorResponse,
 ] as const;
+
+export interface EnvironmentSessionPrincipalShape {
+  readonly sessionId: AuthSessionId;
+  readonly subject: string;
+  readonly method: ServerAuthSessionMethod;
+  readonly role: AuthSessionRole;
+  readonly expiresAt?: DateTime.DateTime;
+}
+
+export class EnvironmentSessionPrincipal extends Context.Service<
+  EnvironmentSessionPrincipal,
+  EnvironmentSessionPrincipalShape
+>()("@t3tools/contracts/environmentHttp/EnvironmentSessionPrincipal") {}
+
+export class EnvironmentOwnerPrincipal extends Context.Service<
+  EnvironmentOwnerPrincipal,
+  EnvironmentSessionPrincipalShape & { readonly role: "owner" }
+>()("@t3tools/contracts/environmentHttp/EnvironmentOwnerPrincipal") {}
+
+export class EnvironmentSessionAuth extends HttpApiMiddleware.Service<
+  EnvironmentSessionAuth,
+  { provides: EnvironmentSessionPrincipal }
+>()("EnvironmentSessionAuth", {
+  error: EnvironmentHttpAuthErrors,
+}) {}
+
+export class EnvironmentOwnerAuth extends HttpApiMiddleware.Service<
+  EnvironmentOwnerAuth,
+  { provides: EnvironmentOwnerPrincipal }
+>()("EnvironmentOwnerAuth", {
+  error: EnvironmentHttpAuthErrors,
+}) {}
 
 export const AuthPairingLinkRevokeResult = Schema.Struct({
   revoked: Schema.Boolean,
@@ -130,46 +176,52 @@ export class EnvironmentAuthHttpApi extends HttpApiGroup.make("auth")
       headers: OptionalBearerHeaders,
       success: AuthWebSocketTokenResult,
       error: EnvironmentHttpAuthErrors,
-    }),
+    }).middleware(EnvironmentSessionAuth),
   )
   .add(
     HttpApiEndpoint.post("pairingCredential", "/api/auth/pairing-token", {
+      headers: OptionalBearerHeaders,
       payload: AuthCreatePairingCredentialInput,
       success: AuthPairingCredentialResult,
       error: EnvironmentHttpAuthErrors,
-    }),
+    }).middleware(EnvironmentOwnerAuth),
   )
   .add(
     HttpApiEndpoint.get("pairingLinks", "/api/auth/pairing-links", {
+      headers: OptionalBearerHeaders,
       success: Schema.Array(AuthPairingLink),
       error: EnvironmentHttpAuthErrors,
-    }),
+    }).middleware(EnvironmentOwnerAuth),
   )
   .add(
     HttpApiEndpoint.post("revokePairingLink", "/api/auth/pairing-links/revoke", {
+      headers: OptionalBearerHeaders,
       payload: AuthRevokePairingLinkInput,
       success: AuthPairingLinkRevokeResult,
       error: EnvironmentHttpAuthErrors,
-    }),
+    }).middleware(EnvironmentOwnerAuth),
   )
   .add(
     HttpApiEndpoint.get("clients", "/api/auth/clients", {
+      headers: OptionalBearerHeaders,
       success: Schema.Array(AuthClientSession),
       error: EnvironmentHttpAuthErrors,
-    }),
+    }).middleware(EnvironmentOwnerAuth),
   )
   .add(
     HttpApiEndpoint.post("revokeClient", "/api/auth/clients/revoke", {
+      headers: OptionalBearerHeaders,
       payload: AuthRevokeClientSessionInput,
       success: AuthClientSessionRevokeResult,
       error: EnvironmentHttpAuthErrors,
-    }),
+    }).middleware(EnvironmentOwnerAuth),
   )
   .add(
     HttpApiEndpoint.post("revokeOtherClients", "/api/auth/clients/revoke-others", {
+      headers: OptionalBearerHeaders,
       success: AuthOtherClientSessionsRevokeResult,
       error: EnvironmentHttpAuthErrors,
-    }),
+    }).middleware(EnvironmentOwnerAuth),
   ) {}
 
 export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestration")
@@ -178,7 +230,7 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
       headers: OptionalBearerHeaders,
       success: OrchestrationReadModel,
       error: EnvironmentHttpOrchestrationErrors,
-    }),
+    }).middleware(EnvironmentOwnerAuth),
   )
   .add(
     HttpApiEndpoint.post("dispatch", "/api/orchestration/dispatch", {
@@ -186,7 +238,7 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
       payload: ClientOrchestrationCommand,
       success: DispatchResult,
       error: EnvironmentHttpOrchestrationErrors,
-    }),
+    }).middleware(EnvironmentOwnerAuth),
   ) {}
 
 export class EnvironmentHttpApi extends HttpApi.make("environment")

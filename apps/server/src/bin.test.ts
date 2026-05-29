@@ -33,6 +33,7 @@ import {
 import { WorkspacePathsLive } from "./workspace/Layers/WorkspacePaths.ts";
 import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore.ts";
 import { ServerAuthLive } from "./auth/Layers/ServerAuth.ts";
+import { environmentOwnerAuthLayer } from "./auth/http.ts";
 
 const CliRuntimeLayer = Layer.mergeAll(NodeServices.layer, NetService.layer);
 class ProjectCliHttpApi extends HttpApi.make("environment").add(EnvironmentOrchestrationHttpApi) {}
@@ -108,6 +109,7 @@ const withLiveProjectCliServer = <A, E, R>(baseDir: string, run: () => Effect.Ef
     const config = yield* makeCliTestServerConfig(baseDir);
     const routesLayer = HttpApiBuilder.layer(ProjectCliHttpApi).pipe(
       Layer.provide(orchestrationHttpApiLayer),
+      Layer.provide(environmentOwnerAuthLayer),
     );
     const appLayer = HttpRouter.serve(routesLayer, {
       disableListenLog: true,

@@ -13,6 +13,7 @@ import {
   fetchRemoteSessionState,
   issueRemoteWebSocketToken,
   remoteHttpClientLayer,
+  RemoteEnvironmentAuthInvalidJsonError,
   RemoteEnvironmentAuthTimeoutError,
   resolveRemoteWebSocketConnectionUrl,
 } from "./remote.ts";
@@ -247,6 +248,33 @@ describe("remote", () => {
       if (isEnvironmentHttpUnauthorizedError(error)) {
         expect(error.message).toBe("Authentication required.");
       }
+    }),
+  );
+
+  it.effect("classifies malformed successful remote auth responses as invalid responses", () =>
+    Effect.gen(function* () {
+      const fetch = recordedFetch(
+        Response.json(
+          {
+            authenticated: true,
+            role: "client",
+            sessionMethod: "bearer-session-token",
+            expiresAt: "2026-05-01T12:00:00.000Z",
+            sessionToken: "",
+          },
+          { status: 200 },
+        ),
+      );
+
+      const error = yield* bootstrapRemoteBearerSession({
+        httpBaseUrl: "https://remote.example.com/",
+        credential: "pairing-token",
+      }).pipe(provideRemoteHttp(fetch.fetchFn), Effect.flip);
+
+      expect(error).toBeInstanceOf(RemoteEnvironmentAuthInvalidJsonError);
+      expect(error.message).toBe(
+        "Remote auth endpoint returned an invalid response from https://remote.example.com/api/auth/bootstrap/bearer.",
+      );
     }),
   );
 

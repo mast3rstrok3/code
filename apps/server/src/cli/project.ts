@@ -1,10 +1,7 @@
 import {
   CommandId,
   EnvironmentHttpApi,
-  EnvironmentHttpBadRequestError,
-  EnvironmentHttpForbiddenError,
-  EnvironmentHttpInternalServerError,
-  EnvironmentHttpUnauthorizedError,
+  EnvironmentHttpCommonError,
   type OrchestrationReadModel,
   ProjectId,
   type ClientOrchestrationCommand,
@@ -79,10 +76,7 @@ const ProjectCliRuntimeLive = Layer.mergeAll(
 );
 
 const PROJECT_CLI_LIVE_SERVER_TIMEOUT = Duration.seconds(1);
-const isEnvironmentHttpBadRequestError = Schema.is(EnvironmentHttpBadRequestError);
-const isEnvironmentHttpUnauthorizedError = Schema.is(EnvironmentHttpUnauthorizedError);
-const isEnvironmentHttpForbiddenError = Schema.is(EnvironmentHttpForbiddenError);
-const isEnvironmentHttpInternalServerError = Schema.is(EnvironmentHttpInternalServerError);
+const isEnvironmentHttpCommonError = Schema.is(EnvironmentHttpCommonError);
 const withProjectCliSessionToken = <A, E, R>(
   authControlPlane: AuthControlPlaneShape,
   run: (token: string) => Effect.Effect<A, E, R>,
@@ -100,12 +94,7 @@ const withProjectCliLiveServerTimeout = <A, E, R>(effect: Effect.Effect<A, E, R>
   effect.pipe(Effect.timeout(PROJECT_CLI_LIVE_SERVER_TIMEOUT));
 
 const failLiveServerRequest = (cause: unknown) => {
-  if (
-    isEnvironmentHttpBadRequestError(cause) ||
-    isEnvironmentHttpUnauthorizedError(cause) ||
-    isEnvironmentHttpForbiddenError(cause) ||
-    isEnvironmentHttpInternalServerError(cause)
-  ) {
+  if (isEnvironmentHttpCommonError(cause)) {
     return Effect.fail(new ProjectCommandError({ message: cause.message }));
   }
   if (HttpClientError.isHttpClientError(cause) && cause.response !== undefined) {

@@ -3,10 +3,21 @@ import {
   EnvironmentHttpBadRequestError,
   EnvironmentHttpForbiddenError,
   EnvironmentHttpInternalServerError,
+  EnvironmentOwnerAuth,
+  EnvironmentOwnerPrincipal,
+  EnvironmentSessionAuth,
+  EnvironmentSessionPrincipal,
   EnvironmentHttpUnauthorizedError,
+} from "@t3tools/contracts";
+import type {
+  AuthBootstrapInput,
+  AuthCreatePairingCredentialInput,
+  AuthRevokeClientSessionInput,
+  AuthRevokePairingLinkInput,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Cookies from "effect/unstable/http/Cookies";
 import * as HttpEffect from "effect/unstable/http/HttpEffect";
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
@@ -53,35 +64,57 @@ export const failEnvironmentHttpAuthError = (error: AuthError) =>
     }
   });
 
-const authenticateOwnerSession = Effect.gen(function* () {
-  const request = yield* HttpServerRequest.HttpServerRequest;
-  const serverAuth = yield* ServerAuth;
-  const session = yield* serverAuth.authenticateHttpRequest(request);
-  if (session.role !== "owner") {
-    return yield* new AuthError({
-      message: "Only owner sessions can manage network access.",
-      status: 403,
-    });
-  }
-  return { serverAuth, session } as const;
-});
+export const environmentSessionAuthLayer = Layer.effect(
+  EnvironmentSessionAuth,
+  Effect.gen(function* () {
+    const serverAuth = yield* ServerAuth;
+    return (httpEffect) =>
+      Effect.gen(function* () {
+        const request = yield* HttpServerRequest.HttpServerRequest;
+        const session = yield* serverAuth.authenticateHttpRequest(request);
+        return yield* httpEffect.pipe(Effect.provideService(EnvironmentSessionPrincipal, session));
+      }).pipe(Effect.catchTag("AuthError", failEnvironmentHttpAuthError));
+  }),
+);
 
-export const authHttpApiLayer = HttpApiBuilder.group(EnvironmentHttpApi, "auth", (handlers) =>
-  handlers
-    .handle("session", () =>
+export const environmentOwnerAuthLayer = Layer.effect(
+  EnvironmentOwnerAuth,
+  Effect.gen(function* () {
+    const serverAuth = yield* ServerAuth;
+    return (httpEffect) =>
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest;
-        const serverAuth = yield* ServerAuth;
-        return yield* serverAuth.getSessionState(request);
-      }),
-    )
-    .handle("bootstrap", ({ payload }) =>
-      Effect.gen(function* () {
+        const session = yield* serverAuth.authenticateHttpRequest(request);
+        if (session.role !== "owner") {
+          return yield* new AuthError({
+            message: "Only owner sessions can manage network access.",
+            status: 403,
+          });
+        }
+        return yield* httpEffect.pipe(
+          Effect.provideService(EnvironmentOwnerPrincipal, { ...session, role: "owner" }),
+        );
+      }).pipe(Effect.catchTag("AuthError", failEnvironmentHttpAuthError));
+  }),
+);
+
+export const authHttpApiLayer = HttpApiBuilder.group(
+  EnvironmentHttpApi,
+  "auth",
+  Effect.fnUntraced(function* (handlers) {
+    const serverAuth = yield* ServerAuth;
+    const sessions = yield* SessionCredentialService;
+
+    const sessionHandler = Effect.fn("environment.auth.session")(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest;
+      return yield* serverAuth.getSessionState(request);
+    });
+
+    const bootstrapHandler = Effect.fn("environment.auth.bootstrap")(
+      function* (input: { readonly payload: AuthBootstrapInput }) {
         const request = yield* HttpServerRequest.HttpServerRequest;
-        const serverAuth = yield* ServerAuth;
-        const sessions = yield* SessionCredentialService;
         const result = yield* serverAuth.exchangeBootstrapCredential(
-          payload.credential,
+          input.payload.credential,
           deriveAuthClientMetadata({ request }),
         );
         const sessionCookies = yield* Effect.fromResult(
@@ -106,72 +139,90 @@ export const authHttpApiLayer = HttpApiBuilder.group(EnvironmentHttpApi, "auth",
           Effect.succeed(HttpServerResponse.mergeCookies(response, sessionCookies)),
         );
         return result.response;
-      }).pipe(Effect.catchTag("AuthError", failEnvironmentHttpAuthError)),
-    )
-    .handle("bootstrapBearer", ({ payload }) =>
-      Effect.gen(function* () {
+      },
+      Effect.catchTag("AuthError", failEnvironmentHttpAuthError),
+    );
+
+    const bootstrapBearerHandler = Effect.fn("environment.auth.bootstrapBearer")(
+      function* (input: { readonly payload: AuthBootstrapInput }) {
         const request = yield* HttpServerRequest.HttpServerRequest;
-        const serverAuth = yield* ServerAuth;
-        const result = yield* serverAuth.exchangeBootstrapCredentialForBearerSession(
-          payload.credential,
+        return yield* serverAuth.exchangeBootstrapCredentialForBearerSession(
+          input.payload.credential,
           deriveAuthClientMetadata({ request }),
         );
-        return result;
-      }).pipe(Effect.catchTag("AuthError", failEnvironmentHttpAuthError)),
-    )
-    .handle("webSocketToken", () =>
-      Effect.gen(function* () {
-        const request = yield* HttpServerRequest.HttpServerRequest;
-        const serverAuth = yield* ServerAuth;
-        const session = yield* serverAuth.authenticateHttpRequest(request);
+      },
+      Effect.catchTag("AuthError", failEnvironmentHttpAuthError),
+    );
+
+    const webSocketTokenHandler = Effect.fn("environment.auth.webSocketToken")(
+      function* () {
+        const session = yield* EnvironmentSessionPrincipal;
         return yield* serverAuth.issueWebSocketToken(session);
-      }).pipe(Effect.catchTag("AuthError", failEnvironmentHttpAuthError)),
-    )
-    .handle("pairingCredential", ({ payload }) =>
-      Effect.gen(function* () {
-        const serverAuth = yield* ServerAuth;
-        const request = yield* HttpServerRequest.HttpServerRequest;
-        const session = yield* serverAuth.authenticateHttpRequest(request);
-        if (session.role !== "owner") {
-          return yield* new AuthError({
-            message: "Only owner sessions can create pairing credentials.",
-            status: 403,
-          });
-        }
-        return yield* serverAuth.issuePairingCredential(payload);
-      }).pipe(Effect.catchTag("AuthError", failEnvironmentHttpAuthError)),
-    )
-    .handle("pairingLinks", () =>
-      Effect.gen(function* () {
-        const { serverAuth } = yield* authenticateOwnerSession;
+      },
+      Effect.catchTag("AuthError", failEnvironmentHttpAuthError),
+    );
+
+    const pairingCredentialHandler = Effect.fn("environment.auth.pairingCredential")(
+      function* (input: { readonly payload: AuthCreatePairingCredentialInput }) {
+        return yield* serverAuth.issuePairingCredential(input.payload);
+      },
+      Effect.catchTag("AuthError", failEnvironmentHttpAuthError),
+    );
+
+    const pairingLinksHandler = Effect.fn("environment.auth.pairingLinks")(
+      function* () {
         return yield* serverAuth.listPairingLinks();
-      }).pipe(Effect.catchTag("AuthError", failEnvironmentHttpAuthError)),
-    )
-    .handle("revokePairingLink", ({ payload }) =>
-      Effect.gen(function* () {
-        const { serverAuth } = yield* authenticateOwnerSession;
-        const revoked = yield* serverAuth.revokePairingLink(payload.id);
+      },
+      Effect.catchTag("AuthError", failEnvironmentHttpAuthError),
+    );
+
+    const revokePairingLinkHandler = Effect.fn("environment.auth.revokePairingLink")(
+      function* (input: { readonly payload: AuthRevokePairingLinkInput }) {
+        const revoked = yield* serverAuth.revokePairingLink(input.payload.id);
         return { revoked };
-      }).pipe(Effect.catchTag("AuthError", failEnvironmentHttpAuthError)),
-    )
-    .handle("clients", () =>
-      Effect.gen(function* () {
-        const { serverAuth, session } = yield* authenticateOwnerSession;
+      },
+      Effect.catchTag("AuthError", failEnvironmentHttpAuthError),
+    );
+
+    const clientsHandler = Effect.fn("environment.auth.clients")(
+      function* () {
+        const session = yield* EnvironmentOwnerPrincipal;
         return yield* serverAuth.listClientSessions(session.sessionId);
-      }).pipe(Effect.catchTag("AuthError", failEnvironmentHttpAuthError)),
-    )
-    .handle("revokeClient", ({ payload }) =>
-      Effect.gen(function* () {
-        const { serverAuth, session } = yield* authenticateOwnerSession;
-        const revoked = yield* serverAuth.revokeClientSession(session.sessionId, payload.sessionId);
+      },
+      Effect.catchTag("AuthError", failEnvironmentHttpAuthError),
+    );
+
+    const revokeClientHandler = Effect.fn("environment.auth.revokeClient")(
+      function* (input: { readonly payload: AuthRevokeClientSessionInput }) {
+        const session = yield* EnvironmentOwnerPrincipal;
+        const revoked = yield* serverAuth.revokeClientSession(
+          session.sessionId,
+          input.payload.sessionId,
+        );
         return { revoked };
-      }).pipe(Effect.catchTag("AuthError", failEnvironmentHttpAuthError)),
-    )
-    .handle("revokeOtherClients", () =>
-      Effect.gen(function* () {
-        const { serverAuth, session } = yield* authenticateOwnerSession;
+      },
+      Effect.catchTag("AuthError", failEnvironmentHttpAuthError),
+    );
+
+    const revokeOtherClientsHandler = Effect.fn("environment.auth.revokeOtherClients")(
+      function* () {
+        const session = yield* EnvironmentOwnerPrincipal;
         const revokedCount = yield* serverAuth.revokeOtherClientSessions(session.sessionId);
         return { revokedCount };
-      }).pipe(Effect.catchTag("AuthError", failEnvironmentHttpAuthError)),
-    ),
+      },
+      Effect.catchTag("AuthError", failEnvironmentHttpAuthError),
+    );
+
+    return handlers
+      .handle("session", sessionHandler)
+      .handle("bootstrap", bootstrapHandler)
+      .handle("bootstrapBearer", bootstrapBearerHandler)
+      .handle("webSocketToken", webSocketTokenHandler)
+      .handle("pairingCredential", pairingCredentialHandler)
+      .handle("pairingLinks", pairingLinksHandler)
+      .handle("revokePairingLink", revokePairingLinkHandler)
+      .handle("clients", clientsHandler)
+      .handle("revokeClient", revokeClientHandler)
+      .handle("revokeOtherClients", revokeOtherClientsHandler);
+  }),
 );
