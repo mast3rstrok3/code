@@ -1307,7 +1307,9 @@ export function ThreadTerminalRouteScreen() {
             })}
           >
             <GlassSurface
+              chrome="none"
               glassEffectStyle="regular"
+              tintColor="transparent"
               style={{
                 alignItems: "center",
                 borderRadius: 24,
