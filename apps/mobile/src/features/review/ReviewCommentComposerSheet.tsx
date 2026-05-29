@@ -1,4 +1,4 @@
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { SymbolView } from "expo-symbols";
 import { TextInputWrapper } from "expo-paste-input";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
@@ -65,6 +65,7 @@ export function ReviewCommentComposerSheet() {
   const [attachments, setAttachments] = useState<ReadonlyArray<DraftComposerImageAttachment>>([]);
   const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
   const inputRef = useRef<NativeTextInput>(null);
+  const isDismissingRef = useRef(false);
 
   const selectedLines = useMemo(
     () => (target ? getSelectedReviewCommentLines(target) : []),
@@ -91,8 +92,21 @@ export function ReviewCommentComposerSheet() {
   );
   const previewViewportWidth = Math.max(width - 40, 280);
   const keepInputFocused = useCallback(() => {
-    requestAnimationFrame(() => inputRef.current?.focus());
+    if (isDismissingRef.current) {
+      return;
+    }
+
+    requestAnimationFrame(() => {
+      if (!isDismissingRef.current) {
+        inputRef.current?.focus();
+      }
+    });
   }, []);
+  const dismissComposer = useCallback(() => {
+    isDismissingRef.current = true;
+    clearReviewCommentTarget();
+    router.dismiss();
+  }, [router]);
   const handleNativePaste = useNativePaste((uris) => {
     void (async () => {
       try {
@@ -108,6 +122,15 @@ export function ReviewCommentComposerSheet() {
       }
     })();
   });
+
+  useFocusEffect(
+    useCallback(() => {
+      isDismissingRef.current = false;
+      return () => {
+        isDismissingRef.current = true;
+      };
+    }, []),
+  );
 
   useEffect(() => {
     if (!target || selectedLines.length === 0) {
@@ -161,10 +184,7 @@ export function ReviewCommentComposerSheet() {
           <View className="flex-row items-center justify-between py-2">
             <Pressable
               className="bg-subtle h-12 w-12 items-center justify-center rounded-full"
-              onPress={() => {
-                clearReviewCommentTarget();
-                router.dismiss();
-              }}
+              onPress={dismissComposer}
             >
               <SymbolView name="xmark" size={18} tintColor={iconTint} type="monochrome" />
             </Pressable>
@@ -311,8 +331,7 @@ export function ReviewCommentComposerSheet() {
                   attachments,
                 });
                 setAttachments([]);
-                clearReviewCommentTarget();
-                router.dismiss();
+                dismissComposer();
               }}
             />
           </View>
