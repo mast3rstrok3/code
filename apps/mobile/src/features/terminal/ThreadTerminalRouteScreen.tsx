@@ -1212,10 +1212,10 @@ export function ThreadTerminalRouteScreen() {
                               : terminalTheme.border,
                             borderRadius: 12,
                             borderWidth: 1,
-                            height: 38,
                             justifyContent: "center",
                             minWidth: action.label.length > 1 ? 46 : 38,
                             paddingHorizontal: 11,
+                            paddingVertical: 8,
                           })}
                         >
                           <RNText
@@ -1277,14 +1277,15 @@ export function ThreadTerminalRouteScreen() {
                     borderColor: terminalTheme.border,
                     borderRadius: 12,
                     borderWidth: 1,
-                    height: 38,
                     justifyContent: "center",
-                    width: 38,
+                    minWidth: 38,
+                    paddingHorizontal: 11,
+                    paddingVertical: 8,
                   })}
                 >
                   <SymbolView
                     name={{ ios: "keyboard.chevron.compact.down", android: "keyboard_hide" }}
-                    size={19}
+                    size={14}
                     tintColor={terminalTheme.foreground}
                     type="monochrome"
                   />
