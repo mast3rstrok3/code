@@ -1,16 +1,9 @@
-import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { SymbolView } from "expo-symbols";
 import { TextInputWrapper } from "expo-paste-input";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  Pressable,
-  ScrollView,
-  type TextInput as NativeTextInput,
-  View,
-  useColorScheme,
-  useWindowDimensions,
-} from "react-native";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Pressable, ScrollView, View, useColorScheme, useWindowDimensions } from "react-native";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import ImageViewing from "react-native-image-viewing";
@@ -64,8 +57,6 @@ export function ReviewCommentComposerSheet() {
   >({});
   const [attachments, setAttachments] = useState<ReadonlyArray<DraftComposerImageAttachment>>([]);
   const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
-  const inputRef = useRef<NativeTextInput>(null);
-  const isDismissingRef = useRef(false);
 
   const selectedLines = useMemo(
     () => (target ? getSelectedReviewCommentLines(target) : []),
@@ -91,19 +82,7 @@ export function ReviewCommentComposerSheet() {
     REVIEW_DIFF_LINE_HEIGHT,
   );
   const previewViewportWidth = Math.max(width - 40, 280);
-  const keepInputFocused = useCallback(() => {
-    if (isDismissingRef.current) {
-      return;
-    }
-
-    requestAnimationFrame(() => {
-      if (!isDismissingRef.current) {
-        inputRef.current?.focus();
-      }
-    });
-  }, []);
   const dismissComposer = useCallback(() => {
-    isDismissingRef.current = true;
     clearReviewCommentTarget();
     router.dismiss();
   }, [router]);
@@ -122,15 +101,6 @@ export function ReviewCommentComposerSheet() {
       }
     })();
   });
-
-  useFocusEffect(
-    useCallback(() => {
-      isDismissingRef.current = false;
-      return () => {
-        isDismissingRef.current = true;
-      };
-    }, []),
-  );
 
   useEffect(() => {
     if (!target || selectedLines.length === 0) {
@@ -271,14 +241,12 @@ export function ReviewCommentComposerSheet() {
                   <View className="flex-1 px-4 pt-3.5">
                     <TextInputWrapper onPaste={handleNativePaste} style={{ flex: 1 }}>
                       <TextInput
-                        ref={inputRef}
                         autoFocus
                         multiline
                         placeholder="Leave a comment..."
                         textAlignVertical="top"
                         value={commentText}
                         onChangeText={setCommentText}
-                        onBlur={keepInputFocused}
                         className="h-full flex-1 border-0 bg-transparent px-0 py-0 font-sans text-[15px]"
                         style={{ flex: 1 }}
                       />
