@@ -4,7 +4,11 @@ import { TextInputWrapper } from "expo-paste-input";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { useEffect, useMemo, useState } from "react";
 import { Pressable, ScrollView, View, useColorScheme, useWindowDimensions } from "react-native";
-import { KeyboardStickyView } from "react-native-keyboard-controller";
+import {
+  KeyboardAwareScrollView,
+  KeyboardStickyView,
+  useKeyboardState,
+} from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import ImageViewing from "react-native-image-viewing";
 
@@ -39,6 +43,9 @@ import {
 } from "./shikiReviewHighlighter";
 
 const REVIEW_COMMENT_PREVIEW_MAX_LINES = 5;
+const REVIEW_COMMENT_ACTION_HEIGHT = 44;
+const REVIEW_COMMENT_ACTION_TOP_PADDING = 12;
+const REVIEW_COMMENT_CONTENT_ACTION_GAP = 12;
 
 export function ReviewCommentComposerSheet() {
   const router = useRouter();
@@ -57,6 +64,7 @@ export function ReviewCommentComposerSheet() {
   >({});
   const [attachments, setAttachments] = useState<ReadonlyArray<DraftComposerImageAttachment>>([]);
   const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
+  const isKeyboardVisible = useKeyboardState((state) => state.isVisible);
 
   const selectedLines = useMemo(
     () => (target ? getSelectedReviewCommentLines(target) : []),
@@ -82,6 +90,9 @@ export function ReviewCommentComposerSheet() {
     REVIEW_DIFF_LINE_HEIGHT,
   );
   const previewViewportWidth = Math.max(width - 40, 280);
+  const actionBottomPadding = isKeyboardVisible ? 8 : Math.max(insets.bottom, 18);
+  const actionBarHeight =
+    REVIEW_COMMENT_ACTION_TOP_PADDING + REVIEW_COMMENT_ACTION_HEIGHT + actionBottomPadding;
   const handleNativePaste = useNativePaste((uris) => {
     void (async () => {
       try {
@@ -138,13 +149,18 @@ export function ReviewCommentComposerSheet() {
 
   return (
     <View style={{ flex: 1 }}>
-      <View
-        style={{
-          flex: 1,
+      <KeyboardAwareScrollView
+        bottomOffset={target ? actionBarHeight + REVIEW_COMMENT_CONTENT_ACTION_GAP : 0}
+        contentContainerStyle={{
+          flexGrow: 1,
           paddingHorizontal: 20,
           paddingTop: 8,
-          paddingBottom: Math.max(insets.bottom, 18) + 82,
+          paddingBottom: target
+            ? actionBarHeight + REVIEW_COMMENT_CONTENT_ACTION_GAP
+            : Math.max(insets.bottom, 18),
         }}
+        keyboardDismissMode="interactive"
+        keyboardShouldPersistTaps="handled"
       >
         <View className="flex-row items-center justify-between py-2">
           <Pressable
@@ -170,7 +186,7 @@ export function ReviewCommentComposerSheet() {
             </Text>
           </View>
         ) : (
-          <View className="flex-1 gap-4">
+          <View className="gap-4">
             <View className="gap-1 px-1">
               <Text className="text-[11px] font-t3-bold uppercase text-foreground-muted">
                 {selectionLabel}
@@ -272,12 +288,12 @@ export function ReviewCommentComposerSheet() {
             </View>
           </View>
         )}
-      </View>
+      </KeyboardAwareScrollView>
       {target ? (
         <KeyboardStickyView style={{ position: "absolute", bottom: 0, left: 0, right: 0 }}>
           <View
             className="flex-row items-center gap-3 bg-sheet px-5 pt-3"
-            style={{ paddingBottom: Math.max(insets.bottom, 18) }}
+            style={{ paddingBottom: actionBottomPadding }}
           >
             <ControlPill icon="plus" onPress={() => void handlePickImages()} />
             <View className="flex-1" />
