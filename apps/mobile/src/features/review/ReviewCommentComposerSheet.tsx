@@ -11,11 +11,7 @@ import {
   useColorScheme,
   useWindowDimensions,
 } from "react-native";
-import {
-  KeyboardAvoidingView,
-  KeyboardStickyView,
-  useKeyboardState,
-} from "react-native-keyboard-controller";
+import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import ImageViewing from "react-native-image-viewing";
 
@@ -50,9 +46,6 @@ import {
 } from "./shikiReviewHighlighter";
 
 const REVIEW_COMMENT_PREVIEW_MAX_LINES = 5;
-const REVIEW_COMMENT_ACTION_HEIGHT = 44;
-const REVIEW_COMMENT_ACTION_TOP_PADDING = 8;
-const REVIEW_COMMENT_CONTENT_ACTION_GAP = 0;
 
 export function ReviewCommentComposerSheet() {
   const router = useRouter();
@@ -72,7 +65,6 @@ export function ReviewCommentComposerSheet() {
   const [attachments, setAttachments] = useState<ReadonlyArray<DraftComposerImageAttachment>>([]);
   const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
   const inputRef = useRef<NativeTextInput>(null);
-  const isKeyboardVisible = useKeyboardState((state) => state.isVisible);
 
   const selectedLines = useMemo(
     () => (target ? getSelectedReviewCommentLines(target) : []),
@@ -98,9 +90,6 @@ export function ReviewCommentComposerSheet() {
     REVIEW_DIFF_LINE_HEIGHT,
   );
   const previewViewportWidth = Math.max(width - 40, 280);
-  const actionBottomPadding = isKeyboardVisible ? 8 : Math.max(insets.bottom, 18);
-  const actionBarHeight =
-    REVIEW_COMMENT_ACTION_TOP_PADDING + REVIEW_COMMENT_ACTION_HEIGHT + actionBottomPadding;
   const keepInputFocused = useCallback(() => {
     requestAnimationFrame(() => inputRef.current?.focus());
   }, []);
@@ -166,9 +155,7 @@ export function ReviewCommentComposerSheet() {
             flex: 1,
             paddingHorizontal: 20,
             paddingTop: 8,
-            paddingBottom: target
-              ? actionBarHeight + REVIEW_COMMENT_CONTENT_ACTION_GAP
-              : Math.max(insets.bottom, 18),
+            paddingBottom: target ? 0 : Math.max(insets.bottom, 18),
           }}
         >
           <View className="flex-row items-center justify-between py-2">
@@ -298,13 +285,8 @@ export function ReviewCommentComposerSheet() {
             </View>
           )}
         </View>
-      </KeyboardAvoidingView>
-      {target ? (
-        <KeyboardStickyView style={{ position: "absolute", bottom: 0, left: 0, right: 0 }}>
-          <View
-            className="flex-row items-center gap-3 bg-sheet px-5 pt-2"
-            style={{ paddingBottom: actionBottomPadding }}
-          >
+        {target ? (
+          <View className="flex-row items-center gap-3 bg-sheet px-5 py-2">
             <ControlPill
               accessibilityLabel="Add image"
               icon="plus"
@@ -314,6 +296,7 @@ export function ReviewCommentComposerSheet() {
             <ControlPill
               accessibilityLabel="Comment"
               icon="arrow.up"
+              label="Comment"
               variant="primary"
               disabled={!canSubmit}
               onPress={() => {
@@ -333,8 +316,8 @@ export function ReviewCommentComposerSheet() {
               }}
             />
           </View>
-        </KeyboardStickyView>
-      ) : null}
+        ) : null}
+      </KeyboardAvoidingView>
       <ImageViewing
         images={previewImageUri ? [{ uri: previewImageUri }] : []}
         imageIndex={0}
