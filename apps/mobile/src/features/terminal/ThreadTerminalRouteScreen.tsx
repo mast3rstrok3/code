@@ -8,7 +8,7 @@ import type { KnownTerminalSession } from "@t3tools/client-runtime";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, ScrollView, Text as RNText, View, useColorScheme } from "react-native";
-import { KeyboardStickyView } from "react-native-keyboard-controller";
+import { KeyboardAvoidingView, KeyboardController } from "react-native-keyboard-controller";
 
 import { EmptyState } from "../../components/EmptyState";
 import { LoadingScreen } from "../../components/LoadingScreen";
@@ -394,8 +394,6 @@ export function ThreadTerminalRouteScreen() {
       { kind: "send", key: "dash", label: "-", data: "-" },
     ];
   }, [hostPlatform]);
-  const terminalBottomInset = TERMINAL_ACCESSORY_HEIGHT;
-
   const terminalMenuSessions = useMemo<ReadonlyArray<TerminalMenuSession>>(
     () =>
       buildTerminalMenuSessions({
@@ -891,6 +889,10 @@ export function ThreadTerminalRouteScreen() {
     [pendingModifier, terminalId, writeInput],
   );
 
+  const handleDismissKeyboard = useCallback(() => {
+    void KeyboardController.dismiss();
+  }, []);
+
   if (!selectedThread) {
     if (isLoadingSavedConnection) {
       return <LoadingScreen message="Opening terminal…" />;
@@ -1022,8 +1024,12 @@ export function ThreadTerminalRouteScreen() {
         </Stack.Toolbar.Menu>
       </Stack.Toolbar>
 
-      <View style={{ flex: 1, backgroundColor: terminalTheme.background }}>
-        <View style={{ flex: 1, paddingBottom: terminalBottomInset }}>
+      <KeyboardAvoidingView
+        automaticOffset
+        behavior="height"
+        style={{ flex: 1, backgroundColor: terminalTheme.background }}
+      >
+        <View style={{ flex: 1 }}>
           <TerminalSurface
             buffer={terminalSurfaceBuffer}
             fontSize={fontSize}
@@ -1035,22 +1041,23 @@ export function ThreadTerminalRouteScreen() {
           />
         </View>
 
-        <KeyboardStickyView style={{ position: "absolute", bottom: 0, left: 0, right: 0 }}>
-          <View
-            style={{
-              backgroundColor: terminalTheme.background,
-              borderTopColor: terminalTheme.border,
-              borderTopWidth: 1,
-              minHeight: TERMINAL_ACCESSORY_HEIGHT,
-              paddingBottom: 4,
-              paddingHorizontal: 8,
-              paddingTop: 4,
-            }}
-          >
+        <View
+          style={{
+            backgroundColor: terminalTheme.background,
+            borderTopColor: terminalTheme.border,
+            borderTopWidth: 1,
+            minHeight: TERMINAL_ACCESSORY_HEIGHT,
+            paddingBottom: 4,
+            paddingHorizontal: 8,
+            paddingTop: 4,
+          }}
+        >
+          <View style={{ alignItems: "center", flexDirection: "row", gap: 6 }}>
             <ScrollView
               horizontal
               contentContainerStyle={{ alignItems: "center", gap: 6, paddingRight: 2 }}
               showsHorizontalScrollIndicator={false}
+              style={{ flex: 1 }}
             >
               {terminalToolbarActions.map((action) => {
                 const active = action.kind === "modifier" && pendingModifier === action.modifier;
@@ -1094,9 +1101,38 @@ export function ThreadTerminalRouteScreen() {
                 );
               })}
             </ScrollView>
+            <Pressable
+              accessibilityLabel="Hide keyboard"
+              accessibilityRole="button"
+              onPress={handleDismissKeyboard}
+              style={({ pressed }) => ({
+                alignItems: "center",
+                backgroundColor: pressed
+                  ? withAlpha(terminalTheme.foreground, "1f")
+                  : withAlpha(terminalTheme.foreground, "12"),
+                borderColor: terminalTheme.border,
+                borderRadius: 12,
+                borderWidth: 1,
+                justifyContent: "center",
+                minWidth: 54,
+                paddingHorizontal: 11,
+                paddingVertical: 8,
+              })}
+            >
+              <RNText
+                style={{
+                  color: terminalTheme.foreground,
+                  fontFamily: "DMSans_700Bold",
+                  fontSize: 12,
+                  fontWeight: "700",
+                }}
+              >
+                hide
+              </RNText>
+            </Pressable>
           </View>
-        </KeyboardStickyView>
-      </View>
+        </View>
+      </KeyboardAvoidingView>
     </>
   );
 }
