@@ -503,6 +503,7 @@ export const tokenApi = HttpApiBuilder.group(RelayApi, "token", (handlers) =>
         if (args.payload.resource !== issuer || requestedScopes === null) {
           return yield* new HttpApiError.Unauthorized({});
         }
+
         const verified = yield* verifyClerkBearerToken(settings, args.payload.subject_token).pipe(
           Effect.catch(() => relayAuthInvalidError("invalid_bearer")),
         );

@@ -577,6 +577,38 @@ describe("mobile cloud link environment client", () => {
       }),
   );
 
+  it.effect("preserves typed local environment failures while obtaining a link proof", () =>
+    Effect.gen(function* () {
+      const fetchMock = vi.fn((url: string | URL) => {
+        if (String(url).endsWith("/v1/client/environment-link-challenges")) {
+          return Promise.resolve(Response.json(validLinkChallengeResponse()));
+        }
+        return Promise.resolve(
+          Response.json(
+            {
+              _tag: "EnvironmentHttpUnauthorizedError",
+              message: "Invalid environment bearer session.",
+            },
+            { status: 401 },
+          ),
+        );
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const error = yield* withCloudServices(
+        linkEnvironmentToCloud({
+          clerkToken: "clerk-token",
+          connection: savedConnection,
+        }),
+      ).pipe(Effect.flip);
+      expect(error._tag).toBe("CloudEnvironmentLinkError");
+      expect(error.message).toBe(
+        "Could not obtain environment link proof: Invalid environment bearer session.",
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    }),
+  );
+
   it.effect("preserves typed relay error bodies while linking environments", () =>
     Effect.gen(function* () {
       const fetchMock = vi.fn((url: string | URL) => {
@@ -671,7 +703,9 @@ describe("mobile cloud link environment client", () => {
         if (String(url).endsWith("/v1/client/environment-links")) {
           return Promise.resolve(Response.json(validLinkResponse()));
         }
-        return Promise.resolve(Response.json({ ok: true }));
+        return Promise.resolve(
+          Response.json({ ok: true, endpointRuntimeStatus: { status: "configured" } }),
+        );
       });
       vi.stubGlobal("fetch", fetchMock);
 

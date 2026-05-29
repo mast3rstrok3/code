@@ -1367,6 +1367,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         const ownerCookie = yield* getAuthenticatedSessionCookieHeader();
         const credentialResponse = yield* HttpClient.post("/api/auth/pairing-token", {
           headers: { cookie: ownerCookie },
+          body: yield* HttpBody.json({}),
         });
         const credential = (yield* credentialResponse.json) as { readonly credential: string };
         const tokenUrl = yield* getHttpServerUrl("/api/auth/token");
@@ -1443,6 +1444,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         headers: {
           cookie: ownerCookie,
         },
+        body: yield* HttpBody.json({}),
       });
       const firstCredential = (yield* firstCredentialResponse.json) as {
         readonly credential: string;
@@ -1451,6 +1453,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         headers: {
           cookie: ownerCookie,
         },
+        body: yield* HttpBody.json({}),
       });
       const secondCredential = (yield* secondCredentialResponse.json) as {
         readonly credential: string;
@@ -1484,7 +1487,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assert.equal(firstBootstrap.response.status, 200);
       assert.equal(replayBootstrap.response.status, 401);
-      assert.equal(replayBootstrap.body.error, "DPoP proof replayed.");
+      assert.equal(replayBootstrap.body.message, "DPoP proof replayed.");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -1497,6 +1500,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         headers: {
           cookie: ownerCookie,
         },
+        body: yield* HttpBody.json({}),
       });
       const credential = (yield* credentialResponse.json) as {
         readonly credential: string;
@@ -1534,6 +1538,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         headers: {
           cookie: ownerCookie,
         },
+        body: yield* HttpBody.json({}),
       });
       const credential = (yield* credentialResponse.json) as {
         readonly credential: string;
@@ -1560,7 +1565,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       });
 
       assert.equal(bootstrap.response.status, 401);
-      assert.equal(bootstrap.body.error, "DPoP URL mismatch.");
+      assert.equal(bootstrap.body.message, "DPoP URL mismatch.");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -1591,11 +1596,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         }),
       });
       const body = yield* responseJsonEffect<{
-        readonly error?: string;
+        readonly _tag?: string;
+        readonly message?: string;
       }>(linkProofResponse);
 
       assert.equal(linkProofResponse.status, 400);
-      assert.equal(body.error, "Invalid managed endpoint origin.");
+      assert.equal(body._tag, "EnvironmentHttpBadRequestError");
+      assert.equal(body.message, "Invalid managed endpoint origin.");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -1629,11 +1636,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         }),
       });
       const body = yield* responseJsonEffect<{
-        readonly error?: string;
+        readonly _tag?: string;
+        readonly message?: string;
       }>(linkProofResponse);
 
       assert.equal(linkProofResponse.status, 400);
-      assert.equal(body.error, "Invalid managed endpoint origin.");
+      assert.equal(body._tag, "EnvironmentHttpBadRequestError");
+      assert.equal(body.message, "Invalid managed endpoint origin.");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -1669,11 +1678,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ),
       });
       const body = (yield* linkProofResponse.json) as {
-        readonly error?: string;
+        readonly _tag?: string;
+        readonly message?: string;
       };
 
       assert.equal(linkProofResponse.status, 400);
-      assert.equal(body.error, "Invalid managed endpoint origin.");
+      assert.equal(body._tag, "EnvironmentHttpBadRequestError");
+      assert.equal(body.message, "Invalid managed endpoint origin.");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -1711,11 +1722,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           ),
         });
         const body = (yield* linkProofResponse.json) as {
-          readonly error?: string;
+          readonly _tag?: string;
+          readonly message?: string;
         };
 
         assert.equal(linkProofResponse.status, 400);
-        assert.equal(body.error, "Invalid managed endpoint origin.");
+        assert.equal(body._tag, "EnvironmentHttpBadRequestError");
+        assert.equal(body.message, "Invalid managed endpoint origin.");
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -1751,11 +1764,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ),
       });
       const body = (yield* linkProofResponse.json) as {
-        readonly error?: string;
+        readonly _tag?: string;
+        readonly message?: string;
       };
 
       assert.equal(linkProofResponse.status, 400);
-      assert.equal(body.error, "Invalid managed endpoint origin.");
+      assert.equal(body._tag, "EnvironmentHttpBadRequestError");
+      assert.equal(body.message, "Invalid managed endpoint origin.");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -1787,11 +1802,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         }),
       });
       const body = yield* responseJsonEffect<{
-        readonly error?: string;
+        readonly _tag?: string;
+        readonly message?: string;
       }>(linkProofResponse);
 
       assert.equal(linkProofResponse.status, 400);
-      assert.equal(body.error, "Invalid managed endpoint origin.");
+      assert.equal(body._tag, "EnvironmentHttpBadRequestError");
+      assert.equal(body.message, "Invalid managed endpoint origin.");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -1816,11 +1833,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         }),
       });
       const body = yield* responseJsonEffect<{
-        readonly error?: string;
+        readonly _tag?: string;
+        readonly message?: string;
       }>(relayConfigResponse);
 
       assert.equal(relayConfigResponse.status, 400);
-      assert.equal(body.error, "Cloud mint public key must be a valid Ed25519 public key.");
+      assert.equal(body._tag, "EnvironmentHttpBadRequestError");
+      assert.equal(body.message, "Cloud mint public key must be a valid Ed25519 public key.");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -1869,25 +1888,25 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         cloudUserId: "user_123",
         environmentCredential: "   ",
       });
-      const insecureRelayUrlBody = yield* responseJsonEffect<{ readonly error?: string }>(
+      const insecureRelayUrlBody = yield* responseJsonEffect<{ readonly message?: string }>(
         insecureRelayUrl,
       );
-      const insecureRelayIssuerBody = yield* responseJsonEffect<{ readonly error?: string }>(
+      const insecureRelayIssuerBody = yield* responseJsonEffect<{ readonly message?: string }>(
         insecureRelayIssuer,
       );
-      const emptyCredentialBody = yield* responseJsonEffect<{ readonly error?: string }>(
+      const emptyCredentialBody = yield* responseJsonEffect<{ readonly message?: string }>(
         emptyCredential,
       );
 
       assert.equal(insecureRelayUrl.status, 400);
-      assert.equal(insecureRelayUrlBody.error, "Relay URL must be a secure absolute HTTPS URL.");
+      assert.equal(insecureRelayUrlBody.message, "Relay URL must be a secure absolute HTTPS URL.");
       assert.equal(insecureRelayIssuer.status, 400);
       assert.equal(
-        insecureRelayIssuerBody.error,
+        insecureRelayIssuerBody.message,
         "Relay issuer must be a secure absolute HTTPS URL.",
       );
       assert.equal(emptyCredential.status, 400);
-      assert.equal(emptyCredentialBody.error, "Relay environment credential is required.");
+      assert.equal(emptyCredentialBody.message, "Relay environment credential is required.");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -1920,13 +1939,15 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const firstResponse = yield* postRelayConfig("user_123", "t3env_first_credential");
       const replacementResponse = yield* postRelayConfig("user_456", "t3env_second_credential");
       const replacementBody = yield* responseJsonEffect<{
-        readonly error?: string;
+        readonly _tag?: string;
+        readonly message?: string;
       }>(replacementResponse);
 
       assert.equal(firstResponse.status, 200);
       assert.equal(replacementResponse.status, 409);
+      assert.equal(replacementBody._tag, "EnvironmentHttpConflictError");
       assert.equal(
-        replacementBody.error,
+        replacementBody.message,
         "This environment is already linked to a different cloud account. Unlink it before switching accounts.",
       );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
@@ -2138,12 +2159,14 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const firstResponse = yield* postMint();
       const replayResponse = yield* postMint();
       const replayBody = yield* responseJsonEffect<{
-        readonly error?: string;
+        readonly _tag?: string;
+        readonly message?: string;
       }>(replayResponse);
 
       assert.equal(firstResponse.status, 200);
       assert.equal(replayResponse.status, 409);
-      assert.equal(replayBody.error, "Cloud mint request was already consumed.");
+      assert.equal(replayBody._tag, "EnvironmentHttpConflictError");
+      assert.equal(replayBody.message, "Cloud mint request was already consumed.");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -2314,12 +2337,14 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const firstResponse = yield* postHealth();
       const replayResponse = yield* postHealth();
       const replayBody = yield* responseJsonEffect<{
-        readonly error?: string;
+        readonly _tag?: string;
+        readonly message?: string;
       }>(replayResponse);
 
       assert.equal(firstResponse.status, 200);
       assert.equal(replayResponse.status, 409);
-      assert.equal(replayBody.error, "Cloud health request was already consumed.");
+      assert.equal(replayBody._tag, "EnvironmentHttpConflictError");
+      assert.equal(replayBody.message, "Cloud health request was already consumed.");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -2436,10 +2461,12 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assert.equal(relayConfigResponse.status, 503);
       const relayConfigBody = yield* responseJsonEffect<{
-        ok?: boolean;
+        _tag?: string;
+        message?: string;
         endpointRuntimeStatus?: { status?: string; reason?: string };
       }>(relayConfigResponse);
-      assert.equal(relayConfigBody.ok, false);
+      assert.equal(relayConfigBody._tag, "EnvironmentCloudEndpointUnavailableError");
+      assert.equal(relayConfigBody.message, "Managed endpoint runtime could not be started.");
       assert.equal(relayConfigBody.endpointRuntimeStatus?.status, "failed");
       assert.equal(relayConfigBody.endpointRuntimeStatus?.reason, "cloudflared missing");
 
@@ -2460,11 +2487,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         body: jsonRequestBody(healthRequest),
       });
       const healthBody = yield* responseJsonEffect<{
-        error?: string;
+        _tag?: string;
+        message?: string;
       }>(healthResponse);
       assert.equal(healthResponse.status, 500);
+      assert.equal(healthBody._tag, "EnvironmentHttpInternalServerError");
       assert.equal(
-        healthBody.error,
+        healthBody.message,
         "Cloud mint public key is not installed for this environment.",
       );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),

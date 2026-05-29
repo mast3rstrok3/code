@@ -162,7 +162,9 @@ async function exchangeBootstrapCredential(credential: string): Promise<AuthBoot
     try {
       return await primaryHttpRuntime.runPromise(
         makeEnvironmentHttpApiClient(resolvePrimaryEnvironmentHttpUrl("/")).pipe(
-          Effect.flatMap((client) => client.auth.bootstrap({ payload: { credential } })),
+          Effect.flatMap((client) =>
+            client.auth.bootstrap({ headers: {}, payload: { credential } }),
+          ),
         ),
       );
     } catch (error) {

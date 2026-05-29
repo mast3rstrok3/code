@@ -269,8 +269,39 @@ describe("web cloud link environment client", () => {
       ).pipe(Effect.flip);
       expect(error).toMatchObject({
         _tag: "CloudEnvironmentLinkError",
-        message: "Environment returned an invalid cloud link proof.",
+        message: "Could not obtain environment link proof.",
       });
+    }),
+  );
+
+  it.effect("preserves typed local environment failures while obtaining a link proof", () =>
+    Effect.gen(function* () {
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValueOnce(Response.json(validChallenge()))
+          .mockResolvedValueOnce(
+            Response.json(
+              {
+                _tag: "EnvironmentHttpUnauthorizedError",
+                message: "Invalid environment bearer session.",
+              },
+              { status: 401 },
+            ),
+          ),
+      );
+
+      const error = yield* withCloudServices(
+        linkEnvironmentToCloud({
+          environment: savedEnvironment,
+          clerkToken: "clerk-token",
+        }),
+      ).pipe(Effect.flip);
+      expect(error._tag).toBe("CloudEnvironmentLinkError");
+      expect(error.message).toBe(
+        "Could not obtain environment link proof: Invalid environment bearer session.",
+      );
     }),
   );
 

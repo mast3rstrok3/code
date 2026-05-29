@@ -262,7 +262,18 @@ describe("EnvironmentConnector", () => {
 
   it.effect("reports offline status when the managed endpoint health request fails", () => {
     const execute = (request: HttpClientRequest.HttpClientRequest) =>
-      Effect.succeed(HttpClientResponse.fromWeb(request, Response.json({}, { status: 503 })));
+      Effect.succeed(
+        HttpClientResponse.fromWeb(
+          request,
+          Response.json(
+            {
+              _tag: "EnvironmentHttpInternalServerError",
+              message: "Environment is unavailable.",
+            },
+            { status: 500 },
+          ),
+        ),
+      );
 
     return Effect.gen(function* () {
       const connector = yield* EnvironmentConnector.EnvironmentConnector;
@@ -274,7 +285,7 @@ describe("EnvironmentConnector", () => {
       expect(result).toMatchObject({
         environmentId: "env-connector-test",
         status: "offline",
-        error: "Managed endpoint health returned HTTP 503.",
+        error: "Managed endpoint health request failed: Environment is unavailable.",
       });
     }).pipe(Effect.provide(connectorTestLayer(execute)));
   });

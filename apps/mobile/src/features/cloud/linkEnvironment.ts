@@ -2,13 +2,18 @@ import Constants from "expo-constants";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient } from "effect/unstable/http";
+import {
+  EnvironmentCloudEndpointUnavailableError,
+  EnvironmentHttpBadRequestError,
+  EnvironmentHttpConflictError,
+  EnvironmentHttpForbiddenError,
+  EnvironmentHttpInternalServerError,
+  EnvironmentHttpUnauthorizedError,
+} from "@t3tools/contracts";
 import { stripPairingTokenFromUrl } from "@t3tools/shared/remote";
 import {
   type RelayEnvironmentConnectResponse as RelayEnvironmentConnectResponseType,
-  RelayEnvironmentConfigRequest,
-  RelayEnvironmentLinkProof,
-  RelayLinkProofRequest,
   type RelayEnvironmentLinkResponse as RelayEnvironmentLinkResponseType,
   RelayEnvironmentConnectScope,
   RelayEnvironmentStatusScope,
@@ -22,6 +27,7 @@ import {
 import {
   exchangeRemoteDpopAccessToken,
   fetchRemoteEnvironmentDescriptor,
+  makeEnvironmentHttpApiClient,
   ManagedRelayClient,
   ManagedRelayDpopSigner,
 } from "@t3tools/client-runtime";
@@ -33,12 +39,6 @@ const RELAY_STATUS_AND_CONNECT_SCOPES = [
   RelayEnvironmentStatusScope,
   RelayEnvironmentConnectScope,
 ] satisfies ReadonlyArray<RelayDpopAccessTokenScope>;
-const encodeRelayLinkProofRequest = Schema.encodeEffect(
-  Schema.fromJsonString(RelayLinkProofRequest),
-);
-const encodeRelayEnvironmentConfigRequest = Schema.encodeEffect(
-  Schema.fromJsonString(RelayEnvironmentConfigRequest),
-);
 
 export function normalizeRelayBaseUrl(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
@@ -66,12 +66,31 @@ export interface CloudEnvironmentRecordWithStatus {
   readonly statusError: string | null;
 }
 
+const isRelayProtectedError = Schema.is(RelayProtectedError);
+const isEnvironmentCloudApiError = Schema.is(
+  Schema.Union([
+    EnvironmentHttpBadRequestError,
+    EnvironmentHttpUnauthorizedError,
+    EnvironmentHttpForbiddenError,
+    EnvironmentHttpConflictError,
+    EnvironmentHttpInternalServerError,
+    EnvironmentCloudEndpointUnavailableError,
+  ]),
+);
+
 const MANAGED_ENDPOINT_PROVIDER_KIND =
   "cloudflare_tunnel" satisfies RelayManagedEndpointProviderKind;
 
 function cloudEnvironmentLinkError(message: string) {
-  return (cause: unknown) =>
-    new CloudEnvironmentLinkError({ message: withDevCause(message, cause), cause });
+  return (cause: unknown) => {
+    const environmentError = findEnvironmentCloudApiError(cause);
+    return new CloudEnvironmentLinkError({
+      message: environmentError
+        ? `${message.replace(/[.:]$/, "")}: ${environmentError.message}`
+        : withDevCause(message, cause),
+      cause,
+    });
+  };
 }
 
 function isDevRuntime(): boolean {
@@ -99,8 +118,6 @@ function withDevCause(message: string, cause: unknown): string {
   const detail = causeMessage(cause);
   return detail ? `${message} (${detail})` : message;
 }
-
-const decodeRelayProtectedError = Schema.decodeUnknownEffect(RelayProtectedError);
 
 function relayProtectedErrorMessage(error: RelayProtectedErrorType): string {
   switch (error._tag) {
@@ -149,13 +166,23 @@ function decodedRelayClientError(message: string) {
 }
 
 function findRelayProtectedError(cause: unknown): RelayProtectedErrorType | null {
+  if (isRelayProtectedError(cause)) {
+    return cause;
+  }
   if (typeof cause !== "object" || cause === null) {
     return null;
   }
-  if ("_tag" in cause && String(cause._tag).startsWith("Relay")) {
-    return cause as RelayProtectedErrorType;
-  }
   return "cause" in cause ? findRelayProtectedError(cause.cause) : null;
+}
+
+function findEnvironmentCloudApiError(cause: unknown): { readonly message: string } | null {
+  if (isEnvironmentCloudApiError(cause)) {
+    return cause;
+  }
+  if (typeof cause !== "object" || cause === null) {
+    return null;
+  }
+  return "cause" in cause ? findEnvironmentCloudApiError(cause.cause) : null;
 }
 
 function requireRelayUrl(): Effect.Effect<string, CloudEnvironmentLinkError> {
@@ -163,85 +190,6 @@ function requireRelayUrl(): Effect.Effect<string, CloudEnvironmentLinkError> {
   return relayUrl
     ? Effect.succeed(relayUrl)
     : Effect.fail(new CloudEnvironmentLinkError({ message: "Relay URL is not configured." }));
-}
-
-function requestFromInit(url: string, init: RequestInit) {
-  return HttpClientRequest.make((init.method ?? "GET") as "GET" | "POST" | "DELETE")(url, {
-    headers: init.headers as Record<string, string> | undefined,
-  }).pipe(
-    typeof init.body === "string"
-      ? HttpClientRequest.bodyText(
-          init.body,
-          (init.headers as Record<string, string> | undefined)?.["content-type"] ??
-            "application/json",
-        )
-      : (request) => request,
-  );
-}
-
-function jsonResponse(
-  url: string,
-  init: RequestInit,
-): Effect.Effect<
-  HttpClientResponse.HttpClientResponse,
-  CloudEnvironmentLinkError,
-  HttpClient.HttpClient
-> {
-  return Effect.gen(function* () {
-    const response = yield* HttpClient.execute(requestFromInit(url, init)).pipe(
-      Effect.mapError(cloudEnvironmentLinkError(`${url} request failed.`)),
-    );
-    if (response.status < 200 || response.status >= 300) {
-      const relayError = yield* response.json.pipe(
-        Effect.orElseSucceed(() => null),
-        Effect.flatMap((json) =>
-          json === null
-            ? Effect.succeed(null)
-            : decodeRelayProtectedError(json).pipe(Effect.catch(() => Effect.succeed(null))),
-        ),
-      );
-      return yield* new CloudEnvironmentLinkError({
-        message: relayError
-          ? `${url} failed with ${response.status}: ${relayProtectedErrorMessage(relayError)}`
-          : `${url} failed with ${response.status}`,
-      });
-    }
-    return response;
-  });
-}
-
-function jsonFetch<T>(
-  url: string,
-  init: RequestInit,
-): Effect.Effect<T, CloudEnvironmentLinkError, HttpClient.HttpClient> {
-  return Effect.gen(function* () {
-    const response = yield* jsonResponse(url, init);
-    return yield* response.json.pipe(
-      Effect.map((json) => json as T),
-      Effect.mapError(cloudEnvironmentLinkError(`${url} returned invalid JSON.`)),
-    );
-  });
-}
-
-function jsonFetchSchema<S extends Schema.Top>(input: {
-  readonly url: string;
-  readonly init: RequestInit;
-  readonly schema: S;
-  readonly errorMessage: string;
-}): Effect.Effect<
-  S["Type"],
-  CloudEnvironmentLinkError,
-  S["DecodingServices"] | HttpClient.HttpClient
-> {
-  return jsonResponse(input.url, input.init).pipe(
-    Effect.flatMap(HttpClientResponse.schemaJson(Schema.Struct({ body: input.schema }))),
-    Effect.map((response) => (response as { readonly body: S["Type"] }).body),
-    Effect.mapError((cause) =>
-      cause instanceof CloudEnvironmentLinkError
-        ? cause
-        : new CloudEnvironmentLinkError({ message: input.errorMessage, cause }),
-    ),
-  );
 }
 
 function endpointOrigin(httpBaseUrl: string) {
@@ -354,31 +302,22 @@ export function linkEnvironmentToCloud(input: {
           decodedRelayClientError(`${relayUrl}/v1/client/environment-link-challenges failed`),
         ),
       );
-    const proofRequestBody = yield* encodeRelayLinkProofRequest({
-      challenge: challenge.challenge,
-      relayIssuer: relayUrl,
-      endpoint: {
-        httpBaseUrl: input.connection.httpBaseUrl,
-        wsBaseUrl: input.connection.wsBaseUrl,
-        providerKind: MANAGED_ENDPOINT_PROVIDER_KIND,
-      },
-      origin: endpointOrigin(input.connection.httpBaseUrl),
-    }).pipe(
-      Effect.mapError(cloudEnvironmentLinkError("Could not encode cloud link proof request.")),
-    );
-    const proof = yield* jsonFetchSchema({
-      url: `${input.connection.httpBaseUrl}/api/cloud/link-proof`,
-      schema: RelayEnvironmentLinkProof,
-      errorMessage: "Environment returned an invalid cloud link proof.",
-      init: {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${localBearerToken}`,
-          "content-type": "application/json",
+    const environmentClient = yield* makeEnvironmentHttpApiClient(input.connection.httpBaseUrl);
+    const proof = yield* environmentClient.cloud
+      .linkProof({
+        headers: { authorization: `Bearer ${localBearerToken}` },
+        payload: {
+          challenge: challenge.challenge,
+          relayIssuer: relayUrl,
+          endpoint: {
+            httpBaseUrl: input.connection.httpBaseUrl,
+            wsBaseUrl: input.connection.wsBaseUrl,
+            providerKind: MANAGED_ENDPOINT_PROVIDER_KIND,
+          },
+          origin: endpointOrigin(input.connection.httpBaseUrl),
         },
-        body: proofRequestBody,
-      },
-    });
+      })
+      .pipe(Effect.mapError(cloudEnvironmentLinkError("Could not obtain environment link proof.")));
     const link = yield* relayClient
       .linkEnvironment({
         clerkToken: input.clerkToken,
@@ -399,24 +338,21 @@ export function linkEnvironmentToCloud(input: {
       link,
     });
 
-    const relayConfigRequestBody = yield* encodeRelayEnvironmentConfigRequest({
-      relayUrl,
-      relayIssuer: link.relayIssuer,
-      cloudUserId: link.cloudUserId,
-      environmentCredential: link.environmentCredential,
-      cloudMintPublicKey: link.cloudMintPublicKey,
-      endpointRuntime: link.endpointRuntime,
-    }).pipe(
-      Effect.mapError(cloudEnvironmentLinkError("Could not encode cloud relay config request.")),
-    );
-    yield* jsonFetch(`${input.connection.httpBaseUrl}/api/cloud/relay-config`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${localBearerToken}`,
-        "content-type": "application/json",
-      },
-      body: relayConfigRequestBody,
-    });
+    yield* environmentClient.cloud
+      .relayConfig({
+        headers: { authorization: `Bearer ${localBearerToken}` },
+        payload: {
+          relayUrl,
+          relayIssuer: link.relayIssuer,
+          cloudUserId: link.cloudUserId,
+          environmentCredential: link.environmentCredential,
+          cloudMintPublicKey: link.cloudMintPublicKey,
+          endpointRuntime: link.endpointRuntime,
+        },
+      })
+      .pipe(
+        Effect.mapError(cloudEnvironmentLinkError("Could not configure environment relay access.")),
+      );
   });
 }
 

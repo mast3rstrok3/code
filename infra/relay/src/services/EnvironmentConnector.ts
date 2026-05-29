@@ -1,4 +1,12 @@
 import {
+  EnvironmentHttpBadRequestError,
+  EnvironmentHttpConflictError,
+  EnvironmentHttpForbiddenError,
+  EnvironmentHttpInternalServerError,
+  EnvironmentHttpUnauthorizedError,
+} from "@t3tools/contracts";
+import { makeEnvironmentHttpApiClient } from "@t3tools/client-runtime";
+import {
   RelayCloudEnvironmentHealthProofPayload,
   RelayEnvironmentHealthResponse,
   RelayEnvironmentHealthResponseProofPayload,
@@ -28,7 +36,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
-import { HttpClient, HttpClientRequest } from "effect/unstable/http";
+import { HttpClient } from "effect/unstable/http";
 
 import * as EnvironmentLinks from "../persistence/EnvironmentLinks.ts";
 import * as Settings from "../settings.ts";
@@ -84,14 +92,27 @@ export class EnvironmentConnector extends Context.Service<
   EnvironmentConnectorShape
 >()("EnvironmentConnector") {}
 
-const decodeMintResponse = Schema.decodeUnknownEffect(RelayEnvironmentMintResponse);
-const decodeHealthResponse = Schema.decodeUnknownEffect(RelayEnvironmentHealthResponse);
 const decodeMintResponseProof = Schema.decodeUnknownEffect(
   RelayEnvironmentMintResponseProofPayload,
 );
 const decodeHealthResponseProof = Schema.decodeUnknownEffect(
   RelayEnvironmentHealthResponseProofPayload,
 );
+const isEnvironmentHealthError = Schema.is(
+  Schema.Union([
+    EnvironmentHttpBadRequestError,
+    EnvironmentHttpUnauthorizedError,
+    EnvironmentHttpForbiddenError,
+    EnvironmentHttpConflictError,
+    EnvironmentHttpInternalServerError,
+  ]),
+);
+
+function environmentHealthRequestFailureMessage(cause: unknown): string {
+  return isEnvironmentHealthError(cause)
+    ? `Managed endpoint health request failed: ${cause.message}`
+    : "Managed endpoint health request failed.";
+}
 
 function verifyWithEnvironmentKeys<A, E>(input: {
   readonly token: string;
@@ -201,6 +222,10 @@ const make = Effect.gen(function* () {
   const httpClient = yield* HttpClient.HttpClient;
   const crypto = yield* Crypto.Crypto;
   const relayIssuer = normalizeRelayIssuer(settings.relayIssuer);
+  const makeEnvironmentClient = (httpBaseUrl: string) =>
+    makeEnvironmentHttpApiClient(httpBaseUrl).pipe(
+      Effect.provideService(HttpClient.HttpClient, httpClient),
+    );
 
   return EnvironmentConnector.of({
     status: Effect.fn("relay.environment_connector.status")(function* (input) {
@@ -236,34 +261,33 @@ const make = Effect.gen(function* () {
         payload,
       }).pipe(Effect.mapError((cause) => new EnvironmentMintRequestFailed({ cause })));
       const checkedAt = DateTime.formatIso(now);
-      const responseOption = yield* HttpClientRequest.post(
-        new URL("/api/t3-cloud/health", link.endpoint.httpBaseUrl).href,
-      ).pipe(
-        HttpClientRequest.bodyJson({ proof }),
-        Effect.flatMap(httpClient.execute),
-        Effect.option,
+      const environmentClient = yield* makeEnvironmentClient(link.endpoint.httpBaseUrl);
+      const responseOption = yield* environmentClient.cloud.health({ payload: { proof } }).pipe(
+        Effect.match({
+          onFailure: (cause) => ({ _tag: "Failure" as const, cause }),
+          onSuccess: (response) => ({ _tag: "Success" as const, response }),
+        }),
         Effect.timeoutOption(Duration.millis(ENVIRONMENT_MINT_REQUEST_TIMEOUT_MS)),
-        Effect.map(Option.flatten),
       );
-      if (
-        Option.isNone(responseOption) ||
-        responseOption.value.status < 200 ||
-        responseOption.value.status >= 300
-      ) {
+      if (Option.isNone(responseOption)) {
         return {
           environmentId: link.environmentId,
           endpoint: link.endpoint,
           status: "offline" as const,
           checkedAt,
-          error: Option.isNone(responseOption)
-            ? "Managed endpoint health request failed or timed out."
-            : `Managed endpoint health returned HTTP ${responseOption.value.status}.`,
+          error: "Managed endpoint health request timed out.",
         };
       }
-      const decoded = yield* responseOption.value.json.pipe(
-        Effect.flatMap(decodeHealthResponse),
-        Effect.mapError((cause) => new EnvironmentMintRequestFailed({ cause })),
-      );
+      if (responseOption.value._tag === "Failure") {
+        return {
+          environmentId: link.environmentId,
+          endpoint: link.endpoint,
+          status: "offline" as const,
+          checkedAt,
+          error: environmentHealthRequestFailureMessage(responseOption.value.cause),
+        };
+      }
+      const decoded = responseOption.value.response;
       const verified = yield* verifyEnvironmentHealthResponse({
         response: decoded,
         environmentId: input.environmentId,
@@ -323,11 +347,8 @@ const make = Effect.gen(function* () {
         typ: RELAY_MINT_REQUEST_TYP,
         payload,
       }).pipe(Effect.mapError((cause) => new EnvironmentMintRequestFailed({ cause })));
-      const response = yield* HttpClientRequest.post(
-        new URL("/api/t3-cloud/mint-credential", link.endpoint.httpBaseUrl).href,
-      ).pipe(
-        HttpClientRequest.bodyJson({ proof }),
-        Effect.flatMap(httpClient.execute),
+      const environmentClient = yield* makeEnvironmentClient(link.endpoint.httpBaseUrl);
+      const decoded = yield* environmentClient.cloud.t3MintCredential({ payload: { proof } }).pipe(
         Effect.mapError((cause) => new EnvironmentMintRequestFailed({ cause })),
         Effect.timeoutOption(Duration.millis(ENVIRONMENT_MINT_REQUEST_TIMEOUT_MS)),
         Effect.flatMap(
@@ -342,13 +363,6 @@ const make = Effect.gen(function* () {
             onSome: Effect.succeed,
           }),
         ),
-      );
-      if (response.status < 200 || response.status >= 300) {
-        return yield* new EnvironmentMintRequestFailed({ cause: response.status });
-      }
-      const decoded = yield* response.json.pipe(
-        Effect.flatMap(decodeMintResponse),
-        Effect.mapError((cause) => new EnvironmentMintRequestFailed({ cause })),
       );
       const verified = yield* verifyEnvironmentResponse({
         response: decoded,

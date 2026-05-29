@@ -31,6 +31,15 @@ import {
   DispatchResult,
   OrchestrationReadModel,
 } from "./orchestration.ts";
+import {
+  RelayCloudEnvironmentHealthRequest,
+  RelayCloudMintCredentialRequest,
+  RelayEnvironmentConfigRequest,
+  RelayEnvironmentHealthResponse,
+  RelayEnvironmentLinkProof,
+  RelayEnvironmentMintResponse,
+  RelayLinkProofRequest,
+} from "./relay.ts";
 
 const OptionalBearerHeaders = Schema.Struct({
   authorization: Schema.optionalKey(Schema.String),
@@ -81,6 +90,21 @@ export const EnvironmentHttpCommonError = Schema.Union([
 ]);
 export type EnvironmentHttpCommonError = typeof EnvironmentHttpCommonError.Type;
 
+export class EnvironmentHttpConflictError extends Schema.TaggedErrorClass<EnvironmentHttpConflictError>()(
+  "EnvironmentHttpConflictError",
+  {
+    message: Schema.String,
+  },
+) {}
+
+export class EnvironmentCloudEndpointUnavailableError extends Schema.TaggedErrorClass<EnvironmentCloudEndpointUnavailableError>()(
+  "EnvironmentCloudEndpointUnavailableError",
+  {
+    message: Schema.String,
+    endpointRuntimeStatus: Schema.Unknown,
+  },
+) {}
+
 const EnvironmentHttpBadRequestErrorResponse = EnvironmentHttpBadRequestError.pipe(
   HttpApiSchema.status("BadRequest"),
 );
@@ -93,6 +117,11 @@ const EnvironmentHttpForbiddenErrorResponse = EnvironmentHttpForbiddenError.pipe
 const EnvironmentHttpInternalServerErrorResponse = EnvironmentHttpInternalServerError.pipe(
   HttpApiSchema.status("InternalServerError"),
 );
+const EnvironmentHttpConflictErrorResponse = EnvironmentHttpConflictError.pipe(
+  HttpApiSchema.status("Conflict"),
+);
+const EnvironmentCloudEndpointUnavailableErrorResponse =
+  EnvironmentCloudEndpointUnavailableError.pipe(HttpApiSchema.status("ServiceUnavailable"));
 
 const EnvironmentHttpAuthErrors = [
   EnvironmentHttpBadRequestErrorResponse,
@@ -140,6 +169,28 @@ export class EnvironmentOwnerAuth extends HttpApiMiddleware.Service<
 >()("EnvironmentOwnerAuth", {
   error: EnvironmentHttpAuthErrors,
 }) {}
+
+const EnvironmentHttpCloudErrors = [
+  EnvironmentHttpBadRequestErrorResponse,
+  EnvironmentHttpUnauthorizedErrorResponse,
+  EnvironmentHttpForbiddenErrorResponse,
+  EnvironmentHttpConflictErrorResponse,
+  EnvironmentHttpInternalServerErrorResponse,
+] as const;
+
+export const EnvironmentCloudRelayConfigResult = Schema.Struct({
+  ok: Schema.Boolean,
+  endpointRuntimeStatus: Schema.Unknown,
+});
+export type EnvironmentCloudRelayConfigResult = typeof EnvironmentCloudRelayConfigResult.Type;
+
+export const EnvironmentCloudLinkStateResult = Schema.Struct({
+  linked: Schema.Boolean,
+  cloudUserId: Schema.NullOr(Schema.String),
+  relayUrl: Schema.NullOr(Schema.String),
+  relayIssuer: Schema.NullOr(Schema.String),
+});
+export type EnvironmentCloudLinkStateResult = typeof EnvironmentCloudLinkStateResult.Type;
 
 export const AuthPairingLinkRevokeResult = Schema.Struct({
   revoked: Schema.Boolean,
@@ -263,7 +314,61 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
     }).middleware(EnvironmentOwnerAuth),
   ) {}
 
+export class EnvironmentCloudHttpApi extends HttpApiGroup.make("cloud")
+  .add(
+    HttpApiEndpoint.post("linkProof", "/api/cloud/link-proof", {
+      headers: OptionalBearerHeaders,
+      payload: RelayLinkProofRequest,
+      success: RelayEnvironmentLinkProof,
+      error: EnvironmentHttpCloudErrors,
+    }).middleware(EnvironmentOwnerAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("relayConfig", "/api/cloud/relay-config", {
+      headers: OptionalBearerHeaders,
+      payload: RelayEnvironmentConfigRequest,
+      success: EnvironmentCloudRelayConfigResult,
+      error: [...EnvironmentHttpCloudErrors, EnvironmentCloudEndpointUnavailableErrorResponse],
+    }).middleware(EnvironmentOwnerAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("linkState", "/api/cloud/link-state", {
+      headers: OptionalBearerHeaders,
+      success: EnvironmentCloudLinkStateResult,
+      error: EnvironmentHttpCloudErrors,
+    }).middleware(EnvironmentOwnerAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("unlink", "/api/cloud/unlink", {
+      headers: OptionalBearerHeaders,
+      success: EnvironmentCloudRelayConfigResult,
+      error: EnvironmentHttpCloudErrors,
+    }).middleware(EnvironmentOwnerAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("health", "/api/t3-cloud/health", {
+      payload: RelayCloudEnvironmentHealthRequest,
+      success: RelayEnvironmentHealthResponse,
+      error: EnvironmentHttpCloudErrors,
+    }),
+  )
+  .add(
+    HttpApiEndpoint.post("mintCredential", "/api/cloud/mint-credential", {
+      payload: RelayCloudMintCredentialRequest,
+      success: RelayEnvironmentMintResponse,
+      error: EnvironmentHttpCloudErrors,
+    }),
+  )
+  .add(
+    HttpApiEndpoint.post("t3MintCredential", "/api/t3-cloud/mint-credential", {
+      payload: RelayCloudMintCredentialRequest,
+      success: RelayEnvironmentMintResponse,
+      error: EnvironmentHttpCloudErrors,
+    }),
+  ) {}
+
 export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
-  .add(EnvironmentOrchestrationHttpApi) {}
+  .add(EnvironmentOrchestrationHttpApi)
+  .add(EnvironmentCloudHttpApi) {}

@@ -70,15 +70,7 @@ import {
   environmentOwnerAuthLayer,
   environmentSessionAuthLayer,
 } from "./auth/http.ts";
-import {
-  cloudEnvironmentHealthRouteLayer,
-  cloudLinkStateRouteLayer,
-  cloudUnlinkRouteLayer,
-  cloudLinkProofRouteLayer,
-  cloudMintCredentialRouteLayer,
-  cloudRelayConfigRouteLayer,
-  cloudT3MintCredentialRouteLayer,
-} from "./cloud/http.ts";
+import { cloudHttpApiLayer } from "./cloud/http.ts";
 import { CloudManagedEndpointRuntimeLive } from "./cloud/ManagedEndpointRuntime.ts";
 import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore.ts";
 import { ServerAuthLive } from "./auth/Layers/ServerAuth.ts";
@@ -309,18 +301,12 @@ const RuntimeServicesLive = ServerRuntimeStartupLive.pipe(
 export const makeRoutesLayer = Layer.mergeAll(
   HttpApiBuilder.layer(EnvironmentHttpApi).pipe(
     Layer.provide(authHttpApiLayer),
+    Layer.provide(cloudHttpApiLayer),
     Layer.provide(orchestrationHttpApiLayer),
     Layer.provide(serverEnvironmentHttpApiLayer),
     Layer.provide(environmentSessionAuthLayer),
     Layer.provide(environmentOwnerAuthLayer),
   ),
-  cloudLinkStateRouteLayer,
-  cloudUnlinkRouteLayer,
-  cloudLinkProofRouteLayer,
-  cloudEnvironmentHealthRouteLayer,
-  cloudMintCredentialRouteLayer,
-  cloudRelayConfigRouteLayer,
-  cloudT3MintCredentialRouteLayer,
   attachmentsRouteLayer,
   otlpTracesProxyRouteLayer,
   projectFaviconRouteLayer,
