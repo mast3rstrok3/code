@@ -11,11 +11,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, ScrollView, Text as RNText, View, useColorScheme } from "react-native";
 import {
   KeyboardController,
+  KeyboardEvents,
   KeyboardStickyView,
   useKeyboardState,
 } from "react-native-keyboard-controller";
 
 import { EmptyState } from "../../components/EmptyState";
+import { GlassSurface } from "../../components/GlassSurface";
 import { LoadingScreen } from "../../components/LoadingScreen";
 import { buildThreadTerminalNavigation } from "../../lib/routes";
 import { getEnvironmentClient } from "../../state/environment-session-registry";
@@ -234,6 +236,7 @@ export function ThreadTerminalRouteScreen() {
   );
   const [fontSize, setFontSize] = useState(cachedFontSize ?? DEFAULT_TERMINAL_FONT_SIZE);
   const [keyboardFocusRequest, setKeyboardFocusRequest] = useState(0);
+  const [isAccessoryDismissed, setIsAccessoryDismissed] = useState(false);
   const hasOpenedRef = useRef(false);
   const bufferReplayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const attachStreamLogCountRef = useRef(0);
@@ -404,9 +407,24 @@ export function ThreadTerminalRouteScreen() {
     height: state.height,
     isVisible: state.isVisible,
   }));
-  const terminalBottomInset = keyboardState.isVisible
-    ? TERMINAL_ACCESSORY_HEIGHT + keyboardState.height
-    : 0;
+  const isAccessoryVisible = keyboardState.isVisible && !isAccessoryDismissed;
+  const terminalBottomInset =
+    (keyboardState.isVisible ? keyboardState.height : 0) +
+    (isAccessoryVisible ? TERMINAL_ACCESSORY_HEIGHT : 0);
+
+  useEffect(() => {
+    const keyboardWillShow = KeyboardEvents.addListener("keyboardWillShow", () => {
+      setIsAccessoryDismissed(false);
+    });
+    const keyboardWillHide = KeyboardEvents.addListener("keyboardWillHide", () => {
+      setIsAccessoryDismissed(true);
+    });
+
+    return () => {
+      keyboardWillShow.remove();
+      keyboardWillHide.remove();
+    };
+  }, []);
 
   const terminalMenuSessions = useMemo<ReadonlyArray<TerminalMenuSession>>(
     () =>
@@ -904,6 +922,7 @@ export function ThreadTerminalRouteScreen() {
   );
 
   const handleDismissKeyboard = useCallback(() => {
+    setIsAccessoryDismissed(true);
     void KeyboardController.dismiss();
   }, []);
 
@@ -1056,7 +1075,7 @@ export function ThreadTerminalRouteScreen() {
           />
         </View>
 
-        {keyboardState.isVisible ? (
+        {isAccessoryVisible ? (
           <KeyboardStickyView
             style={{ position: "absolute", bottom: 0, left: 0, right: 0 }}
             offset={{ closed: 0, opened: 0 }}
@@ -1136,7 +1155,7 @@ export function ThreadTerminalRouteScreen() {
                     borderWidth: 1,
                     height: 38,
                     justifyContent: "center",
-                    width: 48,
+                    width: 38,
                   })}
                 >
                   <SymbolView
@@ -1149,35 +1168,38 @@ export function ThreadTerminalRouteScreen() {
               </View>
             </View>
           </KeyboardStickyView>
-        ) : (
+        ) : !keyboardState.isVisible ? (
           <Pressable
             accessibilityLabel="Show keyboard"
             accessibilityRole="button"
             onPress={handleShowKeyboard}
             style={({ pressed }) => ({
-              alignItems: "center",
-              backgroundColor: pressed
-                ? withAlpha(terminalTheme.foreground, "1f")
-                : withAlpha(terminalTheme.foreground, "12"),
-              borderColor: terminalTheme.border,
-              borderRadius: 18,
-              borderWidth: 1,
               bottom: 16,
-              height: 48,
-              justifyContent: "center",
+              borderRadius: 28,
+              opacity: pressed ? 0.72 : 1,
               position: "absolute",
               right: 16,
-              width: 56,
             })}
           >
-            <SymbolView
-              name={{ ios: "keyboard", android: "keyboard" }}
-              size={23}
-              tintColor={terminalTheme.foreground}
-              type="monochrome"
-            />
+            <GlassSurface
+              glassEffectStyle="regular"
+              style={{
+                alignItems: "center",
+                borderRadius: 28,
+                height: 56,
+                justifyContent: "center",
+                width: 56,
+              }}
+            >
+              <SymbolView
+                name={{ ios: "keyboard", android: "keyboard" }}
+                size={22}
+                tintColor={terminalTheme.foreground}
+                type="monochrome"
+              />
+            </GlassSurface>
           </Pressable>
-        )}
+        ) : null}
       </View>
     </>
   );

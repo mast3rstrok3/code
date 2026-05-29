@@ -68,8 +68,12 @@ const FallbackTerminalSurface = memo(function FallbackTerminalSurface(props: Ter
 
   useEffect(() => {
     if ((props.keyboardFocusRequest ?? 0) > 0) {
-      inputRef.current?.focus();
+      inputRef.current?.blur();
+      const focusFrame = requestAnimationFrame(() => inputRef.current?.focus());
+      return () => cancelAnimationFrame(focusFrame);
     }
+
+    return undefined;
   }, [props.keyboardFocusRequest]);
 
   return (

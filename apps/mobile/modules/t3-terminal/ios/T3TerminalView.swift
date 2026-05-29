@@ -111,7 +111,7 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
   var keyboardFocusRequest: Int = 0 {
     didSet {
       guard keyboardFocusRequest > 0, oldValue != keyboardFocusRequest else { return }
-      requestKeyboardFocus()
+      restoreKeyboardFocus()
     }
   }
 
@@ -505,6 +505,19 @@ public final class T3TerminalView: ExpoView, UITextFieldDelegate {
     guard window != nil else { return }
     inputField.becomeFirstResponder()
     textInputModeDidChange()
+  }
+
+  private func restoreKeyboardFocus() {
+    guard window != nil else { return }
+    guard inputField.isFirstResponder else {
+      requestKeyboardFocus()
+      return
+    }
+
+    inputField.resignFirstResponder()
+    DispatchQueue.main.async { [weak self] in
+      self?.requestKeyboardFocus()
+    }
   }
 
   private func emitInput(_ data: String) {

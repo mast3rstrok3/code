@@ -58,7 +58,7 @@ class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(contex
   var keyboardFocusRequest: Int = 0
     set(value) {
       if (value > 0 && field != value) {
-        requestKeyboardFocus()
+        restoreKeyboardFocus()
       }
       field = value
     }
@@ -192,6 +192,18 @@ class T3TerminalView(context: Context, appContext: AppContext) : ExpoView(contex
   private fun requestKeyboardFocus() {
     inputView.requestFocus()
     showKeyboard()
+  }
+
+  private fun restoreKeyboardFocus() {
+    if (!inputView.hasFocus()) {
+      requestKeyboardFocus()
+      return
+    }
+
+    inputView.clearFocus()
+    inputView.post {
+      requestKeyboardFocus()
+    }
   }
 
   private fun applyTheme() {
