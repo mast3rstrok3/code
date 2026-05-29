@@ -67,7 +67,8 @@ vi.mock("./catalog", () => ({
   writeSavedEnvironmentBearerToken: vi.fn(),
 }));
 
-vi.mock("./connection", () => ({
+vi.mock("./connection", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./connection")>()),
   createEnvironmentConnection: mockCreateEnvironmentConnection,
 }));
 

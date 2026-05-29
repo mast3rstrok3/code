@@ -54,7 +54,12 @@ import {
   waitForSavedEnvironmentRegistryHydration,
   writeSavedEnvironmentBearerToken,
 } from "./catalog";
-import { createEnvironmentConnection, type EnvironmentConnection } from "./connection";
+import {
+  createEnvironmentConnection,
+  createEnvironmentConnectionAttemptRegistry,
+  EnvironmentConnectionAttemptCancelledError,
+  type EnvironmentConnection,
+} from "./connection";
 import {
   useStore,
   selectProjectsAcrossEnvironments,
@@ -94,24 +99,19 @@ type ThreadDetailSubscriptionEntry = {
 };
 
 const environmentConnections = new Map<EnvironmentId, EnvironmentConnection>();
-class SavedEnvironmentConnectionCancelledError extends Error {
-  constructor(environmentId: EnvironmentId) {
-    super(`Saved environment ${environmentId} connection was cancelled.`);
-    this.name = "SavedEnvironmentConnectionCancelledError";
-  }
-}
 
 function isSavedEnvironmentConnectionCancelledError(
   error: unknown,
-): error is SavedEnvironmentConnectionCancelledError {
-  return error instanceof SavedEnvironmentConnectionCancelledError;
+): error is EnvironmentConnectionAttemptCancelledError {
+  return error instanceof EnvironmentConnectionAttemptCancelledError;
 }
 
 interface PendingSavedEnvironmentConnection {
-  cancelled: boolean;
+  readonly isCurrent: () => boolean;
   readonly promise: Promise<EnvironmentConnection>;
 }
 
+const savedEnvironmentConnectionAttempts = createEnvironmentConnectionAttemptRegistry();
 const pendingSavedEnvironmentConnections = new Map<
   EnvironmentId,
   PendingSavedEnvironmentConnection
@@ -1325,8 +1325,9 @@ async function ensureSavedEnvironmentConnection(
     return pending.promise;
   }
 
+  const attempt = savedEnvironmentConnectionAttempts.begin(record.environmentId);
   const pendingEntry: PendingSavedEnvironmentConnection = {
-    cancelled: false,
+    isCurrent: attempt.isCurrent,
     promise: Promise.resolve().then(async () => {
       let activeRecord = record;
       let roleHint = options?.role ?? null;
@@ -1438,16 +1439,16 @@ async function ensureSavedEnvironmentConnection(
           });
         }
         if (
-          pendingEntry.cancelled ||
+          !pendingEntry.isCurrent() ||
           pendingSavedEnvironmentConnections.get(activeRecord.environmentId) !== pendingEntry
         ) {
           await connection.dispose().catch(() => undefined);
-          throw new SavedEnvironmentConnectionCancelledError(activeRecord.environmentId);
+          throw new EnvironmentConnectionAttemptCancelledError(activeRecord.environmentId);
         }
         registerConnection(connection);
         return connection;
       } catch (error) {
-        if (error instanceof SavedEnvironmentConnectionCancelledError) {
+        if (error instanceof EnvironmentConnectionAttemptCancelledError) {
           throw error;
         }
         setRuntimeError(activeRecord.environmentId, error);
@@ -1464,6 +1465,7 @@ async function ensureSavedEnvironmentConnection(
   return await pendingEntry.promise.finally(() => {
     if (pendingSavedEnvironmentConnections.get(record.environmentId) === pendingEntry) {
       pendingSavedEnvironmentConnections.delete(record.environmentId);
+      savedEnvironmentConnectionAttempts.cancel(record.environmentId);
     }
   });
 }
@@ -1584,7 +1586,7 @@ export async function disconnectSavedEnvironment(environmentId: EnvironmentId): 
   const record = getSavedEnvironmentRecord(environmentId);
   const pendingConnection = pendingSavedEnvironmentConnections.get(environmentId);
   if (pendingConnection) {
-    pendingConnection.cancelled = true;
+    savedEnvironmentConnectionAttempts.cancel(environmentId);
     pendingSavedEnvironmentConnections.delete(environmentId);
   }
   const connection = environmentConnections.get(environmentId);
@@ -1840,6 +1842,7 @@ export async function resetEnvironmentServiceForTests(): Promise<void> {
   lastBrowserResumeReconnectAt = Number.NEGATIVE_INFINITY;
   lastAppliedProjectionVersionByEnvironment.clear();
   pendingSavedEnvironmentConnections.clear();
+  savedEnvironmentConnectionAttempts.clear();
   for (const key of Array.from(threadDetailSubscriptions.keys())) {
     disposeThreadDetailSubscriptionByKey(key);
   }

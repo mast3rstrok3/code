@@ -2094,11 +2094,8 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
         const bufferedEvents: TerminalEvent[] = [];
         let deliverLive = false;
 
-        const initialSnapshot = yield* openOrAttachForStream(input);
-        const terminalId = initialSnapshot.terminalId;
-
         unsubscribe = yield* subscribe((event) => {
-          if (event.threadId !== input.threadId || event.terminalId !== terminalId) {
+          if (event.threadId !== input.threadId || event.terminalId !== input.terminalId) {
             return Effect.void;
           }
 
@@ -2110,6 +2107,8 @@ export const makeTerminalManagerWithOptions = Effect.fn("makeTerminalManagerWith
           const attachEvent = terminalEventToAttachEvent(event);
           return attachEvent ? listener(attachEvent) : Effect.void;
         });
+
+        const initialSnapshot = yield* openOrAttachForStream(input);
 
         yield* listener({
           type: "snapshot",

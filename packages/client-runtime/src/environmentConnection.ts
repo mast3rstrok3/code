@@ -4,6 +4,7 @@ import type {
   OrchestrationShellStreamEvent,
   ServerConfig,
   ServerLifecycleWelcomePayload,
+  TerminalEvent,
 } from "@t3tools/contracts";
 
 import type { KnownEnvironment } from "./knownEnvironment.ts";
@@ -28,9 +29,10 @@ interface OrchestrationHandlers {
     snapshot: OrchestrationShellSnapshot,
     environmentId: EnvironmentId,
   ) => void;
+  readonly applyTerminalEvent?: (event: TerminalEvent, environmentId: EnvironmentId) => void;
 }
 
-interface EnvironmentConnectionInput extends OrchestrationHandlers {
+export interface EnvironmentConnectionInput extends OrchestrationHandlers {
   readonly kind: "primary" | "saved";
   readonly knownEnvironment: KnownEnvironment;
   readonly client: WsRpcClient;
@@ -40,13 +42,58 @@ interface EnvironmentConnectionInput extends OrchestrationHandlers {
   readonly onShellResubscribe?: (environmentId: EnvironmentId) => void;
 }
 
+export interface EnvironmentConnectionAttempt {
+  readonly environmentId: EnvironmentId;
+  readonly isCurrent: () => boolean;
+}
+
+export class EnvironmentConnectionAttemptCancelledError extends Error {
+  constructor(environmentId: EnvironmentId) {
+    super(`Environment connection attempt ${environmentId} was cancelled.`);
+    this.name = "EnvironmentConnectionAttemptCancelledError";
+  }
+}
+
+export function createEnvironmentConnectionAttemptRegistry() {
+  const attempts = new Map<EnvironmentId, symbol>();
+
+  return {
+    begin: (environmentId: EnvironmentId): EnvironmentConnectionAttempt => {
+      const id = Symbol(environmentId);
+      attempts.set(environmentId, id);
+      return {
+        environmentId,
+        isCurrent: () => attempts.get(environmentId) === id,
+      };
+    },
+    cancel: (environmentId: EnvironmentId): void => {
+      attempts.delete(environmentId);
+    },
+    clear: (): void => {
+      attempts.clear();
+    },
+  };
+}
+
+export class EnvironmentConnectionDisposedError extends Error {
+  constructor(environmentId: EnvironmentId) {
+    super(`Environment connection ${environmentId} was disposed before it finished bootstrapping.`);
+    this.name = "EnvironmentConnectionDisposedError";
+  }
+}
+
 function createBootstrapGate() {
   let resolve: (() => void) | null = null;
   let reject: ((error: unknown) => void) | null = null;
-  let promise = new Promise<void>((nextResolve, nextReject) => {
-    resolve = nextResolve;
-    reject = nextReject;
-  });
+  const makePromise = () => {
+    const nextPromise = new Promise<void>((nextResolve, nextReject) => {
+      resolve = nextResolve;
+      reject = nextReject;
+    });
+    void nextPromise.catch(() => undefined);
+    return nextPromise;
+  };
+  let promise = makePromise();
 
   return {
     wait: () => promise,
@@ -61,10 +108,7 @@ function createBootstrapGate() {
       reject = null;
     },
     reset: () => {
-      promise = new Promise<void>((nextResolve, nextReject) => {
-        resolve = nextResolve;
-        reject = nextReject;
-      });
+      promise = makePromise();
     },
   };
 }
@@ -82,6 +126,8 @@ export function createEnvironmentConnection(
 
   let disposed = false;
   const bootstrapGate = createBootstrapGate();
+  const shouldObserveLifecycle = input.kind === "saved" || input.onWelcome !== undefined;
+  const shouldObserveConfig = input.kind === "saved" || input.onConfigSnapshot !== undefined;
 
   const observeEnvironmentIdentity = (nextEnvironmentId: EnvironmentId, source: string) => {
     if (environmentId !== nextEnvironmentId) {
@@ -91,23 +137,33 @@ export function createEnvironmentConnection(
     }
   };
 
-  const unsubLifecycle = input.client.server.subscribeLifecycle((event) => {
-    if (event.type !== "welcome") {
-      return;
-    }
+  const unsubLifecycle = shouldObserveLifecycle
+    ? input.client.server.subscribeLifecycle((event) => {
+        if (disposed || event.type !== "welcome") {
+          return;
+        }
 
-    observeEnvironmentIdentity(event.payload.environment.environmentId, "server lifecycle welcome");
-    input.onWelcome?.(event.payload);
-  });
+        observeEnvironmentIdentity(
+          event.payload.environment.environmentId,
+          "server lifecycle welcome",
+        );
+        input.onWelcome?.(event.payload);
+      })
+    : () => undefined;
 
-  const unsubConfig = input.client.server.subscribeConfig((event) => {
-    if (event.type !== "snapshot") {
-      return;
-    }
+  const unsubConfig = shouldObserveConfig
+    ? input.client.server.subscribeConfig((event) => {
+        if (disposed || event.type !== "snapshot") {
+          return;
+        }
 
-    observeEnvironmentIdentity(event.config.environment.environmentId, "server config snapshot");
-    input.onConfigSnapshot?.(event.config);
-  });
+        observeEnvironmentIdentity(
+          event.config.environment.environmentId,
+          "server config snapshot",
+        );
+        input.onConfigSnapshot?.(event.config);
+      })
+    : () => undefined;
 
   const unsubShell = input.client.orchestration.subscribeShell(
     (item) => {
@@ -135,9 +191,23 @@ export function createEnvironmentConnection(
     },
   );
 
+  const unsubTerminalEvent = input.applyTerminalEvent
+    ? input.client.terminal.onEvent((event) => {
+        if (!disposed) {
+          input.applyTerminalEvent?.(event, environmentId);
+        }
+      })
+    : () => undefined;
+
   const cleanup = () => {
+    if (disposed) {
+      return;
+    }
+
     disposed = true;
+    bootstrapGate.reject(new EnvironmentConnectionDisposedError(environmentId));
     unsubShell();
+    unsubTerminalEvent();
     unsubLifecycle();
     unsubConfig();
   };
@@ -147,8 +217,15 @@ export function createEnvironmentConnection(
     environmentId,
     knownEnvironment: input.knownEnvironment,
     client: input.client,
-    ensureBootstrapped: () => bootstrapGate.wait(),
+    ensureBootstrapped: () =>
+      disposed
+        ? Promise.reject(new EnvironmentConnectionDisposedError(environmentId))
+        : bootstrapGate.wait(),
     reconnect: async () => {
+      if (disposed) {
+        throw new EnvironmentConnectionDisposedError(environmentId);
+      }
+
       bootstrapGate.reset();
       try {
         await input.client.reconnect();

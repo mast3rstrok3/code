@@ -1409,6 +1409,43 @@ it.layer(
       }),
   );
 
+  it.effect("buffers attach output delivered during the initial snapshot callback", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager(5, {
+        ptyAdapter: new FakePtyAdapter("async"),
+      });
+      yield* manager.open(openInput());
+
+      const process = ptyAdapter.processes[0];
+      expect(process).toBeDefined();
+      if (!process) return;
+
+      const attachEvents = yield* Ref.make<ReadonlyArray<TerminalAttachStreamEvent>>([]);
+      const unsubscribe = yield* manager.attachStream(openInput(), (event) =>
+        Effect.gen(function* () {
+          yield* Ref.update(attachEvents, (events) => [...events, event]);
+          if (event.type === "snapshot") {
+            yield* Effect.sync(() => process.emitData("during snapshot\n"));
+            yield* Effect.yieldNow;
+          }
+        }),
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+
+      yield* waitFor(
+        Effect.map(Ref.get(attachEvents), (events) =>
+          events.some((event) => event.type === "output" && event.data === "during snapshot\n"),
+        ),
+        "1200 millis",
+      );
+
+      expect(yield* Ref.get(attachEvents)).toMatchObject([
+        { type: "snapshot" },
+        { type: "output", data: "during snapshot\n" },
+      ]);
+    }),
+  );
+
   it.effect("preserves queued PTY output ordering through exit callbacks", () =>
     Effect.gen(function* () {
       const { manager, ptyAdapter, getEvents } = yield* createManager(5, {

@@ -1,7 +1,9 @@
 import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as SecureStore from "expo-secure-store";
-import type { EnvironmentId, OrchestrationShellSnapshot } from "@t3tools/contracts";
+import { EnvironmentId, OrchestrationShellSnapshot } from "@t3tools/contracts";
 
 import type { SavedRemoteConnection } from "./connection";
 
@@ -20,6 +22,14 @@ export interface CachedShellSnapshot {
 export interface MobilePreferences {
   readonly terminalFontSize?: number;
 }
+
+const CachedShellSnapshotSchema = Schema.Struct({
+  schemaVersion: Schema.Literal(SHELL_SNAPSHOT_CACHE_SCHEMA_VERSION),
+  environmentId: EnvironmentId,
+  snapshotReceivedAt: Schema.String,
+  snapshot: OrchestrationShellSnapshot,
+});
+const decodeCachedShellSnapshot = Schema.decodeUnknownOption(CachedShellSnapshotSchema);
 
 async function readStorageItem(key: string): Promise<string | null> {
   return await SecureStore.getItemAsync(key);
@@ -40,34 +50,6 @@ async function readJsonStorageItem<T>(key: string): Promise<T | null> {
   } catch {
     return null;
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function isShellSnapshot(value: unknown): value is OrchestrationShellSnapshot {
-  if (!isRecord(value)) {
-    return false;
-  }
-  return (
-    typeof value.snapshotSequence === "number" &&
-    Array.isArray(value.projects) &&
-    Array.isArray(value.threads) &&
-    typeof value.updatedAt === "string"
-  );
-}
-
-function isCachedShellSnapshot(value: unknown): value is CachedShellSnapshot {
-  if (!isRecord(value)) {
-    return false;
-  }
-  return (
-    value.schemaVersion === SHELL_SNAPSHOT_CACHE_SCHEMA_VERSION &&
-    typeof value.environmentId === "string" &&
-    typeof value.snapshotReceivedAt === "string" &&
-    isShellSnapshot(value.snapshot)
-  );
 }
 
 function cachedShellSnapshotFileName(environmentId: EnvironmentId): string {
@@ -93,11 +75,12 @@ export async function loadCachedShellSnapshot(
     }
 
     const parsed = JSON.parse(await file.text()) as unknown;
-    if (!isCachedShellSnapshot(parsed) || parsed.environmentId !== environmentId) {
+    const decoded = decodeCachedShellSnapshot(parsed);
+    if (Option.isNone(decoded) || decoded.value.environmentId !== environmentId) {
       return null;
     }
 
-    return parsed;
+    return decoded.value;
   } catch {
     return null;
   }

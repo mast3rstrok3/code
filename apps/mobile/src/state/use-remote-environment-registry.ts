@@ -5,6 +5,7 @@ import { Alert } from "react-native";
 import {
   type EnvironmentRuntimeState,
   createEnvironmentConnection,
+  createEnvironmentConnectionAttemptRegistry,
   createKnownEnvironment,
   createWsRpcClient,
   EnvironmentConnectionState,
@@ -50,6 +51,7 @@ import {
 import { subscribeTerminalMetadata, terminalSessionManager } from "./use-terminal-session";
 
 const terminalMetadataUnsubscribers = new Map<EnvironmentId, () => void>();
+const environmentConnectionAttempts = createEnvironmentConnectionAttemptRegistry();
 const SAVED_CONNECTION_BOOTSTRAP_TIMEOUT_MS = 8_000;
 
 interface RemoteEnvironmentLocalState {
@@ -176,8 +178,16 @@ function withTimeout<T>(
 
 export async function disconnectEnvironment(
   environmentId: EnvironmentId,
-  options?: { readonly preserveShellSnapshot?: boolean; readonly removeSaved?: boolean },
+  options?: {
+    readonly preserveShellSnapshot?: boolean;
+    readonly removeSaved?: boolean;
+    readonly preserveConnectionAttempt?: boolean;
+  },
 ) {
+  if (!options?.preserveConnectionAttempt) {
+    environmentConnectionAttempts.cancel(environmentId);
+  }
+
   const session = removeEnvironmentSession(environmentId);
   notifyEnvironmentConnectionListeners();
   await session?.connection.dispose();
@@ -202,10 +212,22 @@ export async function connectSavedEnvironment(
   connection: SavedRemoteConnection,
   options?: { readonly persist?: boolean },
 ) {
-  await disconnectEnvironment(connection.environmentId, { preserveShellSnapshot: true });
+  const connectionAttempt = environmentConnectionAttempts.begin(connection.environmentId);
+  const isCurrentAttempt = connectionAttempt.isCurrent;
+
+  await disconnectEnvironment(connection.environmentId, {
+    preserveShellSnapshot: true,
+    preserveConnectionAttempt: true,
+  });
+  if (!isCurrentAttempt()) {
+    return;
+  }
 
   if (options?.persist !== false) {
     await saveConnection(connection);
+    if (!isCurrentAttempt()) {
+      return;
+    }
   }
 
   upsertSavedConnection(connection);
@@ -223,6 +245,10 @@ export async function connectSavedEnvironment(
       ),
     {
       onAttempt: () => {
+        if (!isCurrentAttempt()) {
+          return;
+        }
+
         environmentRuntimeManager.patch({ environmentId: connection.environmentId }, (previous) => {
           const nextState =
             previous.connectionState === "ready" || previous.connectionState === "reconnecting"
@@ -238,9 +264,15 @@ export async function connectSavedEnvironment(
         });
       },
       onError: (message) => {
-        setEnvironmentConnectionStatus(connection.environmentId, "disconnected", message);
+        if (isCurrentAttempt()) {
+          setEnvironmentConnectionStatus(connection.environmentId, "disconnected", message);
+        }
       },
       onClose: (details) => {
+        if (!isCurrentAttempt()) {
+          return;
+        }
+
         const reason =
           details.reason.trim().length > 0
             ? details.reason
@@ -269,9 +301,15 @@ export async function connectSavedEnvironment(
     },
     client,
     applyShellEvent: (event, environmentId) => {
-      shellSnapshotManager.applyEvent({ environmentId }, event);
+      if (isCurrentAttempt()) {
+        shellSnapshotManager.applyEvent({ environmentId }, event);
+      }
     },
     syncShellSnapshot: (snapshot, environmentId) => {
+      if (!isCurrentAttempt()) {
+        return;
+      }
+
       shellSnapshotManager.syncSnapshot({ environmentId }, snapshot);
       markShellSnapshotLive(environmentId);
       void saveCachedShellSnapshot(environmentId, snapshot);
@@ -282,15 +320,24 @@ export async function connectSavedEnvironment(
       }));
     },
     onShellResubscribe: (environmentId) => {
-      shellSnapshotManager.markPending({ environmentId });
+      if (isCurrentAttempt()) {
+        shellSnapshotManager.markPending({ environmentId });
+      }
     },
     onConfigSnapshot: (serverConfig) => {
-      environmentRuntimeManager.patch({ environmentId: connection.environmentId }, (runtime) => ({
-        ...runtime,
-        serverConfig,
-      }));
+      if (isCurrentAttempt()) {
+        environmentRuntimeManager.patch({ environmentId: connection.environmentId }, (runtime) => ({
+          ...runtime,
+          serverConfig,
+        }));
+      }
     },
   });
+
+  if (!isCurrentAttempt()) {
+    await environmentConnection.dispose();
+    return;
+  }
 
   setEnvironmentSession(connection.environmentId, {
     client,
@@ -315,11 +362,13 @@ export async function connectSavedEnvironment(
       "Environment did not respond before the connection timeout.",
     );
   } catch (error) {
-    setEnvironmentConnectionStatus(
-      connection.environmentId,
-      "disconnected",
-      error instanceof Error ? error.message : "Failed to bootstrap remote connection.",
-    );
+    if (isCurrentAttempt()) {
+      setEnvironmentConnectionStatus(
+        connection.environmentId,
+        "disconnected",
+        error instanceof Error ? error.message : "Failed to bootstrap remote connection.",
+      );
+    }
   }
 }
 
@@ -407,6 +456,7 @@ export function useRemoteEnvironmentBootstrap() {
         unsubscribe();
       }
       terminalMetadataUnsubscribers.clear();
+      environmentConnectionAttempts.clear();
       environmentRuntimeManager.invalidate();
       shellSnapshotManager.invalidate();
       resetSourceControlDiscoveryState();
