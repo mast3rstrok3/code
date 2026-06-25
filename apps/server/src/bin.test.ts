@@ -82,6 +82,7 @@ const makeCliTestServerConfig = (baseDir: string) =>
       appDevStackBackendOidcTokenUrl: undefined,
       appDevStackBackendOidcClientId: undefined,
       appDevStackBackendOidcClientSecret: undefined,
+      appDevStackNative: undefined,
       noBrowser: true,
       startupPresentation: "browser",
       desktopBootstrapToken: undefined,

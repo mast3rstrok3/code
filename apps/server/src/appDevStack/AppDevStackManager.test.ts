@@ -1,4 +1,5 @@
 import { assert, it } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
@@ -83,6 +84,7 @@ const makeConfigLayer = (input?: {
     appDevStackBackendOidcClientId: input?.oidc?.clientId,
     appDevStackBackendOidcClientSecret:
       input?.oidc === undefined ? undefined : Redacted.make(input.oidc.clientSecret),
+    appDevStackNative: undefined,
     noBrowser: true,
     startupPresentation: "browser",
     desktopBootstrapToken: undefined,
@@ -107,6 +109,7 @@ const makeLayer = (input: {
   AppDevStackManager.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        NodeServices.layer,
         makeConfigLayer({ bearerToken: input.bearerToken, oidc: input.oidc }),
         Layer.succeed(
           HttpClient.HttpClient,

@@ -381,6 +381,7 @@ const buildAppUnderTest = (options?: {
       appDevStackBackendOidcTokenUrl: undefined,
       appDevStackBackendOidcClientId: undefined,
       appDevStackBackendOidcClientSecret: undefined,
+      appDevStackNative: undefined,
       noBrowser: true,
       startupPresentation: "browser",
       desktopBootstrapToken: defaultDesktopBootstrapToken,

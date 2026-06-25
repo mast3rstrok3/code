@@ -157,6 +157,22 @@ const EnvServerConfig = Config.all({
   appDevStackBackendOidcClientSecret: optionalRedactedString(
     "T3CODE_APP_DEV_STACK_BACKEND_OIDC_CLIENT_SECRET",
   ),
+  appDevStackNativeEnabled: Config.boolean("T3CODE_APP_DEV_STACK_NATIVE_ENABLED").pipe(
+    Config.withDefault(false),
+  ),
+  appDevStackNativeId: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_ID"),
+  appDevStackNativeNamespace: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_NAMESPACE"),
+  appDevStackNativeWorktreePath: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_WORKTREE_PATH"),
+  appDevStackNativeComposePath: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_COMPOSE_PATH"),
+  appDevStackNativeDisplayName: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_DISPLAY_NAME"),
+  appDevStackNativeDisplaySlug: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_DISPLAY_SLUG"),
+  appDevStackNativeRepoName: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_REPO_NAME"),
+  appDevStackNativeBranchName: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_BRANCH_NAME"),
+  appDevStackNativeKubectlPath: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_KUBECTL"),
+  appDevStackNativeFrontendUrl: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_FRONTEND_URL"),
+  appDevStackNativeBackendUrl: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_BACKEND_URL"),
+  appDevStackNativeKeycloakUrl: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_KEYCLOAK_URL"),
+  appDevStackNativeMinioUrl: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_MINIO_URL"),
   codeOidcIssuer: optionalUrl("CODE_OIDC_ISSUER"),
   codeOidcClientId: optionalTrimmedString("CODE_OIDC_CLIENT_ID"),
   codeOidcClientSecret: optionalRedactedString("CODE_OIDC_CLIENT_SECRET"),
@@ -389,6 +405,30 @@ export const resolveServerConfig = (
     );
     const logLevel = Option.getOrElse(cliLogLevel, () => env.logLevel);
     const appDevStackBackendOidcIssuer = env.appDevStackBackendOidcIssuer ?? env.codeOidcIssuer;
+    const appDevStackNative: ServerConfig.NativeAppDevStackConfig | undefined =
+      env.appDevStackNativeEnabled
+        ? {
+            id: env.appDevStackNativeId ?? "rudi-dev",
+            namespace: env.appDevStackNativeNamespace ?? "rudi-dev",
+            worktreePath: path.resolve(
+              yield* expandHomePath(
+                env.appDevStackNativeWorktreePath ?? "/home/nils/repos/nils/rudi",
+              ),
+            ),
+            composePath: env.appDevStackNativeComposePath ?? "infra/compose/compose.app-dev.yml",
+            displayName: env.appDevStackNativeDisplayName ?? "rudi",
+            displaySlug: env.appDevStackNativeDisplaySlug,
+            repoName: env.appDevStackNativeRepoName ?? "rudi",
+            branchName: env.appDevStackNativeBranchName ?? "dev",
+            kubectlPath: env.appDevStackNativeKubectlPath ?? "kubectl",
+            frontendUrl: env.appDevStackNativeFrontendUrl ?? "https://rudi-dev.nightingale-ai.com",
+            backendUrl:
+              env.appDevStackNativeBackendUrl ?? "https://api-rudi-dev.nightingale-ai.com",
+            keycloakUrl:
+              env.appDevStackNativeKeycloakUrl ?? "https://rudi-dev-keycloak.nightingale-ai.com",
+            minioUrl: env.appDevStackNativeMinioUrl ?? "https://minio-rudi-dev.nightingale-ai.com",
+          }
+        : undefined;
 
     const config: ServerConfig.ServerConfig["Service"] = {
       logLevel,
@@ -425,6 +465,7 @@ export const resolveServerConfig = (
       appDevStackBackendOidcClientId: env.appDevStackBackendOidcClientId ?? env.codeOidcClientId,
       appDevStackBackendOidcClientSecret:
         env.appDevStackBackendOidcClientSecret ?? env.codeOidcClientSecret,
+      appDevStackNative,
       noBrowser,
       startupPresentation,
       desktopBootstrapToken,

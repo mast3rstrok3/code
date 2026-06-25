@@ -46,6 +46,22 @@ export interface ServerDerivedPaths {
   readonly secretsDir: string;
 }
 
+export interface NativeAppDevStackConfig {
+  readonly id: string;
+  readonly namespace: string;
+  readonly worktreePath: string;
+  readonly composePath: string;
+  readonly displayName: string;
+  readonly displaySlug: string | undefined;
+  readonly repoName: string | undefined;
+  readonly branchName: string | undefined;
+  readonly kubectlPath: string;
+  readonly frontendUrl: string | undefined;
+  readonly backendUrl: string | undefined;
+  readonly keycloakUrl: string | undefined;
+  readonly minioUrl: string | undefined;
+}
+
 /**
  * ServerConfig - Service tag for server runtime configuration.
  */
@@ -74,6 +90,7 @@ export class ServerConfig extends Context.Service<
     readonly appDevStackBackendOidcTokenUrl: URL | undefined;
     readonly appDevStackBackendOidcClientId: string | undefined;
     readonly appDevStackBackendOidcClientSecret: Redacted.Redacted<string> | undefined;
+    readonly appDevStackNative: NativeAppDevStackConfig | undefined;
     readonly noBrowser: boolean;
     readonly startupPresentation: StartupPresentation;
     readonly desktopBootstrapToken: string | undefined;
@@ -190,6 +207,7 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
     appDevStackBackendOidcTokenUrl: undefined,
     appDevStackBackendOidcClientId: undefined,
     appDevStackBackendOidcClientSecret: undefined,
+    appDevStackNative: undefined,
     noBrowser: false,
     startupPresentation: "browser",
   });

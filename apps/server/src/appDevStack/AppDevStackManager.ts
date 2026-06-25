@@ -17,8 +17,10 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
+import { ChildProcessSpawner } from "effect/unstable/process";
 
 import * as ServerConfig from "../config.ts";
+import { makeKubectlRunner, makeNativeAppDevStackService } from "./NativeAppDevStackManager.ts";
 
 const BACKEND_TOKEN_ENV = "T3CODE_APP_DEV_STACK_BACKEND_BEARER_TOKEN";
 const OIDC_TOKEN_URL_ENV = "T3CODE_APP_DEV_STACK_BACKEND_OIDC_TOKEN_URL";
@@ -30,7 +32,7 @@ const CODE_OIDC_CLIENT_ID_ENV = "CODE_OIDC_CLIENT_ID";
 const CODE_OIDC_CLIENT_SECRET_ENV = "CODE_OIDC_CLIENT_SECRET";
 const OIDC_REFRESH_EARLY_MS = 60_000;
 const DISABLED_MESSAGE =
-  "App Dev Stack backend is not configured. Set T3CODE_APP_DEV_STACK_BACKEND_URL on the server to the Cortex API base URL that serves /api/app-dev-stacks.";
+  "App Dev Stack handling is not configured. Enable T3CODE_APP_DEV_STACK_NATIVE_ENABLED or set T3CODE_APP_DEV_STACK_BACKEND_URL to a controller API that serves /api/app-dev-stacks.";
 
 const OAuthTokenResponse = Schema.Struct({
   access_token: Schema.String,
@@ -63,6 +65,16 @@ export class AppDevStackManager extends Context.Service<
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;
       const httpClient = yield* HttpClient.HttpClient;
+
+      if (config.appDevStackNative !== undefined) {
+        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        return AppDevStackManager.of(
+          makeNativeAppDevStackService(
+            config.appDevStackNative,
+            makeKubectlRunner(config.appDevStackNative.kubectlPath, spawner),
+          ),
+        );
+      }
 
       const baseUrl = config.appDevStackBackendUrl?.href.replace(/\/+$/u, "") ?? null;
       const bearerToken =

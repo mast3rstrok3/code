@@ -624,7 +624,7 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
                 <div className="flex gap-2 rounded-md border border-amber-500/25 bg-amber-500/5 p-2 text-xs text-amber-700 dark:text-amber-500">
                   <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
                   <div>
-                    Set T3CODE_APP_DEV_STACK_BACKEND_URL on the server before starting stacks.
+                    Enable native app-dev stack handling on the server before starting stacks.
                   </div>
                 </div>
               ) : null}
@@ -707,7 +707,7 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
           {!stackBackendEnabled ? (
             <EmptyPanelState
               title="Stack backend is not configured"
-              description="Set T3CODE_APP_DEV_STACK_BACKEND_URL on the server to the Cortex API base URL that serves /api/app-dev-stacks."
+              description="Enable native app-dev stack handling on the server or set T3CODE_APP_DEV_STACK_BACKEND_URL to a controller API that serves /api/app-dev-stacks."
             />
           ) : (
             <>
