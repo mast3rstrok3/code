@@ -1,6 +1,16 @@
 import type { ContextMenuItem, PreviewSessionSnapshot } from "@t3tools/contracts";
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
-import { ClipboardList, FileDiff, Files, Globe2, Plus, TerminalSquare, X } from "lucide-react";
+import {
+  ClipboardList,
+  EyeIcon,
+  FileDiff,
+  Files,
+  Globe2,
+  Plus,
+  ScrollTextIcon,
+  TerminalSquare,
+  X,
+} from "lucide-react";
 import {
   type MouseEvent as ReactMouseEvent,
   type ReactElement,
@@ -41,9 +51,14 @@ interface RightPanelTabsProps {
   onCopyFilePath: (relativePath: string) => void;
   onAddBrowser: () => void;
   onAddTerminal: () => void;
+  onAddPlan: () => void;
+  onAddReview: () => void;
+  onAddLogs: () => void;
   onAddDiff: () => void;
   onAddFiles: () => void;
   browserAvailable: boolean;
+  reviewAvailable: boolean;
+  logsAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
   children: ReactNode;
@@ -51,6 +66,8 @@ interface RightPanelTabsProps {
 
 const SURFACE_DISABLED_REASONS = {
   browser: "Browser previews are only available in the T3 Code desktop app.",
+  review: "Dev review is only available for server threads in Git repositories.",
+  logs: "Workflow logs are only available when a thread is open.",
   files: "Files are only available when a project is open.",
   diff: "Diff is only available for server threads in Git repositories.",
 } as const;
@@ -88,13 +105,42 @@ function SurfaceMenuItem(props: {
 function RightPanelEmptyState(props: {
   onAddBrowser: () => void;
   onAddTerminal: () => void;
+  onAddPlan: () => void;
+  onAddReview: () => void;
+  onAddLogs: () => void;
   onAddDiff: () => void;
   onAddFiles: () => void;
   browserAvailable: boolean;
+  reviewAvailable: boolean;
+  logsAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
 }) {
   const actions = [
+    {
+      label: "Plan",
+      description: "Review the current plan and proposed plan.",
+      icon: ClipboardList,
+      available: true,
+      disabledReason: null,
+      onClick: props.onAddPlan,
+    },
+    {
+      label: "Dev Review",
+      description: "Inspect and annotate the current implementation diff.",
+      icon: EyeIcon,
+      available: props.reviewAvailable,
+      disabledReason: SURFACE_DISABLED_REASONS.review,
+      onClick: props.onAddReview,
+    },
+    {
+      label: "Logs",
+      description: "Inspect thread and workflow activity.",
+      icon: ScrollTextIcon,
+      available: props.logsAvailable,
+      disabledReason: SURFACE_DISABLED_REASONS.logs,
+      onClick: props.onAddLogs,
+    },
     {
       label: "Browser",
       description: "Open a local app or URL.",
@@ -204,6 +250,10 @@ function surfaceTitle(
       );
     case "plan":
       return "Plan";
+    case "review":
+      return "Dev Review";
+    case "logs":
+      return "Logs";
     case "preview": {
       const snapshot = surface.resourceId ? sessions[surface.resourceId] : null;
       if (!snapshot || snapshot.navStatus._tag === "Idle") return "Browser";
@@ -265,6 +315,10 @@ function SurfaceIcon({
       return <TerminalSquare className="size-3.5 shrink-0" />;
     case "plan":
       return <ClipboardList className="size-3.5 shrink-0" />;
+    case "review":
+      return <EyeIcon className="size-3.5 shrink-0" />;
+    case "logs":
+      return <ScrollTextIcon className="size-3.5 shrink-0" />;
   }
 }
 
@@ -437,6 +491,26 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                     <TerminalSquare />
                     Terminal
                   </SurfaceMenuItem>
+                  <SurfaceMenuItem available onClick={props.onAddPlan}>
+                    <ClipboardList />
+                    Plan
+                  </SurfaceMenuItem>
+                  <SurfaceMenuItem
+                    available={props.reviewAvailable}
+                    disabledReason={SURFACE_DISABLED_REASONS.review}
+                    onClick={props.onAddReview}
+                  >
+                    <EyeIcon />
+                    Dev Review
+                  </SurfaceMenuItem>
+                  <SurfaceMenuItem
+                    available={props.logsAvailable}
+                    disabledReason={SURFACE_DISABLED_REASONS.logs}
+                    onClick={props.onAddLogs}
+                  >
+                    <ScrollTextIcon />
+                    Logs
+                  </SurfaceMenuItem>
                   <SurfaceMenuItem
                     available={props.filesAvailable}
                     disabledReason={SURFACE_DISABLED_REASONS.files}
@@ -465,9 +539,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
           <RightPanelEmptyState
             onAddBrowser={props.onAddBrowser}
             onAddTerminal={props.onAddTerminal}
+            onAddPlan={props.onAddPlan}
+            onAddReview={props.onAddReview}
+            onAddLogs={props.onAddLogs}
             onAddDiff={props.onAddDiff}
             onAddFiles={props.onAddFiles}
             browserAvailable={props.browserAvailable}
+            reviewAvailable={props.reviewAvailable}
+            logsAvailable={props.logsAvailable}
             diffAvailable={props.diffAvailable}
             filesAvailable={props.filesAvailable}
           />

@@ -2,6 +2,7 @@ import {
   ApprovalRequestId,
   DEFAULT_MODEL,
   EventId,
+  isPlanningWorkflowInteractionMode,
   ProviderDriverKind,
   ProviderItemId,
   type ProviderInstanceId,
@@ -41,6 +42,7 @@ import {
   CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
   CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
 } from "../CodexDeveloperInstructions.ts";
+import { resolveWorkflowSystemInstructions } from "../WorkflowPromptRegistry.ts";
 const decodeV2TurnStartResponse = Schema.decodeUnknownEffect(EffectCodexSchema.V2TurnStartResponse);
 
 const PROVIDER = ProviderDriverKind.make("codex");
@@ -331,15 +333,29 @@ function buildCodexCollaborationMode(input: {
     return undefined;
   }
   const model = normalizeCodexModelSlug(input.model) ?? DEFAULT_MODEL;
+  const mode: "default" | "plan" =
+    input.interactionMode === "implementation-workflow"
+      ? "default"
+      : isPlanningWorkflowInteractionMode(input.interactionMode)
+        ? "plan"
+        : input.interactionMode;
+  const baseDeveloperInstructions =
+    mode === "plan"
+      ? CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS
+      : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS;
+  const workflowInstructions = resolveWorkflowSystemInstructions({
+    interactionMode: input.interactionMode,
+  });
+  const developerInstructions =
+    workflowInstructions === undefined
+      ? baseDeveloperInstructions
+      : `${baseDeveloperInstructions}\n\n${workflowInstructions}`;
   return {
-    mode: input.interactionMode,
+    mode,
     settings: {
       model,
       reasoning_effort: input.effort ?? "medium",
-      developer_instructions:
-        input.interactionMode === "plan"
-          ? CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS
-          : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
+      developer_instructions: developerInstructions,
     },
   };
 }

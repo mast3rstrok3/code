@@ -10,8 +10,10 @@
  * @module ProviderServiceLive
  */
 import {
+  isPlanningWorkflowInteractionMode,
   ModelSelection,
   NonNegativeInt,
+  ProviderDriverKind,
   ThreadId,
   ProviderInterruptTurnInput,
   ProviderRespondToRequestInput,
@@ -20,7 +22,6 @@ import {
   ProviderSessionStartInput,
   ProviderStopSessionInput,
   type ProviderInstanceId,
-  type ProviderDriverKind,
   type ProviderRuntimeEvent,
   type ProviderSession,
 } from "@t3tools/contracts";
@@ -56,6 +57,10 @@ import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 const isModelSelection = Schema.is(ModelSelection);
+const WORKFLOW_PROVIDERS: ReadonlySet<ProviderDriverKind> = new Set([
+  ProviderDriverKind.make("codex"),
+  ProviderDriverKind.make("claudeAgent"),
+]);
 
 /**
  * Hook for tests that want to override the canonical event logger pulled
@@ -673,6 +678,16 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         operation: "ProviderService.sendTurn",
         allowRecovery: true,
       });
+      if (
+        (isPlanningWorkflowInteractionMode(input.interactionMode) ||
+          input.interactionMode === "implementation-workflow") &&
+        !WORKFLOW_PROVIDERS.has(routed.adapter.provider)
+      ) {
+        return yield* toValidationError(
+          "ProviderService.sendTurn",
+          "Workflow modes are only available for Codex and Claude providers in v1.",
+        );
+      }
       metricProvider = routed.adapter.provider;
       metricModel = input.modelSelection?.model;
       yield* Effect.annotateCurrentSpan({

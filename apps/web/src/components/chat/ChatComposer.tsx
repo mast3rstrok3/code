@@ -13,6 +13,7 @@ import type {
   TurnId,
 } from "@t3tools/contracts";
 import {
+  isPlanningWorkflowInteractionMode,
   ProviderDriverKind,
   ProviderInstanceId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
@@ -101,7 +102,9 @@ import {
   LockIcon,
   LockOpenIcon,
   PenLineIcon,
+  WorkflowIcon,
   XIcon,
+  ZapIcon,
 } from "lucide-react";
 import { proposedPlanTitle } from "../../proposedPlan";
 import { getProviderDisplayName, getProviderInteractionModeToggle } from "../../providerModels";
@@ -112,6 +115,10 @@ import {
   sortProviderInstanceEntries,
   type ProviderInstanceEntry,
 } from "../../providerInstances";
+import {
+  isPlanningWorkflowAvailableForProvider,
+  resolveComposerInteractionModeForProvider,
+} from "./composerPlanningWorkflow";
 import { type AppModelOption, getAppModelOptionsForInstance } from "../../modelSelection";
 import type { UnifiedSettings } from "@t3tools/contracts/settings";
 import type { SessionPhase, Thread } from "../../types";
@@ -150,6 +157,37 @@ const runtimeModeConfig: Record<
 };
 
 const runtimeModeOptions = Object.keys(runtimeModeConfig) as RuntimeMode[];
+const interactionModeConfig: Record<
+  ProviderInteractionMode,
+  { label: string; description: string; icon: LucideIcon }
+> = {
+  default: {
+    label: "Build",
+    description: "Work normally and make implementation changes.",
+    icon: BotIcon,
+  },
+  plan: {
+    label: "Plan",
+    description: "Plan the work without applying implementation changes.",
+    icon: PencilRulerIcon,
+  },
+  "planning-workflow": {
+    label: "Planning Workflow",
+    description: "Run the Planning Workflow grill stage with first-party workflow instructions.",
+    icon: WorkflowIcon,
+  },
+  "implementation-workflow": {
+    label: "Implementation Workflow",
+    description: "Plan and start a durable implementation workflow from a PRD.",
+    icon: WorkflowIcon,
+  },
+  "yolo-workflow": {
+    label: "YOLO Workflow",
+    description: "Align on intent, then run planning and implementation with no further gates.",
+    icon: ZapIcon,
+  },
+};
+const interactionModeOptions = Object.keys(interactionModeConfig) as ProviderInteractionMode[];
 const COMPOSER_FLOATING_LAYER_SELECTOR = [
   '[data-slot="popover-popup"]',
   '[data-slot="menu-popup"]',
@@ -193,62 +231,75 @@ function isInsideComposerFloatingLayer(element: Element): boolean {
 const ComposerFooterModeControls = memo(function ComposerFooterModeControls(props: {
   showInteractionModeToggle: boolean;
   interactionMode: ProviderInteractionMode;
+  planningWorkflowAvailable: boolean;
   runtimeMode: RuntimeMode;
   showPlanToggle: boolean;
   planSidebarLabel: string;
   planSidebarOpen: boolean;
-  onToggleInteractionMode: () => void;
+  onInteractionModeChange: (mode: ProviderInteractionMode) => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
   onTogglePlanSidebar: () => void;
 }) {
+  const interactionModeOption = interactionModeConfig[props.interactionMode];
+  const InteractionModeIcon = interactionModeOption.icon;
   const runtimeModeOption = runtimeModeConfig[props.runtimeMode];
   const RuntimeModeIcon = runtimeModeOption.icon;
-  const interactionModeTooltip =
-    props.interactionMode === "plan"
-      ? "Plan mode — click to return to normal build mode"
-      : "Default mode — click to enter plan mode";
   const planSidebarTooltip = props.planSidebarOpen
     ? `Hide ${props.planSidebarLabel.toLowerCase()} sidebar`
     : `Show ${props.planSidebarLabel.toLowerCase()} sidebar`;
 
-  const interactionModeToggle = props.showInteractionModeToggle ? (
-    <>
-      <Separator orientation="vertical" className="mx-0.5 hidden h-4 sm:block" />
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Button
-              variant="ghost"
-              className={cn(
-                "shrink-0 whitespace-nowrap px-2 sm:px-3",
-                props.interactionMode === "plan"
-                  ? "bg-blue-500/10 text-blue-400 hover:bg-blue-500/15 hover:text-blue-300"
-                  : "text-muted-foreground/70 hover:text-foreground/80",
-              )}
-              size="sm"
-              type="button"
-              onClick={props.onToggleInteractionMode}
-              aria-label={interactionModeTooltip}
-            />
-          }
-        >
-          {props.interactionMode === "plan" ? (
-            <PencilRulerIcon className="text-current opacity-100" />
-          ) : (
-            <BotIcon />
-          )}
-          <span className="sr-only sm:not-sr-only">
-            {props.interactionMode === "plan" ? "Plan" : "Build"}
-          </span>
-        </TooltipTrigger>
-        <TooltipPopup side="top">{interactionModeTooltip}</TooltipPopup>
-      </Tooltip>
-    </>
-  ) : null;
-
   return (
     <>
       <Separator orientation="vertical" className="mx-0.5 hidden h-4 sm:block" />
+
+      {props.showInteractionModeToggle ? (
+        <>
+          <Select
+            value={props.interactionMode}
+            onValueChange={(value) => {
+              if (!value || value === props.interactionMode) return;
+              props.onInteractionModeChange(value as ProviderInteractionMode);
+            }}
+          >
+            <SelectTrigger
+              variant="ghost"
+              size="sm"
+              className="font-medium"
+              aria-label="Composer mode"
+              title={interactionModeOption.description}
+            >
+              <InteractionModeIcon className="size-4" />
+              <SelectValue>{interactionModeOption.label}</SelectValue>
+            </SelectTrigger>
+            <SelectPopup alignItemWithTrigger={false} matchTriggerWidth={false}>
+              {interactionModeOptions.map((mode) => {
+                const option = interactionModeConfig[mode];
+                const OptionIcon = option.icon;
+                const disabled =
+                  (isPlanningWorkflowInteractionMode(mode) || mode === "implementation-workflow") &&
+                  !props.planningWorkflowAvailable;
+                return (
+                  <SelectItem key={mode} value={mode} disabled={disabled} className="min-w-64 py-2">
+                    <div className="grid min-w-0 gap-0.5">
+                      <span className="inline-flex items-center gap-1.5 font-medium text-foreground">
+                        <OptionIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                        {option.label}
+                      </span>
+                      <span className="text-muted-foreground text-xs leading-4">
+                        {disabled
+                          ? "Available for Codex and Claude providers in v1."
+                          : option.description}
+                      </span>
+                    </div>
+                  </SelectItem>
+                );
+              })}
+            </SelectPopup>
+          </Select>
+
+          <Separator orientation="vertical" className="mx-0.5 hidden h-4 sm:block" />
+        </>
+      ) : null}
 
       <Tooltip>
         <Select
@@ -290,8 +341,6 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
         </Select>
         <TooltipPopup side="top">{runtimeModeOption.description}</TooltipPopup>
       </Tooltip>
-
-      {interactionModeToggle}
 
       {props.showPlanToggle ? (
         <>
@@ -820,6 +869,21 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     }),
     [providerStatuses, selectedProvider],
   );
+  const planningWorkflowAvailable = useMemo(
+    () => isPlanningWorkflowAvailableForProvider(selectedProvider),
+    [selectedProvider],
+  );
+
+  useEffect(() => {
+    const resolvedInteractionMode = resolveComposerInteractionModeForProvider({
+      interactionMode,
+      provider: selectedProvider,
+    });
+    if (resolvedInteractionMode !== interactionMode) {
+      handleInteractionModeChange(resolvedInteractionMode);
+    }
+  }, [handleInteractionModeChange, interactionMode, selectedProvider]);
+
   const selectedModelSelection = useMemo<ModelSelection>(
     () => createModelSelection(selectedInstanceId, selectedModel, selectedModelOptionsForDispatch),
     [selectedInstanceId, selectedModel, selectedModelOptionsForDispatch],
@@ -2499,10 +2563,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     interactionMode={interactionMode}
                     planSidebarLabel={planSidebarLabel}
                     planSidebarOpen={planSidebarOpen}
+                    planningWorkflowAvailable={planningWorkflowAvailable}
                     runtimeMode={runtimeMode}
                     showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
                     traitsMenuContent={providerTraitsMenuContent}
-                    onToggleInteractionMode={toggleInteractionMode}
+                    onInteractionModeChange={handleInteractionModeChange}
                     onTogglePlanSidebar={togglePlanSidebar}
                     onRuntimeModeChange={handleRuntimeModeChange}
                   />
@@ -2521,7 +2586,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       showPlanToggle={showPlanSidebarToggle}
                       planSidebarLabel={planSidebarLabel}
                       planSidebarOpen={planSidebarOpen}
-                      onToggleInteractionMode={toggleInteractionMode}
+                      planningWorkflowAvailable={planningWorkflowAvailable}
+                      onInteractionModeChange={handleInteractionModeChange}
                       onRuntimeModeChange={handleRuntimeModeChange}
                       onTogglePlanSidebar={togglePlanSidebar}
                     />

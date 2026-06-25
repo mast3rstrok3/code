@@ -21,6 +21,39 @@ import { ModelCapabilities } from "./model.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { ServerSettings } from "./settings.ts";
 
+export const WorkflowPromptAssociatedDocContract = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  title: TrimmedNonEmptyString,
+  path: TrimmedNonEmptyString,
+  content: TrimmedNonEmptyString,
+});
+export type WorkflowPromptAssociatedDocContract = typeof WorkflowPromptAssociatedDocContract.Type;
+
+export const WorkflowPromptContract = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  order: PositiveInt,
+  workflow: Schema.Literals(["shared", "planning", "implementation", "yolo"]),
+  role: Schema.Literals([
+    "workflow-communications",
+    "planning-thread",
+    "planning-reviewer",
+    "implementation-orchestrator",
+    "implementation-worker",
+    "implementation-validator",
+    "implementation-qa-reviewer",
+    "implementation-fixer",
+  ]),
+  stage: TrimmedNonEmptyString,
+  title: TrimmedNonEmptyString,
+  description: TrimmedNonEmptyString,
+  promptText: TrimmedNonEmptyString,
+  associatedDocs: Schema.optional(Schema.Array(WorkflowPromptAssociatedDocContract)),
+});
+export type WorkflowPromptContract = typeof WorkflowPromptContract.Type;
+
+export const WorkflowPromptContracts = Schema.Array(WorkflowPromptContract);
+export type WorkflowPromptContracts = typeof WorkflowPromptContracts.Type;
+
 const KeybindingsMalformedConfigIssue = Schema.Struct({
   kind: Schema.Literal("keybindings.malformed-config"),
   message: TrimmedNonEmptyString,

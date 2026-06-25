@@ -27,6 +27,7 @@ import {
   type CanonicalRequestType,
   type ClaudeSettings,
   EventId,
+  isPlanningWorkflowInteractionMode,
   type ProviderApprovalDecision,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -88,6 +89,7 @@ import {
 } from "../Errors.ts";
 import { type ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
+import { resolveWorkflowSystemInstructions } from "../WorkflowPromptRegistry.ts";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.UnknownFromJsonString);
 const decodeUnknownJsonStringExit = Schema.decodeUnknownExit(Schema.UnknownFromJsonString);
 
@@ -904,7 +906,20 @@ function buildPromptText(
   const caps = getClaudeModelCapabilities(claudeModel);
 
   const promptEffort = resolvePromptInjectedEffort(caps, rawEffort);
-  return applyClaudePromptEffortPrefix(input.input?.trim() ?? "", promptEffort);
+  const promptText = applyClaudePromptEffortPrefix(input.input?.trim() ?? "", promptEffort);
+  const workflowInstructions = resolveWorkflowSystemInstructions({
+    interactionMode: input.interactionMode,
+  });
+  if (workflowInstructions === undefined) {
+    return promptText;
+  }
+  return `<workflow-instructions>
+${workflowInstructions}
+</workflow-instructions>
+
+<user-message>
+${promptText}
+</user-message>`;
 }
 
 function buildUserMessage(input: {
@@ -3675,12 +3690,18 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     // "plan" maps directly to the SDK's "plan" permission mode;
     // "default" restores the session's original permission mode.
     // When interactionMode is absent we leave the current mode unchanged.
-    if (input.interactionMode === "plan") {
+    if (
+      input.interactionMode === "plan" ||
+      isPlanningWorkflowInteractionMode(input.interactionMode)
+    ) {
       yield* Effect.tryPromise({
         try: () => context.query.setPermissionMode("plan"),
         catch: (cause) => toRequestError(input.threadId, "turn/setPermissionMode", cause),
       });
-    } else if (input.interactionMode === "default") {
+    } else if (
+      input.interactionMode === "default" ||
+      input.interactionMode === "implementation-workflow"
+    ) {
       yield* Effect.tryPromise({
         try: () => context.query.setPermissionMode(context.basePermissionMode ?? "default"),
         catch: (cause) => toRequestError(input.threadId, "turn/setPermissionMode", cause),

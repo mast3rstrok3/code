@@ -17,10 +17,11 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
   interactionMode: ProviderInteractionMode;
   planSidebarLabel: string;
   planSidebarOpen: boolean;
+  planningWorkflowAvailable: boolean;
   runtimeMode: RuntimeMode;
   showInteractionModeToggle: boolean;
   traitsMenuContent?: ReactNode;
-  onToggleInteractionMode: () => void;
+  onInteractionModeChange: (mode: ProviderInteractionMode) => void;
   onTogglePlanSidebar: () => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
 }) {
@@ -52,11 +53,23 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
               value={props.interactionMode}
               onValueChange={(value) => {
                 if (!value || value === props.interactionMode) return;
-                props.onToggleInteractionMode();
+                props.onInteractionModeChange(value as ProviderInteractionMode);
               }}
             >
-              <MenuRadioItem value="default">Chat</MenuRadioItem>
+              <MenuRadioItem value="default">Build</MenuRadioItem>
               <MenuRadioItem value="plan">Plan</MenuRadioItem>
+              <MenuRadioItem value="planning-workflow" disabled={!props.planningWorkflowAvailable}>
+                Planning Workflow
+              </MenuRadioItem>
+              <MenuRadioItem
+                value="implementation-workflow"
+                disabled={!props.planningWorkflowAvailable}
+              >
+                Implementation Workflow
+              </MenuRadioItem>
+              <MenuRadioItem value="yolo-workflow" disabled={!props.planningWorkflowAvailable}>
+                YOLO Workflow
+              </MenuRadioItem>
             </MenuRadioGroup>
             <MenuDivider />
           </>

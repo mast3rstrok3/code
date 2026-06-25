@@ -75,6 +75,7 @@ import {
 } from "./observability/RpcInstrumentation.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
+import { listWorkflowPromptContracts } from "./provider/WorkflowPromptRegistry.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerSettings from "./serverSettings.ts";
@@ -289,6 +290,7 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.serverRemoveKeybinding, AuthOrchestrationOperateScope],
   [WS_METHODS.serverGetSettings, AuthOrchestrationReadScope],
   [WS_METHODS.serverUpdateSettings, AuthOrchestrationOperateScope],
+  [WS_METHODS.serverGetWorkflowPrompts, AuthOrchestrationReadScope],
   [WS_METHODS.serverDiscoverSourceControl, AuthOrchestrationReadScope],
   [WS_METHODS.serverGetTraceDiagnostics, AuthOrchestrationReadScope],
   [WS_METHODS.serverGetProcessDiagnostics, AuthOrchestrationReadScope],
@@ -1222,6 +1224,14 @@ const makeWsRpcLayer = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
             serverSettings
               .updateSettings(patch)
               .pipe(Effect.map(ServerSettings.redactServerSettingsForClient)),
+            {
+              "rpc.aggregate": "server",
+            },
+          ),
+        [WS_METHODS.serverGetWorkflowPrompts]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.serverGetWorkflowPrompts,
+            Effect.succeed(listWorkflowPromptContracts()),
             {
               "rpc.aggregate": "server",
             },

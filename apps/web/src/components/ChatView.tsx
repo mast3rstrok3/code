@@ -131,6 +131,7 @@ import { subscribePreviewAction } from "./preview/previewActionBus";
 import { getConfiguredPreviewUrls } from "./preview/previewEmptyStateLogic";
 import { PreviewAutomationOwner } from "./preview/PreviewAutomationOwner";
 import { RightPanelTabs } from "./RightPanelTabs";
+import { WorkflowLogsPanel } from "./WorkflowLogsPanel";
 import { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
 import { BranchToolbar } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
@@ -1295,7 +1296,7 @@ function ChatViewContent(props: ChatViewProps) {
   const activeRightPanelKind = useRightPanelStore((state) =>
     selectActiveRightPanel(state.byThreadKey, activeThreadRef),
   );
-  const diffOpen = activeRightPanelKind === "diff";
+  const diffOpen = activeRightPanelKind === "diff" || activeRightPanelKind === "review";
   const rightPanelState = useRightPanelStore((state) =>
     selectThreadRightPanelState(state.byThreadKey, activeThreadRef),
   );
@@ -2772,6 +2773,20 @@ function ChatViewContent(props: ChatViewProps) {
     useRightPanelStore.getState().open(activeThreadRef, "diff");
     onDiffPanelOpen?.();
   }, [activeThreadRef, isGitRepo, isServerThread, onDiffPanelOpen]);
+  const addPlanSurface = useCallback(() => {
+    if (!activeThreadRef) return;
+    planSidebarDismissedForTurnRef.current = null;
+    useRightPanelStore.getState().open(activeThreadRef, "plan");
+  }, [activeThreadRef]);
+  const addReviewSurface = useCallback(() => {
+    if (!activeThreadRef || !isServerThread || !isGitRepo) return;
+    useRightPanelStore.getState().open(activeThreadRef, "review");
+    onDiffPanelOpen?.();
+  }, [activeThreadRef, isGitRepo, isServerThread, onDiffPanelOpen]);
+  const addLogsSurface = useCallback(() => {
+    if (!activeThreadRef) return;
+    useRightPanelStore.getState().open(activeThreadRef, "logs");
+  }, [activeThreadRef]);
   const addFilesSurface = useCallback(() => {
     if (!activeThreadRef || !activeProject) return;
     useRightPanelStore.getState().open(activeThreadRef, "files");
@@ -2917,7 +2932,7 @@ function ChatViewContent(props: ChatViewProps) {
       if (surface.kind === "terminal") {
         setTerminalFocusRequestId((value) => value + 1);
       }
-      if (surface.kind === "diff" && !diffOpen) {
+      if ((surface.kind === "diff" || surface.kind === "review") && !diffOpen) {
         onDiffPanelOpen?.();
       }
     },
@@ -4661,7 +4676,7 @@ function ChatViewContent(props: ChatViewProps) {
         newShortcutLabel={newTerminalShortcutLabel ?? undefined}
         closeShortcutLabel={closeTerminalShortcutLabel ?? undefined}
       />
-    ) : activeRightPanelSurface?.kind === "diff" ? (
+    ) : activeRightPanelSurface?.kind === "diff" || activeRightPanelSurface?.kind === "review" ? (
       <Suspense fallback={null}>
         <DiffPanel mode="embedded" composerDraftTarget={composerDraftTarget} />
       </Suspense>
@@ -4677,6 +4692,8 @@ function ChatViewContent(props: ChatViewProps) {
         timestampFormat={timestampFormat}
         mode="embedded"
       />
+    ) : activeRightPanelSurface?.kind === "logs" ? (
+      <WorkflowLogsPanel entries={workLogEntries} timestampFormat={timestampFormat} />
     ) : (activeRightPanelSurface?.kind === "files" || activeRightPanelSurface?.kind === "file") &&
       activeProject &&
       activeWorkspaceRoot ? (
@@ -5000,9 +5017,14 @@ function ChatViewContent(props: ChatViewProps) {
           onCopyFilePath={copyRightPanelFilePath}
           onAddBrowser={createBrowserSurface}
           onAddTerminal={addTerminalSurface}
+          onAddPlan={addPlanSurface}
+          onAddReview={addReviewSurface}
+          onAddLogs={addLogsSurface}
           onAddDiff={addDiffSurface}
           onAddFiles={addFilesSurface}
           browserAvailable={isPreviewSupportedInRuntime()}
+          reviewAvailable={isServerThread && isGitRepo}
+          logsAvailable={activeThreadRef !== null}
           diffAvailable={isServerThread && isGitRepo}
           filesAvailable={activeProject !== null}
         >
@@ -5027,9 +5049,14 @@ function ChatViewContent(props: ChatViewProps) {
             onCopyFilePath={copyRightPanelFilePath}
             onAddBrowser={createBrowserSurface}
             onAddTerminal={addTerminalSurface}
+            onAddPlan={addPlanSurface}
+            onAddReview={addReviewSurface}
+            onAddLogs={addLogsSurface}
             onAddDiff={addDiffSurface}
             onAddFiles={addFilesSurface}
             browserAvailable={isPreviewSupportedInRuntime()}
+            reviewAvailable={isServerThread && isGitRepo}
+            logsAvailable={activeThreadRef !== null}
             diffAvailable={isServerThread && isGitRepo}
             filesAvailable={activeProject !== null}
           >

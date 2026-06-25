@@ -127,6 +127,23 @@ describe("rightPanelStore", () => {
     });
   });
 
+  it("keeps workflow surfaces as singleton tabs", () => {
+    useRightPanelStore.getState().open(refA, "plan");
+    useRightPanelStore.getState().open(refA, "review");
+    useRightPanelStore.getState().open(refA, "logs");
+    useRightPanelStore.getState().open(refA, "review");
+
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "review",
+      surfaces: [
+        { id: "plan", kind: "plan" },
+        { id: "review", kind: "review" },
+        { id: "logs", kind: "logs" },
+      ],
+    });
+  });
+
   it("replaces the standalone explorer with peer file surfaces", () => {
     useRightPanelStore.getState().open(refA, "files");
     useRightPanelStore.getState().openFile(refA, "src/index.ts");
