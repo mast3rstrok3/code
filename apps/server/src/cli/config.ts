@@ -8,6 +8,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as LogLevel from "effect/LogLevel";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 import * as SchemaTransformation from "effect/SchemaTransformation";
@@ -73,6 +74,43 @@ export const tailscaleServePortFlag = Flag.integer("tailscale-serve-port").pipe(
   Flag.optional,
 );
 
+const optionalRedactedString = (name: string) =>
+  Config.redacted(name).pipe(
+    Config.option,
+    Config.map((value) =>
+      Option.match(value, {
+        onNone: () => undefined,
+        onSome: (redacted) => {
+          const trimmed = Redacted.value(redacted).trim();
+          return trimmed.length > 0 ? Redacted.make(trimmed) : undefined;
+        },
+      }),
+    ),
+  );
+
+const optionalTrimmedString = (name: string) =>
+  Config.string(name).pipe(
+    Config.option,
+    Config.map((value) =>
+      Option.match(value, {
+        onNone: () => undefined,
+        onSome: (raw) => {
+          const trimmed = raw.trim();
+          return trimmed.length > 0 ? trimmed : undefined;
+        },
+      }),
+    ),
+  );
+
+const optionalUrl = (name: string) =>
+  Config.url(name).pipe(Config.option, Config.map(Option.getOrUndefined));
+
+const deriveOidcTokenUrl = (tokenUrl: URL | undefined, issuer: URL | undefined) => {
+  if (tokenUrl !== undefined) return tokenUrl;
+  if (issuer === undefined) return undefined;
+  return new URL(`${issuer.href.replace(/\/+$/u, "")}/protocol/openid-connect/token`);
+};
+
 const EnvServerConfig = Config.all({
   logLevel: Config.logLevel("T3CODE_LOG_LEVEL").pipe(Config.withDefault("Info")),
   traceMinLevel: Config.logLevel("T3CODE_TRACE_MIN_LEVEL").pipe(Config.withDefault("Info")),
@@ -104,6 +142,24 @@ const EnvServerConfig = Config.all({
   host: Config.string("T3CODE_HOST").pipe(Config.option, Config.map(Option.getOrUndefined)),
   t3Home: Config.string("T3CODE_HOME").pipe(Config.option, Config.map(Option.getOrUndefined)),
   devUrl: Config.url("VITE_DEV_SERVER_URL").pipe(Config.option, Config.map(Option.getOrUndefined)),
+  appDevStackBackendUrl: Config.url("T3CODE_APP_DEV_STACK_BACKEND_URL").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  appDevStackBackendBearerToken: optionalRedactedString(
+    "T3CODE_APP_DEV_STACK_BACKEND_BEARER_TOKEN",
+  ),
+  appDevStackBackendOidcTokenUrl: optionalUrl("T3CODE_APP_DEV_STACK_BACKEND_OIDC_TOKEN_URL"),
+  appDevStackBackendOidcIssuer: optionalUrl("T3CODE_APP_DEV_STACK_BACKEND_OIDC_ISSUER"),
+  appDevStackBackendOidcClientId: optionalTrimmedString(
+    "T3CODE_APP_DEV_STACK_BACKEND_OIDC_CLIENT_ID",
+  ),
+  appDevStackBackendOidcClientSecret: optionalRedactedString(
+    "T3CODE_APP_DEV_STACK_BACKEND_OIDC_CLIENT_SECRET",
+  ),
+  codeOidcIssuer: optionalUrl("CODE_OIDC_ISSUER"),
+  codeOidcClientId: optionalTrimmedString("CODE_OIDC_CLIENT_ID"),
+  codeOidcClientSecret: optionalRedactedString("CODE_OIDC_CLIENT_SECRET"),
   noBrowser: Config.boolean("T3CODE_NO_BROWSER").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
@@ -332,6 +388,7 @@ export const resolveServerConfig = (
       () => (mode === "desktop" ? "127.0.0.1" : undefined),
     );
     const logLevel = Option.getOrElse(cliLogLevel, () => env.logLevel);
+    const appDevStackBackendOidcIssuer = env.appDevStackBackendOidcIssuer ?? env.codeOidcIssuer;
 
     const config: ServerConfig.ServerConfig["Service"] = {
       logLevel,
@@ -359,6 +416,15 @@ export const resolveServerConfig = (
       host,
       staticDir,
       devUrl,
+      appDevStackBackendUrl: env.appDevStackBackendUrl,
+      appDevStackBackendBearerToken: env.appDevStackBackendBearerToken,
+      appDevStackBackendOidcTokenUrl: deriveOidcTokenUrl(
+        env.appDevStackBackendOidcTokenUrl,
+        appDevStackBackendOidcIssuer,
+      ),
+      appDevStackBackendOidcClientId: env.appDevStackBackendOidcClientId ?? env.codeOidcClientId,
+      appDevStackBackendOidcClientSecret:
+        env.appDevStackBackendOidcClientSecret ?? env.codeOidcClientSecret,
       noBrowser,
       startupPresentation,
       desktopBootstrapToken,

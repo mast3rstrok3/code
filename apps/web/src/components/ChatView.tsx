@@ -131,6 +131,7 @@ import { subscribePreviewAction } from "./preview/previewActionBus";
 import { getConfiguredPreviewUrls } from "./preview/previewEmptyStateLogic";
 import { PreviewAutomationOwner } from "./preview/PreviewAutomationOwner";
 import { RightPanelTabs } from "./RightPanelTabs";
+import { AppDevStackPanel } from "./AppDevStackPanel";
 import { WorkflowLogsPanel } from "./WorkflowLogsPanel";
 import { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
 import { BranchToolbar } from "./BranchToolbar";
@@ -2791,6 +2792,10 @@ function ChatViewContent(props: ChatViewProps) {
     if (!activeThreadRef || !activeProject) return;
     useRightPanelStore.getState().open(activeThreadRef, "files");
   }, [activeProject, activeThreadRef]);
+  const addAppDevStackSurface = useCallback(() => {
+    if (!activeThreadRef || !activeProject) return;
+    useRightPanelStore.getState().open(activeThreadRef, "app-dev-stack");
+  }, [activeProject, activeThreadRef]);
   const openFileSurface = useCallback(
     (relativePath: string) => {
       if (!activeThreadRef || !activeProject) return;
@@ -4692,6 +4697,18 @@ function ChatViewContent(props: ChatViewProps) {
         timestampFormat={timestampFormat}
         mode="embedded"
       />
+    ) : activeRightPanelSurface?.kind === "app-dev-stack" &&
+      activeProject &&
+      activeWorkspaceRoot ? (
+      <AppDevStackPanel
+        environmentId={activeProject.environmentId}
+        threadRef={activeThreadRef}
+        activeThread={activeThread}
+        activeProject={activeProject}
+        workspaceRoot={activeWorkspaceRoot}
+        gitCwd={gitCwd}
+        openPreview={openPreview}
+      />
     ) : activeRightPanelSurface?.kind === "logs" ? (
       <WorkflowLogsPanel entries={workLogEntries} timestampFormat={timestampFormat} />
     ) : (activeRightPanelSurface?.kind === "files" || activeRightPanelSurface?.kind === "file") &&
@@ -5022,11 +5039,13 @@ function ChatViewContent(props: ChatViewProps) {
           onAddLogs={addLogsSurface}
           onAddDiff={addDiffSurface}
           onAddFiles={addFilesSurface}
+          onAddAppDevStack={addAppDevStackSurface}
           browserAvailable={isPreviewSupportedInRuntime()}
           reviewAvailable={isServerThread && isGitRepo}
           logsAvailable={activeThreadRef !== null}
           diffAvailable={isServerThread && isGitRepo}
           filesAvailable={activeProject !== null}
+          appDevStackAvailable={activeProject !== null}
         >
           {rightPanelContent}
         </RightPanelTabs>
@@ -5054,11 +5073,13 @@ function ChatViewContent(props: ChatViewProps) {
             onAddLogs={addLogsSurface}
             onAddDiff={addDiffSurface}
             onAddFiles={addFilesSurface}
+            onAddAppDevStack={addAppDevStackSurface}
             browserAvailable={isPreviewSupportedInRuntime()}
             reviewAvailable={isServerThread && isGitRepo}
             logsAvailable={activeThreadRef !== null}
             diffAvailable={isServerThread && isGitRepo}
             filesAvailable={activeProject !== null}
+            appDevStackAvailable={activeProject !== null}
           >
             {rightPanelContent}
           </RightPanelTabs>

@@ -144,6 +144,17 @@ describe("rightPanelStore", () => {
     });
   });
 
+  it("keeps app dev stack as a singleton surface", () => {
+    useRightPanelStore.getState().open(refA, "app-dev-stack");
+    useRightPanelStore.getState().open(refA, "app-dev-stack");
+
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "app-dev-stack",
+      surfaces: [{ id: "app-dev-stack", kind: "app-dev-stack" }],
+    });
+  });
+
   it("replaces the standalone explorer with peer file surfaces", () => {
     useRightPanelStore.getState().open(refA, "files");
     useRightPanelStore.getState().openFile(refA, "src/index.ts");

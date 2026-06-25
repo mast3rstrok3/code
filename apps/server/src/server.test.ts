@@ -71,6 +71,7 @@ import { vi } from "vite-plus/test";
 const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
 
 import * as ServerConfig from "./config.ts";
+import * as AppDevStackManager from "./appDevStack/AppDevStackManager.ts";
 import { makeRoutesLayer } from "./server.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as GitManager from "./git/GitManager.ts";
@@ -342,6 +343,7 @@ const buildAppUnderTest = (options?: {
     repositoryIdentityResolver?: Partial<
       RepositoryIdentityResolver.RepositoryIdentityResolver["Service"]
     >;
+    appDevStackManager?: Partial<AppDevStackManager.AppDevStackManager["Service"]>;
     cloudManagedEndpointRuntime?: Partial<
       CloudManagedEndpointRuntime.CloudManagedEndpointRuntime["Service"]
     >;
@@ -374,6 +376,11 @@ const buildAppUnderTest = (options?: {
       ...derivedPaths,
       staticDir: undefined,
       devUrl,
+      appDevStackBackendUrl: undefined,
+      appDevStackBackendBearerToken: undefined,
+      appDevStackBackendOidcTokenUrl: undefined,
+      appDevStackBackendOidcClientId: undefined,
+      appDevStackBackendOidcClientSecret: undefined,
       noBrowser: true,
       startupPresentation: "browser",
       desktopBootstrapToken: defaultDesktopBootstrapToken,
@@ -763,6 +770,23 @@ const buildAppUnderTest = (options?: {
         Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
           resolve: () => Effect.succeed(null),
           ...options?.layers?.repositoryIdentityResolver,
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(AppDevStackManager.AppDevStackManager)({
+          status: Effect.succeed({ enabled: false, backendUrl: null }),
+          list: () => Effect.succeed({ stacks: [] }),
+          getByWorktree: () =>
+            Effect.succeed({
+              stack: null,
+              frontendUrl: null,
+              frontendServiceName: null,
+            }),
+          get: () => Effect.die("AppDevStackManager.get not stubbed in this test"),
+          autoCreate: () => Effect.die("AppDevStackManager.autoCreate not stubbed in this test"),
+          stop: () => Effect.die("AppDevStackManager.stop not stubbed in this test"),
+          delete: () => Effect.succeed({ deleted: true as const }),
+          ...options?.layers?.appDevStackManager,
         }),
       ),
       Layer.provide(

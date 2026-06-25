@@ -1,6 +1,7 @@
 import type { ContextMenuItem, PreviewSessionSnapshot } from "@t3tools/contracts";
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
 import {
+  Boxes,
   ClipboardList,
   EyeIcon,
   FileDiff,
@@ -56,11 +57,13 @@ interface RightPanelTabsProps {
   onAddLogs: () => void;
   onAddDiff: () => void;
   onAddFiles: () => void;
+  onAddAppDevStack: () => void;
   browserAvailable: boolean;
   reviewAvailable: boolean;
   logsAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
+  appDevStackAvailable: boolean;
   children: ReactNode;
 }
 
@@ -68,6 +71,7 @@ const SURFACE_DISABLED_REASONS = {
   browser: "Browser previews are only available in the T3 Code desktop app.",
   review: "Dev review is only available for server threads in Git repositories.",
   logs: "Workflow logs are only available when a thread is open.",
+  appDevStack: "App stacks are only available when a project is open.",
   files: "Files are only available when a project is open.",
   diff: "Diff is only available for server threads in Git repositories.",
 } as const;
@@ -110,11 +114,13 @@ function RightPanelEmptyState(props: {
   onAddLogs: () => void;
   onAddDiff: () => void;
   onAddFiles: () => void;
+  onAddAppDevStack: () => void;
   browserAvailable: boolean;
   reviewAvailable: boolean;
   logsAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
+  appDevStackAvailable: boolean;
 }) {
   const actions = [
     {
@@ -140,6 +146,14 @@ function RightPanelEmptyState(props: {
       available: props.logsAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.logs,
       onClick: props.onAddLogs,
+    },
+    {
+      label: "App Dev Stack",
+      description: "Run Kubernetes dev stacks by worktree.",
+      icon: Boxes,
+      available: props.appDevStackAvailable,
+      disabledReason: SURFACE_DISABLED_REASONS.appDevStack,
+      onClick: props.onAddAppDevStack,
     },
     {
       label: "Browser",
@@ -241,6 +255,8 @@ function surfaceTitle(
       return "Diff";
     case "files":
       return "Files";
+    case "app-dev-stack":
+      return "App Dev Stack";
     case "file":
       return surface.relativePath.slice(surface.relativePath.lastIndexOf("/") + 1);
     case "terminal":
@@ -302,6 +318,8 @@ function SurfaceIcon({
       return <FileDiff className="size-3.5 shrink-0" />;
     case "files":
       return <Files className="size-3.5 shrink-0" />;
+    case "app-dev-stack":
+      return <Boxes className="size-3.5 shrink-0" />;
     case "file":
       return (
         <PierreEntryIcon
@@ -512,6 +530,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                     Logs
                   </SurfaceMenuItem>
                   <SurfaceMenuItem
+                    available={props.appDevStackAvailable}
+                    disabledReason={SURFACE_DISABLED_REASONS.appDevStack}
+                    onClick={props.onAddAppDevStack}
+                  >
+                    <Boxes />
+                    App Dev Stack
+                  </SurfaceMenuItem>
+                  <SurfaceMenuItem
                     available={props.filesAvailable}
                     disabledReason={SURFACE_DISABLED_REASONS.files}
                     onClick={props.onAddFiles}
@@ -544,11 +570,13 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddLogs={props.onAddLogs}
             onAddDiff={props.onAddDiff}
             onAddFiles={props.onAddFiles}
+            onAddAppDevStack={props.onAddAppDevStack}
             browserAvailable={props.browserAvailable}
             reviewAvailable={props.reviewAvailable}
             logsAvailable={props.logsAvailable}
             diffAvailable={props.diffAvailable}
             filesAvailable={props.filesAvailable}
+            appDevStackAvailable={props.appDevStackAvailable}
           />
         ) : (
           props.children

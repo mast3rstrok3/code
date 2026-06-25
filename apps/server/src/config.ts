@@ -12,6 +12,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as LogLevel from "effect/LogLevel";
 import * as Path from "effect/Path";
+import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 
 export const DEFAULT_PORT = 3773;
@@ -68,6 +69,11 @@ export class ServerConfig extends Context.Service<
     readonly baseDir: string;
     readonly staticDir: string | undefined;
     readonly devUrl: URL | undefined;
+    readonly appDevStackBackendUrl: URL | undefined;
+    readonly appDevStackBackendBearerToken: Redacted.Redacted<string> | undefined;
+    readonly appDevStackBackendOidcTokenUrl: URL | undefined;
+    readonly appDevStackBackendOidcClientId: string | undefined;
+    readonly appDevStackBackendOidcClientSecret: Redacted.Redacted<string> | undefined;
     readonly noBrowser: boolean;
     readonly startupPresentation: StartupPresentation;
     readonly desktopBootstrapToken: string | undefined;
@@ -179,6 +185,11 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
     desktopBootstrapToken: undefined,
     staticDir: undefined,
     devUrl,
+    appDevStackBackendUrl: undefined,
+    appDevStackBackendBearerToken: undefined,
+    appDevStackBackendOidcTokenUrl: undefined,
+    appDevStackBackendOidcClientId: undefined,
+    appDevStackBackendOidcClientSecret: undefined,
     noBrowser: false,
     startupPresentation: "browser",
   });

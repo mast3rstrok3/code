@@ -43,6 +43,11 @@ const makeServerConfig = Effect.fn(function* (baseDir: string) {
     desktopBootstrapToken: undefined,
     staticDir: undefined,
     devUrl: undefined,
+    appDevStackBackendUrl: undefined,
+    appDevStackBackendBearerToken: undefined,
+    appDevStackBackendOidcTokenUrl: undefined,
+    appDevStackBackendOidcClientId: undefined,
+    appDevStackBackendOidcClientSecret: undefined,
     noBrowser: false,
     startupPresentation: "browser",
   } satisfies ServerConfig.ServerConfig["Service"];

@@ -7,6 +7,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 
 import {
@@ -114,11 +115,145 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         noBrowser: true,
         startupPresentation: "browser",
         desktopBootstrapToken: undefined,
+        appDevStackBackendUrl: undefined,
+        appDevStackBackendBearerToken: undefined,
+        appDevStackBackendOidcTokenUrl: undefined,
+        appDevStackBackendOidcClientId: undefined,
+        appDevStackBackendOidcClientSecret: undefined,
         autoBootstrapProjectFromCwd: false,
         logWebSocketEvents: true,
         tailscaleServeEnabled: false,
         tailscaleServePort: 443,
       });
+    }),
+  );
+
+  it.effect("reads app dev stack backend config from the canonical server env", () =>
+    Effect.gen(function* () {
+      const { join } = yield* Path.Path;
+      const baseDir = join(NodeOS.tmpdir(), "t3-cli-config-app-dev-stack");
+      const backendUrl = new URL("https://api-code.nightingale-ai.com");
+      const backendBearerToken = "backend-token";
+      const derivedPaths = yield* deriveServerPaths(baseDir, undefined);
+
+      const resolved = yield* resolveServerConfig(
+        {
+          mode: Option.some("web"),
+          port: Option.some(3773),
+          host: Option.none(),
+          baseDir: Option.some(baseDir),
+          cwd: Option.none(),
+          devUrl: Option.none(),
+          noBrowser: Option.none(),
+          bootstrapFd: Option.none(),
+          autoBootstrapProjectFromCwd: Option.none(),
+          logWebSocketEvents: Option.none(),
+          tailscaleServeEnabled: Option.none(),
+          tailscaleServePort: Option.none(),
+        },
+        Option.none(),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({
+                env: {
+                  T3CODE_APP_DEV_STACK_BACKEND_URL: backendUrl.href,
+                  T3CODE_APP_DEV_STACK_BACKEND_BEARER_TOKEN: ` ${backendBearerToken} `,
+                },
+              }),
+            ),
+            NetService.layer,
+          ),
+        ),
+      );
+
+      const { appDevStackBackendBearerToken, ...resolvedWithoutBearerToken } = resolved;
+      if (appDevStackBackendBearerToken === undefined) {
+        assert.fail("expected app dev stack backend bearer token to be configured");
+      }
+      assert.equal(Redacted.value(appDevStackBackendBearerToken), backendBearerToken);
+      assert.equal(String(appDevStackBackendBearerToken), "<redacted>");
+
+      expect(resolvedWithoutBearerToken).toEqual({
+        logLevel: "Info",
+        ...defaultObservabilityConfig,
+        mode: "web",
+        port: 3773,
+        cwd: process.cwd(),
+        baseDir,
+        ...derivedPaths,
+        host: undefined,
+        staticDir: resolved.staticDir,
+        devUrl: undefined,
+        noBrowser: false,
+        startupPresentation: "browser",
+        desktopBootstrapToken: undefined,
+        appDevStackBackendUrl: backendUrl,
+        appDevStackBackendOidcTokenUrl: undefined,
+        appDevStackBackendOidcClientId: undefined,
+        appDevStackBackendOidcClientSecret: undefined,
+        autoBootstrapProjectFromCwd: true,
+        logWebSocketEvents: false,
+        tailscaleServeEnabled: false,
+        tailscaleServePort: 443,
+      });
+    }),
+  );
+
+  it.effect("derives app dev stack OIDC service credentials from CODE_OIDC env", () =>
+    Effect.gen(function* () {
+      const { join } = yield* Path.Path;
+      const baseDir = join(NodeOS.tmpdir(), "t3-cli-config-app-dev-stack-oidc");
+      const backendUrl = new URL("https://api-code-dev.nightingale-ai.com");
+      const issuer = new URL("https://auth-code-dev.nightingale-ai.com/realms/code");
+      const clientSecret = "client-secret";
+
+      const resolved = yield* resolveServerConfig(
+        {
+          mode: Option.some("web"),
+          port: Option.some(3773),
+          host: Option.none(),
+          baseDir: Option.some(baseDir),
+          cwd: Option.none(),
+          devUrl: Option.none(),
+          noBrowser: Option.none(),
+          bootstrapFd: Option.none(),
+          autoBootstrapProjectFromCwd: Option.none(),
+          logWebSocketEvents: Option.none(),
+          tailscaleServeEnabled: Option.none(),
+          tailscaleServePort: Option.none(),
+        },
+        Option.none(),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({
+                env: {
+                  T3CODE_APP_DEV_STACK_BACKEND_URL: backendUrl.href,
+                  CODE_OIDC_ISSUER: issuer.href,
+                  CODE_OIDC_CLIENT_ID: "cortex-t3code",
+                  CODE_OIDC_CLIENT_SECRET: ` ${clientSecret} `,
+                },
+              }),
+            ),
+            NetService.layer,
+          ),
+        ),
+      );
+
+      assert.equal(resolved.appDevStackBackendUrl?.href, backendUrl.href);
+      assert.equal(
+        resolved.appDevStackBackendOidcTokenUrl?.href,
+        `${issuer.href.replace(/\/+$/u, "")}/protocol/openid-connect/token`,
+      );
+      assert.equal(resolved.appDevStackBackendOidcClientId, "cortex-t3code");
+      if (resolved.appDevStackBackendOidcClientSecret === undefined) {
+        assert.fail("expected app dev stack OIDC client secret to be configured");
+      }
+      assert.equal(Redacted.value(resolved.appDevStackBackendOidcClientSecret), clientSecret);
+      assert.equal(String(resolved.appDevStackBackendOidcClientSecret), "<redacted>");
     }),
   );
 
@@ -180,6 +315,11 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         noBrowser: true,
         startupPresentation: "browser",
         desktopBootstrapToken: undefined,
+        appDevStackBackendUrl: undefined,
+        appDevStackBackendBearerToken: undefined,
+        appDevStackBackendOidcTokenUrl: undefined,
+        appDevStackBackendOidcClientId: undefined,
+        appDevStackBackendOidcClientSecret: undefined,
         autoBootstrapProjectFromCwd: true,
         logWebSocketEvents: true,
         tailscaleServeEnabled: true,
@@ -249,6 +389,11 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         noBrowser: false,
         startupPresentation: "browser",
         desktopBootstrapToken: "desktop-bootstrap-token",
+        appDevStackBackendUrl: undefined,
+        appDevStackBackendBearerToken: undefined,
+        appDevStackBackendOidcTokenUrl: undefined,
+        appDevStackBackendOidcClientId: undefined,
+        appDevStackBackendOidcClientSecret: undefined,
         autoBootstrapProjectFromCwd: false,
         logWebSocketEvents: false,
         tailscaleServeEnabled: false,
@@ -323,6 +468,11 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         noBrowser: true,
         startupPresentation: "browser",
         desktopBootstrapToken: "desktop-token",
+        appDevStackBackendUrl: undefined,
+        appDevStackBackendBearerToken: undefined,
+        appDevStackBackendOidcTokenUrl: undefined,
+        appDevStackBackendOidcClientId: undefined,
+        appDevStackBackendOidcClientSecret: undefined,
         autoBootstrapProjectFromCwd: false,
         logWebSocketEvents: false,
         tailscaleServeEnabled: false,
@@ -448,6 +598,11 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         noBrowser: true,
         startupPresentation: "browser",
         desktopBootstrapToken: "desktop-token",
+        appDevStackBackendUrl: undefined,
+        appDevStackBackendBearerToken: undefined,
+        appDevStackBackendOidcTokenUrl: undefined,
+        appDevStackBackendOidcClientId: undefined,
+        appDevStackBackendOidcClientSecret: undefined,
         autoBootstrapProjectFromCwd: true,
         logWebSocketEvents: true,
         tailscaleServeEnabled: false,
@@ -517,6 +672,11 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         noBrowser: true,
         startupPresentation: "browser",
         desktopBootstrapToken: undefined,
+        appDevStackBackendUrl: undefined,
+        appDevStackBackendBearerToken: undefined,
+        appDevStackBackendOidcTokenUrl: undefined,
+        appDevStackBackendOidcClientId: undefined,
+        appDevStackBackendOidcClientSecret: undefined,
         autoBootstrapProjectFromCwd: false,
         logWebSocketEvents: false,
         tailscaleServeEnabled: false,
@@ -580,6 +740,11 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         noBrowser: true,
         startupPresentation: "headless",
         desktopBootstrapToken: undefined,
+        appDevStackBackendUrl: undefined,
+        appDevStackBackendBearerToken: undefined,
+        appDevStackBackendOidcTokenUrl: undefined,
+        appDevStackBackendOidcClientId: undefined,
+        appDevStackBackendOidcClientSecret: undefined,
         autoBootstrapProjectFromCwd: false,
         logWebSocketEvents: false,
         tailscaleServeEnabled: false,

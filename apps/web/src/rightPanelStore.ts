@@ -23,6 +23,7 @@ export const RIGHT_PANEL_KINDS = [
   "file",
   "preview",
   "terminal",
+  "app-dev-stack",
 ] as const;
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
 
@@ -39,6 +40,7 @@ export type RightPanelSurface =
     }
   | { id: "diff"; kind: "diff" }
   | { id: "files"; kind: "files" }
+  | { id: "app-dev-stack"; kind: "app-dev-stack" }
   | {
       id: `file:${string}`;
       kind: "file";
@@ -51,7 +53,7 @@ export type RightPanelSurface =
   | { id: "logs"; kind: "logs" };
 
 const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
-const RIGHT_PANEL_STORAGE_VERSION = 8;
+const RIGHT_PANEL_STORAGE_VERSION = 9;
 
 export interface ThreadRightPanelState {
   isOpen: boolean;
@@ -101,6 +103,8 @@ const singletonSurface = (
       return { id: "diff", kind };
     case "files":
       return { id: "files", kind };
+    case "app-dev-stack":
+      return { id: "app-dev-stack", kind };
     case "plan":
       return { id: "plan", kind };
     case "review":

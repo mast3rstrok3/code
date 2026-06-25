@@ -47,6 +47,10 @@
       "types": "./src/state/assets.ts",
       "default": "./src/state/assets.ts"
     },
+    "./state/app-dev-stacks": {
+      "types": "./src/state/appDevStacks.ts",
+      "default": "./src/state/appDevStacks.ts"
+    },
     "./state/connections": {
       "types": "./src/state/connections.ts",
       "default": "./src/state/connections.ts"

@@ -62,6 +62,7 @@ import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/uns
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
+import * as AppDevStackManager from "./appDevStack/AppDevStackManager.ts";
 import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
@@ -340,6 +341,13 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.previewAutomationRespond, AuthOrchestrationOperateScope],
   [WS_METHODS.previewAutomationReportOwner, AuthOrchestrationOperateScope],
   [WS_METHODS.previewAutomationClearOwner, AuthOrchestrationOperateScope],
+  [WS_METHODS.appDevStackStatus, AuthOrchestrationReadScope],
+  [WS_METHODS.appDevStackList, AuthOrchestrationReadScope],
+  [WS_METHODS.appDevStackGetByWorktree, AuthOrchestrationReadScope],
+  [WS_METHODS.appDevStackGet, AuthOrchestrationReadScope],
+  [WS_METHODS.appDevStackAutoCreate, AuthOrchestrationOperateScope],
+  [WS_METHODS.appDevStackStop, AuthOrchestrationOperateScope],
+  [WS_METHODS.appDevStackDelete, AuthOrchestrationOperateScope],
   [WS_METHODS.subscribePreviewEvents, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeDiscoveredLocalServers, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeServerConfig, AuthOrchestrationReadScope],
@@ -404,6 +412,7 @@ const makeWsRpcLayer = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
       const terminalManager = yield* TerminalManager.TerminalManager;
       const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
       const previewManager = yield* PreviewManager.PreviewManager;
+      const appDevStackManager = yield* AppDevStackManager.AppDevStackManager;
       const portDiscovery = yield* PortScanner.PortDiscovery;
       const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
@@ -1672,6 +1681,38 @@ const makeWsRpcLayer = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
             previewAutomationBroker.clearOwner(input),
             { "rpc.aggregate": "preview-automation" },
           ),
+        [WS_METHODS.appDevStackStatus]: (_input) =>
+          observeRpcEffect(WS_METHODS.appDevStackStatus, appDevStackManager.status, {
+            "rpc.aggregate": "app-dev-stack",
+          }),
+        [WS_METHODS.appDevStackList]: (input) =>
+          observeRpcEffect(WS_METHODS.appDevStackList, appDevStackManager.list(input), {
+            "rpc.aggregate": "app-dev-stack",
+          }),
+        [WS_METHODS.appDevStackGetByWorktree]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.appDevStackGetByWorktree,
+            appDevStackManager.getByWorktree(input),
+            {
+              "rpc.aggregate": "app-dev-stack",
+            },
+          ),
+        [WS_METHODS.appDevStackGet]: (input) =>
+          observeRpcEffect(WS_METHODS.appDevStackGet, appDevStackManager.get(input), {
+            "rpc.aggregate": "app-dev-stack",
+          }),
+        [WS_METHODS.appDevStackAutoCreate]: (input) =>
+          observeRpcEffect(WS_METHODS.appDevStackAutoCreate, appDevStackManager.autoCreate(input), {
+            "rpc.aggregate": "app-dev-stack",
+          }),
+        [WS_METHODS.appDevStackStop]: (input) =>
+          observeRpcEffect(WS_METHODS.appDevStackStop, appDevStackManager.stop(input), {
+            "rpc.aggregate": "app-dev-stack",
+          }),
+        [WS_METHODS.appDevStackDelete]: (input) =>
+          observeRpcEffect(WS_METHODS.appDevStackDelete, appDevStackManager.delete(input), {
+            "rpc.aggregate": "app-dev-stack",
+          }),
         [WS_METHODS.subscribePreviewEvents]: (_input) =>
           observeRpcStream(WS_METHODS.subscribePreviewEvents, previewManager.events, {
             "rpc.aggregate": "preview",

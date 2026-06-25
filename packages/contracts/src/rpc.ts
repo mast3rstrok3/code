@@ -113,6 +113,19 @@ import {
   PreviewAutomationResponse,
 } from "./previewAutomation.ts";
 import {
+  AppDevStackAutoCreateInput,
+  AppDevStackAutoCreateResult,
+  AppDevStackBackendStatus,
+  AppDevStackByWorktreeInput,
+  AppDevStackByWorktreeResult,
+  AppDevStackDeleteResult,
+  AppDevStackError,
+  AppDevStackGetInput,
+  AppDevStackListInput,
+  AppDevStackListResult,
+  AppDevStack,
+} from "./appDevStack.ts";
+import {
   ServerConfigStreamEvent,
   ServerConfig,
   ServerProviderUpdateError,
@@ -199,6 +212,15 @@ export const WS_METHODS = {
   previewAutomationRespond: "previewAutomation.respond",
   previewAutomationReportOwner: "previewAutomation.reportOwner",
   previewAutomationClearOwner: "previewAutomation.clearOwner",
+
+  // App dev stack methods
+  appDevStackStatus: "appDevStack.status",
+  appDevStackList: "appDevStack.list",
+  appDevStackGetByWorktree: "appDevStack.getByWorktree",
+  appDevStackGet: "appDevStack.get",
+  appDevStackAutoCreate: "appDevStack.autoCreate",
+  appDevStackStop: "appDevStack.stop",
+  appDevStackDelete: "appDevStack.delete",
 
   // Server meta
   serverGetConfig: "server.getConfig",
@@ -579,6 +601,48 @@ export const WsPreviewAutomationClearOwnerRpc = Rpc.make(WS_METHODS.previewAutom
   error: Schema.Union([PreviewAutomationError, EnvironmentAuthorizationError]),
 });
 
+export const WsAppDevStackStatusRpc = Rpc.make(WS_METHODS.appDevStackStatus, {
+  payload: Schema.Struct({}),
+  success: AppDevStackBackendStatus,
+  error: EnvironmentAuthorizationError,
+});
+
+export const WsAppDevStackListRpc = Rpc.make(WS_METHODS.appDevStackList, {
+  payload: AppDevStackListInput,
+  success: AppDevStackListResult,
+  error: Schema.Union([AppDevStackError, EnvironmentAuthorizationError]),
+});
+
+export const WsAppDevStackGetByWorktreeRpc = Rpc.make(WS_METHODS.appDevStackGetByWorktree, {
+  payload: AppDevStackByWorktreeInput,
+  success: AppDevStackByWorktreeResult,
+  error: Schema.Union([AppDevStackError, EnvironmentAuthorizationError]),
+});
+
+export const WsAppDevStackGetRpc = Rpc.make(WS_METHODS.appDevStackGet, {
+  payload: AppDevStackGetInput,
+  success: AppDevStack,
+  error: Schema.Union([AppDevStackError, EnvironmentAuthorizationError]),
+});
+
+export const WsAppDevStackAutoCreateRpc = Rpc.make(WS_METHODS.appDevStackAutoCreate, {
+  payload: AppDevStackAutoCreateInput,
+  success: AppDevStackAutoCreateResult,
+  error: Schema.Union([AppDevStackError, EnvironmentAuthorizationError]),
+});
+
+export const WsAppDevStackStopRpc = Rpc.make(WS_METHODS.appDevStackStop, {
+  payload: AppDevStackGetInput,
+  success: AppDevStack,
+  error: Schema.Union([AppDevStackError, EnvironmentAuthorizationError]),
+});
+
+export const WsAppDevStackDeleteRpc = Rpc.make(WS_METHODS.appDevStackDelete, {
+  payload: AppDevStackGetInput,
+  success: AppDevStackDeleteResult,
+  error: Schema.Union([AppDevStackError, EnvironmentAuthorizationError]),
+});
+
 export const WsSubscribePreviewEventsRpc = Rpc.make(WS_METHODS.subscribePreviewEvents, {
   payload: Schema.Struct({}),
   success: PreviewEvent,
@@ -745,6 +809,13 @@ export const WsRpcGroup = RpcGroup.make(
   WsPreviewAutomationRespondRpc,
   WsPreviewAutomationReportOwnerRpc,
   WsPreviewAutomationClearOwnerRpc,
+  WsAppDevStackStatusRpc,
+  WsAppDevStackListRpc,
+  WsAppDevStackGetByWorktreeRpc,
+  WsAppDevStackGetRpc,
+  WsAppDevStackAutoCreateRpc,
+  WsAppDevStackStopRpc,
+  WsAppDevStackDeleteRpc,
   WsSubscribePreviewEventsRpc,
   WsSubscribeDiscoveredLocalServersRpc,
   WsSubscribeServerConfigRpc,
