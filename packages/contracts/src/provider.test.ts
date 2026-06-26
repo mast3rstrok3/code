@@ -41,6 +41,7 @@ describe("ProviderSessionStartInput", () => {
     expect(parsed.modelSelection?.model).toBe("gpt-5.3-codex");
     expect(getOptionValue(parsed.modelSelection?.options, "reasoningEffort")).toBe("high");
     expect(getOptionValue(parsed.modelSelection?.options, "fastMode")).toBe(true);
+    expect(parsed.workflowPromptId).toBeUndefined();
   });
 
   it("rejects payloads without runtime mode", () => {
@@ -112,6 +113,17 @@ describe("ProviderSessionStartInput", () => {
     expect(parsed.providerInstanceId).toBe("ollama_local");
     expect(parsed.modelSelection?.instanceId).toBe("ollama_local");
   });
+
+  it("accepts optional workflow prompt metadata", () => {
+    const parsed = decodeProviderSessionStartInput({
+      threadId: "thread-1",
+      provider: "codex",
+      runtimeMode: "full-access",
+      workflowPromptId: "implementation.browser-dev-review.codex",
+    });
+
+    expect(parsed.workflowPromptId).toBe("implementation.browser-dev-review.codex");
+  });
 });
 
 describe("ProviderSendTurnInput", () => {
@@ -132,6 +144,7 @@ describe("ProviderSendTurnInput", () => {
     expect(parsed.modelSelection?.model).toBe("gpt-5.3-codex");
     expect(getOptionValue(parsed.modelSelection?.options, "reasoningEffort")).toBe("xhigh");
     expect(getOptionValue(parsed.modelSelection?.options, "fastMode")).toBe(true);
+    expect(parsed.workflowPromptId).toBeUndefined();
   });
 
   it("accepts claude modelSelection including ultrathink", () => {
@@ -150,6 +163,16 @@ describe("ProviderSendTurnInput", () => {
     expect(parsed.modelSelection?.instanceId).toBe("claudeAgent");
     expect(getOptionValue(parsed.modelSelection?.options, "effort")).toBe("ultrathink");
     expect(getOptionValue(parsed.modelSelection?.options, "fastMode")).toBe(true);
+  });
+
+  it("accepts optional workflow prompt metadata", () => {
+    const parsed = decodeProviderSendTurnInput({
+      threadId: "thread-1",
+      input: "review in browser",
+      workflowPromptId: "implementation.browser-dev-review.codex",
+    });
+
+    expect(parsed.workflowPromptId).toBe("implementation.browser-dev-review.codex");
   });
 });
 

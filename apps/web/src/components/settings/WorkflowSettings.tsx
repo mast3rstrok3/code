@@ -143,7 +143,7 @@ function ImplementationWorkflowSettingsSection() {
       <SettingsRow
         title="Auto-start app-dev stack"
         description="Start the orchestrator worktree app-dev stack automatically when an Implementation Workflow run launches."
-        status="Browser QA still blocks completion if the stack or Chrome tooling is unavailable."
+        status="The Browser Dev Review QA stage still blocks completion if the stack or Chrome tooling is unavailable."
         control={
           <Switch
             checked={autoStartAppDevStack}

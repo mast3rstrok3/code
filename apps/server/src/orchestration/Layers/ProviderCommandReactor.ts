@@ -42,6 +42,7 @@ import {
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
+import { isBrowserDevReviewWorkflowPromptId } from "../../provider/WorkflowPromptRegistry.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 
@@ -214,6 +215,7 @@ const make = Effect.gen(function* () {
     );
 
   const threadModelSelections = new Map<string, ModelSelection>();
+  const threadWorkflowPromptIds = new Map<string, string | undefined>();
 
   const appendProviderFailureActivity = (input: {
     readonly threadId: ThreadId;
@@ -355,6 +357,7 @@ const make = Effect.gen(function* () {
     createdAt: string,
     options?: {
       readonly modelSelection?: ModelSelection;
+      readonly workflowPromptId?: string;
     },
   ) {
     const thread = yield* resolveThread(threadId);
@@ -393,6 +396,7 @@ const make = Effect.gen(function* () {
         ? activeSession.providerInstanceId
         : thread.modelSelection.instanceId;
     const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
+    const desiredWorkflowPromptId = options?.workflowPromptId;
     const desiredInstanceId = desiredModelSelection.instanceId;
     const currentInfo = yield* providerService.getInstanceInfo(currentInstanceId).pipe(
       Effect.mapError(
@@ -484,6 +488,9 @@ const make = Effect.gen(function* () {
         modelSelection: desiredModelSelection,
         ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
         runtimeMode: desiredRuntimeMode,
+        ...(desiredWorkflowPromptId !== undefined
+          ? { workflowPromptId: desiredWorkflowPromptId }
+          : {}),
       });
 
     const bindSessionToThread = (session: ProviderSession) =>
@@ -510,6 +517,7 @@ const make = Effect.gen(function* () {
           },
           createdAt,
         });
+        threadWorkflowPromptIds.set(threadId, desiredWorkflowPromptId);
       });
 
     const existingSessionThreadId =
@@ -531,13 +539,18 @@ const make = Effect.gen(function* () {
         preferredProvider === "claudeAgent" &&
         requestedModelSelection !== undefined &&
         !Equal.equals(previousModelSelection, requestedModelSelection);
+      const previousWorkflowPromptId = threadWorkflowPromptIds.get(threadId);
+      const browserDevReviewScopeChanged =
+        isBrowserDevReviewWorkflowPromptId(previousWorkflowPromptId) !==
+        isBrowserDevReviewWorkflowPromptId(desiredWorkflowPromptId);
 
       if (
         !runtimeModeChanged &&
         !cwdChanged &&
         !instanceChanged &&
         !shouldRestartForModelChange &&
-        !shouldRestartForModelSelectionChange
+        !shouldRestartForModelSelectionChange &&
+        !browserDevReviewScopeChanged
       ) {
         return existingSessionThreadId;
       }
@@ -562,6 +575,9 @@ const make = Effect.gen(function* () {
         instanceChanged,
         shouldRestartForModelChange,
         shouldRestartForModelSelectionChange,
+        browserDevReviewScopeChanged,
+        previousWorkflowPromptId,
+        desiredWorkflowPromptId,
         hasResumeCursor: resumeCursor !== undefined,
       });
       const restartedSession = yield* startProviderSession(
@@ -590,6 +606,7 @@ const make = Effect.gen(function* () {
     readonly attachments?: ReadonlyArray<ChatAttachment>;
     readonly modelSelection?: ModelSelection;
     readonly interactionMode?: ProviderInteractionMode;
+    readonly workflowPromptId?: string;
     readonly createdAt: string;
   }) {
     const thread = yield* resolveThread(input.threadId);
@@ -598,11 +615,10 @@ const make = Effect.gen(function* () {
         new Error(`Thread '${input.threadId}' was not found in read model.`),
       );
     }
-    yield* ensureSessionForThread(
-      input.threadId,
-      input.createdAt,
-      input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {},
-    );
+    yield* ensureSessionForThread(input.threadId, input.createdAt, {
+      ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
+      ...(input.workflowPromptId !== undefined ? { workflowPromptId: input.workflowPromptId } : {}),
+    });
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
     }
@@ -642,6 +658,7 @@ const make = Effect.gen(function* () {
       ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
       ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
+      ...(input.workflowPromptId !== undefined ? { workflowPromptId: input.workflowPromptId } : {}),
     };
   });
 
@@ -846,6 +863,9 @@ const make = Effect.gen(function* () {
         ? { modelSelection: event.payload.modelSelection }
         : {}),
       interactionMode: event.payload.interactionMode,
+      ...(event.payload.workflowPromptId !== undefined
+        ? { workflowPromptId: event.payload.workflowPromptId }
+        : {}),
       createdAt: event.payload.createdAt,
     }).pipe(
       Effect.map(Option.some),

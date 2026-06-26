@@ -1,6 +1,8 @@
 import type { ProviderInteractionMode, WorkflowPromptContract } from "@t3tools/contracts";
 import { isPlanningWorkflowInteractionMode } from "@t3tools/contracts";
 
+import { CHROME_DEVTOOLS_MCP_ASSOCIATED_DOC_CONTENT } from "./ChromeDevtoolsMcp.ts";
+
 export const WORKFLOW_PROMPT_IDS = {
   workflowAgentCommunications: "workflow.agent-communications",
   planningGrillStageCodex: "planning.grill-stage.codex",
@@ -215,6 +217,14 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     title: "4. Browser Dev Review",
     description: "Tests the app-dev stack and creates concrete Dev Review findings.",
     promptText: IMPLEMENTATION_BROWSER_DEV_REVIEW_PROMPT,
+    associatedDocs: [
+      {
+        id: "implementation.browser-dev-review.chrome-devtools-mcp",
+        path: "chrome-devtools-mcp.md",
+        title: "Chrome DevTools MCP",
+        content: CHROME_DEVTOOLS_MCP_ASSOCIATED_DOC_CONTENT,
+      },
+    ],
   },
   {
     id: WORKFLOW_PROMPT_IDS.yoloGrillStageCodex,
@@ -248,6 +258,16 @@ export function resolveWorkflowPromptContract(id: string): WorkflowPromptContrac
   return cloneWorkflowPromptContract(contract);
 }
 
+export function isRegisteredWorkflowPromptId(id: string): boolean {
+  return WORKFLOW_PROMPT_REGISTRY.some((entry) => entry.id === id);
+}
+
+export function isBrowserDevReviewWorkflowPromptId(
+  workflowPromptId: string | null | undefined,
+): boolean {
+  return workflowPromptId === WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex;
+}
+
 function renderAssociatedDoc(doc: NonNullable<WorkflowPromptContract["associatedDocs"]>[number]) {
   return `<associated-doc id="${doc.id}" path="${doc.path}" title="${doc.title}">
 ${doc.content}
@@ -268,7 +288,10 @@ export function resolveWorkflowPromptId(input: {
   readonly interactionMode?: ProviderInteractionMode | undefined;
   readonly workflowPromptId?: string | undefined;
 }): string | undefined {
-  if (input.workflowPromptId !== undefined) {
+  if (
+    input.workflowPromptId !== undefined &&
+    isRegisteredWorkflowPromptId(input.workflowPromptId)
+  ) {
     return input.workflowPromptId;
   }
   switch (input.interactionMode) {

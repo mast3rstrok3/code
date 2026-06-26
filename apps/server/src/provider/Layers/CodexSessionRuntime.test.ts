@@ -9,9 +9,11 @@ import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexRpc from "effect-codex-app-server/rpc";
 
 import {
+  CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS,
   CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
   CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
 } from "../CodexDeveloperInstructions.ts";
+import { WORKFLOW_PROMPT_IDS } from "../WorkflowPromptRegistry.ts";
 import {
   buildTurnStartParams,
   hasConfiguredMcpServer,
@@ -194,18 +196,65 @@ describe("buildTurnStartParams", () => {
   });
 });
 
-describe("T3 browser developer instructions", () => {
-  it("prefers the product-native preview tools in both collaboration modes", () => {
+describe("Codex developer instructions browser scoping", () => {
+  it("keeps browser tooling out of default and plan collaboration modes", () => {
     for (const instructions of [
       CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
       CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
     ]) {
-      NodeAssert.match(instructions, /t3-code/);
-      NodeAssert.match(instructions, /preview_status/);
-      NodeAssert.match(instructions, /preview_open/);
-      NodeAssert.match(instructions, /Do not switch to global browser skills/);
+      NodeAssert.doesNotMatch(instructions, /Chrome DevTools MCP/);
+      NodeAssert.doesNotMatch(instructions, /t3-code/);
+      NodeAssert.doesNotMatch(instructions, /preview_status/);
+      NodeAssert.doesNotMatch(instructions, /Do not switch to global browser skills/);
     }
   });
+
+  it("defines browser QA developer instructions for Browser Dev Review only", () => {
+    NodeAssert.match(CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS, /Chrome DevTools MCP/);
+    NodeAssert.match(CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS, /t3-code/);
+    NodeAssert.match(CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS, /preview_status/);
+    NodeAssert.match(CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS, /Browser Dev Review QA role only/);
+  });
+});
+
+describe("Codex workflow prompt browser scoping", () => {
+  it.effect("omits browser tooling from implementation orchestrator turns", () =>
+    Effect.gen(function* () {
+      const params = yield* buildTurnStartParams({
+        threadId: "provider-thread-1",
+        runtimeMode: "full-access",
+        prompt: "Start implementation workflow",
+        model: "gpt-5.3-codex",
+        interactionMode: "implementation-workflow",
+        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationOrchestratorPlanningCodex,
+      });
+
+      const instructions = params.collaborationMode?.settings.developer_instructions ?? "";
+      NodeAssert.match(instructions, /Implementation Workflow: Orchestrator Start/);
+      NodeAssert.doesNotMatch(instructions, /Chrome DevTools MCP/);
+      NodeAssert.doesNotMatch(instructions, /preview_status/);
+    }),
+  );
+
+  it.effect("includes browser tooling only for Browser Dev Review turns", () =>
+    Effect.gen(function* () {
+      const params = yield* buildTurnStartParams({
+        threadId: "provider-thread-1",
+        runtimeMode: "full-access",
+        prompt: "Review in browser",
+        model: "gpt-5.3-codex",
+        interactionMode: "implementation-workflow",
+        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
+      });
+
+      const instructions = params.collaborationMode?.settings.developer_instructions ?? "";
+      NodeAssert.match(instructions, /Browser Dev Review QA tools/);
+      NodeAssert.match(instructions, /Chrome DevTools MCP/);
+      NodeAssert.match(instructions, /preview_status/);
+      NodeAssert.match(instructions, /chrome-devtools-mcp\.md/);
+      NodeAssert.match(instructions, /npx -y chrome-devtools-mcp@latest/);
+    }),
+  );
 });
 
 describe("hasConfiguredMcpServer", () => {

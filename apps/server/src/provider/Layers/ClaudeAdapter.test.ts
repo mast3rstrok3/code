@@ -14,6 +14,7 @@ import type {
 import {
   ApprovalRequestId,
   ClaudeSettings,
+  EnvironmentId,
   ProviderDriverKind,
   ProviderItemId,
   ProviderRuntimeEvent,
@@ -34,9 +35,11 @@ import * as TestClock from "effect/testing/TestClock";
 
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderAdapterProcessError, ProviderAdapterValidationError } from "../Errors.ts";
 import type { ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
+import { WORKFLOW_PROMPT_IDS } from "../WorkflowPromptRegistry.ts";
 import { makeClaudeAdapter, type ClaudeAdapterLiveOptions } from "./ClaudeAdapter.ts";
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 
@@ -389,6 +392,71 @@ describe("ClaudeAdapterLive", () => {
       const createInput = harness.getLastCreateQueryInput();
       assert.equal(createInput?.options.permissionMode, "bypassPermissions");
       assert.equal(createInput?.options.allowDangerouslySkipPermissions, true);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("omits browser MCP servers for ordinary implementation sessions", () => {
+    const harness = makeHarness();
+    const threadId = ThreadId.make("thread-claude-mcp-default");
+    return Effect.gen(function* () {
+      McpProviderSession.setMcpProviderSession({
+        environmentId: EnvironmentId.make("env-1"),
+        threadId,
+        providerSessionId: "provider-session-1",
+        providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+        endpoint: "http://127.0.0.1/mcp",
+        authorizationHeader: "Bearer token",
+      });
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationOrchestratorPlanningCodex,
+      });
+
+      const createInput = harness.getLastCreateQueryInput();
+      assert.equal(createInput?.options.mcpServers, undefined);
+      McpProviderSession.clearMcpProviderSession(threadId);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("includes browser MCP servers only for Browser Dev Review sessions", () => {
+    const harness = makeHarness();
+    const threadId = ThreadId.make("thread-claude-mcp-browser-review");
+    return Effect.gen(function* () {
+      McpProviderSession.setMcpProviderSession({
+        environmentId: EnvironmentId.make("env-1"),
+        threadId,
+        providerSessionId: "provider-session-2",
+        providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+        endpoint: "http://127.0.0.1/mcp",
+        authorizationHeader: "Bearer token",
+      });
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
+      });
+
+      const mcpServers = harness.getLastCreateQueryInput()?.options.mcpServers as
+        | Record<string, { readonly command?: string; readonly args?: ReadonlyArray<string> }>
+        | undefined;
+      assert.equal(mcpServers?.["chrome-devtools"]?.command, "npx");
+      assert.equal(mcpServers?.["chrome-devtools"]?.args?.[1], "chrome-devtools-mcp@latest");
+      assert.equal(
+        (mcpServers?.["t3-code"] as { readonly url?: string } | undefined)?.url,
+        "http://127.0.0.1/mcp",
+      );
+      McpProviderSession.clearMcpProviderSession(threadId);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

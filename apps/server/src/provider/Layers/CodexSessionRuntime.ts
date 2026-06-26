@@ -39,10 +39,15 @@ import * as EffectCodexSchema from "effect-codex-app-server/schema";
 import { buildCodexInitializeParams } from "./CodexProvider.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
 import {
+  CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS,
   CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
   CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
 } from "../CodexDeveloperInstructions.ts";
-import { resolveWorkflowSystemInstructions } from "../WorkflowPromptRegistry.ts";
+import {
+  isBrowserDevReviewWorkflowPromptId,
+  resolveWorkflowPromptId,
+  resolveWorkflowSystemInstructions,
+} from "../WorkflowPromptRegistry.ts";
 const decodeV2TurnStartResponse = Schema.decodeUnknownEffect(EffectCodexSchema.V2TurnStartResponse);
 
 const PROVIDER = ProviderDriverKind.make("codex");
@@ -121,6 +126,7 @@ export interface CodexSessionRuntimeSendTurnInput {
   readonly serviceTier?: CodexServiceTier | undefined;
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort | undefined;
   readonly interactionMode?: ProviderInteractionMode;
+  readonly workflowPromptId?: string;
 }
 
 export interface CodexThreadTurnSnapshot {
@@ -326,15 +332,20 @@ function runtimeModeToTurnSandboxPolicy(
 
 function buildCodexCollaborationMode(input: {
   readonly interactionMode?: ProviderInteractionMode;
+  readonly workflowPromptId?: string;
   readonly model?: string;
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort;
 }): EffectCodexSchema.V2TurnStartParams__CollaborationMode | undefined {
-  if (input.interactionMode === undefined) {
+  const workflowPromptId = resolveWorkflowPromptId({
+    interactionMode: input.interactionMode,
+    workflowPromptId: input.workflowPromptId,
+  });
+  if (input.interactionMode === undefined && workflowPromptId === undefined) {
     return undefined;
   }
   const model = normalizeCodexModelSlug(input.model) ?? DEFAULT_MODEL;
   const mode: "default" | "plan" =
-    input.interactionMode === "implementation-workflow"
+    input.interactionMode === undefined || input.interactionMode === "implementation-workflow"
       ? "default"
       : isPlanningWorkflowInteractionMode(input.interactionMode)
         ? "plan"
@@ -343,13 +354,17 @@ function buildCodexCollaborationMode(input: {
     mode === "plan"
       ? CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS
       : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS;
+  const scopedDeveloperInstructions = isBrowserDevReviewWorkflowPromptId(input.workflowPromptId)
+    ? `${baseDeveloperInstructions}\n\n${CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS}`
+    : baseDeveloperInstructions;
   const workflowInstructions = resolveWorkflowSystemInstructions({
     interactionMode: input.interactionMode,
+    ...(workflowPromptId !== undefined ? { workflowPromptId } : {}),
   });
   const developerInstructions =
     workflowInstructions === undefined
-      ? baseDeveloperInstructions
-      : `${baseDeveloperInstructions}\n\n${workflowInstructions}`;
+      ? scopedDeveloperInstructions
+      : `${scopedDeveloperInstructions}\n\n${workflowInstructions}`;
   return {
     mode,
     settings: {
@@ -372,6 +387,7 @@ export function buildTurnStartParams(input: {
   readonly serviceTier?: CodexServiceTier;
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort;
   readonly interactionMode?: ProviderInteractionMode;
+  readonly workflowPromptId?: string;
 }): Effect.Effect<
   CodexTurnStartParamsWithCollaborationMode,
   CodexErrors.CodexAppServerProtocolParseError
@@ -390,6 +406,7 @@ export function buildTurnStartParams(input: {
   const config = runtimeModeToThreadConfig(input.runtimeMode);
   const collaborationMode = buildCodexCollaborationMode({
     ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
+    ...(input.workflowPromptId ? { workflowPromptId: input.workflowPromptId } : {}),
     ...(input.model ? { model: input.model } : {}),
     ...(input.effort ? { effort: input.effort } : {}),
   });
@@ -1302,6 +1319,7 @@ export const makeCodexSessionRuntime = (
             ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
             ...(input.effort ? { effort: input.effort } : {}),
             ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
+            ...(input.workflowPromptId ? { workflowPromptId: input.workflowPromptId } : {}),
           });
           const rawResponse = yield* client.raw.request("turn/start", params);
           const response = yield* decodeV2TurnStartResponse(rawResponse).pipe(

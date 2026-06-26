@@ -73,6 +73,10 @@ import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
 import {
+  buildClaudeChromeDevtoolsMcpServerConfig,
+  CHROME_DEVTOOLS_MCP_SERVER_NAME,
+} from "../ChromeDevtoolsMcp.ts";
+import {
   getClaudeModelCapabilities,
   isClaudeUltracodeEffort,
   normalizeClaudeCliEffort,
@@ -89,7 +93,10 @@ import {
 } from "../Errors.ts";
 import { type ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
-import { resolveWorkflowSystemInstructions } from "../WorkflowPromptRegistry.ts";
+import {
+  isBrowserDevReviewWorkflowPromptId,
+  resolveWorkflowSystemInstructions,
+} from "../WorkflowPromptRegistry.ts";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.UnknownFromJsonString);
 const decodeUnknownJsonStringExit = Schema.decodeUnknownExit(Schema.UnknownFromJsonString);
 
@@ -909,6 +916,7 @@ function buildPromptText(
   const promptText = applyClaudePromptEffortPrefix(input.input?.trim() ?? "", promptEffort);
   const workflowInstructions = resolveWorkflowSystemInstructions({
     interactionMode: input.interactionMode,
+    workflowPromptId: input.workflowPromptId,
   });
   if (workflowInstructions === undefined) {
     return promptText;
@@ -3454,7 +3462,26 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(fastMode ? { fastMode: true } : {}),
         ...(ultracode ? { ultracode: true } : {}),
       };
-      const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
+      const browserDevReview = isBrowserDevReviewWorkflowPromptId(input.workflowPromptId);
+      const mcpSession = browserDevReview
+        ? McpProviderSession.readMcpProviderSession(input.threadId)
+        : undefined;
+      const mcpServers = browserDevReview
+        ? {
+            [CHROME_DEVTOOLS_MCP_SERVER_NAME]: buildClaudeChromeDevtoolsMcpServerConfig(),
+            ...(mcpSession
+              ? {
+                  "t3-code": {
+                    type: "http" as const,
+                    url: mcpSession.endpoint,
+                    headers: {
+                      Authorization: mcpSession.authorizationHeader,
+                    },
+                  },
+                }
+              : {}),
+          }
+        : undefined;
       const queryOptions: ClaudeQueryOptions = {
         ...(input.cwd ? { cwd: input.cwd } : {}),
         ...(apiModelId ? { model: apiModelId } : {}),
@@ -3480,19 +3507,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         env: claudeEnvironment,
         ...(input.cwd ? { additionalDirectories: [input.cwd] } : {}),
         ...(Object.keys(extraArgs).length > 0 ? { extraArgs } : {}),
-        ...(mcpSession
-          ? {
-              mcpServers: {
-                "t3-code": {
-                  type: "http",
-                  url: mcpSession.endpoint,
-                  headers: {
-                    Authorization: mcpSession.authorizationHeader,
-                  },
-                },
-              },
-            }
-          : {}),
+        ...(mcpServers ? { mcpServers } : {}),
       };
 
       yield* Effect.annotateCurrentSpan({
