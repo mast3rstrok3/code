@@ -1,10 +1,13 @@
 import {
+  DEFAULT_WORKSPACE_USER_VIEW,
   ORCHESTRATION_WS_METHODS,
   type EnvironmentId,
   type OrchestrationShellSnapshot,
   type OrchestrationShellStreamItem,
   type ServerConfig,
+  type WorkspaceUserView,
 } from "@t3tools/contracts";
+import { workspaceUserViewCacheKey } from "@t3tools/shared/model";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -45,11 +48,13 @@ function shellStatusForSnapshot(
 
 const SHELL_SYNCHRONIZATION_ERROR_MESSAGE = "Could not synchronize environment data.";
 
-export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")(function* () {
+export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")(function* (
+  userView: WorkspaceUserView = DEFAULT_WORKSPACE_USER_VIEW,
+) {
   const supervisor = yield* EnvironmentSupervisor;
   const cache = yield* EnvironmentCacheStore;
   const environmentId = supervisor.target.environmentId;
-  const cachedSnapshot = yield* cache.loadShell(environmentId).pipe(
+  const cachedSnapshot = yield* cache.loadShell(environmentId, userView).pipe(
     Effect.catch((error) =>
       Effect.logWarning("Could not load cached environment shell.").pipe(
         Effect.annotateLogs({
@@ -70,7 +75,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
   const persist = Effect.fn("EnvironmentShellState.persist")(function* (
     snapshot: OrchestrationShellSnapshot,
   ) {
-    yield* cache.saveShell(environmentId, snapshot).pipe(
+    yield* cache.saveShell(environmentId, snapshot, userView).pipe(
       Effect.catch((error) =>
         Effect.logWarning("Could not persist environment shell cache.").pipe(
           Effect.annotateLogs({
@@ -149,7 +154,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
 
   yield* subscribe(
     ORCHESTRATION_WS_METHODS.subscribeShell,
-    {},
+    { userView },
     {
       onExpectedFailure: (cause) => setStreamError(Cause.squash(cause)),
     },
@@ -171,10 +176,13 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
   return state;
 });
 
-export function shellStateChanges(environmentId: EnvironmentId) {
+export function shellStateChanges(
+  environmentId: EnvironmentId,
+  userView: WorkspaceUserView = DEFAULT_WORKSPACE_USER_VIEW,
+) {
   return followStreamInEnvironment(
     environmentId,
-    Stream.unwrap(makeEnvironmentShellState().pipe(Effect.map(SubscriptionRef.changes))),
+    Stream.unwrap(makeEnvironmentShellState(userView).pipe(Effect.map(SubscriptionRef.changes))),
   );
 }
 
@@ -294,12 +302,40 @@ export function createEnvironmentServerConfigsAtom(input: {
 
 export function createEnvironmentShellAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | EnvironmentCacheStore | R, E>,
+  options?: {
+    readonly userViewAtom?: Atom.Atom<WorkspaceUserView>;
+  },
 ) {
-  const stateAtom = Atom.family((environmentId: EnvironmentId) =>
-    runtime.atom(shellStateChanges(environmentId), {
+  const activeUserViewAtom = options?.userViewAtom;
+  const shellStateAtomInputs = new Map<
+    string,
+    { readonly environmentId: EnvironmentId; readonly userView: WorkspaceUserView }
+  >();
+  const shellStateAtomKey = (environmentId: EnvironmentId, userView: WorkspaceUserView) => {
+    const key = `${environmentId}::${workspaceUserViewCacheKey(userView)}`;
+    shellStateAtomInputs.set(key, { environmentId, userView });
+    return key;
+  };
+  const stateAtomForView = Atom.family((key: string) => {
+    const input = shellStateAtomInputs.get(key);
+    if (!input) {
+      throw new Error(`Missing shell state atom input for ${key}`);
+    }
+    return runtime.atom(shellStateChanges(input.environmentId, input.userView), {
       initialValue: EMPTY_SHELL_STATE,
-    }),
-  );
+    });
+  });
+
+  const stateAtom = (environmentId: EnvironmentId, userView?: WorkspaceUserView) => {
+    if (userView !== undefined || activeUserViewAtom === undefined) {
+      return stateAtomForView(
+        shellStateAtomKey(environmentId, userView ?? DEFAULT_WORKSPACE_USER_VIEW),
+      );
+    }
+    return Atom.make((get) =>
+      get(stateAtomForView(shellStateAtomKey(environmentId, get(activeUserViewAtom)))),
+    ).pipe(Atom.withLabel(`environment-shell-state:${environmentId}`));
+  };
 
   const stateValueAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make((get) =>

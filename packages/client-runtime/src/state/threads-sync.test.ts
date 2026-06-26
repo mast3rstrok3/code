@@ -1,4 +1,5 @@
 import {
+  DEFAULT_WORKSPACE_USER_ID,
   EnvironmentId,
   EventId,
   ORCHESTRATION_WS_METHODS,
@@ -43,6 +44,7 @@ const THREAD_ID = ThreadId.make("thread-1");
 const BASE_THREAD: OrchestrationThread = {
   id: THREAD_ID,
   projectId: ProjectId.make("project-1"),
+  ownerUserId: DEFAULT_WORKSPACE_USER_ID,
   title: "Cached thread",
   modelSelection: {
     instanceId: ProviderInstanceId.make("codex"),

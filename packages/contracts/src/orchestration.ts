@@ -21,6 +21,7 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
+import { DEFAULT_WORKSPACE_USER_ID, WorkspaceUserId, WorkspaceUserView } from "./workspaceUsers.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
@@ -354,6 +355,9 @@ export type OrchestrationLatestTurn = typeof OrchestrationLatestTurn.Type;
 export const OrchestrationThread = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
+  ownerUserId: WorkspaceUserId.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_WORKSPACE_USER_ID)),
+  ),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -400,6 +404,9 @@ export type OrchestrationProjectShell = typeof OrchestrationProjectShell.Type;
 export const OrchestrationThreadShell = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
+  ownerUserId: WorkspaceUserId.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_WORKSPACE_USER_ID)),
+  ),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -461,6 +468,21 @@ export const OrchestrationShellStreamItem = Schema.Union([
 ]);
 export type OrchestrationShellStreamItem = typeof OrchestrationShellStreamItem.Type;
 
+export const OrchestrationSubscribeShellInput = Schema.Struct({
+  userView: WorkspaceUserView.pipe(
+    Schema.withDecodingDefault(Effect.succeed({ kind: "all" as const })),
+  ),
+});
+export type OrchestrationSubscribeShellInput = typeof OrchestrationSubscribeShellInput.Type;
+
+export const OrchestrationGetArchivedShellSnapshotInput = Schema.Struct({
+  userView: WorkspaceUserView.pipe(
+    Schema.withDecodingDefault(Effect.succeed({ kind: "all" as const })),
+  ),
+});
+export type OrchestrationGetArchivedShellSnapshotInput =
+  typeof OrchestrationGetArchivedShellSnapshotInput.Type;
+
 export const OrchestrationSubscribeThreadInput = Schema.Struct({
   threadId: ThreadId,
 });
@@ -505,6 +527,9 @@ const ThreadCreateCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   projectId: ProjectId,
+  ownerUserId: WorkspaceUserId.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_WORKSPACE_USER_ID)),
+  ),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -538,6 +563,7 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   type: Schema.Literal("thread.meta.update"),
   commandId: CommandId,
   threadId: ThreadId,
+  ownerUserId: Schema.optional(WorkspaceUserId),
   title: Schema.optional(TrimmedNonEmptyString),
   modelSelection: Schema.optional(ModelSelection),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
@@ -562,6 +588,9 @@ const ThreadInteractionModeSetCommand = Schema.Struct({
 
 const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
   projectId: ProjectId,
+  ownerUserId: WorkspaceUserId.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_WORKSPACE_USER_ID)),
+  ),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -849,6 +878,9 @@ export const ProjectDeletedPayload = Schema.Struct({
 export const ThreadCreatedPayload = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
+  ownerUserId: WorkspaceUserId.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_WORKSPACE_USER_ID)),
+  ),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
@@ -879,6 +911,7 @@ export const ThreadUnarchivedPayload = Schema.Struct({
 
 export const ThreadMetaUpdatedPayload = Schema.Struct({
   threadId: ThreadId,
+  ownerUserId: Schema.optional(WorkspaceUserId),
   title: Schema.optional(TrimmedNonEmptyString),
   modelSelection: Schema.optional(ModelSelection),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
@@ -1246,7 +1279,7 @@ export const OrchestrationRpcSchemas = {
     output: OrchestrationReplayEventsResult,
   },
   getArchivedShellSnapshot: {
-    input: Schema.Struct({}),
+    input: OrchestrationGetArchivedShellSnapshotInput,
     output: OrchestrationShellSnapshot,
   },
   subscribeThread: {
@@ -1254,7 +1287,7 @@ export const OrchestrationRpcSchemas = {
     output: OrchestrationThreadStreamItem,
   },
   subscribeShell: {
-    input: Schema.Struct({}),
+    input: OrchestrationSubscribeShellInput,
     output: OrchestrationShellStreamItem,
   },
 } as const;

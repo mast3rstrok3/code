@@ -2,6 +2,7 @@ import {
   CheckpointRef,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
+  DEFAULT_WORKSPACE_USER_ID,
   MessageId,
   ProjectId,
   ThreadId,
@@ -133,6 +134,7 @@ describe("OrchestrationEngine", () => {
         {
           id: ThreadId.make("thread-bootstrap"),
           projectId: asProjectId("project-bootstrap"),
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           title: "Bootstrap Thread",
           modelSelection: {
             instanceId: ProviderInstanceId.make("codex"),
@@ -257,6 +259,7 @@ describe("OrchestrationEngine", () => {
         commandId: CommandId.make("cmd-thread-1-create"),
         threadId: ThreadId.make("thread-1"),
         projectId: asProjectId("project-1"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Thread",
         modelSelection: {
           instanceId: ProviderInstanceId.make("codex"),
@@ -317,6 +320,7 @@ describe("OrchestrationEngine", () => {
         commandId: CommandId.make("cmd-thread-archive-create"),
         threadId: ThreadId.make("thread-archive"),
         projectId: asProjectId("project-archive"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Archive me",
         modelSelection: {
           instanceId: ProviderInstanceId.make("codex"),
@@ -382,6 +386,7 @@ describe("OrchestrationEngine", () => {
         commandId: CommandId.make("cmd-thread-replay-create"),
         threadId: ThreadId.make("thread-replay"),
         projectId: asProjectId("project-replay"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "replay",
         modelSelection: {
           instanceId: ProviderInstanceId.make("codex"),
@@ -450,6 +455,7 @@ describe("OrchestrationEngine", () => {
           commandId: CommandId.make("cmd-stream-thread-create"),
           threadId: ThreadId.make("thread-stream"),
           projectId: asProjectId("project-stream"),
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           title: "domain-stream",
           modelSelection: {
             instanceId: ProviderInstanceId.make("codex"),
@@ -502,6 +508,7 @@ describe("OrchestrationEngine", () => {
         commandId: CommandId.make("cmd-thread-ack-create"),
         threadId: ThreadId.make("thread-ack"),
         projectId: asProjectId("project-ack"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Ack Thread",
         modelSelection: {
           instanceId: ProviderInstanceId.make("codex"),
@@ -539,6 +546,7 @@ describe("OrchestrationEngine", () => {
           commandId: CommandId.make("cmd-thread-missing-project"),
           threadId: ThreadId.make("thread-missing-project"),
           projectId: asProjectId("project-missing"),
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           title: "Missing Project Thread",
           modelSelection: {
             instanceId: ProviderInstanceId.make("codex"),
@@ -590,6 +598,7 @@ describe("OrchestrationEngine", () => {
         commandId: CommandId.make("cmd-thread-turn-diff-create"),
         threadId: ThreadId.make("thread-turn-diff"),
         projectId: asProjectId("project-turn-diff"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Turn diff thread",
         modelSelection: {
           instanceId: ProviderInstanceId.make("codex"),
@@ -711,6 +720,7 @@ describe("OrchestrationEngine", () => {
           commandId: CommandId.make("cmd-flaky-1"),
           threadId: ThreadId.make("thread-flaky-fail"),
           projectId: asProjectId("project-flaky"),
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           title: "flaky-fail",
           modelSelection: {
             instanceId: ProviderInstanceId.make("codex"),
@@ -731,6 +741,7 @@ describe("OrchestrationEngine", () => {
         commandId: CommandId.make("cmd-flaky-2"),
         threadId: ThreadId.make("thread-flaky-ok"),
         projectId: asProjectId("project-flaky"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "flaky-ok",
         modelSelection: {
           instanceId: ProviderInstanceId.make("codex"),
@@ -813,6 +824,7 @@ describe("OrchestrationEngine", () => {
         commandId: CommandId.make("cmd-thread-atomic-create"),
         threadId: ThreadId.make("thread-atomic"),
         projectId: asProjectId("project-atomic"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "atomic",
         modelSelection: {
           instanceId: ProviderInstanceId.make("codex"),
@@ -956,6 +968,7 @@ describe("OrchestrationEngine", () => {
         commandId: CommandId.make("cmd-thread-sync-create"),
         threadId: ThreadId.make("thread-sync"),
         projectId: asProjectId("project-sync"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "sync-before",
         modelSelection: {
           instanceId: ProviderInstanceId.make("codex"),
@@ -1044,6 +1057,7 @@ describe("OrchestrationEngine", () => {
         commandId: CommandId.make("cmd-thread-duplicate-1"),
         threadId: ThreadId.make("thread-duplicate"),
         projectId: asProjectId("project-duplicate"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "duplicate",
         modelSelection: {
           instanceId: ProviderInstanceId.make("codex"),
@@ -1064,6 +1078,7 @@ describe("OrchestrationEngine", () => {
           commandId: CommandId.make("cmd-thread-duplicate-2"),
           threadId: ThreadId.make("thread-duplicate"),
           projectId: asProjectId("project-duplicate"),
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           title: "duplicate",
           modelSelection: {
             instanceId: ProviderInstanceId.make("codex"),

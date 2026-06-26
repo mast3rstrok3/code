@@ -17,6 +17,7 @@ import type {
   OrchestrationThreadShell,
   ProjectId,
   ThreadId,
+  WorkspaceUserView,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Option from "effect/Option";
@@ -77,10 +78,9 @@ export interface ProjectionSnapshotQueryShape {
    * Returns only projects and thread shell summaries so clients can bootstrap
    * lightweight navigation state without hydrating every thread body.
    */
-  readonly getShellSnapshot: () => Effect.Effect<
-    OrchestrationShellSnapshot,
-    ProjectionRepositoryError
-  >;
+  readonly getShellSnapshot: (options?: {
+    readonly userView?: WorkspaceUserView;
+  }) => Effect.Effect<OrchestrationShellSnapshot, ProjectionRepositoryError>;
 
   /**
    * Read archived thread shell summaries for the archive page.
@@ -88,10 +88,9 @@ export interface ProjectionSnapshotQueryShape {
    * This query is separate from the main shell snapshot so archived threads
    * are never bootstrapped into normal navigation state.
    */
-  readonly getArchivedShellSnapshot: () => Effect.Effect<
-    OrchestrationShellSnapshot,
-    ProjectionRepositoryError
-  >;
+  readonly getArchivedShellSnapshot: (options?: {
+    readonly userView?: WorkspaceUserView;
+  }) => Effect.Effect<OrchestrationShellSnapshot, ProjectionRepositoryError>;
 
   /**
    * Read the latest projection snapshot sequence without hydrating read-model
@@ -149,6 +148,7 @@ export interface ProjectionSnapshotQueryShape {
    */
   readonly getThreadShellById: (
     threadId: ThreadId,
+    options?: { readonly userView?: WorkspaceUserView },
   ) => Effect.Effect<Option.Option<OrchestrationThreadShell>, ProjectionRepositoryError>;
 
   /**

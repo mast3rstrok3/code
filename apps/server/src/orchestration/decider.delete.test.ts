@@ -1,6 +1,7 @@
 import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
+  DEFAULT_WORKSPACE_USER_ID,
   EventId,
   ProjectId,
   ThreadId,
@@ -59,6 +60,7 @@ const seedReadModel = Effect.gen(function* () {
     payload: {
       threadId: asThreadId("thread-delete-1"),
       projectId: asProjectId("project-delete"),
+      ownerUserId: DEFAULT_WORKSPACE_USER_ID,
       title: "Thread Delete 1",
       modelSelection: {
         instanceId: ProviderInstanceId.make("codex"),
@@ -87,6 +89,7 @@ const seedReadModel = Effect.gen(function* () {
     payload: {
       threadId: asThreadId("thread-delete-2"),
       projectId: asProjectId("project-delete"),
+      ownerUserId: DEFAULT_WORKSPACE_USER_ID,
       title: "Thread Delete 2",
       modelSelection: {
         instanceId: ProviderInstanceId.make("codex"),

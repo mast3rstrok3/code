@@ -9,6 +9,7 @@ import {
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_MODEL,
   DEFAULT_MODEL_BY_PROVIDER,
+  DEFAULT_WORKSPACE_USER_ID,
   EventId,
   MessageId,
   ProjectId,
@@ -141,6 +142,7 @@ const seedProjectAndThread = (harness: OrchestrationIntegrationHarness) =>
       commandId: CommandId.make("cmd-thread-create"),
       threadId: THREAD_ID,
       projectId: PROJECT_ID,
+      ownerUserId: DEFAULT_WORKSPACE_USER_ID,
       title: "Integration Thread",
       modelSelection: {
         instanceId,
@@ -291,6 +293,7 @@ it.live.skipIf(!process.env.CODEX_BINARY_PATH)(
           commandId: CommandId.make("cmd-thread-create-real-codex"),
           threadId: THREAD_ID,
           projectId: PROJECT_ID,
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           title: "Integration Thread",
           modelSelection: {
             instanceId: ProviderInstanceId.make("codex"),

@@ -75,6 +75,12 @@
       "types": "./src/serverSettings.ts",
       "import": "./src/serverSettings.ts"
     },
+    "./workspaceUsers": {
+      "types": "./src/workspaceUsers.ts",
+      "browser": "./src/workspaceUsers.ts",
+      "import": "./src/workspaceUsers.ts",
+      "default": "./src/workspaceUsers.ts"
+    },
     "./String": {
       "types": "./src/String.ts",
       "import": "./src/String.ts"

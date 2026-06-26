@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   DEFAULT_SERVER_SETTINGS,
+  DEFAULT_WORKSPACE_USER_ID,
   ProviderDriverKind,
   ProviderInstanceId,
   ServerSettings,
@@ -89,6 +90,62 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       assert.notInclude(error.message, cause.message);
     }).pipe(Effect.provide(settingsLayer));
   });
+
+  it.effect("stores, replaces, redacts, and clears workspace user GitHub PATs", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+
+      const setFirst = yield* serverSettings.updateSettings({
+        workspaceUsers: [
+          {
+            id: DEFAULT_WORKSPACE_USER_ID,
+            displayName: "Nils",
+            github: { personalAccessToken: "github_pat_first" },
+          },
+        ],
+      });
+      assert.strictEqual(
+        setFirst.workspaceUsers[0]?.github.personalAccessToken,
+        "github_pat_first",
+      );
+      assert.strictEqual(
+        ServerSettingsModule.redactServerSettingsForClient(setFirst).workspaceUsers[0]?.github
+          .personalAccessToken,
+        "",
+      );
+      assert.strictEqual(
+        ServerSettingsModule.redactServerSettingsForClient(setFirst).workspaceUsers[0]?.github
+          .personalAccessTokenRedacted,
+        true,
+      );
+
+      const setSecond = yield* serverSettings.updateSettings({
+        workspaceUsers: [
+          {
+            id: DEFAULT_WORKSPACE_USER_ID,
+            displayName: "Nils",
+            github: { personalAccessToken: "github_pat_second" },
+          },
+        ],
+      });
+      assert.strictEqual(
+        setSecond.workspaceUsers[0]?.github.personalAccessToken,
+        "github_pat_second",
+      );
+
+      const cleared = yield* serverSettings.updateSettings({
+        workspaceUsers: [
+          {
+            id: DEFAULT_WORKSPACE_USER_ID,
+            displayName: "Nils",
+            github: { personalAccessToken: "" },
+          },
+        ],
+      });
+      assert.strictEqual(cleared.workspaceUsers[0]?.github.personalAccessToken, "");
+      assert.strictEqual(cleared.workspaceUsers[0]?.github.personalAccessTokenRedacted, undefined);
+    }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
 
   it.effect("decodes nested settings patches", () =>
     Effect.gen(function* () {

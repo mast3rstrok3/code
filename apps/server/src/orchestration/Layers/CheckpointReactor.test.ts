@@ -13,6 +13,7 @@ import {
 import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
+  DEFAULT_WORKSPACE_USER_ID,
   EventId,
   MessageId,
   ProjectId,
@@ -375,6 +376,7 @@ describe("CheckpointReactor", () => {
         commandId: CommandId.make("cmd-thread-create"),
         threadId: ThreadId.make("thread-1"),
         projectId: asProjectId("project-1"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Thread",
         modelSelection: {
           instanceId: ProviderInstanceId.make("codex"),

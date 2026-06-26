@@ -49,6 +49,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import type { GitManagerServiceError } from "@t3tools/contracts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
+import * as SourceControlProvider from "../sourceControl/SourceControlProvider.ts";
 import type { ChangeRequest } from "@t3tools/contracts";
 
 export interface GitActionProgressReporter {
@@ -58,6 +59,7 @@ export interface GitActionProgressReporter {
 export interface GitRunStackedActionOptions {
   readonly actionId?: string;
   readonly progressReporter?: GitActionProgressReporter;
+  readonly credentials?: SourceControlProvider.SourceControlCredentialContext;
 }
 
 export class GitManager extends Context.Service<
@@ -199,6 +201,11 @@ function parseGitHubRepositoryNameWithOwnerFromRemoteUrl(url: string | null): st
     );
   const repositoryNameWithOwner = match?.[1]?.trim() ?? "";
   return repositoryNameWithOwner.length > 0 ? repositoryNameWithOwner : null;
+}
+
+function isHttpsGitHubRemoteUrl(url: string | null): boolean {
+  const trimmed = url?.trim() ?? "";
+  return /^https:\/\/(?:[^/\s@]+@)?github\.com[:/]/i.test(trimmed);
 }
 
 function parseRepositoryOwnerLogin(nameWithOwner: string | null): string | null {
@@ -724,6 +731,96 @@ export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
 
   const tempDir = process.env.TMPDIR ?? process.env.TEMP ?? process.env.TMP ?? "/tmp";
+  const createGitHubAskPassEnv = Effect.fn("GitManager.createGitHubAskPassEnv")(function* (
+    cwd: string,
+    token: string,
+  ) {
+    const scriptPath = path.join(
+      tempDir,
+      `t3code-git-askpass-${process.pid}-${yield* randomUUIDv4(cwd)}.sh`,
+    );
+    yield* fileSystem
+      .writeFileString(
+        scriptPath,
+        [
+          "#!/bin/sh",
+          'case "$1" in',
+          '*Username*) printf "%s\\n" "x-access-token" ;;',
+          '*) printf "%s\\n" "$T3CODE_GITHUB_TOKEN" ;;',
+          "esac",
+          "",
+        ].join("\n"),
+      )
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new GitManagerError({
+              operation: "createGitHubAskPassEnv",
+              cwd,
+              detail: "Failed to write temporary GitHub askpass helper.",
+              cause,
+            }),
+        ),
+      );
+    yield* fileSystem.chmod(scriptPath, 0o700).pipe(
+      Effect.mapError(
+        (cause) =>
+          new GitManagerError({
+            operation: "createGitHubAskPassEnv",
+            cwd,
+            detail: "Failed to mark temporary GitHub askpass helper executable.",
+            cause,
+          }),
+      ),
+    );
+
+    return {
+      scriptPath,
+      env: {
+        GIT_ASKPASS: scriptPath,
+        GIT_TERMINAL_PROMPT: "0",
+        GCM_INTERACTIVE: "never",
+        T3CODE_GITHUB_TOKEN: token,
+      } satisfies NodeJS.ProcessEnv,
+    };
+  });
+  const runPushCurrentBranch = Effect.fn("GitManager.runPushCurrentBranch")(function* (
+    cwd: string,
+    currentBranch: string | null,
+    credentials: SourceControlProvider.SourceControlCredentialContext | undefined,
+  ) {
+    const token = credentials?.githubPersonalAccessToken?.trim();
+    if (!token) {
+      return yield* gitCore.pushCurrentBranch(cwd, currentBranch);
+    }
+    const details = yield* gitCore.statusDetails(cwd).pipe(Effect.orElseSucceed(() => null));
+    const branch = details?.branch ?? currentBranch;
+    const remoteName =
+      branch !== null
+        ? yield* gitCore
+            .readConfigValue(cwd, `branch.${branch}.remote`)
+            .pipe(Effect.orElseSucceed(() => null))
+        : null;
+    const targetRemoteName = remoteName ?? "origin";
+    const remoteUrl =
+      (yield* gitCore
+        .readConfigValue(cwd, `remote.${targetRemoteName}.pushurl`)
+        .pipe(Effect.orElseSucceed(() => null))) ??
+      (yield* gitCore
+        .readConfigValue(cwd, `remote.${targetRemoteName}.url`)
+        .pipe(Effect.orElseSucceed(() => null)));
+    if (!isHttpsGitHubRemoteUrl(remoteUrl)) {
+      return yield* gitCore.pushCurrentBranch(cwd, currentBranch);
+    }
+    const askPass = yield* createGitHubAskPassEnv(cwd, token);
+    return yield* gitCore
+      .pushCurrentBranch(cwd, currentBranch, { env: askPass.env })
+      .pipe(
+        Effect.ensuring(
+          fileSystem.remove(askPass.scriptPath).pipe(Effect.catch(() => Effect.void)),
+        ),
+      );
+  });
   const canonicalizeExistingPath = (value: string) =>
     fileSystem.realPath(value).pipe(Effect.orElseSucceed(() => value));
   const normalizeStatusCacheKey = canonicalizeExistingPath;
@@ -931,6 +1028,7 @@ export const make = Effect.gen(function* () {
       | "headRepositoryOwnerLogin"
       | "isCrossRepository"
     >,
+    credentials?: SourceControlProvider.SourceControlCredentialContext,
   ) {
     for (const headSelector of headContext.headSelectors) {
       const pullRequests = yield* (yield* sourceControlProvider(cwd)).listChangeRequests({
@@ -938,6 +1036,7 @@ export const make = Effect.gen(function* () {
         headSelector,
         state: "open",
         limit: 1,
+        ...(credentials !== undefined ? { credentials } : {}),
       });
       const normalizedPullRequests = pullRequests.map(toPullRequestInfo);
 
@@ -995,6 +1094,7 @@ export const make = Effect.gen(function* () {
   const buildCompletionToast = Effect.fn("buildCompletionToast")(function* (
     cwd: string,
     result: Pick<GitRunStackedActionResult, "action" | "branch" | "commit" | "push" | "pr">,
+    credentials?: SourceControlProvider.SourceControlCredentialContext,
   ) {
     const terms = yield* sourceControlProvider(cwd).pipe(
       Effect.map((provider) => getChangeRequestTerminologyForKind(provider.kind)),
@@ -1041,7 +1141,7 @@ export const make = Effect.gen(function* () {
         branch: finalBranchContext.branch,
         upstreamRef: finalBranchContext.upstreamRef,
       }).pipe(
-        Effect.flatMap((headContext) => findOpenPr(cwd, headContext)),
+        Effect.flatMap((headContext) => findOpenPr(cwd, headContext, credentials)),
         Effect.orElseSucceed(() => null),
       );
     }
@@ -1091,6 +1191,7 @@ export const make = Effect.gen(function* () {
     branch: string,
     upstreamRef: string | null,
     headContext: Pick<BranchHeadContext, "isCrossRepository" | "remoteName">,
+    credentials?: SourceControlProvider.SourceControlCredentialContext,
   ) {
     const configured = yield* gitCore.readConfigValue(cwd, `branch.${branch}.gh-merge-base`);
     if (configured) return configured;
@@ -1105,7 +1206,12 @@ export const make = Effect.gen(function* () {
     }
 
     const defaultFromProvider = yield* sourceControlProvider(cwd).pipe(
-      Effect.flatMap((provider) => provider.getDefaultBranch({ cwd })),
+      Effect.flatMap((provider) =>
+        provider.getDefaultBranch({
+          cwd,
+          ...(credentials !== undefined ? { credentials } : {}),
+        }),
+      ),
       Effect.orElseSucceed(() => null),
     );
     if (defaultFromProvider) {
@@ -1301,6 +1407,7 @@ export const make = Effect.gen(function* () {
     cwd: string,
     fallbackBranch: string | null,
     emit: GitActionProgressEmitter,
+    credentials?: SourceControlProvider.SourceControlCredentialContext,
   ) {
     const provider = yield* sourceControlProvider(cwd);
     const terms = getChangeRequestTerminologyForKind(provider.kind);
@@ -1326,7 +1433,7 @@ export const make = Effect.gen(function* () {
       upstreamRef: details.upstreamRef,
     });
 
-    const existing = yield* findOpenPr(cwd, headContext);
+    const existing = yield* findOpenPr(cwd, headContext, credentials);
     if (existing) {
       return {
         status: "opened_existing" as const,
@@ -1338,7 +1445,13 @@ export const make = Effect.gen(function* () {
       };
     }
 
-    const baseBranch = yield* resolveBaseBranch(cwd, branch, details.upstreamRef, headContext);
+    const baseBranch = yield* resolveBaseBranch(
+      cwd,
+      branch,
+      details.upstreamRef,
+      headContext,
+      credentials,
+    );
     yield* emit({
       kind: "phase_started",
       phase: "pr",
@@ -1384,10 +1497,11 @@ export const make = Effect.gen(function* () {
         headSelector: headContext.preferredHeadSelector,
         title: generated.title,
         bodyFile,
+        ...(credentials !== undefined ? { credentials } : {}),
       })
       .pipe(Effect.ensuring(fileSystem.remove(bodyFile).pipe(Effect.catch(() => Effect.void))));
 
-    const created = yield* findOpenPr(cwd, headContext);
+    const created = yield* findOpenPr(cwd, headContext, credentials);
     if (!created) {
       return {
         status: "created" as const,
@@ -1801,7 +1915,9 @@ export const make = Effect.gen(function* () {
               })
               .pipe(
                 Effect.tap(() => Ref.set(currentPhase, Option.some("push"))),
-                Effect.flatMap(() => gitCore.pushCurrentBranch(input.cwd, currentBranch)),
+                Effect.flatMap(() =>
+                  runPushCurrentBranch(input.cwd, currentBranch, options?.credentials),
+                ),
               )
           : { status: "skipped_not_requested" as const };
 
@@ -1815,18 +1931,28 @@ export const make = Effect.gen(function* () {
               .pipe(
                 Effect.tap(() => Ref.set(currentPhase, Option.some("pr"))),
                 Effect.flatMap(() =>
-                  runPrStep(modelSelection, input.cwd, currentBranch, progress.emit),
+                  runPrStep(
+                    modelSelection,
+                    input.cwd,
+                    currentBranch,
+                    progress.emit,
+                    options?.credentials,
+                  ),
                 ),
               )
           : { status: "skipped_not_requested" as const };
 
-        const toast = yield* buildCompletionToast(input.cwd, {
-          action: input.action,
-          branch: branchStep,
-          commit,
-          push,
-          pr,
-        });
+        const toast = yield* buildCompletionToast(
+          input.cwd,
+          {
+            action: input.action,
+            branch: branchStep,
+            commit,
+            push,
+            pr,
+          },
+          options?.credentials,
+        );
 
         const result = {
           action: input.action,

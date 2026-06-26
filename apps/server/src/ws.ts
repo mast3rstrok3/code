@@ -22,14 +22,17 @@ import {
   type AuthEnvironmentScope,
   AuthSessionId,
   CommandId,
+  DEFAULT_WORKSPACE_USER_VIEW,
   type DiscoveredLocalServerList,
   EventId,
   type OrchestrationCommand,
   type GitActionProgressEvent,
+  type GitRunStackedActionInput,
   type GitManagerServiceError,
   OrchestrationDispatchCommandError,
   type OrchestrationEvent,
   type OrchestrationShellStreamEvent,
+  type OrchestrationThreadShell,
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetSnapshotError,
   OrchestrationGetTurnDiffError,
@@ -56,6 +59,7 @@ import {
   type TerminalMetadataStreamEvent,
   WS_METHODS,
   WsRpcGroup,
+  type WorkspaceUserView,
 } from "@t3tools/contracts";
 import { clamp } from "effect/Number";
 import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/unstable/http";
@@ -621,9 +625,47 @@ const makeWsRpcLayer = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
       const enrichOrchestrationEvents = (events: ReadonlyArray<OrchestrationEvent>) =>
         Effect.forEach(events, enrichProjectEvent, { concurrency: 4 });
 
+      const threadMatchesWorkspaceUserView = (
+        thread: OrchestrationThreadShell,
+        userView: WorkspaceUserView,
+      ): boolean => userView.kind === "all" || thread.ownerUserId === userView.userId;
+
       const toShellStreamEvent = (
         event: OrchestrationEvent,
+        userView: WorkspaceUserView = DEFAULT_WORKSPACE_USER_VIEW,
+        visibleThreadIds?: Set<ThreadId>,
       ): Effect.Effect<Option.Option<OrchestrationShellStreamEvent>, never, never> => {
+        const removeThreadIfVisible = (threadId: ThreadId) => {
+          if (visibleThreadIds !== undefined && !visibleThreadIds.has(threadId)) {
+            return Option.none<OrchestrationShellStreamEvent>();
+          }
+          visibleThreadIds?.delete(threadId);
+          return Option.some({
+            kind: "thread-removed" as const,
+            sequence: event.sequence,
+            threadId,
+          });
+        };
+
+        const loadThreadUpsertOrRemoval = (threadId: ThreadId) =>
+          projectionSnapshotQuery.getThreadShellById(threadId).pipe(
+            Effect.map((thread) => {
+              if (Option.isNone(thread)) {
+                return removeThreadIfVisible(threadId);
+              }
+              if (threadMatchesWorkspaceUserView(thread.value, userView)) {
+                visibleThreadIds?.add(thread.value.id);
+                return Option.some({
+                  kind: "thread-upserted" as const,
+                  sequence: event.sequence,
+                  thread: thread.value,
+                });
+              }
+              return removeThreadIfVisible(thread.value.id);
+            }),
+            Effect.orElseSucceed(() => Option.none()),
+          );
+
         switch (event.type) {
           case "project.created":
           case "project.meta-updated":
@@ -647,40 +689,14 @@ const makeWsRpcLayer = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
             );
           case "thread.deleted":
           case "thread.archived":
-            return Effect.succeed(
-              Option.some({
-                kind: "thread-removed" as const,
-                sequence: event.sequence,
-                threadId: event.payload.threadId,
-              }),
-            );
+            return Effect.succeed(removeThreadIfVisible(event.payload.threadId));
           case "thread.unarchived":
-            return projectionSnapshotQuery.getThreadShellById(event.payload.threadId).pipe(
-              Effect.map((thread) =>
-                Option.map(thread, (nextThread) => ({
-                  kind: "thread-upserted" as const,
-                  sequence: event.sequence,
-                  thread: nextThread,
-                })),
-              ),
-              Effect.orElseSucceed(() => Option.none()),
-            );
+            return loadThreadUpsertOrRemoval(event.payload.threadId);
           default:
             if (event.aggregateKind !== "thread") {
               return Effect.succeed(Option.none());
             }
-            return projectionSnapshotQuery
-              .getThreadShellById(ThreadId.make(event.aggregateId))
-              .pipe(
-                Effect.map((thread) =>
-                  Option.map(thread, (nextThread) => ({
-                    kind: "thread-upserted" as const,
-                    sequence: event.sequence,
-                    thread: nextThread,
-                  })),
-                ),
-                Effect.orElseSucceed(() => Option.none()),
-              );
+            return loadThreadUpsertOrRemoval(ThreadId.make(event.aggregateId));
         }
       };
 
@@ -831,6 +847,7 @@ const makeWsRpcLayer = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
                 commandId: yield* serverCommandId("bootstrap-thread-create"),
                 threadId: command.threadId,
                 projectId: bootstrap.createThread.projectId,
+                ownerUserId: bootstrap.createThread.ownerUserId,
                 title: bootstrap.createThread.title,
                 modelSelection: bootstrap.createThread.modelSelection,
                 runtimeMode: bootstrap.createThread.runtimeMode,
@@ -950,6 +967,29 @@ const makeWsRpcLayer = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
           .refreshStatus(cwd)
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
 
+      const resolveStackedActionCredentials = (
+        input: GitRunStackedActionInput,
+      ): Effect.Effect<{ readonly githubPersonalAccessToken: string } | undefined, never> => {
+        const threadId = input.threadId;
+        if (threadId === undefined) {
+          return Effect.succeed(undefined);
+        }
+        return Effect.gen(function* () {
+          const thread = yield* projectionSnapshotQuery
+            .getThreadShellById(threadId)
+            .pipe(Effect.orElseSucceed(() => Option.none()));
+          if (Option.isNone(thread)) {
+            return undefined;
+          }
+          const settings = yield* serverSettings.getSettings.pipe(Effect.orElseSucceed(() => null));
+          const token =
+            settings?.workspaceUsers
+              .find((user) => user.id === thread.value.ownerUserId)
+              ?.github.personalAccessToken.trim() ?? "";
+          return token.length > 0 ? { githubPersonalAccessToken: token } : undefined;
+        });
+      };
+
       return WsRpcGroup.of({
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           observeRpcEffect(
@@ -1068,11 +1108,12 @@ const makeWsRpcLayer = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
             ),
             { "rpc.aggregate": "orchestration" },
           ),
-        [ORCHESTRATION_WS_METHODS.subscribeShell]: (_input) =>
+        [ORCHESTRATION_WS_METHODS.subscribeShell]: (input) =>
           observeRpcStreamEffect(
             ORCHESTRATION_WS_METHODS.subscribeShell,
             Effect.gen(function* () {
-              const snapshot = yield* projectionSnapshotQuery.getShellSnapshot().pipe(
+              const userView = input.userView ?? DEFAULT_WORKSPACE_USER_VIEW;
+              const snapshot = yield* projectionSnapshotQuery.getShellSnapshot({ userView }).pipe(
                 Effect.tapError((cause) =>
                   Effect.logError("orchestration shell snapshot load failed", { cause }),
                 ),
@@ -1084,9 +1125,10 @@ const makeWsRpcLayer = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
                     }),
                 ),
               );
+              const visibleThreadIds = new Set(snapshot.threads.map((thread) => thread.id));
 
               const liveStream = orchestrationEngine.streamDomainEvents.pipe(
-                Stream.mapEffect(toShellStreamEvent),
+                Stream.mapEffect((event) => toShellStreamEvent(event, userView, visibleThreadIds)),
                 Stream.flatMap((event) =>
                   Option.isSome(event) ? Stream.succeed(event.value) : Stream.empty,
                 ),
@@ -1102,10 +1144,10 @@ const makeWsRpcLayer = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
             }),
             { "rpc.aggregate": "orchestration" },
           ),
-        [ORCHESTRATION_WS_METHODS.getArchivedShellSnapshot]: (_input) =>
+        [ORCHESTRATION_WS_METHODS.getArchivedShellSnapshot]: (input) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.getArchivedShellSnapshot,
-            projectionSnapshotQuery.getArchivedShellSnapshot().pipe(
+            projectionSnapshotQuery.getArchivedShellSnapshot({ userView: input.userView }).pipe(
               Effect.tapError((cause) =>
                 Effect.logError("orchestration archived shell snapshot load failed", { cause }),
               ),
@@ -1501,22 +1543,24 @@ const makeWsRpcLayer = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
           observeRpcStream(
             WS_METHODS.gitRunStackedAction,
             Stream.callback<GitActionProgressEvent, GitManagerServiceError>((queue) =>
-              gitWorkflow
-                .runStackedAction(input, {
+              Effect.gen(function* () {
+                const credentials = yield* resolveStackedActionCredentials(input);
+                return yield* gitWorkflow.runStackedAction(input, {
                   actionId: input.actionId,
                   progressReporter: {
                     publish: (event) => Queue.offer(queue, event).pipe(Effect.asVoid),
                   },
-                })
-                .pipe(
-                  Effect.matchCauseEffect({
-                    onFailure: (cause) => Queue.failCause(queue, cause),
-                    onSuccess: () =>
-                      refreshGitStatus(input.cwd).pipe(
-                        Effect.andThen(Queue.end(queue).pipe(Effect.asVoid)),
-                      ),
-                  }),
-                ),
+                  ...(credentials !== undefined ? { credentials } : {}),
+                });
+              }).pipe(
+                Effect.matchCauseEffect({
+                  onFailure: (cause) => Queue.failCause(queue, cause),
+                  onSuccess: () =>
+                    refreshGitStatus(input.cwd).pipe(
+                      Effect.andThen(Queue.end(queue).pipe(Effect.asVoid)),
+                    ),
+                }),
+              ),
             ),
             { "rpc.aggregate": "vcs" },
           ),

@@ -22,6 +22,7 @@ import {
   THREAD_JUMP_HINT_SHOW_DELAY_MS,
 } from "./Sidebar.logic";
 import {
+  DEFAULT_WORKSPACE_USER_ID,
   EnvironmentId,
   OrchestrationLatestTurn,
   ProjectId,
@@ -817,6 +818,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     id: ThreadId.make("thread-1"),
     environmentId: localEnvironmentId,
     projectId: ProjectId.make("project-1"),
+    ownerUserId: DEFAULT_WORKSPACE_USER_ID,
     title: "Thread",
     modelSelection: {
       instanceId: ProviderInstanceId.make("codex"),

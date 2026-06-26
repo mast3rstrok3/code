@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vite-plus/test";
-import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  DEFAULT_WORKSPACE_USER_ID,
+  EnvironmentId,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
 import type { Thread } from "../types";
 import {
   buildThreadActionItems,
@@ -15,6 +21,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     id: ThreadId.make("thread-1"),
     environmentId: LOCAL_ENVIRONMENT_ID,
     projectId: PROJECT_ID,
+    ownerUserId: DEFAULT_WORKSPACE_USER_ID,
     title: "Thread",
     modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
     runtimeMode: "full-access",

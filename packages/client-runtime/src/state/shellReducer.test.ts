@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  DEFAULT_WORKSPACE_USER_ID,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
 import type { OrchestrationShellSnapshot, OrchestrationShellStreamEvent } from "@t3tools/contracts";
 
 import { applyShellStreamEvent } from "./shellReducer.ts";
@@ -26,6 +31,7 @@ const stubProject = {
 const stubThread = {
   id: ThreadId.make("thread-1"),
   projectId: ProjectId.make("project-1"),
+  ownerUserId: DEFAULT_WORKSPACE_USER_ID,
   title: "Test Thread",
   modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
   runtimeMode: "full-access" as const,

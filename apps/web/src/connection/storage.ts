@@ -22,7 +22,9 @@ import {
   OrchestrationShellSnapshot,
   OrchestrationThread,
   ThreadId,
+  type WorkspaceUserView,
 } from "@t3tools/contracts";
+import { environmentShellCacheKey } from "@t3tools/shared/model";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -59,6 +61,10 @@ const decodeStoredShellSnapshot = Schema.decodeUnknownEffect(StoredShellSnapshot
 const encodeStoredShellSnapshot = Schema.encodeEffect(StoredShellSnapshotJson);
 const decodeStoredThreadSnapshot = Schema.decodeUnknownEffect(StoredThreadSnapshotJson);
 const encodeStoredThreadSnapshot = Schema.encodeEffect(StoredThreadSnapshotJson);
+
+function shellCacheKey(environmentId: EnvironmentId, userView?: WorkspaceUserView): string {
+  return userView === undefined ? environmentId : environmentShellCacheKey(environmentId, userView);
+}
 
 function catalogError(operation: string, cause: unknown) {
   return new ConnectionTransientError({
@@ -423,8 +429,8 @@ export const connectionStorageLayer = Layer.effectContext(
         })),
     });
     const cacheStore = EnvironmentCacheStore.of({
-      loadShell: (environmentId) =>
-        readDatabaseValue(database, SHELL_STORE_NAME, environmentId).pipe(
+      loadShell: (environmentId, userView) =>
+        readDatabaseValue(database, SHELL_STORE_NAME, shellCacheKey(environmentId, userView)).pipe(
           Effect.flatMap((raw) => {
             if (typeof raw !== "string") {
               return Effect.succeed(Option.none());
@@ -444,14 +450,19 @@ export const connectionStorageLayer = Layer.effectContext(
               : persistenceError("load-shell", cause),
           ),
         ),
-      saveShell: (environmentId, snapshot) =>
+      saveShell: (environmentId, snapshot, userView) =>
         Effect.gen(function* () {
           const encoded = yield* encodeStoredShellSnapshot({
             schemaVersion: SHELL_SNAPSHOT_CACHE_SCHEMA_VERSION,
             environmentId,
             snapshot,
           }).pipe(Effect.mapError((cause) => persistenceError("save-shell", cause)));
-          yield* writeDatabaseValue(database, SHELL_STORE_NAME, environmentId, encoded);
+          yield* writeDatabaseValue(
+            database,
+            SHELL_STORE_NAME,
+            shellCacheKey(environmentId, userView),
+            encoded,
+          );
         }).pipe(
           Effect.mapError((cause) =>
             cause._tag === "ConnectionPersistenceError"

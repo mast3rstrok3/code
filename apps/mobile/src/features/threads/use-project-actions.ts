@@ -5,6 +5,7 @@ import { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { mapAtomCommandResult } from "@t3tools/client-runtime/state/runtime";
 import {
   CommandId,
+  DEFAULT_WORKSPACE_USER_ID,
   MessageId,
   ThreadId,
   type ModelSelection,
@@ -84,6 +85,7 @@ export function useCreateProjectThread() {
           bootstrap: {
             createThread: {
               projectId: input.project.id,
+              ownerUserId: DEFAULT_WORKSPACE_USER_ID,
               title: nextTitle,
               modelSelection: input.modelSelection,
               runtimeMode: input.runtimeMode,

@@ -66,6 +66,29 @@ function mergeModelSelectionOptionsById(input: {
   return [...merged.entries()].map(([id, value]) => ({ id, value }));
 }
 
+function normalizeWorkspaceUsersPatch(
+  currentUsers: ServerSettings["workspaceUsers"],
+  patchUsers: NonNullable<ServerSettingsPatch["workspaceUsers"]>,
+): ServerSettings["workspaceUsers"] {
+  const currentById = new Map(currentUsers.map((user) => [user.id, user] as const));
+  return patchUsers.map((user) => {
+    const currentUser = currentById.get(user.id);
+    return {
+      id: user.id,
+      displayName: user.displayName,
+      github:
+        user.github === undefined
+          ? (currentUser?.github ?? { personalAccessToken: "" })
+          : {
+              personalAccessToken: user.github.personalAccessToken ?? "",
+              ...(user.github.personalAccessTokenRedacted !== undefined
+                ? { personalAccessTokenRedacted: user.github.personalAccessTokenRedacted }
+                : {}),
+            },
+    };
+  });
+}
+
 /**
  * Applies a server settings patch while treating textGenerationModelSelection as
  * replace-on-provider/model updates. This prevents stale nested options from
@@ -82,6 +105,14 @@ export function applyServerSettingsPatch(
     ...next,
     ...(patch.providerInstances !== undefined
       ? { providerInstances: patch.providerInstances }
+      : {}),
+    ...(patch.workspaceUsers !== undefined
+      ? {
+          workspaceUsers: normalizeWorkspaceUsersPatch(
+            current.workspaceUsers,
+            patch.workspaceUsers,
+          ),
+        }
       : {}),
     ...(automaticGitFetchInterval !== undefined ? { automaticGitFetchInterval } : {}),
   };

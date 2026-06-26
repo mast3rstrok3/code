@@ -276,6 +276,7 @@ export function projectEvent(
           {
             id: payload.threadId,
             projectId: payload.projectId,
+            ownerUserId: payload.ownerUserId,
             title: payload.title,
             modelSelection: payload.modelSelection,
             runtimeMode: payload.runtimeMode,
@@ -342,6 +343,7 @@ export function projectEvent(
         Effect.map((payload) => ({
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
+            ...(payload.ownerUserId !== undefined ? { ownerUserId: payload.ownerUserId } : {}),
             ...(payload.title !== undefined ? { title: payload.title } : {}),
             ...(payload.modelSelection !== undefined
               ? { modelSelection: payload.modelSelection }

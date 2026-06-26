@@ -8,6 +8,7 @@ import {
   ServerSettings,
   ServerSettingsPatch,
 } from "./settings.ts";
+import { DEFAULT_WORKSPACE_USER, DEFAULT_WORKSPACE_USER_VIEW } from "./workspaceUsers.ts";
 
 const decodeClientSettings = Schema.decodeUnknownSync(ClientSettingsSchema);
 const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
@@ -15,6 +16,10 @@ const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 
 describe("ClientSettings word wrap", () => {
+  it("defaults workspace user view to all", () => {
+    expect(decodeClientSettings({}).activeWorkspaceUserView).toEqual(DEFAULT_WORKSPACE_USER_VIEW);
+  });
+
   it("defaults word wrap on", () => {
     expect(decodeClientSettings({}).wordWrap).toBe(true);
   });
@@ -32,6 +37,10 @@ describe("ClientSettings word wrap", () => {
 });
 
 describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
+  it("defaults workspace users to Nils", () => {
+    expect(decodeServerSettings({}).workspaceUsers).toEqual([DEFAULT_WORKSPACE_USER]);
+  });
+
   it("defaults to an empty record so legacy configs without the key still decode", () => {
     expect(DEFAULT_SERVER_SETTINGS.providerInstances).toEqual({});
   });

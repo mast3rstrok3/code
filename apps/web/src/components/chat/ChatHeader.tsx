@@ -4,6 +4,9 @@ import {
   type ProjectScript,
   type ResolvedKeybindingsConfig,
   type ThreadId,
+  type WorkspaceUser,
+  WorkspaceUserId,
+  type WorkspaceUserId as WorkspaceUserIdType,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { memo } from "react";
@@ -17,12 +20,15 @@ import ProjectScriptsControl, {
 import { OpenInPicker } from "./OpenInPicker";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { cn } from "~/lib/utils";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
   activeThreadId: ThreadId;
   draftId?: DraftId;
   activeThreadTitle: string;
+  activeThreadOwnerUserId: WorkspaceUserIdType;
+  workspaceUsers: ReadonlyArray<WorkspaceUser>;
   activeProjectName: string | undefined;
   openInCwd: string | null;
   activeProjectScripts: ReadonlyArray<ProjectScript> | undefined;
@@ -32,6 +38,7 @@ interface ChatHeaderProps {
   rightPanelOpen: boolean;
   gitCwd: string | null;
   onRunProjectScript: (script: ProjectScript) => void;
+  onOwnerUserIdChange: (ownerUserId: WorkspaceUserIdType) => void;
   onAddProjectScript: (input: NewProjectScriptInput) => Promise<ProjectScriptActionResult>;
   onUpdateProjectScript: (
     scriptId: string,
@@ -57,6 +64,8 @@ export const ChatHeader = memo(function ChatHeader({
   activeThreadId,
   draftId,
   activeThreadTitle,
+  activeThreadOwnerUserId,
+  workspaceUsers,
   activeProjectName,
   openInCwd,
   activeProjectScripts,
@@ -66,6 +75,7 @@ export const ChatHeader = memo(function ChatHeader({
   rightPanelOpen,
   gitCwd,
   onRunProjectScript,
+  onOwnerUserIdChange,
   onAddProjectScript,
   onUpdateProjectScript,
   onDeleteProjectScript,
@@ -92,6 +102,34 @@ export const ChatHeader = memo(function ChatHeader({
           />
           <TooltipPopup side="top">{activeThreadTitle}</TooltipPopup>
         </Tooltip>
+        {workspaceUsers.length > 1 ? (
+          <Select
+            value={activeThreadOwnerUserId}
+            onValueChange={(value) => {
+              if (value === null) {
+                return;
+              }
+              onOwnerUserIdChange(WorkspaceUserId.make(value));
+            }}
+          >
+            <SelectTrigger
+              className="h-7 max-w-32 shrink-0 px-2 text-xs text-muted-foreground"
+              aria-label="Thread owner"
+            >
+              <SelectValue>
+                {workspaceUsers.find((user) => user.id === activeThreadOwnerUserId)?.displayName ??
+                  activeThreadOwnerUserId}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectPopup align="end" alignItemWithTrigger={false}>
+              {workspaceUsers.map((user) => (
+                <SelectItem key={user.id} hideIndicator value={user.id}>
+                  {user.displayName}
+                </SelectItem>
+              ))}
+            </SelectPopup>
+          </Select>
+        ) : null}
       </div>
       <div
         data-chat-header-actions

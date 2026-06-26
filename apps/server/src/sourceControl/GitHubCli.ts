@@ -203,28 +203,33 @@ export class GitHubCli extends Context.Service<
       readonly cwd: string;
       readonly args: ReadonlyArray<string>;
       readonly timeoutMs?: number;
+      readonly env?: NodeJS.ProcessEnv;
     }) => Effect.Effect<VcsProcess.VcsProcessOutput, GitHubCliError>;
 
     readonly listOpenPullRequests: (input: {
       readonly cwd: string;
       readonly headSelector: string;
       readonly limit?: number;
+      readonly env?: NodeJS.ProcessEnv;
     }) => Effect.Effect<ReadonlyArray<GitHubPullRequestSummary>, GitHubCliError>;
 
     readonly getPullRequest: (input: {
       readonly cwd: string;
       readonly reference: string;
+      readonly env?: NodeJS.ProcessEnv;
     }) => Effect.Effect<GitHubPullRequestSummary, GitHubCliError>;
 
     readonly getRepositoryCloneUrls: (input: {
       readonly cwd: string;
       readonly repository: string;
+      readonly env?: NodeJS.ProcessEnv;
     }) => Effect.Effect<GitHubRepositoryCloneUrls, GitHubCliError>;
 
     readonly createRepository: (input: {
       readonly cwd: string;
       readonly repository: string;
       readonly visibility: SourceControlRepositoryVisibility;
+      readonly env?: NodeJS.ProcessEnv;
     }) => Effect.Effect<GitHubRepositoryCloneUrls, GitHubCliError>;
 
     readonly createPullRequest: (input: {
@@ -233,16 +238,19 @@ export class GitHubCli extends Context.Service<
       readonly headSelector: string;
       readonly title: string;
       readonly bodyFile: string;
+      readonly env?: NodeJS.ProcessEnv;
     }) => Effect.Effect<void, GitHubCliError>;
 
     readonly getDefaultBranch: (input: {
       readonly cwd: string;
+      readonly env?: NodeJS.ProcessEnv;
     }) => Effect.Effect<string | null, GitHubCliError>;
 
     readonly checkoutPullRequest: (input: {
       readonly cwd: string;
       readonly reference: string;
       readonly force?: boolean;
+      readonly env?: NodeJS.ProcessEnv;
     }) => Effect.Effect<void, GitHubCliError>;
   }
 >()("t3/sourceControl/GitHubCli") {}
@@ -313,6 +321,7 @@ export const make = Effect.gen(function* () {
         command: "gh",
         args: input.args,
         cwd: input.cwd,
+        ...(input.env !== undefined ? { env: input.env } : {}),
         timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       })
       .pipe(Effect.mapError((error) => fromVcsError({ command: "gh", cwd: input.cwd }, error)));
@@ -334,6 +343,7 @@ export const make = Effect.gen(function* () {
           "--json",
           "number,title,url,baseRefName,headRefName,state,mergedAt,isCrossRepository,headRepository,headRepositoryOwner",
         ],
+        ...(input.env !== undefined ? { env: input.env } : {}),
       }).pipe(
         Effect.map((result) => result.stdout.trim()),
         Effect.flatMap((raw) =>
@@ -368,6 +378,7 @@ export const make = Effect.gen(function* () {
           "--json",
           "number,title,url,baseRefName,headRefName,state,mergedAt,isCrossRepository,headRepository,headRepositoryOwner",
         ],
+        ...(input.env !== undefined ? { env: input.env } : {}),
       }).pipe(
         Effect.map((result) => result.stdout.trim()),
         Effect.flatMap((raw) =>
@@ -394,6 +405,7 @@ export const make = Effect.gen(function* () {
       execute({
         cwd: input.cwd,
         args: ["repo", "view", input.repository, "--json", "nameWithOwner,url,sshUrl"],
+        ...(input.env !== undefined ? { env: input.env } : {}),
       }).pipe(
         Effect.map((result) => result.stdout.trim()),
         Effect.flatMap((raw) =>
@@ -414,6 +426,7 @@ export const make = Effect.gen(function* () {
       execute({
         cwd: input.cwd,
         args: ["repo", "create", input.repository, `--${input.visibility}`],
+        ...(input.env !== undefined ? { env: input.env } : {}),
       }).pipe(
         Effect.map((result) =>
           deriveRepositoryCloneUrlsFromCreateOutput(result.stdout, input.repository),
@@ -434,11 +447,13 @@ export const make = Effect.gen(function* () {
           "--body-file",
           input.bodyFile,
         ],
+        ...(input.env !== undefined ? { env: input.env } : {}),
       }).pipe(Effect.asVoid),
     getDefaultBranch: (input) =>
       execute({
         cwd: input.cwd,
         args: ["repo", "view", "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name"],
+        ...(input.env !== undefined ? { env: input.env } : {}),
       }).pipe(
         Effect.map((value) => {
           const trimmed = value.stdout.trim();
@@ -449,6 +464,7 @@ export const make = Effect.gen(function* () {
       execute({
         cwd: input.cwd,
         args: ["pr", "checkout", input.reference, ...(input.force ? ["--force"] : [])],
+        ...(input.env !== undefined ? { env: input.env } : {}),
       }).pipe(Effect.asVoid),
   });
 });

@@ -10,6 +10,7 @@ import {
   AuthTokenExchangeGrantType,
   CommandId,
   DEFAULT_SERVER_SETTINGS,
+  DEFAULT_WORKSPACE_USER_ID,
   EnvironmentId,
   EventId,
   GitCommandError,
@@ -155,6 +156,7 @@ const makeDefaultOrchestrationReadModel = () => {
       {
         id: defaultThreadId,
         projectId: defaultProjectId,
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Default Thread",
         modelSelection: defaultModelSelection,
         interactionMode: "default" as const,
@@ -183,6 +185,7 @@ const makeDefaultOrchestrationThreadShell = (
   return {
     id: defaultThreadId,
     projectId: defaultProjectId,
+    ownerUserId: DEFAULT_WORKSPACE_USER_ID,
     title: "Default Thread",
     modelSelection: defaultModelSelection,
     runtimeMode: "full-access",
@@ -5441,6 +5444,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           {
             id: ThreadId.make("thread-1"),
             projectId: ProjectId.make("project-a"),
+            ownerUserId: DEFAULT_WORKSPACE_USER_ID,
             title: "Thread A",
             modelSelection: defaultModelSelection,
             interactionMode: "default" as const,
@@ -5551,7 +5555,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const wsUrl = yield* getWsServerUrl("/ws");
       const result = yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
-          client[ORCHESTRATION_WS_METHODS.subscribeShell]({}).pipe(Stream.runCollect),
+          client[ORCHESTRATION_WS_METHODS.subscribeShell]({ userView: { kind: "all" } }).pipe(
+            Stream.runCollect,
+          ),
         ).pipe(Effect.result),
       );
 
@@ -6158,6 +6164,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               bootstrap: {
                 createThread: {
                   projectId: defaultProjectId,
+                  ownerUserId: DEFAULT_WORKSPACE_USER_ID,
                   title: "Bootstrap Thread",
                   modelSelection: defaultModelSelection,
                   runtimeMode: "full-access",
@@ -6302,6 +6309,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             bootstrap: {
               createThread: {
                 projectId: defaultProjectId,
+                ownerUserId: DEFAULT_WORKSPACE_USER_ID,
                 title: "Bootstrap Thread",
                 modelSelection: defaultModelSelection,
                 runtimeMode: "full-access",
@@ -6423,6 +6431,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             bootstrap: {
               createThread: {
                 projectId: defaultProjectId,
+                ownerUserId: DEFAULT_WORKSPACE_USER_ID,
                 title: "Bootstrap Thread",
                 modelSelection: defaultModelSelection,
                 runtimeMode: "full-access",
@@ -6507,6 +6516,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             bootstrap: {
               createThread: {
                 projectId: defaultProjectId,
+                ownerUserId: DEFAULT_WORKSPACE_USER_ID,
                 title: "Bootstrap Thread",
                 modelSelection: defaultModelSelection,
                 runtimeMode: "full-access",

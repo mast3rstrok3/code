@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  DEFAULT_WORKSPACE_USER_ID,
   EventId,
   MessageId,
   ProjectId,
@@ -29,6 +30,7 @@ function makeThread(
   input: Partial<OrchestrationThread> & Pick<OrchestrationThread, "id" | "projectId" | "title">,
 ): OrchestrationThread {
   return {
+    ownerUserId: DEFAULT_WORKSPACE_USER_ID,
     modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
     runtimeMode: "full-access",
     interactionMode: "default",

@@ -309,6 +309,7 @@ it.effect("decodes thread.created runtime mode for historical events", () =>
 
     assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
     assert.strictEqual(parsed.modelSelection.instanceId, "codex");
+    assert.strictEqual(parsed.ownerUserId, "nils");
   }),
 );
 

@@ -3,6 +3,7 @@ import {
   type OrchestrationThread,
   type OrchestrationShellSnapshot,
   type ThreadId,
+  type WorkspaceUserView,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -52,10 +53,12 @@ export class EnvironmentCacheStore extends Context.Service<
   {
     readonly loadShell: (
       environmentId: EnvironmentId,
+      userView?: WorkspaceUserView,
     ) => Effect.Effect<Option.Option<OrchestrationShellSnapshot>, ConnectionPersistenceError>;
     readonly saveShell: (
       environmentId: EnvironmentId,
       snapshot: OrchestrationShellSnapshot,
+      userView?: WorkspaceUserView,
     ) => Effect.Effect<void, ConnectionPersistenceError>;
     readonly loadThread: (
       environmentId: EnvironmentId,

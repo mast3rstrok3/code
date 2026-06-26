@@ -1,6 +1,7 @@
 import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
+  DEFAULT_WORKSPACE_USER_ID,
   EventId,
   MessageId,
   ProjectId,
@@ -133,6 +134,7 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
         payload: {
           threadId: ThreadId.make("thread-1"),
           projectId: asProjectId("project-1"),
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           title: "Thread",
           modelSelection: {
             instanceId: ProviderInstanceId.make("codex"),
@@ -230,6 +232,7 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
         payload: {
           threadId: ThreadId.make("thread-1"),
           projectId: asProjectId("project-1"),
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           title: "Thread",
           modelSelection: {
             instanceId: ProviderInstanceId.make("codex"),
@@ -308,6 +311,7 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
         payload: {
           threadId: ThreadId.make("thread-1"),
           projectId: asProjectId("project-1"),
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           title: "Thread",
           modelSelection: {
             instanceId: ProviderInstanceId.make("codex"),

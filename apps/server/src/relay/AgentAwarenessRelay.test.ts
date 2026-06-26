@@ -16,7 +16,7 @@ import type {
   RelayAgentActivityPublishProofPayload,
   RelayAgentActivityState,
 } from "@t3tools/contracts/relay";
-import { CommandId, ProviderInstanceId } from "@t3tools/contracts";
+import { CommandId, DEFAULT_WORKSPACE_USER_ID, ProviderInstanceId } from "@t3tools/contracts";
 import { RelayClientTracer } from "@t3tools/shared/relayTracing";
 import { RELAY_ACTIVITY_PUBLISH_TYP, verifyRelayJwt } from "@t3tools/shared/relayJwt";
 import { describe, expect, it } from "@effect/vitest";
@@ -241,6 +241,7 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
     const thread = {
       id: threadId,
       projectId: "project-1" as ProjectId,
+      ownerUserId: DEFAULT_WORKSPACE_USER_ID,
       title: "Deleted thread",
       modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
       session: null,
@@ -286,6 +287,7 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
 
     const baseThread = {
       projectId,
+      ownerUserId: DEFAULT_WORKSPACE_USER_ID,
       title: "Run remote agent",
       modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
       runtimeMode: "full-access",
@@ -425,6 +427,7 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
         const thread = {
           id: threadId,
           projectId,
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           title: "Run remote agent",
           modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
           runtimeMode: "full-access",
@@ -580,6 +583,7 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
         const thread = {
           id: threadId,
           projectId,
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           title: "Run remote agent",
           modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
           runtimeMode: "full-access",

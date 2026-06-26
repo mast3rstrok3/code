@@ -24,6 +24,7 @@ import {
   ServerSettings,
   ServerSettingsError,
   type ServerSettingsPatch,
+  type WorkspaceUser,
 } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
@@ -79,6 +80,10 @@ function providerEnvironmentSecretName(input: {
   return `provider-env-${Buffer.from(input.instanceId, "utf8").toString("base64url")}-${Buffer.from(input.name, "utf8").toString("base64url")}`;
 }
 
+function workspaceUserGithubPersonalAccessTokenSecretName(userId: string): string {
+  return `workspace-user-github-pat-${Buffer.from(userId, "utf8").toString("base64url")}`;
+}
+
 function redactProviderEnvironmentVariable(
   variable: ProviderInstanceEnvironmentVariable,
 ): ProviderInstanceEnvironmentVariable {
@@ -90,6 +95,19 @@ function redactProviderEnvironmentVariable(
     ...variable,
     value: "",
     ...(variable.value.length > 0 || variable.valueRedacted ? { valueRedacted: true } : {}),
+  };
+}
+
+function redactWorkspaceUserGithubPersonalAccessToken(user: WorkspaceUser): WorkspaceUser {
+  return {
+    ...user,
+    github: {
+      ...user.github,
+      personalAccessToken: "",
+      ...(user.github.personalAccessToken.length > 0 || user.github.personalAccessTokenRedacted
+        ? { personalAccessTokenRedacted: true }
+        : {}),
+    },
   };
 }
 
@@ -105,7 +123,11 @@ export function redactServerSettingsForClient(settings: ServerSettings): ServerS
         : instance,
     ]),
   );
-  return { ...settings, providerInstances };
+  return {
+    ...settings,
+    providerInstances,
+    workspaceUsers: settings.workspaceUsers.map(redactWorkspaceUserGithubPersonalAccessToken),
+  };
 }
 
 export class ServerSettingsService extends Context.Service<
@@ -357,9 +379,36 @@ const make = Effect.gen(function* () {
           environment,
         } satisfies ProviderInstanceConfig;
       }
+      const workspaceUsers: WorkspaceUser[] = [];
+      for (const user of settings.workspaceUsers) {
+        if (!user.github.personalAccessTokenRedacted) {
+          workspaceUsers.push(user);
+          continue;
+        }
+        const secret = yield* secretStore
+          .get(workspaceUserGithubPersonalAccessTokenSecretName(user.id))
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new ServerSettingsError({
+                  settingsPath,
+                  operation: "read-secret",
+                  cause,
+                }),
+            ),
+          );
+        workspaceUsers.push({
+          ...user,
+          github: {
+            ...user.github,
+            personalAccessToken: Option.isSome(secret) ? textDecoder.decode(secret.value) : "",
+          },
+        });
+      }
       return {
         ...settings,
         providerInstances: providerInstances as ServerSettings["providerInstances"],
+        workspaceUsers,
       };
     });
 
@@ -438,6 +487,61 @@ const make = Effect.gen(function* () {
         } satisfies ProviderInstanceConfig;
       }
 
+      const workspaceUsers: WorkspaceUser[] = [];
+      const nextWorkspaceUserGithubSecretKeys = new Set<string>();
+      for (const user of next.workspaceUsers) {
+        const secretName = workspaceUserGithubPersonalAccessTokenSecretName(user.id);
+        if (user.github.personalAccessTokenRedacted) {
+          nextWorkspaceUserGithubSecretKeys.add(secretName);
+          workspaceUsers.push(redactWorkspaceUserGithubPersonalAccessToken(user));
+          continue;
+        }
+
+        if (user.github.personalAccessToken.length > 0) {
+          nextWorkspaceUserGithubSecretKeys.add(secretName);
+          yield* secretStore
+            .set(secretName, textEncoder.encode(user.github.personalAccessToken))
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ServerSettingsError({
+                    settingsPath,
+                    operation: "write-secret",
+                    cause,
+                  }),
+              ),
+            );
+          workspaceUsers.push({
+            ...user,
+            github: {
+              ...user.github,
+              personalAccessToken: "",
+              personalAccessTokenRedacted: true,
+            },
+          });
+          continue;
+        }
+
+        yield* secretStore.remove(secretName).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ServerSettingsError({
+                settingsPath,
+                operation: "remove-secret",
+                cause,
+              }),
+          ),
+        );
+        const { personalAccessTokenRedacted: _omit, ...github } = user.github;
+        workspaceUsers.push({
+          ...user,
+          github: {
+            ...github,
+            personalAccessToken: "",
+          },
+        });
+      }
+
       for (const [instanceId, instance] of Object.entries(current.providerInstances)) {
         for (const variable of instance.environment ?? []) {
           if (!variable.sensitive) continue;
@@ -458,9 +562,25 @@ const make = Effect.gen(function* () {
         }
       }
 
+      for (const user of current.workspaceUsers) {
+        const secretName = workspaceUserGithubPersonalAccessTokenSecretName(user.id);
+        if (nextWorkspaceUserGithubSecretKeys.has(secretName)) continue;
+        yield* secretStore.remove(secretName).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ServerSettingsError({
+                settingsPath,
+                operation: "remove-stale-secret",
+                cause,
+              }),
+          ),
+        );
+      }
+
       return {
         ...next,
         providerInstances: providerInstances as ServerSettings["providerInstances"],
+        workspaceUsers,
       };
     });
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
+  DEFAULT_WORKSPACE_USER_ID,
   DEFAULT_RUNTIME_MODE,
   EnvironmentId,
   ProjectId,
@@ -17,6 +18,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     id: ThreadId.make("thread-1"),
     environmentId: LOCAL_ENVIRONMENT_ID,
     projectId: PROJECT_ID,
+    ownerUserId: DEFAULT_WORKSPACE_USER_ID,
     title: "Thread",
     modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
     runtimeMode: DEFAULT_RUNTIME_MODE,

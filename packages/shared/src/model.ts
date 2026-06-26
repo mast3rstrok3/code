@@ -1,13 +1,17 @@
 import {
   DEFAULT_MODEL,
   DEFAULT_MODEL_BY_PROVIDER,
+  DEFAULT_WORKSPACE_USER_VIEW,
   MODEL_SLUG_ALIASES_BY_PROVIDER,
+  type EnvironmentId,
   type ModelCapabilities,
   type ModelSelection,
   ProviderDriverKind,
   ProviderInstanceId,
   type ProviderOptionDescriptor,
   type ProviderOptionSelection,
+  type WorkspaceUser,
+  type WorkspaceUserView,
 } from "@t3tools/contracts";
 
 const DEFAULT_PROVIDER_DRIVER_KIND = ProviderDriverKind.make("codex");
@@ -15,6 +19,30 @@ const DEFAULT_PROVIDER_DRIVER_KIND = ProviderDriverKind.make("codex");
 export interface SelectableModelOption {
   slug: string;
   name: string;
+}
+
+export function workspaceUserViewCacheKey(userView: WorkspaceUserView): string {
+  return userView.kind === "all" ? "all" : `user:${userView.userId}`;
+}
+
+export function environmentShellCacheKey(
+  environmentId: EnvironmentId,
+  userView: WorkspaceUserView,
+): string {
+  const userViewKey = workspaceUserViewCacheKey(userView);
+  return userViewKey === "all" ? environmentId : `${environmentId}::${userViewKey}`;
+}
+
+export function resolveWorkspaceUserView(
+  userView: WorkspaceUserView,
+  workspaceUsers: ReadonlyArray<WorkspaceUser>,
+): WorkspaceUserView {
+  if (userView.kind === "all") {
+    return userView;
+  }
+  return workspaceUsers.some((user) => user.id === userView.userId)
+    ? userView
+    : DEFAULT_WORKSPACE_USER_VIEW;
 }
 
 export function createModelCapabilities(input: {

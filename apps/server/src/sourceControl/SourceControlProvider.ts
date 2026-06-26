@@ -16,6 +16,10 @@ export interface SourceControlProviderContext {
   readonly remoteUrl: string;
 }
 
+export interface SourceControlCredentialContext {
+  readonly githubPersonalAccessToken?: string;
+}
+
 export interface SourceControlRefSelector {
   readonly refName: string;
   readonly owner?: string;
@@ -86,6 +90,7 @@ export class SourceControlProvider extends Context.Service<
     readonly listChangeRequests: (input: {
       readonly cwd: string;
       readonly context?: SourceControlProviderContext;
+      readonly credentials?: SourceControlCredentialContext;
       readonly source?: SourceControlRefSelector;
       readonly headSelector: string;
       readonly state: ChangeRequestState | "all";
@@ -94,11 +99,13 @@ export class SourceControlProvider extends Context.Service<
     readonly getChangeRequest: (input: {
       readonly cwd: string;
       readonly context?: SourceControlProviderContext;
+      readonly credentials?: SourceControlCredentialContext;
       readonly reference: string;
     }) => Effect.Effect<ChangeRequest, SourceControlProviderError>;
     readonly createChangeRequest: (input: {
       readonly cwd: string;
       readonly context?: SourceControlProviderContext;
+      readonly credentials?: SourceControlCredentialContext;
       readonly source?: SourceControlRefSelector;
       readonly target?: SourceControlRefSelector;
       readonly baseRefName: string;
@@ -109,20 +116,24 @@ export class SourceControlProvider extends Context.Service<
     readonly getRepositoryCloneUrls: (input: {
       readonly cwd: string;
       readonly context?: SourceControlProviderContext;
+      readonly credentials?: SourceControlCredentialContext;
       readonly repository: string;
     }) => Effect.Effect<SourceControlRepositoryCloneUrls, SourceControlProviderError>;
     readonly createRepository: (input: {
       readonly cwd: string;
       readonly repository: string;
       readonly visibility: SourceControlRepositoryVisibility;
+      readonly credentials?: SourceControlCredentialContext;
     }) => Effect.Effect<SourceControlRepositoryCloneUrls, SourceControlProviderError>;
     readonly getDefaultBranch: (input: {
       readonly cwd: string;
       readonly context?: SourceControlProviderContext;
+      readonly credentials?: SourceControlCredentialContext;
     }) => Effect.Effect<string | null, SourceControlProviderError>;
     readonly checkoutChangeRequest: (input: {
       readonly cwd: string;
       readonly context?: SourceControlProviderContext;
+      readonly credentials?: SourceControlCredentialContext;
       readonly reference: string;
       readonly force?: boolean;
     }) => Effect.Effect<void, SourceControlProviderError>;

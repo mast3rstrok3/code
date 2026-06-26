@@ -1,6 +1,7 @@
 import {
   type ApprovalRequestId,
   DEFAULT_MODEL,
+  DEFAULT_WORKSPACE_USER_ID,
   defaultInstanceIdForDriver,
   type EnvironmentId,
   type MessageId,
@@ -14,6 +15,7 @@ import {
   type ScopedThreadRef,
   type ThreadId,
   type TurnId,
+  type WorkspaceUserId,
   type KeybindingCommand,
   OrchestrationThreadActivity,
   ProviderInteractionMode,
@@ -1046,6 +1048,16 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const timestampFormat = settings.timestampFormat;
   const autoOpenPlanSidebar = settings.autoOpenPlanSidebar;
+  const defaultNewThreadOwnerUserId = useMemo(() => {
+    const activeWorkspaceUserView = settings.activeWorkspaceUserView;
+    if (
+      activeWorkspaceUserView.kind === "user" &&
+      settings.workspaceUsers.some((user) => user.id === activeWorkspaceUserView.userId)
+    ) {
+      return activeWorkspaceUserView.userId;
+    }
+    return DEFAULT_WORKSPACE_USER_ID;
+  }, [settings.activeWorkspaceUserView, settings.workspaceUsers]);
   const navigate = useNavigate();
   const { resolvedTheme } = useTheme();
   // Granular store selectors — avoid subscribing to prompt changes.
@@ -1284,6 +1296,21 @@ function ChatViewContent(props: ChatViewProps) {
   const activeThreadRef = useMemo(
     () => (activeThread ? scopeThreadRef(activeThread.environmentId, activeThread.id) : null),
     [activeThread],
+  );
+  const handleThreadOwnerUserIdChange = useCallback(
+    (ownerUserId: WorkspaceUserId) => {
+      if (!isServerThread || activeThreadId === null) {
+        return;
+      }
+      void updateThreadMetadata({
+        environmentId,
+        input: {
+          threadId: activeThreadId,
+          ownerUserId,
+        },
+      });
+    },
+    [activeThreadId, environmentId, isServerThread, updateThreadMetadata],
   );
   const activeThreadKey = activeThreadRef ? scopedThreadKey(activeThreadRef) : null;
   const [timelineAnchor, setTimelineAnchor] = useState<{
@@ -3859,6 +3886,7 @@ function ChatViewContent(props: ChatViewProps) {
                 ? {
                     createThread: {
                       projectId: activeProject.id,
+                      ownerUserId: defaultNewThreadOwnerUserId,
                       title,
                       modelSelection: threadCreateModelSelection,
                       runtimeMode,
@@ -4350,6 +4378,7 @@ function ChatViewContent(props: ChatViewProps) {
       input: {
         threadId: nextThreadId,
         projectId: activeProject.id,
+        ownerUserId: defaultNewThreadOwnerUserId,
         title: nextThreadTitle,
         modelSelection: nextThreadModelSelection,
         runtimeMode,
@@ -4771,6 +4800,8 @@ function ChatViewContent(props: ChatViewProps) {
             activeThreadId={activeThread.id}
             {...(routeKind === "draft" && draftId ? { draftId } : {})}
             activeThreadTitle={activeThread.title}
+            activeThreadOwnerUserId={activeThread.ownerUserId}
+            workspaceUsers={settings.workspaceUsers}
             activeProjectName={activeProject?.title}
             openInCwd={gitCwd}
             activeProjectScripts={activeProject?.scripts}
@@ -4782,6 +4813,7 @@ function ChatViewContent(props: ChatViewProps) {
             rightPanelOpen={rightPanelOpen}
             gitCwd={gitCwd}
             onRunProjectScript={runProjectScript}
+            onOwnerUserIdChange={handleThreadOwnerUserIdChange}
             onAddProjectScript={saveProjectScript}
             onUpdateProjectScript={updateProjectScript}
             onDeleteProjectScript={deleteProjectScript}

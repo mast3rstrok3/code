@@ -1,4 +1,10 @@
-import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  DEFAULT_WORKSPACE_USER_ID,
+  EnvironmentId,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
@@ -11,6 +17,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     id: ThreadId.make("thread-1"),
     environmentId: localEnvironmentId,
     projectId: ProjectId.make("project-1"),
+    ownerUserId: DEFAULT_WORKSPACE_USER_ID,
     title: "Thread",
     modelSelection: {
       instanceId: ProviderInstanceId.make("codex"),

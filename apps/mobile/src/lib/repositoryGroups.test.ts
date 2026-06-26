@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  DEFAULT_WORKSPACE_USER_ID,
+  EnvironmentId,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
 
 import { groupProjectsByRepository } from "./repositoryGroups";
 import { EnvironmentProject, EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
@@ -24,6 +30,7 @@ function makeThread(
     Pick<EnvironmentThreadShell, "environmentId" | "id" | "projectId" | "title" | "modelSelection">,
 ): EnvironmentThreadShell {
   return {
+    ownerUserId: DEFAULT_WORKSPACE_USER_ID,
     runtimeMode: "full-access",
     interactionMode: "default",
     branch: null,

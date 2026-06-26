@@ -62,6 +62,7 @@ export function applyThreadDetailEvent(
         thread: {
           id: event.payload.threadId,
           projectId: event.payload.projectId,
+          ownerUserId: event.payload.ownerUserId,
           title: event.payload.title,
           modelSelection: event.payload.modelSelection,
           runtimeMode: event.payload.runtimeMode,
@@ -106,6 +107,9 @@ export function applyThreadDetailEvent(
         kind: "updated",
         thread: {
           ...thread,
+          ...(event.payload.ownerUserId !== undefined
+            ? { ownerUserId: event.payload.ownerUserId }
+            : {}),
           ...(event.payload.title !== undefined ? { title: event.payload.title } : {}),
           ...(event.payload.modelSelection !== undefined
             ? { modelSelection: event.payload.modelSelection }

@@ -3,6 +3,7 @@ import {
   MessageId,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
+  DEFAULT_WORKSPACE_USER_ID,
   ProjectId,
   ThreadId,
   type OrchestrationCommand,
@@ -56,6 +57,7 @@ const readModel: OrchestrationReadModel = {
     {
       id: ThreadId.make("thread-1"),
       projectId: ProjectId.make("project-a"),
+      ownerUserId: DEFAULT_WORKSPACE_USER_ID,
       title: "Thread A",
       modelSelection: {
         instanceId: ProviderInstanceId.make("codex"),
@@ -79,6 +81,7 @@ const readModel: OrchestrationReadModel = {
     {
       id: ThreadId.make("thread-2"),
       projectId: ProjectId.make("project-b"),
+      ownerUserId: DEFAULT_WORKSPACE_USER_ID,
       title: "Thread B",
       modelSelection: {
         instanceId: ProviderInstanceId.make("codex"),
@@ -156,6 +159,7 @@ describe("commandInvariants", () => {
           commandId: CommandId.make("cmd-2"),
           threadId: ThreadId.make("thread-3"),
           projectId: ProjectId.make("project-a"),
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           title: "new",
           modelSelection: {
             instanceId: ProviderInstanceId.make("codex"),
@@ -180,6 +184,7 @@ describe("commandInvariants", () => {
             commandId: CommandId.make("cmd-3"),
             threadId: ThreadId.make("thread-1"),
             projectId: ProjectId.make("project-a"),
+            ownerUserId: DEFAULT_WORKSPACE_USER_ID,
             title: "dup",
             modelSelection: {
               instanceId: ProviderInstanceId.make("codex"),

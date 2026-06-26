@@ -41,13 +41,18 @@ import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from "@dnd-
 import { CSS } from "@dnd-kit/utilities";
 import {
   type ContextMenuItem,
+  DEFAULT_WORKSPACE_USER_VIEW,
   DEFAULT_SERVER_SETTINGS,
   ProjectId,
   type ScopedThreadRef,
   type ResolvedKeybindingsConfig,
   type SidebarProjectGroupingMode,
   ThreadId,
+  type WorkspaceUser,
+  WorkspaceUserId,
+  type WorkspaceUserView,
 } from "@t3tools/contracts";
+import { resolveWorkspaceUserView } from "@t3tools/shared/model";
 import {
   parseScopedThreadKey,
   scopedProjectKey,
@@ -201,7 +206,12 @@ import { SidebarUpdatePill } from "./sidebar/SidebarUpdatePill";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { useIsMobile } from "~/hooks/useMediaQuery";
 import { CommandDialogTrigger } from "./ui/command";
-import { useClientSettings, useUpdateClientSettings } from "~/hooks/useSettings";
+import {
+  useClientSettings,
+  usePrimarySettings,
+  useUpdateClientSettings,
+} from "~/hooks/useSettings";
+import { setActiveWorkspaceUserView } from "../state/shell";
 import { primaryServerConfigAtom, primaryServerKeybindingsAtom } from "../state/server";
 import {
   derivePhysicalProjectKey,
@@ -238,6 +248,16 @@ const PROJECT_GROUPING_MODE_LABELS: Record<SidebarProjectGroupingMode, string> =
 };
 const SIDEBAR_ICON_ACTION_BUTTON_CLASS =
   "inline-flex h-6 min-w-6 cursor-pointer items-center justify-center rounded-md px-[calc(--spacing(1)-1px)] text-muted-foreground/60 hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring";
+
+function workspaceUserViewsEqual(left: WorkspaceUserView, right: WorkspaceUserView): boolean {
+  if (left.kind !== right.kind) {
+    return false;
+  }
+  if (left.kind === "all") {
+    return true;
+  }
+  return right.kind === "user" && left.userId === right.userId;
+}
 
 function SidebarThreadDetailPrewarmer({ threadRef }: { readonly threadRef: ScopedThreadRef }) {
   useEnvironmentThread(threadRef.environmentId, threadRef.threadId);
@@ -2747,6 +2767,9 @@ interface SidebarProjectsContentProps {
   threadSortOrder: SidebarThreadSortOrder;
   projectGroupingMode: SidebarProjectGroupingMode;
   threadPreviewCount: SidebarThreadPreviewCount;
+  workspaceUsers: ReadonlyArray<WorkspaceUser>;
+  workspaceUserView: WorkspaceUserView;
+  onWorkspaceUserViewChange: (userView: WorkspaceUserView) => void;
   updateSettings: ReturnType<typeof useUpdateClientSettings>;
   openAddProject: () => void;
   isManualProjectSorting: boolean;
@@ -2788,6 +2811,9 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     threadSortOrder,
     projectGroupingMode,
     threadPreviewCount,
+    workspaceUsers,
+    workspaceUserView,
+    onWorkspaceUserViewChange,
     updateSettings,
     openAddProject,
     isManualProjectSorting,
@@ -2840,6 +2866,21 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     },
     [updateSettings],
   );
+  const workspaceUserViewValue =
+    workspaceUserView.kind === "all" ? "all" : workspaceUserView.userId;
+  const handleWorkspaceUserViewValueChange = useCallback(
+    (value: string | null) => {
+      if (value === null) {
+        return;
+      }
+      onWorkspaceUserViewChange(
+        value === "all"
+          ? DEFAULT_WORKSPACE_USER_VIEW
+          : { kind: "user", userId: WorkspaceUserId.make(value) },
+      );
+    },
+    [onWorkspaceUserViewChange],
+  );
 
   return (
     <SidebarContent className="gap-0">
@@ -2890,6 +2931,28 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
         </SidebarGroup>
       ) : null}
       <SidebarGroup className="px-2 py-2">
+        <div className="mb-2 px-1">
+          <Select value={workspaceUserViewValue} onValueChange={handleWorkspaceUserViewValueChange}>
+            <SelectTrigger className="h-7 w-full px-2 text-xs" aria-label="Thread owner view">
+              <SelectValue>
+                {workspaceUserView.kind === "all"
+                  ? "All"
+                  : (workspaceUsers.find((user) => user.id === workspaceUserView.userId)
+                      ?.displayName ?? "All")}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectPopup align="start" alignItemWithTrigger={false}>
+              <SelectItem hideIndicator value="all">
+                All
+              </SelectItem>
+              {workspaceUsers.map((user) => (
+                <SelectItem key={user.id} hideIndicator value={user.id}>
+                  {user.displayName}
+                </SelectItem>
+              ))}
+            </SelectPopup>
+          </Select>
+        </div>
         <div className="mb-1 flex items-center justify-between pl-2 pr-1.5">
           <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
             Projects
@@ -3021,7 +3084,20 @@ export default function Sidebar() {
   const sidebarProjectGroupingMode = useClientSettings((s) => s.sidebarProjectGroupingMode);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const sidebarThreadPreviewCount = useClientSettings((s) => s.sidebarThreadPreviewCount);
+  const activeWorkspaceUserViewSetting = useClientSettings((s) => s.activeWorkspaceUserView);
+  const workspaceUsers = usePrimarySettings((s) => s.workspaceUsers);
   const updateSettings = useUpdateClientSettings();
+  const workspaceUserView = useMemo(
+    () => resolveWorkspaceUserView(activeWorkspaceUserViewSetting, workspaceUsers),
+    [activeWorkspaceUserViewSetting, workspaceUsers],
+  );
+  const handleWorkspaceUserViewChange = useCallback(
+    (userView: WorkspaceUserView) => {
+      setActiveWorkspaceUserView(userView);
+      updateSettings({ activeWorkspaceUserView: userView });
+    },
+    [updateSettings],
+  );
   const handleNewThread = useNewThreadHandler();
   const { archiveThread, deleteThread } = useThreadActions();
   const { isMobile, setOpenMobile } = useSidebar();
@@ -3058,6 +3134,13 @@ export default function Sidebar() {
       ),
     [environments],
   );
+
+  useEffect(() => {
+    setActiveWorkspaceUserView(workspaceUserView);
+    if (!workspaceUserViewsEqual(workspaceUserView, activeWorkspaceUserViewSetting)) {
+      updateSettings({ activeWorkspaceUserView: workspaceUserView });
+    }
+  }, [activeWorkspaceUserViewSetting, updateSettings, workspaceUserView]);
   const orderedProjects = useMemo(() => {
     return orderItemsByPreferredIds({
       items: projects,
@@ -3337,6 +3420,27 @@ export default function Sidebar() {
       threadsByProjectKey,
     ],
   );
+  const firstVisibleThreadRef = useMemo(() => {
+    const projectOrder = activeRouteProjectKey
+      ? [
+          ...sortedProjects.filter((project) => project.projectKey === activeRouteProjectKey),
+          ...sortedProjects.filter((project) => project.projectKey !== activeRouteProjectKey),
+        ]
+      : sortedProjects;
+    for (const project of projectOrder) {
+      const projectThreads = sortThreads(
+        (threadsByProjectKey.get(project.projectKey) ?? []).filter(
+          (thread) => thread.archivedAt === null,
+        ),
+        sidebarThreadSortOrder,
+      );
+      const thread = projectThreads[0];
+      if (thread) {
+        return scopeThreadRef(thread.environmentId, thread.id);
+      }
+    }
+    return null;
+  }, [activeRouteProjectKey, sidebarThreadSortOrder, sortedProjects, threadsByProjectKey]);
   const threadJumpCommandByKey = useMemo(() => {
     const mapping = new Map<string, NonNullable<ReturnType<typeof threadJumpCommandForIndex>>>();
     for (const [visibleThreadIndex, threadKey] of visibleSidebarThreadKeys.entries()) {
@@ -3392,6 +3496,24 @@ export default function Sidebar() {
       }),
     [prewarmedSidebarThreadKeys],
   );
+
+  useEffect(() => {
+    if (isOnSettings || routeThreadKey === null || sidebarThreadByKey.has(routeThreadKey)) {
+      return;
+    }
+    if (firstVisibleThreadRef) {
+      navigateToThread(firstVisibleThreadRef);
+      return;
+    }
+    void navigate({ to: "/" });
+  }, [
+    firstVisibleThreadRef,
+    isOnSettings,
+    navigate,
+    navigateToThread,
+    routeThreadKey,
+    sidebarThreadByKey,
+  ]);
 
   useEffect(() => {
     updateThreadJumpHintsVisibility(shouldShowThreadJumpHintsNow);
@@ -3603,6 +3725,9 @@ export default function Sidebar() {
             threadSortOrder={sidebarThreadSortOrder}
             projectGroupingMode={sidebarProjectGroupingMode}
             threadPreviewCount={sidebarThreadPreviewCount}
+            workspaceUsers={workspaceUsers}
+            workspaceUserView={workspaceUserView}
+            onWorkspaceUserViewChange={handleWorkspaceUserViewChange}
             updateSettings={updateSettings}
             openAddProject={openAddProjectCommandPalette}
             isManualProjectSorting={isManualProjectSorting}

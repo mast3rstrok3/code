@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   CheckpointRef,
+  DEFAULT_WORKSPACE_USER_ID,
   EventId,
   MessageId,
   ProjectId,
@@ -24,6 +25,7 @@ const baseEventFields = {
 const baseThread: OrchestrationThread = {
   id: ThreadId.make("thread-1"),
   projectId: ProjectId.make("project-1"),
+  ownerUserId: DEFAULT_WORKSPACE_USER_ID,
   title: "Test Thread",
   modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
   runtimeMode: "full-access",
@@ -80,6 +82,7 @@ describe("applyThreadDetailEvent", () => {
         payload: {
           threadId: ThreadId.make("thread-2"),
           projectId: ProjectId.make("project-1"),
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           title: "New Thread",
           modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
           runtimeMode: "full-access",

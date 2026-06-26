@@ -1,5 +1,6 @@
 import {
   CheckpointRef,
+  DEFAULT_WORKSPACE_USER_ID,
   EventId,
   MessageId,
   ProjectId,
@@ -49,6 +50,7 @@ describe("deriveOrchestrationBatchEffects", () => {
       makeEvent("thread.created", {
         threadId: createdThreadId,
         projectId: ProjectId.make("project-1"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Created thread",
         modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
         runtimeMode: "full-access",
@@ -86,6 +88,7 @@ describe("deriveOrchestrationBatchEffects", () => {
       makeEvent("thread.created", {
         threadId,
         projectId: ProjectId.make("project-1"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Recreated thread",
         modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
         runtimeMode: "full-access",

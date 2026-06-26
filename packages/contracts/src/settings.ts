@@ -6,6 +6,13 @@ import { TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
 import { DEFAULT_GIT_TEXT_GENERATION_MODEL, ProviderOptionSelections } from "./model.ts";
 import { ModelSelection } from "./orchestration.ts";
 import { ProviderInstanceConfig, ProviderInstanceId } from "./providerInstance.ts";
+import {
+  DEFAULT_WORKSPACE_USER,
+  DEFAULT_WORKSPACE_USER_VIEW,
+  WorkspaceUser,
+  WorkspaceUserId,
+  WorkspaceUserView,
+} from "./workspaceUsers.ts";
 
 // ── Client Settings (local-only) ───────────────────────────────
 
@@ -40,6 +47,9 @@ export type SidebarThreadPreviewCount = typeof SidebarThreadPreviewCount.Type;
 export const DEFAULT_SIDEBAR_THREAD_PREVIEW_COUNT: SidebarThreadPreviewCount = 6;
 
 export const ClientSettingsSchema = Schema.Struct({
+  activeWorkspaceUserView: WorkspaceUserView.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_WORKSPACE_USER_VIEW)),
+  ),
   autoOpenPlanSidebar: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   confirmThreadArchive: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   confirmThreadDelete: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
@@ -417,6 +427,9 @@ export const ServerSettings = Schema.Struct({
   implementation: ImplementationWorkflowSettings.pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  workspaceUsers: Schema.Array(WorkspaceUser).pipe(
+    Schema.withDecodingDefault(Effect.succeed([DEFAULT_WORKSPACE_USER])),
+  ),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
@@ -509,6 +522,17 @@ const OpenCodeSettingsPatch = Schema.Struct({
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
+const WorkspaceUserGithubSettingsPatch = Schema.Struct({
+  personalAccessToken: Schema.optionalKey(TrimmedString),
+  personalAccessTokenRedacted: Schema.optionalKey(Schema.Boolean),
+});
+
+const WorkspaceUserPatch = Schema.Struct({
+  id: WorkspaceUserId,
+  displayName: TrimmedNonEmptyString,
+  github: Schema.optionalKey(WorkspaceUserGithubSettingsPatch),
+});
+
 export const ServerSettingsPatch = Schema.Struct({
   // Server settings
   enableAssistantStreaming: Schema.optionalKey(Schema.Boolean),
@@ -543,10 +567,12 @@ export const ServerSettingsPatch = Schema.Struct({
   // patches risk leaving driver-specific config in a half-merged state.
   // The web UI sends a fully-formed map every time it edits this field.
   providerInstances: Schema.optionalKey(Schema.Record(ProviderInstanceId, ProviderInstanceConfig)),
+  workspaceUsers: Schema.optionalKey(Schema.Array(WorkspaceUserPatch)),
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 
 export const ClientSettingsPatch = Schema.Struct({
+  activeWorkspaceUserView: Schema.optionalKey(WorkspaceUserView),
   autoOpenPlanSidebar: Schema.optionalKey(Schema.Boolean),
   confirmThreadArchive: Schema.optionalKey(Schema.Boolean),
   confirmThreadDelete: Schema.optionalKey(Schema.Boolean),

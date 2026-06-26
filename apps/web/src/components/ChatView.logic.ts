@@ -1,5 +1,6 @@
 import {
   type EnvironmentId,
+  DEFAULT_WORKSPACE_USER_ID,
   isProviderDriverKind,
   ProjectId,
   type ModelSelection,
@@ -36,6 +37,7 @@ export function buildLocalDraftThread(
     id: threadId,
     environmentId: draftThread.environmentId,
     projectId: draftThread.projectId,
+    ownerUserId: DEFAULT_WORKSPACE_USER_ID,
     title: "New thread",
     modelSelection: fallbackModelSelection,
     runtimeMode: draftThread.runtimeMode,
