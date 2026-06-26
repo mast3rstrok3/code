@@ -1,6 +1,7 @@
 import {
   ChatAttachment,
   CheckpointRef,
+  DEFAULT_WORKSPACE_USER_ID,
   DEFAULT_WORKSPACE_USER_VIEW,
   IsoDateTime,
   MessageId,
@@ -342,7 +343,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           project_id AS "projectId",
-          owner_user_id AS "ownerUserId",
+          COALESCE(NULLIF(trim(owner_user_id), ''), ${DEFAULT_WORKSPACE_USER_ID}) AS "ownerUserId",
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
@@ -371,7 +372,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           project_id AS "projectId",
-          owner_user_id AS "ownerUserId",
+          COALESCE(NULLIF(trim(owner_user_id), ''), ${DEFAULT_WORKSPACE_USER_ID}) AS "ownerUserId",
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
@@ -402,7 +403,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           project_id AS "projectId",
-          owner_user_id AS "ownerUserId",
+          COALESCE(NULLIF(trim(owner_user_id), ''), ${DEFAULT_WORKSPACE_USER_ID}) AS "ownerUserId",
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
@@ -765,7 +766,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           project_id AS "projectId",
-          owner_user_id AS "ownerUserId",
+          COALESCE(NULLIF(trim(owner_user_id), ''), ${DEFAULT_WORKSPACE_USER_ID}) AS "ownerUserId",
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
