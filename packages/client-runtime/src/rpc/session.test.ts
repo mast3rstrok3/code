@@ -26,6 +26,7 @@ type SocketEvent = {
   readonly data?: unknown;
   readonly reason?: string;
   readonly type: SocketEventType;
+  readonly wasClean?: boolean;
 };
 type SocketListener = (event: SocketEvent) => void;
 
@@ -58,12 +59,16 @@ class TestWebSocket {
     this.sent.push(data);
   }
 
-  close(code = 1000, reason = "") {
+  close(code = 1000, reason = "", wasClean = code === 1000) {
     if (this.readyState === TestWebSocket.CLOSED) {
       return;
     }
     this.readyState = TestWebSocket.CLOSED;
-    this.emit("close", { code, reason, type: "close" });
+    this.emit("close", { code, reason, type: "close", wasClean });
+  }
+
+  error() {
+    this.emit("error", { type: "error" });
   }
 
   open() {
@@ -218,14 +223,14 @@ describe("RpcSessionFactory", () => {
       expect(config).toEqual(SERVER_CONFIG);
       expect(socket.sent).toHaveLength(1);
 
-      socket.close(1012, "service restart");
+      socket.close(1012, "service restart", false);
       const error = yield* Effect.flip(session.closed);
 
       expect(error).toBeInstanceOf(ConnectionTransientError);
-      expect(error).toMatchObject({
-        reason: "transport",
-        message: "Test environment disconnected.",
-      });
+      expect(error.reason).toBe("transport");
+      expect(error.message).toContain("Test environment disconnected.");
+      expect(error.message).toContain("WebSocket close code 1012 (unclean)");
+      expect(error.message).toContain("service restart");
       yield* Effect.yieldNow;
       expect(sockets).toHaveLength(1);
     }),
@@ -268,9 +273,61 @@ describe("RpcSessionFactory", () => {
       expect(error).toBeInstanceOf(ConnectionTransientError);
       expect(error).toMatchObject({
         reason: "transport",
-        message: "Test environment could not establish a WebSocket connection.",
       });
+      expect(error.message).toContain(
+        "Test environment could not establish a WebSocket connection.",
+      );
+      expect(error.message).toContain("WebSocket close code 1000 (clean)");
       expect(sockets[0]?.readyState).toBe(TestWebSocket.CLOSED);
     }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("includes native close details when the websocket closes before opening", () =>
+    Effect.gen(function* () {
+      const { factory, sockets } = yield* makeFactory();
+
+      const error = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* factory.connect(PREPARED);
+          const readyFiber = yield* Effect.forkChild(Effect.flip(session.ready));
+          const socket = yield* awaitSocket(sockets);
+
+          socket.close(1006, "proxy closed before upgrade", false);
+          return yield* Fiber.join(readyFiber);
+        }),
+      );
+
+      expect(error).toBeInstanceOf(ConnectionTransientError);
+      expect(error.reason).toBe("transport");
+      expect(error.message).toContain(
+        "Test environment could not establish a WebSocket connection.",
+      );
+      expect(error.message).toContain("WebSocket close code 1006 (unclean)");
+      expect(error.message).toContain("proxy closed before upgrade");
+    }),
+  );
+
+  it.effect("includes native error details when the websocket errors before opening", () =>
+    Effect.gen(function* () {
+      const { factory, sockets } = yield* makeFactory();
+
+      const error = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* factory.connect(PREPARED);
+          const readyFiber = yield* Effect.forkChild(Effect.flip(session.ready));
+          const socket = yield* awaitSocket(sockets);
+
+          socket.error();
+          return yield* Fiber.join(readyFiber);
+        }),
+      );
+
+      expect(error).toBeInstanceOf(ConnectionTransientError);
+      expect(error.reason).toBe("transport");
+      expect(error.message).toContain(
+        "Test environment could not establish a WebSocket connection.",
+      );
+      expect(error.message).toContain("WebSocket error event");
+    }),
   );
 });

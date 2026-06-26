@@ -1,8 +1,10 @@
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -118,6 +120,88 @@ import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
+
+type WebSocketLifecycleLogAttributes = Record<
+  string,
+  string | number | boolean | ReadonlyArray<string>
+>;
+
+function optionalLogAttribute(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized && normalized.length > 0 ? normalized : undefined;
+}
+
+function addOptionalLogAttribute(
+  attributes: WebSocketLifecycleLogAttributes,
+  key: string,
+  value: string | undefined,
+) {
+  const normalized = optionalLogAttribute(value);
+  if (normalized) {
+    attributes[key] = normalized;
+  }
+}
+
+export function webSocketRequestLogAttributes(
+  request: Pick<HttpServerRequest.HttpServerRequest, "headers" | "remoteAddress">,
+): WebSocketLifecycleLogAttributes {
+  const attributes: WebSocketLifecycleLogAttributes = {};
+  addOptionalLogAttribute(
+    attributes,
+    "http.remote_address",
+    Option.getOrUndefined(request.remoteAddress),
+  );
+  addOptionalLogAttribute(attributes, "http.user_agent", request.headers["user-agent"]);
+  addOptionalLogAttribute(attributes, "http.forwarded_for", request.headers["x-forwarded-for"]);
+  addOptionalLogAttribute(attributes, "http.forwarded_proto", request.headers["x-forwarded-proto"]);
+  return attributes;
+}
+
+function webSocketSessionLogAttributes(input: {
+  readonly environmentId: string;
+  readonly request: HttpServerRequest.HttpServerRequest;
+  readonly session: EnvironmentAuth.AuthenticatedSession;
+}): WebSocketLifecycleLogAttributes {
+  return {
+    "environment.id": input.environmentId,
+    "auth.session.id": input.session.sessionId,
+    "auth.session.method": input.session.method,
+    "auth.session.subject": input.session.subject,
+    "auth.session.scopes": input.session.scopes,
+    ...webSocketRequestLogAttributes(input.request),
+  };
+}
+
+function logWebSocketLifecycle(
+  enabled: boolean,
+  message: string,
+  attributes: WebSocketLifecycleLogAttributes,
+) {
+  return enabled ? Effect.logInfo(message).pipe(Effect.annotateLogs(attributes)) : Effect.void;
+}
+
+function logWebSocketClosed(input: {
+  readonly attributes: WebSocketLifecycleLogAttributes;
+  readonly durationMs: number;
+  readonly enabled: boolean;
+  readonly exit: Exit.Exit<unknown, unknown>;
+}) {
+  if (!input.enabled) {
+    return Effect.void;
+  }
+  const attributes: WebSocketLifecycleLogAttributes = {
+    ...input.attributes,
+    "websocket.duration_ms": input.durationMs,
+    "websocket.exit": Exit.isSuccess(input.exit) ? "success" : "failure",
+  };
+  if (Exit.isFailure(input.exit)) {
+    attributes["cause.reason_count"] = input.exit.cause.reasons.length;
+  }
+  const log = Exit.isSuccess(input.exit)
+    ? Effect.logInfo("WebSocket connection closed.")
+    : Effect.logWarning("WebSocket connection failed.");
+  return log.pipe(Effect.annotateLogs(attributes));
+}
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -972,7 +1056,9 @@ const makeWsRpcLayer = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
       ): Effect.Effect<{ readonly githubPersonalAccessToken: string } | undefined, never> => {
         const threadId = input.threadId;
         if (threadId === undefined) {
-          return Effect.succeed(undefined);
+          return Effect.void.pipe(
+            Effect.as(undefined as { readonly githubPersonalAccessToken: string } | undefined),
+          );
         }
         return Effect.gen(function* () {
           const thread = yield* projectionSnapshotQuery
@@ -1892,6 +1978,8 @@ export const websocketRpcRouteLayer = Layer.unwrap(
       "/ws",
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest;
+        const config = yield* ServerConfig.ServerConfig;
+        const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
         const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
         const sessions = yield* SessionStore.SessionStore;
         const session = yield* serverAuth.authenticateWebSocketUpgrade(request).pipe(
@@ -1902,6 +1990,13 @@ export const websocketRpcRouteLayer = Layer.unwrap(
             failEnvironmentInternal("internal_error", error),
           ),
         );
+        const environmentId = yield* serverEnvironment.getEnvironmentId;
+        const startedAt = yield* Clock.currentTimeMillis;
+        const lifecycleAttributes = webSocketSessionLogAttributes({
+          environmentId,
+          request,
+          session,
+        });
         const rpcWebSocketHttpEffect = yield* RpcServer.toHttpEffectWebsocket(WsRpcGroup, {
           disableTracing: true,
         }).pipe(
@@ -1935,9 +2030,23 @@ export const websocketRpcRouteLayer = Layer.unwrap(
           ),
         );
         return yield* Effect.acquireUseRelease(
-          sessions.markConnected(session.sessionId),
+          logWebSocketLifecycle(
+            config.logWebSocketEvents,
+            "WebSocket connection opened.",
+            lifecycleAttributes,
+          ).pipe(Effect.andThen(sessions.markConnected(session.sessionId))),
           () => rpcWebSocketHttpEffect,
-          () => sessions.markDisconnected(session.sessionId),
+          (_resource, exit) =>
+            Effect.gen(function* () {
+              const endedAt = yield* Clock.currentTimeMillis;
+              yield* sessions.markDisconnected(session.sessionId);
+              yield* logWebSocketClosed({
+                attributes: lifecycleAttributes,
+                durationMs: endedAt - startedAt,
+                enabled: config.logWebSocketEvents,
+                exit,
+              });
+            }),
         );
       }).pipe(
         Effect.catchTags({
