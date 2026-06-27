@@ -106,6 +106,8 @@ import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
+import { DevReviewReplayEventRepository } from "./persistence/Services/DevReviewReplayEvents.ts";
+import { ProjectionThreadDevReviewRepository } from "./persistence/Services/ProjectionThreadDevReviews.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
@@ -157,6 +159,8 @@ const makeDefaultOrchestrationReadModel = () => {
         id: defaultThreadId,
         projectId: defaultProjectId,
         ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+        parentThreadId: null,
+        workflowRole: null,
         title: "Default Thread",
         modelSelection: defaultModelSelection,
         interactionMode: "default" as const,
@@ -171,10 +175,13 @@ const makeDefaultOrchestrationReadModel = () => {
         session: null,
         activities: [],
         proposedPlans: [],
+        planningWorkflow: null,
+        devReviews: [],
         checkpoints: [],
         deletedAt: null,
       },
     ],
+    implementationRuns: [],
   };
 };
 
@@ -202,6 +209,8 @@ const makeDefaultOrchestrationThreadShell = (
     hasPendingUserInput: false,
     hasActionableProposedPlan: false,
     ...overrides,
+    parentThreadId: overrides.parentThreadId ?? null,
+    workflowRole: overrides.workflowRole ?? null,
   };
 };
 
@@ -524,6 +533,22 @@ const buildAppUnderTest = (options?: {
       : ReviewService.layer.pipe(
           Layer.provideMerge(gitVcsDriverLayer),
           Layer.provide(vcsDriverRegistryLayer),
+          Layer.provide(
+            Layer.succeed(ProjectionThreadDevReviewRepository, {
+              upsert: () => Effect.die("unexpected Dev Review upsert"),
+              getById: () => Effect.succeed(Option.none()),
+              listByThreadId: () => Effect.succeed([]),
+              listAll: () => Effect.succeed([]),
+              deleteByThreadId: () => Effect.die("unexpected Dev Review delete"),
+            }),
+          ),
+          Layer.provide(
+            Layer.succeed(DevReviewReplayEventRepository, {
+              appendEvents: () => Effect.die("unexpected Dev Review replay append"),
+              listByReviewId: () => Effect.succeed([]),
+              countByReviewId: () => Effect.succeed(0),
+            }),
+          ),
         );
     const vcsStatusBroadcasterLayer = options?.layers?.vcsStatusBroadcaster
       ? Layer.mock(VcsStatusBroadcaster.VcsStatusBroadcaster)({
@@ -5445,6 +5470,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             id: ThreadId.make("thread-1"),
             projectId: ProjectId.make("project-a"),
             ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+            parentThreadId: null,
+            workflowRole: null,
             title: "Thread A",
             modelSelection: defaultModelSelection,
             interactionMode: "default" as const,
@@ -5459,10 +5486,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             session: null,
             activities: [],
             proposedPlans: [],
+            planningWorkflow: null,
+            devReviews: [],
             checkpoints: [],
             deletedAt: null,
           },
         ],
+        implementationRuns: [],
       };
 
       yield* buildAppUnderTest({

@@ -18,7 +18,12 @@ import type {
   VcsStatusInput,
   VcsStatusResult,
 } from "./git.ts";
-import type { ReviewDiffPreviewInput, ReviewDiffPreviewResult } from "./review.ts";
+import {
+  DevReviewId,
+  DevReviewReplayMetadata,
+  type ReviewDiffPreviewInput,
+  type ReviewDiffPreviewResult,
+} from "./review.ts";
 import type { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem.ts";
 import type { AssetCreateUrlInput, AssetCreateUrlResult } from "./assets.ts";
 import type {
@@ -606,6 +611,23 @@ export const DesktopPreviewRecordingArtifactSchema: Schema.Codec<DesktopPreviewR
     createdAt: Schema.String,
   });
 
+export interface DesktopPreviewDevReviewReplayEventBatch {
+  tabId: string;
+  reviewId: string;
+  events: readonly unknown[];
+  eventCount: number;
+  emittedAt: string;
+}
+
+export const DesktopPreviewDevReviewReplayEventBatchSchema: Schema.Codec<DesktopPreviewDevReviewReplayEventBatch> =
+  Schema.Struct({
+    tabId: DesktopPreviewTabIdSchema,
+    reviewId: DevReviewId,
+    events: Schema.Array(Schema.Unknown),
+    eventCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+    emittedAt: Schema.String,
+  });
+
 export interface DesktopPreviewScreenshotArtifact {
   id: string;
   tabId: string;
@@ -848,6 +870,11 @@ export const DesktopPreviewRecordingSaveInputSchema = Schema.Struct({
   data: Schema.Uint8Array,
 });
 
+export const DesktopPreviewDevReviewReplayInputSchema = Schema.Struct({
+  tabId: DesktopPreviewTabIdSchema,
+  reviewId: DevReviewId,
+});
+
 export const DesktopPreviewAutomationClickInputSchema = Schema.Struct({
   tabId: DesktopPreviewTabIdSchema,
   input: PreviewAutomationClickInput,
@@ -981,6 +1008,11 @@ export interface DesktopPreviewBridge {
       data: Uint8Array,
     ) => Promise<DesktopPreviewRecordingArtifact>;
     onFrame: (listener: (frame: DesktopPreviewRecordingFrame) => void) => () => void;
+  };
+  devReviewReplay: {
+    start: (tabId: string, reviewId: string) => Promise<DevReviewReplayMetadata>;
+    stop: (tabId: string, reviewId: string) => Promise<DevReviewReplayMetadata>;
+    onEvents: (listener: (batch: DesktopPreviewDevReviewReplayEventBatch) => void) => () => void;
   };
   automation: {
     status: (tabId: string) => Promise<PreviewAutomationStatus>;

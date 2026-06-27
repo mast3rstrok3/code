@@ -6,14 +6,22 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 
 import {
+  DevReviewReplayError,
   VcsRepositoryDetectionError,
   VcsUnsupportedOperationError,
+  type DevReviewReplayAppendEventsInput,
+  type DevReviewReplayAppendEventsResult,
+  type DevReviewReplayGetInput,
+  type DevReviewReplayGetResult,
   type ReviewDiffPreviewError,
   type ReviewDiffPreviewInput,
   type ReviewDiffPreviewResult,
 } from "@t3tools/contracts";
+import * as Option from "effect/Option";
 
 import * as ServerConfig from "../config.ts";
+import { DevReviewReplayEventRepository } from "../persistence/Services/DevReviewReplayEvents.ts";
+import { ProjectionThreadDevReviewRepository } from "../persistence/Services/ProjectionThreadDevReviews.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 
@@ -23,6 +31,12 @@ export class ReviewService extends Context.Service<
     readonly getDiffPreview: (
       input: ReviewDiffPreviewInput,
     ) => Effect.Effect<ReviewDiffPreviewResult, ReviewDiffPreviewError>;
+    readonly appendDevReviewReplayEvents: (
+      input: DevReviewReplayAppendEventsInput,
+    ) => Effect.Effect<DevReviewReplayAppendEventsResult, DevReviewReplayError>;
+    readonly getDevReviewReplay: (
+      input: DevReviewReplayGetInput,
+    ) => Effect.Effect<DevReviewReplayGetResult, DevReviewReplayError>;
   }
 >()("t3/review/ReviewService") {}
 
@@ -32,6 +46,8 @@ export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const vcsRegistry = yield* VcsDriverRegistry.VcsDriverRegistry;
   const git = yield* GitVcsDriver.GitVcsDriver;
+  const devReviewRepository = yield* ProjectionThreadDevReviewRepository;
+  const replayEventsRepository = yield* DevReviewReplayEventRepository;
 
   const canonicalizePath = (value: string) => {
     const resolvedPath = path.resolve(value);
@@ -106,8 +122,99 @@ export const make = Effect.gen(function* () {
     return yield* getDriverDiffPreview(input);
   });
 
+  const replayError = (
+    reviewId: DevReviewReplayError["reviewId"],
+    message: string,
+    cause?: unknown,
+  ) =>
+    new DevReviewReplayError({
+      ...(reviewId === undefined ? {} : { reviewId }),
+      message,
+      ...(cause === undefined ? {} : { cause }),
+    });
+
+  const appendDevReviewReplayEvents: ReviewService["Service"]["appendDevReviewReplayEvents"] =
+    Effect.fn("ReviewService.appendDevReviewReplayEvents")(function* (input) {
+      const now = DateTime.formatIso(yield* DateTime.now);
+      const review = yield* devReviewRepository
+        .getById({ reviewId: input.reviewId })
+        .pipe(
+          Effect.mapError((cause) =>
+            replayError(input.reviewId, "Failed to load the Dev Review record.", cause),
+          ),
+        );
+
+      if (Option.isNone(review)) {
+        return yield* replayError(input.reviewId, "Dev Review record not found.");
+      }
+
+      if (input.events.length > 0) {
+        yield* replayEventsRepository
+          .appendEvents({
+            reviewId: input.reviewId,
+            events: input.events,
+            createdAt: now,
+          })
+          .pipe(
+            Effect.mapError((cause) =>
+              replayError(input.reviewId, "Failed to append Dev Review replay events.", cause),
+            ),
+          );
+      }
+
+      const eventCount = yield* replayEventsRepository
+        .countByReviewId({ reviewId: input.reviewId })
+        .pipe(
+          Effect.mapError((cause) =>
+            replayError(input.reviewId, "Failed to count Dev Review replay events.", cause),
+          ),
+        );
+
+      const replay = review.value.replay;
+      return {
+        status:
+          replay.status === "saved" || replay.status === "failed" ? replay.status : "recording",
+        eventCount,
+        startedAt: replay.startedAt ?? now,
+        completedAt: replay.completedAt,
+        durationMs: replay.durationMs,
+        error: replay.error,
+      };
+    });
+
+  const getDevReviewReplay: ReviewService["Service"]["getDevReviewReplay"] = Effect.fn(
+    "ReviewService.getDevReviewReplay",
+  )(function* (input) {
+    const review = yield* devReviewRepository
+      .getById({ reviewId: input.reviewId })
+      .pipe(
+        Effect.mapError((cause) =>
+          replayError(input.reviewId, "Failed to load the Dev Review record.", cause),
+        ),
+      );
+
+    if (Option.isNone(review)) {
+      return yield* replayError(input.reviewId, "Dev Review record not found.");
+    }
+
+    const chunks = yield* replayEventsRepository
+      .listByReviewId({ reviewId: input.reviewId })
+      .pipe(
+        Effect.mapError((cause) =>
+          replayError(input.reviewId, "Failed to load Dev Review replay events.", cause),
+        ),
+      );
+
+    return {
+      reviewId: input.reviewId,
+      events: chunks.flatMap((chunk) => chunk.events),
+    };
+  });
+
   return ReviewService.of({
     getDiffPreview,
+    appendDevReviewReplayEvents,
+    getDevReviewReplay,
   });
 });
 

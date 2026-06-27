@@ -286,6 +286,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           id: ThreadId.make("thread-1"),
           projectId: asProjectId("project-1"),
           ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+          parentThreadId: null,
+          workflowRole: null,
           title: "Thread 1",
           modelSelection: {
             instanceId: ProviderInstanceId.make("codex"),
@@ -333,6 +335,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               updatedAt: "2026-02-24T00:00:05.500Z",
             },
           ],
+          planningWorkflow: null,
+          devReviews: [],
           activities: [
             {
               id: asEventId("activity-1"),
@@ -397,6 +401,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           id: ThreadId.make("thread-1"),
           projectId: asProjectId("project-1"),
           ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+          parentThreadId: null,
+          workflowRole: null,
           title: "Thread 1",
           modelSelection: {
             instanceId: ProviderInstanceId.make("codex"),

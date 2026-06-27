@@ -7,26 +7,33 @@ import type {
 import { mergeEnvironmentThread } from "@t3tools/client-runtime/state/threads";
 import type {
   OrchestrationMessage,
+  OrchestrationImplementationRun,
+  OrchestrationPlanningPrdId,
+  OrchestrationPlanningWorkflow,
   OrchestrationProposedPlan,
   OrchestrationSession,
   OrchestrationThreadActivity,
+  DevReviewRecord,
   ScopedProjectRef,
   ScopedThreadRef,
   ServerConfig,
 } from "@t3tools/contracts";
-import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 import { Atom } from "effect/unstable/reactivity";
 import { useMemo } from "react";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentProjects } from "./projects";
 import { environmentServerConfigsAtom } from "./server";
-import { environmentThreadDetails, environmentThreadShells } from "./threads";
+import { environmentThreadDetails, environmentThreadShells, threadEnvironment } from "./threads";
+import { useAtomCommand } from "./use-atom-command";
 
 const EMPTY_PROJECT_REFS: ReadonlyArray<ScopedProjectRef> = Object.freeze([]);
 const EMPTY_THREAD_REFS: ReadonlyArray<ScopedThreadRef> = Object.freeze([]);
 const EMPTY_MESSAGES: ReadonlyArray<OrchestrationMessage> = Object.freeze([]);
 const EMPTY_ACTIVITIES: ReadonlyArray<OrchestrationThreadActivity> = Object.freeze([]);
 const EMPTY_PROPOSED_PLANS: ReadonlyArray<OrchestrationProposedPlan> = Object.freeze([]);
+const EMPTY_DEV_REVIEWS: ReadonlyArray<DevReviewRecord> = Object.freeze([]);
+const EMPTY_IMPLEMENTATION_RUNS: ReadonlyArray<OrchestrationImplementationRun> = Object.freeze([]);
 
 const EMPTY_PROJECT_ATOM = Atom.make<EnvironmentProject | null>(null).pipe(
   Atom.withLabel("web-project:empty"),
@@ -51,6 +58,15 @@ const EMPTY_ACTIVITIES_ATOM = Atom.make(EMPTY_ACTIVITIES).pipe(
 );
 const EMPTY_PROPOSED_PLANS_ATOM = Atom.make(EMPTY_PROPOSED_PLANS).pipe(
   Atom.withLabel("web-thread-proposed-plans:empty"),
+);
+const EMPTY_DEV_REVIEWS_ATOM = Atom.make(EMPTY_DEV_REVIEWS).pipe(
+  Atom.withLabel("web-thread-dev-reviews:empty"),
+);
+const EMPTY_PLANNING_WORKFLOW_ATOM = Atom.make<OrchestrationPlanningWorkflow | null>(null).pipe(
+  Atom.withLabel("web-thread-planning-workflow:empty"),
+);
+const EMPTY_IMPLEMENTATION_RUNS_ATOM = Atom.make(EMPTY_IMPLEMENTATION_RUNS).pipe(
+  Atom.withLabel("web-implementation-runs:empty"),
 );
 const EMPTY_SESSION_ATOM = Atom.make<OrchestrationSession | null>(null).pipe(
   Atom.withLabel("web-thread-session:empty"),
@@ -166,10 +182,92 @@ export function useThreadProposedPlans(
   );
 }
 
+export function useThreadPlanningWorkflow(
+  ref: ScopedThreadRef | null,
+): OrchestrationPlanningWorkflow | null {
+  return useAtomValue(
+    ref === null
+      ? EMPTY_PLANNING_WORKFLOW_ATOM
+      : environmentThreadDetails.planningWorkflowAtom(ref),
+  );
+}
+
+export function useThreadDevReviews(ref: ScopedThreadRef | null): ReadonlyArray<DevReviewRecord> {
+  return useAtomValue(
+    ref === null ? EMPTY_DEV_REVIEWS_ATOM : environmentThreadDetails.devReviewsAtom(ref),
+  );
+}
+
+export function useImplementationRuns(
+  environmentId: EnvironmentId | null,
+): ReadonlyArray<OrchestrationImplementationRun> {
+  return useAtomValue(
+    environmentId === null
+      ? EMPTY_IMPLEMENTATION_RUNS_ATOM
+      : environmentThreadShells.environmentImplementationRunsAtom(environmentId),
+  );
+}
+
+export function useImplementationRunsForPrd(
+  environmentId: EnvironmentId | null,
+  prdId: OrchestrationPlanningPrdId | null,
+): ReadonlyArray<OrchestrationImplementationRun> {
+  return useAtomValue(
+    environmentId === null || prdId === null
+      ? EMPTY_IMPLEMENTATION_RUNS_ATOM
+      : environmentThreadShells.implementationRunsByPrdAtom({ environmentId, prdId }),
+  );
+}
+
+export function usePlanningWorkflowThreadShells(
+  environmentId: EnvironmentId | null,
+  projectId?: ProjectId | null,
+): ReadonlyArray<EnvironmentThreadShell> {
+  const shells = useThreadShells();
+  return useMemo(
+    () =>
+      environmentId === null
+        ? []
+        : shells.filter(
+            (thread) =>
+              thread.environmentId === environmentId &&
+              (projectId === undefined || projectId === null || thread.projectId === projectId) &&
+              (thread.parentThreadId !== null ||
+                thread.workflowRole !== null ||
+                thread.planningWorkflowSummary !== undefined),
+          ),
+    [environmentId, projectId, shells],
+  );
+}
+
 export function useThreadSession(ref: ScopedThreadRef | null): OrchestrationSession | null {
   return useAtomValue(
     ref === null ? EMPTY_SESSION_ATOM : environmentThreadDetails.sessionAtom(ref),
   );
+}
+
+export function useLoadPlanningPrdBundleCommand() {
+  return useAtomCommand(threadEnvironment.loadPlanningPrdBundle, {
+    label: "planning PRD bundle load",
+  });
+}
+
+export function useRequestPlanningIssueReviewCommand() {
+  return useAtomCommand(threadEnvironment.requestPlanningIssueReview, {
+    label: "planning issue review request",
+  });
+}
+
+export function useLaunchImplementationRunCommand() {
+  return useAtomCommand(threadEnvironment.launchImplementationRun, {
+    label: "implementation run launch",
+  });
+}
+
+export function useRetryImplementationChangeRequestCommand() {
+  return useAtomCommand(threadEnvironment.retryImplementationChangeRequest, {
+    label: "implementation change request retry",
+  });
 }
 
 export function readProject(ref: ScopedProjectRef): EnvironmentProject | null {

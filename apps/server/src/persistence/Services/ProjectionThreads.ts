@@ -14,6 +14,8 @@ import {
   ProviderInteractionMode,
   RuntimeMode,
   ThreadId,
+  OrchestrationPlanningWorkflowStage,
+  OrchestrationThreadWorkflowRole,
   TurnId,
   WorkspaceUserId,
 } from "@t3tools/contracts";
@@ -28,6 +30,8 @@ export const ProjectionThread = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
   ownerUserId: WorkspaceUserId,
+  parentThreadId: Schema.NullOr(ThreadId),
+  workflowRole: Schema.NullOr(OrchestrationThreadWorkflowRole),
   title: Schema.String,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -42,6 +46,7 @@ export const ProjectionThread = Schema.Struct({
   pendingApprovalCount: NonNegativeInt,
   pendingUserInputCount: NonNegativeInt,
   hasActionableProposedPlan: NonNegativeInt,
+  planningWorkflowStage: Schema.NullOr(OrchestrationPlanningWorkflowStage),
   deletedAt: Schema.NullOr(IsoDateTime),
 });
 export type ProjectionThread = typeof ProjectionThread.Type;

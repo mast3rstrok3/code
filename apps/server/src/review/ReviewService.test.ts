@@ -3,9 +3,12 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 
 import { ServerConfig } from "../config.ts";
+import { DevReviewReplayEventRepository } from "../persistence/Services/DevReviewReplayEvents.ts";
+import { ProjectionThreadDevReviewRepository } from "../persistence/Services/ProjectionThreadDevReviews.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as ReviewService from "./ReviewService.ts";
@@ -25,6 +28,22 @@ function makeLayer(input: {
             input.detectCalls?.push({ cwd: request.cwd });
             return null;
           }),
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(ProjectionThreadDevReviewRepository, {
+        upsert: () => Effect.die("unexpected Dev Review upsert"),
+        getById: () => Effect.succeed(Option.none()),
+        listByThreadId: () => Effect.succeed([]),
+        listAll: () => Effect.succeed([]),
+        deleteByThreadId: () => Effect.die("unexpected Dev Review delete"),
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(DevReviewReplayEventRepository, {
+        appendEvents: () => Effect.die("unexpected Dev Review replay append"),
+        listByReviewId: () => Effect.succeed([]),
+        countByReviewId: () => Effect.succeed(0),
       }),
     ),
     Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),

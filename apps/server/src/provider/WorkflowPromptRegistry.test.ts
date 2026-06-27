@@ -3,6 +3,8 @@ import * as NodeAssert from "node:assert/strict";
 import { describe, it } from "vite-plus/test";
 
 import {
+  isPreviewMcpWorkflowPromptId,
+  isQnaDevReviewWorkflowPromptId,
   listWorkflowPromptContracts,
   resolveWorkflowPromptText,
   WORKFLOW_PROMPT_IDS,
@@ -52,5 +54,23 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /<associated-doc/);
     NodeAssert.match(rendered, /chrome-devtools-mcp\.md/);
     NodeAssert.match(rendered, /--redact-network-headers/);
+  });
+
+  it("registers Q&A Dev Review with preview and dev-review workflow affordances", () => {
+    const contracts = listWorkflowPromptContracts();
+    const qnaReview = contracts.find(
+      (contract) => contract.id === WORKFLOW_PROMPT_IDS.implementationQnaDevReviewCodex,
+    );
+
+    NodeAssert.ok(qnaReview);
+    NodeAssert.equal(qnaReview.stage, "qna-dev-review");
+    NodeAssert.ok(isQnaDevReviewWorkflowPromptId(qnaReview.id));
+    NodeAssert.ok(isPreviewMcpWorkflowPromptId(qnaReview.id));
+
+    const rendered = resolveWorkflowPromptText(qnaReview.id);
+    NodeAssert.match(rendered, /dev_review_get/);
+    NodeAssert.match(rendered, /dev_review_replay_start/);
+    NodeAssert.match(rendered, /dev_review_replay_stop/);
+    NodeAssert.match(rendered, /preview_/);
   });
 });

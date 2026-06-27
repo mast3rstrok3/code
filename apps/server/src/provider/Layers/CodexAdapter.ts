@@ -62,7 +62,7 @@ import {
   type CodexSessionRuntimeShape,
 } from "./CodexSessionRuntime.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
-import { isBrowserDevReviewWorkflowPromptId } from "../WorkflowPromptRegistry.ts";
+import { isPreviewMcpWorkflowPromptId } from "../WorkflowPromptRegistry.ts";
 const isCodexAppServerProcessExitedError = Schema.is(CodexErrors.CodexAppServerProcessExitedError);
 const isCodexAppServerTransportError = Schema.is(CodexErrors.CodexAppServerTransportError);
 const isCodexSessionRuntimeThreadIdMissingError = Schema.is(
@@ -1388,11 +1388,11 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           input.modelSelection?.instanceId === boundInstanceId
             ? getCodexServiceTierOptionValue(input.modelSelection)
             : undefined;
-        const browserDevReview = isBrowserDevReviewWorkflowPromptId(input.workflowPromptId);
-        const mcpSession = browserDevReview
+        const previewMcpWorkflow = isPreviewMcpWorkflowPromptId(input.workflowPromptId);
+        const mcpSession = previewMcpWorkflow
           ? McpProviderSession.readMcpProviderSession(input.threadId)
           : undefined;
-        const appServerArgs = browserDevReview
+        const appServerArgs = previewMcpWorkflow
           ? [
               ...(mcpSession
                 ? [

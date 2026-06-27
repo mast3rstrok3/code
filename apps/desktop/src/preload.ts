@@ -1,5 +1,6 @@
 import type {
   DesktopBridge,
+  DesktopPreviewDevReviewReplayEventBatch,
   DesktopPreviewPointerEvent,
   DesktopPreviewRecordingFrame,
   DesktopPreviewTabState,
@@ -178,6 +179,30 @@ contextBridge.exposeInMainWorld("desktopBridge", {
         ipcRenderer.on(IpcChannels.PREVIEW_RECORDING_FRAME_CHANNEL, wrappedListener);
         return () =>
           ipcRenderer.removeListener(IpcChannels.PREVIEW_RECORDING_FRAME_CHANNEL, wrappedListener);
+      },
+    },
+    devReviewReplay: {
+      start: (tabId, reviewId) =>
+        ipcRenderer.invoke(IpcChannels.PREVIEW_DEV_REVIEW_REPLAY_START_CHANNEL, {
+          tabId,
+          reviewId,
+        }),
+      stop: (tabId, reviewId) =>
+        ipcRenderer.invoke(IpcChannels.PREVIEW_DEV_REVIEW_REPLAY_STOP_CHANNEL, {
+          tabId,
+          reviewId,
+        }),
+      onEvents: (listener) => {
+        const wrappedListener = (_event: Electron.IpcRendererEvent, batch: unknown) => {
+          if (typeof batch !== "object" || batch === null) return;
+          listener(batch as DesktopPreviewDevReviewReplayEventBatch);
+        };
+        ipcRenderer.on(IpcChannels.PREVIEW_DEV_REVIEW_REPLAY_EVENTS_CHANNEL, wrappedListener);
+        return () =>
+          ipcRenderer.removeListener(
+            IpcChannels.PREVIEW_DEV_REVIEW_REPLAY_EVENTS_CHANNEL,
+            wrappedListener,
+          );
       },
     },
     automation: {

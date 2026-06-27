@@ -58,6 +58,8 @@ const readModel: OrchestrationReadModel = {
       id: ThreadId.make("thread-1"),
       projectId: ProjectId.make("project-a"),
       ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+      parentThreadId: null,
+      workflowRole: null,
       title: "Thread A",
       modelSelection: {
         instanceId: ProviderInstanceId.make("codex"),
@@ -75,6 +77,8 @@ const readModel: OrchestrationReadModel = {
       session: null,
       activities: [],
       proposedPlans: [],
+      planningWorkflow: null,
+      devReviews: [],
       checkpoints: [],
       deletedAt: null,
     },
@@ -82,6 +86,8 @@ const readModel: OrchestrationReadModel = {
       id: ThreadId.make("thread-2"),
       projectId: ProjectId.make("project-b"),
       ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+      parentThreadId: null,
+      workflowRole: null,
       title: "Thread B",
       modelSelection: {
         instanceId: ProviderInstanceId.make("codex"),
@@ -99,10 +105,13 @@ const readModel: OrchestrationReadModel = {
       session: null,
       activities: [],
       proposedPlans: [],
+      planningWorkflow: null,
+      devReviews: [],
       checkpoints: [],
       deletedAt: null,
     },
   ],
+  implementationRuns: [],
 };
 
 const messageSendCommand: OrchestrationCommand = {

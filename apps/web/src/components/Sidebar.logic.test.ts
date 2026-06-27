@@ -819,6 +819,8 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     environmentId: localEnvironmentId,
     projectId: ProjectId.make("project-1"),
     ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+    parentThreadId: null,
+    workflowRole: null,
     title: "Thread",
     modelSelection: {
       instanceId: ProviderInstanceId.make("codex"),
@@ -830,6 +832,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     session: null,
     messages: [],
     proposedPlans: [],
+    planningWorkflow: null,
     createdAt: "2026-03-09T10:00:00.000Z",
     archivedAt: null,
     deletedAt: null,
@@ -838,6 +841,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     branch: null,
     worktreePath: null,
     checkpoints: [],
+    devReviews: [],
     activities: [],
     ...overrides,
   };

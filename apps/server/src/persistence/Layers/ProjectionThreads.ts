@@ -34,6 +34,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           thread_id,
           project_id,
           owner_user_id,
+          parent_thread_id,
+          workflow_role,
           title,
           model_selection_json,
           runtime_mode,
@@ -48,12 +50,15 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           pending_approval_count,
           pending_user_input_count,
           has_actionable_proposed_plan,
+          planning_workflow_stage,
           deleted_at
         )
         VALUES (
           ${row.threadId},
           ${row.projectId},
           ${row.ownerUserId},
+          ${row.parentThreadId},
+          ${row.workflowRole},
           ${row.title},
           ${JSON.stringify(row.modelSelection)},
           ${row.runtimeMode},
@@ -68,12 +73,15 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.pendingApprovalCount},
           ${row.pendingUserInputCount},
           ${row.hasActionableProposedPlan},
+          ${row.planningWorkflowStage},
           ${row.deletedAt}
         )
         ON CONFLICT (thread_id)
         DO UPDATE SET
           project_id = excluded.project_id,
           owner_user_id = excluded.owner_user_id,
+          parent_thread_id = excluded.parent_thread_id,
+          workflow_role = excluded.workflow_role,
           title = excluded.title,
           model_selection_json = excluded.model_selection_json,
           runtime_mode = excluded.runtime_mode,
@@ -88,6 +96,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           pending_approval_count = excluded.pending_approval_count,
           pending_user_input_count = excluded.pending_user_input_count,
           has_actionable_proposed_plan = excluded.has_actionable_proposed_plan,
+          planning_workflow_stage = excluded.planning_workflow_stage,
           deleted_at = excluded.deleted_at
       `,
   });
@@ -101,6 +110,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           thread_id AS "threadId",
           project_id AS "projectId",
           COALESCE(NULLIF(trim(owner_user_id), ''), ${DEFAULT_WORKSPACE_USER_ID}) AS "ownerUserId",
+          parent_thread_id AS "parentThreadId",
+          workflow_role AS "workflowRole",
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
@@ -115,6 +126,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
+          planning_workflow_stage AS "planningWorkflowStage",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE thread_id = ${threadId}
@@ -130,6 +142,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           thread_id AS "threadId",
           project_id AS "projectId",
           COALESCE(NULLIF(trim(owner_user_id), ''), ${DEFAULT_WORKSPACE_USER_ID}) AS "ownerUserId",
+          parent_thread_id AS "parentThreadId",
+          workflow_role AS "workflowRole",
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
@@ -144,6 +158,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           pending_approval_count AS "pendingApprovalCount",
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
+          planning_workflow_stage AS "planningWorkflowStage",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE project_id = ${projectId}

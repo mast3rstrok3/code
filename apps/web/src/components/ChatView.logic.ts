@@ -1,6 +1,5 @@
 import {
   type EnvironmentId,
-  DEFAULT_WORKSPACE_USER_ID,
   isProviderDriverKind,
   ProjectId,
   type ModelSelection,
@@ -37,7 +36,9 @@ export function buildLocalDraftThread(
     id: threadId,
     environmentId: draftThread.environmentId,
     projectId: draftThread.projectId,
-    ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+    ownerUserId: draftThread.ownerUserId,
+    parentThreadId: null,
+    workflowRole: null,
     title: "New thread",
     modelSelection: fallbackModelSelection,
     runtimeMode: draftThread.runtimeMode,
@@ -54,6 +55,8 @@ export function buildLocalDraftThread(
     checkpoints: [],
     activities: [],
     proposedPlans: [],
+    planningWorkflow: null,
+    devReviews: [],
   };
 }
 

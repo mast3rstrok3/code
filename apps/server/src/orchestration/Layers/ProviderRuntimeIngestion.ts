@@ -16,6 +16,7 @@ import {
   type OrchestrationThread,
   type OrchestrationThreadActivity,
   type ProviderRuntimeEvent,
+  isPlanningWorkflowInteractionMode,
 } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
@@ -38,6 +39,10 @@ import {
   type ProviderRuntimeIngestionShape,
 } from "../Services/ProviderRuntimeIngestion.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import {
+  parseWorkflowDirectiveFromMarkdown,
+  type WorkflowDirective,
+} from "../workflowDirectives.ts";
 
 const providerTurnKey = (threadId: ThreadId, turnId: TurnId) => `${threadId}:${turnId}`;
 
@@ -53,6 +58,8 @@ const BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_CACHE_CAPACITY = 20_000;
 const BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_TTL = Duration.minutes(120);
 const BUFFERED_PROPOSED_PLAN_BY_ID_CACHE_CAPACITY = 10_000;
 const BUFFERED_PROPOSED_PLAN_BY_ID_TTL = Duration.minutes(120);
+const PROCESSED_WORKFLOW_DIRECTIVE_CACHE_CAPACITY = 10_000;
+const PROCESSED_WORKFLOW_DIRECTIVE_TTL = Duration.minutes(120);
 const MAX_BUFFERED_ASSISTANT_CHARS = 24_000;
 const STRICT_PROVIDER_LIFECYCLE_GUARD = process.env.T3CODE_STRICT_PROVIDER_LIFECYCLE_GUARD !== "0";
 
@@ -176,6 +183,16 @@ function normalizeProposedPlanMarkdown(planMarkdown: string | undefined): string
 
 function hasRenderableAssistantText(text: string | undefined): boolean {
   return (text?.trim().length ?? 0) > 0;
+}
+
+function workflowDispatchErrorDetail(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  return "Unknown workflow directive dispatch error";
 }
 
 function proposedPlanIdForTurn(threadId: ThreadId, turnId: TurnId): string {
@@ -666,6 +683,12 @@ const make = Effect.gen(function* () {
     lookup: () => Effect.succeed({ text: "", createdAt: "" }),
   });
 
+  const processedWorkflowDirectiveKeys = yield* Cache.make<string, boolean>({
+    capacity: PROCESSED_WORKFLOW_DIRECTIVE_CACHE_CAPACITY,
+    timeToLive: PROCESSED_WORKFLOW_DIRECTIVE_TTL,
+    lookup: () => Effect.succeed(false),
+  });
+
   const resolveThreadDetail = Effect.fn("resolveThreadDetail")(function* (threadId: ThreadId) {
     return yield* projectionSnapshotQuery
       .getThreadDetailById(threadId)
@@ -858,6 +881,190 @@ const make = Effect.gen(function* () {
   const clearAssistantMessageState = (messageId: MessageId) =>
     clearBufferedAssistantText(messageId);
 
+  const dispatchWorkflowDirective = (input: {
+    event: ProviderRuntimeEvent;
+    threadId: ThreadId;
+    messageId: MessageId;
+    directive: WorkflowDirective;
+    createdAt: string;
+  }) =>
+    Effect.gen(function* () {
+      const thread = yield* resolveThreadShell(input.threadId);
+      if (!thread) {
+        return;
+      }
+
+      switch (input.directive.type) {
+        case "planning-prd-artifact": {
+          if (
+            !isPlanningWorkflowInteractionMode(thread.interactionMode) ||
+            thread.workflowRole !== null
+          ) {
+            yield* Effect.logWarning(
+              "provider workflow directive ignored for non-planning thread",
+              {
+                directiveType: input.directive.type,
+                threadId: thread.id,
+                workflowRole: thread.workflowRole,
+              },
+            );
+            return;
+          }
+
+          yield* orchestrationEngine.dispatch({
+            type: "thread.planning-prd.apply",
+            commandId: yield* providerCommandId(input.event, "workflow-planning-prd-apply"),
+            threadId: thread.id,
+            sourceMessageId: input.messageId,
+            title: input.directive.title,
+            summaryMarkdown: input.directive.summaryMarkdown,
+            createdAt: input.createdAt,
+          });
+          return;
+        }
+
+        case "planning-issues-artifact": {
+          if (
+            !isPlanningWorkflowInteractionMode(thread.interactionMode) ||
+            thread.workflowRole !== null
+          ) {
+            yield* Effect.logWarning(
+              "provider workflow directive ignored for non-planning thread",
+              {
+                directiveType: input.directive.type,
+                threadId: thread.id,
+                workflowRole: thread.workflowRole,
+              },
+            );
+            return;
+          }
+
+          yield* orchestrationEngine.dispatch({
+            type: "thread.planning-issues.apply",
+            commandId: yield* providerCommandId(input.event, "workflow-planning-issues-apply"),
+            threadId: thread.id,
+            sourceMessageId: input.messageId,
+            prdId: input.directive.prdId,
+            issues: input.directive.issues.map((issue) => ({
+              key: issue.key,
+              title: issue.title,
+              bodyMarkdown: issue.bodyMarkdown,
+              dependencyKeys: [...issue.dependencyKeys],
+            })),
+            createdAt: input.createdAt,
+          });
+          return;
+        }
+
+        case "planning-reviewer-verdict": {
+          if (thread.workflowRole !== "planning-reviewer" || thread.parentThreadId === null) {
+            yield* Effect.logWarning(
+              "provider workflow reviewer verdict ignored for non-reviewer thread",
+              {
+                directiveType: input.directive.type,
+                threadId: thread.id,
+                workflowRole: thread.workflowRole,
+              },
+            );
+            return;
+          }
+
+          const verdictMarkdown = [
+            `Issue review cycle ${input.directive.cycleNumber}: ${
+              input.directive.passed ? "passed" : "failed"
+            }.`,
+            input.directive.dependencyFeedback.length > 0
+              ? `Dependency feedback:\n${input.directive.dependencyFeedback
+                  .map((entry) => `- ${entry}`)
+                  .join("\n")}`
+              : "",
+            input.directive.perIssueFeedback.length > 0
+              ? `Per-issue feedback:\n${input.directive.perIssueFeedback
+                  .map(
+                    (entry) =>
+                      `- ${entry.issueId}: ${entry.passed ? "passed" : "failed"}\n  ${
+                        entry.feedbackMarkdown
+                      }`,
+                  )
+                  .join("\n")}`
+              : "",
+          ]
+            .filter((entry) => entry.length > 0)
+            .join("\n\n");
+
+          yield* orchestrationEngine.dispatch({
+            type: "thread.planning-reviewer-verdict.apply",
+            commandId: yield* providerCommandId(input.event, "workflow-planning-review-apply"),
+            threadId: thread.parentThreadId,
+            reviewerThreadId: thread.id,
+            reviewerMessageId: input.messageId,
+            verdictMarkdown,
+            passed: input.directive.passed,
+            failingPlanningIssueIds: [...input.directive.failingPlanningIssueIds],
+            dependencyFeedback: [...input.directive.dependencyFeedback],
+            perIssueFeedback: input.directive.perIssueFeedback.map((entry) => ({
+              issueId: entry.issueId,
+              passed: entry.passed,
+              feedbackMarkdown: entry.feedbackMarkdown,
+            })),
+            createdAt: input.createdAt,
+          });
+        }
+      }
+    });
+
+  const maybeProcessWorkflowDirective = (input: {
+    event: ProviderRuntimeEvent;
+    threadId: ThreadId;
+    messageId: MessageId;
+    markdown: string;
+    createdAt: string;
+  }) =>
+    Effect.gen(function* () {
+      const thread = yield* resolveThreadShell(input.threadId);
+      if (!thread || !isPlanningWorkflowInteractionMode(thread.interactionMode)) {
+        return;
+      }
+
+      const parseResult = parseWorkflowDirectiveFromMarkdown(input.markdown);
+      if (parseResult.kind === "none") {
+        return;
+      }
+      if (parseResult.kind === "error") {
+        yield* Effect.logWarning("provider workflow directive parse failed", {
+          threadId: input.threadId,
+          messageId: input.messageId,
+          detail: parseResult.message,
+        });
+        return;
+      }
+
+      const directiveKey = `${input.threadId}:${input.messageId}:${parseResult.directive.type}`;
+      const existing = yield* Cache.getOption(processedWorkflowDirectiveKeys, directiveKey);
+      if (Option.getOrElse(existing, () => false)) {
+        return;
+      }
+      yield* Cache.set(processedWorkflowDirectiveKeys, directiveKey, true);
+
+      yield* dispatchWorkflowDirective({
+        event: input.event,
+        threadId: input.threadId,
+        messageId: input.messageId,
+        directive: parseResult.directive,
+        createdAt: input.createdAt,
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("provider workflow directive dispatch failed", {
+            threadId: input.threadId,
+            messageId: input.messageId,
+            directiveType: parseResult.directive.type,
+            detail: workflowDispatchErrorDetail(cause),
+            cause: Cause.pretty(cause),
+          }),
+        ),
+      );
+    });
+
   const flushBufferedAssistantMessage = (input: {
     event: ProviderRuntimeEvent;
     threadId: ThreadId;
@@ -926,7 +1133,9 @@ const make = Effect.gen(function* () {
     commandTag: string;
     finalDeltaCommandTag: string;
     fallbackText?: string;
+    existingText?: string;
     hasProjectedMessage?: boolean;
+    processWorkflowDirective?: boolean;
   }) =>
     Effect.gen(function* () {
       const bufferedText = yield* takeBufferedAssistantText(input.messageId);
@@ -959,6 +1168,19 @@ const make = Effect.gen(function* () {
           ...(input.turnId ? { turnId: input.turnId } : {}),
           createdAt: input.createdAt,
         });
+      }
+
+      if (input.processWorkflowDirective === true) {
+        const directiveMarkdown = `${input.existingText ?? ""}${hasRenderableText ? text : ""}`;
+        if (hasRenderableAssistantText(directiveMarkdown)) {
+          yield* maybeProcessWorkflowDirective({
+            event: input.event,
+            threadId: input.threadId,
+            messageId: input.messageId,
+            markdown: directiveMarkdown,
+            createdAt: input.createdAt,
+          });
+        }
       }
       yield* clearAssistantMessageState(input.messageId);
     });
@@ -1511,6 +1733,10 @@ const make = Effect.gen(function* () {
             commandTag: "assistant-complete",
             finalDeltaCommandTag: "assistant-delta-finalize",
             hasProjectedMessage: existingAssistantMessage !== undefined,
+            processWorkflowDirective: true,
+            ...(existingAssistantMessage?.text !== undefined
+              ? { existingText: existingAssistantMessage.text }
+              : {}),
             ...(assistantCompletion.fallbackText !== undefined && shouldApplyFallbackCompletionText
               ? { fallbackText: assistantCompletion.fallbackText }
               : {}),
@@ -1558,6 +1784,10 @@ const make = Effect.gen(function* () {
                 commandTag: "assistant-complete-finalize",
                 finalDeltaCommandTag: "assistant-delta-finalize-fallback",
                 hasProjectedMessage: findMessageById(messages, assistantMessageId) !== undefined,
+                processWorkflowDirective: true,
+                ...(findMessageById(messages, assistantMessageId)?.text !== undefined
+                  ? { existingText: findMessageById(messages, assistantMessageId)!.text }
+                  : {}),
               }),
             { concurrency: 1 },
           ).pipe(Effect.asVoid);

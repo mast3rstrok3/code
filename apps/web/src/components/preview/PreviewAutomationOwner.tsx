@@ -3,6 +3,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
+  type DevReviewId,
   type PreviewAutomationNavigateInput,
   type PreviewAutomationOpenInput,
   type PreviewAutomationOwner as PreviewAutomationOwnerState,
@@ -21,6 +22,7 @@ import { useRightPanelStore } from "~/rightPanelStore";
 import { resolveBrowserNavigationTarget } from "~/browser/browserTargetResolver";
 import { startBrowserRecording, stopBrowserRecording } from "~/browser/browserRecording";
 import { previewEnvironment } from "~/state/preview";
+import { reviewEnvironment } from "~/state/review";
 import { useEnvironmentConnectionState } from "~/state/environments";
 import { useAtomCommand } from "~/state/use-atom-command";
 
@@ -79,6 +81,19 @@ const waitForDesktopOverlay = async (
     timeoutMs,
   });
 };
+
+function readDevReviewReplayInput(input: unknown): { reviewId: string } {
+  if (
+    typeof input === "object" &&
+    input !== null &&
+    "reviewId" in input &&
+    typeof input.reviewId === "string" &&
+    input.reviewId.trim().length > 0
+  ) {
+    return { reviewId: input.reviewId };
+  }
+  throw new Error("Dev Review replay input requires reviewId.");
+}
 
 const waitForNavigationReadiness = async (
   threadRef: ScopedThreadRef,
@@ -173,6 +188,26 @@ export function PreviewAutomationOwner(props: {
     previewEnvironment.clearAutomationOwner,
     "preview automation owner clear",
   );
+  const appendDevReviewReplayEvents = useAtomCommand(
+    reviewEnvironment.appendDevReviewReplayEvents,
+    {
+      label: "dev review replay event append",
+      reportFailure: false,
+    },
+  );
+  useEffect(() => {
+    if (!previewBridge?.devReviewReplay) return;
+    return previewBridge.devReviewReplay.onEvents((batch) => {
+      if (batch.events.length === 0) return;
+      void appendDevReviewReplayEvents({
+        environmentId: threadRef.environmentId,
+        input: {
+          reviewId: batch.reviewId as DevReviewId,
+          events: [...batch.events],
+        },
+      });
+    });
+  }, [appendDevReviewReplayEvents, threadRef.environmentId]);
   const connectedGenerationRef = useRef<number | null>(null);
   const reportCurrentAutomationOwner = useEffectEvent(() => {
     const state = readThreadPreviewState(threadRef);
@@ -344,6 +379,20 @@ export function PreviewAutomationOwner(props: {
               });
             }
             return artifact;
+          }
+          case "devReviewReplayStart": {
+            if (!previewBridge?.devReviewReplay || !tabId) {
+              throw new PreviewAutomationTargetUnavailableError(unavailableTarget);
+            }
+            const input = readDevReviewReplayInput(request.input);
+            return await previewBridge.devReviewReplay.start(tabId, input.reviewId);
+          }
+          case "devReviewReplayStop": {
+            if (!previewBridge?.devReviewReplay || !tabId) {
+              throw new PreviewAutomationTargetUnavailableError(unavailableTarget);
+            }
+            const input = readDevReviewReplayInput(request.input);
+            return await previewBridge.devReviewReplay.stop(tabId, input.reviewId);
           }
         }
       } catch (cause) {

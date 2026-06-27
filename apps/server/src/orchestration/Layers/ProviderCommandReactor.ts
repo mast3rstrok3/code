@@ -42,7 +42,10 @@ import {
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
-import { isBrowserDevReviewWorkflowPromptId } from "../../provider/WorkflowPromptRegistry.ts";
+import {
+  isPreviewMcpWorkflowPromptId,
+  isQnaDevReviewWorkflowPromptId,
+} from "../../provider/WorkflowPromptRegistry.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 
@@ -540,9 +543,11 @@ const make = Effect.gen(function* () {
         requestedModelSelection !== undefined &&
         !Equal.equals(previousModelSelection, requestedModelSelection);
       const previousWorkflowPromptId = threadWorkflowPromptIds.get(threadId);
-      const browserDevReviewScopeChanged =
-        isBrowserDevReviewWorkflowPromptId(previousWorkflowPromptId) !==
-        isBrowserDevReviewWorkflowPromptId(desiredWorkflowPromptId);
+      const previewMcpScopeChanged =
+        isPreviewMcpWorkflowPromptId(previousWorkflowPromptId) !==
+          isPreviewMcpWorkflowPromptId(desiredWorkflowPromptId) ||
+        isQnaDevReviewWorkflowPromptId(previousWorkflowPromptId) !==
+          isQnaDevReviewWorkflowPromptId(desiredWorkflowPromptId);
 
       if (
         !runtimeModeChanged &&
@@ -550,7 +555,7 @@ const make = Effect.gen(function* () {
         !instanceChanged &&
         !shouldRestartForModelChange &&
         !shouldRestartForModelSelectionChange &&
-        !browserDevReviewScopeChanged
+        !previewMcpScopeChanged
       ) {
         return existingSessionThreadId;
       }
@@ -575,7 +580,7 @@ const make = Effect.gen(function* () {
         instanceChanged,
         shouldRestartForModelChange,
         shouldRestartForModelSelectionChange,
-        browserDevReviewScopeChanged,
+        previewMcpScopeChanged,
         previousWorkflowPromptId,
         desiredWorkflowPromptId,
         hasResumeCursor: resumeCursor !== undefined,

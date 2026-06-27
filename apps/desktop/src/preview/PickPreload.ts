@@ -1,5 +1,6 @@
 // @effect-diagnostics globalDate:off - This isolated Electron preload does not run inside an Effect runtime.
 import { ipcRenderer } from "electron";
+import { record } from "@rrweb/record";
 import { getElementContext } from "react-grab/primitives";
 import type {
   DesktopPreviewAnnotationTheme,
@@ -18,6 +19,10 @@ import {
   ANNOTATION_CAPTURED_CHANNEL,
   ANNOTATION_THEME_CHANNEL,
   CANCEL_PICK_CHANNEL,
+  DEV_REVIEW_REPLAY_EVENTS_CHANNEL,
+  DEV_REVIEW_REPLAY_START_CHANNEL,
+  DEV_REVIEW_REPLAY_STOP_CHANNEL,
+  DEV_REVIEW_REPLAY_STOPPED_CHANNEL,
   ELEMENT_PICKED_CHANNEL,
   HUMAN_INPUT_CHANNEL,
   START_PICK_CHANNEL,
@@ -46,8 +51,118 @@ interface AnnotationSession {
 }
 
 let activeSession: AnnotationSession | null = null;
+let activeReplaySession: DevReviewReplaySession | null = null;
 let idSequence = 0;
 let annotationTheme: DesktopPreviewAnnotationTheme | null = null;
+
+interface DevReviewReplaySession {
+  readonly reviewId: string;
+  readonly startedAt: string;
+  stop: (() => void) | null;
+  eventCount: number;
+  pendingEvents: unknown[];
+  flushTimer: number | null;
+}
+
+const DEV_REVIEW_REPLAY_BATCH_SIZE = 50;
+const DEV_REVIEW_REPLAY_FLUSH_MS = 1_000;
+
+function replayDurationMs(startedAt: string, completedAt: string): number {
+  const started = Date.parse(startedAt);
+  const completed = Date.parse(completedAt);
+  return Number.isFinite(started) && Number.isFinite(completed)
+    ? Math.max(0, completed - started)
+    : 0;
+}
+
+function flushDevReviewReplay(session: DevReviewReplaySession): void {
+  if (session.pendingEvents.length === 0) return;
+  const events = session.pendingEvents.splice(0, session.pendingEvents.length);
+  if (session.flushTimer !== null) {
+    window.clearTimeout(session.flushTimer);
+    session.flushTimer = null;
+  }
+  ipcRenderer.send(DEV_REVIEW_REPLAY_EVENTS_CHANNEL, {
+    reviewId: session.reviewId,
+    events,
+    eventCount: events.length,
+    emittedAt: new Date().toISOString(),
+  });
+}
+
+function scheduleDevReviewReplayFlush(session: DevReviewReplaySession): void {
+  if (session.flushTimer !== null) return;
+  session.flushTimer = window.setTimeout(() => {
+    session.flushTimer = null;
+    flushDevReviewReplay(session);
+  }, DEV_REVIEW_REPLAY_FLUSH_MS);
+}
+
+function stopDevReviewReplay(status: "saved" | "failed", error: string | null): void {
+  const session = activeReplaySession;
+  if (session === null) return;
+  activeReplaySession = null;
+  if (session.flushTimer !== null) {
+    window.clearTimeout(session.flushTimer);
+    session.flushTimer = null;
+  }
+  try {
+    session.stop?.();
+  } catch (cause) {
+    status = "failed";
+    error = cause instanceof Error ? cause.message : String(cause);
+  }
+  flushDevReviewReplay(session);
+  const completedAt = new Date().toISOString();
+  ipcRenderer.send(DEV_REVIEW_REPLAY_STOPPED_CHANNEL, {
+    reviewId: session.reviewId,
+    status,
+    eventCount: session.eventCount,
+    startedAt: session.startedAt,
+    completedAt,
+    durationMs: replayDurationMs(session.startedAt, completedAt),
+    error,
+  });
+}
+
+function startDevReviewReplay(reviewId: string): void {
+  if (activeReplaySession !== null) {
+    stopDevReviewReplay("failed", "A new Dev Review replay capture replaced the active capture.");
+  }
+  const startedAt = new Date().toISOString();
+  const session: DevReviewReplaySession = {
+    reviewId,
+    startedAt,
+    stop: null,
+    eventCount: 0,
+    pendingEvents: [],
+    flushTimer: null,
+  };
+  activeReplaySession = session;
+  try {
+    const stop = record({
+      emit(event) {
+        session.eventCount += 1;
+        session.pendingEvents.push(event);
+        if (session.pendingEvents.length >= DEV_REVIEW_REPLAY_BATCH_SIZE) {
+          flushDevReviewReplay(session);
+          return;
+        }
+        scheduleDevReviewReplayFlush(session);
+      },
+      maskAllInputs: true,
+    });
+    if (typeof stop !== "function") {
+      throw new Error("RRweb recorder did not return a stop function.");
+    }
+    session.stop = stop;
+  } catch (cause) {
+    stopDevReviewReplay(
+      "failed",
+      cause instanceof Error ? cause.message : "Failed to start RRweb capture.",
+    );
+  }
+}
 
 const applyAnnotationTheme = (
   host: HTMLElement,
@@ -1261,3 +1376,26 @@ ipcRenderer.on(ANNOTATION_THEME_CHANNEL, (_event, theme: DesktopPreviewAnnotatio
   activeSession?.applyTheme(theme);
 });
 ipcRenderer.on(CANCEL_PICK_CHANNEL, () => activeSession?.teardown(false));
+ipcRenderer.on(DEV_REVIEW_REPLAY_START_CHANNEL, (_event, input: unknown) => {
+  const reviewId =
+    typeof input === "object" &&
+    input !== null &&
+    "reviewId" in input &&
+    typeof input.reviewId === "string"
+      ? input.reviewId
+      : "";
+  if (reviewId.length === 0) return;
+  startDevReviewReplay(reviewId);
+});
+ipcRenderer.on(DEV_REVIEW_REPLAY_STOP_CHANNEL, (_event, input: unknown) => {
+  const reviewId =
+    typeof input === "object" &&
+    input !== null &&
+    "reviewId" in input &&
+    typeof input.reviewId === "string"
+      ? input.reviewId
+      : "";
+  if (activeReplaySession === null) return;
+  if (reviewId.length > 0 && activeReplaySession.reviewId !== reviewId) return;
+  stopDevReviewReplay("saved", null);
+});

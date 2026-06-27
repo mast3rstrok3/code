@@ -55,8 +55,12 @@ import { type EventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import type { McpCapability } from "../../mcp/McpInvocationContext.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
-import { isBrowserDevReviewWorkflowPromptId } from "../WorkflowPromptRegistry.ts";
+import {
+  isBrowserDevReviewWorkflowPromptId,
+  isQnaDevReviewWorkflowPromptId,
+} from "../WorkflowPromptRegistry.ts";
 const isModelSelection = Schema.is(ModelSelection);
 const WORKFLOW_PROVIDERS: ReadonlySet<ProviderDriverKind> = new Set([
   ProviderDriverKind.make("codex"),
@@ -185,6 +189,18 @@ const dieOnMissingBindingInstanceId = (
   );
 };
 
+function mcpCapabilitiesForWorkflowPromptId(
+  workflowPromptId: string | undefined,
+): ReadonlySet<McpCapability> | undefined {
+  if (isQnaDevReviewWorkflowPromptId(workflowPromptId)) {
+    return new Set<McpCapability>(["preview", "dev-review"]);
+  }
+  if (isBrowserDevReviewWorkflowPromptId(workflowPromptId)) {
+    return new Set<McpCapability>(["preview"]);
+  }
+  return undefined;
+}
+
 const correlateRuntimeEventWithInstance = (
   source: {
     readonly instanceId: ProviderInstanceId;
@@ -229,12 +245,14 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     readonly providerInstanceId: ProviderInstanceId;
     readonly workflowPromptId?: string;
   }) => {
-    if (!isBrowserDevReviewWorkflowPromptId(input.workflowPromptId)) {
+    const capabilities = mcpCapabilitiesForWorkflowPromptId(input.workflowPromptId);
+    if (capabilities === undefined) {
       return clearMcpSession(input.threadId);
     }
     return McpSessionRegistry.issueActiveMcpCredential({
       threadId: input.threadId,
       providerInstanceId: input.providerInstanceId,
+      capabilities,
     }).pipe(
       Effect.tap((credential) =>
         credential

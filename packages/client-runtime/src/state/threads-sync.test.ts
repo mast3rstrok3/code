@@ -45,6 +45,8 @@ const BASE_THREAD: OrchestrationThread = {
   id: THREAD_ID,
   projectId: ProjectId.make("project-1"),
   ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+  parentThreadId: null,
+  workflowRole: null,
   title: "Cached thread",
   modelSelection: {
     instanceId: ProviderInstanceId.make("codex"),
@@ -61,6 +63,8 @@ const BASE_THREAD: OrchestrationThread = {
   deletedAt: null,
   messages: [],
   proposedPlans: [],
+  planningWorkflow: null,
+  devReviews: [],
   activities: [],
   checkpoints: [],
   session: null,

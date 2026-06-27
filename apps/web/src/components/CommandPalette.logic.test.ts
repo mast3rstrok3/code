@@ -8,6 +8,7 @@ import {
 } from "@t3tools/contracts";
 import type { Thread } from "../types";
 import {
+  buildBrowseGroups,
   buildThreadActionItems,
   filterCommandPaletteGroups,
   type CommandPaletteGroup,
@@ -22,6 +23,8 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     environmentId: LOCAL_ENVIRONMENT_ID,
     projectId: PROJECT_ID,
     ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+    parentThreadId: null,
+    workflowRole: null,
     title: "Thread",
     modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
     runtimeMode: "full-access",
@@ -29,6 +32,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     session: null,
     messages: [],
     proposedPlans: [],
+    planningWorkflow: null,
     createdAt: "2026-03-01T00:00:00.000Z",
     archivedAt: null,
     deletedAt: null,
@@ -37,6 +41,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     branch: null,
     worktreePath: null,
     checkpoints: [],
+    devReviews: [],
     activities: [],
     ...overrides,
   };
@@ -168,5 +173,28 @@ describe("buildThreadActionItems", () => {
     });
 
     expect(items.map((item) => item.value)).toEqual(["thread:thread-active"]);
+  });
+});
+
+describe("buildBrowseGroups", () => {
+  it("passes the selected absolute browse entry to navigation", async () => {
+    const browseTo = vi.fn();
+    const groups = buildBrowseGroups({
+      browseEntries: [{ name: "repos", fullPath: "/home/nils/repos" }],
+      browseQuery: "~/",
+      canBrowseUp: false,
+      upIcon: null,
+      directoryIcon: null,
+      browseUp: vi.fn(),
+      browseTo,
+    });
+
+    const item = groups[0]?.items[0];
+    expect(item?.kind).toBe("action");
+    if (item?.kind !== "action") return;
+
+    await item.run();
+
+    expect(browseTo).toHaveBeenCalledWith({ name: "repos", fullPath: "/home/nils/repos" });
   });
 });

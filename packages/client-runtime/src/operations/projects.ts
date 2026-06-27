@@ -1,6 +1,8 @@
 import type {
   CommandId,
   EnvironmentId,
+  FilesystemBrowseEntry,
+  FilesystemBrowseResult,
   OrchestrationCommand,
   ProjectId,
   SourceControlDiscoveryResult,
@@ -15,6 +17,8 @@ import * as Order from "effect/Order";
 import {
   ensureBrowseDirectoryPath,
   findProjectByPath,
+  getBrowseLeafPathSegment,
+  hasTrailingPathSeparator,
   inferProjectTitleFromPath,
   isExplicitRelativeProjectPath,
   isUnsupportedWindowsProjectPath,
@@ -168,6 +172,60 @@ export function buildAddProjectRemoteSourceReadiness(
 export function getAddProjectInitialQuery(baseDirectory: string | null | undefined): string {
   const trimmed = baseDirectory?.trim() ?? "";
   return trimmed.length === 0 ? "~/" : ensureBrowseDirectoryPath(trimmed);
+}
+
+export function resolveSubmittedAddProjectPath(input: {
+  readonly rawPath: string;
+  readonly browseResult?: Pick<FilesystemBrowseResult, "parentPath"> | null;
+  readonly missingPathParentResult?: Pick<FilesystemBrowseResult, "parentPath"> | null;
+  readonly exactBrowseEntry?: Pick<FilesystemBrowseEntry, "fullPath"> | null;
+}): string {
+  const rawPath = input.rawPath.trim();
+  if (rawPath.length === 0) {
+    return "";
+  }
+
+  if (hasTrailingPathSeparator(rawPath)) {
+    if (input.browseResult?.parentPath) {
+      return input.browseResult.parentPath;
+    }
+
+    const missingParentPath = input.missingPathParentResult?.parentPath;
+    const leafPathSegment = getBrowseLeafPathSegment(trimTrailingBrowsePathSeparators(rawPath));
+    if (missingParentPath && leafPathSegment.length > 0 && leafPathSegment !== "~") {
+      return resolveProjectPathForDispatch(
+        `${ensureBrowseDirectoryPath(missingParentPath)}${leafPathSegment}`,
+        null,
+      );
+    }
+
+    return rawPath;
+  }
+
+  if (input.exactBrowseEntry) {
+    return input.exactBrowseEntry.fullPath;
+  }
+
+  const browseParentPath = input.browseResult?.parentPath;
+  const leafPathSegment = getBrowseLeafPathSegment(rawPath).trim();
+  if (browseParentPath && leafPathSegment.length > 0) {
+    return resolveProjectPathForDispatch(
+      `${ensureBrowseDirectoryPath(browseParentPath)}${leafPathSegment}`,
+      null,
+    );
+  }
+
+  return rawPath;
+}
+
+function trimTrailingBrowsePathSeparators(value: string): string {
+  if (value === "/" || value === "\\" || /^~[/\\]?$/.test(value)) {
+    return value;
+  }
+  if (/^[a-zA-Z]:[/\\]?$/.test(value)) {
+    return value;
+  }
+  return value.replace(/[/\\]+$/g, "");
 }
 
 export function resolveAddProjectPath(input: {

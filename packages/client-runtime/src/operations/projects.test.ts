@@ -13,6 +13,7 @@ import {
   findExistingAddProject,
   getAddProjectInitialQuery,
   resolveAddProjectPath,
+  resolveSubmittedAddProjectPath,
   sortAddProjectProviderSources,
 } from "./projects.ts";
 import type { EnvironmentProject } from "../state/models.ts";
@@ -45,6 +46,37 @@ describe("add project shared logic", () => {
         currentProjectCwd: "/work/current",
       }),
     ).toEqual({ ok: true, path: "/work/next" });
+  });
+
+  it("resolves typed missing home folders from the expanded browse parent", () => {
+    expect(
+      resolveSubmittedAddProjectPath({
+        rawPath: "~/new-folder",
+        browseResult: { parentPath: "/home/nils" },
+        exactBrowseEntry: null,
+      }),
+    ).toBe("/home/nils/new-folder");
+  });
+
+  it("resolves trailing typed missing home folders from the expanded missing parent", () => {
+    expect(
+      resolveSubmittedAddProjectPath({
+        rawPath: "~/repos/nils/new-folder/",
+        browseResult: null,
+        missingPathParentResult: { parentPath: "/home/nils/repos/nils" },
+        exactBrowseEntry: null,
+      }),
+    ).toBe("/home/nils/repos/nils/new-folder");
+  });
+
+  it("resolves exact home browse entries from their absolute full path", () => {
+    expect(
+      resolveSubmittedAddProjectPath({
+        rawPath: "~/existing",
+        browseResult: { parentPath: "/home/nils" },
+        exactBrowseEntry: { fullPath: "/home/nils/existing" },
+      }),
+    ).toBe("/home/nils/existing");
   });
 
   it("marks authenticated source control providers as ready", () => {
@@ -118,6 +150,32 @@ describe("add project shared logic", () => {
     ];
 
     expect(findExistingAddProject({ projects, environmentId: env, path: "/repo" })?.id).toBe(
+      "project",
+    );
+  });
+
+  it("finds duplicates using the resolved absolute add project path", () => {
+    const env = EnvironmentId.make("env");
+    const projects: EnvironmentProject[] = [
+      {
+        environmentId: env,
+        id: ProjectId.make("project"),
+        title: "Repo",
+        workspaceRoot: "/home/nils/repo",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        repositoryIdentity: null,
+        defaultModelSelection: null,
+        scripts: [],
+      },
+    ];
+    const resolvedPath = resolveSubmittedAddProjectPath({
+      rawPath: "~/repo",
+      browseResult: { parentPath: "/home/nils" },
+      exactBrowseEntry: null,
+    });
+
+    expect(findExistingAddProject({ projects, environmentId: env, path: resolvedPath })?.id).toBe(
       "project",
     );
   });

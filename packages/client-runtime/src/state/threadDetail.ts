@@ -2,10 +2,12 @@ import type {
   OrchestrationCheckpointSummary,
   OrchestrationLatestTurn,
   OrchestrationMessage,
+  OrchestrationPlanningWorkflow,
   OrchestrationProposedPlan,
   OrchestrationSession,
   OrchestrationThread,
   OrchestrationThreadActivity,
+  DevReviewRecord,
   ScopedThreadRef,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
@@ -20,6 +22,7 @@ import { THREAD_STATE_IDLE_TTL_MS } from "./threadRetention.ts";
 const EMPTY_MESSAGES: ReadonlyArray<OrchestrationMessage> = Object.freeze([]);
 const EMPTY_ACTIVITIES: ReadonlyArray<OrchestrationThreadActivity> = Object.freeze([]);
 const EMPTY_PROPOSED_PLANS: ReadonlyArray<OrchestrationProposedPlan> = Object.freeze([]);
+const EMPTY_DEV_REVIEWS: ReadonlyArray<DevReviewRecord> = Object.freeze([]);
 const EMPTY_CHECKPOINTS: ReadonlyArray<OrchestrationCheckpointSummary> = Object.freeze([]);
 
 /**
@@ -47,6 +50,8 @@ export function mergeEnvironmentThread(
     environmentId: shell.environmentId,
     id: shell.id,
     projectId: shell.projectId,
+    parentThreadId: shell.parentThreadId,
+    workflowRole: shell.workflowRole,
     title: shell.title,
     modelSelection: shell.modelSelection,
     runtimeMode: shell.runtimeMode,
@@ -142,6 +147,26 @@ export function createEnvironmentThreadDetailAtoms<E>(
     ),
   );
 
+  const threadPlanningWorkflowAtomFamily = Atom.family((key: string) =>
+    Atom.make(
+      (get): OrchestrationPlanningWorkflow | null =>
+        get(threadDetailAtomFamily(key))?.planningWorkflow ?? null,
+    ).pipe(
+      Atom.setIdleTTL(THREAD_STATE_IDLE_TTL_MS),
+      Atom.withLabel(`environment-thread-planning-workflow:${key}`),
+    ),
+  );
+
+  const threadDevReviewsAtomFamily = Atom.family((key: string) =>
+    Atom.make(
+      (get): ReadonlyArray<DevReviewRecord> =>
+        get(threadDetailAtomFamily(key))?.devReviews ?? EMPTY_DEV_REVIEWS,
+    ).pipe(
+      Atom.setIdleTTL(THREAD_STATE_IDLE_TTL_MS),
+      Atom.withLabel(`environment-thread-dev-reviews:${key}`),
+    ),
+  );
+
   const threadCheckpointsAtomFamily = Atom.family((key: string) =>
     Atom.make(
       (get): ReadonlyArray<OrchestrationCheckpointSummary> =>
@@ -178,6 +203,9 @@ export function createEnvironmentThreadDetailAtoms<E>(
     messagesAtom: (ref: ScopedThreadRef) => threadMessagesAtomFamily(threadKey(ref)),
     activitiesAtom: (ref: ScopedThreadRef) => threadActivitiesAtomFamily(threadKey(ref)),
     proposedPlansAtom: (ref: ScopedThreadRef) => threadProposedPlansAtomFamily(threadKey(ref)),
+    planningWorkflowAtom: (ref: ScopedThreadRef) =>
+      threadPlanningWorkflowAtomFamily(threadKey(ref)),
+    devReviewsAtom: (ref: ScopedThreadRef) => threadDevReviewsAtomFamily(threadKey(ref)),
     checkpointsAtom: (ref: ScopedThreadRef) => threadCheckpointsAtomFamily(threadKey(ref)),
     sessionAtom: (ref: ScopedThreadRef) => threadSessionAtomFamily(threadKey(ref)),
     latestTurnAtom: (ref: ScopedThreadRef) => threadLatestTurnAtomFamily(threadKey(ref)),

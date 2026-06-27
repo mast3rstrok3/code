@@ -218,6 +218,7 @@ import {
   deriveProjectGroupingOverrideKey,
   getProjectOrderKey,
   selectProjectGroupingSettings,
+  updateProjectGroupingOverrides,
 } from "../logicalProject";
 import type { SidebarThreadSummary } from "../types";
 import {
@@ -1893,6 +1894,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             ...(seedContext.worktreePath !== undefined
               ? { worktreePath: seedContext.worktreePath }
               : {}),
+            draftProjectScope: "physical",
             envMode: seedContext.envMode,
             ...(seedContext.startFromOrigin !== undefined
               ? { startFromOrigin: seedContext.startFromOrigin }
@@ -2097,15 +2099,11 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       return;
     }
 
-    const overrideKey = deriveProjectGroupingOverrideKey(projectGroupingTarget);
-    const nextOverrides = {
-      ...projectGroupingSettings.sidebarProjectGroupingOverrides,
-    };
-    if (projectGroupingSelection === "inherit") {
-      delete nextOverrides[overrideKey];
-    } else {
-      nextOverrides[overrideKey] = projectGroupingSelection;
-    }
+    const nextOverrides = updateProjectGroupingOverrides({
+      overrides: projectGroupingSettings.sidebarProjectGroupingOverrides,
+      project: projectGroupingTarget,
+      selection: projectGroupingSelection,
+    });
     updateSettings({
       sidebarProjectGroupingOverrides: nextOverrides,
     });

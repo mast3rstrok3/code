@@ -47,6 +47,10 @@ function makeThread(
     checkpoints: [],
     session: null,
     ...input,
+    parentThreadId: input.parentThreadId ?? null,
+    workflowRole: input.workflowRole ?? null,
+    planningWorkflow: input.planningWorkflow ?? null,
+    devReviews: input.devReviews ?? [],
   };
 }
 

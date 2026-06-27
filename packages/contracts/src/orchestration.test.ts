@@ -559,6 +559,36 @@ it.effect("accepts workflow prompt metadata in thread.turn.start", () =>
   }),
 );
 
+it.effect("accepts Q&A Dev Review launch commands", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationCommand({
+      type: "thread.dev-review.launch",
+      commandId: "cmd-dev-review-launch",
+      sourceThreadId: "thread-source",
+      reviewThreadId: "thread-review",
+      reviewId: "dev-review-1",
+      message: {
+        messageId: "msg-dev-review-launch",
+        role: "user",
+        text: "Run Q&A Dev Review",
+        attachments: [],
+      },
+      modelSelection: {
+        instanceId: "codex",
+        model: "gpt-5-codex",
+      },
+      runtimeMode: "full-access",
+      workflowPromptId: "implementation.qna-dev-review.codex",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    assert.strictEqual(parsed.type, "thread.dev-review.launch");
+    if (parsed.type !== "thread.dev-review.launch") return;
+    assert.strictEqual(parsed.reviewId, "dev-review-1");
+    assert.strictEqual(parsed.workflowPromptId, "implementation.qna-dev-review.codex");
+  }),
+);
+
 it.effect(
   "decodes thread.turn-start-requested defaults for provider, runtime mode, and interaction mode",
   () =>
@@ -615,6 +645,55 @@ it.effect("decodes thread.turn-start-requested workflow prompt metadata when pre
       createdAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(parsed.workflowPromptId, "implementation.browser-dev-review.codex");
+  }),
+);
+
+it.effect("decodes Dev Review metadata events", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationEvent({
+      sequence: 1,
+      eventId: "event-dev-review-created",
+      type: "thread.dev-review-created",
+      aggregateKind: "thread",
+      aggregateId: "thread-source",
+      commandId: "cmd-dev-review-launch",
+      causationEventId: null,
+      correlationId: "cmd-dev-review-launch",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      metadata: {},
+      payload: {
+        threadId: "thread-source",
+        devReview: {
+          id: "dev-review-1",
+          sourceThreadId: "thread-source",
+          reviewThreadId: "thread-review",
+          sourceTurnId: null,
+          status: "running",
+          document: {
+            verdict: "pending",
+            summary: "",
+            checks: [],
+            findings: [],
+            questions: [],
+            nextSteps: [],
+          },
+          replay: {
+            status: "not-started",
+            eventCount: 0,
+            startedAt: null,
+            completedAt: null,
+            durationMs: null,
+            error: null,
+          },
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      },
+    });
+
+    assert.strictEqual(parsed.type, "thread.dev-review-created");
+    if (parsed.type !== "thread.dev-review-created") return;
+    assert.strictEqual(parsed.payload.devReview.replay.status, "not-started");
   }),
 );
 

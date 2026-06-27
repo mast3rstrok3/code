@@ -1,6 +1,7 @@
 import {
   DEFAULT_MODEL,
   DEFAULT_MODEL_BY_PROVIDER,
+  DEFAULT_WORKSPACE_USER_ID,
   defaultInstanceIdForDriver,
   type EnvironmentId,
   ModelSelection,
@@ -16,6 +17,8 @@ import {
   type ScopedProjectRef,
   type ScopedThreadRef,
   ThreadId,
+  WorkspaceUserId,
+  type WorkspaceUserId as WorkspaceUserIdType,
 } from "@t3tools/contracts";
 import {
   parseScopedProjectKey,
@@ -209,6 +212,9 @@ const PersistedDraftThreadState = Schema.Struct({
   threadId: ThreadId,
   environmentId: Schema.String,
   projectId: ProjectId,
+  ownerUserId: WorkspaceUserId.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_WORKSPACE_USER_ID)),
+  ),
   logicalProjectKey: Schema.optionalKey(Schema.String),
   createdAt: Schema.String,
   runtimeMode: RuntimeMode,
@@ -288,6 +294,7 @@ export interface DraftSessionState {
   threadId: ThreadId;
   environmentId: EnvironmentId;
   projectId: ProjectId;
+  ownerUserId: WorkspaceUserIdType;
   logicalProjectKey: string;
   createdAt: string;
   runtimeMode: RuntimeMode;
@@ -355,6 +362,7 @@ interface ComposerDraftStoreState {
       threadId?: ThreadId;
       branch?: string | null;
       worktreePath?: string | null;
+      ownerUserId?: WorkspaceUserIdType;
       createdAt?: string;
       envMode?: DraftThreadEnvMode;
       startFromOrigin?: boolean;
@@ -370,6 +378,7 @@ interface ComposerDraftStoreState {
       threadId?: ThreadId;
       branch?: string | null;
       worktreePath?: string | null;
+      ownerUserId?: WorkspaceUserIdType;
       createdAt?: string;
       envMode?: DraftThreadEnvMode;
       startFromOrigin?: boolean;
@@ -384,6 +393,7 @@ interface ComposerDraftStoreState {
       branch?: string | null;
       worktreePath?: string | null;
       projectRef?: ScopedProjectRef;
+      ownerUserId?: WorkspaceUserIdType;
       createdAt?: string;
       envMode?: DraftThreadEnvMode;
       startFromOrigin?: boolean;
@@ -1318,6 +1328,7 @@ function createDraftThreadState(
     threadId?: ThreadId;
     branch?: string | null;
     worktreePath?: string | null;
+    ownerUserId?: WorkspaceUserIdType;
     createdAt?: string;
     envMode?: DraftThreadEnvMode;
     startFromOrigin?: boolean;
@@ -1351,6 +1362,7 @@ function createDraftThreadState(
     threadId,
     environmentId: projectRef.environmentId,
     projectId: projectRef.projectId,
+    ownerUserId: options?.ownerUserId ?? existingThread?.ownerUserId ?? DEFAULT_WORKSPACE_USER_ID,
     logicalProjectKey,
     createdAt: options?.createdAt ?? existingThread?.createdAt ?? new Date().toISOString(),
     runtimeMode: options?.runtimeMode ?? existingThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
@@ -1390,6 +1402,7 @@ function draftThreadsEqual(left: DraftThreadState | undefined, right: DraftThrea
     left.threadId === right.threadId &&
     left.environmentId === right.environmentId &&
     left.projectId === right.projectId &&
+    left.ownerUserId === right.ownerUserId &&
     left.logicalProjectKey === right.logicalProjectKey &&
     left.createdAt === right.createdAt &&
     left.runtimeMode === right.runtimeMode &&
@@ -1489,6 +1502,7 @@ function normalizePersistedDraftThreads(
           ? (candidateDraftThread.environmentId as EnvironmentId)
           : environmentIdByThreadId.get(threadKeyOrId as ThreadId));
       const projectId = candidateDraftThread.projectId;
+      const ownerUserId = candidateDraftThread.ownerUserId;
       const createdAt = candidateDraftThread.createdAt;
       const branch = candidateDraftThread.branch;
       const worktreePath = candidateDraftThread.worktreePath;
@@ -1518,6 +1532,10 @@ function normalizePersistedDraftThreads(
         threadId,
         environmentId: normalizedEnvironmentId,
         projectId: projectId as ProjectId,
+        ownerUserId:
+          typeof ownerUserId === "string" && ownerUserId.length > 0
+            ? WorkspaceUserId.make(ownerUserId)
+            : DEFAULT_WORKSPACE_USER_ID,
         logicalProjectKey:
           typeof candidateDraftThread.logicalProjectKey === "string" &&
           candidateDraftThread.logicalProjectKey.length > 0
@@ -1577,6 +1595,7 @@ function normalizePersistedDraftThreads(
           threadId: parsedThreadRef?.threadId ?? (threadKey as ThreadId),
           environmentId: projectRef.environmentId,
           projectId: projectRef.projectId,
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           logicalProjectKey,
           createdAt: new Date().toISOString(),
           runtimeMode: DEFAULT_RUNTIME_MODE,
@@ -1596,6 +1615,7 @@ function normalizePersistedDraftThreads(
           threadId: draftThreadsByThreadKey[threadKey]!.threadId,
           environmentId: projectRef.environmentId,
           projectId: projectRef.projectId,
+          ownerUserId: draftThreadsByThreadKey[threadKey]!.ownerUserId,
           logicalProjectKey,
         };
       }
@@ -2140,6 +2160,7 @@ function toHydratedDraftThreadState(
     threadId: persistedDraftThread.threadId,
     environmentId: persistedDraftThread.environmentId as EnvironmentId,
     projectId: persistedDraftThread.projectId,
+    ownerUserId: persistedDraftThread.ownerUserId,
     logicalProjectKey:
       persistedDraftThread.logicalProjectKey ??
       projectDraftKey(
@@ -2350,6 +2371,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               threadId: existing.threadId,
               environmentId: nextProjectRef.environmentId,
               projectId: nextProjectRef.projectId,
+              ownerUserId: options.ownerUserId ?? existing.ownerUserId,
               logicalProjectKey: existing.logicalProjectKey,
               createdAt:
                 options.createdAt === undefined
@@ -2372,6 +2394,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             const isUnchanged =
               nextDraftThread.environmentId === existing.environmentId &&
               nextDraftThread.projectId === existing.projectId &&
+              nextDraftThread.ownerUserId === existing.ownerUserId &&
               nextDraftThread.logicalProjectKey === existing.logicalProjectKey &&
               nextDraftThread.createdAt === existing.createdAt &&
               nextDraftThread.runtimeMode === existing.runtimeMode &&

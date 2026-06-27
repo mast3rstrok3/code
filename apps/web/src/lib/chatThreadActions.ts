@@ -1,6 +1,12 @@
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
-import type { EnvironmentId, ProjectId, ScopedProjectRef } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  ProjectId,
+  ScopedProjectRef,
+  WorkspaceUserId,
+} from "@t3tools/contracts";
 import type { DraftThreadEnvMode } from "../composerDraftStore";
+import type { DraftProjectScope } from "../logicalProject";
 
 interface ThreadContextLike {
   environmentId: EnvironmentId;
@@ -20,6 +26,8 @@ interface NewThreadHandler {
     options?: {
       branch?: string | null;
       worktreePath?: string | null;
+      ownerUserId?: WorkspaceUserId;
+      draftProjectScope?: DraftProjectScope;
       envMode?: DraftThreadEnvMode;
       startFromOrigin?: boolean;
     },
@@ -75,7 +83,10 @@ export async function startNewThreadInProjectFromContext(
   context: ChatThreadActionContext,
   projectRef: ScopedProjectRef,
 ): Promise<void> {
-  await context.handleNewThread(projectRef, buildContextualThreadOptions(context));
+  await context.handleNewThread(projectRef, {
+    ...buildContextualThreadOptions(context),
+    draftProjectScope: "physical",
+  });
 }
 
 export async function startNewThreadFromContext(

@@ -31,6 +31,8 @@ export const PreviewAutomationOperation = Schema.Literals([
   "waitFor",
   "recordingStart",
   "recordingStop",
+  "devReviewReplayStart",
+  "devReviewReplayStop",
 ]);
 export type PreviewAutomationOperation = typeof PreviewAutomationOperation.Type;
 
@@ -454,7 +456,7 @@ export type PreviewAutomationResponse = typeof PreviewAutomationResponse.Type;
 export class PreviewAutomationUnavailableError extends Schema.TaggedErrorClass<PreviewAutomationUnavailableError>()(
   "PreviewAutomationUnavailableError",
   {
-    capability: Schema.Literal("preview"),
+    capability: Schema.Literals(["preview", "dev-review"]),
     environmentId: EnvironmentId,
     threadId: ThreadId,
     providerSessionId: TrimmedNonEmptyString,

@@ -5,6 +5,7 @@ import {
   ProviderInstanceId,
   ThreadId,
   TurnId,
+  WorkspaceUserId,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -12,6 +13,7 @@ import type { Thread } from "../types";
 import {
   MAX_HIDDEN_MOUNTED_PREVIEW_THREADS,
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
+  buildLocalDraftThread,
   buildExpiredTerminalContextToastCopy,
   createLocalDispatchSnapshot,
   deriveComposerSendState,
@@ -34,6 +36,8 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     environmentId,
     projectId,
     ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+    parentThreadId: null,
+    workflowRole: null,
     title: "Thread",
     modelSelection: {
       instanceId: ProviderInstanceId.make("codex"),
@@ -44,6 +48,8 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     session: null,
     messages: [],
     proposedPlans: [],
+    planningWorkflow: null,
+    devReviews: [],
     activities: [],
     checkpoints: [],
     createdAt: now,
@@ -76,6 +82,37 @@ const readySession = {
   lastError: null,
   updatedAt: "2026-03-29T00:00:10.000Z",
 };
+
+describe("buildLocalDraftThread", () => {
+  it("uses the stored draft owner", () => {
+    const ownerUserId = WorkspaceUserId.make("ada");
+
+    expect(
+      buildLocalDraftThread(
+        threadId,
+        {
+          threadId,
+          environmentId,
+          projectId,
+          ownerUserId,
+          logicalProjectKey: "project",
+          createdAt: now,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          envMode: "local",
+          startFromOrigin: false,
+          promotedTo: null,
+        },
+        {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.4",
+        },
+      ).ownerUserId,
+    ).toBe(ownerUserId);
+  });
+});
 
 describe("deriveComposerSendState", () => {
   it("treats expired terminal pills as non-sendable content", () => {

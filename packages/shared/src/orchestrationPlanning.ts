@@ -1,0 +1,1 @@
+export const MAX_PLANNING_REVIEW_CYCLE_NUMBER = 5;

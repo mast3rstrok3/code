@@ -66,6 +66,8 @@ import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
+import { DevReviewReplayEventRepositoryLive } from "./persistence/Layers/DevReviewReplayEvents.ts";
+import { ProjectionThreadDevReviewRepositoryLive } from "./persistence/Layers/ProjectionThreadDevReviews.ts";
 import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
@@ -220,6 +222,8 @@ const SourceControlRepositoryServiceLayerLive = SourceControlRepositoryService.l
 const ReviewLayerLive = ReviewService.layer.pipe(
   Layer.provideMerge(GitVcsDriver.layer),
   Layer.provideMerge(VcsDriverRegistryLayerLive),
+  Layer.provideMerge(ProjectionThreadDevReviewRepositoryLive),
+  Layer.provideMerge(DevReviewReplayEventRepositoryLive),
 );
 
 const VcsLayerLive = Layer.empty.pipe(

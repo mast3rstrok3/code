@@ -1,12 +1,9 @@
-import {
-  scopedProjectKey,
-  scopeProjectRef,
-  scopeThreadRef,
-} from "@t3tools/client-runtime/environment";
+import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   DEFAULT_RUNTIME_MODE,
   DEFAULT_SERVER_SETTINGS,
   type ScopedProjectRef,
+  type WorkspaceUserId,
 } from "@t3tools/contracts";
 import { useParams, useRouter } from "@tanstack/react-router";
 import { useCallback, useMemo } from "react";
@@ -19,20 +16,34 @@ import {
 import { newDraftId, newThreadId } from "../lib/utils";
 import { orderItemsByPreferredIds } from "../components/Sidebar.logic";
 import {
-  deriveLogicalProjectKeyFromSettings,
+  deriveDraftProjectKey,
+  type DraftProjectScope,
   getProjectOrderKey,
   selectProjectGroupingSettings,
 } from "../logicalProject";
-import { readThreadShell, useProjects, useServerConfigs, useThread } from "../state/entities";
+import { resolveDefaultThreadOwnerUserId } from "../lib/workspaceUsers";
+import {
+  readProject,
+  readThreadShell,
+  useProjects,
+  useServerConfigs,
+  useThread,
+} from "../state/entities";
 import { resolveNewDraftStartFromOrigin } from "../lib/chatThreadActions";
 import { resolveThreadRouteTarget } from "../threadRoutes";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
-import { useClientSettings } from "./useSettings";
+import { useClientSettings, usePrimarySettings } from "./useSettings";
 
 export function useNewThreadHandler() {
   const projects = useProjects();
   const serverConfigs = useServerConfigs();
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
+  const activeWorkspaceUserView = useClientSettings((settings) => settings.activeWorkspaceUserView);
+  const workspaceUsers = usePrimarySettings((settings) => settings.workspaceUsers);
+  const defaultNewThreadOwnerUserId = useMemo(
+    () => resolveDefaultThreadOwnerUserId({ activeWorkspaceUserView, workspaceUsers }),
+    [activeWorkspaceUserView, workspaceUsers],
+  );
   const router = useRouter();
   const getCurrentRouteTarget = useCallback(() => {
     const currentRouteParams = router.state.matches[router.state.matches.length - 1]?.params ?? {};
@@ -45,6 +56,8 @@ export function useNewThreadHandler() {
       options?: {
         branch?: string | null;
         worktreePath?: string | null;
+        ownerUserId?: WorkspaceUserId;
+        draftProjectScope?: DraftProjectScope;
         envMode?: DraftThreadEnvMode;
         startFromOrigin?: boolean;
       },
@@ -58,20 +71,26 @@ export function useNewThreadHandler() {
         setLogicalProjectDraftThreadId,
       } = useComposerDraftStore.getState();
       const currentRouteTarget = getCurrentRouteTarget();
-      const project = projects.find(
-        (candidate) =>
-          candidate.id === projectRef.projectId &&
-          candidate.environmentId === projectRef.environmentId,
-      );
+      const project =
+        readProject(projectRef) ??
+        projects.find(
+          (candidate) =>
+            candidate.id === projectRef.projectId &&
+            candidate.environmentId === projectRef.environmentId,
+        );
       const environmentSettings =
         serverConfigs.get(projectRef.environmentId)?.settings ?? DEFAULT_SERVER_SETTINGS;
-      const logicalProjectKey = project
-        ? deriveLogicalProjectKeyFromSettings(project, projectGroupingSettings)
-        : scopedProjectKey(projectRef);
+      const logicalProjectKey = deriveDraftProjectKey({
+        projectRef,
+        project,
+        settings: projectGroupingSettings,
+        scope: options?.draftProjectScope,
+      });
       const hasBranchOption = options?.branch !== undefined;
       const hasWorktreePathOption = options?.worktreePath !== undefined;
       const hasEnvModeOption = options?.envMode !== undefined;
       const hasStartFromOriginOption = options?.startFromOrigin !== undefined;
+      const ownerUserId = options?.ownerUserId ?? defaultNewThreadOwnerUserId;
       const storedDraftThread = getDraftSessionByLogicalProjectKey(logicalProjectKey);
       const storedDraftThreadRef = storedDraftThread
         ? scopeThreadRef(storedDraftThread.environmentId, storedDraftThread.threadId)
@@ -99,6 +118,7 @@ export function useNewThreadHandler() {
             setDraftThreadContext(reusableStoredDraftThread.draftId, {
               ...(hasBranchOption ? { branch: options?.branch ?? null } : {}),
               ...(hasWorktreePathOption ? { worktreePath: options?.worktreePath ?? null } : {}),
+              ownerUserId,
               ...(hasEnvModeOption ? { envMode: options?.envMode } : {}),
               ...(hasStartFromOriginOption ? { startFromOrigin: options?.startFromOrigin } : {}),
             });
@@ -109,6 +129,7 @@ export function useNewThreadHandler() {
             reusableStoredDraftThread.draftId,
             {
               threadId: reusableStoredDraftThread.threadId,
+              ownerUserId,
             },
           );
           if (
@@ -139,6 +160,7 @@ export function useNewThreadHandler() {
           setDraftThreadContext(currentRouteTarget.draftId, {
             ...(hasBranchOption ? { branch: options?.branch ?? null } : {}),
             ...(hasWorktreePathOption ? { worktreePath: options?.worktreePath ?? null } : {}),
+            ownerUserId,
             ...(hasEnvModeOption ? { envMode: options?.envMode } : {}),
             ...(hasStartFromOriginOption ? { startFromOrigin: options?.startFromOrigin } : {}),
           });
@@ -146,6 +168,7 @@ export function useNewThreadHandler() {
         setLogicalProjectDraftThreadId(logicalProjectKey, projectRef, currentRouteTarget.draftId, {
           threadId: latestActiveDraftThread.threadId,
           createdAt: latestActiveDraftThread.createdAt,
+          ownerUserId,
           runtimeMode: latestActiveDraftThread.runtimeMode,
           interactionMode: latestActiveDraftThread.interactionMode,
           ...(hasBranchOption ? { branch: options?.branch ?? null } : {}),
@@ -164,6 +187,7 @@ export function useNewThreadHandler() {
         setLogicalProjectDraftThreadId(logicalProjectKey, projectRef, draftId, {
           threadId,
           createdAt,
+          ownerUserId,
           branch: options?.branch ?? null,
           worktreePath: options?.worktreePath ?? null,
           envMode: initialEnvMode,
@@ -183,7 +207,14 @@ export function useNewThreadHandler() {
         });
       })();
     },
-    [getCurrentRouteTarget, projectGroupingSettings, projects, router, serverConfigs],
+    [
+      defaultNewThreadOwnerUserId,
+      getCurrentRouteTarget,
+      projectGroupingSettings,
+      projects,
+      router,
+      serverConfigs,
+    ],
   );
 }
 

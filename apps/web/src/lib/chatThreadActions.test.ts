@@ -87,6 +87,7 @@ describe("chatThreadActions", () => {
     expect(handleNewThread).toHaveBeenCalledWith(scopeProjectRef(ENVIRONMENT_ID, PROJECT_ID), {
       branch: "feature/refactor",
       worktreePath: "/tmp/worktree",
+      draftProjectScope: "physical",
       envMode: "worktree",
       startFromOrigin: true,
     });
@@ -112,6 +113,7 @@ describe("chatThreadActions", () => {
     expect(handleNewThread).toHaveBeenCalledWith(scopeProjectRef(ENVIRONMENT_ID, PROJECT_ID), {
       branch: "feature/refactor",
       worktreePath: "/tmp/worktree",
+      draftProjectScope: "physical",
       envMode: "worktree",
       startFromOrigin: false,
     });

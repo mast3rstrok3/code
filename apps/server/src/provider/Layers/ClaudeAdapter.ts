@@ -94,7 +94,7 @@ import {
 import { type ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import {
-  isBrowserDevReviewWorkflowPromptId,
+  isPreviewMcpWorkflowPromptId,
   resolveWorkflowSystemInstructions,
 } from "../WorkflowPromptRegistry.ts";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.UnknownFromJsonString);
@@ -3462,11 +3462,11 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(fastMode ? { fastMode: true } : {}),
         ...(ultracode ? { ultracode: true } : {}),
       };
-      const browserDevReview = isBrowserDevReviewWorkflowPromptId(input.workflowPromptId);
-      const mcpSession = browserDevReview
+      const previewMcpWorkflow = isPreviewMcpWorkflowPromptId(input.workflowPromptId);
+      const mcpSession = previewMcpWorkflow
         ? McpProviderSession.readMcpProviderSession(input.threadId)
         : undefined;
-      const mcpServers = browserDevReview
+      const mcpServers = previewMcpWorkflow
         ? {
             [CHROME_DEVTOOLS_MCP_SERVER_NAME]: buildClaudeChromeDevtoolsMcpServerConfig(),
             ...(mcpSession

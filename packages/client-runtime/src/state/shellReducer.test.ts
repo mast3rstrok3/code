@@ -32,6 +32,8 @@ const stubThread = {
   id: ThreadId.make("thread-1"),
   projectId: ProjectId.make("project-1"),
   ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+  parentThreadId: null,
+  workflowRole: null,
   title: "Test Thread",
   modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
   runtimeMode: "full-access" as const,

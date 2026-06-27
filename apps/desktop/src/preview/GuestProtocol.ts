@@ -4,3 +4,7 @@ export const ELEMENT_PICKED_CHANNEL = "preview:element-picked";
 export const ANNOTATION_CAPTURED_CHANNEL = "preview:annotation-captured";
 export const ANNOTATION_THEME_CHANNEL = "preview:annotation-theme";
 export const HUMAN_INPUT_CHANNEL = "preview:human-input";
+export const DEV_REVIEW_REPLAY_START_CHANNEL = "preview:dev-review-replay-start";
+export const DEV_REVIEW_REPLAY_STOP_CHANNEL = "preview:dev-review-replay-stop";
+export const DEV_REVIEW_REPLAY_EVENTS_CHANNEL = "preview:dev-review-replay-events";
+export const DEV_REVIEW_REPLAY_STOPPED_CHANNEL = "preview:dev-review-replay-stopped";

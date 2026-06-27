@@ -12,6 +12,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
+  WorkspaceUserId,
   type ModelSelection,
   type ProviderOptionSelection,
 } from "@t3tools/contracts";
@@ -1048,6 +1049,24 @@ describe("composerDraftStore project draft thread mapping", () => {
     store.setDraftThreadContext(draftId, { startFromOrigin: false });
 
     expect(useComposerDraftStore.getState().getDraftThread(draftId)?.startFromOrigin).toBe(false);
+  });
+
+  it("stores and updates the draft thread owner", () => {
+    const store = useComposerDraftStore.getState();
+    const ownerUserId = WorkspaceUserId.make("ada");
+    const nextOwnerUserId = WorkspaceUserId.make("grace");
+    store.setProjectDraftThreadId(projectRef, draftId, {
+      threadId,
+      ownerUserId,
+    });
+
+    expect(useComposerDraftStore.getState().getDraftThread(draftId)?.ownerUserId).toBe(ownerUserId);
+
+    store.setDraftThreadContext(draftId, { ownerUserId: nextOwnerUserId });
+
+    expect(useComposerDraftStore.getState().getDraftThread(draftId)?.ownerUserId).toBe(
+      nextOwnerUserId,
+    );
   });
 
   it("preserves existing branch and worktree when setProjectDraftThreadId receives undefined", () => {

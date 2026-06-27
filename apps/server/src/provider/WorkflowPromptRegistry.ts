@@ -13,6 +13,7 @@ export const WORKFLOW_PROMPT_IDS = {
   implementationTddCodex: "implementation.tdd.codex",
   implementationMergeGateCodex: "implementation.merge-gate.codex",
   implementationBrowserDevReviewCodex: "implementation.browser-dev-review.codex",
+  implementationQnaDevReviewCodex: "implementation.qna-dev-review.codex",
   yoloGrillStageCodex: "yolo.grill-stage.codex",
 } as const;
 
@@ -60,6 +61,21 @@ Merge completed implementation work, resolve conflicts deliberately, run require
 const IMPLEMENTATION_BROWSER_DEV_REVIEW_PROMPT = `<collaboration_mode># Implementation Workflow: Browser Dev Review
 
 Exercise the app-dev stack from the implementation worktree. Verify the relevant UI flows in-browser, capture concrete failures with reproduction steps, and create Dev Review findings before marking the implementation complete.
+</collaboration_mode>`;
+
+const IMPLEMENTATION_QNA_DEV_REVIEW_PROMPT = `<collaboration_mode># Implementation Workflow: Q&A Dev Review
+
+You are running a linked Q&A Dev Review for the active implementation thread.
+
+1. Read the source thread context and identify the behavior under review.
+2. Call dev_review_get to load the durable Dev Review record before testing.
+3. Start RRweb replay capture with dev_review_replay_start before interacting with the browser.
+4. Use preview_* tools for actual browser testing. Exercise the product, do not rely on static assumptions.
+5. Stop RRweb replay capture with dev_review_replay_stop after browser testing.
+6. Update the Dev Review record with dev_review_update, including verdict, summary, checks, findings, questions, next steps, and evidence IDs.
+7. Mark the review status passed, failed, or blocked. If no automation-capable preview is attached, complete the review as blocked with explicit evidence.
+
+If RRweb capture fails, keep testing when useful, record the replay failure, and complete the text review. If browser testing cannot begin, mark the review blocked instead of inventing evidence.
 </collaboration_mode>`;
 
 const YOLO_GRILL_PROMPT = `<collaboration_mode># YOLO Workflow: Intent Grill
@@ -227,6 +243,25 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     ],
   },
   {
+    id: WORKFLOW_PROMPT_IDS.implementationQnaDevReviewCodex,
+    order: 5,
+    workflow: "implementation",
+    role: "implementation-qa-reviewer",
+    stage: "qna-dev-review",
+    title: "5. Q&A Dev Review",
+    description:
+      "Runs linked browser QA from an implementation thread and persists a Dev Review document with RRweb replay evidence.",
+    promptText: IMPLEMENTATION_QNA_DEV_REVIEW_PROMPT,
+    associatedDocs: [
+      {
+        id: "implementation.qna-dev-review.chrome-devtools-mcp",
+        path: "chrome-devtools-mcp.md",
+        title: "Chrome DevTools MCP",
+        content: CHROME_DEVTOOLS_MCP_ASSOCIATED_DOC_CONTENT,
+      },
+    ],
+  },
+  {
     id: WORKFLOW_PROMPT_IDS.yoloGrillStageCodex,
     order: 1,
     workflow: "yolo",
@@ -266,6 +301,19 @@ export function isBrowserDevReviewWorkflowPromptId(
   workflowPromptId: string | null | undefined,
 ): boolean {
   return workflowPromptId === WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex;
+}
+
+export function isQnaDevReviewWorkflowPromptId(
+  workflowPromptId: string | null | undefined,
+): boolean {
+  return workflowPromptId === WORKFLOW_PROMPT_IDS.implementationQnaDevReviewCodex;
+}
+
+export function isPreviewMcpWorkflowPromptId(workflowPromptId: string | null | undefined): boolean {
+  return (
+    isBrowserDevReviewWorkflowPromptId(workflowPromptId) ||
+    isQnaDevReviewWorkflowPromptId(workflowPromptId)
+  );
 }
 
 function renderAssociatedDoc(doc: NonNullable<WorkflowPromptContract["associatedDocs"]>[number]) {

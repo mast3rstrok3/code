@@ -93,6 +93,8 @@ function makeReadModel(
       id: thread.id,
       projectId,
       ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+      parentThreadId: null,
+      workflowRole: null,
       title: `Thread ${thread.id}`,
       modelSelection: defaultModelSelection,
       interactionMode: "default" as const,
@@ -111,9 +113,12 @@ function makeReadModel(
       session: thread.session,
       activities: [],
       proposedPlans: [],
+      planningWorkflow: null,
+      devReviews: [],
       checkpoints: [],
       deletedAt: null,
     })),
+    implementationRuns: [],
   };
 }
 

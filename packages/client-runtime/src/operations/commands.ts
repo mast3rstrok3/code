@@ -39,6 +39,15 @@ export type UpdateThreadMetadataInput = CommandInput<"thread.meta.update">;
 export type SetThreadRuntimeModeInput = CommandInput<"thread.runtime-mode.set">;
 export type SetThreadInteractionModeInput = CommandInput<"thread.interaction-mode.set">;
 export type StartThreadTurnInput = CommandInput<"thread.turn.start">;
+export type LaunchThreadDevReviewInput = CommandInput<"thread.dev-review.launch">;
+export type CreateThreadPlanningPrdInput = CommandInput<"thread.planning-prd.create">;
+export type StartThreadPlanningStageInput = CommandInput<"thread.planning-stage.start">;
+export type LoadThreadPlanningPrdBundleInput = CommandInput<"thread.planning-prd-bundle.load">;
+export type RequestThreadPlanningIssueReviewInput =
+  CommandInput<"thread.planning-issue-review.request">;
+export type LaunchThreadImplementationRunInput = CommandInput<"thread.implementation-run.launch">;
+export type RetryThreadImplementationChangeRequestInput =
+  CommandInput<"thread.implementation-change-request.retry">;
 export type InterruptThreadTurnInput = CommandInput<"thread.turn.interrupt">;
 export type RespondToThreadApprovalInput = CommandInput<"thread.approval.respond">;
 export type RespondToThreadUserInputInput = CommandInput<"thread.user-input.respond">;
@@ -197,6 +206,95 @@ export const startThreadTurn: (input: StartThreadTurnInput) => CommandEffect = E
     createdAt: metadata.createdAt,
   });
 });
+
+export const launchThreadDevReview: (input: LaunchThreadDevReviewInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.launchThreadDevReview")(function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "thread.dev-review.launch",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  });
+
+export const createThreadPlanningPrd: (input: CreateThreadPlanningPrdInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.createThreadPlanningPrd")(function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "thread.planning-prd.create",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  });
+
+export const startThreadPlanningStage: (input: StartThreadPlanningStageInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.startThreadPlanningStage")(function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "thread.planning-stage.start",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  });
+
+export const loadThreadPlanningPrdBundle: (
+  input: LoadThreadPlanningPrdBundleInput,
+) => CommandEffect = Effect.fn("EnvironmentCommands.loadThreadPlanningPrdBundle")(
+  function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "thread.planning-prd-bundle.load",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  },
+);
+
+export const requestThreadPlanningIssueReview: (
+  input: RequestThreadPlanningIssueReviewInput,
+) => CommandEffect = Effect.fn("EnvironmentCommands.requestThreadPlanningIssueReview")(
+  function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "thread.planning-issue-review.request",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  },
+);
+
+export const launchThreadImplementationRun: (
+  input: LaunchThreadImplementationRunInput,
+) => CommandEffect = Effect.fn("EnvironmentCommands.launchThreadImplementationRun")(
+  function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "thread.implementation-run.launch",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  },
+);
+
+export const retryThreadImplementationChangeRequest: (
+  input: RetryThreadImplementationChangeRequestInput,
+) => CommandEffect = Effect.fn("EnvironmentCommands.retryThreadImplementationChangeRequest")(
+  function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "thread.implementation-change-request.retry",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  },
+);
 
 export const interruptThreadTurn: (input: InterruptThreadTurnInput) => CommandEffect = Effect.fn(
   "EnvironmentCommands.interruptThreadTurn",

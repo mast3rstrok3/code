@@ -40,6 +40,11 @@ import {
   VcsStatusStreamEvent,
 } from "./git.ts";
 import {
+  DevReviewReplayAppendEventsInput,
+  DevReviewReplayAppendEventsResult,
+  DevReviewReplayError,
+  DevReviewReplayGetInput,
+  DevReviewReplayGetResult,
   ReviewDiffPreviewError,
   ReviewDiffPreviewInput,
   ReviewDiffPreviewResult,
@@ -191,6 +196,8 @@ export const WS_METHODS = {
 
   // Review methods
   reviewGetDiffPreview: "review.getDiffPreview",
+  reviewDevReviewReplayAppendEvents: "review.devReviewReplay.appendEvents",
+  reviewDevReviewReplayGet: "review.devReviewReplay.get",
 
   // Terminal methods
   terminalOpen: "terminal.open",
@@ -507,6 +514,21 @@ export const WsReviewGetDiffPreviewRpc = Rpc.make(WS_METHODS.reviewGetDiffPrevie
   error: Schema.Union([ReviewDiffPreviewError, EnvironmentAuthorizationError]),
 });
 
+export const WsReviewDevReviewReplayAppendEventsRpc = Rpc.make(
+  WS_METHODS.reviewDevReviewReplayAppendEvents,
+  {
+    payload: DevReviewReplayAppendEventsInput,
+    success: DevReviewReplayAppendEventsResult,
+    error: Schema.Union([DevReviewReplayError, EnvironmentAuthorizationError]),
+  },
+);
+
+export const WsReviewDevReviewReplayGetRpc = Rpc.make(WS_METHODS.reviewDevReviewReplayGet, {
+  payload: DevReviewReplayGetInput,
+  success: DevReviewReplayGetResult,
+  error: Schema.Union([DevReviewReplayError, EnvironmentAuthorizationError]),
+});
+
 export const WsTerminalOpenRpc = Rpc.make(WS_METHODS.terminalOpen, {
   payload: TerminalOpenInput,
   success: TerminalSessionSnapshot,
@@ -790,6 +812,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsVcsSwitchRefRpc,
   WsVcsInitRpc,
   WsReviewGetDiffPreviewRpc,
+  WsReviewDevReviewReplayAppendEventsRpc,
+  WsReviewDevReviewReplayGetRpc,
   WsTerminalOpenRpc,
   WsTerminalAttachRpc,
   WsTerminalWriteRpc,

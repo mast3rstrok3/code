@@ -2,6 +2,7 @@ export {
   deriveLogicalProjectKey,
   deriveLogicalProjectKeyFromRef,
   deriveLogicalProjectKeyFromSettings,
+  deriveDraftProjectKey,
   derivePhysicalProjectKey,
   derivePhysicalProjectKeyFromPath,
   deriveProjectGroupLabel,
@@ -9,6 +10,9 @@ export {
   getProjectOrderKey,
   resolveProjectGroupingMode,
   selectProjectGroupingSettings,
+  updateProjectGroupingOverrides,
+  type DraftProjectScope,
+  type ProjectGroupingOverrideSelection,
   type ProjectGroupingMode,
   type ProjectGroupingSettings,
 } from "@t3tools/client-runtime/state/project-grouping";

@@ -2,10 +2,12 @@ import { EnvironmentId, ProjectId, ProviderInstanceId } from "@t3tools/contracts
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  deriveDraftProjectKey,
   deriveLogicalProjectKey,
   deriveLogicalProjectKeyFromSettings,
   derivePhysicalProjectKey,
   resolveProjectGroupingMode,
+  updateProjectGroupingOverrides,
 } from "./logicalProject";
 import type { Project } from "./types";
 
@@ -103,6 +105,61 @@ describe("environment grouping", () => {
         },
       }),
     ).toBe(repositoryIdentity.canonicalKey);
+  });
+
+  it("keeps explicit physical draft targets distinct inside one grouped repository", () => {
+    const root = makeProject({
+      id: ProjectId.make("project-root"),
+      workspaceRoot: "/home/nils/repos/nils/code",
+      repositoryIdentity: {
+        ...repositoryIdentity,
+        rootPath: "/home/nils/repos/nils/code",
+      },
+    });
+    const packageProject = makeProject({
+      id: ProjectId.make("project-server"),
+      title: "server",
+      workspaceRoot: "/home/nils/repos/nils/code/apps/server",
+      repositoryIdentity: {
+        ...repositoryIdentity,
+        rootPath: "/home/nils/repos/nils/code",
+      },
+    });
+
+    expect(deriveLogicalProjectKeyFromSettings(root, defaultGroupingSettings)).toBe(
+      deriveLogicalProjectKeyFromSettings(packageProject, defaultGroupingSettings),
+    );
+    expect(
+      deriveDraftProjectKey({
+        projectRef: { environmentId: root.environmentId, projectId: root.id },
+        project: root,
+        settings: defaultGroupingSettings,
+        scope: "physical",
+      }),
+    ).not.toBe(
+      deriveDraftProjectKey({
+        projectRef: { environmentId: packageProject.environmentId, projectId: packageProject.id },
+        project: packageProject,
+        settings: defaultGroupingSettings,
+        scope: "physical",
+      }),
+    );
+  });
+
+  it("builds a separate grouping override for an explicitly added project", () => {
+    const project = makeProject({ repositoryIdentity });
+    const overrides = updateProjectGroupingOverrides({
+      overrides: {},
+      project,
+      selection: "separate",
+    });
+
+    expect(
+      resolveProjectGroupingMode(project, {
+        ...defaultGroupingSettings,
+        sidebarProjectGroupingOverrides: overrides,
+      }),
+    ).toBe("separate");
   });
 
   it("reports the effective grouping mode after applying an override", () => {

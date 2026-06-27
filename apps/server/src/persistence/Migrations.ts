@@ -47,6 +47,13 @@ import Migration0031 from "./Migrations/031_AuthAuthorizationScopes.ts";
 import Migration0032 from "./Migrations/032_AuthPairingProofKeyThumbprint.ts";
 import Migration0033 from "./Migrations/033_ProjectionThreadsOwnerUserId.ts";
 import Migration0044 from "./Migrations/044_BackfillProjectionThreadOwnerUserId.ts";
+import Migration0045 from "./Migrations/045_ProjectionThreadDevReviews.ts";
+import Migration0046 from "./Migrations/046_ProjectionThreadsWorkflowColumns.ts";
+import Migration0047 from "./Migrations/047_ProjectionThreadPrds.ts";
+import Migration0048 from "./Migrations/048_ProjectionThreadPlanningIssues.ts";
+import Migration0049 from "./Migrations/049_ProjectionThreadPlanningReviewCycles.ts";
+import Migration0050 from "./Migrations/050_ProjectionThreadLoadedPrdBundles.ts";
+import Migration0051 from "./Migrations/051_ProjectionImplementationRuns.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -93,6 +100,13 @@ export const migrationEntries = [
   [32, "AuthPairingProofKeyThumbprint", Migration0032],
   [33, "ProjectionThreadsOwnerUserId", Migration0033],
   [44, "BackfillProjectionThreadOwnerUserId", Migration0044],
+  [45, "ProjectionThreadDevReviews", Migration0045],
+  [46, "ProjectionThreadsWorkflowColumns", Migration0046],
+  [47, "ProjectionThreadPrds", Migration0047],
+  [48, "ProjectionThreadPlanningIssues", Migration0048],
+  [49, "ProjectionThreadPlanningReviewCycles", Migration0049],
+  [50, "ProjectionThreadLoadedPrdBundles", Migration0050],
+  [51, "ProjectionImplementationRuns", Migration0051],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

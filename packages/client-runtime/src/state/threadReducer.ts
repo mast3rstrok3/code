@@ -7,9 +7,11 @@ import type {
   OrchestrationEvent,
   OrchestrationLatestTurn,
   OrchestrationMessage,
+  OrchestrationPlanningWorkflow,
   OrchestrationSession,
   OrchestrationThread,
   OrchestrationThreadActivity,
+  DevReviewRecord,
   TurnId,
 } from "@t3tools/contracts";
 
@@ -21,6 +23,16 @@ export type ThreadDetailReducerResult =
 const proposedPlanOrder = O.combine<OrchestrationThread["proposedPlans"][number]>(
   O.mapInput(O.String, (p) => p.createdAt),
   O.mapInput(O.String, (p) => p.id),
+);
+
+const devReviewOrder = O.combine<DevReviewRecord>(
+  O.mapInput(O.String, (review) => review.createdAt),
+  O.mapInput(O.String, (review) => review.id),
+);
+
+const reviewCycleOrder = O.mapInput(
+  O.Number,
+  (cycle: OrchestrationPlanningWorkflow["reviewCycles"][number]) => cycle.cycleNumber,
 );
 
 const checkpointOrder = O.mapInput(
@@ -63,6 +75,8 @@ export function applyThreadDetailEvent(
           id: event.payload.threadId,
           projectId: event.payload.projectId,
           ownerUserId: event.payload.ownerUserId,
+          parentThreadId: event.payload.parentThreadId ?? null,
+          workflowRole: event.payload.workflowRole ?? null,
           title: event.payload.title,
           modelSelection: event.payload.modelSelection,
           runtimeMode: event.payload.runtimeMode,
@@ -76,6 +90,8 @@ export function applyThreadDetailEvent(
           deletedAt: null,
           messages: [],
           proposedPlans: [],
+          planningWorkflow: null,
+          devReviews: [],
           activities: [],
           checkpoints: [],
           session: null,
@@ -141,6 +157,123 @@ export function applyThreadDetailEvent(
           updatedAt: event.payload.updatedAt,
         },
       };
+
+    // ── Planning workflow ──────────────────────────────────────────
+    case "thread.planning-stage-started": {
+      const workflow = thread.planningWorkflow ?? emptyPlanningWorkflow();
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          planningWorkflow: {
+            ...workflow,
+            stage: event.payload.stage,
+            createIssuesAvailable: event.payload.stage === "issues-authoring",
+          },
+          updatedAt: event.occurredAt,
+        },
+      };
+    }
+
+    case "thread.planning-prd-created": {
+      const workflow = thread.planningWorkflow ?? emptyPlanningWorkflow();
+      const stage = event.payload.stage ?? "issues-authoring";
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          planningWorkflow: {
+            ...workflow,
+            prd: event.payload.prd,
+            stage,
+            createIssuesAvailable: stage === "issues-authoring",
+          },
+          updatedAt: event.payload.prd.updatedAt,
+        },
+      };
+    }
+
+    case "thread.planning-issues-created": {
+      const workflow = thread.planningWorkflow ?? emptyPlanningWorkflow();
+      const stage = event.payload.stage ?? "issue-review";
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          planningWorkflow: {
+            ...workflow,
+            stage,
+            createIssuesAvailable: false,
+            issues: event.payload.issues,
+          },
+          updatedAt: event.occurredAt,
+        },
+      };
+    }
+
+    case "thread.planning-issues-revised": {
+      const workflow = thread.planningWorkflow ?? emptyPlanningWorkflow();
+      const reviewCycles =
+        event.payload.reviewCycle === undefined
+          ? workflow.reviewCycles
+          : pipe(
+              workflow.reviewCycles,
+              Arr.filter((entry) => entry.cycleNumber !== event.payload.reviewCycle?.cycleNumber),
+              Arr.append(event.payload.reviewCycle),
+              Arr.sort(reviewCycleOrder),
+            );
+      const stage = event.payload.stage ?? workflow.stage;
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          planningWorkflow: {
+            ...workflow,
+            stage,
+            createIssuesAvailable: stage === "issues-authoring",
+            issues: event.payload.issues,
+            reviewCycles,
+          },
+          updatedAt: event.payload.revisedAt,
+        },
+      };
+    }
+
+    case "thread.planning-issue-review-requested": {
+      const workflow = thread.planningWorkflow ?? emptyPlanningWorkflow();
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          planningWorkflow: {
+            ...workflow,
+            stage: event.payload.stage,
+            createIssuesAvailable: false,
+          },
+          updatedAt: event.payload.requestedAt,
+        },
+      };
+    }
+
+    case "thread.planning-prd-bundle-loaded": {
+      if (event.payload.bundle === undefined) {
+        return { kind: "unchanged" };
+      }
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          planningWorkflow: {
+            stage: "completed",
+            createIssuesAvailable: false,
+            prd: event.payload.bundle.prd,
+            issues: event.payload.bundle.issues,
+            reviewCycles: event.payload.bundle.reviewCycles,
+          },
+          updatedAt: event.payload.loadedAt,
+        },
+      };
+    }
 
     // ── Turn lifecycle ──────────────────────────────────────────────
     case "thread.turn-start-requested":
@@ -360,6 +493,76 @@ export function applyThreadDetailEvent(
       };
     }
 
+    case "thread.dev-review-created": {
+      const review = event.payload.devReview;
+      if (review.sourceThreadId !== thread.id && review.reviewThreadId !== thread.id) {
+        return { kind: "unchanged" };
+      }
+      const devReviews = pipe(
+        thread.devReviews,
+        Arr.filter((entry) => entry.id !== review.id),
+        Arr.append(review),
+        Arr.sort(devReviewOrder),
+      );
+      return {
+        kind: "updated",
+        thread: { ...thread, devReviews, updatedAt: event.occurredAt },
+      };
+    }
+
+    case "thread.dev-review-updated": {
+      if (
+        event.payload.sourceThreadId !== thread.id &&
+        event.payload.reviewThreadId !== thread.id
+      ) {
+        return { kind: "unchanged" };
+      }
+      const existing = thread.devReviews.find((entry) => entry.id === event.payload.reviewId);
+      if (!existing) return { kind: "unchanged" };
+      const updated: DevReviewRecord = {
+        ...existing,
+        ...(event.payload.status !== undefined ? { status: event.payload.status } : {}),
+        ...(event.payload.document !== undefined ? { document: event.payload.document } : {}),
+        updatedAt: event.payload.updatedAt,
+      };
+      const devReviews = pipe(
+        thread.devReviews,
+        Arr.filter((entry) => entry.id !== updated.id),
+        Arr.append(updated),
+        Arr.sort(devReviewOrder),
+      );
+      return {
+        kind: "updated",
+        thread: { ...thread, devReviews, updatedAt: event.occurredAt },
+      };
+    }
+
+    case "thread.dev-review-replay-metadata-updated": {
+      if (
+        event.payload.sourceThreadId !== thread.id &&
+        event.payload.reviewThreadId !== thread.id
+      ) {
+        return { kind: "unchanged" };
+      }
+      const existing = thread.devReviews.find((entry) => entry.id === event.payload.reviewId);
+      if (!existing) return { kind: "unchanged" };
+      const updated: DevReviewRecord = {
+        ...existing,
+        replay: event.payload.replay,
+        updatedAt: event.payload.updatedAt,
+      };
+      const devReviews = pipe(
+        thread.devReviews,
+        Arr.filter((entry) => entry.id !== updated.id),
+        Arr.append(updated),
+        Arr.sort(devReviewOrder),
+      );
+      return {
+        kind: "updated",
+        thread: { ...thread, devReviews, updatedAt: event.occurredAt },
+      };
+    }
+
     // ── Checkpoints / turn diffs ────────────────────────────────────
     case "thread.turn-diff-completed": {
       const checkpoint: OrchestrationCheckpointSummary = {
@@ -531,6 +734,16 @@ function rebindCheckpointAssistantMessage(
   return Arr.map(checkpoints, (entry) =>
     entry.turnId === turnId ? { ...entry, assistantMessageId: messageId } : entry,
   );
+}
+
+function emptyPlanningWorkflow(): OrchestrationPlanningWorkflow {
+  return {
+    stage: "grill",
+    createIssuesAvailable: false,
+    prd: null,
+    issues: [],
+    reviewCycles: [],
+  };
 }
 
 function retainMessagesAfterRevert(

@@ -1,5 +1,7 @@
 import type {
   EnvironmentId,
+  OrchestrationImplementationRun,
+  OrchestrationPlanningPrdId,
   OrchestrationShellSnapshot,
   OrchestrationThreadShell,
   ProjectId,
@@ -22,6 +24,7 @@ import {
 } from "./entities.ts";
 
 const EMPTY_THREADS: ReadonlyArray<OrchestrationThreadShell> = Object.freeze([]);
+const EMPTY_IMPLEMENTATION_RUNS: ReadonlyArray<OrchestrationImplementationRun> = Object.freeze([]);
 const EMPTY_SCOPED_THREAD_REFS: ReadonlyArray<ScopedThreadRef> = Object.freeze([]);
 const EMPTY_THREAD_INDEX: ReadonlyMap<ThreadId, OrchestrationThreadShell> = new Map();
 const EMPTY_THREAD_REFS_BY_PROJECT: ReadonlyMap<
@@ -41,6 +44,33 @@ export function createEnvironmentThreadShellAtoms(input: {
         get(input.snapshotAtom(environmentId))?.threads ?? EMPTY_THREADS,
     ).pipe(Atom.withLabel(`environment-threads:${environmentId}`)),
   );
+
+  const environmentImplementationRunsAtom = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make(
+      (get): ReadonlyArray<OrchestrationImplementationRun> =>
+        get(input.snapshotAtom(environmentId))?.implementationRuns ?? EMPTY_IMPLEMENTATION_RUNS,
+    ).pipe(Atom.withLabel(`environment-implementation-runs:${environmentId}`)),
+  );
+
+  const implementationRunsByPrdAtomFamily = Atom.family((key: string) => {
+    const separator = key.indexOf("\u0000");
+    if (separator < 0) {
+      throw new Error(`Invalid implementation runs by PRD atom key: ${JSON.stringify(key)}.`);
+    }
+    const environmentId = key.slice(0, separator) as EnvironmentId;
+    const prdId = key.slice(separator + 1) as OrchestrationPlanningPrdId;
+    let previous: ReadonlyArray<OrchestrationImplementationRun> = [];
+    return Atom.make((get) => {
+      const next = get(environmentImplementationRunsAtom(environmentId)).filter(
+        (run) => run.prdId === prdId,
+      );
+      if (arrayElementsEqual(previous, next)) {
+        return previous;
+      }
+      previous = next;
+      return previous;
+    }).pipe(Atom.withLabel(`environment-implementation-runs-by-prd:${key}`));
+  });
 
   const environmentThreadIndexAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make((get): ReadonlyMap<ThreadId, OrchestrationThreadShell> => {
@@ -174,6 +204,11 @@ export function createEnvironmentThreadShellAtoms(input: {
 
   return {
     environmentThreadsAtom,
+    environmentImplementationRunsAtom,
+    implementationRunsByPrdAtom: (input: {
+      readonly environmentId: EnvironmentId;
+      readonly prdId: OrchestrationPlanningPrdId;
+    }) => implementationRunsByPrdAtomFamily(`${input.environmentId}\u0000${input.prdId}`),
     environmentThreadIndexAtom,
     environmentThreadRefsAtom,
     environmentThreadRefsByProjectAtom,

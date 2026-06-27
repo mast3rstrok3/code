@@ -45,6 +45,8 @@ function makeThread(
     hasPendingUserInput: false,
     hasActionableProposedPlan: false,
     ...input,
+    parentThreadId: input.parentThreadId ?? null,
+    workflowRole: input.workflowRole ?? null,
   };
 }
 

@@ -1,7 +1,10 @@
 import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@t3tools/contracts";
 import {
+  type DevReviewRecord,
+  type OrchestrationImplementationRun,
   OrchestrationCheckpointSummary,
   OrchestrationMessage,
+  OrchestrationPlanningWorkflow,
   OrchestrationSession,
   OrchestrationThread,
 } from "@t3tools/contracts";
@@ -18,8 +21,19 @@ import {
   ThreadArchivedPayload,
   ThreadCreatedPayload,
   ThreadDeletedPayload,
+  ThreadDevReviewCreatedPayload,
+  ThreadDevReviewReplayMetadataUpdatedPayload,
+  ThreadDevReviewUpdatedPayload,
   ThreadInteractionModeSetPayload,
   ThreadMetaUpdatedPayload,
+  ThreadImplementationChangeRequestRetryRequestedPayload,
+  ThreadImplementationRunLaunchedPayload,
+  ThreadPlanningIssueReviewRequestedPayload,
+  ThreadPlanningIssuesCreatedPayload,
+  ThreadPlanningIssuesRevisedPayload,
+  ThreadPlanningPrdBundleLoadedPayload,
+  ThreadPlanningPrdCreatedPayload,
+  ThreadPlanningStageStartedPayload,
   ThreadProposedPlanUpsertedPayload,
   ThreadRuntimeModeSetPayload,
   ThreadUnarchivedPayload,
@@ -178,11 +192,49 @@ function compareThreadActivities(
   return left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id);
 }
 
+function compareDevReviews(left: DevReviewRecord, right: DevReviewRecord): number {
+  return left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id);
+}
+
+function compareImplementationRuns(
+  left: OrchestrationImplementationRun,
+  right: OrchestrationImplementationRun,
+): number {
+  return left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id);
+}
+
+function upsertDevReview(
+  devReviews: ReadonlyArray<DevReviewRecord>,
+  devReview: DevReviewRecord,
+): DevReviewRecord[] {
+  return [...devReviews.filter((entry) => entry.id !== devReview.id), devReview]
+    .toSorted(compareDevReviews)
+    .slice(-200);
+}
+
+function upsertImplementationRun(
+  runs: ReadonlyArray<OrchestrationImplementationRun>,
+  run: OrchestrationImplementationRun,
+): OrchestrationImplementationRun[] {
+  return [...runs.filter((entry) => entry.id !== run.id), run].toSorted(compareImplementationRuns);
+}
+
+function emptyPlanningWorkflow(): OrchestrationPlanningWorkflow {
+  return {
+    stage: "grill",
+    createIssuesAvailable: false,
+    prd: null,
+    issues: [],
+    reviewCycles: [],
+  };
+}
+
 export function createEmptyReadModel(nowIso: string): OrchestrationReadModel {
   return {
     snapshotSequence: 0,
     projects: [],
     threads: [],
+    implementationRuns: [],
     updatedAt: nowIso,
   };
 }
@@ -277,6 +329,8 @@ export function projectEvent(
             id: payload.threadId,
             projectId: payload.projectId,
             ownerUserId: payload.ownerUserId,
+            parentThreadId: payload.parentThreadId ?? null,
+            workflowRole: payload.workflowRole ?? null,
             title: payload.title,
             modelSelection: payload.modelSelection,
             runtimeMode: payload.runtimeMode,
@@ -289,6 +343,9 @@ export function projectEvent(
             archivedAt: null,
             deletedAt: null,
             messages: [],
+            proposedPlans: [],
+            planningWorkflow: null,
+            devReviews: [],
             activities: [],
             checkpoints: [],
             session: null,
@@ -379,6 +436,199 @@ export function projectEvent(
             interactionMode: payload.interactionMode,
             updatedAt: payload.updatedAt,
           }),
+        })),
+      );
+
+    case "thread.planning-stage-started":
+      return decodeForEvent(
+        ThreadPlanningStageStartedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) return nextBase;
+          const workflow = thread.planningWorkflow ?? emptyPlanningWorkflow();
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              planningWorkflow: {
+                ...workflow,
+                stage: payload.stage,
+                createIssuesAvailable: payload.stage === "issues-authoring",
+              },
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.planning-prd-created":
+      return decodeForEvent(
+        ThreadPlanningPrdCreatedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) return nextBase;
+          const workflow = thread.planningWorkflow ?? emptyPlanningWorkflow();
+          const stage = payload.stage ?? "issues-authoring";
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              planningWorkflow: {
+                ...workflow,
+                prd: payload.prd,
+                stage,
+                createIssuesAvailable: stage === "issues-authoring",
+              },
+              updatedAt: payload.prd.updatedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.planning-issues-created":
+      return decodeForEvent(
+        ThreadPlanningIssuesCreatedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) return nextBase;
+          const workflow = thread.planningWorkflow ?? emptyPlanningWorkflow();
+          const stage = payload.stage ?? "issue-review";
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              planningWorkflow: {
+                ...workflow,
+                stage,
+                createIssuesAvailable: false,
+                issues: payload.issues,
+              },
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.planning-issues-revised":
+      return decodeForEvent(
+        ThreadPlanningIssuesRevisedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) return nextBase;
+          const workflow = thread.planningWorkflow ?? emptyPlanningWorkflow();
+          const reviewCycles =
+            payload.reviewCycle === undefined
+              ? workflow.reviewCycles
+              : [
+                  ...workflow.reviewCycles.filter(
+                    (entry) => entry.cycleNumber !== payload.reviewCycle?.cycleNumber,
+                  ),
+                  payload.reviewCycle,
+                ].toSorted((left, right) => left.cycleNumber - right.cycleNumber);
+          const stage = payload.stage ?? workflow.stage;
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              planningWorkflow: {
+                ...workflow,
+                stage,
+                createIssuesAvailable: stage === "issues-authoring",
+                issues: payload.issues,
+                reviewCycles,
+              },
+              updatedAt: payload.revisedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.planning-issue-review-requested":
+      return decodeForEvent(
+        ThreadPlanningIssueReviewRequestedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) return nextBase;
+          const workflow = thread.planningWorkflow ?? emptyPlanningWorkflow();
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              planningWorkflow: {
+                ...workflow,
+                stage: payload.stage,
+                createIssuesAvailable: false,
+              },
+              updatedAt: payload.requestedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.planning-prd-bundle-loaded":
+      return decodeForEvent(
+        ThreadPlanningPrdBundleLoadedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread || payload.bundle === undefined) return nextBase;
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              planningWorkflow: {
+                stage: "completed",
+                createIssuesAvailable: false,
+                prd: payload.bundle.prd,
+                issues: payload.bundle.issues,
+                reviewCycles: payload.bundle.reviewCycles,
+              },
+              updatedAt: payload.loadedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.implementation-run-launched":
+      return decodeForEvent(
+        ThreadImplementationRunLaunchedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          implementationRuns: upsertImplementationRun(nextBase.implementationRuns, payload.run),
+        })),
+      );
+
+    case "thread.implementation-change-request-retry-requested":
+      return decodeForEvent(
+        ThreadImplementationChangeRequestRetryRequestedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          implementationRuns: upsertImplementationRun(nextBase.implementationRuns, payload.run),
         })),
       );
 
@@ -534,6 +784,90 @@ export function projectEvent(
           threads: updateThread(nextBase.threads, payload.threadId, {
             proposedPlans,
             updatedAt: event.occurredAt,
+          }),
+        };
+      });
+
+    case "thread.dev-review-created":
+      return Effect.gen(function* () {
+        const payload = yield* decodeForEvent(
+          ThreadDevReviewCreatedPayload,
+          event.payload,
+          event.type,
+          "payload",
+        );
+        const review = payload.devReview;
+        return {
+          ...nextBase,
+          threads: nextBase.threads.map((thread) =>
+            thread.id === review.sourceThreadId || thread.id === review.reviewThreadId
+              ? {
+                  ...thread,
+                  devReviews: upsertDevReview(thread.devReviews, review),
+                  updatedAt: event.occurredAt,
+                }
+              : thread,
+          ),
+        };
+      });
+
+    case "thread.dev-review-updated":
+      return Effect.gen(function* () {
+        const payload = yield* decodeForEvent(
+          ThreadDevReviewUpdatedPayload,
+          event.payload,
+          event.type,
+          "payload",
+        );
+        return {
+          ...nextBase,
+          threads: nextBase.threads.map((thread) => {
+            if (thread.id !== payload.sourceThreadId && thread.id !== payload.reviewThreadId) {
+              return thread;
+            }
+            const existing = thread.devReviews.find((entry) => entry.id === payload.reviewId);
+            if (!existing) return thread;
+            const updated = {
+              ...existing,
+              ...(payload.status !== undefined ? { status: payload.status } : {}),
+              ...(payload.document !== undefined ? { document: payload.document } : {}),
+              updatedAt: payload.updatedAt,
+            };
+            return {
+              ...thread,
+              devReviews: upsertDevReview(thread.devReviews, updated),
+              updatedAt: event.occurredAt,
+            };
+          }),
+        };
+      });
+
+    case "thread.dev-review-replay-metadata-updated":
+      return Effect.gen(function* () {
+        const payload = yield* decodeForEvent(
+          ThreadDevReviewReplayMetadataUpdatedPayload,
+          event.payload,
+          event.type,
+          "payload",
+        );
+        return {
+          ...nextBase,
+          threads: nextBase.threads.map((thread) => {
+            if (thread.id !== payload.sourceThreadId && thread.id !== payload.reviewThreadId) {
+              return thread;
+            }
+            const existing = thread.devReviews.find((entry) => entry.id === payload.reviewId);
+            if (!existing) return thread;
+            const updated = {
+              ...existing,
+              replay: payload.replay,
+              updatedAt: payload.updatedAt,
+            };
+            return {
+              ...thread,
+              devReviews: upsertDevReview(thread.devReviews, updated),
+              updatedAt: event.occurredAt,
+            };
           }),
         };
       });

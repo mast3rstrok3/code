@@ -40,6 +40,17 @@ export function applyShellStreamEvent(
         threads: Arr.filter(snapshot.threads, (t) => t.id !== event.threadId),
         snapshotSequence: event.sequence,
       };
+    case "implementation-run-upserted": {
+      const implementationRuns = snapshot.implementationRuns ?? [];
+      const nextImplementationRuns = implementationRuns.some((run) => run.id === event.run.id)
+        ? Arr.map(implementationRuns, (run) => (run.id === event.run.id ? event.run : run))
+        : Arr.append(implementationRuns, event.run);
+      return {
+        ...snapshot,
+        implementationRuns: nextImplementationRuns,
+        snapshotSequence: event.sequence,
+      };
+    }
     default:
       return snapshot;
   }

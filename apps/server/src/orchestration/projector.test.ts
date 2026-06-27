@@ -78,6 +78,8 @@ describe("orchestration projector", () => {
         id: "thread-1",
         projectId: "project-1",
         ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+        parentThreadId: null,
+        workflowRole: null,
         title: "demo",
         modelSelection: {
           instanceId: "codex",
@@ -94,6 +96,8 @@ describe("orchestration projector", () => {
         deletedAt: null,
         messages: [],
         proposedPlans: [],
+        planningWorkflow: null,
+        devReviews: [],
         activities: [],
         checkpoints: [],
         session: null,

@@ -1,7 +1,7 @@
 import {
   type ApprovalRequestId,
   DEFAULT_MODEL,
-  DEFAULT_WORKSPACE_USER_ID,
+  DevReviewId,
   defaultInstanceIdForDriver,
   type EnvironmentId,
   type MessageId,
@@ -67,6 +67,7 @@ import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { isElectron } from "../env";
 import { readLocalApi } from "../localApi";
+import { resolveImplementationBranchIdentity } from "../lib/implementationBranchIdentity";
 import { useDiffPanelStore } from "../diffPanelStore";
 import {
   collapseExpandedComposerCursor,
@@ -157,6 +158,7 @@ import { useEnvironmentSettings } from "../hooks/useSettings";
 import { resolveAppModelSelectionForInstance } from "../modelSelection";
 import { getTerminalFocusOwner } from "../lib/terminalFocus";
 import { resolveNewDraftStartFromOrigin } from "../lib/chatThreadActions";
+import { resolveDefaultThreadOwnerUserId } from "../lib/workspaceUsers";
 import {
   deriveLogicalProjectKeyFromSettings,
   selectProjectGroupingSettings,
@@ -196,9 +198,16 @@ import { threadEnvironment } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
 import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
+  useImplementationRuns,
+  useLaunchImplementationRunCommand,
+  useLoadPlanningPrdBundleCommand,
+  usePlanningWorkflowThreadShells,
   useProject,
   useProjects,
+  useRequestPlanningIssueReviewCommand,
+  useRetryImplementationChangeRequestCommand,
   useThread,
+  useThreadPlanningWorkflow,
   useThreadProposedPlans,
   useThreadRefs,
 } from "../state/entities";
@@ -262,8 +271,12 @@ const PreviewPanel = lazy(() =>
   import("./preview/PreviewPanel").then((module) => ({ default: module.PreviewPanel })),
 );
 const DiffPanel = lazy(() => import("./DiffPanel"));
+const DevReviewPanel = lazy(() =>
+  import("./DevReviewPanel").then((module) => ({ default: module.DevReviewPanel })),
+);
 const FilePreviewPanel = lazy(() => import("./files/FilePreviewPanel"));
 const EMPTY_PENDING_FILE_SURFACE_IDS: ReadonlySet<string> = new Set();
+const QNA_DEV_REVIEW_WORKFLOW_PROMPT_ID = "implementation.qna-dev-review.codex";
 const TYPE_TO_FOCUS_EDITABLE_SELECTOR = [
   "input",
   "textarea",
@@ -1014,6 +1027,13 @@ function ChatViewContent(props: ChatViewProps) {
     reportFailure: false,
   });
   const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
+  const launchDevReview = useAtomCommand(threadEnvironment.launchDevReview, {
+    reportFailure: false,
+  });
+  const loadPlanningPrdBundle = useLoadPlanningPrdBundleCommand();
+  const requestPlanningIssueReview = useRequestPlanningIssueReviewCommand();
+  const launchImplementationRun = useLaunchImplementationRunCommand();
+  const retryImplementationChangeRequest = useRetryImplementationChangeRequestCommand();
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, {
     reportFailure: false,
   });
@@ -1049,14 +1069,10 @@ function ChatViewContent(props: ChatViewProps) {
   const timestampFormat = settings.timestampFormat;
   const autoOpenPlanSidebar = settings.autoOpenPlanSidebar;
   const defaultNewThreadOwnerUserId = useMemo(() => {
-    const activeWorkspaceUserView = settings.activeWorkspaceUserView;
-    if (
-      activeWorkspaceUserView.kind === "user" &&
-      settings.workspaceUsers.some((user) => user.id === activeWorkspaceUserView.userId)
-    ) {
-      return activeWorkspaceUserView.userId;
-    }
-    return DEFAULT_WORKSPACE_USER_ID;
+    return resolveDefaultThreadOwnerUserId({
+      activeWorkspaceUserView: settings.activeWorkspaceUserView,
+      workspaceUsers: settings.workspaceUsers,
+    });
   }, [settings.activeWorkspaceUserView, settings.workspaceUsers]);
   const navigate = useNavigate();
   const { resolvedTheme } = useTheme();
@@ -1122,6 +1138,7 @@ function ChatViewContent(props: ChatViewProps) {
   >({});
   const [isConnecting, _setIsConnecting] = useState(false);
   const [isRevertingCheckpoint, setIsRevertingCheckpoint] = useState(false);
+  const [devReviewLaunchInFlight, setDevReviewLaunchInFlight] = useState(false);
   const [maximizedRightPanelThreadKey, setMaximizedRightPanelThreadKey] = useState<string | null>(
     null,
   );
@@ -1299,7 +1316,14 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const handleThreadOwnerUserIdChange = useCallback(
     (ownerUserId: WorkspaceUserId) => {
-      if (!isServerThread || activeThreadId === null) {
+      if (activeThreadId === null) {
+        return;
+      }
+      if (isLocalDraftThread) {
+        setDraftThreadContext(composerDraftTarget, { ownerUserId });
+        return;
+      }
+      if (!isServerThread) {
         return;
       }
       void updateThreadMetadata({
@@ -1310,7 +1334,15 @@ function ChatViewContent(props: ChatViewProps) {
         },
       });
     },
-    [activeThreadId, environmentId, isServerThread, updateThreadMetadata],
+    [
+      activeThreadId,
+      composerDraftTarget,
+      environmentId,
+      isLocalDraftThread,
+      isServerThread,
+      setDraftThreadContext,
+      updateThreadMetadata,
+    ],
   );
   const activeThreadKey = activeThreadRef ? scopedThreadKey(activeThreadRef) : null;
   const [timelineAnchor, setTimelineAnchor] = useState<{
@@ -1407,6 +1439,12 @@ function ChatViewContent(props: ChatViewProps) {
     ? scopeProjectRef(activeThread.environmentId, activeThread.projectId)
     : null;
   const activeProject = useProject(activeProjectRef);
+  const activePlanningWorkflow = useThreadPlanningWorkflow(activeThreadRef);
+  const activeImplementationRuns = useImplementationRuns(activeThread?.environmentId ?? null);
+  const activeWorkflowThreadShells = usePlanningWorkflowThreadShells(
+    activeThread?.environmentId ?? null,
+    activeProject?.id ?? null,
+  );
   const activeEnvironmentShell = useEnvironmentQuery(
     activeThread ? environmentShell.stateAtom(activeThread.environmentId) : null,
   );
@@ -1549,13 +1587,17 @@ function ChatViewContent(props: ChatViewProps) {
       );
       const storedDraftSession = getDraftSessionByLogicalProjectKey(logicalProjectKey);
       if (storedDraftSession) {
-        setDraftThreadContext(storedDraftSession.draftId, input);
+        setDraftThreadContext(storedDraftSession.draftId, {
+          ...input,
+          ownerUserId: defaultNewThreadOwnerUserId,
+        });
         setLogicalProjectDraftThreadId(
           logicalProjectKey,
           activeProjectRef,
           storedDraftSession.draftId,
           {
             threadId: storedDraftSession.threadId,
+            ownerUserId: defaultNewThreadOwnerUserId,
             ...input,
           },
         );
@@ -1574,10 +1616,14 @@ function ChatViewContent(props: ChatViewProps) {
         activeDraftSession?.logicalProjectKey === logicalProjectKey &&
         draftId
       ) {
-        setDraftThreadContext(draftId, input);
+        setDraftThreadContext(draftId, {
+          ...input,
+          ownerUserId: defaultNewThreadOwnerUserId,
+        });
         setLogicalProjectDraftThreadId(logicalProjectKey, activeProjectRef, draftId, {
           threadId: activeDraftSession.threadId,
           createdAt: activeDraftSession.createdAt,
+          ownerUserId: defaultNewThreadOwnerUserId,
           runtimeMode: activeDraftSession.runtimeMode,
           interactionMode: activeDraftSession.interactionMode,
           ...input,
@@ -1590,6 +1636,7 @@ function ChatViewContent(props: ChatViewProps) {
       setLogicalProjectDraftThreadId(logicalProjectKey, activeProjectRef, nextDraftId, {
         threadId: nextThreadId,
         createdAt: new Date().toISOString(),
+        ownerUserId: defaultNewThreadOwnerUserId,
         runtimeMode: DEFAULT_RUNTIME_MODE,
         interactionMode: DEFAULT_INTERACTION_MODE,
         ...input,
@@ -1602,6 +1649,7 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [
       activeProject,
+      defaultNewThreadOwnerUserId,
       draftId,
       getDraftSession,
       getDraftSessionByLogicalProjectKey,
@@ -2174,6 +2222,88 @@ function ChatViewContent(props: ChatViewProps) {
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const activeWorkspaceRoot = activeThreadWorktreePath ?? activeProjectCwd ?? undefined;
+  const implementationBranchIdentity = useMemo(() => {
+    if (!activeWorkspaceRoot || !activePlanningWorkflow?.prd) {
+      return null;
+    }
+    return resolveImplementationBranchIdentity({
+      workspaceRoot: activeWorkspaceRoot,
+      prdId: activePlanningWorkflow.prd.id,
+      prdTitle: activePlanningWorkflow.prd.title,
+      baseBranch: activeThread?.branch ?? null,
+      implementationRuns: activeImplementationRuns,
+    });
+  }, [activeImplementationRuns, activePlanningWorkflow?.prd, activeWorkspaceRoot]);
+  const openWorkflowThread = useCallback(
+    (targetThreadId: ThreadId) => {
+      void navigate({
+        to: "/$environmentId/$threadId",
+        params: {
+          environmentId,
+          threadId: targetThreadId,
+        },
+      });
+    },
+    [environmentId, navigate],
+  );
+  const handleLoadPlanningPrdBundle = useCallback(
+    (prdId: string) => {
+      if (!activeThread) return;
+      void loadPlanningPrdBundle({
+        environmentId: activeThread.environmentId,
+        input: {
+          threadId: activeThread.id,
+          prdId,
+          source: "projection",
+        },
+      });
+    },
+    [activeThread, loadPlanningPrdBundle],
+  );
+  const handleRequestPlanningIssueReview = useCallback(
+    (prdId: string) => {
+      if (!activeThread) return;
+      void requestPlanningIssueReview({
+        environmentId: activeThread.environmentId,
+        input: {
+          threadId: activeThread.id,
+          prdId,
+        },
+      });
+    },
+    [activeThread, requestPlanningIssueReview],
+  );
+  const handleLaunchImplementationRun = useCallback(
+    (prdId: string) => {
+      if (!activeThread || implementationBranchIdentity === null) return;
+      void launchImplementationRun({
+        environmentId: activeThread.environmentId,
+        input: {
+          threadId: activeThread.id,
+          prdId,
+          baseBranch: activeThread.branch ?? "main",
+          pinnedCommit: "HEAD",
+          orchestratorBranch: implementationBranchIdentity.orchestratorBranch,
+          orchestratorWorktreePath: implementationBranchIdentity.orchestratorWorktreePath,
+          validationCommands: ["vp check", "vp run typecheck"],
+        },
+      });
+    },
+    [activeThread, implementationBranchIdentity, launchImplementationRun],
+  );
+  const handleRetryImplementationChangeRequest = useCallback(
+    (runId: string) => {
+      if (!activeThread) return;
+      void retryImplementationChangeRequest({
+        environmentId: activeThread.environmentId,
+        input: {
+          threadId: activeThread.id,
+          runId,
+        },
+      });
+    },
+    [activeThread, retryImplementationChangeRequest],
+  );
   const activeTerminalLaunchContext =
     terminalUiLaunchContext?.threadId === activeThreadId ? terminalUiLaunchContext : null;
   // Default true while loading to avoid toolbar flicker.
@@ -2811,6 +2941,121 @@ function ChatViewContent(props: ChatViewProps) {
     useRightPanelStore.getState().open(activeThreadRef, "review");
     onDiffPanelOpen?.();
   }, [activeThreadRef, isGitRepo, isServerThread, onDiffPanelOpen]);
+  const launchQnaDevReview = useCallback(async () => {
+    if (
+      !activeThread ||
+      !activeThreadRef ||
+      !activeProject ||
+      !isServerThread ||
+      devReviewLaunchInFlight
+    ) {
+      return;
+    }
+    const sendCtx = composerRef.current?.getSendContext();
+    if (!sendCtx) return;
+    setDevReviewLaunchInFlight(true);
+    const reviewThreadId = newThreadId();
+    const reviewThreadRef = scopeThreadRef(activeThread.environmentId, reviewThreadId);
+    const reviewId = DevReviewId.make(`dev-review-${Date.now().toString(36)}-${randomHex(6)}`);
+    const createdAt = new Date().toISOString();
+    const sourceMessages = activeThread.messages
+      .slice(-12)
+      .map((message) => `${message.role}: ${truncate(message.text, 1_200)}`)
+      .join("\n\n");
+    const messageText = [
+      `Run Q&A Dev Review for source implementation thread ${activeThread.id}.`,
+      `Source title: ${activeThread.title}`,
+      `Dev Review record ID: ${reviewId}`,
+      "Use dev_review_get, dev_review_replay_start, preview_* testing, dev_review_replay_stop, and dev_review_update.",
+      sourceMessages ? `Recent source thread context:\n${sourceMessages}` : null,
+    ]
+      .filter((part): part is string => Boolean(part))
+      .join("\n\n");
+
+    const result = await launchDevReview({
+      environmentId,
+      input: {
+        sourceThreadId: activeThread.id,
+        reviewThreadId,
+        reviewId,
+        message: {
+          messageId: newMessageId(),
+          role: "user",
+          text: messageText,
+          attachments: [],
+        },
+        modelSelection: sendCtx.selectedModelSelection,
+        runtimeMode,
+        workflowPromptId: QNA_DEV_REVIEW_WORKFLOW_PROMPT_ID,
+        createdAt,
+      },
+    });
+
+    if (result._tag === "Failure") {
+      if (!isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not launch Dev Review",
+            description:
+              error instanceof Error
+                ? error.message
+                : "An error occurred while creating the review thread.",
+          }),
+        );
+      }
+      setDevReviewLaunchInFlight(false);
+      return;
+    }
+
+    useRightPanelStore.getState().open(activeThreadRef, "review");
+    useRightPanelStore.getState().open(reviewThreadRef, "review");
+    const startedResult = await settlePromise(() => waitForStartedServerThread(reviewThreadRef));
+    if (startedResult._tag === "Failure") {
+      toastManager.add(
+        stackedThreadToast({
+          type: "warning",
+          title: "Dev Review record created",
+          description: "The review thread did not report a running agent yet.",
+        }),
+      );
+    }
+    const navigateResult = await settlePromise(() =>
+      navigate({
+        to: "/$environmentId/$threadId",
+        params: {
+          environmentId: activeThread.environmentId,
+          threadId: reviewThreadId,
+        },
+      }),
+    );
+    if (navigateResult._tag === "Failure" && !isAtomCommandInterrupted(navigateResult)) {
+      const error = squashAtomCommandFailure(navigateResult);
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Could not open review thread",
+          description:
+            error instanceof Error
+              ? error.message
+              : "The review thread was created but not opened.",
+        }),
+      );
+    }
+    setDevReviewLaunchInFlight(false);
+  }, [
+    activeProject,
+    activeThread,
+    activeThreadRef,
+    composerRef,
+    devReviewLaunchInFlight,
+    environmentId,
+    isServerThread,
+    launchDevReview,
+    navigate,
+    runtimeMode,
+  ]);
   const addLogsSurface = useCallback(() => {
     if (!activeThreadRef) return;
     useRightPanelStore.getState().open(activeThreadRef, "logs");
@@ -3886,7 +4131,7 @@ function ChatViewContent(props: ChatViewProps) {
                 ? {
                     createThread: {
                       projectId: activeProject.id,
-                      ownerUserId: defaultNewThreadOwnerUserId,
+                      ownerUserId: draftThread?.ownerUserId ?? defaultNewThreadOwnerUserId,
                       title,
                       modelSelection: threadCreateModelSelection,
                       runtimeMode,
@@ -4710,14 +4955,26 @@ function ChatViewContent(props: ChatViewProps) {
         newShortcutLabel={newTerminalShortcutLabel ?? undefined}
         closeShortcutLabel={closeTerminalShortcutLabel ?? undefined}
       />
-    ) : activeRightPanelSurface?.kind === "diff" || activeRightPanelSurface?.kind === "review" ? (
+    ) : activeRightPanelSurface?.kind === "diff" ? (
       <Suspense fallback={null}>
         <DiffPanel mode="embedded" composerDraftTarget={composerDraftTarget} />
+      </Suspense>
+    ) : activeRightPanelSurface?.kind === "review" ? (
+      <Suspense fallback={null}>
+        <DevReviewPanel
+          mode="embedded"
+          threadRef={activeThreadRef}
+          launchInFlight={devReviewLaunchInFlight}
+          onLaunch={launchQnaDevReview}
+        />
       </Suspense>
     ) : activeRightPanelSurface?.kind === "plan" ? (
       <PlanSidebar
         activePlan={activePlan}
         activeProposedPlan={sidebarProposedPlan}
+        planningWorkflow={activePlanningWorkflow}
+        workflowThreadShells={activeWorkflowThreadShells}
+        implementationRuns={activeImplementationRuns}
         label={planSidebarLabel}
         environmentId={environmentId}
         threadRef={activeThreadRef}
@@ -4725,6 +4982,11 @@ function ChatViewContent(props: ChatViewProps) {
         workspaceRoot={activeWorkspaceRoot}
         timestampFormat={timestampFormat}
         mode="embedded"
+        onOpenThread={openWorkflowThread}
+        onLoadPrdBundle={handleLoadPlanningPrdBundle}
+        onRequestIssueReview={handleRequestPlanningIssueReview}
+        onLaunchImplementationRun={handleLaunchImplementationRun}
+        onRetryImplementationChangeRequest={handleRetryImplementationChangeRequest}
       />
     ) : activeRightPanelSurface?.kind === "app-dev-stack" &&
       activeProject &&

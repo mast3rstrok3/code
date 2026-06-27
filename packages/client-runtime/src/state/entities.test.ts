@@ -88,6 +88,8 @@ const THREAD_SHELL = {
   id: THREAD_ID,
   projectId: PROJECT_ID,
   ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+  parentThreadId: null,
+  workflowRole: null,
   title: "Thread",
   modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
   runtimeMode: "full-access",
@@ -208,6 +210,8 @@ describe("environment entity projections", () => {
       deletedAt: null,
       messages,
       proposedPlans: [],
+      planningWorkflow: null,
+      devReviews: [],
       activities: [],
       checkpoints: [],
     } satisfies OrchestrationThread & { readonly environmentId: EnvironmentId };
@@ -323,6 +327,8 @@ describe("environment entity projections", () => {
       deletedAt: null,
       messages: [],
       proposedPlans: [],
+      planningWorkflow: null,
+      devReviews: [],
       activities: [],
       checkpoints: [],
     } satisfies OrchestrationThread;

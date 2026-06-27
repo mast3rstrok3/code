@@ -3,6 +3,7 @@ import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_WORKSPACE_USER_ID,
+  DevReviewId,
   MessageId,
   ProjectId,
   ThreadId,
@@ -135,6 +136,8 @@ describe("OrchestrationEngine", () => {
           id: ThreadId.make("thread-bootstrap"),
           projectId: asProjectId("project-bootstrap"),
           ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+          parentThreadId: null,
+          workflowRole: null,
           title: "Bootstrap Thread",
           modelSelection: {
             instanceId: ProviderInstanceId.make("codex"),
@@ -151,11 +154,14 @@ describe("OrchestrationEngine", () => {
           deletedAt: null,
           messages: [],
           proposedPlans: [],
+          planningWorkflow: null,
+          devReviews: [],
           activities: [],
           checkpoints: [],
           session: null,
         },
       ],
+      implementationRuns: [],
     };
     const commandReadModel = {
       ...projectionSnapshot,
@@ -163,6 +169,7 @@ describe("OrchestrationEngine", () => {
         ...thread,
         messages: [],
         proposedPlans: [],
+        devReviews: [],
         activities: [],
         checkpoints: [],
       })),
@@ -292,6 +299,99 @@ describe("OrchestrationEngine", () => {
     const readModelA = await system.readModel();
     const readModelB = await system.readModel();
     expect(readModelB).toEqual(readModelA);
+    await system.dispose();
+  });
+
+  it("launches Q&A Dev Review records and linked review threads atomically", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const createdAt = now();
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-project-dev-review-create"),
+        projectId: asProjectId("project-dev-review"),
+        title: "Dev Review Project",
+        workspaceRoot: "/tmp/project-dev-review",
+        defaultModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-thread-dev-review-source-create"),
+        threadId: ThreadId.make("thread-dev-review-source"),
+        projectId: asProjectId("project-dev-review"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+        title: "Implementation",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "full-access",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+
+    await system.run(
+      engine.dispatch({
+        type: "thread.dev-review.launch",
+        commandId: CommandId.make("cmd-dev-review-launch"),
+        sourceThreadId: ThreadId.make("thread-dev-review-source"),
+        reviewThreadId: ThreadId.make("thread-dev-review-review"),
+        reviewId: DevReviewId.make("dev-review-1"),
+        message: {
+          messageId: asMessageId("msg-dev-review-launch"),
+          role: "user",
+          text: "Run Q&A Dev Review",
+          attachments: [],
+        },
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        runtimeMode: "full-access",
+        workflowPromptId: "implementation.qna-dev-review.codex",
+        createdAt,
+      }),
+    );
+
+    const readModel = await system.readModel();
+    const sourceThread = readModel.threads.find(
+      (thread) => thread.id === "thread-dev-review-source",
+    );
+    const reviewThread = readModel.threads.find(
+      (thread) => thread.id === "thread-dev-review-review",
+    );
+    expect(sourceThread?.devReviews).toHaveLength(1);
+    expect(reviewThread?.devReviews).toHaveLength(1);
+    expect(sourceThread?.devReviews[0]).toEqual(reviewThread?.devReviews[0]);
+    expect(sourceThread?.devReviews[0]?.status).toBe("running");
+    expect(sourceThread?.devReviews[0]?.replay.status).toBe("not-started");
+    expect(reviewThread?.messages.map((message) => message.id)).toEqual(["msg-dev-review-launch"]);
+
+    const events = await system.run(
+      Stream.runCollect(engine.readEvents(0)).pipe(
+        Effect.map((chunk): OrchestrationEvent[] => Array.from(chunk)),
+      ),
+    );
+    expect(events.map((event) => event.type)).toEqual([
+      "project.created",
+      "thread.created",
+      "thread.created",
+      "thread.dev-review-created",
+      "thread.message-sent",
+      "thread.turn-start-requested",
+    ]);
+
     await system.dispose();
   });
 

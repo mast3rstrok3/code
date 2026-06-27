@@ -130,6 +130,7 @@ const SettingsWatcherLive = Layer.effectDiscard(
       ),
       Effect.forkScoped,
     );
+    yield* Effect.yieldNow;
   }),
 );
 

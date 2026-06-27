@@ -11,6 +11,8 @@ export interface ProjectGroupingSettings {
 }
 
 export type ProjectGroupingMode = SidebarProjectGroupingMode;
+export type DraftProjectScope = "logical" | "physical";
+export type ProjectGroupingOverrideSelection = SidebarProjectGroupingMode | "inherit";
 
 export function selectProjectGroupingSettings(settings: ClientSettings): ProjectGroupingSettings {
   return {
@@ -74,6 +76,29 @@ export function deriveProjectGroupingOverrideKey(
   project: Pick<EnvironmentProject, "environmentId" | "workspaceRoot">,
 ): string {
   return derivePhysicalProjectKey(project);
+}
+
+export function updateProjectGroupingOverrides(input: {
+  readonly overrides: Record<string, SidebarProjectGroupingMode>;
+  readonly project: Pick<EnvironmentProject, "environmentId" | "workspaceRoot">;
+  readonly selection: ProjectGroupingOverrideSelection;
+}): Record<string, SidebarProjectGroupingMode> {
+  const overrideKey = deriveProjectGroupingOverrideKey(input.project);
+  if (input.selection === "inherit") {
+    if (input.overrides[overrideKey] === undefined) {
+      return input.overrides;
+    }
+    const nextOverrides = { ...input.overrides };
+    delete nextOverrides[overrideKey];
+    return nextOverrides;
+  }
+  if (input.overrides[overrideKey] === input.selection) {
+    return input.overrides;
+  }
+  return {
+    ...input.overrides,
+    [overrideKey]: input.selection,
+  };
 }
 
 export function getProjectOrderKey(
@@ -159,6 +184,24 @@ export function deriveLogicalProjectKeyFromRef(
   },
 ): string {
   return project ? deriveLogicalProjectKey(project, options) : scopedProjectKey(projectRef);
+}
+
+export function deriveDraftProjectKey(input: {
+  readonly projectRef: ScopedProjectRef;
+  readonly project:
+    | Pick<EnvironmentProject, "environmentId" | "id" | "workspaceRoot" | "repositoryIdentity">
+    | null
+    | undefined;
+  readonly settings: ProjectGroupingSettings;
+  readonly scope?: DraftProjectScope | undefined;
+}): string {
+  if (!input.project) {
+    return scopedProjectKey(input.projectRef);
+  }
+  if (input.scope === "physical") {
+    return derivePhysicalProjectKey(input.project);
+  }
+  return deriveLogicalProjectKeyFromSettings(input.project, input.settings);
 }
 
 export function deriveProjectGroupLabel(input: {

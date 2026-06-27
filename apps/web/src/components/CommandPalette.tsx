@@ -1,6 +1,7 @@
 "use client";
 
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { resolveSubmittedAddProjectPath } from "@t3tools/client-runtime/operations/projects";
 import {
   isAtomCommandInterrupted,
   settlePromise,
@@ -9,6 +10,7 @@ import {
 import {
   DEFAULT_MODEL,
   type EnvironmentId,
+  type FilesystemBrowseEntry,
   type FilesystemBrowseResult,
   type ProjectId,
   ProviderInstanceId,
@@ -45,7 +47,11 @@ import {
 import { useAtomValue } from "@effect/atom-react";
 import { OpenAddProjectCommandPaletteProvider } from "../commandPaletteContext";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
-import { useClientSettings } from "../hooks/useSettings";
+import {
+  useClientSettings,
+  usePrimarySettings,
+  useUpdateClientSettings,
+} from "../hooks/useSettings";
 import { readLocalApi } from "../localApi";
 import { filesystemEnvironment } from "../state/filesystem";
 import { projectEnvironment } from "../state/projects";
@@ -54,13 +60,12 @@ import { sourceControlEnvironment } from "../state/sourceControl";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
-import { useProjects, useThreadShells } from "../state/entities";
+import { readProject, useProjects, useThreadShells } from "../state/entities";
 import {
   startNewThreadInProjectFromContext,
   startNewThreadFromContext,
 } from "../lib/chatThreadActions";
 import {
-  appendBrowsePathSegment,
   canNavigateUp,
   ensureBrowseDirectoryPath,
   findProjectByPath,
@@ -77,6 +82,8 @@ import {
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { getLatestThreadForProject } from "../lib/threadSort";
 import { cn, isMacPlatform, isWindowsPlatform, newProjectId } from "../lib/utils";
+import { resolveDefaultThreadOwnerUserId } from "../lib/workspaceUsers";
+import { updateProjectGroupingOverrides } from "../logicalProject";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { buildThreadRouteParams, resolveThreadRouteTarget } from "../threadRoutes";
 import {
@@ -118,6 +125,26 @@ import { ComposerHandleContext, useComposerHandleContext } from "../composerHand
 import type { ChatComposerHandle } from "./chat/ChatComposer";
 
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
+const PROJECT_UPSERT_WAIT_TIMEOUT_MS = 800;
+const PROJECT_UPSERT_POLL_INTERVAL_MS = 40;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function waitForProjectUpsert(
+  projectRef: Parameters<typeof readProject>[0],
+): Promise<ReturnType<typeof readProject>> {
+  const deadline = Date.now() + PROJECT_UPSERT_WAIT_TIMEOUT_MS;
+  let project = readProject(projectRef);
+  while (project === null && Date.now() < deadline) {
+    await delay(PROJECT_UPSERT_POLL_INTERVAL_MS);
+    project = readProject(projectRef);
+  }
+  return project;
+}
 
 function getLocalFileManagerName(platform: string): string {
   if (isMacPlatform(platform)) {
@@ -448,6 +475,16 @@ function OpenCommandPaletteDialog(props: {
   const isActionsOnly = deferredQuery.startsWith(">");
   const [highlightedItemValue, setHighlightedItemValue] = useState<string | null>(null);
   const clientSettings = useClientSettings();
+  const updateClientSettings = useUpdateClientSettings();
+  const workspaceUsers = usePrimarySettings((settings) => settings.workspaceUsers);
+  const defaultNewThreadOwnerUserId = useMemo(
+    () =>
+      resolveDefaultThreadOwnerUserId({
+        activeWorkspaceUserView: clientSettings.activeWorkspaceUserView,
+        workspaceUsers,
+      }),
+    [clientSettings.activeWorkspaceUserView, workspaceUsers],
+  );
   const createProject = useAtomCommand(projectEnvironment.create, {
     reportFailure: false,
   });
@@ -462,6 +499,20 @@ function OpenCommandPaletteDialog(props: {
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
   const projects = useProjects();
+  const showProjectSeparatelyInSidebar = useCallback(
+    (project: Pick<(typeof projects)[number], "environmentId" | "workspaceRoot">) => {
+      const nextOverrides = updateProjectGroupingOverrides({
+        overrides: clientSettings.sidebarProjectGroupingOverrides,
+        project,
+        selection: "separate",
+      });
+      if (nextOverrides === clientSettings.sidebarProjectGroupingOverrides) {
+        return;
+      }
+      updateClientSettings({ sidebarProjectGroupingOverrides: nextOverrides });
+    },
+    [clientSettings.sidebarProjectGroupingOverrides, updateClientSettings],
+  );
   const threads = useThreadShells();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const [viewStack, setViewStack] = useState<CommandPaletteView[]>([]);
@@ -576,6 +627,31 @@ function OpenCommandPaletteDialog(props: {
   );
   const browseResult = browseQuery.data;
   const isBrowsePending = browseQuery.isPending;
+  const missingTrailingBrowseParentPath =
+    isBrowsing &&
+    hasTrailingPathSeparator(query) &&
+    query.trim().length > 0 &&
+    !isBrowsePending &&
+    browseResult === null &&
+    browseEnvironmentId !== null &&
+    !relativePathNeedsActiveProject
+      ? getBrowseParentPath(query)
+      : null;
+  const missingTrailingBrowseParentQuery = useEnvironmentQuery(
+    missingTrailingBrowseParentPath !== null &&
+      missingTrailingBrowseParentPath.length > 0 &&
+      browseEnvironmentId !== null
+      ? filesystemEnvironment.browse({
+          environmentId: browseEnvironmentId,
+          input: {
+            partialPath: missingTrailingBrowseParentPath,
+            ...(currentProjectCwdForBrowse ? { cwd: currentProjectCwdForBrowse } : {}),
+          },
+        })
+      : null,
+  );
+  const isMissingTrailingBrowseParentPending =
+    missingTrailingBrowseParentPath !== null && missingTrailingBrowseParentQuery.isPending;
   const browseEntries = browseResult?.entries ?? EMPTY_BROWSE_ENTRIES;
   const { filteredEntries: filteredBrowseEntries, exactEntry: exactBrowseEntry } = useMemo(
     () => filterBrowseEntries({ browseEntries, browseFilterQuery, highlightedItemValue }),
@@ -599,7 +675,9 @@ function OpenCommandPaletteDialog(props: {
         return;
       }
 
-      await handleNewThread(scopeProjectRef(project.environmentId, project.id));
+      await handleNewThread(scopeProjectRef(project.environmentId, project.id), {
+        draftProjectScope: "physical",
+      });
     },
     [handleNewThread, navigate, clientSettings.sidebarThreadSortOrder, threads],
   );
@@ -1050,6 +1128,7 @@ function OpenCommandPaletteDialog(props: {
         cwd,
       );
       if (existing) {
+        showProjectSeparatelyInSidebar(existing);
         const latestThread = getLatestThreadForProject(
           threads.filter((thread) => thread.environmentId === existing.environmentId),
           existing.id,
@@ -1064,7 +1143,10 @@ function OpenCommandPaletteDialog(props: {
           });
         } else {
           const navigationResult = await settlePromise(() =>
-            handleNewThread(scopeProjectRef(existing.environmentId, existing.id)),
+            handleNewThread(scopeProjectRef(existing.environmentId, existing.id), {
+              ownerUserId: defaultNewThreadOwnerUserId,
+              draftProjectScope: "physical",
+            }),
           );
           if (navigationResult._tag === "Failure") {
             const error = squashAtomCommandFailure(navigationResult);
@@ -1110,8 +1192,22 @@ function OpenCommandPaletteDialog(props: {
         return;
       }
 
+      const createdProjectRef = scopeProjectRef(browseEnvironmentId, projectId);
+      const createdProject = await waitForProjectUpsert(createdProjectRef);
+      const navigationProjectRef = createdProject
+        ? scopeProjectRef(createdProject.environmentId, createdProject.id)
+        : createdProjectRef;
+      showProjectSeparatelyInSidebar(
+        createdProject ?? {
+          environmentId: browseEnvironmentId,
+          workspaceRoot: cwd,
+        },
+      );
       const navigationResult = await settlePromise(() =>
-        handleNewThread(scopeProjectRef(browseEnvironmentId, projectId)),
+        handleNewThread(navigationProjectRef, {
+          ownerUserId: defaultNewThreadOwnerUserId,
+          draftProjectScope: "physical",
+        }),
       );
       if (navigationResult._tag === "Failure") {
         const error = squashAtomCommandFailure(navigationResult);
@@ -1130,11 +1226,13 @@ function OpenCommandPaletteDialog(props: {
       browseEnvironmentId,
       browseEnvironmentPlatform,
       currentProjectCwdForBrowse,
+      defaultNewThreadOwnerUserId,
       handleNewThread,
       createProject,
       navigate,
       projects,
       setOpen,
+      showProjectSeparatelyInSidebar,
       clientSettings.sidebarThreadSortOrder,
       threads,
     ],
@@ -1268,8 +1366,8 @@ function OpenCommandPaletteDialog(props: {
     await handleAddProject(cloneResult.value.cwd);
   }
 
-  function browseTo(name: string): void {
-    const nextQuery = appendBrowsePathSegment(query, name);
+  function browseTo(entry: FilesystemBrowseEntry): void {
+    const nextQuery = ensureBrowseDirectoryPath(entry.fullPath);
     setHighlightedItemValue(null);
     setQuery(nextQuery);
     setBrowseGeneration((generation) => generation + 1);
@@ -1286,13 +1384,12 @@ function OpenCommandPaletteDialog(props: {
     setBrowseGeneration((generation) => generation + 1);
   }
 
-  // Resolve the add-project path from browse data when available. When the
-  // query has a trailing separator (e.g. "~/projects/foo/"), parentPath is the
-  // directory itself. Otherwise the user typed a partial leaf name, so we need
-  // the exact browse entry's fullPath or fall back to the raw query.
-  const resolvedAddProjectPath = hasTrailingPathSeparator(query)
-    ? (browseResult?.parentPath ?? query.trim())
-    : (exactBrowseEntry?.fullPath ?? query.trim());
+  const resolvedAddProjectPath = resolveSubmittedAddProjectPath({
+    rawPath: query,
+    browseResult,
+    missingPathParentResult: missingTrailingBrowseParentQuery.data,
+    exactBrowseEntry,
+  });
 
   const canBrowseUp =
     isBrowsing && !relativePathNeedsActiveProject && canNavigateUp(browseDirectoryPath);
@@ -1341,9 +1438,10 @@ function OpenCommandPaletteDialog(props: {
   const isSubmenu = paletteMode === "submenu" || paletteMode === "submenu-browse";
   const hasHighlightedBrowseItem = highlightedItemValue?.startsWith("browse:") ?? false;
   const canSubmitBrowsePath = isBrowsing && !relativePathNeedsActiveProject;
+  const isBrowseSubmitResolutionPending = isBrowsePending || isMissingTrailingBrowseParentPending;
   const willCreateProjectPath =
     canSubmitBrowsePath &&
-    !isBrowsePending &&
+    !isBrowseSubmitResolutionPending &&
     query.trim().length > 0 &&
     !hasHighlightedBrowseItem &&
     (hasTrailingPathSeparator(query) ? !browseResult : exactBrowseEntry === null);
@@ -1387,7 +1485,9 @@ function OpenCommandPaletteDialog(props: {
     }
 
     const initialPath = hasTrailingPathSeparator(query)
-      ? (browseResult?.parentPath ?? trimmedQuery)
+      ? (browseResult?.parentPath ??
+        missingTrailingBrowseParentQuery.data?.parentPath ??
+        trimmedQuery)
       : browseDirectoryPath || trimmedQuery;
 
     const resolvedPath = resolveProjectPathForDispatch(initialPath, currentProjectCwdForBrowse);
@@ -1397,6 +1497,7 @@ function OpenCommandPaletteDialog(props: {
     browseResult?.parentPath,
     canOpenProjectFromFileManager,
     currentProjectCwdForBrowse,
+    missingTrailingBrowseParentQuery.data?.parentPath,
     query,
   ]);
 
@@ -1414,6 +1515,7 @@ function OpenCommandPaletteDialog(props: {
     const shouldSubmitBrowsePath =
       canSubmitBrowsePath &&
       event.key === "Enter" &&
+      !isBrowseSubmitResolutionPending &&
       (!hasHighlightedBrowseItem || isPrimaryModifierPressed(event));
 
     if (shouldSubmitBrowsePath) {
@@ -1593,6 +1695,7 @@ function OpenCommandPaletteDialog(props: {
                     aria-label={`${submitActionLabel} (${addShortcutLabel})`}
                     disabled={
                       relativePathNeedsActiveProject ||
+                      isBrowseSubmitResolutionPending ||
                       (isCloneDestinationStep && isRemoteProjectPending)
                     }
                     onMouseDown={(event) => {
@@ -1600,6 +1703,9 @@ function OpenCommandPaletteDialog(props: {
                     }}
                     onClick={() => {
                       if (relativePathNeedsActiveProject) {
+                        return;
+                      }
+                      if (isBrowseSubmitResolutionPending) {
                         return;
                       }
                       if (isCloneDestinationStep) {

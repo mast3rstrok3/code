@@ -346,6 +346,15 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
     type:
       | "thread.message-sent"
       | "thread.proposed-plan-upserted"
+      | "thread.dev-review-created"
+      | "thread.dev-review-updated"
+      | "thread.dev-review-replay-metadata-updated"
+      | "thread.planning-stage-started"
+      | "thread.planning-prd-created"
+      | "thread.planning-issues-created"
+      | "thread.planning-issues-revised"
+      | "thread.planning-issue-review-requested"
+      | "thread.planning-prd-bundle-loaded"
       | "thread.activity-appended"
       | "thread.turn-diff-completed"
       | "thread.reverted"
@@ -355,11 +364,41 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
   return (
     event.type === "thread.message-sent" ||
     event.type === "thread.proposed-plan-upserted" ||
+    event.type === "thread.dev-review-created" ||
+    event.type === "thread.dev-review-updated" ||
+    event.type === "thread.dev-review-replay-metadata-updated" ||
+    event.type === "thread.planning-stage-started" ||
+    event.type === "thread.planning-prd-created" ||
+    event.type === "thread.planning-issues-created" ||
+    event.type === "thread.planning-issues-revised" ||
+    event.type === "thread.planning-issue-review-requested" ||
+    event.type === "thread.planning-prd-bundle-loaded" ||
     event.type === "thread.activity-appended" ||
     event.type === "thread.turn-diff-completed" ||
     event.type === "thread.reverted" ||
     event.type === "thread.session-set"
   );
+}
+
+function threadDetailEventMatchesThread(event: OrchestrationEvent, threadId: string): boolean {
+  if (event.aggregateKind !== "thread" || !isThreadDetailEvent(event)) {
+    return false;
+  }
+  if (event.aggregateId === threadId) {
+    return true;
+  }
+  switch (event.type) {
+    case "thread.dev-review-created":
+      return (
+        event.payload.devReview.sourceThreadId === threadId ||
+        event.payload.devReview.reviewThreadId === threadId
+      );
+    case "thread.dev-review-updated":
+    case "thread.dev-review-replay-metadata-updated":
+      return event.payload.sourceThreadId === threadId || event.payload.reviewThreadId === threadId;
+    default:
+      return false;
+  }
 }
 
 const PROVIDER_STATUS_DEBOUNCE_MS = 200;
@@ -410,6 +449,8 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.vcsSwitchRef, AuthOrchestrationOperateScope],
   [WS_METHODS.vcsInit, AuthOrchestrationOperateScope],
   [WS_METHODS.reviewGetDiffPreview, AuthReviewWriteScope],
+  [WS_METHODS.reviewDevReviewReplayAppendEvents, AuthReviewWriteScope],
+  [WS_METHODS.reviewDevReviewReplayGet, AuthReviewWriteScope],
   [WS_METHODS.terminalOpen, AuthTerminalOperateScope],
   [WS_METHODS.terminalAttach, AuthTerminalOperateScope],
   [WS_METHODS.terminalWrite, AuthTerminalOperateScope],
@@ -776,6 +817,28 @@ const makeWsRpcLayer = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
             return Effect.succeed(removeThreadIfVisible(event.payload.threadId));
           case "thread.unarchived":
             return loadThreadUpsertOrRemoval(event.payload.threadId);
+          case "thread.implementation-run-launched":
+          case "thread.implementation-change-request-retry-requested": {
+            const run = event.payload.run;
+            const sourceThreadId =
+              event.type === "thread.implementation-run-launched"
+                ? event.payload.sourceThreadId
+                : null;
+            if (
+              visibleThreadIds !== undefined &&
+              (sourceThreadId === null || !visibleThreadIds.has(sourceThreadId)) &&
+              !visibleThreadIds.has(run.orchestratorThreadId)
+            ) {
+              return Effect.succeed(Option.none());
+            }
+            return Effect.succeed(
+              Option.some({
+                kind: "implementation-run-upserted" as const,
+                sequence: event.sequence,
+                run,
+              }),
+            );
+          }
           default:
             if (event.aggregateKind !== "thread") {
               return Effect.succeed(Option.none());
@@ -1281,12 +1344,7 @@ const makeWsRpcLayer = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
               }
 
               const liveStream = orchestrationEngine.streamDomainEvents.pipe(
-                Stream.filter(
-                  (event) =>
-                    event.aggregateKind === "thread" &&
-                    event.aggregateId === input.threadId &&
-                    isThreadDetailEvent(event),
-                ),
+                Stream.filter((event) => threadDetailEventMatchesThread(event, input.threadId)),
                 Stream.map((event) => ({
                   kind: "event" as const,
                   event,
@@ -1704,6 +1762,18 @@ const makeWsRpcLayer = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
           ),
         [WS_METHODS.reviewGetDiffPreview]: (input) =>
           observeRpcEffect(WS_METHODS.reviewGetDiffPreview, review.getDiffPreview(input), {
+            "rpc.aggregate": "review",
+          }),
+        [WS_METHODS.reviewDevReviewReplayAppendEvents]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.reviewDevReviewReplayAppendEvents,
+            review.appendDevReviewReplayEvents(input),
+            {
+              "rpc.aggregate": "review",
+            },
+          ),
+        [WS_METHODS.reviewDevReviewReplayGet]: (input) =>
+          observeRpcEffect(WS_METHODS.reviewDevReviewReplayGet, review.getDevReviewReplay(input), {
             "rpc.aggregate": "review",
           }),
         [WS_METHODS.terminalOpen]: (input) =>

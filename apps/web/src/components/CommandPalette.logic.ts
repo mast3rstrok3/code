@@ -286,7 +286,7 @@ export function buildBrowseGroups(input: {
   upIcon: ReactNode;
   directoryIcon: ReactNode;
   browseUp: () => void;
-  browseTo: (name: string) => void;
+  browseTo: (entry: FilesystemBrowseEntry) => void;
 }): CommandPaletteGroup[] {
   const items: CommandPaletteActionItem[] = [];
 
@@ -313,7 +313,7 @@ export function buildBrowseGroups(input: {
       icon: input.directoryIcon,
       keepOpen: true,
       run: async () => {
-        input.browseTo(entry.name);
+        input.browseTo(entry);
       },
     });
   }
