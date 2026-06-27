@@ -39,6 +39,39 @@ const deploymentsJson = JSON.stringify({
   ],
 });
 
+const podsJson = JSON.stringify({
+  items: [
+    {
+      metadata: {
+        name: "backend-7cdbbbfdd8-l9mpx",
+        creationTimestamp: "2026-06-25T16:00:00.000Z",
+        ownerReferences: [{ kind: "ReplicaSet", name: "backend-7cdbbbfdd8" }],
+      },
+      spec: {
+        nodeName: "kind-worker",
+        containers: [{ name: "backend" }, { name: "sidecar" }],
+      },
+      status: {
+        phase: "Running",
+        containerStatuses: [
+          {
+            name: "backend",
+            ready: true,
+            restartCount: 1,
+            state: { running: {} },
+          },
+          {
+            name: "sidecar",
+            ready: false,
+            restartCount: 2,
+            state: { waiting: { reason: "CrashLoopBackOff" } },
+          },
+        ],
+      },
+    },
+  ],
+});
+
 it.effect("reports the configured Rudi stack from Kubernetes deployments", () => {
   const calls: Array<ReadonlyArray<string>> = [];
   const runKubectl: KubectlRunner = async (args) => {
@@ -66,6 +99,82 @@ it.effect("reports the configured Rudi stack from Kubernetes deployments", () =>
     assert.deepEqual(calls, [
       ["get", "namespace", "rudi-dev", "-o", "json"],
       ["-n", "rudi-dev", "get", "deployments", "-o", "json"],
+    ]);
+  });
+});
+
+it.effect("lists pods with container readiness and restart counts", () => {
+  const calls: Array<ReadonlyArray<string>> = [];
+  const runKubectl: KubectlRunner = async (args) => {
+    calls.push(args);
+    if (args.join(" ") === "-n rudi-dev get pods -o json") return podsJson;
+    throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
+  };
+  const service = makeNativeAppDevStackService(nativeConfig, runKubectl);
+
+  return Effect.gen(function* () {
+    const result = yield* service.listPods({ stackId: "rudi-dev" });
+
+    assert.equal(result.stackId, "rudi-dev");
+    assert.equal(result.namespace, "rudi-dev");
+    assert.deepEqual(
+      result.pods.map((pod) => ({
+        name: pod.name,
+        phase: pod.phase,
+        readyContainerCount: pod.readyContainerCount,
+        totalContainerCount: pod.totalContainerCount,
+        restartCount: pod.restartCount,
+        ownerKind: pod.ownerKind,
+        ownerName: pod.ownerName,
+        containers: pod.containers,
+      })),
+      [
+        {
+          name: "backend-7cdbbbfdd8-l9mpx",
+          phase: "Running",
+          readyContainerCount: 1,
+          totalContainerCount: 2,
+          restartCount: 3,
+          ownerKind: "ReplicaSet",
+          ownerName: "backend-7cdbbbfdd8",
+          containers: [
+            { name: "backend", ready: true, restartCount: 1, state: "running" },
+            { name: "sidecar", ready: false, restartCount: 2, state: "CrashLoopBackOff" },
+          ],
+        },
+      ],
+    );
+    assert.deepEqual(calls, [["-n", "rudi-dev", "get", "pods", "-o", "json"]]);
+  });
+});
+
+it.effect("reads bounded logs for a validated pod container", () => {
+  const calls: Array<ReadonlyArray<string>> = [];
+  const runKubectl: KubectlRunner = async (args) => {
+    calls.push(args);
+    if (args.join(" ") === "-n rudi-dev get pods -o json") return podsJson;
+    if (args.join(" ") === "-n rudi-dev logs backend-7cdbbbfdd8-l9mpx -c sidecar --tail=42") {
+      return "sidecar log line\n";
+    }
+    throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
+  };
+  const service = makeNativeAppDevStackService(nativeConfig, runKubectl);
+
+  return Effect.gen(function* () {
+    const result = yield* service.getPodLogs({
+      stackId: "rudi-dev",
+      podName: "backend-7cdbbbfdd8-l9mpx",
+      containerName: "sidecar",
+      tailLines: 42,
+    });
+
+    assert.equal(result.podName, "backend-7cdbbbfdd8-l9mpx");
+    assert.equal(result.containerName, "sidecar");
+    assert.equal(result.tailLines, 42);
+    assert.equal(result.logs, "sidecar log line\n");
+    assert.deepEqual(calls, [
+      ["-n", "rudi-dev", "get", "pods", "-o", "json"],
+      ["-n", "rudi-dev", "logs", "backend-7cdbbbfdd8-l9mpx", "-c", "sidecar", "--tail=42"],
     ]);
   });
 });

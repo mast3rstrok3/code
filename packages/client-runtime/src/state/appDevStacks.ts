@@ -65,5 +65,17 @@ export function createAppDevStackEnvironmentAtoms<R, E>(
       scheduler: lifecycleScheduler,
       concurrency: stackLifecycleConcurrency,
     }),
+    listPods: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:app-dev-stack:list-pods",
+      tag: WS_METHODS.appDevStackListPods,
+      staleTimeMs: 3_000,
+      idleTtlMs: 30_000,
+    }),
+    getPodLogs: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:app-dev-stack:get-pod-logs",
+      tag: WS_METHODS.appDevStackGetPodLogs,
+      staleTimeMs: 3_000,
+      idleTtlMs: 30_000,
+    }),
   };
 }

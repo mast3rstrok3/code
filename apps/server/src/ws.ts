@@ -477,6 +477,8 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.appDevStackAutoCreate, AuthOrchestrationOperateScope],
   [WS_METHODS.appDevStackStop, AuthOrchestrationOperateScope],
   [WS_METHODS.appDevStackDelete, AuthOrchestrationOperateScope],
+  [WS_METHODS.appDevStackListPods, AuthOrchestrationReadScope],
+  [WS_METHODS.appDevStackGetPodLogs, AuthOrchestrationReadScope],
   [WS_METHODS.subscribePreviewEvents, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeDiscoveredLocalServers, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeServerConfig, AuthOrchestrationReadScope],
@@ -1911,6 +1913,14 @@ const makeWsRpcLayer = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
           }),
         [WS_METHODS.appDevStackDelete]: (input) =>
           observeRpcEffect(WS_METHODS.appDevStackDelete, appDevStackManager.delete(input), {
+            "rpc.aggregate": "app-dev-stack",
+          }),
+        [WS_METHODS.appDevStackListPods]: (input) =>
+          observeRpcEffect(WS_METHODS.appDevStackListPods, appDevStackManager.listPods(input), {
+            "rpc.aggregate": "app-dev-stack",
+          }),
+        [WS_METHODS.appDevStackGetPodLogs]: (input) =>
+          observeRpcEffect(WS_METHODS.appDevStackGetPodLogs, appDevStackManager.getPodLogs(input), {
             "rpc.aggregate": "app-dev-stack",
           }),
         [WS_METHODS.subscribePreviewEvents]: (_input) =>

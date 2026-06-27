@@ -1,5 +1,7 @@
 import {
   type AppDevStack,
+  type AppDevStackGetPodLogsResult,
+  type AppDevStackPod,
   type AppDevStackService,
   type EnvironmentId,
   type ScopedThreadRef,
@@ -10,6 +12,8 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import {
   BoxesIcon,
+  CheckIcon,
+  CopyIcon,
   CornerLeftUpIcon,
   ExternalLinkIcon,
   FolderIcon,
@@ -18,6 +22,8 @@ import {
   PlusIcon,
   PowerIcon,
   RefreshCwIcon,
+  Rows3Icon,
+  ScrollTextIcon,
   Trash2Icon,
   TriangleAlertIcon,
   XIcon,
@@ -26,6 +32,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { OpenPreviewMutation } from "~/browser/openFileInPreview";
 import { openUrlInPreview } from "~/browser/openFileInPreview";
+import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { ensureBrowseDirectoryPath, getBrowseParentPath } from "~/lib/projectPaths";
 import { cn } from "~/lib/utils";
 import { isPreviewSupportedInRuntime } from "~/previewStateStore";
@@ -213,6 +220,180 @@ function StackServices({ stack }: { readonly stack: AppDevStack }) {
   );
 }
 
+function PodPhaseBadge({ phase }: { readonly phase: string }) {
+  return (
+    <span
+      className={cn(
+        "inline-flex h-5 items-center rounded-full border px-2 text-[11px] font-medium",
+        phase === "Running" && "border-emerald-500/30 bg-emerald-500/10 text-emerald-600",
+        phase === "Failed" && "border-destructive/30 bg-destructive/10 text-destructive",
+        phase === "Pending" && "border-amber-500/30 bg-amber-500/10 text-amber-600",
+        phase !== "Running" &&
+          phase !== "Failed" &&
+          phase !== "Pending" &&
+          "border-border bg-muted text-muted-foreground",
+      )}
+    >
+      {phase}
+    </span>
+  );
+}
+
+function podOwnerLabel(pod: AppDevStackPod): string | null {
+  const ownerName = nonEmpty(pod.ownerName);
+  const ownerKind = nonEmpty(pod.ownerKind);
+  if (ownerName && ownerKind) return `${ownerKind} ${ownerName}`;
+  return ownerName ?? ownerKind;
+}
+
+function StackKubernetesInspect(props: {
+  readonly pods: ReadonlyArray<AppDevStackPod>;
+  readonly podsError: string | null;
+  readonly podsPending: boolean;
+  readonly logs: AppDevStackGetPodLogsResult | null;
+  readonly logsError: string | null;
+  readonly logsPending: boolean;
+  readonly selectedPodName: string | null;
+  readonly selectedContainerName: string | null;
+  readonly onSelectPod: (pod: AppDevStackPod) => void;
+  readonly onSelectContainer: (containerName: string) => void;
+  readonly onRefresh: () => void;
+}) {
+  const { copyToClipboard, isCopied } = useCopyToClipboard({ target: "pod logs" });
+  const selectedPod =
+    props.pods.find((pod) => pod.name === props.selectedPodName) ?? props.pods[0] ?? null;
+  const selectedContainerName =
+    selectedPod?.containers.find((container) => container.name === props.selectedContainerName)
+      ?.name ??
+    selectedPod?.containers[0]?.name ??
+    null;
+  const logText = props.logs?.logs ?? "";
+
+  return (
+    <div className="mt-3 space-y-3 rounded-md border border-border/70 bg-background/60 p-2.5">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2 text-xs font-medium">
+          <Rows3Icon className="size-3.5 text-muted-foreground" />
+          <span>Pods</span>
+        </div>
+        <Button
+          size="icon-xs"
+          variant="ghost"
+          onClick={props.onRefresh}
+          disabled={props.podsPending || props.logsPending}
+          aria-label="Refresh pods and logs"
+        >
+          <RefreshCwIcon
+            className={cn("size-3.5", (props.podsPending || props.logsPending) && "animate-spin")}
+          />
+        </Button>
+      </div>
+
+      {props.podsError ? (
+        <div className="rounded-md border border-destructive/25 bg-destructive/5 p-2 text-xs text-destructive">
+          {props.podsError}
+        </div>
+      ) : props.podsPending && props.pods.length === 0 ? (
+        <div className="flex items-center gap-2 rounded-md bg-muted/40 px-2 py-2 text-xs text-muted-foreground">
+          <LoaderIcon className="size-3.5 animate-spin" />
+          Loading pods
+        </div>
+      ) : props.pods.length === 0 ? (
+        <div className="rounded-md bg-muted/40 px-2 py-2 text-xs text-muted-foreground">
+          No pods reported.
+        </div>
+      ) : (
+        <div className="space-y-1.5">
+          {props.pods.map((pod) => {
+            const owner = podOwnerLabel(pod);
+            const selected = pod.name === selectedPod?.name;
+            return (
+              <button
+                key={pod.name}
+                type="button"
+                className={cn(
+                  "grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-md border px-2 py-1.5 text-left transition-colors",
+                  selected
+                    ? "border-primary/35 bg-primary/8"
+                    : "border-transparent bg-muted/40 hover:bg-accent",
+                )}
+                onClick={() => props.onSelectPod(pod)}
+              >
+                <span className="min-w-0">
+                  <span className="block truncate text-xs font-medium">{pod.name}</span>
+                  <span className="block truncate text-[11px] text-muted-foreground">
+                    {pod.readyContainerCount}/{pod.totalContainerCount} ready
+                    {pod.restartCount > 0 ? ` · ${pod.restartCount} restarts` : ""}
+                    {owner ? ` · ${owner}` : ""}
+                  </span>
+                </span>
+                <PodPhaseBadge phase={pod.phase} />
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {selectedPod ? (
+        <div className="space-y-2">
+          {selectedPod.containers.length > 1 ? (
+            <div className="flex flex-wrap gap-1">
+              {selectedPod.containers.map((container) => (
+                <button
+                  key={container.name}
+                  type="button"
+                  className={cn(
+                    "max-w-full truncate rounded-md border px-2 py-1 text-[11px] transition-colors",
+                    container.name === selectedContainerName
+                      ? "border-primary/35 bg-primary/8 text-primary"
+                      : "border-border/70 bg-muted/40 text-muted-foreground hover:bg-accent hover:text-foreground",
+                  )}
+                  onClick={() => props.onSelectContainer(container.name)}
+                >
+                  {container.name}
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          <div className="rounded-md border border-border/70 bg-background">
+            <div className="flex min-w-0 items-center justify-between gap-2 border-b border-border/70 px-2 py-1.5">
+              <div className="flex min-w-0 items-center gap-2 text-xs font-medium">
+                <ScrollTextIcon className="size-3.5 text-muted-foreground" />
+                <span className="truncate">
+                  {selectedPod.name}
+                  {selectedContainerName ? ` / ${selectedContainerName}` : ""}
+                </span>
+              </div>
+              <Button
+                size="icon-xs"
+                variant="ghost"
+                onClick={() => copyToClipboard(logText)}
+                disabled={logText.length === 0}
+                aria-label="Copy pod logs"
+              >
+                {isCopied ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
+              </Button>
+            </div>
+            {props.logsError ? (
+              <div className="p-2 text-xs text-destructive">{props.logsError}</div>
+            ) : props.logsPending && !props.logs ? (
+              <div className="flex items-center gap-2 p-2 text-xs text-muted-foreground">
+                <LoaderIcon className="size-3.5 animate-spin" />
+                Loading logs
+              </div>
+            ) : (
+              <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words p-2 font-mono text-[11px] leading-relaxed text-foreground/80">
+                {logText.length > 0 ? logText : "No log lines returned."}
+              </pre>
+            )}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function AppDevStackPanel(props: AppDevStackPanelProps) {
   const currentWorktreePath = useMemo(
     () => props.activeThread?.worktreePath ?? props.gitCwd ?? props.workspaceRoot,
@@ -222,6 +403,9 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
   const [manualPath, setManualPath] = useState(currentWorktreePath);
   const [actionError, setActionError] = useState<string | null>(null);
   const [pendingKey, setPendingKey] = useState<string | null>(null);
+  const [inspectedStackId, setInspectedStackId] = useState<string | null>(null);
+  const [selectedPodName, setSelectedPodName] = useState<string | null>(null);
+  const [selectedContainerName, setSelectedContainerName] = useState<string | null>(null);
 
   useEffect(() => {
     setManualPath((current) => (current.trim().length === 0 ? currentWorktreePath : current));
@@ -284,6 +468,63 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
         })
       : null,
   );
+  const podsQuery = useEnvironmentQuery(
+    stackBackendEnabled && inspectedStackId !== null
+      ? appDevStackEnvironment.listPods({
+          environmentId: props.environmentId,
+          input: { stackId: inspectedStackId },
+        })
+      : null,
+  );
+  const selectedPod =
+    podsQuery.data?.pods.find((pod) => pod.name === selectedPodName) ??
+    podsQuery.data?.pods[0] ??
+    null;
+  const selectedLogContainerName =
+    selectedPod?.containers.find((container) => container.name === selectedContainerName)?.name ??
+    selectedPod?.containers[0]?.name ??
+    null;
+  const podLogsQuery = useEnvironmentQuery(
+    stackBackendEnabled && inspectedStackId !== null && selectedPod !== null
+      ? appDevStackEnvironment.getPodLogs({
+          environmentId: props.environmentId,
+          input: {
+            stackId: inspectedStackId,
+            podName: selectedPod.name,
+            containerName: selectedLogContainerName,
+            tailLines: 300,
+          },
+        })
+      : null,
+  );
+
+  useEffect(() => {
+    if (inspectedStackId === null) return;
+    const pods = podsQuery.data?.pods ?? [];
+    if (pods.length === 0) {
+      if (selectedPodName !== null) setSelectedPodName(null);
+      if (selectedContainerName !== null) setSelectedContainerName(null);
+      return;
+    }
+    const nextPod =
+      pods.find((pod) => pod.name === selectedPodName) ??
+      pods.find((pod) => pod.phase === "Running") ??
+      pods[0];
+    if (nextPod && nextPod.name !== selectedPodName) {
+      setSelectedPodName(nextPod.name);
+      setSelectedContainerName(nextPod.containers[0]?.name ?? null);
+    }
+  }, [inspectedStackId, podsQuery.data?.pods, selectedContainerName, selectedPodName]);
+
+  useEffect(() => {
+    if (selectedPod === null) return;
+    const containerExists =
+      selectedContainerName !== null &&
+      selectedPod.containers.some((container) => container.name === selectedContainerName);
+    if (!containerExists) {
+      setSelectedContainerName(selectedPod.containers[0]?.name ?? null);
+    }
+  }, [selectedContainerName, selectedPod]);
 
   const autoCreateStack = useAtomCommand(appDevStackEnvironment.autoCreate, {
     reportFailure: false,
@@ -295,7 +536,9 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
     statusQuery.refresh();
     currentStackQuery.refresh();
     listQuery.refresh();
-  }, [currentStackQuery, listQuery, statusQuery]);
+    podsQuery.refresh();
+    podLogsQuery.refresh();
+  }, [currentStackQuery, listQuery, podLogsQuery, podsQuery, statusQuery]);
 
   const stacks = useMemo(() => {
     const currentNormalized = normalizeWorktreePath(currentPath);
@@ -425,12 +668,24 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
     setManualPath(ensureBrowseDirectoryPath(path));
   }, []);
 
+  const toggleInspectStack = useCallback((stack: AppDevStack) => {
+    setInspectedStackId((current) => (current === stack.id ? null : stack.id));
+    setSelectedPodName(null);
+    setSelectedContainerName(null);
+  }, []);
+
+  const selectPod = useCallback((pod: AppDevStackPod) => {
+    setSelectedPodName(pod.name);
+    setSelectedContainerName(pod.containers[0]?.name ?? null);
+  }, []);
+
   const renderStackRow = (stack: AppDevStack) => {
     const preview = primaryPreviewForStack(stack);
     const isTransitioning = TRANSITIONING_STATUSES.has(stack.status);
     const startKey = `start:${stack.id}`;
     const stopKey = `stop:${stack.id}`;
     const deleteKey = `delete:${stack.id}`;
+    const inspectSelected = inspectedStackId === stack.id;
     const startPending = pendingKey === startKey;
     const stopPending = pendingKey === stopKey;
     const deletePending = pendingKey === deleteKey;
@@ -475,6 +730,15 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
             <Button
               size="icon-xs"
               variant="ghost"
+              onClick={() => toggleInspectStack(stack)}
+              data-pressed={inspectSelected ? "" : undefined}
+              aria-label="Inspect Kubernetes pods and logs"
+            >
+              <Rows3Icon className="size-3.5" />
+            </Button>
+            <Button
+              size="icon-xs"
+              variant="ghost"
               onClick={() => void runStart(stack.worktreePath, stack)}
               disabled={isTransitioning || pendingKey !== null}
               aria-label="Start stack"
@@ -510,6 +774,24 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
         <div className="mt-3">
           <StackServices stack={stack} />
         </div>
+        {inspectSelected ? (
+          <StackKubernetesInspect
+            pods={podsQuery.data?.pods ?? []}
+            podsError={podsQuery.error}
+            podsPending={podsQuery.isPending}
+            logs={podLogsQuery.data}
+            logsError={podLogsQuery.error}
+            logsPending={podLogsQuery.isPending}
+            selectedPodName={selectedPod?.name ?? selectedPodName}
+            selectedContainerName={selectedLogContainerName}
+            onSelectPod={selectPod}
+            onSelectContainer={setSelectedContainerName}
+            onRefresh={() => {
+              podsQuery.refresh();
+              podLogsQuery.refresh();
+            }}
+          />
+        ) : null}
       </div>
     );
   };

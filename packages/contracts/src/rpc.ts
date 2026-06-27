@@ -125,7 +125,11 @@ import {
   AppDevStackByWorktreeResult,
   AppDevStackDeleteResult,
   AppDevStackError,
+  AppDevStackGetPodLogsInput,
+  AppDevStackGetPodLogsResult,
   AppDevStackGetInput,
+  AppDevStackListPodsInput,
+  AppDevStackListPodsResult,
   AppDevStackListInput,
   AppDevStackListResult,
   AppDevStack,
@@ -228,6 +232,8 @@ export const WS_METHODS = {
   appDevStackAutoCreate: "appDevStack.autoCreate",
   appDevStackStop: "appDevStack.stop",
   appDevStackDelete: "appDevStack.delete",
+  appDevStackListPods: "appDevStack.listPods",
+  appDevStackGetPodLogs: "appDevStack.getPodLogs",
 
   // Server meta
   serverGetConfig: "server.getConfig",
@@ -665,6 +671,18 @@ export const WsAppDevStackDeleteRpc = Rpc.make(WS_METHODS.appDevStackDelete, {
   error: Schema.Union([AppDevStackError, EnvironmentAuthorizationError]),
 });
 
+export const WsAppDevStackListPodsRpc = Rpc.make(WS_METHODS.appDevStackListPods, {
+  payload: AppDevStackListPodsInput,
+  success: AppDevStackListPodsResult,
+  error: Schema.Union([AppDevStackError, EnvironmentAuthorizationError]),
+});
+
+export const WsAppDevStackGetPodLogsRpc = Rpc.make(WS_METHODS.appDevStackGetPodLogs, {
+  payload: AppDevStackGetPodLogsInput,
+  success: AppDevStackGetPodLogsResult,
+  error: Schema.Union([AppDevStackError, EnvironmentAuthorizationError]),
+});
+
 export const WsSubscribePreviewEventsRpc = Rpc.make(WS_METHODS.subscribePreviewEvents, {
   payload: Schema.Struct({}),
   success: PreviewEvent,
@@ -840,6 +858,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsAppDevStackAutoCreateRpc,
   WsAppDevStackStopRpc,
   WsAppDevStackDeleteRpc,
+  WsAppDevStackListPodsRpc,
+  WsAppDevStackGetPodLogsRpc,
   WsSubscribePreviewEventsRpc,
   WsSubscribeDiscoveredLocalServersRpc,
   WsSubscribeServerConfigRpc,

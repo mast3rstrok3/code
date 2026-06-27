@@ -1,6 +1,12 @@
 import * as Schema from "effect/Schema";
 
-import { IsoDateTime, NonNegativeInt, PortSchema, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  IsoDateTime,
+  NonNegativeInt,
+  PortSchema,
+  PositiveInt,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 
 const NullableString = Schema.NullOr(Schema.String);
 const NullableTrimmedNonEmptyString = Schema.NullOr(TrimmedNonEmptyString);
@@ -126,6 +132,62 @@ export const AppDevStackDeleteResult = Schema.Struct({
   deleted: Schema.Literal(true),
 });
 export type AppDevStackDeleteResult = typeof AppDevStackDeleteResult.Type;
+
+export const AppDevStackPodContainer = Schema.Struct({
+  name: TrimmedNonEmptyString,
+  ready: Schema.Boolean,
+  restartCount: NonNegativeInt,
+  state: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type AppDevStackPodContainer = typeof AppDevStackPodContainer.Type;
+
+export const AppDevStackPod = Schema.Struct({
+  name: TrimmedNonEmptyString,
+  phase: TrimmedNonEmptyString,
+  readyContainerCount: NonNegativeInt,
+  totalContainerCount: NonNegativeInt,
+  restartCount: NonNegativeInt,
+  createdAt: Schema.optionalKey(Schema.NullOr(IsoDateTime)),
+  nodeName: Schema.optionalKey(NullableTrimmedNonEmptyString),
+  ownerKind: Schema.optionalKey(NullableTrimmedNonEmptyString),
+  ownerName: Schema.optionalKey(NullableTrimmedNonEmptyString),
+  containers: Schema.Array(AppDevStackPodContainer),
+});
+export type AppDevStackPod = typeof AppDevStackPod.Type;
+
+export const AppDevStackListPodsInput = Schema.Struct({
+  stackId: TrimmedNonEmptyString,
+});
+export type AppDevStackListPodsInput = typeof AppDevStackListPodsInput.Type;
+
+export const AppDevStackListPodsResult = Schema.Struct({
+  stackId: TrimmedNonEmptyString,
+  namespace: TrimmedNonEmptyString,
+  pods: Schema.Array(AppDevStackPod),
+});
+export type AppDevStackListPodsResult = typeof AppDevStackListPodsResult.Type;
+
+export const AppDevStackPodLogTailLines = PositiveInt.check(Schema.isLessThanOrEqualTo(5_000));
+export type AppDevStackPodLogTailLines = typeof AppDevStackPodLogTailLines.Type;
+
+export const AppDevStackGetPodLogsInput = Schema.Struct({
+  stackId: TrimmedNonEmptyString,
+  podName: TrimmedNonEmptyString,
+  containerName: Schema.optional(NullableTrimmedNonEmptyString),
+  tailLines: Schema.optional(AppDevStackPodLogTailLines),
+});
+export type AppDevStackGetPodLogsInput = typeof AppDevStackGetPodLogsInput.Type;
+
+export const AppDevStackGetPodLogsResult = Schema.Struct({
+  stackId: TrimmedNonEmptyString,
+  namespace: TrimmedNonEmptyString,
+  podName: TrimmedNonEmptyString,
+  containerName: Schema.NullOr(TrimmedNonEmptyString),
+  tailLines: AppDevStackPodLogTailLines,
+  logs: Schema.String,
+  fetchedAt: IsoDateTime,
+});
+export type AppDevStackGetPodLogsResult = typeof AppDevStackGetPodLogsResult.Type;
 
 export class AppDevStackError extends Schema.TaggedErrorClass<AppDevStackError>()(
   "AppDevStackError",

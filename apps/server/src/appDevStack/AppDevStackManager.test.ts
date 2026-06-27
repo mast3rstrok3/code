@@ -230,3 +230,51 @@ it.effect(
     }).pipe(Effect.provide(layer));
   },
 );
+
+it.effect("proxies pod list and log reads to the configured backend", () => {
+  const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+  const layer = makeLayer({
+    bearerToken: "backend-token",
+    requests,
+    response: (request) => {
+      if (request.url.endsWith("/api/app-dev-stacks/rudi-dev/pods")) {
+        return Response.json({
+          stackId: "rudi-dev",
+          namespace: "rudi-dev",
+          pods: [],
+        });
+      }
+      return Response.json({
+        stackId: "rudi-dev",
+        namespace: "rudi-dev",
+        podName: "backend-pod",
+        containerName: "backend",
+        tailLines: 300,
+        logs: "ok\n",
+        fetchedAt: "2026-06-25T00:00:00.000Z",
+      });
+    },
+  });
+
+  return Effect.gen(function* () {
+    const manager = yield* AppDevStackManager;
+    yield* manager.listPods({ stackId: "rudi-dev" });
+    yield* manager.getPodLogs({
+      stackId: "rudi-dev",
+      podName: "backend-pod",
+      containerName: "backend",
+      tailLines: 300,
+    });
+
+    assert.equal(
+      requests[0]?.url,
+      `${backendUrl.href.replace(/\/+$/u, "")}/api/app-dev-stacks/rudi-dev/pods`,
+    );
+    assert.equal(requests[0]?.headers.authorization, "Bearer backend-token");
+    assert.equal(
+      requests[1]?.url,
+      `${backendUrl.href.replace(/\/+$/u, "")}/api/app-dev-stacks/rudi-dev/pods/backend-pod/logs?containerName=backend&tailLines=300`,
+    );
+    assert.equal(requests[1]?.headers.authorization, "Bearer backend-token");
+  }).pipe(Effect.provide(layer));
+});

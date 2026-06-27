@@ -6,9 +6,15 @@ import {
   type AppDevStackByWorktreeResult,
   type AppDevStackDeleteResult,
   AppDevStackError,
+  type AppDevStackGetPodLogsInput,
+  type AppDevStackGetPodLogsResult,
   type AppDevStackGetInput,
+  type AppDevStackListPodsInput,
+  type AppDevStackListPodsResult,
   type AppDevStackListInput,
   type AppDevStackListResult,
+  type AppDevStackPod,
+  type AppDevStackPodContainer,
   type AppDevStackService,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -20,6 +26,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import type { NativeAppDevStackConfig } from "../config.ts";
 
 const NATIVE_USER_ID = "00000000-0000-0000-0000-000000000000";
+const DEFAULT_LOG_TAIL_LINES = 300;
 
 interface KubectlDeploymentList {
   readonly items?: ReadonlyArray<{
@@ -43,6 +50,46 @@ interface KubectlNamespace {
   };
 }
 
+interface KubectlPodList {
+  readonly items?: ReadonlyArray<KubectlPod>;
+}
+
+interface KubectlPod {
+  readonly metadata?: {
+    readonly name?: string;
+    readonly creationTimestamp?: string;
+    readonly ownerReferences?: ReadonlyArray<{
+      readonly kind?: string;
+      readonly name?: string;
+    }>;
+  };
+  readonly spec?: {
+    readonly containers?: ReadonlyArray<{
+      readonly name?: string;
+    }>;
+    readonly nodeName?: string;
+  };
+  readonly status?: {
+    readonly phase?: string;
+    readonly containerStatuses?: ReadonlyArray<KubectlContainerStatus>;
+  };
+}
+
+interface KubectlContainerStatus {
+  readonly name?: string;
+  readonly ready?: boolean;
+  readonly restartCount?: number;
+  readonly state?: {
+    readonly waiting?: {
+      readonly reason?: string;
+    };
+    readonly running?: Record<string, unknown>;
+    readonly terminated?: {
+      readonly reason?: string;
+    };
+  };
+}
+
 export type KubectlRunner = (args: ReadonlyArray<string>) => Promise<string>;
 
 export interface NativeAppDevStackService {
@@ -61,6 +108,12 @@ export interface NativeAppDevStackService {
   readonly delete: (
     input: AppDevStackGetInput,
   ) => Effect.Effect<AppDevStackDeleteResult, AppDevStackError>;
+  readonly listPods: (
+    input: AppDevStackListPodsInput,
+  ) => Effect.Effect<AppDevStackListPodsResult, AppDevStackError>;
+  readonly getPodLogs: (
+    input: AppDevStackGetPodLogsInput,
+  ) => Effect.Effect<AppDevStackGetPodLogsResult, AppDevStackError>;
 }
 
 const collectProcessOutput = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.Effect<string, E> =>
@@ -157,6 +210,122 @@ const readDeployments = async (
     throw cause;
   }
 };
+
+const readPodList = async (
+  config: NativeAppDevStackConfig,
+  runKubectl: KubectlRunner,
+): Promise<KubectlPodList> => {
+  try {
+    return parseJson<KubectlPodList>(
+      await runKubectl(["-n", config.namespace, "get", "pods", "-o", "json"]),
+    );
+  } catch (cause) {
+    if (isNotFound(cause)) return { items: [] };
+    throw cause;
+  }
+};
+
+const containerState = (status: KubectlContainerStatus | undefined): string | null => {
+  if (status?.state?.waiting !== undefined) {
+    return status.state.waiting.reason ?? "waiting";
+  }
+  if (status?.state?.running !== undefined) {
+    return "running";
+  }
+  if (status?.state?.terminated !== undefined) {
+    return status.state.terminated.reason ?? "terminated";
+  }
+  return null;
+};
+
+const buildPodContainer = (
+  container: { readonly name?: string },
+  statusByName: ReadonlyMap<string, KubectlContainerStatus>,
+): AppDevStackPodContainer | null => {
+  const name = container.name?.trim();
+  if (!name) return null;
+  const status = statusByName.get(name);
+  return {
+    name,
+    ready: status?.ready === true,
+    restartCount: Math.max(0, status?.restartCount ?? 0),
+    state: containerState(status),
+  };
+};
+
+const buildPods = (podList: KubectlPodList): Array<AppDevStackPod> =>
+  (podList.items ?? [])
+    .flatMap((pod) => {
+      const name = pod.metadata?.name?.trim();
+      if (!name) return [];
+      const statuses = pod.status?.containerStatuses ?? [];
+      const statusByName = new Map<string, KubectlContainerStatus>();
+      for (const status of statuses) {
+        const statusName = status.name?.trim();
+        if (statusName) statusByName.set(statusName, status);
+      }
+      const containers = (pod.spec?.containers ?? [])
+        .flatMap((container) => {
+          const record = buildPodContainer(container, statusByName);
+          return record === null ? [] : [record];
+        })
+        .sort((left, right) => left.name.localeCompare(right.name));
+      const readyContainerCount = containers.filter((container) => container.ready).length;
+      const restartCount = containers.reduce(
+        (total, container) => total + container.restartCount,
+        0,
+      );
+      const owner = pod.metadata?.ownerReferences?.[0];
+      return [
+        {
+          name,
+          phase: pod.status?.phase?.trim() || "Unknown",
+          readyContainerCount,
+          totalContainerCount: containers.length,
+          restartCount,
+          createdAt: pod.metadata?.creationTimestamp ?? null,
+          nodeName: pod.spec?.nodeName ?? null,
+          ownerKind: owner?.kind ?? null,
+          ownerName: owner?.name ?? null,
+          containers,
+        },
+      ];
+    })
+    .sort((left, right) => left.name.localeCompare(right.name));
+
+const readPods = async (
+  config: NativeAppDevStackConfig,
+  runKubectl: KubectlRunner,
+): Promise<Array<AppDevStackPod>> => buildPods(await readPodList(config, runKubectl));
+
+const findPodForLogs = async (
+  config: NativeAppDevStackConfig,
+  runKubectl: KubectlRunner,
+  podName: string,
+  containerName: string | null | undefined,
+) => {
+  const pods = await readPods(config, runKubectl);
+  const pod = pods.find((item) => item.name === podName);
+  if (pod === undefined) {
+    throw new Error(`Pod "${podName}" was not found in namespace "${config.namespace}".`);
+  }
+  const trimmedContainerName = containerName?.trim() || null;
+  const selectedContainer =
+    trimmedContainerName === null
+      ? (pod.containers[0]?.name ?? null)
+      : (pod.containers.find((container) => container.name === trimmedContainerName)?.name ?? null);
+  if (trimmedContainerName !== null && selectedContainer === null) {
+    throw new Error(
+      `Container "${trimmedContainerName}" was not found in pod "${podName}" in namespace "${config.namespace}".`,
+    );
+  }
+  return { pod, containerName: selectedContainer };
+};
+
+const normalizeTailLines = (tailLines: number | undefined): number =>
+  tailLines === undefined || !Number.isFinite(tailLines)
+    ? DEFAULT_LOG_TAIL_LINES
+    : Math.min(5_000, Math.max(1, Math.trunc(tailLines)));
 
 const buildStack = async (
   config: NativeAppDevStackConfig,
@@ -349,6 +518,47 @@ export const makeNativeAppDevStackService = (
           nativeOperation("delete", async () => {
             await runKubectl(["delete", "namespace", config.namespace, "--ignore-not-found"]);
             return { deleted: true };
+          }),
+        ),
+      ),
+    listPods: (input) =>
+      ensureKnownStack(config, "listPods", input.stackId).pipe(
+        Effect.flatMap(() =>
+          nativeOperation("listPods", async () => ({
+            stackId: config.id,
+            namespace: config.namespace,
+            pods: await readPods(config, runKubectl),
+          })),
+        ),
+      ),
+    getPodLogs: (input) =>
+      ensureKnownStack(config, "getPodLogs", input.stackId).pipe(
+        Effect.flatMap(() =>
+          nativeOperation("getPodLogs", async () => {
+            const { pod, containerName } = await findPodForLogs(
+              config,
+              runKubectl,
+              input.podName,
+              input.containerName,
+            );
+            const tailLines = normalizeTailLines(input.tailLines);
+            const logArgs = [
+              "-n",
+              config.namespace,
+              "logs",
+              pod.name,
+              ...(containerName === null ? [] : ["-c", containerName]),
+              `--tail=${String(tailLines)}`,
+            ];
+            return {
+              stackId: config.id,
+              namespace: config.namespace,
+              podName: pod.name,
+              containerName,
+              tailLines,
+              logs: await runKubectl(logArgs),
+              fetchedAt: DateTime.formatIso(DateTime.nowUnsafe()),
+            };
           }),
         ),
       ),

@@ -4,11 +4,15 @@ import {
   AppDevStackByWorktreeResult,
   AppDevStackDeleteResult,
   AppDevStackError,
+  AppDevStackGetPodLogsResult,
   AppDevStackListResult,
   type AppDevStackAutoCreateInput,
   type AppDevStackBackendStatus,
+  type AppDevStackGetPodLogsInput,
   type AppDevStackGetInput,
+  type AppDevStackListPodsInput,
   type AppDevStackListInput,
+  AppDevStackListPodsResult,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -58,6 +62,12 @@ export class AppDevStackManager extends Context.Service<
     readonly delete: (
       input: AppDevStackGetInput,
     ) => Effect.Effect<AppDevStackDeleteResult, AppDevStackError>;
+    readonly listPods: (
+      input: AppDevStackListPodsInput,
+    ) => Effect.Effect<AppDevStackListPodsResult, AppDevStackError>;
+    readonly getPodLogs: (
+      input: AppDevStackGetPodLogsInput,
+    ) => Effect.Effect<AppDevStackGetPodLogsResult, AppDevStackError>;
   }
 >()("t3/appDevStack/AppDevStackManager") {
   static readonly layer = Layer.effect(
@@ -411,6 +421,41 @@ export class AppDevStackManager extends Context.Service<
         );
       });
 
+      const listPods = Effect.fn("AppDevStackManager.listPods")(function* (
+        input: AppDevStackListPodsInput,
+      ) {
+        const base = yield* requireBaseUrl("listPods");
+        return yield* executeJson(
+          "listPods",
+          HttpClientRequest.get(appDevStackUrl(base, `/${encodeURIComponent(input.stackId)}/pods`)),
+          AppDevStackListPodsResult,
+        );
+      });
+
+      const getPodLogs = Effect.fn("AppDevStackManager.getPodLogs")(function* (
+        input: AppDevStackGetPodLogsInput,
+      ) {
+        const base = yield* requireBaseUrl("getPodLogs");
+        const url = new URL(
+          appDevStackUrl(
+            base,
+            `/${encodeURIComponent(input.stackId)}/pods/${encodeURIComponent(input.podName)}/logs`,
+          ),
+        );
+        const containerName = input.containerName?.trim();
+        if (containerName) {
+          url.searchParams.set("containerName", containerName);
+        }
+        if (input.tailLines !== undefined) {
+          url.searchParams.set("tailLines", String(input.tailLines));
+        }
+        return yield* executeJson(
+          "getPodLogs",
+          HttpClientRequest.get(url.toString()),
+          AppDevStackGetPodLogsResult,
+        );
+      });
+
       return AppDevStackManager.of({
         status,
         list,
@@ -419,6 +464,8 @@ export class AppDevStackManager extends Context.Service<
         autoCreate,
         stop,
         delete: deleteStack,
+        listPods,
+        getPodLogs,
       });
     }),
   );
