@@ -32,6 +32,7 @@ import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import { buildFileReviewComment } from "~/reviewCommentContext";
 import { assetEnvironment } from "~/state/assets";
+import { useServerConfigs } from "~/state/entities";
 import { useEnvironmentHttpBaseUrl, usePrimaryEnvironmentId } from "~/state/environments";
 import { previewEnvironment } from "~/state/preview";
 import { projectEnvironment } from "~/state/projects";
@@ -624,6 +625,8 @@ export default function FilePreviewPanel({
   const wordWrap = useClientSettings((settings) => settings.wordWrap);
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const environmentHttpBaseUrl = useEnvironmentHttpBaseUrl(environmentId);
+  const serverConfigs = useServerConfigs();
+  const serverConfig = serverConfigs.get(environmentId);
   const createAssetUrl = useAtomQueryRunner(assetEnvironment.createUrl, {
     reportFailure: false,
   });
@@ -643,7 +646,9 @@ export default function FilePreviewPanel({
     markdownView.path === relativePath &&
     (revealLine === null || markdownView.revealRequestId === revealRequestId);
   const canOpenInBrowser =
-    relativePath !== null && isPreviewSupportedInRuntime() && isBrowserPreviewFile(relativePath);
+    relativePath !== null &&
+    isPreviewSupportedInRuntime(serverConfig) &&
+    isBrowserPreviewFile(relativePath);
   const absolutePath = relativePath ? resolvePathLinkTarget(relativePath, cwd) : null;
   const breadcrumbs = useMemo(
     () => (relativePath ? fileBreadcrumbs(projectName, relativePath) : []),
@@ -679,6 +684,7 @@ export default function FilePreviewPanel({
         httpBaseUrl: environmentHttpBaseUrl,
         createAssetUrl,
         openPreview,
+        serverConfig: serverConfig ?? null,
       });
       if (result._tag === "Success" || isAtomCommandInterrupted(result)) {
         return;
@@ -692,7 +698,7 @@ export default function FilePreviewPanel({
         }),
       );
     })();
-  }, [absolutePath, createAssetUrl, environmentHttpBaseUrl, openPreview, threadRef]);
+  }, [absolutePath, createAssetUrl, environmentHttpBaseUrl, openPreview, serverConfig, threadRef]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">

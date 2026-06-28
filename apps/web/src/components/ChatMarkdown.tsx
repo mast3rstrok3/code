@@ -1248,6 +1248,10 @@ function ChatMarkdown({
   const preparedConnection = usePreparedConnection(threadRef?.environmentId ?? null);
   const environmentId = useActiveEnvironmentId();
   const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
+  const previewServerConfig = useAtomValue(
+    serverEnvironment.configValueAtom(threadRef?.environmentId ?? null),
+  );
+  const previewSupported = isPreviewSupportedInRuntime(previewServerConfig);
   const openInPreferredEditor = useOpenInPreferredEditor(
     environmentId,
     serverConfig?.availableEditors ?? [],
@@ -1322,9 +1326,10 @@ function ChatMarkdown({
         httpBaseUrl: preparedConnection.value.httpBaseUrl,
         createAssetUrl,
         openPreview,
+        serverConfig: previewServerConfig,
       });
     },
-    [createAssetUrl, openPreview, preparedConnection, threadRef],
+    [createAssetUrl, openPreview, preparedConnection, previewServerConfig, threadRef],
   );
   const markdownComponents = useMemo<Components>(
     () => ({
@@ -1377,7 +1382,7 @@ function ChatMarkdown({
           const faviconHost = resolveExternalLinkHost(href);
           const isSameDocumentLink = href?.startsWith("#") ?? false;
           const onClick = props.onClick;
-          const canOpenInPreview = Boolean(threadRef) && isPreviewSupportedInRuntime();
+          const canOpenInPreview = Boolean(threadRef) && previewSupported;
           const link = (
             <a
               {...props}
@@ -1474,9 +1479,7 @@ function ChatMarkdown({
             threadRef={threadRef}
             onOpen={openInPreferredEditor}
             onOpenInBrowser={
-              threadRef &&
-              isPreviewSupportedInRuntime() &&
-              isBrowserPreviewFile(fileLinkMeta.filePath)
+              threadRef && previewSupported && isBrowserPreviewFile(fileLinkMeta.filePath)
                 ? () => openMarkdownFileInPreview(fileLinkMeta.filePath)
                 : undefined
             }
@@ -1528,6 +1531,7 @@ function ChatMarkdown({
       openInPreferredEditor,
       openExternalLinkInPreview,
       openMarkdownFileInPreview,
+      previewSupported,
       resolvedTheme,
       skills,
       text,

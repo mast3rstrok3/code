@@ -5,17 +5,23 @@ import {
   AppDevStackDeleteResult,
   AppDevStackError,
   AppDevStackGetPodLogsResult,
+  type AppDevStackGetStackPodLogsResult,
   AppDevStackListResult,
   type AppDevStackAutoCreateInput,
   type AppDevStackBackendStatus,
   type AppDevStackGetPodLogsInput,
+  type AppDevStackGetStackPodLogsInput,
   type AppDevStackGetInput,
   type AppDevStackListPodsInput,
   type AppDevStackListInput,
   AppDevStackListPodsResult,
+  type AppDevStackPod,
+  type AppDevStackPodContainer,
+  type AppDevStackPodLogEntry,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
@@ -37,6 +43,8 @@ const CODE_OIDC_CLIENT_SECRET_ENV = "CODE_OIDC_CLIENT_SECRET";
 const OIDC_REFRESH_EARLY_MS = 60_000;
 const DISABLED_MESSAGE =
   "App Dev Stack handling is not configured. Enable T3CODE_APP_DEV_STACK_NATIVE_ENABLED or set T3CODE_APP_DEV_STACK_BACKEND_URL to a controller API that serves /api/app-dev-stacks.";
+const DEFAULT_LOG_TAIL_LINES = 300;
+const POD_LOG_FETCH_CONCURRENCY = 4;
 
 const OAuthTokenResponse = Schema.Struct({
   access_token: Schema.String,
@@ -68,6 +76,9 @@ export class AppDevStackManager extends Context.Service<
     readonly getPodLogs: (
       input: AppDevStackGetPodLogsInput,
     ) => Effect.Effect<AppDevStackGetPodLogsResult, AppDevStackError>;
+    readonly getStackPodLogs: (
+      input: AppDevStackGetStackPodLogsInput,
+    ) => Effect.Effect<AppDevStackGetStackPodLogsResult, AppDevStackError>;
   }
 >()("t3/appDevStack/AppDevStackManager") {
   static readonly layer = Layer.effect(
@@ -456,6 +467,50 @@ export class AppDevStackManager extends Context.Service<
         );
       });
 
+      const getStackPodLogs = Effect.fn("AppDevStackManager.getStackPodLogs")(function* (
+        input: AppDevStackGetStackPodLogsInput,
+      ) {
+        const tailLines = input.tailLines ?? DEFAULT_LOG_TAIL_LINES;
+        const podList = yield* listPods({ stackId: input.stackId });
+        const podContainers = podList.pods.flatMap((pod) =>
+          pod.containers.map((container) => ({ pod, container })),
+        );
+        const entries = yield* Effect.forEach(
+          podContainers,
+          ({ pod, container }) =>
+            getPodLogs({
+              stackId: input.stackId,
+              podName: pod.name,
+              containerName: container.name,
+              tailLines,
+            }).pipe(
+              Effect.map((result) =>
+                stackPodLogEntryFromResult(pod, container, result.logs, null, result.fetchedAt),
+              ),
+              Effect.catch((error) =>
+                Effect.succeed(
+                  stackPodLogEntryFromResult(
+                    pod,
+                    container,
+                    "",
+                    error.message,
+                    DateTime.formatIso(DateTime.nowUnsafe()),
+                  ),
+                ),
+              ),
+            ),
+          { concurrency: POD_LOG_FETCH_CONCURRENCY },
+        );
+        return {
+          stackId: podList.stackId,
+          namespace: podList.namespace,
+          tailLines,
+          pods: podList.pods,
+          entries,
+          fetchedAt: DateTime.formatIso(DateTime.nowUnsafe()),
+        };
+      });
+
       return AppDevStackManager.of({
         status,
         list,
@@ -466,7 +521,28 @@ export class AppDevStackManager extends Context.Service<
         delete: deleteStack,
         listPods,
         getPodLogs,
+        getStackPodLogs,
       });
     }),
   );
 }
+
+const stackPodLogEntryFromResult = (
+  pod: AppDevStackPod,
+  container: AppDevStackPodContainer,
+  logs: string,
+  error: string | null,
+  fetchedAt: string,
+): AppDevStackPodLogEntry => ({
+  podName: pod.name,
+  containerName: container.name,
+  phase: pod.phase,
+  ready: container.ready,
+  restartCount: container.restartCount,
+  state: container.state,
+  ownerKind: pod.ownerKind ?? null,
+  ownerName: pod.ownerName ?? null,
+  logs,
+  error,
+  fetchedAt,
+});

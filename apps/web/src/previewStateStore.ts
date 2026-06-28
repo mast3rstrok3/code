@@ -7,6 +7,7 @@
  */
 import { useAtomValue } from "@effect/atom-react";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
+import type { ServerConfig } from "@t3tools/contracts";
 import {
   type PreviewEvent,
   type PreviewSessionSnapshot,
@@ -407,9 +408,37 @@ export function removePreviewThread(ref: ScopedThreadRef): void {
   changedPreviewThreadKeys.delete(threadKey);
 }
 
-export function isPreviewSupportedInRuntime(): boolean {
-  if (typeof window === "undefined") return false;
-  return Boolean(window.desktopBridge?.preview);
+export type PreviewRuntimeCapability =
+  | { readonly supported: true; readonly mode: "desktop" | "server"; readonly message?: string }
+  | { readonly supported: false; readonly mode: "none"; readonly message: string };
+
+export function resolvePreviewRuntimeCapability(
+  serverConfig?: ServerConfig | null,
+): PreviewRuntimeCapability {
+  if (typeof window !== "undefined" && window.desktopBridge?.preview) {
+    return { supported: true, mode: "desktop" };
+  }
+  const previewBrowser = serverConfig?.previewBrowser;
+  if (previewBrowser?.mode === "server" && previewBrowser.status === "ready") {
+    return {
+      supported: true,
+      mode: "server",
+      ...(previewBrowser.message === undefined ? {} : { message: previewBrowser.message }),
+    };
+  }
+  return {
+    supported: false,
+    mode: "none",
+    message:
+      previewBrowser?.message ??
+      (previewBrowser?.status === "disabled"
+        ? "Server-hosted browser preview is disabled."
+        : "Preview is only available in the T3 Code desktop app or with a server-hosted browser."),
+  };
+}
+
+export function isPreviewSupportedInRuntime(serverConfig?: ServerConfig | null): boolean {
+  return resolvePreviewRuntimeCapability(serverConfig).supported;
 }
 
 export function resetPreviewStateForTests(): void {

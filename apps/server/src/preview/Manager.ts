@@ -241,7 +241,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
           const snapshot: PreviewSessionSnapshot = {
             threadId: session.threadId,
             tabId: session.tabId,
-            navStatus: { _tag: "Success", url, title: resolvedTitle },
+            navStatus: { _tag: "Loading", url, title: resolvedTitle },
             canGoBack: session.snapshot.canGoBack,
             canGoForward: session.snapshot.canGoForward,
             viewport: session.snapshot.viewport ?? FILL_PREVIEW_VIEWPORT,

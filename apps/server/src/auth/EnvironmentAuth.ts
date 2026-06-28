@@ -648,6 +648,12 @@ export const make = Effect.gen(function* () {
           auth: descriptor,
         } satisfies AuthSessionState),
       ),
+      Effect.catchTag("ServerAuthSessionCredentialValidationError", () =>
+        Effect.succeed({
+          authenticated: false,
+          auth: descriptor,
+        } satisfies AuthSessionState),
+      ),
       Effect.withSpan("EnvironmentAuth.getSessionState"),
     );
 

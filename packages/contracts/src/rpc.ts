@@ -99,17 +99,25 @@ import {
 } from "./terminal.ts";
 import {
   DiscoveredLocalServerList,
+  PreviewClearBrowserDataInput,
   PreviewCloseInput,
   PreviewError,
   PreviewEvent,
+  PreviewFrameEvent,
+  PreviewFrameSubscribeInput,
+  PreviewInputEvent,
   PreviewListInput,
   PreviewListResult,
   PreviewNavigateInput,
   PreviewOpenInput,
+  PreviewPickElementInput,
   PreviewRefreshInput,
   PreviewReportStatusInput,
   PreviewResizeInput,
+  PreviewScreenshotArtifact,
   PreviewSessionSnapshot,
+  PreviewTabActionInput,
+  PreviewZoomInput,
 } from "./preview.ts";
 import {
   PreviewAutomationError,
@@ -128,6 +136,8 @@ import {
   AppDevStackError,
   AppDevStackGetPodLogsInput,
   AppDevStackGetPodLogsResult,
+  AppDevStackGetStackPodLogsInput,
+  AppDevStackGetStackPodLogsResult,
   AppDevStackGetInput,
   AppDevStackListPodsInput,
   AppDevStackListPodsResult,
@@ -221,6 +231,14 @@ export const WS_METHODS = {
   previewClose: "preview.close",
   previewList: "preview.list",
   previewReportStatus: "preview.reportStatus",
+  previewSubscribeFrames: "preview.subscribeFrames",
+  previewInput: "preview.input",
+  previewGoBack: "preview.goBack",
+  previewGoForward: "preview.goForward",
+  previewZoom: "preview.zoom",
+  previewCaptureScreenshot: "preview.captureScreenshot",
+  previewPickElementAt: "preview.pickElementAt",
+  previewClearBrowserData: "preview.clearBrowserData",
   previewAutomationConnect: "previewAutomation.connect",
   previewAutomationRespond: "previewAutomation.respond",
   previewAutomationFocusHost: "previewAutomation.focusHost",
@@ -235,6 +253,7 @@ export const WS_METHODS = {
   appDevStackDelete: "appDevStack.delete",
   appDevStackListPods: "appDevStack.listPods",
   appDevStackGetPodLogs: "appDevStack.getPodLogs",
+  appDevStackGetStackPodLogs: "appDevStack.getStackPodLogs",
 
   // Server meta
   serverGetConfig: "server.getConfig",
@@ -614,6 +633,50 @@ export const WsPreviewReportStatusRpc = Rpc.make(WS_METHODS.previewReportStatus,
   error: Schema.Union([PreviewError, EnvironmentAuthorizationError]),
 });
 
+export const WsPreviewSubscribeFramesRpc = Rpc.make(WS_METHODS.previewSubscribeFrames, {
+  payload: PreviewFrameSubscribeInput,
+  success: PreviewFrameEvent,
+  error: Schema.Union([PreviewError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
+export const WsPreviewInputRpc = Rpc.make(WS_METHODS.previewInput, {
+  payload: PreviewInputEvent,
+  error: Schema.Union([PreviewError, EnvironmentAuthorizationError]),
+});
+
+export const WsPreviewGoBackRpc = Rpc.make(WS_METHODS.previewGoBack, {
+  payload: PreviewTabActionInput,
+  error: Schema.Union([PreviewError, EnvironmentAuthorizationError]),
+});
+
+export const WsPreviewGoForwardRpc = Rpc.make(WS_METHODS.previewGoForward, {
+  payload: PreviewTabActionInput,
+  error: Schema.Union([PreviewError, EnvironmentAuthorizationError]),
+});
+
+export const WsPreviewZoomRpc = Rpc.make(WS_METHODS.previewZoom, {
+  payload: PreviewZoomInput,
+  error: Schema.Union([PreviewError, EnvironmentAuthorizationError]),
+});
+
+export const WsPreviewCaptureScreenshotRpc = Rpc.make(WS_METHODS.previewCaptureScreenshot, {
+  payload: PreviewTabActionInput,
+  success: PreviewScreenshotArtifact,
+  error: Schema.Union([PreviewError, EnvironmentAuthorizationError]),
+});
+
+export const WsPreviewPickElementAtRpc = Rpc.make(WS_METHODS.previewPickElementAt, {
+  payload: PreviewPickElementInput,
+  success: Schema.NullOr(Schema.String),
+  error: Schema.Union([PreviewError, EnvironmentAuthorizationError]),
+});
+
+export const WsPreviewClearBrowserDataRpc = Rpc.make(WS_METHODS.previewClearBrowserData, {
+  payload: PreviewClearBrowserDataInput,
+  error: Schema.Union([PreviewError, EnvironmentAuthorizationError]),
+});
+
 export const WsPreviewAutomationConnectRpc = Rpc.make(WS_METHODS.previewAutomationConnect, {
   payload: PreviewAutomationHost,
   success: PreviewAutomationStreamEvent,
@@ -682,6 +745,12 @@ export const WsAppDevStackListPodsRpc = Rpc.make(WS_METHODS.appDevStackListPods,
 export const WsAppDevStackGetPodLogsRpc = Rpc.make(WS_METHODS.appDevStackGetPodLogs, {
   payload: AppDevStackGetPodLogsInput,
   success: AppDevStackGetPodLogsResult,
+  error: Schema.Union([AppDevStackError, EnvironmentAuthorizationError]),
+});
+
+export const WsAppDevStackGetStackPodLogsRpc = Rpc.make(WS_METHODS.appDevStackGetStackPodLogs, {
+  payload: AppDevStackGetStackPodLogsInput,
+  success: AppDevStackGetStackPodLogsResult,
   error: Schema.Union([AppDevStackError, EnvironmentAuthorizationError]),
 });
 
@@ -850,6 +919,14 @@ export const WsRpcGroup = RpcGroup.make(
   WsPreviewCloseRpc,
   WsPreviewListRpc,
   WsPreviewReportStatusRpc,
+  WsPreviewSubscribeFramesRpc,
+  WsPreviewInputRpc,
+  WsPreviewGoBackRpc,
+  WsPreviewGoForwardRpc,
+  WsPreviewZoomRpc,
+  WsPreviewCaptureScreenshotRpc,
+  WsPreviewPickElementAtRpc,
+  WsPreviewClearBrowserDataRpc,
   WsPreviewAutomationConnectRpc,
   WsPreviewAutomationRespondRpc,
   WsPreviewAutomationFocusHostRpc,
@@ -862,6 +939,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsAppDevStackDeleteRpc,
   WsAppDevStackListPodsRpc,
   WsAppDevStackGetPodLogsRpc,
+  WsAppDevStackGetStackPodLogsRpc,
   WsSubscribePreviewEventsRpc,
   WsSubscribeDiscoveredLocalServersRpc,
   WsSubscribeServerConfigRpc,

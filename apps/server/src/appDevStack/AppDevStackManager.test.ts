@@ -92,6 +92,15 @@ const makeConfigLayer = (input?: {
     logWebSocketEvents: false,
     tailscaleServeEnabled: false,
     tailscaleServePort: 443,
+    previewBrowserMode: "auto",
+    previewBrowserSource: "auto",
+    previewBrowserExecutablePath: undefined,
+    previewBrowserSandbox: "auto",
+    previewBrowserMaxFps: 12,
+    previewBrowserMaxFrameWidth: 1600,
+    previewBrowserMaxFrameHeight: 1200,
+    previewBrowserJpegQuality: 75,
+    previewBrowserIdleTtlMs: 600_000,
   });
 
 const makeLayer = (input: {
@@ -276,5 +285,110 @@ it.effect("proxies pod list and log reads to the configured backend", () => {
       `${backendUrl.href.replace(/\/+$/u, "")}/api/app-dev-stacks/rudi-dev/pods/backend-pod/logs?containerName=backend&tailLines=300`,
     );
     assert.equal(requests[1]?.headers.authorization, "Bearer backend-token");
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("aggregates stack pod logs through existing pod endpoints with backend auth", () => {
+  const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+  const podList = {
+    stackId: "rudi-dev",
+    namespace: "rudi-dev",
+    pods: [
+      {
+        name: "backend-pod",
+        phase: "Running",
+        readyContainerCount: 1,
+        totalContainerCount: 2,
+        restartCount: 1,
+        ownerKind: "ReplicaSet",
+        ownerName: "backend-7cdbbbfdd8",
+        containers: [
+          { name: "backend", ready: true, restartCount: 0, state: "running" },
+          { name: "sidecar", ready: false, restartCount: 1, state: "CrashLoopBackOff" },
+        ],
+      },
+    ],
+  } as const;
+  const layer = makeLayer({
+    bearerToken: "backend-token",
+    requests,
+    response: (request) => {
+      const url = new URL(request.url);
+      if (url.pathname === "/api/app-dev-stacks/rudi-dev/pods") {
+        return Response.json(podList);
+      }
+      if (
+        url.pathname === "/api/app-dev-stacks/rudi-dev/pods/backend-pod/logs" &&
+        url.searchParams.get("containerName") === "backend"
+      ) {
+        return Response.json({
+          stackId: "rudi-dev",
+          namespace: "rudi-dev",
+          podName: "backend-pod",
+          containerName: "backend",
+          tailLines: 300,
+          logs: "backend ready\n",
+          fetchedAt: "2026-06-25T00:00:00.000Z",
+        });
+      }
+      if (
+        url.pathname === "/api/app-dev-stacks/rudi-dev/pods/backend-pod/logs" &&
+        url.searchParams.get("containerName") === "sidecar"
+      ) {
+        return new Response("sidecar logs unavailable", { status: 500 });
+      }
+      return new Response(`unexpected request ${request.url}`, { status: 404 });
+    },
+  });
+
+  return Effect.gen(function* () {
+    const manager = yield* AppDevStackManager;
+    const result = yield* manager.getStackPodLogs({ stackId: "rudi-dev" });
+
+    assert.equal(result.stackId, "rudi-dev");
+    assert.equal(result.namespace, "rudi-dev");
+    assert.equal(result.tailLines, 300);
+    assert.equal(result.pods.length, 1);
+    assert.deepEqual(
+      result.entries.map((entry) => ({
+        podName: entry.podName,
+        containerName: entry.containerName,
+        logs: entry.logs,
+        error: entry.error,
+      })),
+      [
+        {
+          podName: "backend-pod",
+          containerName: "backend",
+          logs: "backend ready\n",
+          error: null,
+        },
+        {
+          podName: "backend-pod",
+          containerName: "sidecar",
+          logs: "",
+          error: "App Dev Stack backend responded with 500: sidecar logs unavailable",
+        },
+      ],
+    );
+    assert.deepEqual(
+      requests.map((request) => {
+        const url = new URL(request.url);
+        return `${url.pathname}${url.search}`;
+      }),
+      [
+        "/api/app-dev-stacks/rudi-dev/pods",
+        "/api/app-dev-stacks/rudi-dev/pods/backend-pod/logs?containerName=backend&tailLines=300",
+        "/api/app-dev-stacks/rudi-dev/pods/backend-pod/logs?containerName=sidecar&tailLines=300",
+      ],
+    );
+    assert.equal(
+      requests.every((request) => request.headers.authorization === "Bearer backend-token"),
+      true,
+    );
+    assert.equal(
+      requests.some((request) => request.url.includes("getStackPodLogs")),
+      false,
+    );
   }).pipe(Effect.provide(layer));
 });

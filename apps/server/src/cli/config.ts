@@ -73,6 +73,10 @@ export const tailscaleServePortFlag = Flag.integer("tailscale-serve-port").pipe(
   Flag.withDescription("HTTPS port for Tailscale Serve when --tailscale-serve is enabled."),
   Flag.optional,
 );
+export const previewBrowserFlag = Flag.choice(
+  "preview-browser",
+  ServerConfig.PreviewBrowserMode.literals,
+).pipe(Flag.withDescription("Server-hosted browser preview mode: auto or off."), Flag.optional);
 
 const optionalRedactedString = (name: string) =>
   Config.redacted(name).pipe(
@@ -200,6 +204,32 @@ const EnvServerConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
+  previewBrowserMode: Config.schema(ServerConfig.PreviewBrowserMode, "T3CODE_PREVIEW_BROWSER").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  previewBrowserSource: Config.schema(
+    ServerConfig.PreviewBrowserSource,
+    "T3CODE_PREVIEW_BROWSER_SOURCE",
+  ).pipe(Config.withDefault("auto")),
+  previewBrowserExecutablePath: optionalTrimmedString("T3CODE_PREVIEW_BROWSER_EXECUTABLE"),
+  previewBrowserSandbox: Config.schema(
+    ServerConfig.PreviewBrowserSandbox,
+    "T3CODE_PREVIEW_BROWSER_SANDBOX",
+  ).pipe(Config.withDefault("auto")),
+  previewBrowserMaxFps: Config.int("T3CODE_PREVIEW_BROWSER_MAX_FPS").pipe(Config.withDefault(12)),
+  previewBrowserMaxFrameWidth: Config.int("T3CODE_PREVIEW_BROWSER_MAX_FRAME_WIDTH").pipe(
+    Config.withDefault(1600),
+  ),
+  previewBrowserMaxFrameHeight: Config.int("T3CODE_PREVIEW_BROWSER_MAX_FRAME_HEIGHT").pipe(
+    Config.withDefault(1200),
+  ),
+  previewBrowserJpegQuality: Config.int("T3CODE_PREVIEW_BROWSER_JPEG_QUALITY").pipe(
+    Config.withDefault(75),
+  ),
+  previewBrowserIdleTtlMs: Config.int("T3CODE_PREVIEW_BROWSER_IDLE_TTL_MS").pipe(
+    Config.withDefault(600_000),
+  ),
 });
 
 export interface CliServerFlags {
@@ -215,6 +245,7 @@ export interface CliServerFlags {
   readonly logWebSocketEvents: Option.Option<boolean>;
   readonly tailscaleServeEnabled: Option.Option<boolean>;
   readonly tailscaleServePort: Option.Option<number>;
+  readonly previewBrowserMode?: Option.Option<ServerConfig.PreviewBrowserMode>;
 }
 
 export interface CliAuthLocationFlags {
@@ -249,6 +280,7 @@ export const sharedServerCommandFlags = {
   logWebSocketEvents: logWebSocketEventsFlag,
   tailscaleServeEnabled: tailscaleServeFlag,
   tailscaleServePort: tailscaleServePortFlag,
+  previewBrowserMode: previewBrowserFlag,
 } as const;
 
 export const authLocationFlags = sharedServerLocationFlags;
@@ -294,6 +326,7 @@ export const resolveServerConfig = (
       logWebSocketEvents: flags.logWebSocketEvents ?? Option.none(),
       tailscaleServeEnabled: flags.tailscaleServeEnabled ?? Option.none(),
       tailscaleServePort: flags.tailscaleServePort ?? Option.none(),
+      previewBrowserMode: flags.previewBrowserMode ?? Option.none(),
     } satisfies CliServerFlags;
     const bootstrapFd = Option.getOrUndefined(normalizedFlags.bootstrapFd) ?? env.bootstrapFd;
     const bootstrapEnvelope =
@@ -394,6 +427,13 @@ export const resolveServerConfig = (
       ),
       () => 443,
     );
+    const previewBrowserMode = Option.getOrElse(
+      resolveOptionPrecedence(
+        normalizedFlags.previewBrowserMode,
+        Option.fromUndefinedOr(env.previewBrowserMode),
+      ),
+      () => "auto" as const,
+    );
     const staticDir = devUrl ? undefined : yield* ServerConfig.resolveStaticDir();
     const host = Option.getOrElse(
       resolveOptionPrecedence(
@@ -473,6 +513,15 @@ export const resolveServerConfig = (
       logWebSocketEvents,
       tailscaleServeEnabled,
       tailscaleServePort,
+      previewBrowserMode,
+      previewBrowserSource: env.previewBrowserSource,
+      previewBrowserExecutablePath: env.previewBrowserExecutablePath,
+      previewBrowserSandbox: env.previewBrowserSandbox,
+      previewBrowserMaxFps: Math.max(1, Math.min(60, env.previewBrowserMaxFps)),
+      previewBrowserMaxFrameWidth: Math.max(240, Math.min(3840, env.previewBrowserMaxFrameWidth)),
+      previewBrowserMaxFrameHeight: Math.max(240, Math.min(2160, env.previewBrowserMaxFrameHeight)),
+      previewBrowserJpegQuality: Math.max(1, Math.min(100, env.previewBrowserJpegQuality)),
+      previewBrowserIdleTtlMs: Math.max(60_000, env.previewBrowserIdleTtlMs),
     };
 
     return config;
@@ -496,6 +545,7 @@ export const resolveCliAuthConfig = (
       logWebSocketEvents: Option.none(),
       tailscaleServeEnabled: Option.none(),
       tailscaleServePort: Option.none(),
+      previewBrowserMode: Option.none(),
     },
     cliLogLevel,
   );

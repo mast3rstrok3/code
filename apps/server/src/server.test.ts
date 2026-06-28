@@ -90,7 +90,9 @@ import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as PreviewManager from "./preview/Manager.ts";
+import * as PreviewCoordinator from "./preview/PreviewCoordinator.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
+import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as BrowserTraceCollector from "./observability/BrowserTraceCollector.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
 import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
@@ -401,6 +403,15 @@ const buildAppUnderTest = (options?: {
       logWebSocketEvents: false,
       tailscaleServeEnabled: false,
       tailscaleServePort: 443,
+      previewBrowserMode: "off",
+      previewBrowserSource: "auto",
+      previewBrowserExecutablePath: undefined,
+      previewBrowserSandbox: "auto",
+      previewBrowserMaxFps: 12,
+      previewBrowserMaxFrameWidth: 1600,
+      previewBrowserMaxFrameHeight: 1200,
+      previewBrowserJpegQuality: 75,
+      previewBrowserIdleTtlMs: 600_000,
       ...options?.config,
     };
     const layerConfig = ServerConfig.layer(config);
@@ -686,6 +697,7 @@ const buildAppUnderTest = (options?: {
       ),
       Layer.provide(
         Layer.mergeAll(
+          PreviewAutomationBroker.layer,
           Layer.mock(PreviewManager.PreviewManager)({
             open: () => Effect.die("PreviewManager not stubbed in this test"),
             navigate: () => Effect.die("PreviewManager not stubbed in this test"),
@@ -698,6 +710,24 @@ const buildAppUnderTest = (options?: {
             subscribeEvents: Effect.flatMap(PubSub.unbounded<PreviewEvent>(), (pubsub) =>
               PubSub.subscribe(pubsub),
             ),
+          }),
+          Layer.mock(PreviewCoordinator.PreviewCoordinator)({
+            open: () => Effect.die("PreviewCoordinator not stubbed in this test"),
+            navigate: () => Effect.die("PreviewCoordinator not stubbed in this test"),
+            resize: () => Effect.die("PreviewCoordinator not stubbed in this test"),
+            reportStatus: () => Effect.void,
+            refresh: () => Effect.void,
+            close: () => Effect.void,
+            list: () => Effect.succeed({ sessions: [] }),
+            subscribeFrames: () => Effect.succeed(Stream.empty),
+            input: () => Effect.void,
+            goBack: () => Effect.void,
+            goForward: () => Effect.void,
+            zoom: () => Effect.void,
+            captureScreenshot: () =>
+              Effect.die("PreviewCoordinator.captureScreenshot not stubbed in this test"),
+            pickElementAt: () => Effect.succeed(null),
+            clearBrowserData: () => Effect.void,
           }),
           Layer.mock(PortScanner.PortDiscovery)({
             scan: () => Effect.succeed([]),
@@ -816,6 +846,27 @@ const buildAppUnderTest = (options?: {
           autoCreate: () => Effect.die("AppDevStackManager.autoCreate not stubbed in this test"),
           stop: () => Effect.die("AppDevStackManager.stop not stubbed in this test"),
           delete: () => Effect.succeed({ deleted: true as const }),
+          listPods: (input) =>
+            Effect.succeed({ stackId: input.stackId, namespace: "test", pods: [] }),
+          getPodLogs: (input) =>
+            Effect.succeed({
+              stackId: input.stackId,
+              namespace: "test",
+              podName: input.podName,
+              containerName: input.containerName ?? null,
+              tailLines: input.tailLines ?? 300,
+              logs: "",
+              fetchedAt: "2026-06-25T00:00:00.000Z",
+            }),
+          getStackPodLogs: (input) =>
+            Effect.succeed({
+              stackId: input.stackId,
+              namespace: "test",
+              tailLines: input.tailLines ?? 300,
+              pods: [],
+              entries: [],
+              fetchedAt: "2026-06-25T00:00:00.000Z",
+            }),
           ...options?.layers?.appDevStackManager,
         }),
       ),

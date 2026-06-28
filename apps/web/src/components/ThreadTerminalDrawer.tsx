@@ -595,6 +595,7 @@ export function TerminalViewport({
                   openPreview,
                   localApi,
                   fallbackToBrowser,
+                  serverConfig,
                 });
                 return;
               }

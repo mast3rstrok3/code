@@ -179,6 +179,139 @@ it.effect("reads bounded logs for a validated pod container", () => {
   });
 });
 
+it.effect("aggregates logs for every reported pod container with the default tail", () => {
+  const calls: Array<ReadonlyArray<string>> = [];
+  const runKubectl: KubectlRunner = async (args) => {
+    calls.push(args);
+    if (args.join(" ") === "-n rudi-dev get pods -o json") return podsJson;
+    if (args.join(" ") === "-n rudi-dev logs backend-7cdbbbfdd8-l9mpx -c backend --tail=300") {
+      return "backend log line\n";
+    }
+    if (args.join(" ") === "-n rudi-dev logs backend-7cdbbbfdd8-l9mpx -c sidecar --tail=300") {
+      return "sidecar log line\n";
+    }
+    throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
+  };
+  const service = makeNativeAppDevStackService(nativeConfig, runKubectl);
+
+  return Effect.gen(function* () {
+    const result = yield* service.getStackPodLogs({ stackId: "rudi-dev" });
+
+    assert.equal(result.stackId, "rudi-dev");
+    assert.equal(result.namespace, "rudi-dev");
+    assert.equal(result.tailLines, 300);
+    assert.deepEqual(
+      result.entries.map((entry) => ({
+        podName: entry.podName,
+        containerName: entry.containerName,
+        phase: entry.phase,
+        ready: entry.ready,
+        restartCount: entry.restartCount,
+        state: entry.state,
+        ownerKind: entry.ownerKind,
+        ownerName: entry.ownerName,
+        logs: entry.logs,
+        error: entry.error,
+      })),
+      [
+        {
+          podName: "backend-7cdbbbfdd8-l9mpx",
+          containerName: "backend",
+          phase: "Running",
+          ready: true,
+          restartCount: 1,
+          state: "running",
+          ownerKind: "ReplicaSet",
+          ownerName: "backend-7cdbbbfdd8",
+          logs: "backend log line\n",
+          error: null,
+        },
+        {
+          podName: "backend-7cdbbbfdd8-l9mpx",
+          containerName: "sidecar",
+          phase: "Running",
+          ready: false,
+          restartCount: 2,
+          state: "CrashLoopBackOff",
+          ownerKind: "ReplicaSet",
+          ownerName: "backend-7cdbbbfdd8",
+          logs: "sidecar log line\n",
+          error: null,
+        },
+      ],
+    );
+    assert.deepEqual(calls, [
+      ["-n", "rudi-dev", "get", "pods", "-o", "json"],
+      ["-n", "rudi-dev", "logs", "backend-7cdbbbfdd8-l9mpx", "-c", "backend", "--tail=300"],
+      ["-n", "rudi-dev", "logs", "backend-7cdbbbfdd8-l9mpx", "-c", "sidecar", "--tail=300"],
+    ]);
+  });
+});
+
+it.effect("honors bounded aggregate log tail values", () => {
+  const calls: Array<ReadonlyArray<string>> = [];
+  const runKubectl: KubectlRunner = async (args) => {
+    calls.push(args);
+    if (args.join(" ") === "-n rudi-dev get pods -o json") return podsJson;
+    if (args.join(" ") === "-n rudi-dev logs backend-7cdbbbfdd8-l9mpx -c backend --tail=5000") {
+      return "backend log line\n";
+    }
+    if (args.join(" ") === "-n rudi-dev logs backend-7cdbbbfdd8-l9mpx -c sidecar --tail=5000") {
+      return "sidecar log line\n";
+    }
+    throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
+  };
+  const service = makeNativeAppDevStackService(nativeConfig, runKubectl);
+
+  return Effect.gen(function* () {
+    const result = yield* service.getStackPodLogs({ stackId: "rudi-dev", tailLines: 5000 });
+
+    assert.equal(result.tailLines, 5000);
+    assert.deepEqual(calls, [
+      ["-n", "rudi-dev", "get", "pods", "-o", "json"],
+      ["-n", "rudi-dev", "logs", "backend-7cdbbbfdd8-l9mpx", "-c", "backend", "--tail=5000"],
+      ["-n", "rudi-dev", "logs", "backend-7cdbbbfdd8-l9mpx", "-c", "sidecar", "--tail=5000"],
+    ]);
+  });
+});
+
+it.effect("keeps successful aggregate log entries when a container log read fails", () => {
+  const calls: Array<ReadonlyArray<string>> = [];
+  const runKubectl: KubectlRunner = async (args) => {
+    calls.push(args);
+    if (args.join(" ") === "-n rudi-dev get pods -o json") return podsJson;
+    if (args.join(" ") === "-n rudi-dev logs backend-7cdbbbfdd8-l9mpx -c backend --tail=1000") {
+      return "backend log line\n";
+    }
+    if (args.join(" ") === "-n rudi-dev logs backend-7cdbbbfdd8-l9mpx -c sidecar --tail=1000") {
+      throw new Error("sidecar logs unavailable");
+    }
+    throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
+  };
+  const service = makeNativeAppDevStackService(nativeConfig, runKubectl);
+
+  return Effect.gen(function* () {
+    const result = yield* service.getStackPodLogs({ stackId: "rudi-dev", tailLines: 1000 });
+
+    assert.deepEqual(
+      result.entries.map((entry) => ({
+        containerName: entry.containerName,
+        logs: entry.logs,
+        error: entry.error,
+      })),
+      [
+        { containerName: "backend", logs: "backend log line\n", error: null },
+        { containerName: "sidecar", logs: "", error: "sidecar logs unavailable" },
+      ],
+    );
+    assert.deepEqual(calls, [
+      ["-n", "rudi-dev", "get", "pods", "-o", "json"],
+      ["-n", "rudi-dev", "logs", "backend-7cdbbbfdd8-l9mpx", "-c", "backend", "--tail=1000"],
+      ["-n", "rudi-dev", "logs", "backend-7cdbbbfdd8-l9mpx", "-c", "sidecar", "--tail=1000"],
+    ]);
+  });
+});
+
 it.effect("scales deployments when auto-creating an existing native stack", () => {
   const calls: Array<ReadonlyArray<string>> = [];
   const runKubectl: KubectlRunner = async (args) => {

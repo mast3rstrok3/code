@@ -1,7 +1,7 @@
 import { ChevronDownIcon, GitPullRequestIcon, RefreshCwIcon } from "lucide-react";
 import * as Duration from "effect/Duration";
 import * as Option from "effect/Option";
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type {
   SourceControlProviderKind,
   SourceControlDiscoveryResult,
@@ -9,9 +9,7 @@ import type {
   SourceControlProviderDiscoveryItem,
   VcsDriverKind,
   VcsDiscoveryItem,
-  WorkspaceUser,
 } from "@t3tools/contracts";
-import { WorkspaceUserId } from "@t3tools/contracts";
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 
 import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
@@ -31,7 +29,6 @@ import {
   EmptyTitle,
 } from "../ui/empty";
 import { Skeleton } from "../ui/skeleton";
-import { Input } from "../ui/input";
 import {
   NumberField,
   NumberFieldDecrement,
@@ -361,203 +358,6 @@ function GitFetchIntervalSettings() {
   );
 }
 
-function workspaceUserIdFromDisplayName(
-  displayName: string,
-  existingUsers: ReadonlyArray<WorkspaceUser>,
-) {
-  const base =
-    displayName
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "") || "user";
-  const existingIds = new Set<string>(existingUsers.map((user) => user.id));
-  let candidate = base;
-  let suffix = 2;
-  while (existingIds.has(candidate)) {
-    candidate = `${base}-${suffix}`;
-    suffix += 1;
-  }
-  return WorkspaceUserId.make(candidate);
-}
-
-function GitHubWorkspaceUserSettingsRow({
-  user,
-  workspaceUsers,
-  onWorkspaceUsersChange,
-}: {
-  readonly user: WorkspaceUser;
-  readonly workspaceUsers: ReadonlyArray<WorkspaceUser>;
-  readonly onWorkspaceUsersChange: (users: ReadonlyArray<WorkspaceUser>) => void;
-}) {
-  const [displayName, setDisplayName] = useState(user.displayName);
-  const [tokenDraft, setTokenDraft] = useState("");
-  const configured = Boolean(user.github.personalAccessTokenRedacted);
-
-  useEffect(() => {
-    setDisplayName(user.displayName);
-    setTokenDraft("");
-  }, [user.displayName, user.id]);
-
-  const updateUser = (nextUser: WorkspaceUser) => {
-    onWorkspaceUsersChange(
-      workspaceUsers.map((candidate) => (candidate.id === user.id ? nextUser : candidate)),
-    );
-  };
-
-  const trimmedDisplayName = displayName.trim();
-  const canRename = trimmedDisplayName.length > 0 && trimmedDisplayName !== user.displayName;
-  const trimmedToken = tokenDraft.trim();
-
-  return (
-    <div className="grid gap-3 border-t border-border/60 py-3 first:border-t-0 first:pt-0 last:pb-0">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0 flex-1 space-y-1">
-          <div className="text-xs font-medium text-foreground">{user.displayName}</div>
-          <p className="text-xs text-muted-foreground">
-            GitHub token {configured ? "configured" : "not configured"} for this workspace user.
-          </p>
-        </div>
-        <Badge variant={configured ? "success" : "secondary"} size="sm">
-          {configured ? "Configured" : "Unconfigured"}
-        </Badge>
-      </div>
-
-      <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-        <Input
-          size="sm"
-          value={displayName}
-          aria-label={`${user.displayName} display name`}
-          onChange={(event) => setDisplayName(event.target.value)}
-        />
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={!canRename}
-          onClick={() => {
-            if (!canRename) return;
-            updateUser({ ...user, displayName: trimmedDisplayName });
-          }}
-        >
-          Rename
-        </Button>
-      </div>
-
-      <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
-        <Input
-          size="sm"
-          type="password"
-          value={tokenDraft}
-          autoComplete="off"
-          aria-label={`${user.displayName} GitHub personal access token`}
-          placeholder={configured ? "Replace personal access token" : "Personal access token"}
-          onChange={(event) => setTokenDraft(event.target.value)}
-        />
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={trimmedToken.length === 0}
-          onClick={() => {
-            if (trimmedToken.length === 0) return;
-            updateUser({
-              ...user,
-              github: {
-                ...user.github,
-                personalAccessToken: trimmedToken,
-                personalAccessTokenRedacted: false,
-              },
-            });
-            setTokenDraft("");
-          }}
-        >
-          {configured ? "Replace" : "Save"}
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={!configured && trimmedToken.length === 0}
-          onClick={() => {
-            updateUser({
-              ...user,
-              github: {
-                ...user.github,
-                personalAccessToken: "",
-                personalAccessTokenRedacted: false,
-              },
-            });
-            setTokenDraft("");
-          }}
-        >
-          Clear
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function GitHubProviderSettings() {
-  const workspaceUsers = usePrimarySettings((settings) => settings.workspaceUsers);
-  const updateSettings = useUpdatePrimarySettings();
-  const [newUserDisplayName, setNewUserDisplayName] = useState("");
-  const trimmedNewUserDisplayName = newUserDisplayName.trim();
-
-  const updateWorkspaceUsers = (users: ReadonlyArray<WorkspaceUser>) => {
-    updateSettings({ workspaceUsers: [...users] });
-  };
-
-  return (
-    <div className="grid gap-4">
-      <div className="space-y-1">
-        <div className="text-xs font-medium text-foreground">GitHub personal access tokens</div>
-        <p className="text-xs leading-relaxed text-muted-foreground">
-          Tokens are stored on the server and are only used for GitHub operations owned by each
-          thread user.
-        </p>
-      </div>
-
-      <div>
-        {workspaceUsers.map((user) => (
-          <GitHubWorkspaceUserSettingsRow
-            key={user.id}
-            user={user}
-            workspaceUsers={workspaceUsers}
-            onWorkspaceUsersChange={updateWorkspaceUsers}
-          />
-        ))}
-      </div>
-
-      <div className="grid gap-2 border-t border-border/60 pt-3 sm:grid-cols-[minmax(0,1fr)_auto]">
-        <Input
-          size="sm"
-          value={newUserDisplayName}
-          aria-label="New workspace user display name"
-          placeholder="New workspace user"
-          onChange={(event) => setNewUserDisplayName(event.target.value)}
-        />
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={trimmedNewUserDisplayName.length === 0}
-          onClick={() => {
-            if (trimmedNewUserDisplayName.length === 0) return;
-            updateWorkspaceUsers([
-              ...workspaceUsers,
-              {
-                id: workspaceUserIdFromDisplayName(trimmedNewUserDisplayName, workspaceUsers),
-                displayName: trimmedNewUserDisplayName,
-                github: { personalAccessToken: "" },
-              },
-            ]);
-            setNewUserDisplayName("");
-          }}
-        >
-          Add user
-        </Button>
-      </div>
-    </div>
-  );
-}
-
 function SourceControlSectionSkeleton({
   title,
   headerAction,
@@ -701,9 +501,7 @@ export function SourceControlSettingsPanel() {
               headerAction={result.versionControlSystems.length === 0 ? scanButton : null}
             >
               {result.sourceControlProviders.map((item) => (
-                <DiscoveryItemRow key={`provider:${item.kind}`} item={item}>
-                  {item.kind === "github" ? <GitHubProviderSettings /> : undefined}
-                </DiscoveryItemRow>
+                <DiscoveryItemRow key={`provider:${item.kind}`} item={item} />
               ))}
             </SettingsSection>
           ) : null}

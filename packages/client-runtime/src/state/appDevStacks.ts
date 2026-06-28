@@ -77,5 +77,11 @@ export function createAppDevStackEnvironmentAtoms<R, E>(
       staleTimeMs: 3_000,
       idleTtlMs: 30_000,
     }),
+    getStackPodLogs: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:app-dev-stack:get-stack-pod-logs",
+      tag: WS_METHODS.appDevStackGetStackPodLogs,
+      staleTimeMs: 3_000,
+      idleTtlMs: 30_000,
+    }),
   };
 }

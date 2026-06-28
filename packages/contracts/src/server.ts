@@ -247,6 +247,22 @@ export const ServerObservability = Schema.Struct({
 });
 export type ServerObservability = typeof ServerObservability.Type;
 
+export const ServerPreviewBrowserStatus = Schema.Struct({
+  mode: Schema.Literals(["desktop", "server", "none"]),
+  status: Schema.Literals(["ready", "disabled", "unavailable"]),
+  source: Schema.optional(Schema.Literals(["configured", "system", "playwright"])),
+  message: Schema.optional(TrimmedNonEmptyString),
+  capabilities: Schema.Struct({
+    visual: Schema.Boolean,
+    automation: Schema.Boolean,
+    screenshots: Schema.Boolean,
+    elementPicking: Schema.Boolean,
+    recording: Schema.Boolean,
+    viewportResize: Schema.Boolean,
+  }),
+});
+export type ServerPreviewBrowserStatus = typeof ServerPreviewBrowserStatus.Type;
+
 export const ServerTraceDiagnosticsErrorKind = Schema.Literals([
   "trace-file-not-found",
   "trace-file-read-failed",
@@ -450,6 +466,7 @@ export const ServerConfig = Schema.Struct({
   availableEditors: Schema.Array(EditorId),
   observability: ServerObservability,
   settings: ServerSettings,
+  previewBrowser: Schema.optional(ServerPreviewBrowserStatus),
 });
 export type ServerConfig = typeof ServerConfig.Type;
 

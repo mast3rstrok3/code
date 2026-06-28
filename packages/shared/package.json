@@ -189,6 +189,10 @@
       "types": "./src/previewViewport.ts",
       "import": "./src/previewViewport.ts"
     },
+    "./previewKeyboard": {
+      "types": "./src/previewKeyboard.ts",
+      "import": "./src/previewKeyboard.ts"
+    },
     "./filePreview": {
       "types": "./src/filePreview.ts",
       "import": "./src/filePreview.ts"

@@ -37,12 +37,18 @@ import { ensureBrowseDirectoryPath, getBrowseParentPath } from "~/lib/projectPat
 import { cn } from "~/lib/utils";
 import { isPreviewSupportedInRuntime } from "~/previewStateStore";
 import { appDevStackEnvironment } from "~/state/appDevStacks";
+import { useServerConfigs } from "~/state/entities";
 import { filesystemEnvironment } from "~/state/filesystem";
 import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
+import {
+  displayNameFromStackPath as displayNameFromPath,
+  displayStackName,
+  normalizeStackWorktreePath as normalizeWorktreePath,
+} from "./AppDevStackLogsPanel.logic";
 
 const TRANSITIONING_STATUSES = new Set(["pending", "starting", "stopping"]);
 const PRIMARY_PREVIEW_SERVICE_NAMES = ["frontend-dev", "frontend", "web"] as const;
@@ -74,25 +80,9 @@ interface StartPathChoice {
   readonly path: string;
 }
 
-function normalizeWorktreePath(path: string): string {
-  return path.trim().replace(/\/+$/u, "") || path.trim();
-}
-
 function nonEmpty(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
-}
-
-function displayNameFromPath(worktreePath: string): string {
-  const normalized = normalizeWorktreePath(worktreePath);
-  const lastSlashIndex = normalized.lastIndexOf("/");
-  return normalized.slice(lastSlashIndex + 1) || "App dev stack";
-}
-
-function displayStackName(stack: AppDevStack): string {
-  return (
-    stack.displayName?.trim() || stack.repoName?.trim() || displayNameFromPath(stack.worktreePath)
-  );
 }
 
 function stackUpdatedTime(stack: AppDevStack): number {
@@ -406,6 +396,8 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
   const [inspectedStackId, setInspectedStackId] = useState<string | null>(null);
   const [selectedPodName, setSelectedPodName] = useState<string | null>(null);
   const [selectedContainerName, setSelectedContainerName] = useState<string | null>(null);
+  const serverConfigs = useServerConfigs();
+  const previewSupported = isPreviewSupportedInRuntime(serverConfigs.get(props.environmentId));
 
   useEffect(() => {
     setManualPath((current) => (current.trim().length === 0 ? currentWorktreePath : current));
@@ -645,7 +637,7 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
 
   const openPreview = useCallback(
     async (candidate: PreviewCandidate) => {
-      if (!isPreviewSupportedInRuntime()) return;
+      if (!previewSupported) return;
       setActionError(null);
       const result = await openUrlInPreview({
         threadRef: props.threadRef,
@@ -656,7 +648,7 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
         setActionError(actionErrorMessage(squashAtomCommandFailure(result)));
       }
     },
-    [props.openPreview, props.threadRef],
+    [previewSupported, props.openPreview, props.threadRef],
   );
 
   const runCreateStart = useCallback(() => {
@@ -707,7 +699,7 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
           <div className="flex shrink-0 items-center gap-1">
             {preview ? (
               <>
-                {isPreviewSupportedInRuntime() ? (
+                {previewSupported ? (
                   <Button
                     size="icon-xs"
                     variant="ghost"

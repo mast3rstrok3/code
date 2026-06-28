@@ -1,10 +1,10 @@
 /**
  * Preview - Schemas for the in-app browser preview surface.
  *
- * The preview is desktop-only (Chromium <webview>); the server tracks per-thread
- * tab metadata so it survives client reconnects and multi-window. The desktop
- * renderer mediates: it owns the actual <webview> and reports navigation back to
- * the server via these RPCs, the server fans events to all subscribers.
+ * The preview tracks per-thread tab metadata so browser state survives client
+ * reconnects and multi-window use. Desktop clients can host the browser through
+ * Electron <webview>; web clients can use a server-hosted Chromium runtime that
+ * streams frames and receives normalized input over RPC.
  *
  * @module Preview
  */
@@ -169,6 +169,7 @@ export type PreviewReportStatusInput = typeof PreviewReportStatusInput.Type;
 export const PreviewRefreshInput = Schema.Struct({
   threadId: ThreadId,
   tabId: PreviewTabId,
+  bypassCache: Schema.optional(Schema.Boolean),
 });
 export type PreviewRefreshInput = typeof PreviewRefreshInput.Type;
 
@@ -176,6 +177,7 @@ export const PreviewResizeInput = Schema.Struct({
   threadId: ThreadId,
   tabId: PreviewTabId,
   viewport: PreviewViewportSetting,
+  renderedViewport: Schema.optional(PreviewRenderedViewportSize),
 });
 export type PreviewResizeInput = typeof PreviewResizeInput.Type;
 
@@ -194,6 +196,100 @@ export const PreviewListResult = Schema.Struct({
   sessions: Schema.Array(PreviewSessionSnapshot),
 });
 export type PreviewListResult = typeof PreviewListResult.Type;
+
+export const PreviewTabActionInput = Schema.Struct({
+  threadId: ThreadId,
+  tabId: PreviewTabId,
+});
+export type PreviewTabActionInput = typeof PreviewTabActionInput.Type;
+
+export const PreviewZoomInput = Schema.Struct({
+  threadId: ThreadId,
+  tabId: PreviewTabId,
+  action: Schema.Literals(["in", "out", "reset"]),
+});
+export type PreviewZoomInput = typeof PreviewZoomInput.Type;
+
+const PreviewModifierKey = Schema.Literals(["Alt", "Control", "Meta", "Shift"]);
+const PreviewInputEventBase = {
+  threadId: ThreadId,
+  tabId: PreviewTabId,
+} as const;
+const PreviewInputCoordinates = {
+  x: Schema.Finite,
+  y: Schema.Finite,
+} as const;
+
+export const PreviewInputEvent = Schema.Union([
+  Schema.Struct({
+    ...PreviewInputEventBase,
+    type: Schema.Literals(["pointerDown", "pointerUp", "pointerMove"]),
+    ...PreviewInputCoordinates,
+    button: Schema.optional(Schema.Int),
+    buttons: Schema.optional(Schema.Int),
+    pointerType: Schema.optional(Schema.Literals(["mouse", "pen", "touch"])),
+    modifiers: Schema.optional(Schema.Array(PreviewModifierKey)),
+  }),
+  Schema.Struct({
+    ...PreviewInputEventBase,
+    type: Schema.Literal("wheel"),
+    ...PreviewInputCoordinates,
+    deltaX: Schema.Finite,
+    deltaY: Schema.Finite,
+    modifiers: Schema.optional(Schema.Array(PreviewModifierKey)),
+  }),
+  Schema.Struct({
+    ...PreviewInputEventBase,
+    type: Schema.Literals(["keyDown", "keyUp"]),
+    key: Schema.String,
+    code: Schema.String,
+    text: Schema.optional(Schema.String),
+    modifiers: Schema.optional(Schema.Array(PreviewModifierKey)),
+  }),
+]);
+export type PreviewInputEvent = typeof PreviewInputEvent.Type;
+
+export const PreviewPickElementInput = Schema.Struct({
+  threadId: ThreadId,
+  tabId: PreviewTabId,
+  ...PreviewInputCoordinates,
+});
+export type PreviewPickElementInput = typeof PreviewPickElementInput.Type;
+
+export const PreviewClearBrowserDataInput = Schema.Struct({
+  data: Schema.Literals(["cookies", "cache", "all"]),
+});
+export type PreviewClearBrowserDataInput = typeof PreviewClearBrowserDataInput.Type;
+
+export const PreviewFrameSubscribeInput = Schema.Struct({
+  threadId: ThreadId,
+  tabId: PreviewTabId,
+});
+export type PreviewFrameSubscribeInput = typeof PreviewFrameSubscribeInput.Type;
+
+export const PreviewFrameEvent = Schema.Struct({
+  threadId: ThreadId,
+  tabId: PreviewTabId,
+  sequence: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  mimeType: Schema.Literal("image/jpeg"),
+  data: Schema.String,
+  width: Schema.Int.check(Schema.isGreaterThan(0)),
+  height: Schema.Int.check(Schema.isGreaterThan(0)),
+  createdAt: Schema.String,
+});
+export type PreviewFrameEvent = typeof PreviewFrameEvent.Type;
+
+export const PreviewScreenshotArtifact = Schema.Struct({
+  id: Schema.String,
+  threadId: ThreadId,
+  tabId: PreviewTabId,
+  path: Schema.String,
+  mimeType: Schema.Literal("image/png"),
+  sizeBytes: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  createdAt: Schema.String,
+  downloadUrl: Schema.optional(Schema.String),
+});
+export type PreviewScreenshotArtifact = typeof PreviewScreenshotArtifact.Type;
 
 const PreviewEventBaseSchema = Schema.Struct({
   threadId: TrimmedNonEmptyString,
@@ -294,5 +390,16 @@ export class PreviewInvalidUrlError extends Schema.TaggedErrorClass<PreviewInval
   }
 }
 
-export const PreviewError = Schema.Union([PreviewSessionLookupError, PreviewInvalidUrlError]);
+export class PreviewBrowserUnavailableError extends Schema.TaggedErrorClass<PreviewBrowserUnavailableError>()(
+  "PreviewBrowserUnavailableError",
+  {
+    message: Schema.String,
+  },
+) {}
+
+export const PreviewError = Schema.Union([
+  PreviewSessionLookupError,
+  PreviewInvalidUrlError,
+  PreviewBrowserUnavailableError,
+]);
 export type PreviewError = typeof PreviewError.Type;

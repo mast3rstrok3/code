@@ -20,7 +20,9 @@ const allowedHosts = process.env.VITE_ALLOWED_HOSTS?.split(",")
 const hmrProtocol = process.env.VITE_HMR_PROTOCOL?.trim() === "wss" ? "wss" : "ws";
 const hmrHost = process.env.VITE_HMR_HOST?.trim() || host;
 const hmrClientPort = Number(process.env.VITE_HMR_CLIENT_PORT ?? port);
+const configuredHttpUrl = process.env.VITE_HTTP_URL?.trim();
 const configuredWsUrl = process.env.VITE_WS_URL?.trim();
+const configuredDevServerUrl = process.env.VITE_DEV_SERVER_URL?.trim();
 const configuredRelayUrl = repoEnv.VITE_T3CODE_RELAY_URL?.trim() || "";
 const configuredClerkPublishableKey = repoEnv.VITE_CLERK_PUBLISHABLE_KEY?.trim() || "";
 const configuredClerkJwtTemplate = repoEnv.VITE_CLERK_JWT_TEMPLATE?.trim() || "";
@@ -117,7 +119,9 @@ export default defineConfig(() => {
     },
     define: {
       // In dev mode, tell the web app where the WebSocket server lives
+      "import.meta.env.VITE_HTTP_URL": JSON.stringify(configuredHttpUrl ?? ""),
       "import.meta.env.VITE_WS_URL": JSON.stringify(configuredWsUrl ?? ""),
+      "import.meta.env.VITE_DEV_SERVER_URL": JSON.stringify(configuredDevServerUrl ?? ""),
       "import.meta.env.VITE_T3CODE_RELAY_URL": JSON.stringify(configuredRelayUrl),
       "import.meta.env.VITE_CLERK_PUBLISHABLE_KEY": JSON.stringify(configuredClerkPublishableKey),
       "import.meta.env.VITE_CLERK_JWT_TEMPLATE": JSON.stringify(configuredClerkJwtTemplate),

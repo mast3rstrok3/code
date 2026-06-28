@@ -6,8 +6,6 @@ import { Button } from "~/components/ui/button";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "~/components/ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 
-import { previewBridge } from "./previewBridge";
-
 interface Props {
   /** Active preview tab id. Tab-targeting actions are disabled without it. */
   tabId: string | null;
@@ -23,6 +21,13 @@ interface Props {
   deviceToolbarVisible: boolean;
   /** Switches between fill-panel mode and a fixed responsive viewport. */
   onToggleDeviceToolbar: () => void;
+  readonly onHardReload: (() => void) | undefined;
+  readonly onOpenDevTools?: (() => void) | undefined;
+  readonly onZoomIn: (() => void) | undefined;
+  readonly onZoomOut: (() => void) | undefined;
+  readonly onResetZoom: (() => void) | undefined;
+  readonly onClearCookies: () => void;
+  readonly onClearCache: () => void;
 }
 
 /**
@@ -36,14 +41,15 @@ export function PreviewMoreMenu({
   zoomFactor,
   deviceToolbarVisible,
   onToggleDeviceToolbar,
+  onHardReload,
+  onOpenDevTools,
+  onZoomIn,
+  onZoomOut,
+  onResetZoom,
+  onClearCookies,
+  onClearCache,
 }: Props) {
-  if (!previewBridge) return null;
-  const bridge = previewBridge;
   const tabDisabled = !tabId || !hasWebContents;
-  const callTab = (op: (tabId: string) => Promise<void>) => () => {
-    if (!tabId) return;
-    void op(tabId).catch(() => undefined);
-  };
 
   const zoomLabel = `${Math.round(zoomFactor * 100)}%`;
   return (
@@ -63,12 +69,14 @@ export function PreviewMoreMenu({
         <TooltipPopup>More</TooltipPopup>
       </Tooltip>
       <MenuPopup align="end" sideOffset={6} className="min-w-56">
-        <MenuItem onClick={callTab(bridge.hardReload)} disabled={tabDisabled}>
+        <MenuItem onClick={onHardReload} disabled={tabDisabled || !onHardReload}>
           Hard reload
         </MenuItem>
-        <MenuItem onClick={callTab(bridge.openDevTools)} disabled={tabDisabled}>
-          Open DevTools
-        </MenuItem>
+        {onOpenDevTools ? (
+          <MenuItem onClick={onOpenDevTools} disabled={tabDisabled}>
+            Open DevTools
+          </MenuItem>
+        ) : null}
         <MenuItem onClick={onToggleDeviceToolbar} disabled={tabDisabled}>
           {deviceToolbarVisible ? "Hide device toolbar" : "Show device toolbar"}
         </MenuItem>
@@ -89,9 +97,9 @@ export function PreviewMoreMenu({
               variant="outline"
               size="icon-xs"
               type="button"
-              onClick={callTab(bridge.zoomOut)}
+              onClick={onZoomOut}
               aria-label="Zoom out"
-              disabled={tabDisabled}
+              disabled={tabDisabled || !onZoomOut}
             >
               <Minus />
             </Button>
@@ -102,9 +110,9 @@ export function PreviewMoreMenu({
               variant="outline"
               size="icon-xs"
               type="button"
-              onClick={callTab(bridge.zoomIn)}
+              onClick={onZoomIn}
               aria-label="Zoom in"
-              disabled={tabDisabled}
+              disabled={tabDisabled || !onZoomIn}
             >
               <PlusIcon />
             </Button>
@@ -112,21 +120,17 @@ export function PreviewMoreMenu({
               variant="ghost"
               size="icon-xs"
               type="button"
-              onClick={callTab(bridge.resetZoom)}
+              onClick={onResetZoom}
               aria-label="Reset zoom"
-              disabled={tabDisabled}
+              disabled={tabDisabled || !onResetZoom}
             >
               <RotateCcw />
             </Button>
           </span>
         </MenuItem>
         <MenuSeparator />
-        <MenuItem onClick={() => void bridge.clearCookies().catch(() => undefined)}>
-          Clear cookies
-        </MenuItem>
-        <MenuItem onClick={() => void bridge.clearCache().catch(() => undefined)}>
-          Clear cache
-        </MenuItem>
+        <MenuItem onClick={onClearCookies}>Clear cookies</MenuItem>
+        <MenuItem onClick={onClearCache}>Clear cache</MenuItem>
       </MenuPopup>
     </Menu>
   );

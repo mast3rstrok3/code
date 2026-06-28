@@ -42,6 +42,11 @@ export function createPreviewEnvironmentAtoms<R, E>(
       label: "environment-data:preview:discovered-servers",
       tag: WS_METHODS.subscribeDiscoveredLocalServers,
     }),
+    frames: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:preview:frames",
+      tag: WS_METHODS.previewSubscribeFrames,
+      idleTtlMs: 0,
+    }),
     automationRequests: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:preview:automation-requests",
       tag: WS_METHODS.previewAutomationConnect,
@@ -89,6 +94,51 @@ export function createPreviewEnvironmentAtoms<R, E>(
         key: ({ environmentId, input }) =>
           JSON.stringify([environmentId, input.threadId, input.tabId]),
       },
+    }),
+    input: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:preview:input",
+      tag: WS_METHODS.previewInput,
+      scheduler: statusScheduler,
+      concurrency: {
+        mode: "latest",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([environmentId, input.threadId, input.tabId, input.type]),
+      },
+    }),
+    goBack: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:preview:go-back",
+      tag: WS_METHODS.previewGoBack,
+      scheduler: lifecycleScheduler,
+      concurrency: lifecycleConcurrency,
+    }),
+    goForward: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:preview:go-forward",
+      tag: WS_METHODS.previewGoForward,
+      scheduler: lifecycleScheduler,
+      concurrency: lifecycleConcurrency,
+    }),
+    zoom: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:preview:zoom",
+      tag: WS_METHODS.previewZoom,
+      scheduler: lifecycleScheduler,
+      concurrency: lifecycleConcurrency,
+    }),
+    captureScreenshot: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:preview:capture-screenshot",
+      tag: WS_METHODS.previewCaptureScreenshot,
+      scheduler: lifecycleScheduler,
+      concurrency: lifecycleConcurrency,
+    }),
+    pickElementAt: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:preview:pick-element-at",
+      tag: WS_METHODS.previewPickElementAt,
+      scheduler: lifecycleScheduler,
+      concurrency: lifecycleConcurrency,
+    }),
+    clearBrowserData: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:preview:clear-browser-data",
+      tag: WS_METHODS.previewClearBrowserData,
+      scheduler: lifecycleScheduler,
     }),
     respondToAutomation: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:preview:automation-respond",

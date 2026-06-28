@@ -6,8 +6,12 @@ import * as Layer from "effect/Layer";
 
 import * as ServerConfig from "../config.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import * as AuthSessions from "../persistence/AuthSessions.ts";
+import { PersistenceSqlError } from "../persistence/Errors.ts";
 import * as PairingGrantStore from "./PairingGrantStore.ts";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
+import * as EnvironmentAuthPolicy from "./EnvironmentAuthPolicy.ts";
+import * as SessionStore from "./SessionStore.ts";
 
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 
@@ -29,6 +33,36 @@ const makeEnvironmentAuthLayer = (overrides?: Partial<ServerConfig.ServerConfig[
     Layer.provide(ServerSecretStore.layer),
     Layer.provide(makeServerConfigLayer(overrides)),
   );
+
+const repositoryFailure = new PersistenceSqlError({
+  operation: "AuthSessionRepository.getById:query",
+  detail: "sqlite is unavailable",
+});
+
+const failingSessionLookupRepositoryLayer = Layer.succeed(AuthSessions.AuthSessionRepository, {
+  create: () => Effect.void,
+  getById: () => Effect.fail(repositoryFailure),
+  listActive: () => Effect.succeed([]),
+  revoke: () => Effect.fail(repositoryFailure),
+  revokeAllExcept: () => Effect.fail(repositoryFailure),
+  setLastConnectedAt: () => Effect.void,
+});
+
+const sessionValidationFailureEnvironmentAuthLayer = Layer.effect(
+  EnvironmentAuth.EnvironmentAuth,
+  EnvironmentAuth.make,
+).pipe(
+  Layer.provideMerge(PairingGrantStore.layer),
+  Layer.provideMerge(
+    Layer.effect(SessionStore.SessionStore, SessionStore.make).pipe(
+      Layer.provide(failingSessionLookupRepositoryLayer),
+    ),
+  ),
+  Layer.provideMerge(EnvironmentAuthPolicy.layer),
+  Layer.provide(SqlitePersistenceMemory),
+  Layer.provide(ServerSecretStore.layer),
+  Layer.provide(makeServerConfigLayer()),
+);
 
 const makeCookieRequest = (
   sessionToken: string,
@@ -98,6 +132,21 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
       ]);
       expect(verified.subject).toBe("one-time-token");
     }).pipe(Effect.provide(makeEnvironmentAuthLayer())),
+  );
+
+  it.effect("reports unauthenticated session state when a browser cookie cannot be looked up", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const pairingCredential = yield* serverAuth.issuePairingCredential();
+      const exchanged = yield* serverAuth.createBrowserSession(
+        pairingCredential.credential,
+        requestMetadata,
+      );
+
+      const state = yield* serverAuth.getSessionState(makeCookieRequest(exchanged.sessionToken));
+
+      expect(state.authenticated).toBe(false);
+    }).pipe(Effect.provide(sessionValidationFailureEnvironmentAuthLayer)),
   );
 
   it.effect("does not exchange ordinary pairing grants for administrative access tokens", () =>

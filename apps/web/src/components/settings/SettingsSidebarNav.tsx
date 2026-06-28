@@ -7,6 +7,7 @@ import {
   KeyboardIcon,
   Link2Icon,
   Settings2Icon,
+  UsersIcon,
   WorkflowIcon,
 } from "lucide-react";
 import { useCanGoBack, useNavigate } from "@tanstack/react-router";
@@ -25,6 +26,7 @@ import { T3ConnectSidebarAvatar, T3ConnectSidebarSignIn } from "../clerk/T3Conne
 
 export type SettingsSectionPath =
   | "/settings/general"
+  | "/settings/users"
   | "/settings/keybindings"
   | "/settings/providers"
   | "/settings/workflows"
@@ -38,6 +40,7 @@ export const SETTINGS_NAV_ITEMS: ReadonlyArray<{
   icon: ComponentType<{ className?: string }>;
 }> = [
   { label: "General", to: "/settings/general", icon: Settings2Icon },
+  { label: "Users", to: "/settings/users", icon: UsersIcon },
   { label: "Keybindings", to: "/settings/keybindings", icon: KeyboardIcon },
   { label: "Providers", to: "/settings/providers", icon: BotIcon },
   { label: "Workflow", to: "/settings/workflows", icon: WorkflowIcon },

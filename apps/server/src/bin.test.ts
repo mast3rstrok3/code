@@ -90,6 +90,15 @@ const makeCliTestServerConfig = (baseDir: string) =>
       logWebSocketEvents: false,
       tailscaleServeEnabled: false,
       tailscaleServePort: 443,
+      previewBrowserMode: "off",
+      previewBrowserSource: "auto",
+      previewBrowserExecutablePath: undefined,
+      previewBrowserSandbox: "auto",
+      previewBrowserMaxFps: 12,
+      previewBrowserMaxFrameWidth: 1600,
+      previewBrowserMaxFrameHeight: 1200,
+      previewBrowserJpegQuality: 75,
+      previewBrowserIdleTtlMs: 600_000,
     } satisfies ServerConfig.ServerConfig["Service"];
   });
 

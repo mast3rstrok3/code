@@ -89,6 +89,8 @@ import * as ServerSettings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as PreviewManager from "./preview/Manager.ts";
+import * as PreviewCoordinator from "./preview/PreviewCoordinator.ts";
+import * as BrowserExecutableResolver from "./preview/BrowserExecutableResolver.ts";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
@@ -467,6 +469,14 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.previewClose, AuthOrchestrationOperateScope],
   [WS_METHODS.previewList, AuthOrchestrationReadScope],
   [WS_METHODS.previewReportStatus, AuthOrchestrationOperateScope],
+  [WS_METHODS.previewSubscribeFrames, AuthOrchestrationReadScope],
+  [WS_METHODS.previewInput, AuthOrchestrationOperateScope],
+  [WS_METHODS.previewGoBack, AuthOrchestrationOperateScope],
+  [WS_METHODS.previewGoForward, AuthOrchestrationOperateScope],
+  [WS_METHODS.previewZoom, AuthOrchestrationOperateScope],
+  [WS_METHODS.previewCaptureScreenshot, AuthOrchestrationOperateScope],
+  [WS_METHODS.previewPickElementAt, AuthOrchestrationOperateScope],
+  [WS_METHODS.previewClearBrowserData, AuthOrchestrationOperateScope],
   [WS_METHODS.previewAutomationConnect, AuthOrchestrationOperateScope],
   [WS_METHODS.previewAutomationRespond, AuthOrchestrationOperateScope],
   [WS_METHODS.previewAutomationFocusHost, AuthOrchestrationOperateScope],
@@ -479,6 +489,7 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.appDevStackDelete, AuthOrchestrationOperateScope],
   [WS_METHODS.appDevStackListPods, AuthOrchestrationReadScope],
   [WS_METHODS.appDevStackGetPodLogs, AuthOrchestrationReadScope],
+  [WS_METHODS.appDevStackGetStackPodLogs, AuthOrchestrationReadScope],
   [WS_METHODS.subscribePreviewEvents, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeDiscoveredLocalServers, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeServerConfig, AuthOrchestrationReadScope],
@@ -545,6 +556,7 @@ const makeWsRpcLayer = (
       const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
       const terminalManager = yield* TerminalManager.TerminalManager;
       const previewManager = yield* PreviewManager.PreviewManager;
+      const previewCoordinator = yield* PreviewCoordinator.PreviewCoordinator;
       const appDevStackManager = yield* AppDevStackManager.AppDevStackManager;
       const portDiscovery = yield* PortScanner.PortDiscovery;
       const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
@@ -1089,6 +1101,7 @@ const makeWsRpcLayer = (
         );
         const environment = yield* serverEnvironment.getDescriptor;
         const auth = yield* serverAuth.getDescriptor();
+        const previewBrowser = yield* BrowserExecutableResolver.resolvePreviewBrowserStatus(config);
 
         return {
           environment,
@@ -1110,6 +1123,7 @@ const makeWsRpcLayer = (
             otlpMetricsEnabled: config.otlpMetricsUrl !== undefined,
           },
           settings,
+          previewBrowser,
         };
       });
 
@@ -1838,33 +1852,79 @@ const makeWsRpcLayer = (
             { "rpc.aggregate": "terminal" },
           ),
         [WS_METHODS.previewOpen]: (input) =>
-          observeRpcEffect(WS_METHODS.previewOpen, previewManager.open(input), {
+          observeRpcEffect(WS_METHODS.previewOpen, previewCoordinator.open(input), {
             "rpc.aggregate": "preview",
           }),
         [WS_METHODS.previewNavigate]: (input) =>
-          observeRpcEffect(WS_METHODS.previewNavigate, previewManager.navigate(input), {
+          observeRpcEffect(WS_METHODS.previewNavigate, previewCoordinator.navigate(input), {
             "rpc.aggregate": "preview",
           }),
         [WS_METHODS.previewResize]: (input) =>
-          observeRpcEffect(WS_METHODS.previewResize, previewManager.resize(input), {
+          observeRpcEffect(WS_METHODS.previewResize, previewCoordinator.resize(input), {
             "rpc.aggregate": "preview",
           }),
         [WS_METHODS.previewRefresh]: (input) =>
-          observeRpcEffect(WS_METHODS.previewRefresh, previewManager.refresh(input), {
+          observeRpcEffect(WS_METHODS.previewRefresh, previewCoordinator.refresh(input), {
             "rpc.aggregate": "preview",
           }),
         [WS_METHODS.previewClose]: (input) =>
-          observeRpcEffect(WS_METHODS.previewClose, previewManager.close(input), {
+          observeRpcEffect(WS_METHODS.previewClose, previewCoordinator.close(input), {
             "rpc.aggregate": "preview",
           }),
         [WS_METHODS.previewList]: (input) =>
-          observeRpcEffect(WS_METHODS.previewList, previewManager.list(input), {
+          observeRpcEffect(WS_METHODS.previewList, previewCoordinator.list(input), {
             "rpc.aggregate": "preview",
           }),
         [WS_METHODS.previewReportStatus]: (input) =>
-          observeRpcEffect(WS_METHODS.previewReportStatus, previewManager.reportStatus(input), {
+          observeRpcEffect(WS_METHODS.previewReportStatus, previewCoordinator.reportStatus(input), {
             "rpc.aggregate": "preview",
           }),
+        [WS_METHODS.previewSubscribeFrames]: (input) =>
+          observeRpcStreamEffect(
+            WS_METHODS.previewSubscribeFrames,
+            previewCoordinator.subscribeFrames(input),
+            { "rpc.aggregate": "preview" },
+          ),
+        [WS_METHODS.previewInput]: (input) =>
+          observeRpcEffect(WS_METHODS.previewInput, previewCoordinator.input(input), {
+            "rpc.aggregate": "preview",
+          }),
+        [WS_METHODS.previewGoBack]: (input) =>
+          observeRpcEffect(WS_METHODS.previewGoBack, previewCoordinator.goBack(input), {
+            "rpc.aggregate": "preview",
+          }),
+        [WS_METHODS.previewGoForward]: (input) =>
+          observeRpcEffect(WS_METHODS.previewGoForward, previewCoordinator.goForward(input), {
+            "rpc.aggregate": "preview",
+          }),
+        [WS_METHODS.previewZoom]: (input) =>
+          observeRpcEffect(WS_METHODS.previewZoom, previewCoordinator.zoom(input), {
+            "rpc.aggregate": "preview",
+          }),
+        [WS_METHODS.previewCaptureScreenshot]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.previewCaptureScreenshot,
+            previewCoordinator.captureScreenshot(input),
+            {
+              "rpc.aggregate": "preview",
+            },
+          ),
+        [WS_METHODS.previewPickElementAt]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.previewPickElementAt,
+            previewCoordinator.pickElementAt(input),
+            {
+              "rpc.aggregate": "preview",
+            },
+          ),
+        [WS_METHODS.previewClearBrowserData]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.previewClearBrowserData,
+            previewCoordinator.clearBrowserData(input),
+            {
+              "rpc.aggregate": "preview",
+            },
+          ),
         [WS_METHODS.previewAutomationConnect]: (input) =>
           observeRpcStreamEffect(
             WS_METHODS.previewAutomationConnect,
@@ -1923,6 +1983,12 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.appDevStackGetPodLogs, appDevStackManager.getPodLogs(input), {
             "rpc.aggregate": "app-dev-stack",
           }),
+        [WS_METHODS.appDevStackGetStackPodLogs]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.appDevStackGetStackPodLogs,
+            appDevStackManager.getStackPodLogs(input),
+            { "rpc.aggregate": "app-dev-stack" },
+          ),
         [WS_METHODS.subscribePreviewEvents]: (_input) =>
           observeRpcStream(WS_METHODS.subscribePreviewEvents, previewManager.events, {
             "rpc.aggregate": "preview",

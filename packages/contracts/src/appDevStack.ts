@@ -189,6 +189,37 @@ export const AppDevStackGetPodLogsResult = Schema.Struct({
 });
 export type AppDevStackGetPodLogsResult = typeof AppDevStackGetPodLogsResult.Type;
 
+export const AppDevStackPodLogEntry = Schema.Struct({
+  podName: TrimmedNonEmptyString,
+  containerName: TrimmedNonEmptyString,
+  phase: TrimmedNonEmptyString,
+  ready: Schema.Boolean,
+  restartCount: NonNegativeInt,
+  state: Schema.NullOr(TrimmedNonEmptyString),
+  ownerKind: Schema.NullOr(TrimmedNonEmptyString),
+  ownerName: Schema.NullOr(TrimmedNonEmptyString),
+  logs: Schema.String,
+  error: Schema.NullOr(TrimmedNonEmptyString),
+  fetchedAt: IsoDateTime,
+});
+export type AppDevStackPodLogEntry = typeof AppDevStackPodLogEntry.Type;
+
+export const AppDevStackGetStackPodLogsInput = Schema.Struct({
+  stackId: TrimmedNonEmptyString,
+  tailLines: Schema.optional(AppDevStackPodLogTailLines),
+});
+export type AppDevStackGetStackPodLogsInput = typeof AppDevStackGetStackPodLogsInput.Type;
+
+export const AppDevStackGetStackPodLogsResult = Schema.Struct({
+  stackId: TrimmedNonEmptyString,
+  namespace: TrimmedNonEmptyString,
+  tailLines: AppDevStackPodLogTailLines,
+  pods: Schema.Array(AppDevStackPod),
+  entries: Schema.Array(AppDevStackPodLogEntry),
+  fetchedAt: IsoDateTime,
+});
+export type AppDevStackGetStackPodLogsResult = typeof AppDevStackGetStackPodLogsResult.Type;
+
 export class AppDevStackError extends Schema.TaggedErrorClass<AppDevStackError>()(
   "AppDevStackError",
   {

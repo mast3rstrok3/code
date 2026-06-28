@@ -126,8 +126,8 @@ it.layer(PreviewManager.layer)("PreviewManager", (it) => {
         resolvedTitle: "About",
       });
 
-      expect(snapshot.navStatus._tag).toBe("Success");
-      if (snapshot.navStatus._tag === "Success") {
+      expect(snapshot.navStatus._tag).toBe("Loading");
+      if (snapshot.navStatus._tag === "Loading") {
         expect(snapshot.navStatus.url).toBe("http://localhost:5173/about");
         expect(snapshot.navStatus.title).toBe("About");
       }

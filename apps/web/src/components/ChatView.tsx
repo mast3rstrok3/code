@@ -125,7 +125,7 @@ import {
   useRightPanelStore,
 } from "../rightPanelStore";
 import {
-  isPreviewSupportedInRuntime,
+  resolvePreviewRuntimeCapability,
   setActivePreviewTab,
   useThreadPreviewState,
 } from "../previewStateStore";
@@ -135,7 +135,7 @@ import { subscribePreviewAction } from "./preview/previewActionBus";
 import { getConfiguredPreviewUrls } from "./preview/previewEmptyStateLogic";
 import { RightPanelTabs } from "./RightPanelTabs";
 import { AppDevStackPanel } from "./AppDevStackPanel";
-import { WorkflowLogsPanel } from "./WorkflowLogsPanel";
+import { AppDevStackLogsPanel } from "./AppDevStackLogsPanel";
 import { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
 import { BranchToolbar } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
@@ -1367,6 +1367,11 @@ function ChatViewContent(props: ChatViewProps) {
   const activeFileSurface =
     activeRightPanelSurface?.kind === "file" ? activeRightPanelSurface : null;
   const activePreviewState = useThreadPreviewState(activeThreadRef);
+  const previewRuntimeConfig = activeThread
+    ? (environmentById.get(activeThread.environmentId)?.serverConfig ?? null)
+    : (primaryEnvironment?.serverConfig ?? null);
+  const previewRuntimeCapability = resolvePreviewRuntimeCapability(previewRuntimeConfig);
+  const previewAvailable = previewRuntimeCapability.supported;
   const panelTerminalIds = useMemo(
     () =>
       new Set(
@@ -1376,7 +1381,7 @@ function ChatViewContent(props: ChatViewProps) {
       ),
     [rightPanelState.surfaces],
   );
-  const previewPanelOpen = activeRightPanelKind === "preview" && isPreviewSupportedInRuntime();
+  const previewPanelOpen = activeRightPanelKind === "preview" && previewAvailable;
   const rightPanelOpen = rightPanelState.isOpen;
   const canMaximizeRightPanel = rightPanelOpen && !shouldUsePlanSidebarSheet;
   const rightPanelMaximized =
@@ -3077,7 +3082,7 @@ function ChatViewContent(props: ChatViewProps) {
     [activeProject, activeThreadRef],
   );
   const togglePreviewPanel = useCallback(() => {
-    if (!activeThreadRef || !isPreviewSupportedInRuntime()) return;
+    if (!activeThreadRef || !previewAvailable) return;
     if (previewPanelOpen) {
       useRightPanelStore.getState().close(activeThreadRef);
       return;
@@ -3088,7 +3093,13 @@ function ChatViewContent(props: ChatViewProps) {
     } else {
       createBrowserSurface();
     }
-  }, [activePreviewState.activeTabId, activeThreadRef, createBrowserSurface, previewPanelOpen]);
+  }, [
+    activePreviewState.activeTabId,
+    activeThreadRef,
+    createBrowserSurface,
+    previewAvailable,
+    previewPanelOpen,
+  ]);
   const closePreviewPanel = useCallback(() => {
     if (activeThreadRef) {
       setMaximizedRightPanelThreadKey(null);
@@ -5073,8 +5084,15 @@ function ChatViewContent(props: ChatViewProps) {
         gitCwd={gitCwd}
         openPreview={openPreview}
       />
-    ) : activeRightPanelSurface?.kind === "logs" ? (
-      <WorkflowLogsPanel entries={workLogEntries} timestampFormat={timestampFormat} />
+    ) : activeRightPanelSurface?.kind === "logs" && activeProject && activeWorkspaceRoot ? (
+      <AppDevStackLogsPanel
+        environmentId={activeProject.environmentId}
+        activeThread={activeThread}
+        workspaceRoot={activeWorkspaceRoot}
+        gitCwd={gitCwd}
+        timestampFormat={timestampFormat}
+        onOpenAppDevStack={addAppDevStackSurface}
+      />
     ) : (activeRightPanelSurface?.kind === "files" || activeRightPanelSurface?.kind === "file") &&
       activeProject &&
       activeWorkspaceRoot ? (
@@ -5411,9 +5429,12 @@ function ChatViewContent(props: ChatViewProps) {
           onAddDiff={addDiffSurface}
           onAddFiles={addFilesSurface}
           onAddAppDevStack={addAppDevStackSurface}
-          browserAvailable={isPreviewSupportedInRuntime()}
+          browserAvailable={previewAvailable}
+          browserUnavailableReason={
+            previewRuntimeCapability.supported ? undefined : previewRuntimeCapability.message
+          }
           reviewAvailable={isServerThread && isGitRepo}
-          logsAvailable={activeThreadRef !== null}
+          logsAvailable={activeProject !== null}
           diffAvailable={isServerThread && isGitRepo}
           filesAvailable={activeProject !== null}
           appDevStackAvailable={activeProject !== null}
@@ -5445,9 +5466,12 @@ function ChatViewContent(props: ChatViewProps) {
             onAddDiff={addDiffSurface}
             onAddFiles={addFilesSurface}
             onAddAppDevStack={addAppDevStackSurface}
-            browserAvailable={isPreviewSupportedInRuntime()}
+            browserAvailable={previewAvailable}
+            browserUnavailableReason={
+              previewRuntimeCapability.supported ? undefined : previewRuntimeCapability.message
+            }
             reviewAvailable={isServerThread && isGitRepo}
-            logsAvailable={activeThreadRef !== null}
+            logsAvailable={activeProject !== null}
             diffAvailable={isServerThread && isGitRepo}
             filesAvailable={activeProject !== null}
             appDevStackAvailable={activeProject !== null}

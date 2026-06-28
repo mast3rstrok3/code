@@ -1,4 +1,4 @@
-import type { LocalApi, ScopedThreadRef } from "@t3tools/contracts";
+import type { LocalApi, ScopedThreadRef, ServerConfig } from "@t3tools/contracts";
 import { isAtomCommandInterrupted } from "@t3tools/client-runtime/state/runtime";
 import { isPreviewableUrl } from "@t3tools/shared/preview";
 import * as Schema from "effect/Schema";
@@ -39,6 +39,7 @@ interface OpenTerminalLinkInPreviewInput<E> {
   readonly openPreview: OpenPreviewMutation<E>;
   readonly localApi: LocalApi;
   readonly fallbackToBrowser: () => void;
+  readonly serverConfig?: ServerConfig | null;
 }
 
 export async function openTerminalLinkInPreview<E>(
@@ -46,7 +47,7 @@ export async function openTerminalLinkInPreview<E>(
 ): Promise<void> {
   const supportsPreview =
     isPreviewableUrl(input.url) &&
-    isPreviewSupportedInRuntime() &&
+    isPreviewSupportedInRuntime(input.serverConfig) &&
     input.threadRef.threadId.length > 0;
 
   if (!supportsPreview) {

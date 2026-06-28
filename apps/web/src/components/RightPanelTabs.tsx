@@ -60,6 +60,7 @@ interface RightPanelTabsProps {
   onAddFiles: () => void;
   onAddAppDevStack: () => void;
   browserAvailable: boolean;
+  browserUnavailableReason: string | undefined;
   reviewAvailable: boolean;
   logsAvailable: boolean;
   diffAvailable: boolean;
@@ -69,9 +70,9 @@ interface RightPanelTabsProps {
 }
 
 const SURFACE_DISABLED_REASONS = {
-  browser: "Browser previews are only available in the T3 Code desktop app.",
+  browser: "Browser preview is unavailable for this environment.",
   review: "Dev review is only available for server threads in Git repositories.",
-  logs: "Workflow logs are only available when a thread is open.",
+  logs: "App Stack pod logs require a project with an app-stack context.",
   appDevStack: "App stacks are only available when a project is open.",
   files: "Files are only available when a project is open.",
   diff: "Diff is only available for server threads in Git repositories.",
@@ -117,6 +118,7 @@ function RightPanelEmptyState(props: {
   onAddFiles: () => void;
   onAddAppDevStack: () => void;
   browserAvailable: boolean;
+  browserUnavailableReason: string | undefined;
   reviewAvailable: boolean;
   logsAvailable: boolean;
   diffAvailable: boolean;
@@ -142,7 +144,7 @@ function RightPanelEmptyState(props: {
     },
     {
       label: "Logs",
-      description: "Inspect thread and workflow activity.",
+      description: "Inspect App Stack pod and container logs.",
       icon: ScrollTextIcon,
       available: props.logsAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.logs,
@@ -161,7 +163,7 @@ function RightPanelEmptyState(props: {
       description: "Open a local app or URL.",
       icon: Globe2,
       available: props.browserAvailable,
-      disabledReason: SURFACE_DISABLED_REASONS.browser,
+      disabledReason: props.browserUnavailableReason ?? SURFACE_DISABLED_REASONS.browser,
       onClick: props.onAddBrowser,
     },
     {
@@ -501,7 +503,9 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                 <MenuPopup align="start" side="bottom" sideOffset={6} className="min-w-44">
                   <SurfaceMenuItem
                     available={props.browserAvailable}
-                    disabledReason={SURFACE_DISABLED_REASONS.browser}
+                    disabledReason={
+                      props.browserUnavailableReason ?? SURFACE_DISABLED_REASONS.browser
+                    }
                     onClick={props.onAddBrowser}
                   >
                     <Globe2 />
@@ -574,6 +578,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddFiles={props.onAddFiles}
             onAddAppDevStack={props.onAddAppDevStack}
             browserAvailable={props.browserAvailable}
+            browserUnavailableReason={props.browserUnavailableReason}
             reviewAvailable={props.reviewAvailable}
             logsAvailable={props.logsAvailable}
             diffAvailable={props.diffAvailable}

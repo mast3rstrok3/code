@@ -23,6 +23,15 @@ export type RuntimeMode = typeof RuntimeMode.Type;
 export const StartupPresentation = Schema.Literals(["browser", "headless"]);
 export type StartupPresentation = typeof StartupPresentation.Type;
 
+export const PreviewBrowserMode = Schema.Literals(["auto", "off"]);
+export type PreviewBrowserMode = typeof PreviewBrowserMode.Type;
+
+export const PreviewBrowserSource = Schema.Literals(["auto", "system", "playwright"]);
+export type PreviewBrowserSource = typeof PreviewBrowserSource.Type;
+
+export const PreviewBrowserSandbox = Schema.Literals(["auto", "on", "off"]);
+export type PreviewBrowserSandbox = typeof PreviewBrowserSandbox.Type;
+
 /**
  * ServerDerivedPaths - Derived paths from the base directory.
  */
@@ -98,6 +107,15 @@ export class ServerConfig extends Context.Service<
     readonly logWebSocketEvents: boolean;
     readonly tailscaleServeEnabled: boolean;
     readonly tailscaleServePort: number;
+    readonly previewBrowserMode: PreviewBrowserMode;
+    readonly previewBrowserSource: PreviewBrowserSource;
+    readonly previewBrowserExecutablePath: string | undefined;
+    readonly previewBrowserSandbox: PreviewBrowserSandbox;
+    readonly previewBrowserMaxFps: number;
+    readonly previewBrowserMaxFrameWidth: number;
+    readonly previewBrowserMaxFrameHeight: number;
+    readonly previewBrowserJpegQuality: number;
+    readonly previewBrowserIdleTtlMs: number;
   }
 >()("t3/config/ServerConfig") {
   /** @deprecated Import and use `layerTest` from this module. */
@@ -197,6 +215,15 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
     logWebSocketEvents: false,
     tailscaleServeEnabled: false,
     tailscaleServePort: 443,
+    previewBrowserMode: "auto",
+    previewBrowserSource: "auto",
+    previewBrowserExecutablePath: undefined,
+    previewBrowserSandbox: "auto",
+    previewBrowserMaxFps: 12,
+    previewBrowserMaxFrameWidth: 1600,
+    previewBrowserMaxFrameHeight: 1200,
+    previewBrowserJpegQuality: 75,
+    previewBrowserIdleTtlMs: 600_000,
     port: 0,
     host: undefined,
     desktopBootstrapToken: undefined,

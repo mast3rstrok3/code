@@ -1,6 +1,11 @@
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { type EnvironmentId, type PreviewSessionSnapshot, ThreadId } from "@t3tools/contracts";
-import { beforeEach, describe, expect, it } from "vite-plus/test";
+import {
+  type EnvironmentId,
+  type PreviewSessionSnapshot,
+  type ServerConfig,
+  ThreadId,
+} from "@t3tools/contracts";
+import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
   __testing,
@@ -15,6 +20,7 @@ import {
   rememberPreviewUrl,
   removePreviewThread,
   resetPreviewStateForTests,
+  resolvePreviewRuntimeCapability,
   setActivePreviewTab,
   updatePreviewServerSnapshot,
 } from "./previewStateStore";
@@ -35,7 +41,25 @@ const makeSnapshot = (overrides: Partial<PreviewSessionSnapshot> = {}): PreviewS
 
 beforeEach(() => {
   resetPreviewStateForTests();
+  vi.unstubAllGlobals();
+  Reflect.deleteProperty(globalThis, "window");
 });
+
+const serverConfigWithPreview = (
+  previewBrowser: NonNullable<ServerConfig["previewBrowser"]>,
+): ServerConfig =>
+  ({
+    previewBrowser,
+  }) as ServerConfig;
+
+const previewCapabilities = {
+  visual: true,
+  automation: true,
+  screenshots: true,
+  elementPicking: true,
+  recording: false,
+  viewportResize: true,
+};
 
 describe("previewStateStore (single-tab)", () => {
   it("keeps independent state atoms for each thread", () => {
@@ -429,5 +453,66 @@ describe("previewStateStore (single-tab)", () => {
     removePreviewThread(ref);
     const state = readThreadPreviewState(ref);
     expect(state).toEqual(__testing.EMPTY_THREAD_PREVIEW_STATE);
+  });
+});
+
+describe("resolvePreviewRuntimeCapability", () => {
+  it("prefers the desktop bridge over server preview status", () => {
+    vi.stubGlobal("window", { desktopBridge: { preview: {} } });
+
+    expect(
+      resolvePreviewRuntimeCapability(
+        serverConfigWithPreview({
+          mode: "server",
+          status: "unavailable",
+          message: "No usable Chromium executable was found.",
+          capabilities: {
+            visual: false,
+            automation: false,
+            screenshots: false,
+            elementPicking: false,
+            recording: false,
+            viewportResize: false,
+          },
+        }),
+      ),
+    ).toEqual({ supported: true, mode: "desktop" });
+  });
+
+  it("enables web preview when the server browser is ready", () => {
+    expect(
+      resolvePreviewRuntimeCapability(
+        serverConfigWithPreview({
+          mode: "server",
+          status: "ready",
+          source: "playwright",
+          capabilities: previewCapabilities,
+        }),
+      ),
+    ).toEqual({ supported: true, mode: "server" });
+  });
+
+  it("returns the server unavailable reason when preview cannot launch", () => {
+    expect(
+      resolvePreviewRuntimeCapability(
+        serverConfigWithPreview({
+          mode: "server",
+          status: "unavailable",
+          message: "No usable Chromium executable was found.",
+          capabilities: {
+            visual: false,
+            automation: false,
+            screenshots: false,
+            elementPicking: false,
+            recording: false,
+            viewportResize: false,
+          },
+        }),
+      ),
+    ).toEqual({
+      supported: false,
+      mode: "none",
+      message: "No usable Chromium executable was found.",
+    });
   });
 });

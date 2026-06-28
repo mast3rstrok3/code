@@ -39,6 +39,9 @@ import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as PreviewManager from "./preview/Manager.ts";
+import * as PreviewCoordinator from "./preview/PreviewCoordinator.ts";
+import * as ServerBrowserManager from "./preview/ServerBrowserManager.ts";
+import * as ServerPreviewAutomationHost from "./preview/ServerPreviewAutomationHost.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as ProcessRunner from "./processRunner.ts";
 import * as GitManager from "./git/GitManager.ts";
@@ -249,7 +252,10 @@ const TerminalLayerLive = TerminalManager.layer.pipe(
   Layer.provide(PortScannerLayerLive),
 );
 
-const PreviewLayerLive = Layer.empty.pipe(
+const PreviewLayerLive = ServerPreviewAutomationHost.layer.pipe(
+  Layer.provideMerge(PreviewAutomationBroker.layer),
+  Layer.provideMerge(PreviewCoordinator.layer),
+  Layer.provideMerge(ServerBrowserManager.layer),
   Layer.provideMerge(PreviewManager.layer),
   Layer.provideMerge(PortScannerLayerLive),
 );
@@ -364,7 +370,7 @@ export const makeRoutesLayer = Layer.mergeAll(
     websocketRpcRouteLayer,
   ),
   McpHttpServer.layer.pipe(Layer.provide(McpSessionRegistry.layer)),
-).pipe(Layer.provide(PreviewAutomationBroker.layer), Layer.provide(browserApiCorsLayer));
+).pipe(Layer.provide(browserApiCorsLayer));
 
 export const makeServerLayer = Layer.unwrap(
   Effect.gen(function* () {

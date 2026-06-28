@@ -8,6 +8,8 @@ import {
   AppDevStackError,
   type AppDevStackGetPodLogsInput,
   type AppDevStackGetPodLogsResult,
+  type AppDevStackGetStackPodLogsInput,
+  type AppDevStackGetStackPodLogsResult,
   type AppDevStackGetInput,
   type AppDevStackListPodsInput,
   type AppDevStackListPodsResult,
@@ -15,6 +17,7 @@ import {
   type AppDevStackListResult,
   type AppDevStackPod,
   type AppDevStackPodContainer,
+  type AppDevStackPodLogEntry,
   type AppDevStackService,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -27,6 +30,7 @@ import type { NativeAppDevStackConfig } from "../config.ts";
 
 const NATIVE_USER_ID = "00000000-0000-0000-0000-000000000000";
 const DEFAULT_LOG_TAIL_LINES = 300;
+const POD_LOG_FETCH_CONCURRENCY = 4;
 
 interface KubectlDeploymentList {
   readonly items?: ReadonlyArray<{
@@ -114,6 +118,9 @@ export interface NativeAppDevStackService {
   readonly getPodLogs: (
     input: AppDevStackGetPodLogsInput,
   ) => Effect.Effect<AppDevStackGetPodLogsResult, AppDevStackError>;
+  readonly getStackPodLogs: (
+    input: AppDevStackGetStackPodLogsInput,
+  ) => Effect.Effect<AppDevStackGetStackPodLogsResult, AppDevStackError>;
 }
 
 const collectProcessOutput = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.Effect<string, E> =>
@@ -326,6 +333,31 @@ const normalizeTailLines = (tailLines: number | undefined): number =>
   tailLines === undefined || !Number.isFinite(tailLines)
     ? DEFAULT_LOG_TAIL_LINES
     : Math.min(5_000, Math.max(1, Math.trunc(tailLines)));
+
+const logFailureMessage = (cause: unknown): string =>
+  cause instanceof Error && cause.message.trim().length > 0
+    ? cause.message
+    : "Failed to fetch container logs.";
+
+const buildPodLogEntry = (
+  pod: AppDevStackPod,
+  container: AppDevStackPodContainer,
+  logs: string,
+  error: string | null,
+  fetchedAt: string,
+): AppDevStackPodLogEntry => ({
+  podName: pod.name,
+  containerName: container.name,
+  phase: pod.phase,
+  ready: container.ready,
+  restartCount: container.restartCount,
+  state: container.state,
+  ownerKind: pod.ownerKind ?? null,
+  ownerName: pod.ownerName ?? null,
+  logs,
+  error,
+  fetchedAt,
+});
 
 const buildStack = async (
   config: NativeAppDevStackConfig,
@@ -557,6 +589,61 @@ export const makeNativeAppDevStackService = (
               containerName,
               tailLines,
               logs: await runKubectl(logArgs),
+              fetchedAt: DateTime.formatIso(DateTime.nowUnsafe()),
+            };
+          }),
+        ),
+      ),
+    getStackPodLogs: (input) =>
+      ensureKnownStack(config, "getStackPodLogs", input.stackId).pipe(
+        Effect.flatMap(() =>
+          Effect.gen(function* () {
+            const tailLines = normalizeTailLines(input.tailLines);
+            const pods = yield* nativeOperation("getStackPodLogs", () =>
+              readPods(config, runKubectl),
+            );
+            const podContainers = pods.flatMap((pod) =>
+              pod.containers.map((container) => ({ pod, container })),
+            );
+            const entries = yield* Effect.forEach(
+              podContainers,
+              ({ pod, container }) =>
+                Effect.promise(async () => {
+                  try {
+                    const logs = await runKubectl([
+                      "-n",
+                      config.namespace,
+                      "logs",
+                      pod.name,
+                      "-c",
+                      container.name,
+                      `--tail=${String(tailLines)}`,
+                    ]);
+                    return buildPodLogEntry(
+                      pod,
+                      container,
+                      logs,
+                      null,
+                      DateTime.formatIso(DateTime.nowUnsafe()),
+                    );
+                  } catch (cause) {
+                    return buildPodLogEntry(
+                      pod,
+                      container,
+                      "",
+                      logFailureMessage(cause),
+                      DateTime.formatIso(DateTime.nowUnsafe()),
+                    );
+                  }
+                }),
+              { concurrency: POD_LOG_FETCH_CONCURRENCY },
+            );
+            return {
+              stackId: config.id,
+              namespace: config.namespace,
+              tailLines,
+              pods,
+              entries,
               fetchedAt: DateTime.formatIso(DateTime.nowUnsafe()),
             };
           }),
