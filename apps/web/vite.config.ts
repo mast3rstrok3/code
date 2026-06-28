@@ -19,7 +19,7 @@ const allowedHosts = process.env.VITE_ALLOWED_HOSTS?.split(",")
   .filter(Boolean);
 const hmrProtocol = process.env.VITE_HMR_PROTOCOL?.trim() === "wss" ? "wss" : "ws";
 const hmrHost = process.env.VITE_HMR_HOST?.trim() || host;
-const hmrClientPort = Number(process.env.VITE_HMR_CLIENT_PORT ?? "");
+const hmrClientPort = Number(process.env.VITE_HMR_CLIENT_PORT ?? port);
 const configuredWsUrl = process.env.VITE_WS_URL?.trim();
 const configuredRelayUrl = repoEnv.VITE_T3CODE_RELAY_URL?.trim() || "";
 const configuredClerkPublishableKey = repoEnv.VITE_CLERK_PUBLISHABLE_KEY?.trim() || "";
@@ -163,7 +163,7 @@ export default defineConfig(() => {
         // connection logs — enable "Verbose" in DevTools to see them.
         protocol: hmrProtocol,
         host: hmrHost,
-        ...(Number.isFinite(hmrClientPort) ? { clientPort: hmrClientPort } : {}),
+        clientPort: Number.isFinite(hmrClientPort) ? hmrClientPort : port,
       },
     },
     build: {
