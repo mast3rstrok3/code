@@ -1620,6 +1620,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.reviewThreadId,
           projectId: sourceThread.projectId,
           ownerUserId: sourceThread.ownerUserId,
+          parentThreadId: sourceThread.id,
+          workflowRole: "implementation-qa-reviewer",
           title: "Browser Dev Review",
           modelSelection: command.modelSelection,
           runtimeMode: command.runtimeMode,

@@ -1,8 +1,21 @@
 import type {
   OrchestrationImplementationValidationResult,
   OrchestrationImplementationWorkerResult,
+  OrchestrationThreadWorkflowRole,
 } from "@t3tools/contracts";
 import { ThreadId } from "@t3tools/contracts";
+
+export type WorkflowAgentMessageTarget =
+  | {
+      readonly relation: "parent";
+    }
+  | {
+      readonly relation: "child";
+      readonly workflowRole: OrchestrationThreadWorkflowRole;
+    }
+  | {
+      readonly threadId: ThreadId;
+    };
 
 export type WorkflowDirective =
   | {
@@ -54,6 +67,19 @@ export type WorkflowDirective =
       readonly commitSha?: string;
       readonly validations: ReadonlyArray<OrchestrationImplementationValidationResult>;
       readonly notesMarkdown: string;
+    }
+  | {
+      readonly type: "workflow-subagent-create";
+      readonly workflowPromptId: string;
+      readonly title: string;
+      readonly promptMarkdown: string;
+      readonly expectedResult?: string;
+    }
+  | {
+      readonly type: "workflow-agent-message";
+      readonly target: WorkflowAgentMessageTarget;
+      readonly purpose: string;
+      readonly messageMarkdown: string;
     };
 
 export type WorkflowDirectiveParseResult =
@@ -96,6 +122,52 @@ function optionalString(record: Record<string, unknown>, key: string): string | 
   return typeof value === "string" && value.trim().length > 0
     ? value.trim()
     : `Directive field '${key}' must be a non-empty string when provided.`;
+}
+
+const WORKFLOW_AGENT_MESSAGE_WORKFLOW_ROLES: ReadonlySet<OrchestrationThreadWorkflowRole> =
+  new Set<OrchestrationThreadWorkflowRole>([
+    "planning-orchestrator",
+    "planning-reviewer",
+    "implementation-orchestrator",
+    "implementation-worker",
+    "implementation-validator",
+    "implementation-qa-reviewer",
+    "implementation-fixer",
+  ]);
+
+function parseWorkflowAgentMessageTarget(value: unknown): WorkflowAgentMessageTarget | string {
+  const record = asRecord(value);
+  if (record === null) {
+    return "workflow-agent-message.target must be an object.";
+  }
+
+  const threadId = record["threadId"];
+  if (threadId !== undefined && threadId !== null) {
+    if (typeof threadId !== "string" || threadId.trim().length === 0) {
+      return "workflow-agent-message.target.threadId must be a non-empty string.";
+    }
+    return { threadId: ThreadId.make(threadId.trim()) };
+  }
+
+  const relation = record["relation"];
+  if (relation === "parent") {
+    return { relation };
+  }
+  if (relation === "child") {
+    const workflowRole = record["workflowRole"];
+    if (
+      typeof workflowRole !== "string" ||
+      !WORKFLOW_AGENT_MESSAGE_WORKFLOW_ROLES.has(workflowRole as OrchestrationThreadWorkflowRole)
+    ) {
+      return "workflow-agent-message.target.workflowRole must be a known workflow role.";
+    }
+    return {
+      relation,
+      workflowRole: workflowRole as OrchestrationThreadWorkflowRole,
+    };
+  }
+
+  return "workflow-agent-message.target must specify relation parent, relation child, or threadId.";
 }
 
 function parseValidationResults(
@@ -340,6 +412,39 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
         ...(commitSha !== undefined ? { commitSha } : {}),
         validations,
         notesMarkdown,
+      };
+    }
+    case "workflow-subagent-create": {
+      const workflowPromptId = requiredString(record, "workflowPromptId");
+      const title = requiredString(record, "title");
+      const promptMarkdown = requiredString(record, "promptMarkdown");
+      const expectedResult = optionalString(record, "expectedResult");
+      if (workflowPromptId.startsWith("Directive field")) return workflowPromptId;
+      if (title.startsWith("Directive field")) return title;
+      if (promptMarkdown.startsWith("Directive field")) return promptMarkdown;
+      if (typeof expectedResult === "string" && expectedResult.startsWith("Directive field")) {
+        return expectedResult;
+      }
+      return {
+        type: "workflow-subagent-create",
+        workflowPromptId,
+        title,
+        promptMarkdown,
+        ...(expectedResult !== undefined ? { expectedResult } : {}),
+      };
+    }
+    case "workflow-agent-message": {
+      const target = parseWorkflowAgentMessageTarget(record["target"]);
+      const purpose = requiredString(record, "purpose");
+      const messageMarkdown = requiredString(record, "messageMarkdown");
+      if (typeof target === "string") return target;
+      if (purpose.startsWith("Directive field")) return purpose;
+      if (messageMarkdown.startsWith("Directive field")) return messageMarkdown;
+      return {
+        type: "workflow-agent-message",
+        target,
+        purpose,
+        messageMarkdown,
       };
     }
     default:

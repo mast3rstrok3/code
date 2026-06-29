@@ -2,6 +2,7 @@ import type { ProviderInteractionMode, WorkflowPromptContract } from "@t3tools/c
 import { isPlanningWorkflowInteractionMode } from "@t3tools/contracts";
 
 import { CHROME_DEVTOOLS_MCP_ASSOCIATED_DOC_CONTENT } from "./ChromeDevtoolsMcp.ts";
+import { WORKFLOW_SUBAGENT_INSTRUCTIONS_PROMPT } from "./WorkflowSubagentInstructions.ts";
 
 export const WORKFLOW_PROMPT_IDS = {
   workflowAgentCommunications: "workflow.agent-communications",
@@ -22,9 +23,7 @@ const LEGACY_WORKFLOW_PROMPT_ID_ALIASES = {
   "yolo.grill-stage.codex": WORKFLOW_PROMPT_IDS.productGrillStageCodex,
 } as const satisfies Record<string, string>;
 
-const WORKFLOW_AGENT_COMMUNICATIONS_PROMPT = `## Agent-Only Thread Messaging
-
-When this workflow needs to communicate with another workflow thread, keep the message concise and structured. Report blockers explicitly, name the target workflow stage, and include the next actionable step.`;
+const WORKFLOW_AGENT_COMMUNICATIONS_PROMPT = WORKFLOW_SUBAGENT_INSTRUCTIONS_PROMPT;
 
 const CONTEXT_FORMAT_ASSOCIATED_DOC_CONTENT = `# CONTEXT.md Format
 

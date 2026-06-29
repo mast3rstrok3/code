@@ -7,6 +7,7 @@ import {
   listWorkflowPromptContracts,
   normalizeWorkflowPromptId,
   resolveWorkflowPromptId,
+  resolveWorkflowSystemInstructions,
   resolveWorkflowPromptText,
   WORKFLOW_PROMPT_IDS,
 } from "./WorkflowPromptRegistry.ts";
@@ -95,6 +96,24 @@ describe("WorkflowPromptRegistry", () => {
         false,
       );
     }
+  });
+
+  it("prepends shared workflow sub-agent instructions to workflow prompts", () => {
+    const rendered =
+      resolveWorkflowSystemInstructions({
+        workflowPromptId: WORKFLOW_PROMPT_IDS.planningPrdCodex,
+      }) ?? "";
+
+    NodeAssert.match(rendered, /T3 Workflow Sub-Agent System/);
+    NodeAssert.match(rendered, /Workflow skills are SKILL\.md-backed instructions/);
+    NodeAssert.match(rendered, /\.codex\/skills\/\*\*\/SKILL\.md/);
+    NodeAssert.match(rendered, /\.agents\/skills\/\*\*\/SKILL\.md/);
+    NodeAssert.match(rendered, /product\.grill-stage\.codex/);
+    NodeAssert.match(rendered, /planning\.issue-reviewer\.codex/);
+    NodeAssert.match(rendered, /implementation\.browser-dev-review\.codex/);
+    NodeAssert.match(rendered, /workflow-subagent-create/);
+    NodeAssert.match(rendered, /workflow-agent-message/);
+    NodeAssert.match(rendered, /Planning Workflow: PRD/);
   });
 
   it("renders Browser Dev Review with its Chrome DevTools MCP associated doc", () => {

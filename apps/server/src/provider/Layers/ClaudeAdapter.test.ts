@@ -746,8 +746,39 @@ describe("ClaudeAdapterLive", () => {
 
       const createInput = harness.getLastCreateQueryInput();
       assert.equal(createInput?.options.effort, "high");
-      const promptText = yield* Effect.promise(() => readFirstPromptText(createInput));
+      const promptText = (yield* Effect.promise(() => readFirstPromptText(createInput))) ?? "";
       assert.equal(promptText, "Ultrathink:\nInvestigate the edge cases");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("wraps workflow turns with shared sub-agent instructions", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "Start planning",
+        attachments: [],
+        interactionMode: "planning-workflow",
+        workflowPromptId: WORKFLOW_PROMPT_IDS.planningPrdCodex,
+      });
+
+      const createInput = harness.getLastCreateQueryInput();
+      const promptText = (yield* Effect.promise(() => readFirstPromptText(createInput))) ?? "";
+      assert.match(promptText, /<workflow-instructions>/);
+      assert.match(promptText, /T3 Workflow Sub-Agent System/);
+      assert.match(promptText, /workflow-subagent-create/);
+      assert.match(promptText, /Planning Workflow: PRD/);
+      assert.match(promptText, /<user-message>\nStart planning\n<\/user-message>/);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

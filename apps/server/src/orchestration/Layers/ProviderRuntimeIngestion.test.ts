@@ -50,6 +50,7 @@ import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeInge
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { WORKFLOW_PROMPT_IDS } from "../../provider/WorkflowPromptRegistry.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
 function makeTestServerSettingsLayer(overrides: Partial<ServerSettings> = {}) {
@@ -183,6 +184,26 @@ async function waitForThread(
     }
     if ((await Effect.runPromise(Clock.currentTimeMillis)) >= deadline) {
       throw new Error("Timed out waiting for thread state");
+    }
+    await Effect.runPromise(Effect.yieldNow);
+    return poll();
+  };
+  return poll();
+}
+
+async function waitForReadModel(
+  readModel: () => Promise<ProviderRuntimeTestReadModel>,
+  predicate: (snapshot: ProviderRuntimeTestReadModel) => boolean,
+  timeoutMs = 2000,
+) {
+  const deadline = (await Effect.runPromise(Clock.currentTimeMillis)) + timeoutMs;
+  const poll = async (): Promise<ProviderRuntimeTestReadModel> => {
+    const snapshot = await readModel();
+    if (predicate(snapshot)) {
+      return snapshot;
+    }
+    if ((await Effect.runPromise(Clock.currentTimeMillis)) >= deadline) {
+      throw new Error("Timed out waiting for read model state");
     }
     await Effect.runPromise(Effect.yieldNow);
     return poll();
@@ -1945,7 +1966,7 @@ describe("ProviderRuntimeIngestion", () => {
     expect(resumedMessage?.text).toBe(" second half");
     expect(resumedMessage?.streaming).toBe(false);
 
-    const events = await Effect.runPromise(
+    const events = await runtime!.runPromise(
       Stream.runCollect(harness.engine.readEvents(0)).pipe(
         Effect.map((chunk) => Array.from(chunk)),
       ),
@@ -2083,7 +2104,7 @@ describe("ProviderRuntimeIngestion", () => {
     const harness = await createHarness({ serverSettings: { enableAssistantStreaming: true } });
     const now = "2026-01-01T00:00:00.000Z";
 
-    await Effect.runPromise(
+    await runtime!.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
         commandId: CommandId.make("cmd-turn-start-streaming-mode"),
@@ -2301,7 +2322,7 @@ describe("ProviderRuntimeIngestion", () => {
         ),
     );
 
-    const events = await Effect.runPromise(
+    const events = await runtime!.runPromise(
       Stream.runCollect(harness.engine.readEvents(0)).pipe(
         Effect.map((chunk) => Array.from(chunk)),
       ),
@@ -3099,6 +3120,166 @@ describe("ProviderRuntimeIngestion", () => {
       planningThreadId,
     );
     expect(planningThread.planningWorkflow?.prd?.summaryMarkdown).toBe("Build checkout.");
+  });
+
+  it("creates workflow sub-agent threads from provider directives", async () => {
+    const harness = await createHarness();
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    const parentThreadId = asThreadId("thread-subagent-parent");
+
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-subagent-parent-create"),
+        threadId: parentThreadId,
+        projectId: asProjectId("project-1"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+        parentThreadId: null,
+        workflowRole: "planning-orchestrator",
+        title: "Planning Parent",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: "planning-workflow",
+        runtimeMode: "approval-required",
+        branch: "feature/planning",
+        worktreePath: "/tmp/planning-worktree",
+        createdAt,
+      }),
+    );
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-subagent-create"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt,
+      threadId: parentThreadId,
+      turnId: asTurnId("turn-subagent-create"),
+      itemId: asItemId("item-subagent-create"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail: `\`\`\`json
+{
+  "type": "workflow-subagent-create",
+  "workflowPromptId": "${WORKFLOW_PROMPT_IDS.planningIssueReviewerCodex}",
+  "title": "Review checkout planning issues",
+  "promptMarkdown": "Review these checkout planning issues.",
+  "expectedResult": "planning-reviewer-verdict"
+}
+\`\`\``,
+      },
+    });
+
+    const snapshot = await waitForReadModel(harness.readModel, (readModel) =>
+      readModel.threads.some(
+        (thread) =>
+          thread.parentThreadId === parentThreadId &&
+          thread.workflowRole === "planning-reviewer" &&
+          thread.messages.some((message) =>
+            message.text.includes("Review these checkout planning issues."),
+          ),
+      ),
+    );
+    const childThread = snapshot.threads.find(
+      (thread) =>
+        thread.parentThreadId === parentThreadId && thread.workflowRole === "planning-reviewer",
+    );
+
+    expect(childThread?.interactionMode).toBe("planning-workflow");
+    expect(childThread?.title).toBe("Review checkout planning issues");
+    expect(childThread?.branch).toBe("feature/planning");
+    expect(childThread?.worktreePath).toBe("/tmp/planning-worktree");
+    expect(childThread?.messages[0]?.text).toContain("Expected result directive");
+  });
+
+  it("routes workflow agent messages to direct child agents by role", async () => {
+    const harness = await createHarness();
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    const parentThreadId = asThreadId("thread-message-parent");
+    const childThreadId = asThreadId("thread-message-child");
+
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-message-parent-create"),
+        threadId: parentThreadId,
+        projectId: asProjectId("project-1"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+        parentThreadId: null,
+        workflowRole: "implementation-orchestrator",
+        title: "Implementation Parent",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: "implementation-workflow",
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-message-child-create"),
+        threadId: childThreadId,
+        projectId: asProjectId("project-1"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+        parentThreadId,
+        workflowRole: "implementation-worker",
+        title: "Implementation Worker",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: "implementation-workflow",
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-agent-message"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt,
+      threadId: parentThreadId,
+      turnId: asTurnId("turn-agent-message"),
+      itemId: asItemId("item-agent-message"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail: `\`\`\`json
+{
+  "type": "workflow-agent-message",
+  "target": {
+    "relation": "child",
+    "workflowRole": "implementation-worker"
+  },
+  "purpose": "status",
+  "messageMarkdown": "Please report current implementation status."
+}
+\`\`\``,
+      },
+    });
+
+    const childThread = await waitForThread(
+      harness.readModel,
+      (thread) =>
+        thread.messages.some((message) =>
+          message.text.includes("Please report current implementation status."),
+        ),
+      2_000,
+      childThreadId,
+    );
+
+    expect(childThread.messages[0]?.text).toContain(`from thread '${parentThreadId}'`);
+    expect(childThread.messages[0]?.text).toContain("Purpose: status.");
   });
 
   it("rejects planning PRD artifacts from Product Grill root threads", async () => {

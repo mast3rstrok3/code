@@ -7,6 +7,7 @@ import {
   type OrchestrationEvent,
   type OrchestrationMessage,
   type OrchestrationProposedPlanId,
+  type OrchestrationThreadShell,
   CheckpointRef,
   isToolLifecycleItemType,
   ThreadId,
@@ -43,7 +44,12 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   parseWorkflowDirectiveFromMarkdown,
   type WorkflowDirective,
+  type WorkflowAgentMessageTarget,
 } from "../workflowDirectives.ts";
+import {
+  isWorkflowSubagentParentRoleAllowed,
+  resolveWorkflowSubagentSpawnDefinition,
+} from "../workflowSubagents.ts";
 
 const providerTurnKey = (threadId: ThreadId, turnId: TurnId) => `${threadId}:${turnId}`;
 
@@ -666,6 +672,10 @@ const make = Effect.gen(function* () {
     crypto.randomUUIDv4.pipe(
       Effect.map((uuid) => CommandId.make(`provider:${event.eventId}:${tag}:${uuid}`)),
     );
+  const serverMessageId = (tag: string) =>
+    crypto.randomUUIDv4.pipe(Effect.map((uuid) => MessageId.make(`message-${tag}-${uuid}`)));
+  const serverThreadId = (tag: string) =>
+    crypto.randomUUIDv4.pipe(Effect.map((uuid) => ThreadId.make(`thread-${tag}-${uuid}`)));
 
   const turnMessageIdsByTurnKey = yield* Cache.make<string, Set<MessageId>>({
     capacity: TURN_MESSAGE_IDS_BY_TURN_CACHE_CAPACITY,
@@ -710,6 +720,138 @@ const make = Effect.gen(function* () {
     return yield* projectionSnapshotQuery
       .getThreadShellById(threadId)
       .pipe(Effect.map(Option.getOrUndefined));
+  });
+
+  const appendWorkflowDirectiveRejectedActivity = Effect.fn(
+    "ProviderRuntimeIngestion.appendWorkflowDirectiveRejectedActivity",
+  )(function* (input: {
+    readonly event: ProviderRuntimeEvent;
+    readonly threadId: ThreadId;
+    readonly directiveType: string;
+    readonly summary: string;
+    readonly detail: string;
+    readonly createdAt: string;
+  }) {
+    yield* orchestrationEngine.dispatch({
+      type: "thread.activity.append",
+      commandId: yield* providerCommandId(input.event, "workflow-directive-rejected"),
+      threadId: input.threadId,
+      activity: {
+        id: EventId.make(yield* crypto.randomUUIDv4),
+        tone: "error",
+        kind: "workflow.directive.rejected",
+        summary: input.summary,
+        payload: {
+          directiveType: input.directiveType,
+          detail: input.detail,
+        },
+        turnId: null,
+        createdAt: input.createdAt,
+      },
+      createdAt: input.createdAt,
+    });
+  });
+
+  const listActiveThreadShells = Effect.fn("ProviderRuntimeIngestion.listActiveThreadShells")(
+    function* () {
+      const snapshot = yield* projectionSnapshotQuery.getShellSnapshot();
+      return snapshot.threads;
+    },
+  );
+
+  function isDescendantThread(
+    candidateThreadId: ThreadId,
+    ancestorThreadId: ThreadId,
+    threads: ReadonlyArray<OrchestrationThreadShell>,
+  ): boolean {
+    const threadById = new Map(threads.map((thread) => [thread.id, thread]));
+    const seenThreadIds = new Set<string>();
+    let current = threadById.get(candidateThreadId);
+    while (current && current.parentThreadId !== null) {
+      if (current.parentThreadId === ancestorThreadId) {
+        return true;
+      }
+      if (seenThreadIds.has(current.id)) {
+        return false;
+      }
+      seenThreadIds.add(current.id);
+      current = threadById.get(current.parentThreadId);
+    }
+    return false;
+  }
+
+  const resolveWorkflowAgentMessageTarget = Effect.fn(
+    "ProviderRuntimeIngestion.resolveWorkflowAgentMessageTarget",
+  )(function* (input: {
+    readonly sourceThread: OrchestrationThreadShell;
+    readonly target: WorkflowAgentMessageTarget;
+  }) {
+    const threads = yield* listActiveThreadShells();
+    const requestedTarget = input.target;
+    if ("threadId" in requestedTarget) {
+      const requestedThreadId = requestedTarget.threadId;
+      const targetThread = threads.find((thread) => thread.id === requestedThreadId);
+      if (!targetThread) {
+        return {
+          kind: "error" as const,
+          detail: `Target thread '${requestedThreadId}' was not found or is not active.`,
+        };
+      }
+      const allowed =
+        targetThread.id === input.sourceThread.id ||
+        input.sourceThread.parentThreadId === targetThread.id ||
+        isDescendantThread(targetThread.id, input.sourceThread.id, threads);
+      return allowed
+        ? { kind: "resolved" as const, thread: targetThread }
+        : {
+            kind: "error" as const,
+            detail: "Target thread must be the current thread, the direct parent, or a descendant.",
+          };
+    }
+
+    if (requestedTarget.relation === "parent") {
+      const parentThreadId = input.sourceThread.parentThreadId;
+      if (parentThreadId === null) {
+        return {
+          kind: "error" as const,
+          detail: `Thread '${input.sourceThread.id}' does not have a parent thread.`,
+        };
+      }
+      const parentThread = threads.find((thread) => thread.id === parentThreadId);
+      return parentThread
+        ? { kind: "resolved" as const, thread: parentThread }
+        : {
+            kind: "error" as const,
+            detail: `Parent thread '${parentThreadId}' was not found or is not active.`,
+          };
+    }
+
+    const requestedWorkflowRole = requestedTarget.workflowRole;
+    const childThreads = threads.filter(
+      (thread) =>
+        thread.parentThreadId === input.sourceThread.id &&
+        thread.workflowRole === requestedWorkflowRole,
+    );
+    if (childThreads.length === 0) {
+      return {
+        kind: "error" as const,
+        detail: `No direct child thread with workflowRole '${requestedWorkflowRole}' was found.`,
+      };
+    }
+    if (childThreads.length > 1) {
+      return {
+        kind: "error" as const,
+        detail: `Multiple direct child threads with workflowRole '${requestedWorkflowRole}' were found; target by threadId instead.`,
+      };
+    }
+    const childThread = childThreads[0];
+    if (!childThread) {
+      return {
+        kind: "error" as const,
+        detail: `No direct child thread with workflowRole '${requestedWorkflowRole}' was found.`,
+      };
+    }
+    return { kind: "resolved" as const, thread: childThread };
   });
 
   const rememberAssistantMessageId = (threadId: ThreadId, turnId: TurnId, messageId: MessageId) =>
@@ -892,6 +1034,143 @@ const make = Effect.gen(function* () {
   const clearAssistantMessageState = (messageId: MessageId) =>
     clearBufferedAssistantText(messageId);
 
+  const dispatchWorkflowSubagentCreateDirective = Effect.fn(
+    "ProviderRuntimeIngestion.dispatchWorkflowSubagentCreateDirective",
+  )(function* (input: {
+    readonly event: ProviderRuntimeEvent;
+    readonly thread: OrchestrationThreadShell;
+    readonly directive: Extract<WorkflowDirective, { type: "workflow-subagent-create" }>;
+    readonly createdAt: string;
+  }) {
+    const spawnDefinition = resolveWorkflowSubagentSpawnDefinition(
+      input.directive.workflowPromptId,
+    );
+    if (spawnDefinition === undefined) {
+      yield* appendWorkflowDirectiveRejectedActivity({
+        event: input.event,
+        threadId: input.thread.id,
+        directiveType: input.directive.type,
+        summary: "Workflow sub-agent request rejected",
+        detail: `Workflow prompt '${input.directive.workflowPromptId}' is not spawnable.`,
+        createdAt: input.createdAt,
+      });
+      return;
+    }
+    if (!isWorkflowSubagentParentRoleAllowed(spawnDefinition, input.thread.workflowRole)) {
+      yield* appendWorkflowDirectiveRejectedActivity({
+        event: input.event,
+        threadId: input.thread.id,
+        directiveType: input.directive.type,
+        summary: "Workflow sub-agent request rejected",
+        detail: `Thread role '${input.thread.workflowRole ?? "root"}' cannot spawn '${spawnDefinition.workflowPromptId}'.`,
+        createdAt: input.createdAt,
+      });
+      return;
+    }
+
+    const childThreadId = yield* serverThreadId(spawnDefinition.threadIdTag);
+    const childMessageId = yield* serverMessageId(spawnDefinition.threadIdTag);
+    const expectedResult = input.directive.expectedResult ?? spawnDefinition.expectedResult;
+    const childPrompt = [
+      `Workflow sub-agent request from parent thread '${input.thread.id}'.`,
+      `Target workflowPromptId: '${spawnDefinition.workflowPromptId}'.`,
+      `Expected result directive: '${expectedResult}'.`,
+      input.directive.promptMarkdown,
+    ].join("\n\n");
+
+    yield* orchestrationEngine.dispatch({
+      type: "thread.create",
+      commandId: yield* providerCommandId(input.event, "workflow-subagent-create-thread"),
+      threadId: childThreadId,
+      projectId: input.thread.projectId,
+      ownerUserId: input.thread.ownerUserId,
+      parentThreadId: input.thread.id,
+      workflowRole: spawnDefinition.workflowRole,
+      title: input.directive.title || spawnDefinition.defaultTitlePrefix,
+      modelSelection: input.thread.modelSelection,
+      runtimeMode: input.thread.runtimeMode,
+      interactionMode: spawnDefinition.interactionMode,
+      branch: input.thread.branch,
+      worktreePath: input.thread.worktreePath,
+      createdAt: input.createdAt,
+    });
+
+    yield* orchestrationEngine.dispatch({
+      type: "thread.turn.start",
+      commandId: yield* providerCommandId(input.event, "workflow-subagent-start-turn"),
+      threadId: childThreadId,
+      message: {
+        messageId: childMessageId,
+        role: "user",
+        text: childPrompt,
+        attachments: [],
+      },
+      titleSeed: input.directive.title,
+      runtimeMode: input.thread.runtimeMode,
+      interactionMode: spawnDefinition.interactionMode,
+      workflowPromptId: spawnDefinition.workflowPromptId,
+      createdAt: input.createdAt,
+    });
+  });
+
+  const dispatchWorkflowAgentMessageDirective = Effect.fn(
+    "ProviderRuntimeIngestion.dispatchWorkflowAgentMessageDirective",
+  )(function* (input: {
+    readonly event: ProviderRuntimeEvent;
+    readonly thread: OrchestrationThreadShell;
+    readonly directive: Extract<WorkflowDirective, { type: "workflow-agent-message" }>;
+    readonly createdAt: string;
+  }) {
+    const target = yield* resolveWorkflowAgentMessageTarget({
+      sourceThread: input.thread,
+      target: input.directive.target,
+    });
+    if (target.kind === "error") {
+      yield* appendWorkflowDirectiveRejectedActivity({
+        event: input.event,
+        threadId: input.thread.id,
+        directiveType: input.directive.type,
+        summary: "Workflow agent message rejected",
+        detail: target.detail,
+        createdAt: input.createdAt,
+      });
+      return;
+    }
+    const targetThread = target.thread;
+    if (targetThread === undefined) {
+      yield* appendWorkflowDirectiveRejectedActivity({
+        event: input.event,
+        threadId: input.thread.id,
+        directiveType: input.directive.type,
+        summary: "Workflow agent message rejected",
+        detail: "Workflow agent message target resolved without a thread.",
+        createdAt: input.createdAt,
+      });
+      return;
+    }
+
+    const messageText = [
+      `Workflow agent message from thread '${input.thread.id}'.`,
+      `Purpose: ${input.directive.purpose}.`,
+      input.directive.messageMarkdown,
+    ].join("\n\n");
+
+    yield* orchestrationEngine.dispatch({
+      type: "thread.turn.start",
+      commandId: yield* providerCommandId(input.event, "workflow-agent-message-turn"),
+      threadId: targetThread.id,
+      message: {
+        messageId: yield* serverMessageId("workflow-agent-message"),
+        role: "user",
+        text: messageText,
+        attachments: [],
+      },
+      runtimeMode: targetThread.runtimeMode,
+      interactionMode: targetThread.interactionMode,
+      createdAt: input.createdAt,
+    });
+  });
+
   const dispatchWorkflowDirective = (input: {
     event: ProviderRuntimeEvent;
     threadId: ThreadId;
@@ -906,6 +1185,26 @@ const make = Effect.gen(function* () {
       }
 
       switch (input.directive.type) {
+        case "workflow-subagent-create": {
+          yield* dispatchWorkflowSubagentCreateDirective({
+            event: input.event,
+            thread,
+            directive: input.directive,
+            createdAt: input.createdAt,
+          });
+          return;
+        }
+
+        case "workflow-agent-message": {
+          yield* dispatchWorkflowAgentMessageDirective({
+            event: input.event,
+            thread,
+            directive: input.directive,
+            createdAt: input.createdAt,
+          });
+          return;
+        }
+
         case "product-intent-locked": {
           if (thread.interactionMode !== "product-workflow" || thread.workflowRole !== null) {
             yield* Effect.logWarning(
