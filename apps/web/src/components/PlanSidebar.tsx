@@ -153,6 +153,7 @@ interface PlanSidebarProps {
   workspaceRoot: string | undefined;
   timestampFormat: TimestampFormat;
   mode?: "sheet" | "sidebar" | "embedded";
+  automationOwned?: boolean | undefined;
   onOpenThread?: (threadId: ThreadId) => void;
   onLoadPrdBundle?: (prdId: OrchestrationPlanningPrdId) => void;
   onRequestIssueReview?: (prdId: OrchestrationPlanningPrdId) => void;
@@ -176,6 +177,7 @@ const PlanSidebar = memo(function PlanSidebar({
   workspaceRoot,
   timestampFormat,
   mode = "sidebar",
+  automationOwned = false,
   onOpenThread,
   onLoadPrdBundle,
   onRequestIssueReview,
@@ -479,7 +481,7 @@ const PlanSidebar = memo(function PlanSidebar({
                       Source
                     </Button>
                   ) : null}
-                  {onRequestIssueReview ? (
+                  {!automationOwned && onRequestIssueReview ? (
                     <Button
                       size="xs"
                       variant="outline"
@@ -491,7 +493,7 @@ const PlanSidebar = memo(function PlanSidebar({
                       Review
                     </Button>
                   ) : null}
-                  {onLaunchImplementationRun ? (
+                  {!automationOwned && onLaunchImplementationRun ? (
                     <Button
                       size="xs"
                       variant="outline"

@@ -302,7 +302,7 @@ describe("OrchestrationEngine", () => {
     await system.dispose();
   });
 
-  it("launches Q&A Dev Review records and linked review threads atomically", async () => {
+  it("launches Browser Dev Review records and linked review threads atomically", async () => {
     const system = await createOrchestrationSystem();
     const { engine } = system;
     const createdAt = now();
@@ -351,7 +351,7 @@ describe("OrchestrationEngine", () => {
         message: {
           messageId: asMessageId("msg-dev-review-launch"),
           role: "user",
-          text: "Run Q&A Dev Review",
+          text: "Run Browser Dev Review",
           attachments: [],
         },
         modelSelection: {
@@ -359,7 +359,7 @@ describe("OrchestrationEngine", () => {
           model: "gpt-5-codex",
         },
         runtimeMode: "full-access",
-        workflowPromptId: "implementation.qna-dev-review.codex",
+        workflowPromptId: "implementation.browser-dev-review.codex",
         createdAt,
       }),
     );
@@ -373,6 +373,7 @@ describe("OrchestrationEngine", () => {
     );
     expect(sourceThread?.devReviews).toHaveLength(1);
     expect(reviewThread?.devReviews).toHaveLength(1);
+    expect(reviewThread?.title).toBe("Browser Dev Review");
     expect(sourceThread?.devReviews[0]).toEqual(reviewThread?.devReviews[0]);
     expect(sourceThread?.devReviews[0]?.status).toBe("running");
     expect(sourceThread?.devReviews[0]?.replay.status).toBe("not-started");
@@ -391,6 +392,10 @@ describe("OrchestrationEngine", () => {
       "thread.message-sent",
       "thread.turn-start-requested",
     ]);
+    const turnStartRequested = events.find((event) => event.type === "thread.turn-start-requested");
+    expect(turnStartRequested?.payload).toMatchObject({
+      workflowPromptId: "implementation.browser-dev-review.codex",
+    });
 
     await system.dispose();
   });

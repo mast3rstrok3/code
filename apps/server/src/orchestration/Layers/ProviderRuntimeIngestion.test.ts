@@ -3027,6 +3027,202 @@ describe("ProviderRuntimeIngestion", () => {
     });
   });
 
+  it("accepts planning PRD artifacts from Product Grill planning orchestrator children", async () => {
+    const harness = await createHarness();
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    const rootThreadId = asThreadId("thread-product-root");
+    const planningThreadId = asThreadId("thread-product-planning");
+
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-product-root-create"),
+        threadId: rootThreadId,
+        projectId: asProjectId("project-1"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+        parentThreadId: null,
+        workflowRole: null,
+        title: "Product Grill",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: "product-workflow",
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-product-planning-create"),
+        threadId: planningThreadId,
+        projectId: asProjectId("project-1"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+        parentThreadId: rootThreadId,
+        workflowRole: "planning-orchestrator",
+        title: "Plan Checkout",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: "planning-workflow",
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-product-planning-prd"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt,
+      threadId: planningThreadId,
+      turnId: asTurnId("turn-product-planning-prd"),
+      itemId: asItemId("item-product-planning-prd"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail:
+          '```json\n{ "type": "planning-prd-artifact", "title": "Checkout", "summaryMarkdown": "Build checkout." }\n```',
+      },
+    });
+
+    const planningThread = await waitForThread(
+      harness.readModel,
+      (thread) => thread.planningWorkflow?.prd?.title === "Checkout",
+      2_000,
+      planningThreadId,
+    );
+    expect(planningThread.planningWorkflow?.prd?.summaryMarkdown).toBe("Build checkout.");
+  });
+
+  it("rejects planning PRD artifacts from Product Grill root threads", async () => {
+    const harness = await createHarness();
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    const rootThreadId = asThreadId("thread-product-root-prd-reject");
+
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-product-root-prd-reject-create"),
+        threadId: rootThreadId,
+        projectId: asProjectId("project-1"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+        parentThreadId: null,
+        workflowRole: null,
+        title: "Product Grill",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: "product-workflow",
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-product-root-prd-reject"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt,
+      threadId: rootThreadId,
+      turnId: asTurnId("turn-product-root-prd-reject"),
+      itemId: asItemId("item-product-root-prd-reject"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail:
+          '```json\n{ "type": "planning-prd-artifact", "title": "Checkout", "summaryMarkdown": "Build checkout." }\n```',
+      },
+    });
+
+    await harness.drain();
+    const readModel = await harness.readModel();
+    const rootThread = readModel.threads.find((thread) => thread.id === rootThreadId);
+    expect(rootThread?.planningWorkflow?.prd ?? null).toBe(null);
+  });
+
+  it("rejects product intent locks from non-root product threads", async () => {
+    const harness = await createHarness();
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    const rootThreadId = asThreadId("thread-product-root-intent");
+    const planningThreadId = asThreadId("thread-product-planning-intent");
+
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-product-root-intent-create"),
+        threadId: rootThreadId,
+        projectId: asProjectId("project-1"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+        parentThreadId: null,
+        workflowRole: null,
+        title: "Product Grill",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: "product-workflow",
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-product-planning-intent-create"),
+        threadId: planningThreadId,
+        projectId: asProjectId("project-1"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+        parentThreadId: rootThreadId,
+        workflowRole: "planning-orchestrator",
+        title: "Plan Checkout",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: "planning-workflow",
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-product-child-intent"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt,
+      threadId: planningThreadId,
+      turnId: asTurnId("turn-product-child-intent"),
+      itemId: asItemId("item-product-child-intent"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail:
+          '```json\n{ "type": "product-intent-locked", "title": "Checkout", "summaryMarkdown": "Locked." }\n```',
+      },
+    });
+
+    await harness.drain();
+    const readModel = await harness.readModel();
+    const planningThread = readModel.threads.find((thread) => thread.id === planningThreadId);
+    expect(
+      planningThread?.activities.some((activity) => activity.kind === "product-intent-locked"),
+    ).toBe(false);
+  });
+
   it("continues processing runtime events after a single event handler failure", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

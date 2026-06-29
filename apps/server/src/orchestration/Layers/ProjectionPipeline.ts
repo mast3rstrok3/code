@@ -820,6 +820,21 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
         }
 
+        case "thread.planning-workflow-stage-set": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            planningWorkflowStage: event.payload.stage,
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
         case "thread.deleted": {
           attachmentSideEffects.deletedThreadIds.add(event.payload.threadId);
           const existingRow = yield* projectionThreadRepository.getById({
@@ -1295,6 +1310,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     )(function* (event, _attachmentSideEffects) {
       switch (event.type) {
         case "thread.implementation-run-launched":
+        case "thread.implementation-run-updated":
           yield* projectionImplementationRunRepository.upsert({
             runId: event.payload.run.id,
             sourceThreadId: event.payload.sourceThreadId,

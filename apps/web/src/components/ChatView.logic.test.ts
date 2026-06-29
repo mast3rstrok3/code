@@ -22,6 +22,7 @@ import {
   hasServerAcknowledgedLocalDispatch,
   reconcileMountedTerminalThreadIds,
   reconcileRetainedMountedThreadIds,
+  resolveProductGrillPlanningThreadId,
   resolveSendEnvMode,
   shouldWriteThreadErrorToCurrentServerThread,
 } from "./ChatView.logic";
@@ -136,6 +137,52 @@ describe("buildThreadTurnInterruptInput", () => {
     expect(buildThreadTurnInterruptInput(makeThread({ session: readySession }))).toEqual({
       threadId,
     });
+  });
+});
+
+describe("resolveProductGrillPlanningThreadId", () => {
+  it("selects the planning-orchestrator child for a Product Grill root", () => {
+    const planningThreadId = ThreadId.make("thread-product-planning");
+
+    expect(
+      resolveProductGrillPlanningThreadId({
+        activeThread: makeThread({
+          interactionMode: "product-workflow",
+          workflowRole: null,
+        }),
+        workflowThreadShells: [
+          {
+            id: planningThreadId,
+            parentThreadId: threadId,
+            workflowRole: "planning-orchestrator",
+          },
+          {
+            id: ThreadId.make("thread-product-reviewer"),
+            parentThreadId: planningThreadId,
+            workflowRole: "planning-reviewer",
+          },
+        ],
+      }),
+    ).toBe(planningThreadId);
+  });
+
+  it("does not select a child for non-root product threads", () => {
+    expect(
+      resolveProductGrillPlanningThreadId({
+        activeThread: makeThread({
+          interactionMode: "product-workflow",
+          workflowRole: "planning-orchestrator",
+          parentThreadId: threadId,
+        }),
+        workflowThreadShells: [
+          {
+            id: ThreadId.make("thread-nested-planning"),
+            parentThreadId: threadId,
+            workflowRole: "planning-orchestrator",
+          },
+        ],
+      }),
+    ).toBeNull();
   });
 });
 

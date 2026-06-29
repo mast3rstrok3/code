@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as SchemaTransformation from "effect/SchemaTransformation";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import { ServerAuthDescriptor } from "./auth.ts";
 import {
@@ -29,10 +30,33 @@ export const WorkflowPromptAssociatedDocContract = Schema.Struct({
 });
 export type WorkflowPromptAssociatedDocContract = typeof WorkflowPromptAssociatedDocContract.Type;
 
+const WorkflowPromptWorkflowWire = Schema.Literals([
+  "shared",
+  "planning",
+  "implementation",
+  "yolo",
+  "product",
+]);
+const WorkflowPromptWorkflowCanonical = Schema.Literals([
+  "shared",
+  "planning",
+  "implementation",
+  "product",
+]);
+const WorkflowPromptWorkflow = WorkflowPromptWorkflowWire.pipe(
+  Schema.decodeTo(
+    WorkflowPromptWorkflowCanonical,
+    SchemaTransformation.transformOrFail({
+      decode: (workflow) => Effect.succeed(workflow === "yolo" ? ("product" as const) : workflow),
+      encode: (workflow) => Effect.succeed(workflow),
+    }),
+  ),
+);
+
 export const WorkflowPromptContract = Schema.Struct({
   id: TrimmedNonEmptyString,
   order: PositiveInt,
-  workflow: Schema.Literals(["shared", "planning", "implementation", "yolo"]),
+  workflow: WorkflowPromptWorkflow,
   role: Schema.Literals([
     "workflow-communications",
     "planning-thread",

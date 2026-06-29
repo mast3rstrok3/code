@@ -357,6 +357,8 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
       | "thread.planning-issues-revised"
       | "thread.planning-issue-review-requested"
       | "thread.planning-prd-bundle-loaded"
+      | "thread.planning-workflow-stage-set"
+      | "thread.implementation-run-updated"
       | "thread.activity-appended"
       | "thread.turn-diff-completed"
       | "thread.reverted"
@@ -375,6 +377,8 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
     event.type === "thread.planning-issues-revised" ||
     event.type === "thread.planning-issue-review-requested" ||
     event.type === "thread.planning-prd-bundle-loaded" ||
+    event.type === "thread.planning-workflow-stage-set" ||
+    event.type === "thread.implementation-run-updated" ||
     event.type === "thread.activity-appended" ||
     event.type === "thread.turn-diff-completed" ||
     event.type === "thread.reverted" ||
@@ -398,6 +402,12 @@ function threadDetailEventMatchesThread(event: OrchestrationEvent, threadId: str
     case "thread.dev-review-updated":
     case "thread.dev-review-replay-metadata-updated":
       return event.payload.sourceThreadId === threadId || event.payload.reviewThreadId === threadId;
+    case "thread.implementation-run-updated":
+      return (
+        event.payload.sourceThreadId === threadId ||
+        event.payload.run.orchestratorThreadId === threadId ||
+        event.payload.run.issueStates.some((state) => state.workerThreadId === threadId)
+      );
     default:
       return false;
   }
@@ -834,12 +844,13 @@ const makeWsRpcLayer = (
           case "thread.unarchived":
             return loadThreadUpsertOrRemoval(event.payload.threadId);
           case "thread.implementation-run-launched":
+          case "thread.implementation-run-updated":
           case "thread.implementation-change-request-retry-requested": {
             const run = event.payload.run;
             const sourceThreadId =
-              event.type === "thread.implementation-run-launched"
-                ? event.payload.sourceThreadId
-                : null;
+              event.type === "thread.implementation-change-request-retry-requested"
+                ? null
+                : event.payload.sourceThreadId;
             if (
               visibleThreadIds !== undefined &&
               (sourceThreadId === null || !visibleThreadIds.has(sourceThreadId)) &&

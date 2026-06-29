@@ -1,11 +1,27 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { ServerProvider } from "./server.ts";
+import { ServerProvider, WorkflowPromptContract } from "./server.ts";
 
 const decodeServerProvider = Schema.decodeUnknownSync(ServerProvider);
+const decodeWorkflowPromptContract = Schema.decodeUnknownSync(WorkflowPromptContract);
 
 describe("ServerProvider", () => {
+  it("decodes legacy YOLO workflow prompt contracts as Product Workflow", () => {
+    const parsed = decodeWorkflowPromptContract({
+      id: "product.grill-stage.codex",
+      order: 1,
+      workflow: "yolo",
+      role: "planning-thread",
+      stage: "grill",
+      title: "1. Intent Grill",
+      description: "Legacy workflow discriminator.",
+      promptText: "Prompt text.",
+    });
+
+    expect(parsed.workflow).toBe("product");
+  });
+
   it("defaults capability arrays when decoding provider snapshots", () => {
     const parsed = decodeServerProvider({
       instanceId: "codex",

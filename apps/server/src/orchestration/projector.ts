@@ -28,12 +28,14 @@ import {
   ThreadMetaUpdatedPayload,
   ThreadImplementationChangeRequestRetryRequestedPayload,
   ThreadImplementationRunLaunchedPayload,
+  ThreadImplementationRunUpdatedPayload,
   ThreadPlanningIssueReviewRequestedPayload,
   ThreadPlanningIssuesCreatedPayload,
   ThreadPlanningIssuesRevisedPayload,
   ThreadPlanningPrdBundleLoadedPayload,
   ThreadPlanningPrdCreatedPayload,
   ThreadPlanningStageStartedPayload,
+  ThreadPlanningWorkflowStageSetPayload,
   ThreadProposedPlanUpsertedPayload,
   ThreadRuntimeModeSetPayload,
   ThreadUnarchivedPayload,
@@ -606,9 +608,47 @@ export function projectEvent(
         }),
       );
 
+    case "thread.planning-workflow-stage-set":
+      return decodeForEvent(
+        ThreadPlanningWorkflowStageSetPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) return nextBase;
+          const workflow = thread.planningWorkflow ?? emptyPlanningWorkflow();
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              planningWorkflow: {
+                ...workflow,
+                stage: payload.stage,
+                createIssuesAvailable: payload.stage === "issues-authoring",
+              },
+              updatedAt: payload.updatedAt,
+            }),
+          };
+        }),
+      );
+
     case "thread.implementation-run-launched":
       return decodeForEvent(
         ThreadImplementationRunLaunchedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          implementationRuns: upsertImplementationRun(nextBase.implementationRuns, payload.run),
+        })),
+      );
+
+    case "thread.implementation-run-updated":
+      return decodeForEvent(
+        ThreadImplementationRunUpdatedPayload,
         event.payload,
         event.type,
         "payload",

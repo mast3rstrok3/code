@@ -1,4 +1,15 @@
+import type {
+  OrchestrationImplementationValidationResult,
+  OrchestrationImplementationWorkerResult,
+} from "@t3tools/contracts";
+import { ThreadId } from "@t3tools/contracts";
+
 export type WorkflowDirective =
+  | {
+      readonly type: "product-intent-locked";
+      readonly title: string;
+      readonly summaryMarkdown: string;
+    }
   | {
       readonly type: "planning-prd-artifact";
       readonly title: string;
@@ -25,6 +36,24 @@ export type WorkflowDirective =
         readonly passed: boolean;
         readonly feedbackMarkdown: string;
       }>;
+    }
+  | (OrchestrationImplementationWorkerResult & {
+      readonly type: "implementation-worker-result";
+    })
+  | {
+      readonly type: "implementation-merge-gate-result";
+      readonly runId: string;
+      readonly status: "passed" | "failed";
+      readonly validations: ReadonlyArray<OrchestrationImplementationValidationResult>;
+      readonly summaryMarkdown: string;
+    }
+  | {
+      readonly type: "implementation-fix-result";
+      readonly runId: string;
+      readonly status: "succeeded" | "failed" | "blocked";
+      readonly commitSha?: string;
+      readonly validations: ReadonlyArray<OrchestrationImplementationValidationResult>;
+      readonly notesMarkdown: string;
     };
 
 export type WorkflowDirectiveParseResult =
@@ -57,6 +86,50 @@ function stringArray(value: unknown): ReadonlyArray<string> | string {
     result.push(entry.trim());
   }
   return result;
+}
+
+function optionalString(record: Record<string, unknown>, key: string): string | undefined | string {
+  const value = record[key];
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : `Directive field '${key}' must be a non-empty string when provided.`;
+}
+
+function parseValidationResults(
+  value: unknown,
+): ReadonlyArray<OrchestrationImplementationValidationResult> | string {
+  if (!Array.isArray(value)) {
+    return "implementation validations must be an array.";
+  }
+  const validations: OrchestrationImplementationValidationResult[] = [];
+  for (const entry of value) {
+    const record = asRecord(entry);
+    if (record === null) {
+      return "implementation validation entries must be objects.";
+    }
+    const command = requiredString(record, "command");
+    const completedAt = requiredString(record, "completedAt");
+    const status = record["status"];
+    if (command.startsWith("Directive field")) return command;
+    if (completedAt.startsWith("Directive field")) return completedAt;
+    if (status !== "passed" && status !== "failed") {
+      return "implementation validation status must be passed or failed.";
+    }
+    const outputMarkdown = record["outputMarkdown"];
+    if (outputMarkdown !== undefined && typeof outputMarkdown !== "string") {
+      return "implementation validation outputMarkdown must be a string when provided.";
+    }
+    validations.push({
+      command,
+      status,
+      outputMarkdown: outputMarkdown ?? "",
+      completedAt,
+    });
+  }
+  return validations;
 }
 
 function parsePlanningIssues(value: unknown):
@@ -124,6 +197,13 @@ function parsePerIssueFeedback(value: unknown):
 
 function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirective | string {
   switch (record["type"]) {
+    case "product-intent-locked": {
+      const title = requiredString(record, "title");
+      const summaryMarkdown = requiredString(record, "summaryMarkdown");
+      if (title.startsWith("Directive field")) return title;
+      if (summaryMarkdown.startsWith("Directive field")) return summaryMarkdown;
+      return { type: "product-intent-locked", title, summaryMarkdown };
+    }
     case "planning-prd-artifact": {
       const title = requiredString(record, "title");
       const summaryMarkdown = requiredString(record, "summaryMarkdown");
@@ -160,6 +240,106 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
         failingPlanningIssueIds,
         dependencyFeedback,
         perIssueFeedback,
+      };
+    }
+    case "implementation-worker-result": {
+      const issueId = requiredString(record, "issueId");
+      const workerThreadId = requiredString(record, "workerThreadId");
+      const branch = requiredString(record, "branch");
+      const worktreePath = requiredString(record, "worktreePath");
+      const reportedAt = requiredString(record, "reportedAt");
+      const status = record["status"];
+      const validations = parseValidationResults(record["validations"] ?? []);
+      const notesMarkdown = record["notesMarkdown"];
+      const commitSha = record["commitSha"];
+      for (const value of [issueId, workerThreadId, branch, worktreePath, reportedAt]) {
+        if (value.startsWith("Directive field")) return value;
+      }
+      if (status !== "succeeded" && status !== "failed") {
+        return "implementation-worker-result.status must be succeeded or failed.";
+      }
+      if (typeof validations === "string") return validations;
+      if (notesMarkdown !== undefined && typeof notesMarkdown !== "string") {
+        return "implementation-worker-result.notesMarkdown must be a string when provided.";
+      }
+      if (status === "succeeded") {
+        if (typeof commitSha !== "string" || commitSha.trim().length === 0) {
+          return "implementation-worker-result.commitSha is required when status is succeeded.";
+        }
+        return {
+          type: "implementation-worker-result",
+          issueId,
+          workerThreadId: ThreadId.make(workerThreadId),
+          branch,
+          worktreePath,
+          status,
+          commitSha: commitSha.trim(),
+          validations,
+          notesMarkdown: notesMarkdown ?? "",
+          reportedAt,
+        };
+      }
+      if (
+        commitSha !== undefined &&
+        commitSha !== null &&
+        (typeof commitSha !== "string" || commitSha.trim().length === 0)
+      ) {
+        return "implementation-worker-result.commitSha must be a non-empty string or null.";
+      }
+      return {
+        type: "implementation-worker-result",
+        issueId,
+        workerThreadId: ThreadId.make(workerThreadId),
+        branch,
+        worktreePath,
+        status,
+        commitSha: typeof commitSha === "string" ? commitSha.trim() : null,
+        validations,
+        notesMarkdown: notesMarkdown ?? "",
+        reportedAt,
+      };
+    }
+    case "implementation-merge-gate-result": {
+      const runId = requiredString(record, "runId");
+      const summaryMarkdown = requiredString(record, "summaryMarkdown");
+      const status = record["status"];
+      const validations = parseValidationResults(record["validations"] ?? []);
+      if (runId.startsWith("Directive field")) return runId;
+      if (summaryMarkdown.startsWith("Directive field")) return summaryMarkdown;
+      if (status !== "passed" && status !== "failed") {
+        return "implementation-merge-gate-result.status must be passed or failed.";
+      }
+      if (typeof validations === "string") return validations;
+      return {
+        type: "implementation-merge-gate-result",
+        runId,
+        status,
+        validations,
+        summaryMarkdown,
+      };
+    }
+    case "implementation-fix-result": {
+      const runId = requiredString(record, "runId");
+      const notesMarkdown = requiredString(record, "notesMarkdown");
+      const status = record["status"];
+      const validations = parseValidationResults(record["validations"] ?? []);
+      const commitSha = optionalString(record, "commitSha");
+      if (runId.startsWith("Directive field")) return runId;
+      if (notesMarkdown.startsWith("Directive field")) return notesMarkdown;
+      if (status !== "succeeded" && status !== "failed" && status !== "blocked") {
+        return "implementation-fix-result.status must be succeeded, failed, or blocked.";
+      }
+      if (typeof validations === "string") return validations;
+      if (typeof commitSha === "string" && commitSha.startsWith("Directive field")) {
+        return commitSha;
+      }
+      return {
+        type: "implementation-fix-result",
+        runId,
+        status,
+        ...(commitSha !== undefined ? { commitSha } : {}),
+        validations,
+        notesMarkdown,
       };
     }
     default:

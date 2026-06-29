@@ -2,6 +2,7 @@ import {
   ApprovalRequestId,
   type AssistantDeliveryMode,
   CommandId,
+  EventId,
   MessageId,
   type OrchestrationEvent,
   type OrchestrationMessage,
@@ -91,6 +92,16 @@ function sameId(left: string | null | undefined, right: string | null | undefine
     return false;
   }
   return left === right;
+}
+
+function isPlanningArtifactThread(thread: {
+  readonly interactionMode: string;
+  readonly workflowRole: string | null;
+}): boolean {
+  return (
+    thread.interactionMode === "planning-workflow" &&
+    (thread.workflowRole === null || thread.workflowRole === "planning-orchestrator")
+  );
 }
 
 function hasAssistantMessageForTurn(
@@ -895,11 +906,43 @@ const make = Effect.gen(function* () {
       }
 
       switch (input.directive.type) {
+        case "product-intent-locked": {
+          if (thread.interactionMode !== "product-workflow" || thread.workflowRole !== null) {
+            yield* Effect.logWarning(
+              "provider workflow product intent directive ignored for non-product root thread",
+              {
+                directiveType: input.directive.type,
+                threadId: thread.id,
+                interactionMode: thread.interactionMode,
+                workflowRole: thread.workflowRole,
+              },
+            );
+            return;
+          }
+
+          yield* orchestrationEngine.dispatch({
+            type: "thread.activity.append",
+            commandId: yield* providerCommandId(input.event, "workflow-product-intent-locked"),
+            threadId: thread.id,
+            activity: {
+              id: EventId.make(yield* crypto.randomUUIDv4),
+              tone: "info",
+              kind: "product-intent-locked",
+              summary: input.directive.title,
+              payload: {
+                title: input.directive.title,
+                summaryMarkdown: input.directive.summaryMarkdown,
+              },
+              turnId: null,
+              createdAt: input.createdAt,
+            },
+            createdAt: input.createdAt,
+          });
+          return;
+        }
+
         case "planning-prd-artifact": {
-          if (
-            !isPlanningWorkflowInteractionMode(thread.interactionMode) ||
-            thread.workflowRole !== null
-          ) {
+          if (!isPlanningArtifactThread(thread)) {
             yield* Effect.logWarning(
               "provider workflow directive ignored for non-planning thread",
               {
@@ -924,10 +967,7 @@ const make = Effect.gen(function* () {
         }
 
         case "planning-issues-artifact": {
-          if (
-            !isPlanningWorkflowInteractionMode(thread.interactionMode) ||
-            thread.workflowRole !== null
-          ) {
+          if (!isPlanningArtifactThread(thread)) {
             yield* Effect.logWarning(
               "provider workflow directive ignored for non-planning thread",
               {
@@ -1009,6 +1049,97 @@ const make = Effect.gen(function* () {
             })),
             createdAt: input.createdAt,
           });
+          return;
+        }
+
+        case "implementation-worker-result": {
+          if (thread.workflowRole !== "implementation-worker") {
+            yield* Effect.logWarning(
+              "provider workflow worker result ignored for non-worker thread",
+              {
+                directiveType: input.directive.type,
+                threadId: thread.id,
+                workflowRole: thread.workflowRole,
+              },
+            );
+            return;
+          }
+
+          yield* orchestrationEngine.dispatch({
+            type: "thread.activity.append",
+            commandId: yield* providerCommandId(input.event, "workflow-worker-result"),
+            threadId: thread.id,
+            activity: {
+              id: EventId.make(yield* crypto.randomUUIDv4),
+              tone: input.directive.status === "succeeded" ? "info" : "error",
+              kind: "implementation-worker-result",
+              summary: `Worker ${input.directive.issueId} ${input.directive.status}`,
+              payload: input.directive,
+              turnId: null,
+              createdAt: input.createdAt,
+            },
+            createdAt: input.createdAt,
+          });
+          return;
+        }
+
+        case "implementation-merge-gate-result": {
+          if (thread.workflowRole !== "implementation-validator") {
+            yield* Effect.logWarning(
+              "provider workflow merge-gate result ignored for non-validator thread",
+              {
+                directiveType: input.directive.type,
+                threadId: thread.id,
+                workflowRole: thread.workflowRole,
+              },
+            );
+            return;
+          }
+
+          yield* orchestrationEngine.dispatch({
+            type: "thread.activity.append",
+            commandId: yield* providerCommandId(input.event, "workflow-merge-gate-result"),
+            threadId: thread.id,
+            activity: {
+              id: EventId.make(yield* crypto.randomUUIDv4),
+              tone: input.directive.status === "passed" ? "info" : "error",
+              kind: "implementation-merge-gate-result",
+              summary: `Merge gate ${input.directive.status}`,
+              payload: input.directive,
+              turnId: null,
+              createdAt: input.createdAt,
+            },
+            createdAt: input.createdAt,
+          });
+          return;
+        }
+
+        case "implementation-fix-result": {
+          if (thread.workflowRole !== "implementation-fixer") {
+            yield* Effect.logWarning("provider workflow fix result ignored for non-fixer thread", {
+              directiveType: input.directive.type,
+              threadId: thread.id,
+              workflowRole: thread.workflowRole,
+            });
+            return;
+          }
+
+          yield* orchestrationEngine.dispatch({
+            type: "thread.activity.append",
+            commandId: yield* providerCommandId(input.event, "workflow-fix-result"),
+            threadId: thread.id,
+            activity: {
+              id: EventId.make(yield* crypto.randomUUIDv4),
+              tone: input.directive.status === "succeeded" ? "info" : "error",
+              kind: "implementation-fix-result",
+              summary: `Implementation fix ${input.directive.status}`,
+              payload: input.directive,
+              turnId: null,
+              createdAt: input.createdAt,
+            },
+            createdAt: input.createdAt,
+          });
+          return;
         }
       }
     });
@@ -1022,7 +1153,11 @@ const make = Effect.gen(function* () {
   }) =>
     Effect.gen(function* () {
       const thread = yield* resolveThreadShell(input.threadId);
-      if (!thread || !isPlanningWorkflowInteractionMode(thread.interactionMode)) {
+      if (
+        !thread ||
+        (!isPlanningWorkflowInteractionMode(thread.interactionMode) &&
+          thread.interactionMode !== "implementation-workflow")
+      ) {
         return;
       }
 

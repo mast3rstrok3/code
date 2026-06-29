@@ -26,7 +26,10 @@ import {
   type VcsStatusLocalResult,
   type VcsStatusRemoteResult,
   type VcsStatusResult,
+  type ChangeRequest,
+  type ThreadId,
 } from "@t3tools/contracts";
+import * as Option from "effect/Option";
 
 import * as GitManager from "./GitManager.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
@@ -77,6 +80,16 @@ export class GitWorkflowService extends Context.Service<
       { readonly commitSha: string; readonly remoteRefName: string },
       GitCommandError
     >;
+    readonly resolveCommit: (input: {
+      readonly cwd: string;
+      readonly ref: string;
+    }) => Effect.Effect<{ readonly commitSha: string }, GitCommandError>;
+    readonly createOrOpenChangeRequest: (input: {
+      readonly cwd: string;
+      readonly actionId: string;
+      readonly threadId?: ThreadId;
+      readonly commitMessage?: string;
+    }) => Effect.Effect<ChangeRequest, GitManagerServiceError>;
     readonly removeWorktree: (
       input: VcsRemoveWorktreeInput,
     ) => Effect.Effect<void, GitCommandError>;
@@ -306,6 +319,68 @@ export const make = Effect.gen(function* () {
     resolveRemoteTrackingCommit: (input) =>
       ensureGitCommand("GitWorkflowService.resolveRemoteTrackingCommit", input.cwd).pipe(
         Effect.andThen(git.resolveRemoteTrackingCommit(input)),
+      ),
+    resolveCommit: (input) =>
+      ensureGitCommand("GitWorkflowService.resolveCommit", input.cwd).pipe(
+        Effect.andThen(
+          git.execute({
+            operation: "GitWorkflowService.resolveCommit",
+            cwd: input.cwd,
+            args: ["rev-parse", "--verify", `${input.ref}^{commit}`],
+            maxOutputBytes: 1024,
+          }),
+        ),
+        Effect.map((result) => ({ commitSha: result.stdout.trim() })),
+      ),
+    createOrOpenChangeRequest: (input) =>
+      ensureGit("GitWorkflowService.createOrOpenChangeRequest", input.cwd).pipe(
+        Effect.andThen(
+          gitManager.runStackedAction({
+            actionId: input.actionId,
+            cwd: input.cwd,
+            action: "commit_push_pr",
+            ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+            ...(input.commitMessage !== undefined ? { commitMessage: input.commitMessage } : {}),
+          }),
+        ),
+        Effect.flatMap((result) =>
+          gitManager.status({ cwd: input.cwd }).pipe(
+            Effect.flatMap((status) => {
+              const pr = status.pr;
+              const fallbackPr = result.pr;
+              const number = pr?.number ?? fallbackPr.number;
+              const title = pr?.title ?? fallbackPr.title;
+              const url = pr?.url ?? fallbackPr.url;
+              const baseRefName = pr?.baseRef ?? fallbackPr.baseBranch;
+              const headRefName = pr?.headRef ?? fallbackPr.headBranch;
+              if (
+                number === undefined ||
+                title === undefined ||
+                url === undefined ||
+                baseRefName === undefined ||
+                headRefName === undefined
+              ) {
+                return Effect.fail(
+                  new GitManagerError({
+                    operation: "GitWorkflowService.createOrOpenChangeRequest",
+                    cwd: input.cwd,
+                    detail: "Git action completed but no change request could be resolved.",
+                  }),
+                );
+              }
+              return Effect.succeed({
+                provider: status.sourceControlProvider?.kind ?? "unknown",
+                number,
+                title,
+                url,
+                baseRefName,
+                headRefName,
+                state: pr?.state ?? "open",
+                updatedAt: Option.none(),
+              } satisfies ChangeRequest);
+            }),
+          ),
+        ),
       ),
     removeWorktree: (input) =>
       ensureGitCommand("GitWorkflowService.removeWorktree", input.cwd).pipe(

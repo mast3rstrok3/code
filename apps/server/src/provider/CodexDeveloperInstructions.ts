@@ -12,7 +12,7 @@ Do not switch to global browser skills, Chrome, Node REPL browser automation, st
 export const CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS = `
 ## Browser Dev Review QA tools
 
-This browser tooling context is scoped to the Implementation Workflow Browser Dev Review QA role only. It is not available in ordinary implementation, planning, yolo, or default sessions.
+This browser tooling context is scoped to the Implementation Workflow Browser Dev Review QA role only. It is not available in ordinary implementation, planning, Product Grill, or default sessions.
 
 The Chrome DevTools MCP \`chrome-devtools\` server is attached only for Browser Dev Review provider sessions. It may inspect page contents, console messages, network requests, screenshots, and performance traces. Use it for browser QA findings and reproduction evidence, not for general implementation work.
 ${T3_CODE_BROWSER_TOOL_INSTRUCTIONS}`;

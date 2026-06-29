@@ -42,6 +42,7 @@ export type StartThreadTurnInput = CommandInput<"thread.turn.start">;
 export type LaunchThreadDevReviewInput = CommandInput<"thread.dev-review.launch">;
 export type CreateThreadPlanningPrdInput = CommandInput<"thread.planning-prd.create">;
 export type StartThreadPlanningStageInput = CommandInput<"thread.planning-stage.start">;
+export type LaunchThreadPlanningWorkflowInput = CommandInput<"thread.planning-workflow.launch">;
 export type LoadThreadPlanningPrdBundleInput = CommandInput<"thread.planning-prd-bundle.load">;
 export type RequestThreadPlanningIssueReviewInput =
   CommandInput<"thread.planning-issue-review.request">;
@@ -239,6 +240,20 @@ export const startThreadPlanningStage: (input: StartThreadPlanningStageInput) =>
       createdAt: metadata.createdAt,
     });
   });
+
+export const launchThreadPlanningWorkflow: (
+  input: LaunchThreadPlanningWorkflowInput,
+) => CommandEffect = Effect.fn("EnvironmentCommands.launchThreadPlanningWorkflow")(
+  function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "thread.planning-workflow.launch",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  },
+);
 
 export const loadThreadPlanningPrdBundle: (
   input: LoadThreadPlanningPrdBundleInput,

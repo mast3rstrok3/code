@@ -16,7 +16,7 @@ export const CHROME_DEVTOOLS_MCP_ARGS = [
 
 export const CHROME_DEVTOOLS_MCP_ASSOCIATED_DOC_CONTENT = `# Chrome DevTools MCP
 
-This MCP server is for the Browser Dev Review QA role only. Do not add it to global/default Codex context, ordinary implementation threads, planning threads, yolo threads, or generic agent instructions.
+This MCP server is for the Browser Dev Review QA role only. Do not add it to global/default Codex context, ordinary implementation threads, planning threads, Product Grill threads, or generic agent instructions.
 
 The server may inspect page contents, console messages, network requests, screenshots, and performance traces. Keep its configuration scoped to the Browser Dev Review provider session.
 

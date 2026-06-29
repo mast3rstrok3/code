@@ -129,19 +129,37 @@ export const RuntimeMode = Schema.Literals([
 ]);
 export type RuntimeMode = typeof RuntimeMode.Type;
 export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
-export const ProviderInteractionMode = Schema.Literals([
+const ProviderInteractionModeWire = Schema.Literals([
   "default",
   "plan",
   "planning-workflow",
   "implementation-workflow",
   "yolo-workflow",
+  "product-workflow",
 ]);
+const ProviderInteractionModeCanonical = Schema.Literals([
+  "default",
+  "plan",
+  "planning-workflow",
+  "implementation-workflow",
+  "product-workflow",
+]);
+export const ProviderInteractionMode = ProviderInteractionModeWire.pipe(
+  Schema.decodeTo(
+    ProviderInteractionModeCanonical,
+    SchemaTransformation.transformOrFail({
+      decode: (mode) =>
+        Effect.succeed(mode === "yolo-workflow" ? ("product-workflow" as const) : mode),
+      encode: (mode) => Effect.succeed(mode),
+    }),
+  ),
+);
 export type ProviderInteractionMode = typeof ProviderInteractionMode.Type;
 export const DEFAULT_PROVIDER_INTERACTION_MODE: ProviderInteractionMode = "default";
 export const isPlanningWorkflowInteractionMode = (
   mode: ProviderInteractionMode | null | undefined,
-): mode is "planning-workflow" | "yolo-workflow" =>
-  mode === "planning-workflow" || mode === "yolo-workflow";
+): mode is "planning-workflow" | "product-workflow" =>
+  mode === "planning-workflow" || mode === "product-workflow";
 export const ProviderRequestKind = Schema.Literals(["command", "file-read", "file-change"]);
 export type ProviderRequestKind = typeof ProviderRequestKind.Type;
 export const AssistantDeliveryMode = Schema.Literals(["buffered", "streaming"]);
@@ -421,7 +439,11 @@ export const IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS = 5;
 export const OrchestrationImplementationRunId = TrimmedNonEmptyString;
 export type OrchestrationImplementationRunId = typeof OrchestrationImplementationRunId.Type;
 
-export const OrchestrationImplementationChangeRequest = ChangeRequest;
+export const OrchestrationImplementationChangeRequest = ChangeRequest.mapFields(
+  Struct.assign({
+    updatedAt: Schema.Unknown,
+  }),
+);
 export type OrchestrationImplementationChangeRequest =
   typeof OrchestrationImplementationChangeRequest.Type;
 
@@ -809,11 +831,13 @@ export const OrchestrationSessionStatus = Schema.Literals([
 export type OrchestrationSessionStatus = typeof OrchestrationSessionStatus.Type;
 
 export const OrchestrationThreadWorkflowRole = Schema.Literals([
+  "planning-orchestrator",
   "planning-reviewer",
   "implementation-orchestrator",
   "implementation-worker",
   "implementation-validator",
   "implementation-qa-reviewer",
+  "implementation-fixer",
 ]);
 export type OrchestrationThreadWorkflowRole = typeof OrchestrationThreadWorkflowRole.Type;
 
@@ -1178,6 +1202,24 @@ const ThreadPlanningStageStartCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadPlanningWorkflowLaunchCommand = Schema.Struct({
+  type: Schema.Literal("thread.planning-workflow.launch"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  intentTitle: TrimmedNonEmptyString,
+  intentSummaryMarkdown: TrimmedNonEmptyString,
+  createdAt: IsoDateTime,
+});
+
+const ThreadPlanningWorkflowStageSetCommand = Schema.Struct({
+  type: Schema.Literal("thread.planning-workflow.stage.set"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  stage: OrchestrationPlanningWorkflowStage,
+  reasonMarkdown: Schema.optional(Schema.String),
+  createdAt: IsoDateTime,
+});
+
 const ThreadPlanningPrdApplyCommand = Schema.Struct({
   type: Schema.Literal("thread.planning-prd.apply"),
   commandId: CommandId,
@@ -1255,6 +1297,14 @@ const ThreadImplementationRunLaunchCommand = Schema.Struct({
   orchestratorBranch: TrimmedNonEmptyString,
   orchestratorWorktreePath: TrimmedNonEmptyString,
   validationCommands: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  createdAt: IsoDateTime,
+});
+
+const ThreadImplementationRunUpdateCommand = Schema.Struct({
+  type: Schema.Literal("thread.implementation-run.update"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  run: OrchestrationImplementationRun,
   createdAt: IsoDateTime,
 });
 
@@ -1411,6 +1461,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadInteractionModeSetCommand,
   ThreadPlanningPrdCreateCommand,
   ThreadPlanningStageStartCommand,
+  ThreadPlanningWorkflowLaunchCommand,
   ThreadPlanningIssueReviewRequestCommand,
   ThreadPlanningPrdBundleLoadCommand,
   ThreadImplementationRunLaunchCommand,
@@ -1439,6 +1490,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadInteractionModeSetCommand,
   ThreadPlanningPrdCreateCommand,
   ThreadPlanningStageStartCommand,
+  ThreadPlanningWorkflowLaunchCommand,
   ThreadPlanningIssueReviewRequestCommand,
   ThreadPlanningPrdBundleLoadCommand,
   ThreadImplementationRunLaunchCommand,
@@ -1547,6 +1599,8 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadPlanningPrdApplyCommand,
   ThreadPlanningIssuesApplyCommand,
   ThreadPlanningReviewerVerdictApplyCommand,
+  ThreadPlanningWorkflowStageSetCommand,
+  ThreadImplementationRunUpdateCommand,
   ThreadTurnDiffCompleteCommand,
   ThreadActivityAppendCommand,
   ThreadDevReviewUpdateCommand,
@@ -1578,7 +1632,9 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.planning-issues-revised",
   "thread.planning-issue-review-requested",
   "thread.planning-prd-bundle-loaded",
+  "thread.planning-workflow-stage-set",
   "thread.implementation-run-launched",
+  "thread.implementation-run-updated",
   "thread.implementation-change-request-retry-requested",
   "thread.message-sent",
   "thread.turn-start-requested",
@@ -1734,7 +1790,19 @@ export const ThreadPlanningPrdBundleLoadedPayload = Schema.Struct({
   loadedAt: IsoDateTime,
 });
 
+export const ThreadPlanningWorkflowStageSetPayload = Schema.Struct({
+  threadId: ThreadId,
+  stage: OrchestrationPlanningWorkflowStage,
+  reasonMarkdown: Schema.optional(Schema.String),
+  updatedAt: IsoDateTime,
+});
+
 export const ThreadImplementationRunLaunchedPayload = Schema.Struct({
+  sourceThreadId: ThreadId,
+  run: OrchestrationImplementationRun,
+});
+
+export const ThreadImplementationRunUpdatedPayload = Schema.Struct({
   sourceThreadId: ThreadId,
   run: OrchestrationImplementationRun,
 });
@@ -1959,8 +2027,18 @@ export const OrchestrationEvent = Schema.Union([
   }),
   Schema.Struct({
     ...EventBaseFields,
+    type: Schema.Literal("thread.planning-workflow-stage-set"),
+    payload: ThreadPlanningWorkflowStageSetPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
     type: Schema.Literal("thread.implementation-run-launched"),
     payload: ThreadImplementationRunLaunchedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.implementation-run-updated"),
+    payload: ThreadImplementationRunUpdatedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

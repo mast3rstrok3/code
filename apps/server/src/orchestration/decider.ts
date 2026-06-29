@@ -1,7 +1,6 @@
 import {
   type DevReviewDocument,
   EventId,
-  isPlanningWorkflowInteractionMode,
   MessageId,
   type OrchestrationImplementationRun,
   type OrchestrationCommand,
@@ -184,6 +183,35 @@ function buildPlanningPrdStagePrompt(): string {
   ].join("\n");
 }
 
+function buildProductPlanningPrdStagePrompt(
+  command: Extract<OrchestrationCommand, { type: "thread.planning-workflow.launch" }>,
+): string {
+  return [
+    "Run the Planning Workflow PRD authoring stage from this locked Product Grill intent.",
+    "",
+    "Use this locked product intent as the authoritative source. Do not ask the user questions or reopen product intent.",
+    "",
+    `Intent title: ${command.intentTitle}`,
+    "",
+    "Intent summary:",
+    command.intentSummaryMarkdown,
+    "",
+    "When ready, finish with exactly one fenced JSON block using this shape:",
+    "```json",
+    JSON.stringify(
+      {
+        type: "planning-prd-artifact",
+        title: "Short PRD title",
+        summaryMarkdown:
+          "Full PRD markdown with goals, non-goals, workflows, data, risks, and acceptance criteria.",
+      },
+      null,
+      2,
+    ),
+    "```",
+  ].join("\n");
+}
+
 function buildPlanningIssuesStagePrompt(prd: OrchestrationPlanningPrd): string {
   return [
     "Decompose this PRD into implementation-ready planning issues.",
@@ -224,6 +252,10 @@ function buildPlanningReviewerPrompt(input: {
   return [
     `Review planning issue cycle ${input.cycleNumber} for PRD "${input.prd.title}".`,
     "",
+    "Decide whether the issue set is complete against the PRD and available context, and whether the proposed issues are correct tracer-bullet vertical slices.",
+    "",
+    "Review for missing PRD coverage, incorrect horizontal slicing, oversized or undersized slices, incorrect dependency ordering, hidden prefactoring/migration/contract work, vague acceptance criteria, and missing expected tests.",
+    "",
     "When ready, finish with exactly one fenced JSON block using this shape. Use the planning issue ids shown below.",
     "```json",
     JSON.stringify(
@@ -245,6 +277,12 @@ function buildPlanningReviewerPrompt(input: {
       2,
     ),
     "```",
+    "",
+    "## PRD",
+    "",
+    input.prd.summaryMarkdown,
+    "",
+    "## Planning Issues",
     "",
     input.issues
       .map((issue) => `#${issue.ordinal} ${issue.title}\nID: ${issue.id}\n${issue.bodyMarkdown}`)
@@ -356,24 +394,6 @@ function buildImplementationRun(input: {
     createdAt: input.command.createdAt,
     updatedAt: input.command.createdAt,
   };
-}
-
-function buildImplementationOrchestratorPrompt(input: {
-  readonly prd: OrchestrationPlanningPrd;
-  readonly issues: ReadonlyArray<OrchestrationPlanningIssue>;
-  readonly run: OrchestrationImplementationRun;
-}): string {
-  return [
-    `Start implementation workflow run ${input.run.id} for PRD "${input.prd.title}".`,
-    "",
-    `Base branch: ${input.run.baseBranch}`,
-    `Pinned commit: ${input.run.pinnedCommit}`,
-    `Orchestrator branch: ${input.run.orchestratorBranch}`,
-    `Validation commands:\n${input.run.launchSummary.validationCommands.map((command) => `- ${command}`).join("\n")}`,
-    "",
-    "Planning issues:",
-    input.issues.map((issue) => `#${issue.ordinal} ${issue.title}`).join("\n"),
-  ].join("\n");
 }
 
 function withEventBase(
@@ -757,13 +777,115 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         },
       });
 
+    case "thread.planning-workflow.launch": {
+      const productRootThread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      if (
+        productRootThread.interactionMode !== "product-workflow" ||
+        productRootThread.workflowRole !== null
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' is not a Product Grill root thread.`,
+        });
+      }
+
+      const crypto = yield* Crypto.Crypto;
+      const planningThreadUuid = yield* crypto.randomUUIDv4;
+      const messageUuid = yield* crypto.randomUUIDv4;
+      const planningThreadId = ThreadId.make(`thread-planning-orchestrator-${planningThreadUuid}`);
+      const messageId = MessageId.make(`message-product-prd-stage-${messageUuid}`);
+      const planningThreadCreatedEvent: PlannedOrchestrationEvent = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: planningThreadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.created",
+        payload: {
+          threadId: planningThreadId,
+          projectId: productRootThread.projectId,
+          ownerUserId: productRootThread.ownerUserId,
+          parentThreadId: productRootThread.id,
+          workflowRole: "planning-orchestrator",
+          title: `Plan ${command.intentTitle}`,
+          modelSelection: productRootThread.modelSelection,
+          runtimeMode: productRootThread.runtimeMode,
+          interactionMode: "planning-workflow",
+          branch: productRootThread.branch,
+          worktreePath: productRootThread.worktreePath,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+      const stageStartedEvent: PlannedOrchestrationEvent = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: planningThreadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        causationEventId: planningThreadCreatedEvent.eventId,
+        type: "thread.planning-stage-started",
+        payload: {
+          threadId: planningThreadId,
+          stage: "prd-authoring",
+          startedAt: command.createdAt,
+        },
+      };
+      const promptEvent: PlannedOrchestrationEvent = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: planningThreadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        causationEventId: stageStartedEvent.eventId,
+        type: "thread.message-sent",
+        payload: {
+          threadId: planningThreadId,
+          messageId,
+          role: "user",
+          text: buildProductPlanningPrdStagePrompt(command),
+          turnId: null,
+          streaming: false,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+      const turnStartRequestedEvent: PlannedOrchestrationEvent = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: planningThreadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        causationEventId: promptEvent.eventId,
+        type: "thread.turn-start-requested",
+        payload: {
+          threadId: planningThreadId,
+          messageId,
+          modelSelection: productRootThread.modelSelection,
+          runtimeMode: productRootThread.runtimeMode,
+          interactionMode: "planning-workflow",
+          workflowPromptId: WORKFLOW_PROMPT_IDS.planningPrdCodex,
+          createdAt: command.createdAt,
+        },
+      };
+      return [planningThreadCreatedEvent, stageStartedEvent, promptEvent, turnStartRequestedEvent];
+    }
+
     case "thread.planning-stage.start": {
       const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
-      if (!isPlanningWorkflowInteractionMode(thread.interactionMode)) {
+      if (thread.interactionMode !== "planning-workflow") {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: `Thread '${command.threadId}' is not in Planning Workflow mode.`,
@@ -827,12 +949,43 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           messageId,
           modelSelection: thread.modelSelection,
           runtimeMode: thread.runtimeMode,
-          interactionMode: "planning-workflow",
+          interactionMode: thread.interactionMode,
           workflowPromptId: WORKFLOW_PROMPT_IDS.planningPrdCodex,
           createdAt: command.createdAt,
         },
       };
       return [stageStartedEvent, promptEvent, turnStartRequestedEvent];
+    }
+
+    case "thread.planning-workflow.stage.set": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      if (thread.interactionMode !== "planning-workflow") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' is not in Planning Workflow mode.`,
+        });
+      }
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: thread.id,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.planning-workflow-stage-set",
+        payload: {
+          threadId: thread.id,
+          stage: command.stage,
+          ...(command.reasonMarkdown !== undefined
+            ? { reasonMarkdown: command.reasonMarkdown }
+            : {}),
+          updatedAt: command.createdAt,
+        },
+      };
     }
 
     case "thread.planning-prd.apply": {
@@ -841,7 +994,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
-      if (!isPlanningWorkflowInteractionMode(thread.interactionMode)) {
+      if (thread.interactionMode !== "planning-workflow") {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: `Thread '${command.threadId}' is not in Planning Workflow mode.`,
@@ -910,7 +1063,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           messageId: issueMessageId,
           modelSelection: thread.modelSelection,
           runtimeMode: thread.runtimeMode,
-          interactionMode: "planning-workflow",
+          interactionMode: thread.interactionMode,
           workflowPromptId: WORKFLOW_PROMPT_IDS.planningIssuesCodex,
           createdAt: command.createdAt,
         },
@@ -926,7 +1079,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       });
       const workflow = thread.planningWorkflow;
       const prd = workflow?.prd ?? null;
-      if (!isPlanningWorkflowInteractionMode(thread.interactionMode)) {
+      if (thread.interactionMode !== "planning-workflow") {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: `Thread '${command.threadId}' is not in Planning Workflow mode.`,
@@ -1071,7 +1224,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           title: `Review ${prd.title}`,
           modelSelection: planningThread.modelSelection,
           runtimeMode: planningThread.runtimeMode,
-          interactionMode: "planning-workflow",
+          interactionMode: planningThread.interactionMode,
           branch: planningThread.branch,
           worktreePath: planningThread.worktreePath,
           createdAt: command.createdAt,
@@ -1112,7 +1265,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           messageId: reviewerMessageId,
           modelSelection: planningThread.modelSelection,
           runtimeMode: planningThread.runtimeMode,
-          interactionMode: "planning-workflow",
+          interactionMode: planningThread.interactionMode,
           workflowPromptId: WORKFLOW_PROMPT_IDS.planningIssueReviewerCodex,
           createdAt: command.createdAt,
         },
@@ -1285,12 +1438,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const crypto = yield* Crypto.Crypto;
       const runUuid = yield* crypto.randomUUIDv4;
       const orchestratorThreadUuid = yield* crypto.randomUUIDv4;
-      const orchestratorMessageUuid = yield* crypto.randomUUIDv4;
       const orchestratorThreadId = ThreadId.make(
         `thread-implementation-orchestrator-${orchestratorThreadUuid}`,
-      );
-      const orchestratorMessageId = MessageId.make(
-        `message-implementation-orchestrator-${orchestratorMessageUuid}`,
       );
       const run = buildImplementationRun({
         runId: `implementation-run-${runUuid}`,
@@ -1358,56 +1507,35 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           run,
         },
       };
-      const orchestratorPromptEvent: PlannedOrchestrationEvent = {
+      return [orchestratorThreadCreatedEvent, bundleLoadedEvent, runLaunchedEvent];
+    }
+
+    case "thread.implementation-run.update": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const existingRun = readModel.implementationRuns.find((run) => run.id === command.run.id);
+      if (existingRun === undefined) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Implementation Run '${command.run.id}' does not exist.`,
+        });
+      }
+      return {
         ...(yield* withEventBase({
           aggregateKind: "thread",
-          aggregateId: orchestratorThreadId,
+          aggregateId: command.threadId,
           occurredAt: command.createdAt,
           commandId: command.commandId,
         })),
-        causationEventId: runLaunchedEvent.eventId,
-        type: "thread.message-sent",
+        type: "thread.implementation-run-updated",
         payload: {
-          threadId: orchestratorThreadId,
-          messageId: orchestratorMessageId,
-          role: "user",
-          text: buildImplementationOrchestratorPrompt({
-            prd: bundle.prd,
-            issues: bundle.issues,
-            run,
-          }),
-          turnId: null,
-          streaming: false,
-          createdAt: command.createdAt,
-          updatedAt: command.createdAt,
+          sourceThreadId: command.threadId,
+          run: command.run,
         },
       };
-      const orchestratorTurnStartRequestedEvent: PlannedOrchestrationEvent = {
-        ...(yield* withEventBase({
-          aggregateKind: "thread",
-          aggregateId: orchestratorThreadId,
-          occurredAt: command.createdAt,
-          commandId: command.commandId,
-        })),
-        causationEventId: orchestratorPromptEvent.eventId,
-        type: "thread.turn-start-requested",
-        payload: {
-          threadId: orchestratorThreadId,
-          messageId: orchestratorMessageId,
-          modelSelection: launcherThread.modelSelection,
-          runtimeMode: launcherThread.runtimeMode,
-          interactionMode: "implementation-workflow",
-          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationOrchestratorPlanningCodex,
-          createdAt: command.createdAt,
-        },
-      };
-      return [
-        orchestratorThreadCreatedEvent,
-        bundleLoadedEvent,
-        runLaunchedEvent,
-        orchestratorPromptEvent,
-        orchestratorTurnStartRequestedEvent,
-      ];
     }
 
     case "thread.implementation-change-request.retry": {
@@ -1492,7 +1620,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.reviewThreadId,
           projectId: sourceThread.projectId,
           ownerUserId: sourceThread.ownerUserId,
-          title: "Q&A Dev Review",
+          title: "Browser Dev Review",
           modelSelection: command.modelSelection,
           runtimeMode: command.runtimeMode,
           interactionMode: "implementation-workflow",
@@ -1550,7 +1678,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.reviewThreadId,
           messageId: command.message.messageId,
           modelSelection: command.modelSelection,
-          titleSeed: "Q&A Dev Review",
+          titleSeed: "Browser Dev Review",
           runtimeMode: command.runtimeMode,
           interactionMode: "implementation-workflow",
           workflowPromptId: command.workflowPromptId,

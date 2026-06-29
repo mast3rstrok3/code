@@ -13,8 +13,10 @@ import {
   OrchestrationLatestTurn,
   ProjectCreatedPayload,
   ProjectMetaUpdatedPayload,
+  ProviderInteractionMode,
   OrchestrationProposedPlan,
   OrchestrationSession,
+  OrchestrationThreadWorkflowRole,
   ProjectCreateCommand,
   ThreadMetaUpdatedPayload,
   ThreadTurnStartCommand,
@@ -49,6 +51,41 @@ const decodeThreadCreatedPayload = Schema.decodeUnknownEffect(ThreadCreatedPaylo
 const decodeOrchestrationCommand = Schema.decodeUnknownEffect(OrchestrationCommand);
 const decodeOrchestrationEvent = Schema.decodeUnknownEffect(OrchestrationEvent);
 const decodeThreadMetaUpdatedPayload = Schema.decodeUnknownEffect(ThreadMetaUpdatedPayload);
+const decodeProviderInteractionMode = Schema.decodeUnknownEffect(ProviderInteractionMode);
+const decodeOrchestrationThreadWorkflowRole = Schema.decodeUnknownEffect(
+  OrchestrationThreadWorkflowRole,
+);
+
+it.effect("decodes legacy YOLO Workflow interaction mode as Product Workflow", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeProviderInteractionMode("yolo-workflow");
+    assert.strictEqual(parsed, "product-workflow");
+  }),
+);
+
+it.effect("decodes planning orchestrator workflow role", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationThreadWorkflowRole("planning-orchestrator");
+    assert.strictEqual(parsed, "planning-orchestrator");
+  }),
+);
+
+it.effect("decodes planning workflow launch commands", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationCommand({
+      type: "thread.planning-workflow.launch",
+      commandId: "cmd-planning-launch",
+      threadId: "thread-product-root",
+      intentTitle: "Checkout",
+      intentSummaryMarkdown: "Build checkout.",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(parsed.type, "thread.planning-workflow.launch");
+    if (parsed.type !== "thread.planning-workflow.launch") return;
+    assert.strictEqual(parsed.intentTitle, "Checkout");
+    assert.strictEqual(parsed.intentSummaryMarkdown, "Build checkout.");
+  }),
+);
 
 it.effect("parses turn diff input when fromTurnCount <= toTurnCount", () =>
   Effect.gen(function* () {
@@ -559,7 +596,7 @@ it.effect("accepts workflow prompt metadata in thread.turn.start", () =>
   }),
 );
 
-it.effect("accepts Q&A Dev Review launch commands", () =>
+it.effect("accepts Browser Dev Review launch commands", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeOrchestrationCommand({
       type: "thread.dev-review.launch",
@@ -570,7 +607,7 @@ it.effect("accepts Q&A Dev Review launch commands", () =>
       message: {
         messageId: "msg-dev-review-launch",
         role: "user",
-        text: "Run Q&A Dev Review",
+        text: "Run Browser Dev Review",
         attachments: [],
       },
       modelSelection: {
@@ -578,14 +615,52 @@ it.effect("accepts Q&A Dev Review launch commands", () =>
         model: "gpt-5-codex",
       },
       runtimeMode: "full-access",
-      workflowPromptId: "implementation.qna-dev-review.codex",
+      workflowPromptId: "implementation.browser-dev-review.codex",
       createdAt: "2026-01-01T00:00:00.000Z",
     });
 
     assert.strictEqual(parsed.type, "thread.dev-review.launch");
     if (parsed.type !== "thread.dev-review.launch") return;
     assert.strictEqual(parsed.reviewId, "dev-review-1");
-    assert.strictEqual(parsed.workflowPromptId, "implementation.qna-dev-review.codex");
+    assert.strictEqual(parsed.workflowPromptId, "implementation.browser-dev-review.codex");
+  }),
+);
+
+it.effect("accepts planning workflow stage set commands and events", () =>
+  Effect.gen(function* () {
+    const command = yield* decodeOrchestrationCommand({
+      type: "thread.planning-workflow.stage.set",
+      commandId: "cmd-stage-set",
+      threadId: "thread-product",
+      stage: "needs-human-attention",
+      reasonMarkdown: "Review retries exhausted.",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(command.type, "thread.planning-workflow.stage.set");
+    if (command.type !== "thread.planning-workflow.stage.set") return;
+    assert.strictEqual(command.stage, "needs-human-attention");
+
+    const event = yield* decodeOrchestrationEvent({
+      sequence: 1,
+      eventId: "event-stage-set",
+      type: "thread.planning-workflow-stage-set",
+      aggregateKind: "thread",
+      aggregateId: "thread-product",
+      commandId: "cmd-stage-set",
+      causationEventId: null,
+      correlationId: "cmd-stage-set",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      metadata: {},
+      payload: {
+        threadId: "thread-product",
+        stage: "needs-human-attention",
+        reasonMarkdown: "Review retries exhausted.",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    });
+    assert.strictEqual(event.type, "thread.planning-workflow-stage-set");
+    if (event.type !== "thread.planning-workflow-stage-set") return;
+    assert.strictEqual(event.payload.reasonMarkdown, "Review retries exhausted.");
   }),
 );
 

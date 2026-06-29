@@ -42,10 +42,7 @@ import {
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
-import {
-  isPreviewMcpWorkflowPromptId,
-  isQnaDevReviewWorkflowPromptId,
-} from "../../provider/WorkflowPromptRegistry.ts";
+import { isPreviewMcpWorkflowPromptId } from "../../provider/WorkflowPromptRegistry.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 
@@ -545,9 +542,7 @@ const make = Effect.gen(function* () {
       const previousWorkflowPromptId = threadWorkflowPromptIds.get(threadId);
       const previewMcpScopeChanged =
         isPreviewMcpWorkflowPromptId(previousWorkflowPromptId) !==
-          isPreviewMcpWorkflowPromptId(desiredWorkflowPromptId) ||
-        isQnaDevReviewWorkflowPromptId(previousWorkflowPromptId) !==
-          isQnaDevReviewWorkflowPromptId(desiredWorkflowPromptId);
+        isPreviewMcpWorkflowPromptId(desiredWorkflowPromptId);
 
       if (
         !runtimeModeChanged &&

@@ -67,8 +67,8 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
               >
                 Implementation Workflow
               </MenuRadioItem>
-              <MenuRadioItem value="yolo-workflow" disabled={!props.planningWorkflowAvailable}>
-                YOLO Workflow
+              <MenuRadioItem value="product-workflow" disabled={!props.planningWorkflowAvailable}>
+                Product Grill
               </MenuRadioItem>
             </MenuRadioGroup>
             <MenuDivider />

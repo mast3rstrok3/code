@@ -9,7 +9,7 @@ import {
   type ThreadId,
   type TurnId,
 } from "@t3tools/contracts";
-import { type ChatMessage, type SessionPhase, type Thread } from "../types";
+import { type ChatMessage, type SessionPhase, type Thread, type ThreadShell } from "../types";
 import { type ComposerImageAttachment, type DraftThreadState } from "../composerDraftStore";
 import * as Schema from "effect/Schema";
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -88,6 +88,27 @@ export function buildThreadTurnInterruptInput(thread: Pick<Thread, "id" | "sessi
     threadId: thread.id,
     ...(runningTurnId !== null ? { turnId: runningTurnId } : {}),
   };
+}
+
+export function resolveProductGrillPlanningThreadId(input: {
+  activeThread: Pick<Thread, "id" | "interactionMode" | "workflowRole"> | null | undefined;
+  workflowThreadShells: ReadonlyArray<Pick<ThreadShell, "id" | "parentThreadId" | "workflowRole">>;
+}): ThreadId | null {
+  const activeThread = input.activeThread;
+  if (
+    !activeThread ||
+    activeThread.interactionMode !== "product-workflow" ||
+    activeThread.workflowRole !== null
+  ) {
+    return null;
+  }
+  return (
+    input.workflowThreadShells.find(
+      (thread) =>
+        thread.parentThreadId === activeThread.id &&
+        thread.workflowRole === "planning-orchestrator",
+    )?.id ?? null
+  );
 }
 
 export function reconcileMountedTerminalThreadIds(input: {

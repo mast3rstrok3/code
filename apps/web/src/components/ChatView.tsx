@@ -42,6 +42,7 @@ import { CHAT_LIST_ANCHOR_OFFSET } from "@t3tools/shared/chatList";
 import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
 import { truncate } from "@t3tools/shared/String";
 import { nextTerminalId, resolveTerminalSessionLabel } from "@t3tools/shared/terminalLabels";
+import { resolveImplementationBranchIdentity } from "@t3tools/shared/orchestrationImplementation";
 import { Debouncer } from "@tanstack/react-pacer";
 import { useAtomValue } from "@effect/atom-react";
 import {
@@ -68,7 +69,6 @@ import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { isElectron } from "../env";
 import { readLocalApi } from "../localApi";
-import { resolveImplementationBranchIdentity } from "../lib/implementationBranchIdentity";
 import { useDiffPanelStore } from "../diffPanelStore";
 import {
   collapseExpandedComposerCursor,
@@ -242,6 +242,7 @@ import {
   deriveLockedProvider,
   readFileAsDataUrl,
   reconcileMountedTerminalThreadIds,
+  resolveProductGrillPlanningThreadId,
   resolveSendEnvMode,
   revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
@@ -277,7 +278,7 @@ const DevReviewPanel = lazy(() =>
 );
 const FilePreviewPanel = lazy(() => import("./files/FilePreviewPanel"));
 const EMPTY_PENDING_FILE_SURFACE_IDS: ReadonlySet<string> = new Set();
-const QNA_DEV_REVIEW_WORKFLOW_PROMPT_ID = "implementation.qna-dev-review.codex";
+const BROWSER_DEV_REVIEW_WORKFLOW_PROMPT_ID = "implementation.browser-dev-review.codex";
 const TYPE_TO_FOCUS_EDITABLE_SELECTOR = [
   "input",
   "textarea",
@@ -1451,6 +1452,26 @@ function ChatViewContent(props: ChatViewProps) {
     activeThread?.environmentId ?? null,
     activeProject?.id ?? null,
   );
+  const productGrillPlanningThreadId = useMemo(
+    () =>
+      resolveProductGrillPlanningThreadId({
+        activeThread,
+        workflowThreadShells: activeWorkflowThreadShells,
+      }),
+    [activeThread, activeWorkflowThreadShells],
+  );
+  const productGrillPlanningThreadRef = useMemo(
+    () =>
+      activeThread && productGrillPlanningThreadId
+        ? scopeThreadRef(activeThread.environmentId, productGrillPlanningThreadId)
+        : null,
+    [activeThread, productGrillPlanningThreadId],
+  );
+  const productGrillPlanningWorkflow = useThreadPlanningWorkflow(productGrillPlanningThreadRef);
+  const displayedPlanningWorkflow =
+    activeThread?.interactionMode === "product-workflow" && activeThread.workflowRole === null
+      ? productGrillPlanningWorkflow
+      : activePlanningWorkflow;
   const activeEnvironmentShell = useEnvironmentQuery(
     activeThread ? environmentShell.stateAtom(activeThread.environmentId) : null,
   );
@@ -2947,7 +2968,7 @@ function ChatViewContent(props: ChatViewProps) {
     useRightPanelStore.getState().open(activeThreadRef, "review");
     onDiffPanelOpen?.();
   }, [activeThreadRef, isGitRepo, isServerThread, onDiffPanelOpen]);
-  const launchQnaDevReview = useCallback(async () => {
+  const launchBrowserDevReview = useCallback(async () => {
     if (
       !activeThread ||
       !activeThreadRef ||
@@ -2969,7 +2990,7 @@ function ChatViewContent(props: ChatViewProps) {
       .map((message) => `${message.role}: ${truncate(message.text, 1_200)}`)
       .join("\n\n");
     const messageText = [
-      `Run Q&A Dev Review for source implementation thread ${activeThread.id}.`,
+      `Run Browser Dev Review for source implementation thread ${activeThread.id}.`,
       `Source title: ${activeThread.title}`,
       `Dev Review record ID: ${reviewId}`,
       "Use dev_review_get, dev_review_replay_start, preview_* testing, dev_review_replay_stop, and dev_review_update.",
@@ -2992,7 +3013,7 @@ function ChatViewContent(props: ChatViewProps) {
         },
         modelSelection: sendCtx.selectedModelSelection,
         runtimeMode,
-        workflowPromptId: QNA_DEV_REVIEW_WORKFLOW_PROMPT_ID,
+        workflowPromptId: BROWSER_DEV_REVIEW_WORKFLOW_PROMPT_ID,
         createdAt,
       },
     });
@@ -5049,14 +5070,14 @@ function ChatViewContent(props: ChatViewProps) {
           mode="embedded"
           threadRef={activeThreadRef}
           launchInFlight={devReviewLaunchInFlight}
-          onLaunch={launchQnaDevReview}
+          onLaunch={launchBrowserDevReview}
         />
       </Suspense>
     ) : activeRightPanelSurface?.kind === "plan" ? (
       <PlanSidebar
         activePlan={activePlan}
         activeProposedPlan={sidebarProposedPlan}
-        planningWorkflow={activePlanningWorkflow}
+        planningWorkflow={displayedPlanningWorkflow}
         workflowThreadShells={activeWorkflowThreadShells}
         implementationRuns={activeImplementationRuns}
         label={planSidebarLabel}
@@ -5068,6 +5089,7 @@ function ChatViewContent(props: ChatViewProps) {
         mode="embedded"
         onOpenThread={openWorkflowThread}
         onLoadPrdBundle={handleLoadPlanningPrdBundle}
+        automationOwned={activeThread?.interactionMode === "product-workflow"}
         onRequestIssueReview={handleRequestPlanningIssueReview}
         onLaunchImplementationRun={handleLaunchImplementationRun}
         onRetryImplementationChangeRequest={handleRetryImplementationChangeRequest}

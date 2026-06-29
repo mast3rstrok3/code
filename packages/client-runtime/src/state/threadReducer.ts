@@ -255,6 +255,22 @@ export function applyThreadDetailEvent(
       };
     }
 
+    case "thread.planning-workflow-stage-set": {
+      const workflow = thread.planningWorkflow ?? emptyPlanningWorkflow();
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          planningWorkflow: {
+            ...workflow,
+            stage: event.payload.stage,
+            createIssuesAvailable: event.payload.stage === "issues-authoring",
+          },
+          updatedAt: event.payload.updatedAt,
+        },
+      };
+    }
+
     case "thread.planning-prd-bundle-loaded": {
       if (event.payload.bundle === undefined) {
         return { kind: "unchanged" };
@@ -562,6 +578,11 @@ export function applyThreadDetailEvent(
         thread: { ...thread, devReviews, updatedAt: event.occurredAt },
       };
     }
+
+    case "thread.implementation-run-launched":
+    case "thread.implementation-run-updated":
+    case "thread.implementation-change-request-retry-requested":
+      return { kind: "unchanged" };
 
     // ── Checkpoints / turn diffs ────────────────────────────────────
     case "thread.turn-diff-completed": {

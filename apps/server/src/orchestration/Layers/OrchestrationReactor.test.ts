@@ -6,8 +6,10 @@ import * as Scope from "effect/Scope";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
+import { ImplementationWorkflowReactor } from "../Services/ImplementationWorkflowReactor.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
+import { ProductWorkflowReactor } from "../Services/ProductWorkflowReactor.ts";
 import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
 import { OrchestrationReactor } from "../Services/OrchestrationReactor.ts";
 import { makeOrchestrationReactor } from "./OrchestrationReactor.ts";
@@ -23,7 +25,7 @@ describe("OrchestrationReactor", () => {
     runtime = null;
   });
 
-  it("starts provider ingestion, provider command, checkpoint, and thread deletion reactors", async () => {
+  it("starts provider ingestion, provider command, checkpoint, workflow, and thread deletion reactors", async () => {
     const started: string[] = [];
 
     runtime = ManagedRuntime.make(
@@ -50,6 +52,24 @@ describe("OrchestrationReactor", () => {
           Layer.succeed(CheckpointReactor, {
             start: () => {
               started.push("checkpoint-reactor");
+              return Effect.void;
+            },
+            drain: Effect.void,
+          }),
+        ),
+        Layer.provideMerge(
+          Layer.succeed(ProductWorkflowReactor, {
+            start: () => {
+              started.push("product-workflow-reactor");
+              return Effect.void;
+            },
+            drain: Effect.void,
+          }),
+        ),
+        Layer.provideMerge(
+          Layer.succeed(ImplementationWorkflowReactor, {
+            start: () => {
+              started.push("implementation-workflow-reactor");
               return Effect.void;
             },
             drain: Effect.void,
@@ -84,6 +104,8 @@ describe("OrchestrationReactor", () => {
       "provider-runtime-ingestion",
       "provider-command-reactor",
       "checkpoint-reactor",
+      "product-workflow-reactor",
+      "implementation-workflow-reactor",
       "thread-deletion-reactor",
       "agent-awareness-relay",
     ]);

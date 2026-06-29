@@ -67,7 +67,7 @@ export function DevReviewPanel(props: {
             onClick={props.onLaunch}
           >
             <PlayCircle className="size-4" />
-            Launch Q&A Dev Review
+            Launch Browser Dev Review
           </Button>
         </>
       }
@@ -79,7 +79,7 @@ export function DevReviewPanel(props: {
           <div className="max-w-sm">
             <h3 className="text-sm font-medium">No Dev Review record</h3>
             <p className="mt-2 text-sm text-muted-foreground">
-              Launch Q&A Dev Review to create a durable review thread and replay-backed record.
+              Launch Browser Dev Review to create a durable review thread and replay-backed record.
             </p>
           </div>
         </div>

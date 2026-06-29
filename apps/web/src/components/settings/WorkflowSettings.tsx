@@ -29,8 +29,8 @@ function workflowTitle(workflow: WorkflowPromptContract["workflow"]): string {
       return "Planning Workflow";
     case "implementation":
       return "Implementation Workflow";
-    case "yolo":
-      return "YOLO Workflow";
+    case "product":
+      return "Product Workflow";
   }
 }
 
@@ -132,6 +132,25 @@ function WorkflowPromptSection({
   );
 }
 
+function ProductWorkflowPromptSection({
+  contracts,
+}: {
+  contracts: readonly WorkflowPromptContract[];
+}) {
+  return (
+    <SettingsSection title="Product Workflow" icon={<WorkflowIcon className="size-3.5" />}>
+      {contracts.length === 0 ? (
+        <SettingsRow
+          title="No prompt contracts"
+          description="No prompt contracts are registered."
+        />
+      ) : (
+        contracts.map((contract) => <PromptContractRow key={contract.id} contract={contract} />)
+      )}
+    </SettingsSection>
+  );
+}
+
 function ImplementationWorkflowSettingsSection() {
   const autoStartAppDevStack = usePrimarySettings(
     (settings) => settings.implementation.autoStartAppDevStack,
@@ -199,8 +218,8 @@ export function WorkflowSettings() {
       implementation: contracts
         .filter((contract) => contract.workflow === "implementation")
         .toSorted((left, right) => left.order - right.order || left.id.localeCompare(right.id)),
-      yolo: contracts
-        .filter((contract) => contract.workflow === "yolo")
+      product: contracts
+        .filter((contract) => contract.workflow === "product")
         .toSorted((left, right) => left.order - right.order || left.id.localeCompare(right.id)),
     };
   }, [state]);
@@ -250,12 +269,14 @@ export function WorkflowSettings() {
       {state.status === "loaded" ? (
         <>
           <WorkflowPromptSection title={workflowTitle("shared")} contracts={grouped.shared} />
+          <ProductWorkflowPromptSection
+            contracts={grouped.product.filter((contract) => contract.stage === "grill")}
+          />
           <WorkflowPromptSection title={workflowTitle("planning")} contracts={grouped.planning} />
           <WorkflowPromptSection
             title={workflowTitle("implementation")}
             contracts={grouped.implementation}
           />
-          <WorkflowPromptSection title={workflowTitle("yolo")} contracts={grouped.yolo} />
         </>
       ) : null}
     </SettingsPageContainer>

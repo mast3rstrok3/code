@@ -181,9 +181,10 @@ const interactionModeConfig: Record<
     description: "Plan and start a durable implementation workflow from a PRD.",
     icon: WorkflowIcon,
   },
-  "yolo-workflow": {
-    label: "YOLO Workflow",
-    description: "Align on intent, then run planning and implementation with no further gates.",
+  "product-workflow": {
+    label: "Product Grill",
+    description:
+      "Ask product-intent questions, then run Planning and Implementation automatically.",
     icon: ZapIcon,
   },
 };
