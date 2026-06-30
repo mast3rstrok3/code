@@ -17,6 +17,12 @@ export interface T3CodePublicConfig {
   readonly relayClientOtlpTracesToken: string | undefined;
 }
 
+export interface T3CodeWebPrimaryEnvironmentBuildConfig {
+  readonly httpUrl: string;
+  readonly wsUrl: string;
+  readonly devServerUrl: string;
+}
+
 type Environment = Readonly<Record<string, string | undefined>>;
 
 const REPO_ROOT = NodePath.dirname(
@@ -151,16 +157,34 @@ export function resolvePublicConfig(...sources: readonly Environment[]): T3CodeP
   };
 }
 
+export function resolveWebPrimaryEnvironmentBuildConfig(input: {
+  readonly command: "build" | "serve";
+  readonly env: Environment;
+}): T3CodeWebPrimaryEnvironmentBuildConfig {
+  const exposeConfiguredPrimary =
+    input.command === "serve" || input.env.T3CODE_WEB_EMBED_PRIMARY_ENVIRONMENT === "1";
+
+  return {
+    httpUrl: exposeConfiguredPrimary ? trimNonEmpty(input.env.VITE_HTTP_URL) : "",
+    wsUrl: exposeConfiguredPrimary ? trimNonEmpty(input.env.VITE_WS_URL) : "",
+    devServerUrl: input.command === "serve" ? trimNonEmpty(input.env.VITE_DEV_SERVER_URL) : "",
+  };
+}
+
 function firstNonEmpty(sources: readonly Environment[], ...names: readonly string[]) {
   for (const source of sources) {
     for (const name of names) {
-      const value = source[name]?.trim();
+      const value = trimNonEmpty(source[name]);
       if (value) {
         return value;
       }
     }
   }
   return undefined;
+}
+
+function trimNonEmpty(value: string | undefined): string {
+  return value?.trim() ?? "";
 }
 
 function readEnvFile(path: string): Record<string, string | undefined> {

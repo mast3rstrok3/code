@@ -7,7 +7,10 @@ import "vite-plus/test/config";
 import { defineConfig } from "vite-plus";
 import pkg from "./package.json" with { type: "json" };
 
-import { loadRepoEnv } from "../../scripts/lib/public-config";
+import {
+  loadRepoEnv,
+  resolveWebPrimaryEnvironmentBuildConfig,
+} from "../../scripts/lib/public-config";
 
 const repoEnv = loadRepoEnv();
 Object.assign(process.env, repoEnv);
@@ -20,9 +23,6 @@ const allowedHosts = process.env.VITE_ALLOWED_HOSTS?.split(",")
 const hmrProtocol = process.env.VITE_HMR_PROTOCOL?.trim() === "wss" ? "wss" : "ws";
 const hmrHost = process.env.VITE_HMR_HOST?.trim() || host;
 const hmrClientPort = Number(process.env.VITE_HMR_CLIENT_PORT ?? port);
-const configuredHttpUrl = process.env.VITE_HTTP_URL?.trim();
-const configuredWsUrl = process.env.VITE_WS_URL?.trim();
-const configuredDevServerUrl = process.env.VITE_DEV_SERVER_URL?.trim();
 const configuredRelayUrl = repoEnv.VITE_T3CODE_RELAY_URL?.trim() || "";
 const configuredClerkPublishableKey = repoEnv.VITE_CLERK_PUBLISHABLE_KEY?.trim() || "";
 const configuredClerkJwtTemplate = repoEnv.VITE_CLERK_JWT_TEMPLATE?.trim() || "";
@@ -87,10 +87,15 @@ function resolveDevProxyTarget(wsUrl: string | undefined): string | undefined {
   }
 }
 
-const devProxyTarget = resolveDevProxyTarget(configuredWsUrl);
+export default defineConfig(({ command }) => {
+  const primaryEnvironmentConfig = resolveWebPrimaryEnvironmentBuildConfig({
+    command,
+    env: process.env,
+  });
+  const devProxyTarget = resolveDevProxyTarget(primaryEnvironmentConfig.wsUrl || undefined);
 
-export default defineConfig(() => {
   return {
+    envPrefix: "T3CODE_WEB_PUBLIC_",
     plugins: [
       tanstackRouter(),
       react(),
@@ -118,10 +123,11 @@ export default defineConfig(() => {
       ],
     },
     define: {
-      // In dev mode, tell the web app where the WebSocket server lives
-      "import.meta.env.VITE_HTTP_URL": JSON.stringify(configuredHttpUrl ?? ""),
-      "import.meta.env.VITE_WS_URL": JSON.stringify(configuredWsUrl ?? ""),
-      "import.meta.env.VITE_DEV_SERVER_URL": JSON.stringify(configuredDevServerUrl ?? ""),
+      // Dev serves point at the backend directly. Production server-backed builds default
+      // to the browser origin so ambient VITE_* values cannot redirect auth cross-origin.
+      "import.meta.env.VITE_HTTP_URL": JSON.stringify(primaryEnvironmentConfig.httpUrl),
+      "import.meta.env.VITE_WS_URL": JSON.stringify(primaryEnvironmentConfig.wsUrl),
+      "import.meta.env.VITE_DEV_SERVER_URL": JSON.stringify(primaryEnvironmentConfig.devServerUrl),
       "import.meta.env.VITE_T3CODE_RELAY_URL": JSON.stringify(configuredRelayUrl),
       "import.meta.env.VITE_CLERK_PUBLISHABLE_KEY": JSON.stringify(configuredClerkPublishableKey),
       "import.meta.env.VITE_CLERK_JWT_TEMPLATE": JSON.stringify(configuredClerkJwtTemplate),
