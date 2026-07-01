@@ -57,7 +57,7 @@ import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import type { McpCapability } from "../../mcp/McpInvocationContext.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
-import { isBrowserDevReviewWorkflowPromptId } from "../WorkflowPromptRegistry.ts";
+import { isDevReviewMcpWorkflowPromptId } from "../WorkflowPromptRegistry.ts";
 const isModelSelection = Schema.is(ModelSelection);
 const WORKFLOW_PROVIDERS: ReadonlySet<ProviderDriverKind> = new Set([
   ProviderDriverKind.make("codex"),
@@ -189,8 +189,8 @@ const dieOnMissingBindingInstanceId = (
 function mcpCapabilitiesForWorkflowPromptId(
   workflowPromptId: string | undefined,
 ): ReadonlySet<McpCapability> | undefined {
-  if (isBrowserDevReviewWorkflowPromptId(workflowPromptId)) {
-    return new Set<McpCapability>(["preview", "dev-review"]);
+  if (isDevReviewMcpWorkflowPromptId(workflowPromptId)) {
+    return new Set<McpCapability>(["dev-review"]);
   }
   return undefined;
 }

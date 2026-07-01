@@ -77,6 +77,15 @@ export const DevReviewReplayMetadata = Schema.Struct({
   completedAt: Schema.NullOr(IsoDateTime),
   durationMs: Schema.NullOr(NonNegativeInt),
   error: Schema.NullOr(Schema.String),
+  agentBrowser: Schema.optionalKey(
+    Schema.Struct({
+      namespace: TrimmedNonEmptyString,
+      session: TrimmedNonEmptyString,
+      evidenceDir: TrimmedNonEmptyString,
+      initScriptPath: TrimmedNonEmptyString,
+      ingestUrl: TrimmedNonEmptyString,
+    }),
+  ),
 });
 export type DevReviewReplayMetadata = typeof DevReviewReplayMetadata.Type;
 

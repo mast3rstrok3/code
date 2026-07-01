@@ -42,7 +42,7 @@ import {
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
-import { isPreviewMcpWorkflowPromptId } from "../../provider/WorkflowPromptRegistry.ts";
+import { isDevReviewMcpWorkflowPromptId } from "../../provider/WorkflowPromptRegistry.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 
@@ -540,9 +540,9 @@ const make = Effect.gen(function* () {
         requestedModelSelection !== undefined &&
         !Equal.equals(previousModelSelection, requestedModelSelection);
       const previousWorkflowPromptId = threadWorkflowPromptIds.get(threadId);
-      const previewMcpScopeChanged =
-        isPreviewMcpWorkflowPromptId(previousWorkflowPromptId) !==
-        isPreviewMcpWorkflowPromptId(desiredWorkflowPromptId);
+      const devReviewMcpScopeChanged =
+        isDevReviewMcpWorkflowPromptId(previousWorkflowPromptId) !==
+        isDevReviewMcpWorkflowPromptId(desiredWorkflowPromptId);
 
       if (
         !runtimeModeChanged &&
@@ -550,7 +550,7 @@ const make = Effect.gen(function* () {
         !instanceChanged &&
         !shouldRestartForModelChange &&
         !shouldRestartForModelSelectionChange &&
-        !previewMcpScopeChanged
+        !devReviewMcpScopeChanged
       ) {
         return existingSessionThreadId;
       }
@@ -575,7 +575,7 @@ const make = Effect.gen(function* () {
         instanceChanged,
         shouldRestartForModelChange,
         shouldRestartForModelSelectionChange,
-        previewMcpScopeChanged,
+        devReviewMcpScopeChanged,
         previousWorkflowPromptId,
         desiredWorkflowPromptId,
         hasResumeCursor: resumeCursor !== undefined,

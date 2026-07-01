@@ -1,7 +1,7 @@
 import type { ProviderInteractionMode, WorkflowPromptContract } from "@t3tools/contracts";
 import { isPlanningWorkflowInteractionMode } from "@t3tools/contracts";
 
-import { CHROME_DEVTOOLS_MCP_ASSOCIATED_DOC_CONTENT } from "./ChromeDevtoolsMcp.ts";
+import { AGENT_BROWSER_CLI_ASSOCIATED_DOC_CONTENT } from "./AgentBrowserCli.ts";
 import { WORKFLOW_SUBAGENT_INSTRUCTIONS_PROMPT } from "./WorkflowSubagentInstructions.ts";
 
 export const WORKFLOW_PROMPT_IDS = {
@@ -733,17 +733,18 @@ Exercise the app-dev stack from the implementation worktree. Verify the relevant
 
 When this Browser Dev Review is linked to a durable Dev Review record:
 
-1. Read the source thread context and identify the behavior under review.
-2. Call dev_review_get to load the durable Dev Review record before testing.
-3. Start RRweb replay capture with dev_review_replay_start before interacting with the browser.
-4. Use preview_* tools for actual browser testing. Exercise the product, do not rely on static assumptions.
+1. Call dev_review_get first to load the durable Dev Review record before testing.
+2. Read the source thread context and identify the behavior under review.
+3. Start RRweb replay capture with dev_review_replay_start before opening the target URL. Use the returned agentBrowser namespace, session, evidenceDir, and initScriptPath.
+4. Use the Agent Browser CLI workflow from agent-browser-cli.md for all browser actions. Exercise the product, do not rely on static assumptions.
 5. Stop RRweb replay capture with dev_review_replay_stop after browser testing.
-6. Update the Dev Review record with dev_review_update, including verdict, summary, checks, findings, questions, next steps, and evidence IDs.
-7. Mark the review status passed, failed, or blocked. If no automation-capable preview is attached, complete the review as blocked with explicit evidence.
+6. Treat replay evidence as required. If replay start fails, replay stop fails, stop returns failed metadata, or eventCount is 0, mark the review blocked or failed. Do not continue to a passing result after replay failure.
+7. Update the Dev Review record with dev_review_update, including verdict, summary, checks, findings, questions, next steps, and evidence IDs.
+8. Mark the review status passed, failed, or blocked.
 
 If no durable Dev Review record is linked, still perform the Browser Dev Review, capture concrete findings in the conversation, and report whether implementation completion should proceed.
 
-If RRweb capture fails, keep testing when useful, record the replay failure, and complete the text review. If browser testing cannot begin, mark the review blocked instead of inventing evidence.
+Do not use preview_* tools, external browser MCP servers, standalone Playwright, or a remote human browser. Browser Dev Review has one required Linux-server browser path: Agent Browser CLI plus durable RRweb capture. Zero RRweb events is a blocking evidence failure, not a passing smoke check.
 </collaboration_mode>`;
 
 const IMPLEMENTATION_FIX_PROMPT = `<collaboration_mode># Implementation Workflow: Fix
@@ -931,10 +932,10 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     promptText: IMPLEMENTATION_BROWSER_DEV_REVIEW_PROMPT,
     associatedDocs: [
       {
-        id: "implementation.browser-dev-review.chrome-devtools-mcp",
-        path: "chrome-devtools-mcp.md",
-        title: "Chrome DevTools MCP",
-        content: CHROME_DEVTOOLS_MCP_ASSOCIATED_DOC_CONTENT,
+        id: "implementation.browser-dev-review.agent-browser-cli",
+        path: "agent-browser-cli.md",
+        title: "Agent Browser CLI",
+        content: AGENT_BROWSER_CLI_ASSOCIATED_DOC_CONTENT,
       },
     ],
   },
@@ -1017,7 +1018,15 @@ export function isBrowserDevReviewWorkflowPromptId(
   );
 }
 
-export function isPreviewMcpWorkflowPromptId(workflowPromptId: string | null | undefined): boolean {
+export function isPreviewMcpWorkflowPromptId(
+  _workflowPromptId: string | null | undefined,
+): boolean {
+  return false;
+}
+
+export function isDevReviewMcpWorkflowPromptId(
+  workflowPromptId: string | null | undefined,
+): boolean {
   return isBrowserDevReviewWorkflowPromptId(workflowPromptId);
 }
 

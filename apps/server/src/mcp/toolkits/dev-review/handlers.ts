@@ -12,9 +12,9 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
-import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
 import { OrchestrationEngineService } from "../../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { DevReviewReplayCapture } from "../../../review/DevReviewReplayCapture.ts";
 import { DevReviewToolkit } from "./tools.ts";
 
 const replayError = (reviewId: DevReviewId | undefined, message: string, cause?: unknown) =>
@@ -97,7 +97,7 @@ const dispatchReplayMetadataUpdate = Effect.fn("DevReviewToolkit.dispatchReplayM
   },
 );
 
-const handlers = {
+export const handlers = {
   dev_review_get: (input) =>
     resolveDevReview(input.reviewId).pipe(Effect.map(({ review }) => review)),
 
@@ -134,13 +134,8 @@ const handlers = {
   dev_review_replay_start: (input) =>
     Effect.gen(function* () {
       const { scope, review } = yield* resolveDevReview(input.reviewId);
-      yield* McpInvocationContext.requireMcpCapability("preview");
-      const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
-      const replay = yield* broker.invoke<DevReviewReplayMetadata>({
-        scope,
-        operation: "devReviewReplayStart",
-        input: { reviewId: review.id },
-      });
+      const replayCapture = yield* DevReviewReplayCapture;
+      const replay = yield* replayCapture.start({ review });
       yield* dispatchReplayMetadataUpdate({ scope, review, replay });
       return replay;
     }),
@@ -148,13 +143,8 @@ const handlers = {
   dev_review_replay_stop: (input) =>
     Effect.gen(function* () {
       const { scope, review } = yield* resolveDevReview(input.reviewId);
-      yield* McpInvocationContext.requireMcpCapability("preview");
-      const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
-      const replay = yield* broker.invoke<DevReviewReplayMetadata>({
-        scope,
-        operation: "devReviewReplayStop",
-        input: { reviewId: review.id },
-      });
+      const replayCapture = yield* DevReviewReplayCapture;
+      const replay = yield* replayCapture.stop({ review });
       yield* dispatchReplayMetadataUpdate({ scope, review, replay });
       return replay;
     }),

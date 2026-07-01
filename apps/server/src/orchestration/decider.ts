@@ -356,7 +356,7 @@ function buildImplementationRun(input: {
         completionBlocking: true,
         appDevStackSource: "orchestrator-worktree",
         autoStartAppDevStack: true,
-        browserMcpProfile: "chrome-devtools",
+        browserMcpProfile: "agent-browser",
         maxAttempts: 5,
       },
       createdAt: input.command.createdAt,
@@ -378,8 +378,7 @@ function buildImplementationRun(input: {
     },
     qaTooling: {
       status: "unknown",
-      chromePath: null,
-      mcpPackage: "chrome-devtools-mcp@latest",
+      agentBrowserPackage: "agent-browser@0.31.1",
       lastErrorMarkdown: null,
       checkedAt: "",
     },

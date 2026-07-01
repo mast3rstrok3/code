@@ -427,7 +427,7 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("includes browser MCP servers only for Browser Dev Review sessions", () => {
+  it.effect("includes Dev Review MCP server only for Browser Dev Review sessions", () => {
     const harness = makeHarness();
     const threadId = ThreadId.make("thread-claude-mcp-browser-review");
     return Effect.gen(function* () {
@@ -450,8 +450,7 @@ describe("ClaudeAdapterLive", () => {
       const mcpServers = harness.getLastCreateQueryInput()?.options.mcpServers as
         | Record<string, { readonly command?: string; readonly args?: ReadonlyArray<string> }>
         | undefined;
-      assert.equal(mcpServers?.["chrome-devtools"]?.command, "npx");
-      assert.equal(mcpServers?.["chrome-devtools"]?.args?.[1], "chrome-devtools-mcp@latest");
+      assert.equal(mcpServers?.["chrome-devtools"], undefined);
       assert.equal(
         (mcpServers?.["t3-code"] as { readonly url?: string } | undefined)?.url,
         "http://127.0.0.1/mcp",

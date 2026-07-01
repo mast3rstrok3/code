@@ -319,7 +319,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
     }),
   );
 
-  it.effect("includes browser MCP app-server args only for Browser Dev Review sessions", () =>
+  it.effect("includes Dev Review MCP app-server args only for Browser Dev Review sessions", () =>
     Effect.gen(function* () {
       validationRuntimeFactory.factory.mockClear();
       const adapter = yield* CodexAdapter;
@@ -343,10 +343,14 @@ validationLayer("CodexAdapterLive validation", (it) => {
 
       const appServerArgs = validationRuntimeFactory.factory.mock.calls[0]?.[0].appServerArgs;
       NodeAssert.ok(appServerArgs?.some((arg) => arg.includes("mcp_servers.t3-code.url")));
-      NodeAssert.ok(
+      NodeAssert.equal(
         appServerArgs?.some((arg) => arg.includes("mcp_servers.chrome-devtools.command")),
+        false,
       );
-      NodeAssert.ok(appServerArgs?.some((arg) => arg.includes("chrome-devtools-mcp@latest")));
+      NodeAssert.equal(
+        appServerArgs?.some((arg) => arg.includes("chrome-devtools-mcp@latest")),
+        false,
+      );
       McpProviderSession.clearMcpProviderSession(threadId);
     }),
   );

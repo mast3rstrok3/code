@@ -40,7 +40,6 @@ import * as EffectCodexSchema from "effect-codex-app-server/schema";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { getCodexServiceTierOptionValue } from "../../codexModelOptions.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
-import { buildCodexChromeDevtoolsMcpAppServerArgs } from "../ChromeDevtoolsMcp.ts";
 
 import {
   ProviderAdapterRequestError,
@@ -62,7 +61,7 @@ import {
   type CodexSessionRuntimeShape,
 } from "./CodexSessionRuntime.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
-import { isPreviewMcpWorkflowPromptId } from "../WorkflowPromptRegistry.ts";
+import { isDevReviewMcpWorkflowPromptId } from "../WorkflowPromptRegistry.ts";
 const isCodexAppServerProcessExitedError = Schema.is(CodexErrors.CodexAppServerProcessExitedError);
 const isCodexAppServerTransportError = Schema.is(CodexErrors.CodexAppServerTransportError);
 const isCodexSessionRuntimeThreadIdMissingError = Schema.is(
@@ -1388,23 +1387,19 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           input.modelSelection?.instanceId === boundInstanceId
             ? getCodexServiceTierOptionValue(input.modelSelection)
             : undefined;
-        const previewMcpWorkflow = isPreviewMcpWorkflowPromptId(input.workflowPromptId);
-        const mcpSession = previewMcpWorkflow
+        const devReviewMcpWorkflow = isDevReviewMcpWorkflowPromptId(input.workflowPromptId);
+        const mcpSession = devReviewMcpWorkflow
           ? McpProviderSession.readMcpProviderSession(input.threadId)
           : undefined;
-        const appServerArgs = previewMcpWorkflow
-          ? [
-              ...(mcpSession
-                ? [
-                    "-c",
-                    `mcp_servers.t3-code.url=${mcpSession.endpoint}`,
-                    "-c",
-                    'mcp_servers.t3-code.bearer_token_env_var="T3_MCP_BEARER_TOKEN"',
-                  ]
-                : []),
-              ...buildCodexChromeDevtoolsMcpAppServerArgs(),
-            ]
-          : undefined;
+        const appServerArgs =
+          devReviewMcpWorkflow && mcpSession
+            ? [
+                "-c",
+                `mcp_servers.t3-code.url=${mcpSession.endpoint}`,
+                "-c",
+                'mcp_servers.t3-code.bearer_token_env_var="T3_MCP_BEARER_TOKEN"',
+              ]
+            : undefined;
         const runtimeInput: CodexSessionRuntimeOptions = {
           threadId: input.threadId,
           providerInstanceId: boundInstanceId,

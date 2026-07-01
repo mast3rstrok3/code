@@ -108,6 +108,7 @@ import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
+import * as DevReviewReplayCapture from "./review/DevReviewReplayCapture.ts";
 import { DevReviewReplayEventRepository } from "./persistence/Services/DevReviewReplayEvents.ts";
 import { ProjectionThreadDevReviewRepository } from "./persistence/Services/ProjectionThreadDevReviews.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
@@ -537,6 +538,11 @@ const buildAppUnderTest = (options?: {
     const vcsProvisioningLayer = VcsProvisioningService.layer.pipe(
       Layer.provide(vcsDriverRegistryLayer),
     );
+    const devReviewReplayEventRepositoryLayer = Layer.succeed(DevReviewReplayEventRepository, {
+      appendEvents: () => Effect.die("unexpected Dev Review replay append"),
+      listByReviewId: () => Effect.succeed([]),
+      countByReviewId: () => Effect.succeed(0),
+    });
     const reviewLayer = options?.layers?.reviewService
       ? Layer.mock(ReviewService.ReviewService)({
           ...options.layers.reviewService,
@@ -553,14 +559,12 @@ const buildAppUnderTest = (options?: {
               deleteByThreadId: () => Effect.die("unexpected Dev Review delete"),
             }),
           ),
-          Layer.provide(
-            Layer.succeed(DevReviewReplayEventRepository, {
-              appendEvents: () => Effect.die("unexpected Dev Review replay append"),
-              listByReviewId: () => Effect.succeed([]),
-              countByReviewId: () => Effect.succeed(0),
-            }),
-          ),
+          Layer.provide(devReviewReplayEventRepositoryLayer),
         );
+    const reviewAndReplayCaptureLayer = Layer.mergeAll(
+      reviewLayer,
+      DevReviewReplayCapture.layer.pipe(Layer.provide(devReviewReplayEventRepositoryLayer)),
+    );
     const vcsStatusBroadcasterLayer = options?.layers?.vcsStatusBroadcaster
       ? Layer.mock(VcsStatusBroadcaster.VcsStatusBroadcaster)({
           ...options.layers.vcsStatusBroadcaster,
@@ -676,7 +680,7 @@ const buildAppUnderTest = (options?: {
       Layer.provide(gitManagerLayer),
       Layer.provide(gitVcsDriverLayer),
       Layer.provide(gitWorkflowLayer),
-      Layer.provide(reviewLayer),
+      Layer.provide(reviewAndReplayCaptureLayer),
       Layer.provide(vcsProvisioningLayer),
       Layer.provide(
         Layer.mock(SourceControlRepositoryService.SourceControlRepositoryService)({
@@ -767,6 +771,7 @@ const buildAppUnderTest = (options?: {
           getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 0 }),
           getProjectShellById: () => Effect.succeed(Option.none()),
           getThreadShellById: () => Effect.succeed(Option.none()),
+          getThreadDetailSnapshotById: () => Effect.succeed(Option.none()),
           getThreadDetailById: () => Effect.succeed(Option.none()),
           getCounts: () => Effect.succeed({ projectCount: 0, threadCount: 0 }),
           getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
@@ -5618,6 +5623,16 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         layers: {
           projectionSnapshotQuery: {
             getSnapshot: () => Effect.succeed(snapshot),
+            getSnapshotSequence: () => Effect.die("subscribeThread should use detail snapshots"),
+            getThreadDetailSnapshotById: (threadId) =>
+              Effect.succeed(
+                threadId === ThreadId.make("thread-1")
+                  ? Option.some({
+                      snapshotSequence: 99,
+                      thread: snapshot.threads[0]!,
+                    })
+                  : Option.none(),
+              ),
           },
           orchestrationEngine: {
             dispatch: () => Effect.succeed({ sequence: 7 }),
@@ -5684,6 +5699,20 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ),
       );
       assert.deepEqual(replayResult, []);
+
+      const threadItems = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeThread]({
+            threadId: ThreadId.make("thread-1"),
+          }).pipe(Stream.take(1), Stream.runCollect),
+        ),
+      );
+      const [threadItem] = Array.from(threadItems);
+      assert.equal(threadItem?.kind, "snapshot");
+      if (threadItem?.kind === "snapshot") {
+        assert.equal(threadItem.snapshot.snapshotSequence, 99);
+        assert.equal(threadItem.snapshot.thread.id, ThreadId.make("thread-1"));
+      }
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

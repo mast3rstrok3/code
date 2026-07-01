@@ -58,11 +58,7 @@ const latestTab = (
   sessions.toSorted((a, b) => a.updatedAt.localeCompare(b.updatedAt)).at(-1)?.tabId ?? null;
 
 const SUPPORTED_SERVER_OPERATIONS = PREVIEW_AUTOMATION_OPERATIONS.filter(
-  (operation) =>
-    operation !== "recordingStart" &&
-    operation !== "recordingStop" &&
-    operation !== "devReviewReplayStart" &&
-    operation !== "devReviewReplayStop",
+  (operation) => operation !== "recordingStart" && operation !== "recordingStop",
 );
 
 const noPreviewTabOpen = () =>
@@ -237,8 +233,6 @@ export const layer = Layer.effectDiscard(
           } as never);
         case "recordingStart":
         case "recordingStop":
-        case "devReviewReplayStart":
-        case "devReviewReplayStop":
           return yield* new PreviewBrowserUnavailableError({
             message: `${request.operation} is not implemented by the server-hosted browser yet.`,
           });

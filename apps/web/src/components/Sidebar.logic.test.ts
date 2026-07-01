@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import {
+  buildSidebarThreadTreeRows,
   createThreadJumpHintVisibilityController,
   getSidebarThreadIdsToPrewarm,
   getVisibleSidebarThreadIds,
@@ -17,6 +18,7 @@ import {
   resolveSidebarStageBadgeLabel,
   resolveThreadRowClassName,
   resolveThreadStatusPill,
+  selectVisibleSidebarThreadRows,
   shouldClearThreadSelectionOnMouseDown,
   sortProjectsForSidebar,
   THREAD_JUMP_HINT_SHOW_DELAY_MS,
@@ -790,6 +792,281 @@ describe("getVisibleThreadsForProject", () => {
       threads.map((thread) => thread.id),
     );
     expect(result.hiddenThreads).toEqual([]);
+  });
+});
+
+describe("sidebar thread tree rows", () => {
+  it("renders child threads immediately under their parent instead of global sort position", () => {
+    const parent = makeThread({
+      id: ThreadId.make("thread-parent"),
+      title: "Parent",
+      updatedAt: "2026-03-09T10:00:00.000Z",
+    });
+    const child = makeThread({
+      id: ThreadId.make("thread-child"),
+      parentThreadId: ThreadId.make("thread-parent"),
+      title: "Child",
+      updatedAt: "2026-03-09T12:00:00.000Z",
+    });
+    const sibling = makeThread({
+      id: ThreadId.make("thread-sibling"),
+      title: "Sibling",
+      updatedAt: "2026-03-09T09:00:00.000Z",
+    });
+
+    const rows = buildSidebarThreadTreeRows([sibling, child, parent], "updated_at");
+
+    expect(rows.map((row) => row.thread.id)).toEqual([
+      ThreadId.make("thread-parent"),
+      ThreadId.make("thread-child"),
+      ThreadId.make("thread-sibling"),
+    ]);
+    expect(rows.map((row) => row.depth)).toEqual([0, 1, 0]);
+  });
+
+  it("keeps descendants visible when their root is inside the folded preview", () => {
+    const rows = buildSidebarThreadTreeRows(
+      [
+        makeThread({
+          id: ThreadId.make("thread-parent"),
+          updatedAt: "2026-03-09T12:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("thread-child"),
+          parentThreadId: ThreadId.make("thread-parent"),
+          updatedAt: "2026-03-09T11:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("thread-other"),
+          updatedAt: "2026-03-09T10:00:00.000Z",
+        }),
+      ],
+      "updated_at",
+    );
+
+    const selected = selectVisibleSidebarThreadRows({
+      rows,
+      activeThreadKey: null,
+      expanded: false,
+      previewLimit: 1,
+    });
+
+    expect(selected.visibleRows.map((row) => row.thread.id)).toEqual([
+      ThreadId.make("thread-parent"),
+      ThreadId.make("thread-child"),
+    ]);
+    expect(selected.hiddenRows.map((row) => row.thread.id)).toEqual([
+      ThreadId.make("thread-other"),
+    ]);
+  });
+
+  it("uses recent descendant activity when choosing folded root groups", () => {
+    const rows = buildSidebarThreadTreeRows(
+      [
+        makeThread({
+          id: ThreadId.make("thread-old-parent"),
+          updatedAt: "2026-03-09T09:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("thread-recent-child"),
+          parentThreadId: ThreadId.make("thread-old-parent"),
+          updatedAt: "2026-03-09T13:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("thread-newer-root"),
+          updatedAt: "2026-03-09T12:00:00.000Z",
+        }),
+      ],
+      "updated_at",
+    );
+
+    const selected = selectVisibleSidebarThreadRows({
+      rows,
+      activeThreadKey: null,
+      expanded: false,
+      previewLimit: 1,
+    });
+
+    expect(selected.visibleRows.map((row) => row.thread.id)).toEqual([
+      ThreadId.make("thread-old-parent"),
+      ThreadId.make("thread-recent-child"),
+    ]);
+    expect(selected.hiddenRows.map((row) => row.thread.id)).toEqual([
+      ThreadId.make("thread-newer-root"),
+    ]);
+  });
+
+  it("includes an active hidden child with its parent root group", () => {
+    const rows = buildSidebarThreadTreeRows(
+      [
+        makeThread({
+          id: ThreadId.make("thread-visible-root"),
+          updatedAt: "2026-03-09T13:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("thread-hidden-parent"),
+          updatedAt: "2026-03-09T12:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("thread-active-child"),
+          parentThreadId: ThreadId.make("thread-hidden-parent"),
+          updatedAt: "2026-03-09T11:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("thread-hidden-other"),
+          updatedAt: "2026-03-09T10:00:00.000Z",
+        }),
+      ],
+      "updated_at",
+    );
+
+    const selected = selectVisibleSidebarThreadRows({
+      rows,
+      activeThreadKey: "thread-active-child",
+      expanded: false,
+      previewLimit: 1,
+    });
+
+    expect(selected.visibleRows.map((row) => row.thread.id)).toEqual([
+      ThreadId.make("thread-visible-root"),
+      ThreadId.make("thread-hidden-parent"),
+      ThreadId.make("thread-active-child"),
+    ]);
+    expect(selected.hiddenRows.map((row) => row.thread.id)).toEqual([
+      ThreadId.make("thread-hidden-other"),
+    ]);
+  });
+
+  it("hides descendants when a parent thread is collapsed", () => {
+    const rows = buildSidebarThreadTreeRows(
+      [
+        makeThread({
+          id: ThreadId.make("thread-parent"),
+          updatedAt: "2026-03-09T13:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("thread-child"),
+          parentThreadId: ThreadId.make("thread-parent"),
+          updatedAt: "2026-03-09T12:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("thread-other"),
+          updatedAt: "2026-03-09T11:00:00.000Z",
+        }),
+      ],
+      "updated_at",
+    );
+
+    const selected = selectVisibleSidebarThreadRows({
+      rows,
+      activeThreadKey: null,
+      expanded: true,
+      previewLimit: 1,
+      collapsedThreadKeys: new Set(["thread-parent"]),
+    });
+
+    expect(selected.visibleRows.map((row) => row.thread.id)).toEqual([
+      ThreadId.make("thread-parent"),
+      ThreadId.make("thread-other"),
+    ]);
+    expect(selected.hiddenRows).toEqual([]);
+  });
+
+  it("keeps the active child path visible through collapsed ancestors", () => {
+    const rows = buildSidebarThreadTreeRows(
+      [
+        makeThread({
+          id: ThreadId.make("thread-parent"),
+          updatedAt: "2026-03-09T13:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("thread-active-child"),
+          parentThreadId: ThreadId.make("thread-parent"),
+          updatedAt: "2026-03-09T12:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("thread-active-grandchild"),
+          parentThreadId: ThreadId.make("thread-active-child"),
+          updatedAt: "2026-03-09T11:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("thread-hidden-sibling"),
+          parentThreadId: ThreadId.make("thread-parent"),
+          updatedAt: "2026-03-09T10:00:00.000Z",
+        }),
+      ],
+      "updated_at",
+    );
+
+    const selected = selectVisibleSidebarThreadRows({
+      rows,
+      activeThreadKey: "thread-active-grandchild",
+      expanded: true,
+      previewLimit: 1,
+      collapsedThreadKeys: new Set(["thread-parent", "thread-active-child"]),
+    });
+
+    expect(selected.visibleRows.map((row) => row.thread.id)).toEqual([
+      ThreadId.make("thread-parent"),
+      ThreadId.make("thread-active-child"),
+      ThreadId.make("thread-active-grandchild"),
+    ]);
+  });
+
+  it("renders orphaned children as root rows", () => {
+    const rows = buildSidebarThreadTreeRows(
+      [
+        makeThread({
+          id: ThreadId.make("thread-orphan"),
+          parentThreadId: ThreadId.make("thread-missing-parent"),
+        }),
+      ],
+      "updated_at",
+    );
+
+    expect(rows.map((row) => row.thread.id)).toEqual([ThreadId.make("thread-orphan")]);
+    expect(rows[0]?.depth).toBe(0);
+    expect(rows[0]?.parentThreadKey).toBeNull();
+  });
+
+  it("uses flattened tree order for visible row order", () => {
+    const rows = buildSidebarThreadTreeRows(
+      [
+        makeThread({
+          id: ThreadId.make("thread-root"),
+          updatedAt: "2026-03-09T13:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("thread-child-a"),
+          parentThreadId: ThreadId.make("thread-root"),
+          updatedAt: "2026-03-09T12:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("thread-child-b"),
+          parentThreadId: ThreadId.make("thread-root"),
+          updatedAt: "2026-03-09T11:00:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("thread-next-root"),
+          updatedAt: "2026-03-09T10:00:00.000Z",
+        }),
+      ],
+      "updated_at",
+    );
+
+    const selected = selectVisibleSidebarThreadRows({
+      rows,
+      activeThreadKey: null,
+      expanded: true,
+      previewLimit: 1,
+    });
+
+    expect(selected.visibleRows.map((row) => row.threadKey)).toEqual([
+      "thread-root",
+      "thread-child-a",
+      "thread-child-b",
+      "thread-next-root",
+    ]);
   });
 });
 

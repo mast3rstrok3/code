@@ -1,21 +1,11 @@
-const T3_CODE_BROWSER_TOOL_INSTRUCTIONS = `
-
-## T3 Code collaborative browser
-
-You are running inside T3 Code. The \`t3-code\` MCP server is the product-native collaborative browser shared with the user. When it exposes \`preview_*\` tools, prefer those tools for browser navigation, inspection, interaction, screenshots, and recordings.
-
-For browser work, first call \`preview_status\`. If no automation-capable preview is attached, call \`preview_open\` before concluding that the browser is unavailable. Then use \`preview_navigate\`, \`preview_snapshot\`, and the focused interaction tools. Prefer snapshot-provided locators over coordinates.
-
-Do not switch to global browser skills, Chrome, Node REPL browser automation, standalone Playwright, or agent-browser merely because the preview is initially closed or a first call fails. Use an alternative browser system only when the T3 preview tools are absent, the user explicitly requests another browser, or \`preview_open\` returns an explicit unsupported/unavailable error. A failed T3 preview tool call should be inspected and retried with corrected arguments when the error is actionable.
-`;
-
 export const CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS = `
 ## Browser Dev Review QA tools
 
 This browser tooling context is scoped to the Implementation Workflow Browser Dev Review QA role only. It is not available in ordinary implementation, planning, Product Grill, or default sessions.
 
-The Chrome DevTools MCP \`chrome-devtools\` server is attached only for Browser Dev Review provider sessions. It may inspect page contents, console messages, network requests, screenshots, and performance traces. Use it for browser QA findings and reproduction evidence, not for general implementation work.
-${T3_CODE_BROWSER_TOOL_INSTRUCTIONS}`;
+Use the \`t3-code\` MCP server for durable Dev Review coordination tools: \`dev_review_get\`, \`dev_review_replay_start\`, \`dev_review_replay_stop\`, and \`dev_review_update\`. Do not use \`preview_*\` tools for Browser Dev Review.
+
+Use the Agent Browser CLI workflow documented in \`agent-browser-cli.md\` for browser navigation, inspection, interaction, console/network review, screenshots, and recordings. If replay start or stop fails, or replay stop reports zero RRweb events, mark the Dev Review blocked or failed rather than passed.`;
 
 export const CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS = `<collaboration_mode># Plan Mode (Conversational)
 

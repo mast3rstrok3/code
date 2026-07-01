@@ -44,7 +44,7 @@ import {
   CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
 } from "../CodexDeveloperInstructions.ts";
 import {
-  isPreviewMcpWorkflowPromptId,
+  isBrowserDevReviewWorkflowPromptId,
   resolveWorkflowPromptId,
   resolveWorkflowSystemInstructions,
 } from "../WorkflowPromptRegistry.ts";
@@ -354,7 +354,7 @@ function buildCodexCollaborationMode(input: {
     mode === "plan"
       ? CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS
       : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS;
-  const scopedDeveloperInstructions = isPreviewMcpWorkflowPromptId(input.workflowPromptId)
+  const scopedDeveloperInstructions = isBrowserDevReviewWorkflowPromptId(input.workflowPromptId)
     ? `${baseDeveloperInstructions}\n\n${CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS}`
     : baseDeveloperInstructions;
   const workflowInstructions = resolveWorkflowSystemInstructions({

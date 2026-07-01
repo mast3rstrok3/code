@@ -30,6 +30,7 @@ import {
   type OrchestrationProject,
   type OrchestrationSession,
   type OrchestrationThreadActivity,
+  type OrchestrationThreadDetailSnapshot,
   type OrchestrationThreadShell,
   type DevReviewRecord,
   ModelSelection,
@@ -2642,7 +2643,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       );
     });
 
-  const getThreadDetailById: ProjectionSnapshotQueryShape["getThreadDetailById"] = (threadId) =>
+  const getThreadDetailSnapshotById: ProjectionSnapshotQueryShape["getThreadDetailSnapshotById"] = (
+    threadId,
+  ) =>
     Effect.gen(function* () {
       const [
         threadRow,
@@ -2656,99 +2659,110 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         checkpointRows,
         latestTurnRow,
         sessionRow,
-      ] = yield* Effect.all([
-        getActiveThreadRowById({ threadId }).pipe(
-          Effect.mapError(
-            toPersistenceSqlOrDecodeError(
-              "ProjectionSnapshotQuery.getThreadDetailById:getThread:query",
-              "ProjectionSnapshotQuery.getThreadDetailById:getThread:decodeRow",
+        stateRows,
+      ] = yield* sql.withTransaction(
+        Effect.all([
+          getActiveThreadRowById({ threadId }).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getThreadDetailSnapshotById:getThread:query",
+                "ProjectionSnapshotQuery.getThreadDetailSnapshotById:getThread:decodeRow",
+              ),
             ),
           ),
-        ),
-        listThreadMessageRowsByThread({ threadId }).pipe(
-          Effect.mapError(
-            toPersistenceSqlOrDecodeError(
-              "ProjectionSnapshotQuery.getThreadDetailById:listMessages:query",
-              "ProjectionSnapshotQuery.getThreadDetailById:listMessages:decodeRows",
+          listThreadMessageRowsByThread({ threadId }).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getThreadDetailSnapshotById:listMessages:query",
+                "ProjectionSnapshotQuery.getThreadDetailSnapshotById:listMessages:decodeRows",
+              ),
             ),
           ),
-        ),
-        listThreadProposedPlanRowsByThread({ threadId }).pipe(
-          Effect.mapError(
-            toPersistenceSqlOrDecodeError(
-              "ProjectionSnapshotQuery.getThreadDetailById:listPlans:query",
-              "ProjectionSnapshotQuery.getThreadDetailById:listPlans:decodeRows",
+          listThreadProposedPlanRowsByThread({ threadId }).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getThreadDetailSnapshotById:listPlans:query",
+                "ProjectionSnapshotQuery.getThreadDetailSnapshotById:listPlans:decodeRows",
+              ),
             ),
           ),
-        ),
-        listThreadDevReviewRowsByThread({ threadId }).pipe(
-          Effect.mapError(
-            toPersistenceSqlOrDecodeError(
-              "ProjectionSnapshotQuery.getThreadDetailById:listDevReviews:query",
-              "ProjectionSnapshotQuery.getThreadDetailById:listDevReviews:decodeRows",
+          listThreadDevReviewRowsByThread({ threadId }).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getThreadDetailSnapshotById:listDevReviews:query",
+                "ProjectionSnapshotQuery.getThreadDetailSnapshotById:listDevReviews:decodeRows",
+              ),
             ),
           ),
-        ),
-        listThreadPrdRowsByThread({ threadId }).pipe(
-          Effect.mapError(
-            toPersistenceSqlOrDecodeError(
-              "ProjectionSnapshotQuery.getThreadDetailById:listThreadPrds:query",
-              "ProjectionSnapshotQuery.getThreadDetailById:listThreadPrds:decodeRows",
+          listThreadPrdRowsByThread({ threadId }).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getThreadDetailSnapshotById:listThreadPrds:query",
+                "ProjectionSnapshotQuery.getThreadDetailSnapshotById:listThreadPrds:decodeRows",
+              ),
             ),
           ),
-        ),
-        listThreadPlanningIssueRowsByThread({ threadId }).pipe(
-          Effect.mapError(
-            toPersistenceSqlOrDecodeError(
-              "ProjectionSnapshotQuery.getThreadDetailById:listThreadPlanningIssues:query",
-              "ProjectionSnapshotQuery.getThreadDetailById:listThreadPlanningIssues:decodeRows",
+          listThreadPlanningIssueRowsByThread({ threadId }).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getThreadDetailSnapshotById:listThreadPlanningIssues:query",
+                "ProjectionSnapshotQuery.getThreadDetailSnapshotById:listThreadPlanningIssues:decodeRows",
+              ),
             ),
           ),
-        ),
-        listThreadPlanningReviewCycleRowsByThread({ threadId }).pipe(
-          Effect.mapError(
-            toPersistenceSqlOrDecodeError(
-              "ProjectionSnapshotQuery.getThreadDetailById:listThreadPlanningReviewCycles:query",
-              "ProjectionSnapshotQuery.getThreadDetailById:listThreadPlanningReviewCycles:decodeRows",
+          listThreadPlanningReviewCycleRowsByThread({ threadId }).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getThreadDetailSnapshotById:listThreadPlanningReviewCycles:query",
+                "ProjectionSnapshotQuery.getThreadDetailSnapshotById:listThreadPlanningReviewCycles:decodeRows",
+              ),
             ),
           ),
-        ),
-        listThreadActivityRowsByThread({ threadId }).pipe(
-          Effect.mapError(
-            toPersistenceSqlOrDecodeError(
-              "ProjectionSnapshotQuery.getThreadDetailById:listActivities:query",
-              "ProjectionSnapshotQuery.getThreadDetailById:listActivities:decodeRows",
+          listThreadActivityRowsByThread({ threadId }).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getThreadDetailSnapshotById:listActivities:query",
+                "ProjectionSnapshotQuery.getThreadDetailSnapshotById:listActivities:decodeRows",
+              ),
             ),
           ),
-        ),
-        listCheckpointRowsByThread({ threadId }).pipe(
-          Effect.mapError(
-            toPersistenceSqlOrDecodeError(
-              "ProjectionSnapshotQuery.getThreadDetailById:listCheckpoints:query",
-              "ProjectionSnapshotQuery.getThreadDetailById:listCheckpoints:decodeRows",
+          listCheckpointRowsByThread({ threadId }).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getThreadDetailSnapshotById:listCheckpoints:query",
+                "ProjectionSnapshotQuery.getThreadDetailSnapshotById:listCheckpoints:decodeRows",
+              ),
             ),
           ),
-        ),
-        getLatestTurnRowByThread({ threadId }).pipe(
-          Effect.mapError(
-            toPersistenceSqlOrDecodeError(
-              "ProjectionSnapshotQuery.getThreadDetailById:getLatestTurn:query",
-              "ProjectionSnapshotQuery.getThreadDetailById:getLatestTurn:decodeRow",
+          getLatestTurnRowByThread({ threadId }).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getThreadDetailSnapshotById:getLatestTurn:query",
+                "ProjectionSnapshotQuery.getThreadDetailSnapshotById:getLatestTurn:decodeRow",
+              ),
             ),
           ),
-        ),
-        getThreadSessionRowByThread({ threadId }).pipe(
-          Effect.mapError(
-            toPersistenceSqlOrDecodeError(
-              "ProjectionSnapshotQuery.getThreadDetailById:getSession:query",
-              "ProjectionSnapshotQuery.getThreadDetailById:getSession:decodeRow",
+          getThreadSessionRowByThread({ threadId }).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getThreadDetailSnapshotById:getSession:query",
+                "ProjectionSnapshotQuery.getThreadDetailSnapshotById:getSession:decodeRow",
+              ),
             ),
           ),
-        ),
-      ]);
+          listProjectionStateRows(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getThreadDetailSnapshotById:listProjectionState:query",
+                "ProjectionSnapshotQuery.getThreadDetailSnapshotById:listProjectionState:decodeRows",
+              ),
+            ),
+          ),
+        ]),
+      );
 
       if (Option.isNone(threadRow)) {
-        return Option.none<OrchestrationThread>();
+        return Option.none<OrchestrationThreadDetailSnapshot>();
       }
 
       const latestPrd = latestPrdByThread(prdRows).get(threadRow.value.threadId);
@@ -2820,14 +2834,33 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         session: Option.isSome(sessionRow) ? mapSessionRow(sessionRow.value) : null,
       };
 
-      return Option.some(
-        yield* decodeThread(thread).pipe(
-          Effect.mapError(
-            toPersistenceDecodeError("ProjectionSnapshotQuery.getThreadDetailById:decodeThread"),
+      const decodedThread = yield* decodeThread(thread).pipe(
+        Effect.mapError(
+          toPersistenceDecodeError(
+            "ProjectionSnapshotQuery.getThreadDetailSnapshotById:decodeThread",
           ),
         ),
       );
-    });
+
+      return Option.some({
+        snapshotSequence: computeSnapshotSequence(stateRows),
+        thread: decodedThread,
+      } satisfies OrchestrationThreadDetailSnapshot);
+    }).pipe(
+      Effect.mapError((error) => {
+        if (isPersistenceError(error)) {
+          return error;
+        }
+        return toPersistenceSqlError("ProjectionSnapshotQuery.getThreadDetailSnapshotById:query")(
+          error,
+        );
+      }),
+    );
+
+  const getThreadDetailById: ProjectionSnapshotQueryShape["getThreadDetailById"] = (threadId) =>
+    getThreadDetailSnapshotById(threadId).pipe(
+      Effect.map((snapshot) => Option.map(snapshot, (value) => value.thread)),
+    );
 
   return {
     getCommandReadModel,
@@ -2842,6 +2875,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getThreadCheckpointContext,
     getFullThreadDiffContext,
     getThreadShellById,
+    getThreadDetailSnapshotById,
     getThreadDetailById,
   } satisfies ProjectionSnapshotQueryShape;
 });

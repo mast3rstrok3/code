@@ -37,12 +37,20 @@ it.effect("decodes Dev Review records and replay RPC payloads", () =>
         completedAt: null,
         durationMs: null,
         error: null,
+        agentBrowser: {
+          namespace: "namespace-1",
+          session: "session-1",
+          evidenceDir: "/tmp/evidence",
+          initScriptPath: "/tmp/evidence/rrweb-init.js",
+          ingestUrl: "http://127.0.0.1:3773/api/dev-review/replay/ingest",
+        },
       },
       createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-01T00:00:01.000Z",
     });
     assert.strictEqual(record.id, "dev-review-1");
     assert.strictEqual(record.replay.eventCount, 2);
+    assert.strictEqual(record.replay.agentBrowser?.initScriptPath, "/tmp/evidence/rrweb-init.js");
 
     const appendInput = yield* decodeAppendReplayEventsInput({
       reviewId: "dev-review-1",

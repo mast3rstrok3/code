@@ -451,6 +451,174 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
     }),
   );
 
+  it.effect("hydrates atomic thread detail snapshots with dev reviews for source and review", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_thread_dev_reviews`;
+      yield* sql`DELETE FROM projection_state`;
+
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id,
+          title,
+          workspace_root,
+          default_model_selection_json,
+          scripts_json,
+          created_at,
+          updated_at,
+          deleted_at
+        )
+        VALUES (
+          'project-dev-review',
+          'Dev Review Project',
+          '/tmp/dev-review-project',
+          '{"provider":"codex","model":"gpt-5-codex"}',
+          '[]',
+          '2026-05-01T00:00:00.000Z',
+          '2026-05-01T00:00:01.000Z',
+          NULL
+        )
+      `;
+
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id,
+          project_id,
+          parent_thread_id,
+          workflow_role,
+          title,
+          model_selection_json,
+          runtime_mode,
+          interaction_mode,
+          branch,
+          worktree_path,
+          latest_turn_id,
+          latest_user_message_at,
+          pending_approval_count,
+          pending_user_input_count,
+          has_actionable_proposed_plan,
+          created_at,
+          updated_at,
+          deleted_at
+        )
+        VALUES
+          (
+            'thread-dev-review-source',
+            'project-dev-review',
+            NULL,
+            NULL,
+            'Implementation',
+            '{"provider":"codex","model":"gpt-5-codex"}',
+            'full-access',
+            'default',
+            NULL,
+            NULL,
+            NULL,
+            NULL,
+            0,
+            0,
+            0,
+            '2026-05-01T00:00:02.000Z',
+            '2026-05-01T00:00:03.000Z',
+            NULL
+          ),
+          (
+            'thread-dev-review-review',
+            'project-dev-review',
+            'thread-dev-review-source',
+            'implementation-qa-reviewer',
+            'Browser Dev Review',
+            '{"provider":"codex","model":"gpt-5-codex"}',
+            'full-access',
+            'implementation-workflow',
+            NULL,
+            NULL,
+            NULL,
+            NULL,
+            0,
+            0,
+            0,
+            '2026-05-01T00:00:04.000Z',
+            '2026-05-01T00:00:05.000Z',
+            NULL
+          )
+      `;
+
+      yield* sql`
+        INSERT INTO projection_thread_dev_reviews (
+          review_id,
+          source_thread_id,
+          review_thread_id,
+          source_turn_id,
+          status,
+          document_json,
+          replay_json,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          'dev-review-1',
+          'thread-dev-review-source',
+          'thread-dev-review-review',
+          NULL,
+          'running',
+          '{"verdict":"pending","summary":"","checks":[],"findings":[],"questions":[],"nextSteps":[]}',
+          '{"status":"not-started","eventCount":0,"startedAt":null,"completedAt":null,"durationMs":null,"error":null}',
+          '2026-05-01T00:00:06.000Z',
+          '2026-05-01T00:00:06.000Z'
+        )
+      `;
+
+      for (const projector of Object.values(ORCHESTRATION_PROJECTOR_NAMES)) {
+        yield* sql`
+          INSERT INTO projection_state (
+            projector,
+            last_applied_sequence,
+            updated_at
+          )
+          VALUES (
+            ${projector},
+            42,
+            '2026-05-01T00:00:07.000Z'
+          )
+        `;
+      }
+
+      const sourceSnapshot = yield* snapshotQuery.getThreadDetailSnapshotById(
+        ThreadId.make("thread-dev-review-source"),
+      );
+      const sourceDetail = yield* snapshotQuery.getThreadDetailById(
+        ThreadId.make("thread-dev-review-source"),
+      );
+      const reviewSnapshot = yield* snapshotQuery.getThreadDetailSnapshotById(
+        ThreadId.make("thread-dev-review-review"),
+      );
+
+      assert.equal(sourceSnapshot._tag, "Some");
+      assert.equal(sourceDetail._tag, "Some");
+      assert.equal(reviewSnapshot._tag, "Some");
+      if (
+        sourceSnapshot._tag === "Some" &&
+        sourceDetail._tag === "Some" &&
+        reviewSnapshot._tag === "Some"
+      ) {
+        assert.equal(sourceSnapshot.value.snapshotSequence, 42);
+        assert.equal(reviewSnapshot.value.snapshotSequence, 42);
+        assert.deepEqual(sourceSnapshot.value.thread, sourceDetail.value);
+        assert.deepEqual(
+          sourceSnapshot.value.thread.devReviews,
+          reviewSnapshot.value.thread.devReviews,
+        );
+        assert.equal(sourceSnapshot.value.thread.devReviews[0]?.id, "dev-review-1");
+        assert.equal(reviewSnapshot.value.thread.parentThreadId, "thread-dev-review-source");
+      }
+    }),
+  );
+
   it.effect("keeps archived threads out of the main shell snapshot", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;

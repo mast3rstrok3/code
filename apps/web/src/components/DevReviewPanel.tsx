@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { PlayCircle } from "lucide-react";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 
@@ -8,6 +8,7 @@ import { useThreadDevReviews } from "~/state/entities";
 import { Button } from "./ui/button";
 import { DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { DevReviewDocument } from "./DevReviewDocument";
+import { selectActiveDevReviewRecord, shouldRefreshDevReviewReplay } from "./DevReviewPanel.logic";
 
 export function DevReviewPanel(props: {
   mode: DiffPanelMode;
@@ -17,15 +18,7 @@ export function DevReviewPanel(props: {
 }) {
   const records = useThreadDevReviews(props.threadRef);
   const activeRecord = useMemo(() => {
-    const sorted = [...records].sort(
-      (left, right) =>
-        left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
-    );
-    return (
-      sorted.find((record) => record.reviewThreadId === props.threadRef.threadId) ??
-      sorted.at(-1) ??
-      null
-    );
+    return selectActiveDevReviewRecord(records, props.threadRef.threadId);
   }, [props.threadRef.threadId, records]);
   const replayQuery = useEnvironmentQuery(
     activeRecord
@@ -35,6 +28,19 @@ export function DevReviewPanel(props: {
         })
       : null,
   );
+  const replayRefreshRevisionRef = useRef<string | null>(null);
+  useEffect(() => {
+    const decision = shouldRefreshDevReviewReplay({
+      record: activeRecord,
+      data: replayQuery.data,
+      isPending: replayQuery.isPending,
+      lastRefreshRevision: replayRefreshRevisionRef.current,
+    });
+    replayRefreshRevisionRef.current = decision.revision;
+    if (decision.refresh) {
+      replayQuery.refresh();
+    }
+  }, [activeRecord, replayQuery.data, replayQuery.isPending, replayQuery.refresh]);
   const replay =
     activeRecord === null
       ? { kind: "empty" as const }
@@ -43,10 +49,14 @@ export function DevReviewPanel(props: {
         : replayQuery.data
           ? replayQuery.data.events.length > 0
             ? { kind: "ready" as const, events: replayQuery.data.events }
-            : { kind: "empty" as const }
-          : activeRecord.replay.eventCount > 0
+            : activeRecord.replay.eventCount > 0
+              ? { kind: "loading" as const }
+              : { kind: "empty" as const }
+          : replayQuery.isPending
             ? { kind: "loading" as const }
-            : { kind: "empty" as const };
+            : activeRecord.replay.eventCount > 0
+              ? { kind: "loading" as const }
+              : { kind: "empty" as const };
 
   return (
     <DiffPanelShell

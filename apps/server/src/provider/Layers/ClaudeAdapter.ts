@@ -73,10 +73,6 @@ import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
 import {
-  buildClaudeChromeDevtoolsMcpServerConfig,
-  CHROME_DEVTOOLS_MCP_SERVER_NAME,
-} from "../ChromeDevtoolsMcp.ts";
-import {
   getClaudeModelCapabilities,
   isClaudeUltracodeEffort,
   normalizeClaudeCliEffort,
@@ -94,7 +90,7 @@ import {
 import { type ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import {
-  isPreviewMcpWorkflowPromptId,
+  isDevReviewMcpWorkflowPromptId,
   resolveWorkflowSystemInstructions,
 } from "../WorkflowPromptRegistry.ts";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.UnknownFromJsonString);
@@ -3462,26 +3458,22 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(fastMode ? { fastMode: true } : {}),
         ...(ultracode ? { ultracode: true } : {}),
       };
-      const previewMcpWorkflow = isPreviewMcpWorkflowPromptId(input.workflowPromptId);
-      const mcpSession = previewMcpWorkflow
+      const devReviewMcpWorkflow = isDevReviewMcpWorkflowPromptId(input.workflowPromptId);
+      const mcpSession = devReviewMcpWorkflow
         ? McpProviderSession.readMcpProviderSession(input.threadId)
         : undefined;
-      const mcpServers = previewMcpWorkflow
-        ? {
-            [CHROME_DEVTOOLS_MCP_SERVER_NAME]: buildClaudeChromeDevtoolsMcpServerConfig(),
-            ...(mcpSession
-              ? {
-                  "t3-code": {
-                    type: "http" as const,
-                    url: mcpSession.endpoint,
-                    headers: {
-                      Authorization: mcpSession.authorizationHeader,
-                    },
-                  },
-                }
-              : {}),
-          }
-        : undefined;
+      const mcpServers =
+        devReviewMcpWorkflow && mcpSession
+          ? {
+              "t3-code": {
+                type: "http" as const,
+                url: mcpSession.endpoint,
+                headers: {
+                  Authorization: mcpSession.authorizationHeader,
+                },
+              },
+            }
+          : undefined;
       const queryOptions: ClaudeQueryOptions = {
         ...(input.cwd ? { cwd: input.cwd } : {}),
         ...(apiModelId ? { model: apiModelId } : {}),

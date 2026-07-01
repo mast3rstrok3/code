@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   CheckpointRef,
   DEFAULT_WORKSPACE_USER_ID,
+  DevReviewId,
   EventId,
   MessageId,
   ProjectId,
@@ -497,6 +498,67 @@ describe("applyThreadDetailEvent", () => {
       if (result.kind === "updated") {
         expect(result.thread.proposedPlans).toHaveLength(1);
         expect(result.thread.proposedPlans[0]?.id).toBe("plan-1");
+      }
+    });
+  });
+
+  describe("thread.dev-review-created", () => {
+    it("adds the review record to both source and review thread details", () => {
+      const sourceThread = {
+        ...baseThread,
+        id: ThreadId.make("thread-source"),
+      };
+      const reviewThread = {
+        ...baseThread,
+        id: ThreadId.make("thread-review"),
+        parentThreadId: ThreadId.make("thread-source"),
+        workflowRole: "implementation-qa-reviewer" as const,
+      };
+      const event = {
+        ...baseEventFields,
+        sequence: 12,
+        occurredAt: "2026-04-01T10:30:00.000Z",
+        aggregateKind: "thread" as const,
+        aggregateId: ThreadId.make("thread-source"),
+        type: "thread.dev-review-created" as const,
+        payload: {
+          threadId: ThreadId.make("thread-source"),
+          devReview: {
+            id: DevReviewId.make("dev-review-1"),
+            sourceThreadId: ThreadId.make("thread-source"),
+            reviewThreadId: ThreadId.make("thread-review"),
+            sourceTurnId: null,
+            status: "running" as const,
+            document: {
+              verdict: "pending" as const,
+              summary: "",
+              checks: [],
+              findings: [],
+              questions: [],
+              nextSteps: [],
+            },
+            replay: {
+              status: "not-started" as const,
+              eventCount: 0,
+              startedAt: null,
+              completedAt: null,
+              durationMs: null,
+              error: null,
+            },
+            createdAt: "2026-04-01T10:30:00.000Z",
+            updatedAt: "2026-04-01T10:30:00.000Z",
+          },
+        },
+      };
+
+      const sourceResult = applyThreadDetailEvent(sourceThread, event);
+      const reviewResult = applyThreadDetailEvent(reviewThread, event);
+
+      expect(sourceResult.kind).toBe("updated");
+      expect(reviewResult.kind).toBe("updated");
+      if (sourceResult.kind === "updated" && reviewResult.kind === "updated") {
+        expect(sourceResult.thread.devReviews).toEqual(reviewResult.thread.devReviews);
+        expect(sourceResult.thread.devReviews[0]?.id).toBe("dev-review-1");
       }
     });
   });

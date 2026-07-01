@@ -226,6 +226,7 @@ import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
 import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
 import {
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
+  buildBrowserDevReviewLaunchMessage,
   buildExpiredTerminalContextToastCopy,
   buildLocalDraftThread,
   buildThreadTurnInterruptInput,
@@ -2989,15 +2990,12 @@ function ChatViewContent(props: ChatViewProps) {
       .slice(-12)
       .map((message) => `${message.role}: ${truncate(message.text, 1_200)}`)
       .join("\n\n");
-    const messageText = [
-      `Run Browser Dev Review for source implementation thread ${activeThread.id}.`,
-      `Source title: ${activeThread.title}`,
-      `Dev Review record ID: ${reviewId}`,
-      "Use dev_review_get, dev_review_replay_start, preview_* testing, dev_review_replay_stop, and dev_review_update.",
-      sourceMessages ? `Recent source thread context:\n${sourceMessages}` : null,
-    ]
-      .filter((part): part is string => Boolean(part))
-      .join("\n\n");
+    const messageText = buildBrowserDevReviewLaunchMessage({
+      sourceThreadId: activeThread.id,
+      sourceTitle: activeThread.title,
+      reviewId,
+      recentSourceContext: sourceMessages,
+    });
 
     const result = await launchDevReview({
       environmentId,

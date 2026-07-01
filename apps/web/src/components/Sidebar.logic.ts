@@ -17,6 +17,7 @@ export const THREAD_JUMP_HINT_SHOW_DELAY_MS = 100;
 // nearby thread usually reuses an already-hot subscription.
 export const SIDEBAR_THREAD_PREWARM_LIMIT = 10;
 export type SidebarNewThreadEnvMode = "local" | "worktree";
+export const SIDEBAR_THREAD_TREE_MAX_VISUAL_DEPTH = 3;
 type SidebarProject = {
   id: string;
   title: string;
@@ -63,6 +64,211 @@ type ThreadStatusInput = Pick<
 export interface ThreadJumpHintVisibilityController {
   sync: (shouldShow: boolean) => void;
   dispose: () => void;
+}
+
+export interface SidebarThreadTreeRow<TThread> {
+  readonly thread: TThread;
+  readonly threadKey: string;
+  readonly parentThreadKey: string | null;
+  readonly rootThreadKey: string;
+  readonly depth: number;
+  readonly visualDepth: number;
+  readonly hasChildren: boolean;
+}
+
+export function buildSidebarThreadTreeRows<
+  TThread extends Pick<Thread, "id" | "parentThreadId"> & ThreadSortInput,
+>(
+  threads: readonly TThread[],
+  sortOrder: SidebarThreadSortOrder,
+  options?: {
+    readonly getThreadKey?: (thread: TThread) => string;
+    readonly getParentThreadKey?: (thread: TThread) => string | null;
+  },
+): SidebarThreadTreeRow<TThread>[] {
+  const getThreadKey = options?.getThreadKey ?? ((thread: TThread) => String(thread.id));
+  const getParentThreadKey =
+    options?.getParentThreadKey ??
+    ((thread: TThread) => (thread.parentThreadId === null ? null : String(thread.parentThreadId)));
+  const sortedThreads = sortThreads(threads, sortOrder);
+  const threadByKey = new Map<string, TThread>();
+  for (const thread of sortedThreads) {
+    threadByKey.set(getThreadKey(thread), thread);
+  }
+
+  const parentKeyByThreadKey = new Map<string, string | null>();
+  const childrenByParentKey = new Map<string, TThread[]>();
+  for (const thread of sortedThreads) {
+    const threadKey = getThreadKey(thread);
+    const rawParentKey = getParentThreadKey(thread);
+    const parentThreadKey =
+      rawParentKey !== null && rawParentKey !== threadKey && threadByKey.has(rawParentKey)
+        ? rawParentKey
+        : null;
+    parentKeyByThreadKey.set(threadKey, parentThreadKey);
+    if (parentThreadKey !== null) {
+      const children = childrenByParentKey.get(parentThreadKey);
+      if (children === undefined) {
+        childrenByParentKey.set(parentThreadKey, [thread]);
+      } else {
+        children.push(thread);
+      }
+    }
+  }
+
+  const treeSortTimestampByThreadKey = new Map<string, number>();
+  const resolveTreeSortTimestamp = (thread: TThread, ancestry: Set<string>): number => {
+    const threadKey = getThreadKey(thread);
+    const existing = treeSortTimestampByThreadKey.get(threadKey);
+    if (existing !== undefined) {
+      return existing;
+    }
+    if (ancestry.has(threadKey)) {
+      return getThreadSortTimestamp(thread, sortOrder);
+    }
+    const nextAncestry = new Set(ancestry);
+    nextAncestry.add(threadKey);
+    let timestamp = getThreadSortTimestamp(thread, sortOrder);
+    for (const child of childrenByParentKey.get(threadKey) ?? []) {
+      timestamp = Math.max(timestamp, resolveTreeSortTimestamp(child, nextAncestry));
+    }
+    treeSortTimestampByThreadKey.set(threadKey, timestamp);
+    return timestamp;
+  };
+
+  const sortRootThreads = (rootThreads: readonly TThread[]): TThread[] =>
+    [...rootThreads].sort((left, right) => {
+      const timestampDiff =
+        resolveTreeSortTimestamp(right, new Set()) - resolveTreeSortTimestamp(left, new Set());
+      if (timestampDiff !== 0) {
+        return timestampDiff;
+      }
+      return getThreadKey(right).localeCompare(getThreadKey(left));
+    });
+
+  const rows: SidebarThreadTreeRow<TThread>[] = [];
+  const emitted = new Set<string>();
+
+  const emit = (thread: TThread, rootThreadKey: string, depth: number, ancestry: Set<string>) => {
+    const threadKey = getThreadKey(thread);
+    if (emitted.has(threadKey) || ancestry.has(threadKey)) {
+      return;
+    }
+    emitted.add(threadKey);
+    const nextAncestry = new Set(ancestry);
+    nextAncestry.add(threadKey);
+    const children = childrenByParentKey.get(threadKey) ?? [];
+    rows.push({
+      thread,
+      threadKey,
+      parentThreadKey: parentKeyByThreadKey.get(threadKey) ?? null,
+      rootThreadKey,
+      depth,
+      visualDepth: Math.min(depth, SIDEBAR_THREAD_TREE_MAX_VISUAL_DEPTH),
+      hasChildren: children.length > 0,
+    });
+    for (const child of children) {
+      emit(child, rootThreadKey, depth + 1, nextAncestry);
+    }
+  };
+
+  const roots = sortedThreads.filter(
+    (thread) => parentKeyByThreadKey.get(getThreadKey(thread)) === null,
+  );
+  for (const thread of sortRootThreads(roots)) {
+    emit(thread, getThreadKey(thread), 0, new Set());
+  }
+
+  for (const thread of sortRootThreads(sortedThreads)) {
+    const threadKey = getThreadKey(thread);
+    if (!emitted.has(threadKey)) {
+      emit(thread, threadKey, 0, new Set());
+    }
+  }
+
+  return rows;
+}
+
+export function selectVisibleSidebarThreadRows<TThread>(input: {
+  rows: readonly SidebarThreadTreeRow<TThread>[];
+  activeThreadKey: string | null | undefined;
+  expanded: boolean;
+  previewLimit: number;
+  collapsedThreadKeys?: ReadonlySet<string> | undefined;
+}): {
+  hasHiddenThreads: boolean;
+  visibleRows: SidebarThreadTreeRow<TThread>[];
+  hiddenRows: SidebarThreadTreeRow<TThread>[];
+} {
+  const rootThreadKeys: string[] = [];
+  for (const row of input.rows) {
+    if (row.depth === 0 && !rootThreadKeys.includes(row.rootThreadKey)) {
+      rootThreadKeys.push(row.rootThreadKey);
+    }
+  }
+
+  const activePathKeys = new Set<string>();
+  const rowByKey = new Map(input.rows.map((row) => [row.threadKey, row] as const));
+  const activeThreadKey = input.activeThreadKey ?? null;
+  const selectedActiveRow =
+    activeThreadKey === null ? null : (rowByKey.get(activeThreadKey) ?? null);
+  let activeRow = selectedActiveRow;
+  const activePathGuard = new Set<string>();
+  while (activeRow !== null && !activePathGuard.has(activeRow.threadKey)) {
+    activePathGuard.add(activeRow.threadKey);
+    activePathKeys.add(activeRow.threadKey);
+    activeRow =
+      activeRow.parentThreadKey === null ? null : (rowByKey.get(activeRow.parentThreadKey) ?? null);
+  }
+
+  const applyCollapsedThreadRows = (
+    rows: readonly SidebarThreadTreeRow<TThread>[],
+  ): SidebarThreadTreeRow<TThread>[] => {
+    const collapsedThreadKeys = input.collapsedThreadKeys;
+    if (collapsedThreadKeys === undefined || collapsedThreadKeys.size === 0) {
+      return [...rows];
+    }
+
+    const visibleRows: SidebarThreadTreeRow<TThread>[] = [];
+    const rowVisibleByThreadKey = new Map<string, boolean>();
+    for (const row of rows) {
+      const parentVisible =
+        row.parentThreadKey === null || rowVisibleByThreadKey.get(row.parentThreadKey) === true;
+      const parentExpanded =
+        row.parentThreadKey === null ||
+        !collapsedThreadKeys.has(row.parentThreadKey) ||
+        activePathKeys.has(row.threadKey);
+      const visible = parentVisible && parentExpanded;
+      rowVisibleByThreadKey.set(row.threadKey, visible);
+      if (visible) {
+        visibleRows.push(row);
+      }
+    }
+    return visibleRows;
+  };
+
+  if (input.expanded || rootThreadKeys.length <= input.previewLimit) {
+    return {
+      hasHiddenThreads: false,
+      visibleRows: applyCollapsedThreadRows(input.rows),
+      hiddenRows: [],
+    };
+  }
+
+  const visibleRootKeys = new Set(rootThreadKeys.slice(0, Math.max(0, input.previewLimit)));
+  if (selectedActiveRow !== null) {
+    visibleRootKeys.add(selectedActiveRow.rootThreadKey);
+  }
+
+  const visibleRows = applyCollapsedThreadRows(
+    input.rows.filter((row) => visibleRootKeys.has(row.rootThreadKey)),
+  );
+  const hiddenRows = input.rows.filter((row) => !visibleRootKeys.has(row.rootThreadKey));
+  return {
+    hasHiddenThreads: hiddenRows.length > 0,
+    visibleRows,
+    hiddenRows,
+  };
 }
 
 export function resolveSidebarStageBadgeLabel(input: {

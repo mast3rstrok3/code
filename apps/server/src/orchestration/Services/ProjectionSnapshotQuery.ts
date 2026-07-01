@@ -14,6 +14,7 @@ import type {
   OrchestrationReadModel,
   OrchestrationShellSnapshot,
   OrchestrationThread,
+  OrchestrationThreadDetailSnapshot,
   OrchestrationThreadShell,
   ProjectId,
   ThreadId,
@@ -150,6 +151,14 @@ export interface ProjectionSnapshotQueryShape {
     threadId: ThreadId,
     options?: { readonly userView?: WorkspaceUserView },
   ) => Effect.Effect<Option.Option<OrchestrationThreadShell>, ProjectionRepositoryError>;
+
+  /**
+   * Read a single active thread detail snapshot by id, including the projection
+   * sequence observed in the same read transaction.
+   */
+  readonly getThreadDetailSnapshotById: (
+    threadId: ThreadId,
+  ) => Effect.Effect<Option.Option<OrchestrationThreadDetailSnapshot>, ProjectionRepositoryError>;
 
   /**
    * Read a single active thread detail snapshot by id.

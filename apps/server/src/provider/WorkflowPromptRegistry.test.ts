@@ -3,6 +3,7 @@ import * as NodeAssert from "node:assert/strict";
 import { describe, it } from "vite-plus/test";
 
 import {
+  isDevReviewMcpWorkflowPromptId,
   isPreviewMcpWorkflowPromptId,
   listWorkflowPromptContracts,
   normalizeWorkflowPromptId,
@@ -69,28 +70,31 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.doesNotMatch(adrDoc.content, /## Validation/);
   });
 
-  it("scopes Chrome DevTools MCP docs to Browser Dev Review", () => {
+  it("scopes Agent Browser CLI docs to Browser Dev Review", () => {
     const contracts = listWorkflowPromptContracts();
     const browserReview = contracts.find(
       (contract) => contract.id === WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
     );
 
     NodeAssert.ok(browserReview);
-    const chromeDoc = browserReview.associatedDocs?.find(
-      (doc) => doc.id === "implementation.browser-dev-review.chrome-devtools-mcp",
+    const agentBrowserDoc = browserReview.associatedDocs?.find(
+      (doc) => doc.id === "implementation.browser-dev-review.agent-browser-cli",
     );
-    NodeAssert.ok(chromeDoc);
-    NodeAssert.equal(chromeDoc.path, "chrome-devtools-mcp.md");
-    NodeAssert.match(chromeDoc.content, /Browser Dev Review QA role only/);
-    NodeAssert.match(chromeDoc.content, /npx -y chrome-devtools-mcp@latest/);
-    NodeAssert.match(chromeDoc.content, /--screenshot-format=webp/);
-    NodeAssert.match(chromeDoc.content, /list_console_messages/);
+    NodeAssert.ok(agentBrowserDoc);
+    NodeAssert.equal(agentBrowserDoc.path, "agent-browser-cli.md");
+    NodeAssert.match(agentBrowserDoc.content, /pnpm exec agent-browser doctor --offline --quick/);
+    NodeAssert.match(agentBrowserDoc.content, /open --init-script "\$initScriptPath"/);
+    NodeAssert.match(agentBrowserDoc.content, /snapshot -i/);
+    NodeAssert.match(agentBrowserDoc.content, /record start/);
+    NodeAssert.match(agentBrowserDoc.content, /network requests/);
+    NodeAssert.match(agentBrowserDoc.content, /refs are stale after page changes/i);
+    NodeAssert.doesNotMatch(agentBrowserDoc.content, /chrome-devtools-mcp/);
 
     for (const contract of contracts.filter((entry) => entry.id !== browserReview.id)) {
       NodeAssert.equal(
         Boolean(
           contract.associatedDocs?.some(
-            (doc) => doc.id === "implementation.browser-dev-review.chrome-devtools-mcp",
+            (doc) => doc.id === "implementation.browser-dev-review.agent-browser-cli",
           ),
         ),
         false,
@@ -116,20 +120,28 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /Planning Workflow: PRD/);
   });
 
-  it("renders Browser Dev Review with its Chrome DevTools MCP associated doc", () => {
+  it("renders Browser Dev Review with its Agent Browser CLI associated doc", () => {
     const rendered = resolveWorkflowPromptText(
       WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
     );
 
     NodeAssert.match(rendered, /<associated-doc/);
-    NodeAssert.match(rendered, /chrome-devtools-mcp\.md/);
-    NodeAssert.match(rendered, /--redact-network-headers/);
+    NodeAssert.match(rendered, /agent-browser-cli\.md/);
+    NodeAssert.match(rendered, /pnpm exec agent-browser doctor --offline --quick/);
+    NodeAssert.match(rendered, /Agent Browser CLI workflow/);
     NodeAssert.match(rendered, /dev_review_get/);
     NodeAssert.match(rendered, /dev_review_replay_start/);
     NodeAssert.match(rendered, /dev_review_replay_stop/);
-    NodeAssert.match(rendered, /preview_/);
-    NodeAssert.ok(
+    NodeAssert.match(rendered, /Do not continue to a passing result after replay failure/);
+    NodeAssert.match(rendered, /Zero RRweb events is a blocking evidence failure/);
+    NodeAssert.doesNotMatch(rendered, /Chrome DevTools MCP/);
+    NodeAssert.doesNotMatch(rendered, /chrome-devtools-mcp/);
+    NodeAssert.equal(
       isPreviewMcpWorkflowPromptId(WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex),
+      false,
+    );
+    NodeAssert.ok(
+      isDevReviewMcpWorkflowPromptId(WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex),
     );
   });
 

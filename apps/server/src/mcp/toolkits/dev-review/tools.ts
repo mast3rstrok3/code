@@ -7,15 +7,14 @@ import {
   DevReviewReplayError,
   OrchestrationDispatchCommandError,
   OrchestrationGetSnapshotError,
-  PreviewAutomationError,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
-import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
 import { OrchestrationEngineService } from "../../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { DevReviewReplayCapture } from "../../../review/DevReviewReplayCapture.ts";
 
 export const DevReviewLookupInput = Schema.Struct({
   reviewId: Schema.optional(DevReviewId).annotate({
@@ -40,7 +39,7 @@ export const DevReviewUpdateInput = Schema.Struct({
 
 const dependencies = [
   McpInvocationContext.McpInvocationContext,
-  PreviewAutomationBroker.PreviewAutomationBroker,
+  DevReviewReplayCapture,
   OrchestrationEngineService,
   ProjectionSnapshotQuery,
 ];
@@ -49,7 +48,6 @@ const DevReviewToolFailure = Schema.Union([
   DevReviewReplayError,
   OrchestrationDispatchCommandError,
   OrchestrationGetSnapshotError,
-  PreviewAutomationError,
 ]);
 
 const devReviewTool = <T extends Tool.Any>(tool: T): T =>
@@ -82,7 +80,7 @@ export const DevReviewUpdateTool = devReviewTool(
 export const DevReviewReplayStartTool = devReviewTool(
   Tool.make("dev_review_replay_start", {
     description:
-      "Start RRweb replay capture for the active preview tab before browser interactions.",
+      "Prepare Agent Browser RRweb replay capture before opening the target URL. Returns namespace, session, evidenceDir, initScriptPath, and replay metadata.",
     parameters: DevReviewLookupInput,
     success: DevReviewReplayMetadata,
     failure: DevReviewToolFailure,
@@ -92,7 +90,8 @@ export const DevReviewReplayStartTool = devReviewTool(
 
 export const DevReviewReplayStopTool = devReviewTool(
   Tool.make("dev_review_replay_stop", {
-    description: "Stop RRweb replay capture and persist compact replay metadata.",
+    description:
+      "Finalize Agent Browser RRweb replay capture and persist compact replay metadata. A zero-event capture returns failed metadata.",
     parameters: DevReviewLookupInput,
     success: DevReviewReplayMetadata,
     failure: DevReviewToolFailure,

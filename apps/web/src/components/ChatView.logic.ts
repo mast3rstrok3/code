@@ -190,6 +190,25 @@ export function collectUserMessageBlobPreviewUrls(message: ChatMessage): string[
   return previewUrls;
 }
 
+export function buildBrowserDevReviewLaunchMessage(input: {
+  readonly sourceThreadId: ThreadId;
+  readonly sourceTitle: string;
+  readonly reviewId: string;
+  readonly recentSourceContext: string;
+}): string {
+  return [
+    `Run Browser Dev Review for source implementation thread ${input.sourceThreadId}.`,
+    `Source title: ${input.sourceTitle}`,
+    `Dev Review record ID: ${input.reviewId}`,
+    "Use dev_review_get, dev_review_replay_start, the Agent Browser CLI workflow from agent-browser-cli.md, dev_review_replay_stop, and dev_review_update. Do not use T3 preview tools. If replay start or stop fails, mark the Dev Review blocked or failed, not passed.",
+    input.recentSourceContext
+      ? `Recent source thread context:\n${input.recentSourceContext}`
+      : null,
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join("\n\n");
+}
+
 export interface PullRequestDialogState {
   initialReference: string | null;
   key: number;

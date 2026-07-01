@@ -499,8 +499,8 @@ export const OrchestrationImplementationFinalDevReviewPlan = Schema.Struct({
   completionBlocking: Schema.Literal(true).pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   appDevStackSource: Schema.Literal("orchestrator-worktree"),
   autoStartAppDevStack: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
-  browserMcpProfile: Schema.Literal("chrome-devtools").pipe(
-    Schema.withDecodingDefault(Effect.succeed("chrome-devtools" as const)),
+  browserMcpProfile: Schema.Literal("agent-browser").pipe(
+    Schema.withDecodingDefault(Effect.succeed("agent-browser" as const)),
   ),
   maxAttempts: NonNegativeInt.pipe(
     Schema.withDecodingDefault(Effect.succeed(IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS)),
@@ -541,11 +541,8 @@ export const OrchestrationImplementationQaToolingState = Schema.Struct({
   status: Schema.Literals(["unknown", "ready", "failed"]).pipe(
     Schema.withDecodingDefault(Effect.succeed("unknown" as const)),
   ),
-  chromePath: Schema.NullOr(TrimmedNonEmptyString).pipe(
-    Schema.withDecodingDefault(Effect.succeed(null)),
-  ),
-  mcpPackage: TrimmedNonEmptyString.pipe(
-    Schema.withDecodingDefault(Effect.succeed("chrome-devtools-mcp@latest")),
+  agentBrowserPackage: TrimmedNonEmptyString.pipe(
+    Schema.withDecodingDefault(Effect.succeed("agent-browser@0.31.1")),
   ),
   lastErrorMarkdown: Schema.NullOr(Schema.String).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
@@ -780,8 +777,7 @@ export const OrchestrationImplementationRun = Schema.Struct({
     Schema.withDecodingDefault(
       Effect.succeed({
         status: "unknown" as const,
-        chromePath: null,
-        mcpPackage: "chrome-devtools-mcp@latest",
+        agentBrowserPackage: "agent-browser@0.31.1",
         lastErrorMarkdown: null,
         checkedAt: "",
       }),

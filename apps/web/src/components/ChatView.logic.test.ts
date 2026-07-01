@@ -13,6 +13,7 @@ import type { Thread } from "../types";
 import {
   MAX_HIDDEN_MOUNTED_PREVIEW_THREADS,
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
+  buildBrowserDevReviewLaunchMessage,
   buildLocalDraftThread,
   buildExpiredTerminalContextToastCopy,
   buildThreadTurnInterruptInput,
@@ -113,6 +114,26 @@ describe("buildLocalDraftThread", () => {
         },
       ).ownerUserId,
     ).toBe(ownerUserId);
+  });
+});
+
+describe("buildBrowserDevReviewLaunchMessage", () => {
+  it("points Browser Dev Review at Agent Browser without preview wildcard guidance", () => {
+    const message = buildBrowserDevReviewLaunchMessage({
+      sourceThreadId: threadId,
+      sourceTitle: "Implementation thread",
+      reviewId: "dev-review-1",
+      recentSourceContext: "user: please review the flow",
+    });
+
+    expect(message).toContain("dev_review_get");
+    expect(message).toContain("dev_review_replay_start");
+    expect(message).toContain("agent-browser-cli.md");
+    expect(message).toContain("dev_review_replay_stop");
+    expect(message).toContain("dev_review_update");
+    expect(message).toContain("blocked or failed, not passed");
+    expect(message).not.toContain("preview_*");
+    expect(message).not.toContain("preview_* testing");
   });
 });
 
