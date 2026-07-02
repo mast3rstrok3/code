@@ -553,7 +553,7 @@ export function applyThreadDetailEvent(
       };
     }
 
-    case "thread.dev-review-replay-metadata-updated": {
+    case "thread.dev-review-evidence-updated": {
       if (
         event.payload.sourceThreadId !== thread.id &&
         event.payload.reviewThreadId !== thread.id
@@ -564,7 +564,7 @@ export function applyThreadDetailEvent(
       if (!existing) return { kind: "unchanged" };
       const updated: DevReviewRecord = {
         ...existing,
-        replay: event.payload.replay,
+        evidence: event.payload.evidence,
         updatedAt: event.payload.updatedAt,
       };
       const devReviews = pipe(

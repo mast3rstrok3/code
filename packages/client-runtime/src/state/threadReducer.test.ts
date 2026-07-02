@@ -4,6 +4,7 @@ import {
   CheckpointRef,
   DEFAULT_WORKSPACE_USER_ID,
   DevReviewId,
+  EMPTY_DEV_REVIEW_EVIDENCE,
   EventId,
   MessageId,
   ProjectId,
@@ -537,14 +538,7 @@ describe("applyThreadDetailEvent", () => {
               questions: [],
               nextSteps: [],
             },
-            replay: {
-              status: "not-started" as const,
-              eventCount: 0,
-              startedAt: null,
-              completedAt: null,
-              durationMs: null,
-              error: null,
-            },
+            evidence: EMPTY_DEV_REVIEW_EVIDENCE,
             createdAt: "2026-04-01T10:30:00.000Z",
             updatedAt: "2026-04-01T10:30:00.000Z",
           },
@@ -559,6 +553,78 @@ describe("applyThreadDetailEvent", () => {
       if (sourceResult.kind === "updated" && reviewResult.kind === "updated") {
         expect(sourceResult.thread.devReviews).toEqual(reviewResult.thread.devReviews);
         expect(sourceResult.thread.devReviews[0]?.id).toBe("dev-review-1");
+      }
+    });
+  });
+
+  describe("thread.dev-review-evidence-updated", () => {
+    it("replaces the review's evidence", () => {
+      const sourceThread = {
+        ...baseThread,
+        id: ThreadId.make("thread-source"),
+        devReviews: [
+          {
+            id: DevReviewId.make("dev-review-1"),
+            sourceThreadId: ThreadId.make("thread-source"),
+            reviewThreadId: ThreadId.make("thread-review"),
+            sourceTurnId: null,
+            status: "running" as const,
+            document: {
+              verdict: "pending" as const,
+              summary: "",
+              checks: [],
+              findings: [],
+              questions: [],
+              nextSteps: [],
+            },
+            evidence: EMPTY_DEV_REVIEW_EVIDENCE,
+            createdAt: "2026-04-01T10:30:00.000Z",
+            updatedAt: "2026-04-01T10:30:00.000Z",
+          },
+        ],
+      };
+      const evidence = {
+        recording: {
+          status: "saved" as const,
+          path: "/tmp/evidence/recording.webm",
+          mimeType: "video/webm",
+          sizeBytes: 2048,
+          startedAt: "2026-04-01T10:31:00.000Z",
+          completedAt: "2026-04-01T10:32:00.000Z",
+          error: null,
+        },
+        screenshots: [
+          {
+            id: "shot-1",
+            path: "/tmp/evidence/shot-1.png",
+            mimeType: "image/png" as const,
+            caption: "Checkout form after submit",
+            capturedAt: "2026-04-01T10:31:30.000Z",
+          },
+        ],
+      };
+
+      const result = applyThreadDetailEvent(sourceThread, {
+        ...baseEventFields,
+        sequence: 13,
+        occurredAt: "2026-04-01T10:32:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-source"),
+        type: "thread.dev-review-evidence-updated",
+        payload: {
+          threadId: ThreadId.make("thread-source"),
+          reviewId: DevReviewId.make("dev-review-1"),
+          sourceThreadId: ThreadId.make("thread-source"),
+          reviewThreadId: ThreadId.make("thread-review"),
+          evidence,
+          updatedAt: "2026-04-01T10:32:00.000Z",
+        },
+      });
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.devReviews[0]?.evidence).toEqual(evidence);
+        expect(result.thread.devReviews[0]?.updatedAt).toBe("2026-04-01T10:32:00.000Z");
       }
     });
   });

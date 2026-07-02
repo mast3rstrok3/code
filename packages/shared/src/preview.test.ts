@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  extractChromiumNetError,
   isLoopbackHost,
   isPreviewableUrl,
   newPreviewTabId,
   normalizePreviewUrl,
   PreviewUrlNormalizationError,
+  sanitizePreviewNavigationFailureDescription,
 } from "./preview.ts";
 
 describe("newPreviewTabId", () => {
@@ -107,5 +109,44 @@ describe("normalizePreviewUrl", () => {
         /user|password|access_token|secret|fragment/,
       );
     }
+  });
+});
+
+describe("extractChromiumNetError", () => {
+  it("extracts Chromium net errors from Playwright navigation messages", () => {
+    expect(
+      extractChromiumNetError("page.goto: net::ERR_NAME_NOT_RESOLVED at https://missing.example/"),
+    ).toEqual({ code: -105, description: "ERR_NAME_NOT_RESOLVED" });
+    expect(
+      extractChromiumNetError(
+        new Error("page.goto: net::ERR_CONNECTION_REFUSED at http://localhost:3773/"),
+      ),
+    ).toEqual({ code: -102, description: "ERR_CONNECTION_REFUSED" });
+    expect(
+      extractChromiumNetError("page.goto: net::ERR_CONNECTION_TIMED_OUT at https://slow.example/"),
+    ).toEqual({ code: -118, description: "ERR_CONNECTION_TIMED_OUT" });
+  });
+
+  it("keeps unknown Chromium ERR descriptions with the fallback code", () => {
+    expect(extractChromiumNetError("page.goto: net::ERR_HTTP2_PROTOCOL_ERROR")).toEqual({
+      code: -1,
+      description: "ERR_HTTP2_PROTOCOL_ERROR",
+    });
+  });
+
+  it("returns null when Chromium did not provide a net error", () => {
+    expect(extractChromiumNetError("page.goto: Timeout 30000ms exceeded.")).toBeNull();
+  });
+});
+
+describe("sanitizePreviewNavigationFailureDescription", () => {
+  it("keeps a useful first line without URL secrets", () => {
+    expect(
+      sanitizePreviewNavigationFailureDescription(
+        new Error(
+          "page.goto: Timeout 30000ms exceeded at https://user:password@example.com/path?token=secret#hash\nCall log: ignored",
+        ),
+      ),
+    ).toBe("page.goto: Timeout 30000ms exceeded at https://example.com/path");
   });
 });

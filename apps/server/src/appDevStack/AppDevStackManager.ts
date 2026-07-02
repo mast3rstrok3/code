@@ -30,7 +30,11 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstab
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import * as ServerConfig from "../config.ts";
-import { makeKubectlRunner, makeNativeAppDevStackService } from "./NativeAppDevStackManager.ts";
+import {
+  makeKubectlRunner,
+  makeNativeAppDevStackService,
+  makeNativeCommandRunner,
+} from "./NativeAppDevStackManager.ts";
 
 const BACKEND_TOKEN_ENV = "T3CODE_APP_DEV_STACK_BACKEND_BEARER_TOKEN";
 const OIDC_TOKEN_URL_ENV = "T3CODE_APP_DEV_STACK_BACKEND_OIDC_TOKEN_URL";
@@ -67,6 +71,7 @@ export class AppDevStackManager extends Context.Service<
       input: AppDevStackAutoCreateInput,
     ) => Effect.Effect<AppDevStackAutoCreateResult, AppDevStackError>;
     readonly stop: (input: AppDevStackGetInput) => Effect.Effect<AppDevStack, AppDevStackError>;
+    readonly restart: (input: AppDevStackGetInput) => Effect.Effect<AppDevStack, AppDevStackError>;
     readonly delete: (
       input: AppDevStackGetInput,
     ) => Effect.Effect<AppDevStackDeleteResult, AppDevStackError>;
@@ -86,18 +91,19 @@ export class AppDevStackManager extends Context.Service<
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;
       const httpClient = yield* HttpClient.HttpClient;
+      const baseUrl = config.appDevStackBackendUrl?.href.replace(/\/+$/u, "") ?? null;
 
-      if (config.appDevStackNative !== undefined) {
+      if (config.appDevStackNative !== undefined && baseUrl === null) {
         const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
         return AppDevStackManager.of(
           makeNativeAppDevStackService(
             config.appDevStackNative,
             makeKubectlRunner(config.appDevStackNative.kubectlPath, spawner),
+            makeNativeCommandRunner(spawner),
           ),
         );
       }
 
-      const baseUrl = config.appDevStackBackendUrl?.href.replace(/\/+$/u, "") ?? null;
       const bearerToken =
         config.appDevStackBackendBearerToken === undefined
           ? null
@@ -405,6 +411,7 @@ export class AppDevStackManager extends Context.Service<
               worktree_path: input.worktreePath,
               display_name: input.displayName,
               git_branch: input.gitBranch ?? null,
+              ...(input.namespace === undefined ? {} : { namespace: input.namespace }),
             }),
           ),
           AppDevStackAutoCreateResult,
@@ -420,6 +427,19 @@ export class AppDevStackManager extends Context.Service<
           ),
           AppDevStack,
         );
+      });
+
+      const restart = Effect.fn("AppDevStackManager.restart")(function* (
+        input: AppDevStackGetInput,
+      ) {
+        const stack = yield* get(input);
+        yield* stop(input);
+        const result = yield* autoCreate({
+          worktreePath: stack.worktreePath,
+          displayName: displayNameForRestart(stack),
+          gitBranch: stack.branchName ?? null,
+        });
+        return result.stack;
       });
 
       const deleteStack = Effect.fn("AppDevStackManager.delete")(function* (
@@ -518,6 +538,7 @@ export class AppDevStackManager extends Context.Service<
         get,
         autoCreate,
         stop,
+        restart,
         delete: deleteStack,
         listPods,
         getPodLogs,
@@ -546,3 +567,18 @@ const stackPodLogEntryFromResult = (
   error,
   fetchedAt,
 });
+
+const displayNameForRestart = (stack: AppDevStack): string => {
+  const candidates = [
+    stack.displayName,
+    stack.displaySlug,
+    stack.repoName,
+    stack.branchName,
+    stack.worktreePath.split("/").findLast((segment) => segment.length > 0),
+  ];
+  for (const candidate of candidates) {
+    const trimmed = candidate?.trim();
+    if (trimmed) return trimmed;
+  }
+  return stack.id;
+};

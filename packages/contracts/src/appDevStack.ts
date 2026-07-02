@@ -117,6 +117,7 @@ export const AppDevStackAutoCreateInput = Schema.Struct({
   worktreePath: TrimmedNonEmptyString,
   displayName: TrimmedNonEmptyString,
   gitBranch: Schema.optional(NullableTrimmedNonEmptyString),
+  namespace: Schema.optional(NullableTrimmedNonEmptyString),
 });
 export type AppDevStackAutoCreateInput = typeof AppDevStackAutoCreateInput.Type;
 

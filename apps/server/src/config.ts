@@ -32,6 +32,9 @@ export type PreviewBrowserSource = typeof PreviewBrowserSource.Type;
 export const PreviewBrowserSandbox = Schema.Literals(["auto", "on", "off"]);
 export type PreviewBrowserSandbox = typeof PreviewBrowserSandbox.Type;
 
+export const NativeAppDevStackImageBuilder = Schema.Literals(["auto", "docker", "buildkit"]);
+export type NativeAppDevStackImageBuilder = typeof NativeAppDevStackImageBuilder.Type;
+
 /**
  * ServerDerivedPaths - Derived paths from the base directory.
  */
@@ -56,15 +59,25 @@ export interface ServerDerivedPaths {
 }
 
 export interface NativeAppDevStackConfig {
-  readonly id: string;
-  readonly namespace: string;
-  readonly worktreePath: string;
+  readonly id: string | undefined;
+  readonly namespace: string | undefined;
+  readonly worktreePath: string | undefined;
   readonly composePath: string;
-  readonly displayName: string;
+  readonly displayName: string | undefined;
   readonly displaySlug: string | undefined;
   readonly repoName: string | undefined;
   readonly branchName: string | undefined;
   readonly kubectlPath: string;
+  readonly dockerPath: string;
+  readonly buildctlPath: string;
+  readonly imageBuilder: NativeAppDevStackImageBuilder;
+  readonly imageRegistry: string | undefined;
+  readonly imagePushRegistry: string | undefined;
+  readonly imageProject: string | undefined;
+  readonly buildkitAddr: string | undefined;
+  readonly buildkitDockerConfig: string | undefined;
+  readonly buildkitDockerConfigsDir: string | undefined;
+  readonly buildkitHarborCaCert: string | undefined;
   readonly frontendUrl: string | undefined;
   readonly backendUrl: string | undefined;
   readonly keycloakUrl: string | undefined;
@@ -110,6 +123,7 @@ export class ServerConfig extends Context.Service<
     readonly previewBrowserMode: PreviewBrowserMode;
     readonly previewBrowserSource: PreviewBrowserSource;
     readonly previewBrowserExecutablePath: string | undefined;
+    readonly previewFfmpegExecutablePath: string | undefined;
     readonly previewBrowserSandbox: PreviewBrowserSandbox;
     readonly previewBrowserMaxFps: number;
     readonly previewBrowserMaxFrameWidth: number;
@@ -218,6 +232,7 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
     previewBrowserMode: "auto",
     previewBrowserSource: "auto",
     previewBrowserExecutablePath: undefined,
+    previewFfmpegExecutablePath: undefined,
     previewBrowserSandbox: "auto",
     previewBrowserMaxFps: 12,
     previewBrowserMaxFrameWidth: 1600,

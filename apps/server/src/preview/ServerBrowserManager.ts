@@ -1,12 +1,16 @@
 // @effect-diagnostics nodeBuiltinImport:off - Server-hosted Chromium needs Node crypto and filesystem paths.
 // @effect-diagnostics globalDate:off - CDP callbacks run outside Effect's clock service.
+// @effect-diagnostics globalTimers:off - ffmpeg teardown timers run in CDP/child-process callbacks outside Effect.
 // @effect-diagnostics preferSchemaOverJson:off - JSON byte sizing guards untrusted automation results.
+import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 
 import {
   FILL_PREVIEW_VIEWPORT,
   PreviewBrowserUnavailableError,
+  type PreviewAutomationRecordingArtifact,
+  type PreviewAutomationRecordingStatus,
   type PreviewCloseInput,
   type PreviewFrameEvent,
   type PreviewInputEvent,
@@ -15,10 +19,15 @@ import {
   type PreviewResizeInput,
   type PreviewScreenshotArtifact,
   type PreviewTabActionInput,
+  type PreviewTabId,
   type ThreadId,
   type PreviewViewportSetting,
   type PreviewZoomInput,
 } from "@t3tools/contracts";
+import {
+  extractChromiumNetError,
+  sanitizePreviewNavigationFailureDescription,
+} from "@t3tools/shared/preview";
 import type { BrowserContext, CDPSession, Page } from "playwright";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -28,12 +37,14 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as BrowserExecutableResolver from "./BrowserExecutableResolver.ts";
 import * as PreviewManager from "./Manager.ts";
+import * as VideoFrameSink from "./VideoFrameSink.ts";
 
 interface ServerBrowserTab {
   readonly threadId: ThreadId;
@@ -44,6 +55,7 @@ interface ServerBrowserTab {
   sequence: number;
   zoomFactor: number;
   lastFrameAt: number;
+  lastRequestedUrl: string | null;
   viewportSetting: PreviewViewportSetting;
   renderedViewport: { readonly width: number; readonly height: number };
 }
@@ -55,10 +67,60 @@ interface ServerBrowserRuntime {
 
 type BrowserDataKind = "cookies" | "cache" | "all";
 
+interface ActiveServerRecording {
+  readonly tabId: string;
+  readonly threadId: ThreadId;
+  readonly id: string;
+  readonly outputPath: string;
+  readonly startedAt: string;
+  readonly sink: VideoFrameSink.VideoFrameSink;
+  readonly process: NodeChildProcess.ChildProcess;
+  readonly exited: Promise<number | null>;
+  readonly stderrChunks: string[];
+  stopping: boolean;
+}
+
 const DEFAULT_VIEWPORT = { width: 1280, height: 800 } as const;
 const MAX_VISIBLE_TEXT_LENGTH = 20_000;
 const MAX_INTERACTIVE_ELEMENTS = 80;
 const MAX_EVALUATION_BYTES = 2 * 1024 * 1024;
+const RECORDING_FPS = 25;
+const RECORDING_FFMPEG_EXIT_TIMEOUT_MS = 10_000;
+const PAGE_CRASHED_FAILURE = {
+  code: -1,
+  description: "ERR_PAGE_CRASHED",
+} as const;
+
+type NavigationStatusReport =
+  | "Loading"
+  | "Success"
+  | {
+      readonly _tag: "Loading";
+      readonly url: string;
+    }
+  | {
+      readonly _tag: "LoadFailed";
+      readonly url?: string;
+      readonly cause?: unknown;
+      readonly code?: number;
+      readonly description?: string;
+    };
+
+/**
+ * Mirrors the desktop host's recording-stop contract: the tag must survive
+ * `serializeHostError` so `preview_recording_stop` callers can distinguish
+ * "nothing was recording" from transport failures.
+ */
+export class PreviewRecordingNotActiveError extends Schema.TaggedErrorClass<PreviewRecordingNotActiveError>()(
+  "PreviewAutomationRecordingNotActiveError",
+  {
+    tabId: Schema.NullOr(Schema.String),
+  },
+) {
+  override get message(): string {
+    return `No active browser recording was found for tab ${this.tabId ?? "unassigned"}.`;
+  }
+}
 
 const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
 
@@ -78,6 +140,14 @@ const browserError = (cause: unknown): PreviewBrowserUnavailableError =>
   new PreviewBrowserUnavailableError({
     message: cause instanceof Error ? cause.message : String(cause),
   });
+
+const navigationFailure = (
+  cause: unknown,
+): { readonly code: number; readonly description: string } =>
+  extractChromiumNetError(cause) ?? {
+    code: -1,
+    description: sanitizePreviewNavigationFailureDescription(cause),
+  };
 
 const viewportFromResizeInput = (
   input: Pick<PreviewResizeInput, "viewport" | "renderedViewport">,
@@ -248,6 +318,17 @@ export class ServerBrowserManager extends Context.Service<
         readonly timeoutMs?: number;
       },
     ) => Effect.Effect<void, PreviewBrowserUnavailableError>;
+    readonly recordingSupported: Effect.Effect<boolean>;
+    readonly recordingStart: (
+      input: PreviewTabActionInput,
+    ) => Effect.Effect<PreviewAutomationRecordingStatus, PreviewBrowserUnavailableError>;
+    readonly recordingStop: (input: {
+      readonly threadId: ThreadId;
+      readonly tabId: string | null;
+    }) => Effect.Effect<
+      PreviewAutomationRecordingArtifact,
+      PreviewBrowserUnavailableError | PreviewRecordingNotActiveError
+    >;
   }
 >()("t3/preview/ServerBrowserManager") {}
 
@@ -262,6 +343,31 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
   const artifactDir = path.join(config.stateDir, "preview-artifacts");
   const tabs = new Map<string, ServerBrowserTab>();
   let runtimePromise: Promise<ServerBrowserRuntime> | null = null;
+  let activeRecording: ActiveServerRecording | null = null;
+
+  const abortRecording = (recording: ActiveServerRecording) => {
+    recording.stopping = true;
+    if (activeRecording === recording) activeRecording = null;
+    try {
+      recording.process.stdin?.end();
+    } catch {
+      // stdin already closed.
+    }
+    const killTimer = setTimeout(() => {
+      try {
+        recording.process.kill("SIGKILL");
+      } catch {
+        // Process already exited.
+      }
+    }, RECORDING_FFMPEG_EXIT_TIMEOUT_MS);
+    killTimer.unref?.();
+    void recording.exited.finally(() => clearTimeout(killTimer));
+  };
+
+  const abortRecordingForTab = (tabId: string) => {
+    const recording = activeRecording;
+    if (recording && recording.tabId === tabId) abortRecording(recording);
+  };
 
   const enabled = config.mode === "web" && config.previewBrowserMode !== "off";
   const context = yield* Effect.context<never>();
@@ -272,28 +378,39 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
     runFork(effect.pipe(Effect.ignore));
   };
 
-  const reportStatus = (tab: ServerBrowserTab, status?: "Loading" | "Success" | "LoadFailed") =>
+  const reportStatus = (tab: ServerBrowserTab, status?: NavigationStatusReport) =>
     Effect.tryPromise({
       try: async () => {
+        const statusTag = typeof status === "string" ? status : status?._tag;
         const url = tab.page.url();
         const title = await tab.page.title().catch(() => "");
         const history = await readHistoryState(tab.cdp);
-        if (status === "LoadFailed") {
+        if (typeof status !== "string" && status?._tag === "LoadFailed") {
+          const failureStatus = status;
+          const failure =
+            failureStatus?.description !== undefined
+              ? { code: failureStatus.code ?? -1, description: failureStatus.description }
+              : failureStatus?.cause !== undefined
+                ? navigationFailure(failureStatus.cause)
+                : PAGE_CRASHED_FAILURE;
           return {
             navStatus: {
               _tag: "LoadFailed" as const,
-              url: url || "about:blank",
+              url: failureStatus?.url ?? tab.lastRequestedUrl ?? (url || "about:blank"),
               title,
-              code: -1,
-              description: "The server-hosted Chromium tab crashed or failed to load.",
+              code: failure.code,
+              description: failure.description,
             },
             ...history,
           };
         }
+        const statusUrl =
+          typeof status !== "string" && status?._tag === "Loading" ? status.url : url;
+        const navTag: "Loading" | "Success" = statusTag === "Loading" ? "Loading" : "Success";
         return {
           navStatus: {
-            _tag: status ?? "Success",
-            url: url || "about:blank",
+            _tag: navTag,
+            url: statusUrl || "about:blank",
             title,
           },
           ...history,
@@ -390,6 +507,7 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
       sequence: 0,
       zoomFactor: 1,
       lastFrameAt: 0,
+      lastRequestedUrl: null,
       viewportSetting,
       renderedViewport,
     };
@@ -398,11 +516,13 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
     page.on("load", () => runDetached(reportStatus(tab, "Success")));
     page.on("crash", () => {
       if (tabs.get(input.tabId) === tab) tabs.delete(input.tabId);
+      abortRecordingForTab(input.tabId);
       runDetached(PubSub.shutdown(framePubSub));
-      runDetached(reportStatus(tab, "LoadFailed"));
+      runDetached(reportStatus(tab, { _tag: "LoadFailed" }));
     });
     page.on("close", () => {
       if (tabs.get(input.tabId) === tab) tabs.delete(input.tabId);
+      abortRecordingForTab(input.tabId);
       runDetached(PubSub.shutdown(framePubSub));
     });
     cdp.on("Page.screencastFrame", (event: unknown) => {
@@ -416,6 +536,14 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
       }
       if (typeof frame.data !== "string") return;
       const now = Date.now();
+      const recording = activeRecording;
+      if (recording && recording.tabId === tab.tabId && !recording.stopping) {
+        try {
+          recording.sink.pushFrame(Buffer.from(frame.data, "base64"), now);
+        } catch {
+          // ffmpeg stdin is gone; the stop path surfaces the failure.
+        }
+      }
       const minInterval = 1000 / config.previewBrowserMaxFps;
       if (now - tab.lastFrameAt < minInterval) return;
       tab.lastFrameAt = now;
@@ -462,13 +590,16 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
     "ServerBrowserManager.navigate",
   )(function* (input) {
     const tab = yield* getTab(input);
-    yield* reportStatus(tab, "Loading");
+    tab.lastRequestedUrl = input.url;
+    yield* reportStatus(tab, { _tag: "Loading", url: input.url });
     yield* Effect.tryPromise({
       try: () => tab.page.goto(input.url, { waitUntil: "domcontentloaded", timeout: 30_000 }),
       catch: browserError,
     }).pipe(
       Effect.catch((error) =>
-        reportStatus(tab, "LoadFailed").pipe(Effect.andThen(Effect.fail(error))),
+        reportStatus(tab, { _tag: "LoadFailed", url: input.url, cause: error }).pipe(
+          Effect.andThen(Effect.fail(error)),
+        ),
       ),
     );
     yield* reportStatus(tab, "Success");
@@ -900,9 +1031,174 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
     });
   });
 
+  const recordingSupported = Effect.suspend(() =>
+    enabled ? BrowserExecutableResolver.resolveFfmpegAvailability(config) : Effect.succeed(false),
+  );
+
+  const recordingStart: ServerBrowserManager["Service"]["recordingStart"] = Effect.fn(
+    "ServerBrowserManager.recordingStart",
+  )(function* (input) {
+    const existing = activeRecording;
+    if (existing && !existing.stopping) {
+      if (existing.tabId === input.tabId) {
+        return {
+          tabId: existing.tabId as PreviewTabId,
+          recording: true,
+          startedAt: existing.startedAt,
+        };
+      }
+      return yield* new PreviewBrowserUnavailableError({
+        message: `Cannot record tab ${input.tabId} while tab ${existing.tabId} is already being recorded.`,
+      });
+    }
+
+    const ffmpegPath = yield* BrowserExecutableResolver.resolveFfmpegExecutable(config).pipe(
+      Effect.mapError(browserError),
+    );
+    const tab = yield* getTab(input);
+    yield* fileSystem
+      .makeDirectory(artifactDir, { recursive: true })
+      .pipe(Effect.mapError(browserError));
+    const [startedAt, millis] = yield* Effect.all([nowIso, Clock.currentTimeMillis]);
+    const id = `browser-recording-${millis.toString(36)}`;
+    const outputPath = path.join(artifactDir, `${id}.webm`);
+    // Match CDP's screencast downscaling so recorded frames fill the canvas.
+    const scale = Math.min(
+      1,
+      config.previewBrowserMaxFrameWidth / tab.renderedViewport.width,
+      config.previewBrowserMaxFrameHeight / tab.renderedViewport.height,
+    );
+    const args = VideoFrameSink.buildFfmpegArgs({
+      width: tab.renderedViewport.width * scale,
+      height: tab.renderedViewport.height * scale,
+      fps: RECORDING_FPS,
+      outputPath,
+    });
+
+    const recording = yield* Effect.try({
+      try: () => {
+        const child = NodeChildProcess.spawn(ffmpegPath, args, {
+          stdio: ["pipe", "ignore", "pipe"],
+        });
+        child.stdin?.on("error", () => {});
+        const stderrChunks: string[] = [];
+        child.stderr?.setEncoding("utf8");
+        child.stderr?.on("data", (chunk: string) => {
+          stderrChunks.push(chunk);
+          if (stderrChunks.length > 16) stderrChunks.shift();
+        });
+        const exited = new Promise<number | null>((resolve) => {
+          child.once("exit", (code) => resolve(code));
+          child.once("error", () => resolve(null));
+        });
+        const sink = VideoFrameSink.createVideoFrameSink({
+          fps: RECORDING_FPS,
+          write: (frame) => {
+            child.stdin?.write(frame);
+          },
+        });
+        const started: ActiveServerRecording = {
+          tabId: tab.tabId,
+          threadId: tab.threadId,
+          id,
+          outputPath,
+          startedAt,
+          sink,
+          process: child,
+          exited,
+          stderrChunks,
+          stopping: false,
+        };
+        return started;
+      },
+      catch: browserError,
+    });
+    activeRecording = recording;
+
+    // Seed one frame so a static page still yields a non-empty video.
+    yield* Effect.tryPromise({
+      try: () => tab.page.screenshot({ type: "jpeg" }),
+      catch: browserError,
+    }).pipe(
+      Effect.flatMap((seed) =>
+        Clock.currentTimeMillis.pipe(
+          Effect.map((seededAt) => {
+            if (activeRecording === recording && !recording.stopping) {
+              recording.sink.pushFrame(seed, seededAt);
+            }
+          }),
+        ),
+      ),
+      Effect.tapError(() => Effect.sync(() => abortRecording(recording))),
+    );
+
+    return { tabId: tab.tabId as PreviewTabId, recording: true, startedAt };
+  });
+
+  const recordingStop: ServerBrowserManager["Service"]["recordingStop"] = Effect.fn(
+    "ServerBrowserManager.recordingStop",
+  )(function* (input) {
+    const recording = activeRecording;
+    const matchesTarget =
+      recording !== null &&
+      !recording.stopping &&
+      (input.tabId === null || input.tabId === recording.tabId);
+    if (!recording || !matchesTarget) {
+      return yield* new PreviewRecordingNotActiveError({ tabId: input.tabId });
+    }
+    recording.stopping = true;
+    activeRecording = null;
+
+    const [createdAt, stoppedAtMillis] = yield* Effect.all([nowIso, Clock.currentTimeMillis]);
+    const sizeBytes = yield* Effect.tryPromise({
+      try: async () => {
+        recording.sink.flush(stoppedAtMillis);
+        await new Promise<void>((resolve) => {
+          const stdin = recording.process.stdin;
+          if (stdin) stdin.end(resolve);
+          else resolve();
+        });
+        const exitCode = await Promise.race([
+          recording.exited,
+          new Promise<"timeout">((resolve) =>
+            setTimeout(() => resolve("timeout"), RECORDING_FFMPEG_EXIT_TIMEOUT_MS),
+          ),
+        ]);
+        if (exitCode === "timeout") {
+          try {
+            recording.process.kill("SIGKILL");
+          } catch {
+            // Process already exited.
+          }
+          throw new Error("ffmpeg did not finalize the recording in time.");
+        }
+        if (exitCode !== 0) {
+          const stderr = recording.stderrChunks.join("").trim();
+          throw new Error(
+            `ffmpeg exited with code ${exitCode ?? "unknown"}${stderr ? `: ${stderr}` : ""}`,
+          );
+        }
+        const stats = await NodeFSP.stat(recording.outputPath);
+        return stats.size;
+      },
+      catch: browserError,
+    });
+
+    return {
+      id: recording.id,
+      tabId: recording.tabId as PreviewTabId,
+      path: recording.outputPath,
+      mimeType: "video/webm",
+      sizeBytes,
+      createdAt,
+    };
+  });
+
   yield* Effect.addFinalizer(() =>
     Effect.tryPromise({
       try: async () => {
+        const recording = activeRecording;
+        if (recording) abortRecording(recording);
         const runtime = runtimePromise ? await runtimePromise.catch(() => null) : null;
         await runtime?.context.close().catch(() => {});
       },
@@ -933,6 +1229,9 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
     automationScroll,
     automationEvaluate,
     automationWaitFor,
+    recordingSupported,
+    recordingStart,
+    recordingStop,
   });
 });
 

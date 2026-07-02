@@ -4,6 +4,7 @@ import {
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_WORKSPACE_USER_ID,
   DevReviewId,
+  EMPTY_DEV_REVIEW_EVIDENCE,
   MessageId,
   ProjectId,
   ThreadId,
@@ -377,7 +378,7 @@ describe("OrchestrationEngine", () => {
     expect(reviewThread?.title).toBe("Browser Dev Review");
     expect(sourceThread?.devReviews[0]).toEqual(reviewThread?.devReviews[0]);
     expect(sourceThread?.devReviews[0]?.status).toBe("running");
-    expect(sourceThread?.devReviews[0]?.replay.status).toBe("not-started");
+    expect(sourceThread?.devReviews[0]?.evidence).toEqual(EMPTY_DEV_REVIEW_EVIDENCE);
     expect(reviewThread?.messages.map((message) => message.id)).toEqual(["msg-dev-review-launch"]);
 
     const events = await system.run(
@@ -397,6 +398,141 @@ describe("OrchestrationEngine", () => {
     expect(turnStartRequested?.payload).toMatchObject({
       workflowPromptId: "implementation.browser-dev-review.codex",
     });
+
+    await system.dispose();
+  });
+
+  it("updates Dev Review evidence through thread.dev-review.evidence.update", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const createdAt = now();
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-project-dev-review-evidence-create"),
+        projectId: asProjectId("project-dev-review-evidence"),
+        title: "Dev Review Evidence Project",
+        workspaceRoot: "/tmp/project-dev-review-evidence",
+        defaultModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-thread-dev-review-evidence-source-create"),
+        threadId: ThreadId.make("thread-dev-review-evidence-source"),
+        projectId: asProjectId("project-dev-review-evidence"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+        title: "Implementation",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "full-access",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.dev-review.launch",
+        commandId: CommandId.make("cmd-dev-review-evidence-launch"),
+        sourceThreadId: ThreadId.make("thread-dev-review-evidence-source"),
+        reviewThreadId: ThreadId.make("thread-dev-review-evidence-review"),
+        reviewId: DevReviewId.make("dev-review-evidence-1"),
+        message: {
+          messageId: asMessageId("msg-dev-review-evidence-launch"),
+          role: "user",
+          text: "Run Browser Dev Review",
+          attachments: [],
+        },
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        runtimeMode: "full-access",
+        workflowPromptId: "implementation.browser-dev-review.codex",
+        createdAt,
+      }),
+    );
+
+    const evidence = {
+      recording: {
+        status: "saved" as const,
+        path: "dev-reviews/dev-review-evidence-1/recording.webm",
+        mimeType: "video/webm",
+        sizeBytes: 1024,
+        startedAt: "2026-01-01T00:00:01.000Z",
+        completedAt: "2026-01-01T00:00:02.000Z",
+        error: null,
+      },
+      screenshots: [
+        {
+          id: "screenshot-1",
+          path: "dev-reviews/dev-review-evidence-1/screenshot-1.png",
+          mimeType: "image/png" as const,
+          caption: "Landing page",
+          capturedAt: "2026-01-01T00:00:01.500Z",
+        },
+      ],
+    };
+
+    await system.run(
+      engine.dispatch({
+        type: "thread.dev-review.evidence.update",
+        commandId: CommandId.make("cmd-dev-review-evidence-update"),
+        threadId: ThreadId.make("thread-dev-review-evidence-source"),
+        reviewId: DevReviewId.make("dev-review-evidence-1"),
+        evidence,
+        updatedAt: "2026-01-01T00:00:03.000Z",
+        createdAt: "2026-01-01T00:00:03.000Z",
+      }),
+    );
+
+    const readModel = await system.readModel();
+    const sourceThread = readModel.threads.find(
+      (thread) => thread.id === "thread-dev-review-evidence-source",
+    );
+    expect(sourceThread?.devReviews[0]?.evidence).toEqual(evidence);
+    expect(sourceThread?.devReviews[0]?.updatedAt).toBe("2026-01-01T00:00:03.000Z");
+
+    const events = await system.run(
+      Stream.runCollect(engine.readEvents(0)).pipe(
+        Effect.map((chunk): OrchestrationEvent[] => Array.from(chunk)),
+      ),
+    );
+    const evidenceUpdated = events.find(
+      (event) => event.type === "thread.dev-review-evidence-updated",
+    );
+    expect(evidenceUpdated?.payload).toMatchObject({
+      threadId: "thread-dev-review-evidence-source",
+      reviewId: "dev-review-evidence-1",
+      sourceThreadId: "thread-dev-review-evidence-source",
+      reviewThreadId: "thread-dev-review-evidence-review",
+      evidence,
+      updatedAt: "2026-01-01T00:00:03.000Z",
+    });
+
+    await expect(
+      system.run(
+        engine.dispatch({
+          type: "thread.dev-review.evidence.update",
+          commandId: CommandId.make("cmd-dev-review-evidence-update-missing"),
+          threadId: ThreadId.make("thread-dev-review-evidence-source"),
+          reviewId: DevReviewId.make("dev-review-missing"),
+          evidence,
+          updatedAt: "2026-01-01T00:00:04.000Z",
+          createdAt: "2026-01-01T00:00:04.000Z",
+        }),
+      ),
+    ).rejects.toThrow("does not exist");
 
     await system.dispose();
   });

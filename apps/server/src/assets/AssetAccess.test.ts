@@ -1,14 +1,25 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ThreadId } from "@t3tools/contracts";
+import {
+  DEV_REVIEW_RECORDING_EVIDENCE_ID,
+  DevReviewId,
+  EMPTY_DEV_REVIEW_EVIDENCE,
+  ThreadId,
+  type DevReviewEvidence,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
+import {
+  ProjectionThreadDevReviewRepository,
+  type ProjectionThreadDevReview,
+} from "../persistence/Services/ProjectionThreadDevReviews.ts";
 import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { ASSET_ROUTE_PREFIX, issueAssetUrl, resolveAsset } from "./AssetAccess.ts";
@@ -16,12 +27,48 @@ import { ASSET_ROUTE_PREFIX, issueAssetUrl, resolveAsset } from "./AssetAccess.t
 const configLayer = ServerConfig.ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-asset-access-test-",
 });
+const devReviewRows = new Map<string, ProjectionThreadDevReview>();
+const devReviewRepositoryLayer = Layer.succeed(
+  ProjectionThreadDevReviewRepository,
+  ProjectionThreadDevReviewRepository.of({
+    upsert: (row) =>
+      Effect.sync(() => {
+        devReviewRows.set(row.reviewId, row);
+      }),
+    getById: ({ reviewId }) => Effect.sync(() => Option.fromNullishOr(devReviewRows.get(reviewId))),
+    listByThreadId: () => Effect.succeed([]),
+    listAll: () => Effect.succeed([]),
+    deleteByThreadId: () => Effect.void,
+  }),
+);
 const testLayer = Layer.mergeAll(
   configLayer,
   WorkspacePaths.layer,
   ProjectFaviconResolver.layer.pipe(Layer.provide(WorkspacePaths.layer)),
   ServerSecretStore.layer.pipe(Layer.provide(configLayer)),
+  devReviewRepositoryLayer,
 ).pipe(Layer.provideMerge(NodeServices.layer));
+
+const seedDevReview = (reviewId: DevReviewId, evidence: DevReviewEvidence) => {
+  devReviewRows.set(reviewId, {
+    reviewId,
+    sourceThreadId: ThreadId.make("thread-source"),
+    reviewThreadId: ThreadId.make("thread-review"),
+    sourceTurnId: null,
+    status: "running",
+    document: {
+      verdict: "pending",
+      summary: "",
+      checks: [],
+      findings: [],
+      questions: [],
+      nextSteps: [],
+    },
+    evidence,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  });
+};
 
 describe("AssetAccess", () => {
   it.effect("issues workspace URLs that resolve the entry file and sibling assets", () =>
@@ -270,6 +317,155 @@ describe("AssetAccess", () => {
       expect(error.message).toBe("Failed to resolve project favicon.");
       expect(error._tag).toBe("AssetProjectFaviconResolutionError");
       expect(error.cause).toBe(resolutionCause);
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.effect("round-trips a saved dev-review recording through signed URLs", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const artifactsDir = path.join(config.stateDir, "preview-artifacts");
+      const webmPath = path.join(artifactsDir, "browser-recording-test.webm");
+      yield* fileSystem.makeDirectory(artifactsDir, { recursive: true });
+      yield* fileSystem.writeFile(webmPath, new Uint8Array([0x1a, 0x45, 0xdf, 0xa3]));
+      const canonicalWebmPath = yield* fileSystem.realPath(webmPath);
+
+      const reviewId = DevReviewId.make("dev-review-recording");
+      seedDevReview(reviewId, {
+        recording: {
+          status: "saved",
+          path: webmPath,
+          mimeType: "video/webm",
+          sizeBytes: 4,
+          startedAt: "2026-01-01T00:00:00.000Z",
+          completedAt: "2026-01-01T00:01:00.000Z",
+          error: null,
+        },
+        screenshots: [],
+      });
+
+      const result = yield* issueAssetUrl({
+        resource: {
+          _tag: "dev-review-evidence",
+          reviewId,
+          evidenceId: DEV_REVIEW_RECORDING_EVIDENCE_ID,
+        },
+      });
+      expect(result.relativeUrl.endsWith("/browser-recording-test.webm")).toBe(true);
+      const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+      const separatorIndex = suffix.indexOf("/");
+      const token = suffix.slice(0, separatorIndex);
+
+      expect(yield* resolveAsset(token, "browser-recording-test.webm")).toEqual({
+        kind: "file",
+        path: canonicalWebmPath,
+      });
+      expect(yield* resolveAsset(`${token}tampered`, "browser-recording-test.webm")).toBeNull();
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.effect("round-trips dev-review screenshots by evidence id", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const reviewId = DevReviewId.make("dev-review-screenshot");
+      const screenshotDir = path.join(config.stateDir, "preview-artifacts", "dev-review", reviewId);
+      const screenshotPath = path.join(screenshotDir, "shot-1.png");
+      yield* fileSystem.makeDirectory(screenshotDir, { recursive: true });
+      yield* fileSystem.writeFile(screenshotPath, new Uint8Array([137, 80, 78, 71]));
+      const canonicalScreenshotPath = yield* fileSystem.realPath(screenshotPath);
+
+      seedDevReview(reviewId, {
+        recording: EMPTY_DEV_REVIEW_EVIDENCE.recording,
+        screenshots: [
+          {
+            id: "shot-1",
+            path: screenshotPath,
+            mimeType: "image/png",
+            caption: "Initial load",
+            capturedAt: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+      });
+
+      const result = yield* issueAssetUrl({
+        resource: { _tag: "dev-review-evidence", reviewId, evidenceId: "shot-1" },
+      });
+      const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+      const token = suffix.slice(0, suffix.indexOf("/"));
+
+      expect(yield* resolveAsset(token, "shot-1.png")).toEqual({
+        kind: "file",
+        path: canonicalScreenshotPath,
+      });
+
+      const missing = yield* issueAssetUrl({
+        resource: { _tag: "dev-review-evidence", reviewId, evidenceId: "shot-2" },
+      }).pipe(Effect.flip);
+      expect(missing._tag).toBe("AssetDevReviewEvidenceNotFoundError");
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.effect("rejects dev-review evidence that is not saved or escapes the artifacts root", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+
+      // Recording not yet saved: no URL may be minted.
+      const recordingReviewId = DevReviewId.make("dev-review-in-progress");
+      seedDevReview(recordingReviewId, {
+        recording: { ...EMPTY_DEV_REVIEW_EVIDENCE.recording, status: "recording" },
+        screenshots: [],
+      });
+      const notSaved = yield* issueAssetUrl({
+        resource: {
+          _tag: "dev-review-evidence",
+          reviewId: recordingReviewId,
+          evidenceId: DEV_REVIEW_RECORDING_EVIDENCE_ID,
+        },
+      }).pipe(Effect.flip);
+      expect(notSaved._tag).toBe("AssetDevReviewEvidenceNotFoundError");
+
+      // Evidence path outside stateDir/preview-artifacts: rejected even though
+      // the file exists.
+      const outside = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-asset-evidence-outside-",
+      });
+      const outsidePath = path.join(outside, "escape.webm");
+      yield* fileSystem.writeFile(outsidePath, new Uint8Array([1]));
+      const traversalReviewId = DevReviewId.make("dev-review-traversal");
+      seedDevReview(traversalReviewId, {
+        recording: {
+          status: "saved",
+          path: outsidePath,
+          mimeType: "video/webm",
+          sizeBytes: 1,
+          startedAt: null,
+          completedAt: null,
+          error: null,
+        },
+        screenshots: [],
+      });
+      const traversal = yield* issueAssetUrl({
+        resource: {
+          _tag: "dev-review-evidence",
+          reviewId: traversalReviewId,
+          evidenceId: DEV_REVIEW_RECORDING_EVIDENCE_ID,
+        },
+      }).pipe(Effect.flip);
+      expect(traversal._tag).toBe("AssetDevReviewEvidenceNotFoundError");
+
+      // Unknown review id.
+      const unknown = yield* issueAssetUrl({
+        resource: {
+          _tag: "dev-review-evidence",
+          reviewId: DevReviewId.make("dev-review-missing"),
+          evidenceId: DEV_REVIEW_RECORDING_EVIDENCE_ID,
+        },
+      }).pipe(Effect.flip);
+      expect(unknown._tag).toBe("AssetDevReviewEvidenceNotFoundError");
     }).pipe(Effect.provide(testLayer)),
   );
 });

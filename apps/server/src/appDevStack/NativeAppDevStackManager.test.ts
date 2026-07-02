@@ -1,8 +1,13 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
 import type { NativeAppDevStackConfig } from "../config.ts";
 import { makeNativeAppDevStackService, type KubectlRunner } from "./NativeAppDevStackManager.ts";
+import type { NativeCommandRunner } from "./nativeAppDevStackProvisioning.ts";
 
 const nativeConfig = {
   id: "rudi-dev",
@@ -14,6 +19,16 @@ const nativeConfig = {
   repoName: "rudi",
   branchName: "dev",
   kubectlPath: "kubectl",
+  dockerPath: "docker",
+  buildctlPath: "buildctl",
+  imageBuilder: "docker",
+  imageRegistry: "harbor.nightingale-ai.com",
+  imagePushRegistry: undefined,
+  imageProject: undefined,
+  buildkitAddr: undefined,
+  buildkitDockerConfig: undefined,
+  buildkitDockerConfigsDir: undefined,
+  buildkitHarborCaCert: undefined,
   frontendUrl: "https://rudi-dev.nightingale-ai.com",
   backendUrl: "https://api-rudi-dev.nightingale-ai.com",
   keycloakUrl: "https://rudi-dev-keycloak.nightingale-ai.com",
@@ -71,6 +86,27 @@ const podsJson = JSON.stringify({
     },
   ],
 });
+
+const makeTempHeroComposeWorktree = (
+  serviceLines: ReadonlyArray<string> = [
+    "    image: hero-web:latest",
+    "    environment:",
+    "      PORT: '3000'",
+    "    ports:",
+    "      - '3000:3000'",
+  ],
+  basename?: string,
+) => {
+  const tempRoot = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-native-app-dev-"));
+  const tempDir = basename === undefined ? tempRoot : NodePath.join(tempRoot, basename);
+  const composeDir = NodePath.join(tempDir, "infra", "compose");
+  NodeFS.mkdirSync(composeDir, { recursive: true });
+  NodeFS.writeFileSync(
+    NodePath.join(composeDir, "compose.app-dev.yml"),
+    ["services:", "  web:", ...serviceLines, ""].join("\n"),
+  );
+  return tempDir;
+};
 
 it.effect("reports the configured Rudi stack from Kubernetes deployments", () => {
   const calls: Array<ReadonlyArray<string>> = [];
@@ -313,19 +349,27 @@ it.effect("keeps successful aggregate log entries when a container log read fail
 });
 
 it.effect("scales deployments when auto-creating an existing native stack", () => {
+  const tempDir = makeTempHeroComposeWorktree(undefined, "rudi");
   const calls: Array<ReadonlyArray<string>> = [];
   const runKubectl: KubectlRunner = async (args) => {
     calls.push(args);
     if (args.join(" ") === "get namespace rudi-dev -o json") return namespaceJson;
     if (args.join(" ") === "-n rudi-dev get deployments -o json") return deploymentsJson;
+    if (args[0] === "apply" && args[1] === "-f" && typeof args[2] === "string") return "";
     if (args.join(" ") === "-n rudi-dev scale deployment --all --replicas=1") return "";
     throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
   };
-  const service = makeNativeAppDevStackService(nativeConfig, runKubectl);
+  const service = makeNativeAppDevStackService(
+    {
+      ...nativeConfig,
+      worktreePath: tempDir,
+    },
+    runKubectl,
+  );
 
   return Effect.gen(function* () {
     const result = yield* service.autoCreate({
-      worktreePath: "/home/nils/repos/nils/rudi",
+      worktreePath: tempDir,
       displayName: "rudi",
       gitBranch: "dev",
     });
@@ -334,6 +378,613 @@ it.effect("scales deployments when auto-creating an existing native stack", () =
     assert.equal(result.stack.status, "running");
     assert.deepEqual(calls, [
       ["get", "namespace", "rudi-dev", "-o", "json"],
+      ["-n", "rudi-dev", "get", "deployments", "-o", "json"],
+      ["apply", "-f", calls[2]?.[2] ?? ""],
+      ["-n", "rudi-dev", "scale", "deployment", "--all", "--replicas=1"],
+      ["get", "namespace", "rudi-dev", "-o", "json"],
+      ["-n", "rudi-dev", "get", "deployments", "-o", "json"],
+    ]);
+  }).pipe(
+    Effect.ensuring(
+      Effect.sync(() => NodeFS.rmSync(NodePath.dirname(tempDir), { force: true, recursive: true })),
+    ),
+  );
+});
+
+it.effect("derives a native namespace for a different worktree instead of rejecting it", () => {
+  const tempDir = makeTempHeroComposeWorktree(undefined, "hero");
+  const calls: Array<ReadonlyArray<string>> = [];
+  const runKubectl: KubectlRunner = async (args) => {
+    calls.push(args);
+    if (args.join(" ") === "get namespace hero-dev -o json") return namespaceJson;
+    if (args.join(" ") === "-n hero-dev get deployments -o json") return deploymentsJson;
+    if (args[0] === "apply" && args[1] === "-f" && typeof args[2] === "string") return "";
+    if (args.join(" ") === "-n hero-dev scale deployment --all --replicas=1") return "";
+    throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
+  };
+  const service = makeNativeAppDevStackService(nativeConfig, runKubectl);
+
+  return Effect.gen(function* () {
+    const result = yield* service.autoCreate({
+      worktreePath: tempDir,
+      displayName: "hero",
+      gitBranch: "main",
+    });
+
+    assert.equal(result.created, false);
+    assert.equal(result.stack.id, "hero-dev");
+    assert.equal(result.stack.namespace, "hero-dev");
+    assert.equal(result.stack.worktreePath, tempDir);
+    assert.equal(result.stack.repoName, "hero");
+    assert.equal(result.stack.branchName, "main");
+    assert.deepEqual(calls, [
+      ["get", "namespace", "hero-dev", "-o", "json"],
+      ["-n", "hero-dev", "get", "deployments", "-o", "json"],
+      ["apply", "-f", calls[2]?.[2] ?? ""],
+      ["-n", "hero-dev", "scale", "deployment", "--all", "--replicas=1"],
+      ["get", "namespace", "hero-dev", "-o", "json"],
+      ["-n", "hero-dev", "get", "deployments", "-o", "json"],
+    ]);
+  }).pipe(
+    Effect.ensuring(
+      Effect.sync(() => NodeFS.rmSync(NodePath.dirname(tempDir), { force: true, recursive: true })),
+    ),
+  );
+});
+
+it.effect("uses an explicit native namespace for a new worktree when provided", () => {
+  const tempDir = makeTempHeroComposeWorktree(undefined, "hero");
+  const calls: Array<ReadonlyArray<string>> = [];
+  const runKubectl: KubectlRunner = async (args) => {
+    calls.push(args);
+    if (args.join(" ") === "get namespace hero-preview -o json") return namespaceJson;
+    if (args.join(" ") === "-n hero-preview get deployments -o json") return deploymentsJson;
+    if (args[0] === "apply" && args[1] === "-f" && typeof args[2] === "string") return "";
+    if (args.join(" ") === "-n hero-preview scale deployment --all --replicas=1") return "";
+    throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
+  };
+  const service = makeNativeAppDevStackService(
+    {
+      ...nativeConfig,
+      id: undefined,
+      namespace: undefined,
+      worktreePath: undefined,
+      displayName: undefined,
+      repoName: undefined,
+      branchName: undefined,
+      frontendUrl: undefined,
+      backendUrl: undefined,
+      keycloakUrl: undefined,
+      minioUrl: undefined,
+    },
+    runKubectl,
+  );
+
+  return Effect.gen(function* () {
+    const result = yield* service.autoCreate({
+      worktreePath: tempDir,
+      displayName: "hero",
+      gitBranch: "main",
+      namespace: "Hero Preview",
+    });
+
+    assert.equal(result.stack.id, "hero-preview");
+    assert.equal(result.stack.namespace, "hero-preview");
+    assert.deepEqual(calls, [
+      ["get", "namespace", "hero-preview", "-o", "json"],
+      ["-n", "hero-preview", "get", "deployments", "-o", "json"],
+      ["apply", "-f", calls[2]?.[2] ?? ""],
+      ["-n", "hero-preview", "scale", "deployment", "--all", "--replicas=1"],
+      ["get", "namespace", "hero-preview", "-o", "json"],
+      ["-n", "hero-preview", "get", "deployments", "-o", "json"],
+    ]);
+  }).pipe(
+    Effect.ensuring(
+      Effect.sync(() => NodeFS.rmSync(NodePath.dirname(tempDir), { force: true, recursive: true })),
+    ),
+  );
+});
+
+it.effect("provisions Kubernetes resources when auto-creating a missing native namespace", () => {
+  const tempDir = makeTempHeroComposeWorktree();
+  const calls: Array<ReadonlyArray<string>> = [];
+  let appliedManifest = "";
+  const runKubectl: KubectlRunner = async (args) => {
+    calls.push(args);
+    if (args.join(" ") === "get namespace hero-dev -o json") {
+      if (appliedManifest.length === 0) throw new Error('namespaces "hero-dev" not found');
+      return namespaceJson;
+    }
+    if (args[0] === "apply" && args[1] === "-f" && typeof args[2] === "string") {
+      appliedManifest = NodeFS.readFileSync(args[2], "utf8");
+      return "";
+    }
+    if (args.join(" ") === "-n hero-dev scale deployment --all --replicas=1") return "";
+    if (args.join(" ") === "-n hero-dev get deployments -o json") return deploymentsJson;
+    throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
+  };
+  const service = makeNativeAppDevStackService(
+    {
+      ...nativeConfig,
+      id: undefined,
+      namespace: undefined,
+      worktreePath: undefined,
+      displayName: undefined,
+      repoName: undefined,
+      branchName: undefined,
+      frontendUrl: undefined,
+      backendUrl: undefined,
+      keycloakUrl: undefined,
+      minioUrl: undefined,
+    },
+    runKubectl,
+  );
+
+  return Effect.gen(function* () {
+    const result = yield* service.autoCreate({
+      worktreePath: tempDir,
+      displayName: "hero",
+      gitBranch: "main",
+      namespace: "hero-dev",
+    });
+
+    assert.equal(result.created, true);
+    assert.equal(result.stack.namespace, "hero-dev");
+    assert.include(appliedManifest, "kind: Namespace");
+    assert.include(appliedManifest, "name: hero-dev");
+    assert.include(appliedManifest, "kind: Deployment");
+    assert.include(appliedManifest, "image: hero-web:latest");
+    assert.include(appliedManifest, "imagePullPolicy: Always");
+    assert.include(appliedManifest, "kind: IngressRoute");
+    assert.deepEqual(
+      calls.map((args) => args.slice(0, 2)),
+      [
+        ["get", "namespace"],
+        ["apply", "-f"],
+        ["-n", "hero-dev"],
+        ["get", "namespace"],
+        ["-n", "hero-dev"],
+      ],
+    );
+  }).pipe(
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { force: true, recursive: true }))),
+  );
+});
+
+it.effect("builds and pushes compose build services before applying Kubernetes resources", () => {
+  const tempDir = makeTempHeroComposeWorktree(
+    [
+      "    image: hero-web:latest",
+      "    build:",
+      "      context: ../..",
+      "      dockerfile: Dockerfile",
+      "      args:",
+      "        VITE_FLAG: '1'",
+      "    environment:",
+      "      PORT: '3000'",
+      "    ports:",
+      "      - '3000:3000'",
+    ],
+    "hero",
+  );
+  NodeFS.writeFileSync(NodePath.join(tempDir, "Dockerfile"), "FROM scratch\n");
+  const calls: Array<ReadonlyArray<string>> = [];
+  const commandCalls: Array<{
+    readonly command: string;
+    readonly args: ReadonlyArray<string>;
+    readonly cwd: string | undefined;
+  }> = [];
+  let appliedManifest = "";
+  const runKubectl: KubectlRunner = async (args) => {
+    calls.push(args);
+    if (args.join(" ") === "get namespace hero-dev -o json") {
+      if (appliedManifest.length === 0) throw new Error('namespaces "hero-dev" not found');
+      return namespaceJson;
+    }
+    if (args[0] === "apply" && args[1] === "-f" && typeof args[2] === "string") {
+      appliedManifest = NodeFS.readFileSync(args[2], "utf8");
+      return "";
+    }
+    if (args.join(" ") === "-n hero-dev scale deployment --all --replicas=1") return "";
+    if (args.join(" ") === "-n hero-dev get deployments -o json") return deploymentsJson;
+    throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
+  };
+  const runCommand: NativeCommandRunner = async (command, args, options) => {
+    commandCalls.push({ command, args, cwd: options?.cwd });
+    return "";
+  };
+  const service = makeNativeAppDevStackService(
+    {
+      ...nativeConfig,
+      id: undefined,
+      namespace: undefined,
+      worktreePath: undefined,
+      displayName: undefined,
+      repoName: undefined,
+      branchName: undefined,
+      imageRegistry: "registry.example.test",
+      frontendUrl: undefined,
+      backendUrl: undefined,
+      keycloakUrl: undefined,
+      minioUrl: undefined,
+    },
+    runKubectl,
+    runCommand,
+  );
+
+  return Effect.gen(function* () {
+    const result = yield* service.autoCreate({
+      worktreePath: tempDir,
+      displayName: "hero",
+      gitBranch: "main",
+      namespace: "hero-dev",
+    });
+
+    const targetImage = "registry.example.test/hero/hero-web:latest";
+    assert.equal(result.created, true);
+    assert.deepEqual(commandCalls, [
+      {
+        command: "docker",
+        args: [
+          "build",
+          "-t",
+          targetImage,
+          "-f",
+          NodePath.join(tempDir, "Dockerfile"),
+          "--build-arg",
+          "VITE_FLAG=1",
+          tempDir,
+        ],
+        cwd: tempDir,
+      },
+      {
+        command: "docker",
+        args: ["push", targetImage],
+        cwd: tempDir,
+      },
+    ]);
+    assert.include(appliedManifest, `image: ${targetImage}`);
+    assert.include(appliedManifest, "imagePullPolicy: Always");
+    assert.deepEqual(
+      calls.map((args) => args.slice(0, 2)),
+      [
+        ["get", "namespace"],
+        ["apply", "-f"],
+        ["-n", "hero-dev"],
+        ["get", "namespace"],
+        ["-n", "hero-dev"],
+      ],
+    );
+  }).pipe(
+    Effect.ensuring(
+      Effect.sync(() => NodeFS.rmSync(NodePath.dirname(tempDir), { force: true, recursive: true })),
+    ),
+  );
+});
+
+it.effect("can build and push compose build services through BuildKit", () => {
+  const tempDir = makeTempHeroComposeWorktree(
+    [
+      "    image: hero-web:latest",
+      "    build:",
+      "      context: ../..",
+      "      dockerfile: Dockerfile",
+      "      target: runner",
+      "      args:",
+      "        VITE_FLAG: '1'",
+      "    ports:",
+      "      - '3000:3000'",
+    ],
+    "hero",
+  );
+  NodeFS.writeFileSync(NodePath.join(tempDir, "Dockerfile"), "FROM scratch\n");
+  const tempRoot = NodePath.dirname(tempDir);
+  const dockerConfigDir = NodePath.join(tempRoot, "docker-config");
+  const harborCaCert = NodePath.join(tempRoot, "harbor-ca.crt");
+  NodeFS.mkdirSync(dockerConfigDir, { recursive: true });
+  NodeFS.writeFileSync(NodePath.join(dockerConfigDir, "config.json"), "{}\n");
+  NodeFS.writeFileSync(harborCaCert, "test-ca\n");
+
+  const calls: Array<ReadonlyArray<string>> = [];
+  const commandCalls: Array<{
+    readonly command: string;
+    readonly args: ReadonlyArray<string>;
+    readonly cwd: string | undefined;
+    readonly env: Readonly<Record<string, string>> | undefined;
+  }> = [];
+  let appliedManifest = "";
+  const runKubectl: KubectlRunner = async (args) => {
+    calls.push(args);
+    if (args.join(" ") === "get namespace hero-dev -o json") {
+      if (appliedManifest.length === 0) throw new Error('namespaces "hero-dev" not found');
+      return namespaceJson;
+    }
+    if (args[0] === "apply" && args[1] === "-f" && typeof args[2] === "string") {
+      appliedManifest = NodeFS.readFileSync(args[2], "utf8");
+      return "";
+    }
+    if (args.join(" ") === "-n hero-dev scale deployment --all --replicas=1") return "";
+    if (args.join(" ") === "-n hero-dev get deployments -o json") return deploymentsJson;
+    throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
+  };
+  const runCommand: NativeCommandRunner = async (command, args, options) => {
+    commandCalls.push({ command, args, cwd: options?.cwd, env: options?.env });
+    return "";
+  };
+  const service = makeNativeAppDevStackService(
+    {
+      ...nativeConfig,
+      id: undefined,
+      namespace: undefined,
+      worktreePath: undefined,
+      displayName: undefined,
+      repoName: undefined,
+      branchName: undefined,
+      imageBuilder: "buildkit",
+      imageRegistry: "harbor.nightingale-ai.com",
+      imagePushRegistry: "harbor-core.harbor-system.svc.cluster.local",
+      buildkitAddr: "tcp://buildkit.test:1234",
+      buildkitDockerConfig: dockerConfigDir,
+      buildkitHarborCaCert: harborCaCert,
+      frontendUrl: undefined,
+      backendUrl: undefined,
+      keycloakUrl: undefined,
+      minioUrl: undefined,
+    },
+    runKubectl,
+    runCommand,
+  );
+
+  return Effect.gen(function* () {
+    yield* service.autoCreate({
+      worktreePath: tempDir,
+      displayName: "hero",
+      gitBranch: "main",
+      namespace: "hero-dev",
+    });
+
+    const targetImage = "harbor.nightingale-ai.com/hero/hero-web:latest";
+    const pushImage = "harbor-core.harbor-system.svc.cluster.local/hero/hero-web:latest";
+    assert.equal(commandCalls.length, 1);
+    assert.equal(commandCalls[0]?.command, "buildctl");
+    assert.equal(commandCalls[0]?.cwd, tempDir);
+    assert.deepEqual(commandCalls[0]?.env, {
+      DOCKER_CONFIG: dockerConfigDir,
+      SSL_CERT_FILE: harborCaCert,
+    });
+    assert.include(commandCalls[0]?.args.join("\n") ?? "", "--addr\ntcp://buildkit.test:1234");
+    assert.include(commandCalls[0]?.args.join("\n") ?? "", `context=${tempDir}`);
+    assert.include(commandCalls[0]?.args.join("\n") ?? "", `dockerfile=${tempDir}`);
+    assert.include(commandCalls[0]?.args.join("\n") ?? "", "filename=Dockerfile");
+    assert.include(commandCalls[0]?.args.join("\n") ?? "", "build-arg:VITE_FLAG=1");
+    assert.include(commandCalls[0]?.args.join("\n") ?? "", "target=runner");
+    assert.include(
+      commandCalls[0]?.args.join("\n") ?? "",
+      `type=image,name=${pushImage},push=true`,
+    );
+    assert.include(appliedManifest, `image: ${targetImage}`);
+  }).pipe(
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempRoot, { force: true, recursive: true }))),
+  );
+});
+
+it.effect("finds the app-dev compose file from a nested worktree path", () => {
+  const tempDir = makeTempHeroComposeWorktree();
+  const nestedDir = NodePath.join(tempDir, "apps", "server");
+  NodeFS.mkdirSync(nestedDir, { recursive: true });
+  const calls: Array<ReadonlyArray<string>> = [];
+  let appliedManifest = "";
+  const runKubectl: KubectlRunner = async (args) => {
+    calls.push(args);
+    if (args.join(" ") === "get namespace hero-dev -o json") {
+      if (appliedManifest.length === 0) throw new Error('namespaces "hero-dev" not found');
+      return namespaceJson;
+    }
+    if (args[0] === "apply" && args[1] === "-f" && typeof args[2] === "string") {
+      appliedManifest = NodeFS.readFileSync(args[2], "utf8");
+      return "";
+    }
+    if (args.join(" ") === "-n hero-dev scale deployment --all --replicas=1") return "";
+    if (args.join(" ") === "-n hero-dev get deployments -o json") return deploymentsJson;
+    throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
+  };
+  const service = makeNativeAppDevStackService(
+    {
+      ...nativeConfig,
+      id: undefined,
+      namespace: undefined,
+      worktreePath: undefined,
+      displayName: undefined,
+      repoName: undefined,
+      branchName: undefined,
+      frontendUrl: undefined,
+      backendUrl: undefined,
+      keycloakUrl: undefined,
+      minioUrl: undefined,
+    },
+    runKubectl,
+  );
+
+  return Effect.gen(function* () {
+    const result = yield* service.autoCreate({
+      worktreePath: nestedDir,
+      displayName: "hero",
+      gitBranch: "main",
+      namespace: "hero-dev",
+    });
+
+    assert.equal(result.created, true);
+    assert.equal(result.stack.namespace, "hero-dev");
+    assert.include(appliedManifest, "image: hero-web:latest");
+    assert.include(appliedManifest, "imagePullPolicy: Always");
+    assert.include(appliedManifest, "kind: Deployment");
+  }).pipe(
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { force: true, recursive: true }))),
+  );
+});
+
+it.effect("reports a clear error when the worktree is missing an app-dev compose file", () => {
+  const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-native-app-dev-missing-"));
+  const calls: Array<ReadonlyArray<string>> = [];
+  const expectedComposePath = NodePath.join(tempDir, "infra", "compose", "compose.app-dev.yml");
+  const runKubectl: KubectlRunner = async (args) => {
+    calls.push(args);
+    if (args.join(" ") === "get namespace hero-dev -o json") {
+      throw new Error('namespaces "hero-dev" not found');
+    }
+    throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
+  };
+  const service = makeNativeAppDevStackService(
+    {
+      ...nativeConfig,
+      id: undefined,
+      namespace: undefined,
+      worktreePath: undefined,
+      displayName: undefined,
+      repoName: undefined,
+      branchName: undefined,
+      frontendUrl: undefined,
+      backendUrl: undefined,
+      keycloakUrl: undefined,
+      minioUrl: undefined,
+    },
+    runKubectl,
+  );
+
+  return Effect.gen(function* () {
+    const error = yield* service
+      .autoCreate({
+        worktreePath: tempDir,
+        displayName: "hero",
+        gitBranch: "main",
+        namespace: "hero-dev",
+      })
+      .pipe(Effect.flip);
+
+    assert.include(error.message, "App-dev compose file not found");
+    assert.include(error.message, expectedComposePath);
+    assert.include(error.message, "T3CODE_APP_DEV_STACK_NATIVE_COMPOSE_PATH");
+    assert.deepEqual(calls, [["get", "namespace", "hero-dev", "-o", "json"]]);
+  }).pipe(
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { force: true, recursive: true }))),
+  );
+});
+
+it.effect("restores Kubernetes resources when auto-creating an empty native namespace", () => {
+  const tempDir = makeTempHeroComposeWorktree();
+  const calls: Array<ReadonlyArray<string>> = [];
+  let appliedManifest = "";
+  const emptyDeploymentsJson = JSON.stringify({ items: [] });
+  const runKubectl: KubectlRunner = async (args) => {
+    calls.push(args);
+    if (args.join(" ") === "get namespace hero-dev -o json") return namespaceJson;
+    if (args.join(" ") === "-n hero-dev get deployments -o json") {
+      return appliedManifest.length === 0 ? emptyDeploymentsJson : deploymentsJson;
+    }
+    if (args[0] === "apply" && args[1] === "-f" && typeof args[2] === "string") {
+      appliedManifest = NodeFS.readFileSync(args[2], "utf8");
+      return "";
+    }
+    if (args.join(" ") === "-n hero-dev scale deployment --all --replicas=1") return "";
+    throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
+  };
+  const service = makeNativeAppDevStackService(
+    {
+      ...nativeConfig,
+      id: undefined,
+      namespace: undefined,
+      worktreePath: undefined,
+      displayName: undefined,
+      repoName: undefined,
+      branchName: undefined,
+      frontendUrl: undefined,
+      backendUrl: undefined,
+      keycloakUrl: undefined,
+      minioUrl: undefined,
+    },
+    runKubectl,
+  );
+
+  return Effect.gen(function* () {
+    const result = yield* service.autoCreate({
+      worktreePath: tempDir,
+      displayName: "hero",
+      gitBranch: "main",
+      namespace: "hero-dev",
+    });
+
+    assert.equal(result.created, true);
+    assert.equal(result.stack.status, "running");
+    assert.include(appliedManifest, "kind: Deployment");
+    assert.deepEqual(
+      calls.map((args) => args.slice(0, 2)),
+      [
+        ["get", "namespace"],
+        ["-n", "hero-dev"],
+        ["apply", "-f"],
+        ["-n", "hero-dev"],
+        ["get", "namespace"],
+        ["-n", "hero-dev"],
+      ],
+    );
+  }).pipe(
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { force: true, recursive: true }))),
+  );
+});
+
+it.effect("does not report a derived worktree stack before its namespace exists", () => {
+  const calls: Array<ReadonlyArray<string>> = [];
+  const runKubectl: KubectlRunner = async (args) => {
+    calls.push(args);
+    if (args.join(" ") === "get namespace hero-dev -o json") {
+      throw new Error('namespaces "hero-dev" not found');
+    }
+    throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
+  };
+  const service = makeNativeAppDevStackService(
+    {
+      ...nativeConfig,
+      id: undefined,
+      namespace: undefined,
+      worktreePath: undefined,
+      displayName: undefined,
+      repoName: undefined,
+      branchName: undefined,
+      frontendUrl: undefined,
+      backendUrl: undefined,
+      keycloakUrl: undefined,
+      minioUrl: undefined,
+    },
+    runKubectl,
+  );
+
+  return Effect.gen(function* () {
+    const result = yield* service.getByWorktree({ worktreePath: "/home/nils/repos/nils/hero" });
+
+    assert.equal(result.stack, null);
+    assert.equal(result.frontendUrl, null);
+    assert.deepEqual(calls, [["get", "namespace", "hero-dev", "-o", "json"]]);
+  });
+});
+
+it.effect("scales native deployments down and back up when restarting", () => {
+  const calls: Array<ReadonlyArray<string>> = [];
+  const runKubectl: KubectlRunner = async (args) => {
+    calls.push(args);
+    if (args.join(" ") === "-n rudi-dev scale deployment --all --replicas=0") return "";
+    if (args.join(" ") === "-n rudi-dev scale deployment --all --replicas=1") return "";
+    if (args.join(" ") === "get namespace rudi-dev -o json") return namespaceJson;
+    if (args.join(" ") === "-n rudi-dev get deployments -o json") return deploymentsJson;
+    throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
+  };
+  const service = makeNativeAppDevStackService(nativeConfig, runKubectl);
+
+  return Effect.gen(function* () {
+    const result = yield* service.restart({ stackId: "rudi-dev" });
+
+    assert.equal(result.status, "running");
+    assert.deepEqual(calls, [
+      ["-n", "rudi-dev", "scale", "deployment", "--all", "--replicas=0"],
       ["-n", "rudi-dev", "scale", "deployment", "--all", "--replicas=1"],
       ["get", "namespace", "rudi-dev", "-o", "json"],
       ["-n", "rudi-dev", "get", "deployments", "-o", "json"],

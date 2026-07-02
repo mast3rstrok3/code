@@ -11,6 +11,11 @@ import {
   loadRepoEnv,
   resolveWebPrimaryEnvironmentBuildConfig,
 } from "../../scripts/lib/public-config";
+import {
+  PUBLIC_DEV_CACHE_HEADERS,
+  shouldHardenPublicDevServerCache,
+  viteInternalModuleFallbackGuardPlugin,
+} from "./viteDevServerHardening";
 
 const repoEnv = loadRepoEnv();
 Object.assign(process.env, repoEnv);
@@ -57,7 +62,7 @@ const unitTestProject = {
   extends: true,
   test: {
     name: "unit",
-    include: ["src/**/*.test.{ts,tsx}"],
+    include: ["src/**/*.test.{ts,tsx}", "*.test.{ts,tsx}"],
     // The web runtime suite exercises auth bootstrap, saved environments,
     // and websocket subscription lifecycles. Under the full monorepo test
     // run, those async tests can exceed Vitest's default 5s budget.
@@ -93,10 +98,16 @@ export default defineConfig(({ command }) => {
     env: process.env,
   });
   const devProxyTarget = resolveDevProxyTarget(primaryEnvironmentConfig.wsUrl || undefined);
+  const publicDevServerHeaders = shouldHardenPublicDevServerCache(
+    primaryEnvironmentConfig.devServerUrl,
+  )
+    ? { ...PUBLIC_DEV_CACHE_HEADERS }
+    : undefined;
 
   return {
     envPrefix: "T3CODE_WEB_PUBLIC_",
     plugins: [
+      viteInternalModuleFallbackGuardPlugin(),
       tanstackRouter(),
       react(),
       babel({
@@ -149,6 +160,7 @@ export default defineConfig(({ command }) => {
       port,
       strictPort: true,
       ...(allowedHosts?.length ? { allowedHosts } : {}),
+      ...(publicDevServerHeaders ? { headers: { ...publicDevServerHeaders } } : {}),
       ...(devProxyTarget
         ? {
             proxy: {

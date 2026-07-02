@@ -350,7 +350,7 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
       | "thread.proposed-plan-upserted"
       | "thread.dev-review-created"
       | "thread.dev-review-updated"
-      | "thread.dev-review-replay-metadata-updated"
+      | "thread.dev-review-evidence-updated"
       | "thread.planning-stage-started"
       | "thread.planning-prd-created"
       | "thread.planning-issues-created"
@@ -370,7 +370,7 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
     event.type === "thread.proposed-plan-upserted" ||
     event.type === "thread.dev-review-created" ||
     event.type === "thread.dev-review-updated" ||
-    event.type === "thread.dev-review-replay-metadata-updated" ||
+    event.type === "thread.dev-review-evidence-updated" ||
     event.type === "thread.planning-stage-started" ||
     event.type === "thread.planning-prd-created" ||
     event.type === "thread.planning-issues-created" ||
@@ -400,7 +400,7 @@ function threadDetailEventMatchesThread(event: OrchestrationEvent, threadId: str
         event.payload.devReview.reviewThreadId === threadId
       );
     case "thread.dev-review-updated":
-    case "thread.dev-review-replay-metadata-updated":
+    case "thread.dev-review-evidence-updated":
       return event.payload.sourceThreadId === threadId || event.payload.reviewThreadId === threadId;
     case "thread.implementation-run-updated":
       return (
@@ -461,8 +461,6 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.vcsSwitchRef, AuthOrchestrationOperateScope],
   [WS_METHODS.vcsInit, AuthOrchestrationOperateScope],
   [WS_METHODS.reviewGetDiffPreview, AuthReviewWriteScope],
-  [WS_METHODS.reviewDevReviewReplayAppendEvents, AuthReviewWriteScope],
-  [WS_METHODS.reviewDevReviewReplayGet, AuthReviewWriteScope],
   [WS_METHODS.terminalOpen, AuthTerminalOperateScope],
   [WS_METHODS.terminalAttach, AuthTerminalOperateScope],
   [WS_METHODS.terminalWrite, AuthTerminalOperateScope],
@@ -496,6 +494,7 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.appDevStackGet, AuthOrchestrationReadScope],
   [WS_METHODS.appDevStackAutoCreate, AuthOrchestrationOperateScope],
   [WS_METHODS.appDevStackStop, AuthOrchestrationOperateScope],
+  [WS_METHODS.appDevStackRestart, AuthOrchestrationOperateScope],
   [WS_METHODS.appDevStackDelete, AuthOrchestrationOperateScope],
   [WS_METHODS.appDevStackListPods, AuthOrchestrationReadScope],
   [WS_METHODS.appDevStackGetPodLogs, AuthOrchestrationReadScope],
@@ -1780,18 +1779,6 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.reviewGetDiffPreview, review.getDiffPreview(input), {
             "rpc.aggregate": "review",
           }),
-        [WS_METHODS.reviewDevReviewReplayAppendEvents]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.reviewDevReviewReplayAppendEvents,
-            review.appendDevReviewReplayEvents(input),
-            {
-              "rpc.aggregate": "review",
-            },
-          ),
-        [WS_METHODS.reviewDevReviewReplayGet]: (input) =>
-          observeRpcEffect(WS_METHODS.reviewDevReviewReplayGet, review.getDevReviewReplay(input), {
-            "rpc.aggregate": "review",
-          }),
         [WS_METHODS.terminalOpen]: (input) =>
           observeRpcEffect(WS_METHODS.terminalOpen, terminalManager.open(input), {
             "rpc.aggregate": "terminal",
@@ -1967,6 +1954,10 @@ const makeWsRpcLayer = (
           }),
         [WS_METHODS.appDevStackStop]: (input) =>
           observeRpcEffect(WS_METHODS.appDevStackStop, appDevStackManager.stop(input), {
+            "rpc.aggregate": "app-dev-stack",
+          }),
+        [WS_METHODS.appDevStackRestart]: (input) =>
+          observeRpcEffect(WS_METHODS.appDevStackRestart, appDevStackManager.restart(input), {
             "rpc.aggregate": "app-dev-stack",
           }),
         [WS_METHODS.appDevStackDelete]: (input) =>

@@ -9,9 +9,12 @@ import {
   ProviderInstanceId,
   ProjectId,
   ThreadId,
+  type ModelSelection,
   type OrchestrationImplementationRun,
+  type ServerSettings,
   type VcsCreateWorktreeInput,
 } from "@t3tools/contracts";
+import { type DeepPartial } from "@t3tools/shared/Struct";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -21,6 +24,7 @@ import { describe } from "vite-plus/test";
 import { AppDevStackManager } from "../../appDevStack/AppDevStackManager.ts";
 import { ServerConfig } from "../../config.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
+import { layerTest as serverSettingsLayerTest } from "../../serverSettings.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
@@ -72,7 +76,10 @@ function eventId(value: string) {
   return EventId.make(`event-${value}`);
 }
 
-function makeTestLayer(calls: ImplementationCalls) {
+function makeTestLayer(
+  calls: ImplementationCalls,
+  serverSettings: DeepPartial<ServerSettings> = {},
+) {
   const coreLayer = Layer.mergeAll(
     OrchestrationEngineLive.pipe(
       Layer.provide(OrchestrationProjectionSnapshotQueryLive),
@@ -94,6 +101,7 @@ function makeTestLayer(calls: ImplementationCalls) {
     coreLayer,
     ImplementationWorkflowReactorLive.pipe(
       Layer.provide(coreLayer),
+      Layer.provide(serverSettingsLayerTest(serverSettings)),
       Layer.provide(
         Layer.mock(GitWorkflowService)({
           createWorktree: (input) =>
@@ -152,7 +160,10 @@ function makeTestLayer(calls: ImplementationCalls) {
   );
 }
 
-function withSystem<A, E>(use: (system: ImplementationSystem) => Effect.Effect<A, E>) {
+function withSystem<A, E>(
+  use: (system: ImplementationSystem) => Effect.Effect<A, E>,
+  options?: { readonly serverSettings?: DeepPartial<ServerSettings> },
+) {
   return Effect.gen(function* () {
     const autoCreateInputs = yield* Ref.make<
       ReadonlyArray<{ readonly worktreePath: string; readonly displayName: string }>
@@ -178,11 +189,14 @@ function withSystem<A, E>(use: (system: ImplementationSystem) => Effect.Effect<A
           reactor,
         });
       }),
-    ).pipe(Effect.provide(makeTestLayer(calls)));
+    ).pipe(Effect.provide(makeTestLayer(calls, options?.serverSettings)));
   });
 }
 
-function seedPlanning(system: ImplementationSystem) {
+function seedPlanning(
+  system: ImplementationSystem,
+  options?: { readonly modelSelection?: ModelSelection },
+) {
   return Effect.gen(function* () {
     yield* system.engine.dispatch({
       type: "project.create",
@@ -201,7 +215,10 @@ function seedPlanning(system: ImplementationSystem) {
       parentThreadId: null,
       workflowRole: null,
       title: "Planning",
-      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
+      modelSelection: options?.modelSelection ?? {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5-codex",
+      },
       runtimeMode: "full-access",
       interactionMode: "planning-workflow",
       branch: "main",
@@ -245,9 +262,12 @@ function seedPlanning(system: ImplementationSystem) {
   });
 }
 
-function launchRun(system: ImplementationSystem) {
+function launchRun(
+  system: ImplementationSystem,
+  options?: { readonly modelSelection?: ModelSelection },
+) {
   return Effect.gen(function* () {
-    const { issue, prd } = yield* seedPlanning(system);
+    const { issue, prd } = yield* seedPlanning(system, options);
     yield* system.engine.dispatch({
       type: "thread.implementation-run.launch",
       commandId: commandId("implementation-launch"),
@@ -309,6 +329,43 @@ function appendWorkerResult(
     yield* system.reactor.drain;
   });
 }
+
+function passMergeGate(system: ImplementationSystem, run: OrchestrationImplementationRun) {
+  return Effect.gen(function* () {
+    const snapshot = yield* system.query.getSnapshot();
+    const validator = snapshot.threads.find(
+      (thread) => thread.workflowRole === "implementation-validator",
+    );
+    if (!validator) throw new Error("Validator missing.");
+    yield* system.engine.dispatch({
+      type: "thread.activity.append",
+      commandId: commandId("merge-gate-pass"),
+      threadId: validator.id,
+      activity: {
+        id: eventId("merge-gate-pass"),
+        tone: "info",
+        kind: "implementation-merge-gate-result",
+        summary: "Merge gate passed",
+        payload: {
+          type: "implementation-merge-gate-result",
+          runId: run.id,
+          status: "passed",
+          validations: [],
+          summaryMarkdown: "ok",
+        },
+        turnId: null,
+        createdAt: "2026-01-01T00:00:02.000Z",
+      },
+      createdAt: "2026-01-01T00:00:02.000Z",
+    });
+    yield* system.reactor.drain;
+  });
+}
+
+const claudeParentSelection: ModelSelection = {
+  instanceId: ProviderInstanceId.make("claudeAgent"),
+  model: "claude-opus-4-8",
+};
 
 describe("ImplementationWorkflowReactor", () => {
   it.effect("creates the orchestrator worktree before starting ready workers", () =>
@@ -415,6 +472,63 @@ describe("ImplementationWorkflowReactor", () => {
         expect(completedRun?.status).toBe("completed");
         expect(completedRun?.changeRequest?.url).toBe("https://example.test/pr/1");
       }),
+    ),
+  );
+
+  it.effect("hardlocks the browser dev review thread to codex gpt-5.5 at extra-high effort", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system, { modelSelection: claudeParentSelection });
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+        yield* passMergeGate(system, run);
+
+        const snapshot = yield* system.query.getSnapshot();
+        const reviewThread = snapshot.threads.find(
+          (thread) => thread.workflowRole === "implementation-qa-reviewer",
+        );
+        expect(reviewThread?.modelSelection).toEqual({
+          instanceId: "codex",
+          model: "gpt-5.5",
+          options: [{ id: "reasoningEffort", value: "xhigh" }],
+        });
+
+        const workerThread = snapshot.threads.find(
+          (thread) => thread.workflowRole === "implementation-worker",
+        );
+        expect(workerThread?.modelSelection).toEqual(claudeParentSelection);
+      }),
+    ),
+  );
+
+  it.effect("falls back to the parent selection when no codex instance is enabled", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system, { modelSelection: claudeParentSelection });
+          yield* appendWorkerResult(system, { run, status: "succeeded" });
+          yield* passMergeGate(system, run);
+
+          const snapshot = yield* system.query.getSnapshot();
+          const reviewThread = snapshot.threads.find(
+            (thread) => thread.workflowRole === "implementation-qa-reviewer",
+          );
+          expect(reviewThread?.modelSelection).toEqual(claudeParentSelection);
+
+          const orchestratorThread = snapshot.threads.find(
+            (thread) => thread.id === run.orchestratorThreadId,
+          );
+          const fallbackActivity = orchestratorThread?.activities.find(
+            (activity) => activity.kind === "implementation-workflow.model-hardlock-fallback",
+          );
+          expect(fallbackActivity).toBeDefined();
+          expect(fallbackActivity?.tone).toBe("info");
+          expect(fallbackActivity?.payload).toMatchObject({
+            runId: run.id,
+            requestedDriver: "codex",
+            requestedModel: "gpt-5.5",
+          });
+        }),
+      { serverSettings: { providers: { codex: { enabled: false } } } },
     ),
   );
 });

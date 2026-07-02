@@ -1,8 +1,8 @@
 import {
   DevReviewDocument,
+  DevReviewEvidence,
   DevReviewId,
   DevReviewRecord,
-  DevReviewReplayMetadata,
   DevReviewStatus,
   IsoDateTime,
   ThreadId,
@@ -22,7 +22,7 @@ export const ProjectionThreadDevReview = Schema.Struct({
   sourceTurnId: Schema.NullOr(TurnId),
   status: DevReviewStatus,
   document: DevReviewDocument,
-  replay: DevReviewReplayMetadata,
+  evidence: DevReviewEvidence,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -53,7 +53,7 @@ export function devReviewRecordToProjection(record: DevReviewRecord): Projection
     sourceTurnId: record.sourceTurnId,
     status: record.status,
     document: record.document,
-    replay: record.replay,
+    evidence: record.evidence,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
   };
@@ -67,7 +67,7 @@ export function projectionThreadDevReviewToRecord(row: ProjectionThreadDevReview
     sourceTurnId: row.sourceTurnId,
     status: row.status,
     document: row.document,
-    replay: row.replay,
+    evidence: row.evidence,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

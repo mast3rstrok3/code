@@ -1,5 +1,6 @@
 import {
   type DevReviewDocument,
+  EMPTY_DEV_REVIEW_EVIDENCE,
   EventId,
   MessageId,
   type OrchestrationImplementationRun,
@@ -1596,14 +1597,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         sourceTurnId: sourceThread.latestTurn?.turnId ?? null,
         status: "running" as const,
         document: EMPTY_DEV_REVIEW_DOCUMENT,
-        replay: {
-          status: "not-started" as const,
-          eventCount: 0,
-          startedAt: null,
-          completedAt: null,
-          durationMs: null,
-          error: null,
-        },
+        evidence: EMPTY_DEV_REVIEW_EVIDENCE,
         createdAt: command.createdAt,
         updatedAt: command.createdAt,
       };
@@ -2098,7 +2092,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
-    case "thread.dev-review.replay-metadata.update": {
+    case "thread.dev-review.evidence.update": {
       const thread = yield* requireThread({
         readModel,
         command,
@@ -2118,13 +2112,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           occurredAt: command.createdAt,
           commandId: command.commandId,
         })),
-        type: "thread.dev-review-replay-metadata-updated",
+        type: "thread.dev-review-evidence-updated",
         payload: {
           threadId: command.threadId,
           reviewId: command.reviewId,
           sourceThreadId: review.sourceThreadId,
           reviewThreadId: review.reviewThreadId,
-          replay: command.replay,
+          evidence: command.evidence,
           updatedAt: command.updatedAt,
         },
       };

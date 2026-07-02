@@ -57,7 +57,7 @@ const latestTab = (
 ): string | null =>
   sessions.toSorted((a, b) => a.updatedAt.localeCompare(b.updatedAt)).at(-1)?.tabId ?? null;
 
-const SUPPORTED_SERVER_OPERATIONS = PREVIEW_AUTOMATION_OPERATIONS.filter(
+const OPERATIONS_WITHOUT_RECORDING = PREVIEW_AUTOMATION_OPERATIONS.filter(
   (operation) => operation !== "recordingStart" && operation !== "recordingStop",
 );
 
@@ -232,9 +232,16 @@ export const layer = Layer.effectDiscard(
             ...(request.input as object),
           } as never);
         case "recordingStart":
+          if (!tabId) {
+            return yield* noPreviewTabOpen();
+          }
+          return yield* browser.recordingStart(withTab(tabId));
         case "recordingStop":
-          return yield* new PreviewBrowserUnavailableError({
-            message: `${request.operation} is not implemented by the server-hosted browser yet.`,
+          // Recording stop never falls back to chooseTab: only an explicitly
+          // requested tab may narrow the target (desktop-host parity).
+          return yield* browser.recordingStop({
+            threadId: request.threadId,
+            tabId: request.tabIdExplicit === true ? (request.tabId ?? null) : null,
           });
       }
     });
@@ -257,10 +264,13 @@ export const layer = Layer.effectDiscard(
         error: serializeHostError(cause),
       });
 
+    const recordingSupported = yield* browser.recordingSupported;
     const stream = yield* broker.connect({
       clientId,
       environmentId,
-      supportedOperations: SUPPORTED_SERVER_OPERATIONS,
+      supportedOperations: recordingSupported
+        ? PREVIEW_AUTOMATION_OPERATIONS
+        : OPERATIONS_WITHOUT_RECORDING,
     });
 
     yield* stream.pipe(

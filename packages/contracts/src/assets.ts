@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 
 import { ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { DevReviewId } from "./review.ts";
 
 const ASSET_PATH_MAX_LENGTH = 1024;
 
@@ -14,6 +15,11 @@ export const AssetResource = Schema.Union([
   }),
   Schema.TaggedStruct("project-favicon", {
     cwd: TrimmedNonEmptyString.check(Schema.isMaxLength(ASSET_PATH_MAX_LENGTH)),
+  }),
+  Schema.TaggedStruct("dev-review-evidence", {
+    reviewId: DevReviewId,
+    /** Recording id or screenshot id from the review's evidence document. */
+    evidenceId: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
   }),
 ]);
 export type AssetResource = typeof AssetResource.Type;
@@ -168,6 +174,29 @@ export class AssetProjectFaviconNotFoundError extends Schema.TaggedErrorClass<As
   }
 }
 
+export class AssetDevReviewEvidenceResolutionError extends Schema.TaggedErrorClass<AssetDevReviewEvidenceResolutionError>()(
+  "AssetDevReviewEvidenceResolutionError",
+  {
+    resource: AssetResource,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return "Failed to resolve Dev Review evidence.";
+  }
+}
+
+export class AssetDevReviewEvidenceNotFoundError extends Schema.TaggedErrorClass<AssetDevReviewEvidenceNotFoundError>()(
+  "AssetDevReviewEvidenceNotFoundError",
+  {
+    resource: AssetResource,
+  },
+) {
+  override get message(): string {
+    return "Dev Review evidence was not found.";
+  }
+}
+
 export class AssetSigningKeyLoadError extends Schema.TaggedErrorClass<AssetSigningKeyLoadError>()(
   "AssetSigningKeyLoadError",
   {
@@ -193,6 +222,8 @@ export const AssetAccessError = Schema.Union([
   AssetProjectFaviconResolutionError,
   AssetProjectFaviconInspectionError,
   AssetProjectFaviconNotFoundError,
+  AssetDevReviewEvidenceResolutionError,
+  AssetDevReviewEvidenceNotFoundError,
   AssetSigningKeyLoadError,
 ]);
 export type AssetAccessError = typeof AssetAccessError.Type;

@@ -7,7 +7,7 @@ import * as SchemaTransformation from "effect/SchemaTransformation";
 import {
   YAMLParseError,
   parse as parseYamlString,
-  stringify as stringifyYamlValue,
+  stringify as stringifyYamlString,
   type CreateNodeOptions,
   type DocumentOptions,
   type ParseOptions,
@@ -31,6 +31,14 @@ function formatYamlParseError(error: unknown): string {
   const position = error.linePos?.[0];
   const location = position === undefined ? "" : `, line=${position.line}, column=${position.col}`;
   return `Invalid YAML (code=${error.code}${location}).`;
+}
+
+export function parseYamlValue(input: string, options?: YamlParseOptions): unknown {
+  return parseYamlString(input, options) as unknown;
+}
+
+export function stringifyYamlValue(input: unknown, options?: YamlStringifyOptions): string {
+  return stringifyYamlString(input, options);
 }
 
 /**

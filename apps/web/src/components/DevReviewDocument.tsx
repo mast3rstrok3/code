@@ -1,16 +1,17 @@
-import { Replayer } from "@rrweb/replay";
-import "@rrweb/replay/dist/style.css";
-import type { DevReviewRecord } from "@t3tools/contracts";
+import type {
+  AssetResource,
+  DevReviewRecord,
+  DevReviewRecordingEvidence,
+  EnvironmentId,
+} from "@t3tools/contracts";
+import { DEV_REVIEW_RECORDING_EVIDENCE_ID } from "@t3tools/contracts";
 import { AlertTriangle, CheckCircle2, Circle, CircleDot, Info, XCircle } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 
+import { useAssetUrls } from "~/assets/assetUrls";
 import { cn } from "~/lib/utils";
-
-type ReplayState =
-  | { kind: "loading" }
-  | { kind: "error"; message: string }
-  | { kind: "ready"; events: readonly unknown[] }
-  | { kind: "empty" };
+import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
+import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 
 const statusClassName = {
   pending: "text-muted-foreground",
@@ -42,65 +43,105 @@ function statusIcon(status: DevReviewRecord["status"]) {
   }
 }
 
-function ReplayPlayer(props: { replay: ReplayState }) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const [renderError, setRenderError] = useState<string | null>(null);
-  const events =
-    props.replay.kind === "ready" && props.replay.events.length > 0 ? props.replay.events : null;
+export function recordingEvidenceLabel(recording: DevReviewRecordingEvidence): string {
+  const pieces: string[] = [recording.status];
+  if (recording.sizeBytes !== null) {
+    pieces.push(`${(recording.sizeBytes / (1024 * 1024)).toFixed(1)} MB`);
+  }
+  return pieces.join(" · ");
+}
 
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container || !events) return;
-    container.replaceChildren();
-    setRenderError(null);
-    let replayer: Replayer | null = null;
-    try {
-      replayer = new Replayer(events as never[], {
-        root: container,
-        showWarning: false,
-        showDebug: false,
-        mouseTail: false,
-      });
-      replayer.play();
-    } catch (error) {
-      setRenderError(error instanceof Error ? error.message : "Unable to render replay.");
-    }
-    return () => {
-      replayer?.destroy();
-      container.replaceChildren();
-    };
-  }, [events]);
-
-  if (props.replay.kind === "loading") {
-    return <div className="px-3 py-4 text-sm text-muted-foreground">Loading replay...</div>;
-  }
-  if (props.replay.kind === "error") {
-    return <div className="px-3 py-4 text-sm text-destructive">{props.replay.message}</div>;
-  }
-  if (props.replay.kind === "empty") {
-    return <div className="px-3 py-4 text-sm text-muted-foreground">No replay events saved.</div>;
-  }
+function RecordingSection(props: {
+  recording: DevReviewRecordingEvidence;
+  recordingUrl: string | null;
+}) {
+  const { recording } = props;
 
   return (
-    <div className="min-h-0">
-      {renderError ? <div className="px-3 py-2 text-sm text-destructive">{renderError}</div> : null}
-      <div ref={containerRef} className="h-[360px] min-h-0 overflow-hidden bg-black" />
-    </div>
+    <section className="border-b border-border px-4 py-3">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-normal text-muted-foreground">
+          <Info className="size-3.5" />
+          Recording
+        </h3>
+        <span className="text-xs text-muted-foreground">{recordingEvidenceLabel(recording)}</span>
+      </div>
+      {recording.status === "saved" ? (
+        props.recordingUrl ? (
+          <video
+            controls
+            preload="metadata"
+            src={props.recordingUrl}
+            className="max-h-[360px] w-full rounded-md border border-border bg-black"
+          />
+        ) : (
+          <div className="rounded-md border border-border px-3 py-4 text-sm text-muted-foreground">
+            Preparing video...
+          </div>
+        )
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          {recording.status === "recording"
+            ? "Recording in progress..."
+            : recording.status === "failed"
+              ? "Recording failed."
+              : "No recording captured yet."}
+        </p>
+      )}
+      {recording.error ? <p className="mt-2 text-sm text-destructive">{recording.error}</p> : null}
+    </section>
   );
 }
 
-export function DevReviewDocument(props: { record: DevReviewRecord; replay: ReplayState }) {
+export function DevReviewDocument(props: {
+  record: DevReviewRecord;
+  environmentId: EnvironmentId;
+}) {
   const { record } = props;
   const checks = record.document.checks;
   const findings = record.document.findings;
   const questions = record.document.questions;
   const nextSteps = record.document.nextSteps;
   const statusLabel = record.status[0]?.toUpperCase() + record.status.slice(1);
-  const replayLabel = useMemo(() => {
-    const pieces = [record.replay.status, `${record.replay.eventCount} events`];
-    if (record.replay.durationMs !== null) pieces.push(`${record.replay.durationMs} ms`);
-    return pieces.join(" · ");
-  }, [record.replay.durationMs, record.replay.eventCount, record.replay.status]);
+  const recording = record.evidence.recording;
+  const screenshots = record.evidence.screenshots;
+  const recordingSaved = recording.status === "saved";
+
+  const evidenceResources = useMemo<AssetResource[]>(() => {
+    const resources: AssetResource[] = [];
+    if (recordingSaved) {
+      resources.push({
+        _tag: "dev-review-evidence",
+        reviewId: record.id,
+        evidenceId: DEV_REVIEW_RECORDING_EVIDENCE_ID,
+      });
+    }
+    for (const screenshot of screenshots) {
+      resources.push({
+        _tag: "dev-review-evidence",
+        reviewId: record.id,
+        evidenceId: screenshot.id,
+      });
+    }
+    return resources;
+  }, [record.id, recordingSaved, screenshots]);
+  const evidenceUrls = useAssetUrls(props.environmentId, evidenceResources);
+  const recordingUrl = recordingSaved ? (evidenceUrls[0] ?? null) : null;
+  const screenshotUrls = recordingSaved ? evidenceUrls.slice(1) : evidenceUrls;
+
+  const [expandedPreview, setExpandedPreview] = useState<ExpandedImagePreview | null>(null);
+  const openScreenshot = (screenshotId: string) => {
+    const images = screenshots.flatMap((screenshot, index) => {
+      const src = screenshotUrls[index];
+      return src ? [{ id: screenshot.id, src, name: screenshot.caption || screenshot.id }] : [];
+    });
+    const index = images.findIndex((image) => image.id === screenshotId);
+    if (index < 0) return;
+    setExpandedPreview({
+      images: images.map((image) => ({ src: image.src, name: image.name })),
+      index,
+    });
+  };
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
@@ -116,6 +157,49 @@ export function DevReviewDocument(props: { record: DevReviewRecord; replay: Repl
           <p className="mt-2 text-sm text-muted-foreground">Review document is pending.</p>
         )}
       </div>
+
+      <RecordingSection recording={recording} recordingUrl={recordingUrl} />
+
+      <section className="border-b border-border px-4 py-3">
+        <h3 className="text-xs font-semibold uppercase tracking-normal text-muted-foreground">
+          Screenshots
+        </h3>
+        {screenshots.length === 0 ? (
+          <p className="mt-2 text-sm text-muted-foreground">No screenshots captured.</p>
+        ) : (
+          <div className="mt-2 grid grid-cols-2 gap-3 md:grid-cols-3">
+            {screenshots.map((screenshot, index) => {
+              const src = screenshotUrls[index] ?? null;
+              return (
+                <figure key={screenshot.id} className="min-w-0">
+                  {src ? (
+                    <button
+                      type="button"
+                      className="block w-full cursor-zoom-in"
+                      onClick={() => openScreenshot(screenshot.id)}
+                      aria-label={`Expand screenshot ${screenshot.id}`}
+                    >
+                      <img
+                        src={src}
+                        alt={screenshot.caption || screenshot.id}
+                        className="aspect-video w-full rounded-md border border-border bg-black object-contain"
+                      />
+                    </button>
+                  ) : (
+                    <div className="flex aspect-video w-full items-center justify-center rounded-md border border-border text-xs text-muted-foreground">
+                      Loading...
+                    </div>
+                  )}
+                  <figcaption className="mt-1 truncate text-xs text-muted-foreground">
+                    <span className="font-medium">{screenshot.id}</span>
+                    {screenshot.caption ? ` · ${screenshot.caption}` : null}
+                  </figcaption>
+                </figure>
+              );
+            })}
+          </div>
+        )}
+      </section>
 
       <section className="border-b border-border px-4 py-3">
         <h3 className="text-xs font-semibold uppercase tracking-normal text-muted-foreground">
@@ -182,7 +266,7 @@ export function DevReviewDocument(props: { record: DevReviewRecord; replay: Repl
         )}
       </section>
 
-      <section className="grid gap-4 border-b border-border px-4 py-3 md:grid-cols-2">
+      <section className="grid gap-4 px-4 py-3 md:grid-cols-2">
         <div>
           <h3 className="text-xs font-semibold uppercase tracking-normal text-muted-foreground">
             Questions
@@ -213,21 +297,9 @@ export function DevReviewDocument(props: { record: DevReviewRecord; replay: Repl
         </div>
       </section>
 
-      <section className="min-h-0 px-4 py-3">
-        <div className="mb-2 flex items-center justify-between gap-3">
-          <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-normal text-muted-foreground">
-            <Info className="size-3.5" />
-            RRweb Replay
-          </h3>
-          <span className="text-xs text-muted-foreground">{replayLabel}</span>
-        </div>
-        <div className="overflow-hidden rounded-md border border-border">
-          <ReplayPlayer replay={props.replay} />
-        </div>
-        {record.replay.error ? (
-          <p className="mt-2 text-sm text-destructive">{record.replay.error}</p>
-        ) : null}
-      </section>
+      {expandedPreview ? (
+        <ExpandedImageDialog preview={expandedPreview} onClose={() => setExpandedPreview(null)} />
+      ) : null}
     </div>
   );
 }

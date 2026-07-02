@@ -1,7 +1,7 @@
 import type { ProviderInteractionMode, WorkflowPromptContract } from "@t3tools/contracts";
 import { isPlanningWorkflowInteractionMode } from "@t3tools/contracts";
 
-import { AGENT_BROWSER_CLI_ASSOCIATED_DOC_CONTENT } from "./AgentBrowserCli.ts";
+import { PREVIEW_BROWSER_QA_ASSOCIATED_DOC_CONTENT } from "./PreviewBrowserQa.ts";
 import { WORKFLOW_SUBAGENT_INSTRUCTIONS_PROMPT } from "./WorkflowSubagentInstructions.ts";
 
 export const WORKFLOW_PROMPT_IDS = {
@@ -735,16 +735,18 @@ When this Browser Dev Review is linked to a durable Dev Review record:
 
 1. Call dev_review_get first to load the durable Dev Review record before testing.
 2. Read the source thread context and identify the behavior under review.
-3. Start RRweb replay capture with dev_review_replay_start before opening the target URL. Use the returned agentBrowser namespace, session, evidenceDir, and initScriptPath.
-4. Use the Agent Browser CLI workflow from agent-browser-cli.md for all browser actions. Exercise the product, do not rely on static assumptions.
-5. Stop RRweb replay capture with dev_review_replay_stop after browser testing.
-6. Treat replay evidence as required. If replay start fails, replay stop fails, stop returns failed metadata, or eventCount is 0, mark the review blocked or failed. Do not continue to a passing result after replay failure.
-7. Update the Dev Review record with dev_review_update, including verdict, summary, checks, findings, questions, next steps, and evidence IDs.
-8. Mark the review status passed, failed, or blocked.
+3. Open the app-dev-stack URL from the launch message with preview_open.
+4. Start the screen recording with dev_review_recording_start before exercising the feature.
+5. Exercise the product with the preview tools: preview_snapshot to inspect the page, then preview_click, preview_type, preview_press, preview_scroll, and preview_wait_for to interact. Re-run preview_snapshot after the DOM changes; element references from an old snapshot go stale. Do not rely on static assumptions.
+6. Capture a captioned screenshot with dev_review_capture_screenshot at each meaningful application state (initial load, after key interactions, any failure states). Findings should reference these screenshot ids in evidenceIds.
+7. Stop the recording with dev_review_recording_stop after browser testing.
+8. Treat evidence as required. A terminal verdict (passed or failed) requires a saved recording and at least one screenshot; dev_review_update enforces this. If recording start or stop fails, or the browser tools are unavailable, mark the review blocked instead.
+9. Update the Dev Review record with dev_review_update, including verdict, summary, checks, findings, questions, next steps, and evidence IDs.
+10. Mark the review status passed, failed, or blocked.
 
 If no durable Dev Review record is linked, still perform the Browser Dev Review, capture concrete findings in the conversation, and report whether implementation completion should proceed.
 
-Do not use preview_* tools, external browser MCP servers, standalone Playwright, or a remote human browser. Browser Dev Review has one required Linux-server browser path: Agent Browser CLI plus durable RRweb capture. Zero RRweb events is a blocking evidence failure, not a passing smoke check.
+Use only the preview_* and dev_review_* MCP tools for browser work. Do not use external browsers, browser MCP servers, standalone Playwright scripts, or shell-driven browser automation. See preview-browser-qa.md for the full preview toolset guidance.
 </collaboration_mode>`;
 
 const IMPLEMENTATION_FIX_PROMPT = `<collaboration_mode># Implementation Workflow: Fix
@@ -932,10 +934,10 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     promptText: IMPLEMENTATION_BROWSER_DEV_REVIEW_PROMPT,
     associatedDocs: [
       {
-        id: "implementation.browser-dev-review.agent-browser-cli",
-        path: "agent-browser-cli.md",
-        title: "Agent Browser CLI",
-        content: AGENT_BROWSER_CLI_ASSOCIATED_DOC_CONTENT,
+        id: "implementation.browser-dev-review.preview-browser-qa",
+        path: "preview-browser-qa.md",
+        title: "Preview Browser QA",
+        content: PREVIEW_BROWSER_QA_ASSOCIATED_DOC_CONTENT,
       },
     ],
   },
@@ -1018,10 +1020,8 @@ export function isBrowserDevReviewWorkflowPromptId(
   );
 }
 
-export function isPreviewMcpWorkflowPromptId(
-  _workflowPromptId: string | null | undefined,
-): boolean {
-  return false;
+export function isPreviewMcpWorkflowPromptId(workflowPromptId: string | null | undefined): boolean {
+  return isBrowserDevReviewWorkflowPromptId(workflowPromptId);
 }
 
 export function isDevReviewMcpWorkflowPromptId(

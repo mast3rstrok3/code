@@ -4,7 +4,7 @@ import {
   DEFAULT_WORKSPACE_USER_ID,
   DEFAULT_WORKSPACE_USER_VIEW,
   DevReviewDocument,
-  DevReviewReplayMetadata,
+  DevReviewEvidence,
   IsoDateTime,
   MessageId,
   NonNegativeInt,
@@ -102,7 +102,7 @@ const ProjectionThreadProposedPlanDbRowSchema = ProjectionThreadProposedPlan;
 const ProjectionThreadDevReviewDbRowSchema = ProjectionThreadDevReview.mapFields(
   Struct.assign({
     document: Schema.fromJsonString(DevReviewDocument),
-    replay: Schema.fromJsonString(DevReviewReplayMetadata),
+    evidence: Schema.fromJsonString(DevReviewEvidence),
   }),
 );
 const ProjectionThreadPrdDbRowSchema = ProjectionThreadPrd.mapFields(
@@ -325,7 +325,7 @@ function mapDevReviewRow(
     sourceTurnId: row.sourceTurnId,
     status: row.status,
     document: row.document,
-    replay: row.replay,
+    evidence: row.evidence,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -687,7 +687,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           source_turn_id AS "sourceTurnId",
           status,
           document_json AS "document",
-          replay_json AS "replay",
+          evidence_json AS "evidence",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
         FROM projection_thread_dev_reviews
@@ -1157,7 +1157,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           source_turn_id AS "sourceTurnId",
           status,
           document_json AS "document",
-          replay_json AS "replay",
+          evidence_json AS "evidence",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
         FROM projection_thread_dev_reviews

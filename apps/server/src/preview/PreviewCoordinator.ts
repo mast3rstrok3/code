@@ -99,11 +99,11 @@ export const make = Effect.gen(function* PreviewCoordinatorMake() {
         tabId: snapshot.tabId,
         ...(snapshot.viewport === undefined ? {} : { viewport: snapshot.viewport }),
       });
-      if (input.url) {
+      if (snapshot.navStatus._tag !== "Idle") {
         yield* browser.navigate({
           threadId: input.threadId,
           tabId: snapshot.tabId,
-          url: input.url,
+          url: snapshot.navStatus.url,
         });
       }
       return snapshot;
@@ -117,7 +117,9 @@ export const make = Effect.gen(function* PreviewCoordinatorMake() {
     if (!(yield* useServerBrowser)) {
       return yield* completeMetadataNavigation(manager, snapshot);
     }
-    yield* browser.navigate(input);
+    if (snapshot.navStatus._tag !== "Idle") {
+      yield* browser.navigate({ ...input, url: snapshot.navStatus.url });
+    }
     return snapshot;
   });
 

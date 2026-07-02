@@ -20,6 +20,10 @@ import {
   type AppDevStackPodLogEntry,
   type AppDevStackService,
 } from "@t3tools/contracts";
+import {
+  deriveAppDevStackNamespaceFromPath,
+  normalizeKubernetesNamespace,
+} from "@t3tools/shared/appDevStack";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -27,6 +31,10 @@ import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import type { NativeAppDevStackConfig } from "../config.ts";
+import {
+  provisionNativeAppDevStack,
+  type NativeCommandRunner,
+} from "./nativeAppDevStackProvisioning.ts";
 
 const NATIVE_USER_ID = "00000000-0000-0000-0000-000000000000";
 const DEFAULT_LOG_TAIL_LINES = 300;
@@ -96,6 +104,32 @@ interface KubectlContainerStatus {
 
 export type KubectlRunner = (args: ReadonlyArray<string>) => Promise<string>;
 
+interface ResolvedNativeAppDevStackConfig {
+  readonly id: string;
+  readonly namespace: string;
+  readonly worktreePath: string;
+  readonly composePath: string;
+  readonly displayName: string;
+  readonly displaySlug: string | undefined;
+  readonly repoName: string | undefined;
+  readonly branchName: string | undefined;
+  readonly kubectlPath: string;
+  readonly dockerPath: string;
+  readonly buildctlPath: string;
+  readonly imageBuilder: NativeAppDevStackConfig["imageBuilder"];
+  readonly imageRegistry: string | undefined;
+  readonly imagePushRegistry: string | undefined;
+  readonly imageProject: string | undefined;
+  readonly buildkitAddr: string | undefined;
+  readonly buildkitDockerConfig: string | undefined;
+  readonly buildkitDockerConfigsDir: string | undefined;
+  readonly buildkitHarborCaCert: string | undefined;
+  readonly frontendUrl: string | undefined;
+  readonly backendUrl: string | undefined;
+  readonly keycloakUrl: string | undefined;
+  readonly minioUrl: string | undefined;
+}
+
 export interface NativeAppDevStackService {
   readonly status: Effect.Effect<AppDevStackBackendStatus>;
   readonly list: (
@@ -109,6 +143,7 @@ export interface NativeAppDevStackService {
     input: AppDevStackAutoCreateInput,
   ) => Effect.Effect<AppDevStackAutoCreateResult, AppDevStackError>;
   readonly stop: (input: AppDevStackGetInput) => Effect.Effect<AppDevStack, AppDevStackError>;
+  readonly restart: (input: AppDevStackGetInput) => Effect.Effect<AppDevStack, AppDevStackError>;
   readonly delete: (
     input: AppDevStackGetInput,
   ) => Effect.Effect<AppDevStackDeleteResult, AppDevStackError>;
@@ -158,9 +193,138 @@ export const makeKubectlRunner =
       }).pipe(Effect.scoped, Effect.timeout(Duration.seconds(30))),
     );
 
+export const makeNativeCommandRunner =
+  (spawner: ChildProcessSpawner.ChildProcessSpawner["Service"]): NativeCommandRunner =>
+  async (command, args, options) =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const child = yield* spawner.spawn(
+          ChildProcess.make(command, [...args], {
+            cwd: options?.cwd,
+            ...(options?.env === undefined
+              ? {}
+              : { env: { ...process.env, ...options.env } as Record<string, string> }),
+          }),
+        );
+        const [stdout, stderr, exitCode] = yield* Effect.all(
+          [
+            collectProcessOutput(child.stdout),
+            collectProcessOutput(child.stderr),
+            child.exitCode.pipe(Effect.map(Number)),
+          ],
+          { concurrency: "unbounded" },
+        );
+        if (exitCode !== 0) {
+          const commandLine = [command, ...args].join(" ");
+          throw new Error(
+            stderr.trim() ||
+              stdout.trim() ||
+              `${commandLine} exited with status ${String(exitCode)}.`,
+          );
+        }
+        return stdout;
+      }).pipe(Effect.scoped, Effect.timeout(Duration.minutes(30))),
+    );
+
 const parseJson = <Value>(raw: string): Value => JSON.parse(raw) as Value;
 
-const normalizePath = (path: string) => path.replace(/\/+$/u, "");
+const normalizePath = (path: string) => path.trim().replace(/[/\\]+$/u, "") || path.trim();
+
+const pathBasename = (path: string) => {
+  const normalized = normalizePath(path);
+  const slashIndex = Math.max(normalized.lastIndexOf("/"), normalized.lastIndexOf("\\"));
+  return slashIndex === -1 ? normalized : normalized.slice(slashIndex + 1);
+};
+
+const normalizeOptionalNamespace = (namespace: string | null | undefined) => {
+  const trimmed = namespace?.trim();
+  return trimmed ? normalizeKubernetesNamespace(trimmed) : undefined;
+};
+
+const optionalConfiguredUrls = (
+  config: NativeAppDevStackConfig,
+  namespace: string,
+): Pick<
+  ResolvedNativeAppDevStackConfig,
+  "frontendUrl" | "backendUrl" | "keycloakUrl" | "minioUrl"
+> =>
+  config.namespace !== undefined && normalizeKubernetesNamespace(config.namespace) === namespace
+    ? {
+        frontendUrl: config.frontendUrl,
+        backendUrl: config.backendUrl,
+        keycloakUrl: config.keycloakUrl,
+        minioUrl: config.minioUrl,
+      }
+    : {
+        frontendUrl: undefined,
+        backendUrl: undefined,
+        keycloakUrl: undefined,
+        minioUrl: undefined,
+      };
+
+const resolveNativeConfigForWorktree = (
+  config: NativeAppDevStackConfig,
+  input: {
+    readonly worktreePath: string;
+    readonly displayName?: string | null | undefined;
+    readonly gitBranch?: string | null | undefined;
+    readonly namespace?: string | null | undefined;
+    readonly preferConfiguredNamespace?: boolean;
+  },
+): ResolvedNativeAppDevStackConfig => {
+  const worktreePath = normalizePath(input.worktreePath);
+  const configuredWorktreeMatches =
+    config.worktreePath !== undefined &&
+    normalizePath(config.worktreePath) === normalizePath(input.worktreePath);
+  const configuredNamespace =
+    configuredWorktreeMatches || input.preferConfiguredNamespace === true
+      ? normalizeOptionalNamespace(config.namespace)
+      : undefined;
+  const namespace =
+    normalizeOptionalNamespace(input.namespace) ??
+    configuredNamespace ??
+    deriveAppDevStackNamespaceFromPath(worktreePath);
+  const repoName = pathBasename(worktreePath) || namespace.replace(/-dev$/u, "");
+  const useConfiguredMetadata = configuredWorktreeMatches || configuredNamespace === namespace;
+  const displayName =
+    input.displayName?.trim() || (useConfiguredMetadata ? config.displayName : undefined);
+
+  return {
+    id: useConfiguredMetadata && config.id !== undefined ? config.id : namespace,
+    namespace,
+    worktreePath,
+    composePath: config.composePath,
+    displayName: displayName?.trim() || repoName,
+    displaySlug: useConfiguredMetadata ? config.displaySlug : undefined,
+    repoName: useConfiguredMetadata && config.repoName !== undefined ? config.repoName : repoName,
+    branchName: input.gitBranch?.trim() || (useConfiguredMetadata ? config.branchName : undefined),
+    kubectlPath: config.kubectlPath,
+    dockerPath: config.dockerPath,
+    buildctlPath: config.buildctlPath,
+    imageBuilder: config.imageBuilder,
+    imageRegistry: config.imageRegistry,
+    imagePushRegistry: config.imagePushRegistry,
+    imageProject: useConfiguredMetadata ? config.imageProject : undefined,
+    buildkitAddr: config.buildkitAddr,
+    buildkitDockerConfig: config.buildkitDockerConfig,
+    buildkitDockerConfigsDir: config.buildkitDockerConfigsDir,
+    buildkitHarborCaCert: config.buildkitHarborCaCert,
+    ...optionalConfiguredUrls(config, namespace),
+  };
+};
+
+const resolveConfiguredNativeConfig = (
+  config: NativeAppDevStackConfig,
+): ResolvedNativeAppDevStackConfig | null => {
+  if (config.worktreePath === undefined) return null;
+  return resolveNativeConfigForWorktree(config, {
+    worktreePath: config.worktreePath,
+    displayName: config.displayName,
+    gitBranch: config.branchName,
+    namespace: config.namespace,
+    preferConfiguredNamespace: true,
+  });
+};
 
 const isNotFound = (cause: unknown) =>
   cause instanceof Error &&
@@ -169,7 +333,7 @@ const isNotFound = (cause: unknown) =>
     cause.message.includes("namespaces") ||
     cause.message.includes("Namespace"));
 
-const previewUrlForService = (config: NativeAppDevStackConfig, name: string) => {
+const previewUrlForService = (config: ResolvedNativeAppDevStackConfig, name: string) => {
   switch (name) {
     case "frontend":
       return config.frontendUrl;
@@ -191,7 +355,7 @@ const serviceOrder = (name: string) => {
 };
 
 const readNamespace = async (
-  config: NativeAppDevStackConfig,
+  config: ResolvedNativeAppDevStackConfig,
   runKubectl: KubectlRunner,
 ): Promise<KubectlNamespace | null> => {
   try {
@@ -205,7 +369,7 @@ const readNamespace = async (
 };
 
 const readDeployments = async (
-  config: NativeAppDevStackConfig,
+  config: ResolvedNativeAppDevStackConfig,
   runKubectl: KubectlRunner,
 ): Promise<KubectlDeploymentList> => {
   try {
@@ -219,7 +383,7 @@ const readDeployments = async (
 };
 
 const readPodList = async (
-  config: NativeAppDevStackConfig,
+  config: ResolvedNativeAppDevStackConfig,
   runKubectl: KubectlRunner,
 ): Promise<KubectlPodList> => {
   try {
@@ -301,12 +465,12 @@ const buildPods = (podList: KubectlPodList): Array<AppDevStackPod> =>
     .sort((left, right) => left.name.localeCompare(right.name));
 
 const readPods = async (
-  config: NativeAppDevStackConfig,
+  config: ResolvedNativeAppDevStackConfig,
   runKubectl: KubectlRunner,
 ): Promise<Array<AppDevStackPod>> => buildPods(await readPodList(config, runKubectl));
 
 const findPodForLogs = async (
-  config: NativeAppDevStackConfig,
+  config: ResolvedNativeAppDevStackConfig,
   runKubectl: KubectlRunner,
   podName: string,
   containerName: string | null | undefined,
@@ -360,7 +524,7 @@ const buildPodLogEntry = (
 });
 
 const buildStack = async (
-  config: NativeAppDevStackConfig,
+  config: ResolvedNativeAppDevStackConfig,
   runKubectl: KubectlRunner,
 ): Promise<AppDevStack> => {
   const namespace = await readNamespace(config, runKubectl);
@@ -463,112 +627,183 @@ const nativeOperation = <Value>(
     catch: (cause) => appDevStackError(operation, cause),
   });
 
-const ensureKnownStack = (
-  config: NativeAppDevStackConfig,
-  operation: string,
-  stackId: string,
-): Effect.Effect<void, AppDevStackError> =>
-  stackId === config.id || stackId === config.namespace
-    ? Effect.void
-    : Effect.fail(
-        new AppDevStackError({
-          operation,
-          reason: "request_failed",
-          status: 404,
-          message: `Native app-dev stack "${stackId}" is not configured.`,
-        }),
-      );
+const unknownStackError = (operation: string, stackId: string) =>
+  new AppDevStackError({
+    operation,
+    reason: "request_failed",
+    status: 404,
+    message: `Native app-dev stack "${stackId}" is not configured in this Code server session.`,
+  });
 
 export const makeNativeAppDevStackService = (
   config: NativeAppDevStackConfig,
   runKubectl: KubectlRunner,
+  runCommand?: NativeCommandRunner,
 ): NativeAppDevStackService => {
-  const readStack = (operation: string) =>
-    nativeOperation(operation, () => buildStack(config, runKubectl));
+  const configuredStack = resolveConfiguredNativeConfig(config);
+  const knownByStackId = new Map<string, ResolvedNativeAppDevStackConfig>();
+  const knownByWorktreePath = new Map<string, ResolvedNativeAppDevStackConfig>();
+
+  const rememberStack = (resolved: ResolvedNativeAppDevStackConfig) => {
+    knownByStackId.set(resolved.id, resolved);
+    knownByStackId.set(resolved.namespace, resolved);
+    knownByWorktreePath.set(normalizePath(resolved.worktreePath), resolved);
+    return resolved;
+  };
+
+  if (configuredStack !== null) {
+    rememberStack(configuredStack);
+  }
+
+  const resolveKnownStack = (
+    operation: string,
+    stackId: string,
+  ): Effect.Effect<ResolvedNativeAppDevStackConfig, AppDevStackError> => {
+    const known = knownByStackId.get(stackId);
+    return known === undefined
+      ? Effect.fail(unknownStackError(operation, stackId))
+      : Effect.succeed(known);
+  };
+
+  const readStack = (operation: string, resolved: ResolvedNativeAppDevStackConfig) =>
+    nativeOperation(operation, () => buildStack(resolved, runKubectl));
 
   return {
     status: Effect.succeed({
       enabled: true,
-      backendUrl: `native://${config.namespace}`,
+      backendUrl:
+        configuredStack === null
+          ? "native://app-dev-stacks"
+          : `native://${configuredStack.namespace}`,
     }),
-    list: () => readStack("list").pipe(Effect.map((stack) => ({ stacks: [stack] }))),
+    list: () =>
+      Effect.forEach(
+        [...new Set(knownByStackId.values())],
+        (resolved) => readStack("list", resolved),
+        { concurrency: 4 },
+      ).pipe(Effect.map((stacks) => ({ stacks }))),
     getByWorktree: (input) =>
-      readStack("getByWorktree").pipe(
-        Effect.map((stack) =>
-          normalizePath(input.worktreePath) === normalizePath(config.worktreePath)
-            ? {
-                stack,
-                frontendUrl: config.frontendUrl ?? null,
-                frontendServiceName: config.frontendUrl ? "frontend" : null,
-              }
-            : { stack: null, frontendUrl: null, frontendServiceName: null },
-        ),
-      ),
-    get: (input) =>
-      ensureKnownStack(config, "get", input.stackId).pipe(Effect.flatMap(() => readStack("get"))),
-    autoCreate: (input) =>
-      nativeOperation("autoCreate", async () => {
-        if (normalizePath(input.worktreePath) !== normalizePath(config.worktreePath)) {
-          throw new Error(
-            `Native app-dev stack only manages ${config.worktreePath}; received ${input.worktreePath}.`,
-          );
+      nativeOperation("getByWorktree", async () => {
+        const normalizedPath = normalizePath(input.worktreePath);
+        const known = knownByWorktreePath.get(normalizedPath);
+        const resolved =
+          known ??
+          resolveNativeConfigForWorktree(config, {
+            worktreePath: input.worktreePath,
+          });
+        if (known === undefined) {
+          const namespace = await readNamespace(resolved, runKubectl);
+          if (namespace === null) {
+            return { stack: null, frontendUrl: null, frontendServiceName: null };
+          }
+          rememberStack(resolved);
         }
-        const namespace = await readNamespace(config, runKubectl);
-        if (namespace === null) {
-          throw new Error(
-            `Native app-dev stack namespace "${config.namespace}" does not exist. Restore the Kubernetes stack before starting it from Code.`,
-          );
-        }
-        await runKubectl(["-n", config.namespace, "scale", "deployment", "--all", "--replicas=1"]);
-        const stack = await buildStack(config, runKubectl);
+        const stack = await buildStack(resolved, runKubectl);
         return {
           stack,
-          created: false,
-          frontendUrl: config.frontendUrl ?? null,
-          frontendServiceName: config.frontendUrl ? "frontend" : null,
+          frontendUrl: resolved.frontendUrl ?? null,
+          frontendServiceName: resolved.frontendUrl ? "frontend" : null,
+        };
+      }),
+    get: (input) =>
+      resolveKnownStack("get", input.stackId).pipe(
+        Effect.flatMap((resolved) => readStack("get", resolved)),
+      ),
+    autoCreate: (input) =>
+      nativeOperation("autoCreate", async () => {
+        const resolved = resolveNativeConfigForWorktree(config, {
+          worktreePath: input.worktreePath,
+          displayName: input.displayName,
+          gitBranch: input.gitBranch,
+          namespace: input.namespace,
+          preferConfiguredNamespace: config.worktreePath === undefined,
+        });
+        const namespace = await readNamespace(resolved, runKubectl);
+        const deployments = namespace === null ? null : await readDeployments(resolved, runKubectl);
+        const shouldProvision = namespace === null || (deployments?.items ?? []).length === 0;
+        await provisionNativeAppDevStack(resolved, runKubectl, runCommand);
+        rememberStack(resolved);
+        await runKubectl([
+          "-n",
+          resolved.namespace,
+          "scale",
+          "deployment",
+          "--all",
+          "--replicas=1",
+        ]);
+        const stack = await buildStack(resolved, runKubectl);
+        return {
+          stack,
+          created: shouldProvision,
+          frontendUrl: resolved.frontendUrl ?? null,
+          frontendServiceName: resolved.frontendUrl ? "frontend" : null,
         };
       }),
     stop: (input) =>
-      ensureKnownStack(config, "stop", input.stackId).pipe(
-        Effect.flatMap(() =>
+      resolveKnownStack("stop", input.stackId).pipe(
+        Effect.flatMap((resolved) =>
           nativeOperation("stop", async () => {
             await runKubectl([
               "-n",
-              config.namespace,
+              resolved.namespace,
               "scale",
               "deployment",
               "--all",
               "--replicas=0",
             ]);
-            return buildStack(config, runKubectl);
+            return buildStack(resolved, runKubectl);
+          }),
+        ),
+      ),
+    restart: (input) =>
+      resolveKnownStack("restart", input.stackId).pipe(
+        Effect.flatMap((resolved) =>
+          nativeOperation("restart", async () => {
+            await runKubectl([
+              "-n",
+              resolved.namespace,
+              "scale",
+              "deployment",
+              "--all",
+              "--replicas=0",
+            ]);
+            await runKubectl([
+              "-n",
+              resolved.namespace,
+              "scale",
+              "deployment",
+              "--all",
+              "--replicas=1",
+            ]);
+            return buildStack(resolved, runKubectl);
           }),
         ),
       ),
     delete: (input) =>
-      ensureKnownStack(config, "delete", input.stackId).pipe(
-        Effect.flatMap(() =>
+      resolveKnownStack("delete", input.stackId).pipe(
+        Effect.flatMap((resolved) =>
           nativeOperation("delete", async () => {
-            await runKubectl(["delete", "namespace", config.namespace, "--ignore-not-found"]);
+            await runKubectl(["delete", "namespace", resolved.namespace, "--ignore-not-found"]);
             return { deleted: true };
           }),
         ),
       ),
     listPods: (input) =>
-      ensureKnownStack(config, "listPods", input.stackId).pipe(
-        Effect.flatMap(() =>
+      resolveKnownStack("listPods", input.stackId).pipe(
+        Effect.flatMap((resolved) =>
           nativeOperation("listPods", async () => ({
-            stackId: config.id,
-            namespace: config.namespace,
-            pods: await readPods(config, runKubectl),
+            stackId: resolved.id,
+            namespace: resolved.namespace,
+            pods: await readPods(resolved, runKubectl),
           })),
         ),
       ),
     getPodLogs: (input) =>
-      ensureKnownStack(config, "getPodLogs", input.stackId).pipe(
-        Effect.flatMap(() =>
+      resolveKnownStack("getPodLogs", input.stackId).pipe(
+        Effect.flatMap((resolved) =>
           nativeOperation("getPodLogs", async () => {
             const { pod, containerName } = await findPodForLogs(
-              config,
+              resolved,
               runKubectl,
               input.podName,
               input.containerName,
@@ -576,15 +811,15 @@ export const makeNativeAppDevStackService = (
             const tailLines = normalizeTailLines(input.tailLines);
             const logArgs = [
               "-n",
-              config.namespace,
+              resolved.namespace,
               "logs",
               pod.name,
               ...(containerName === null ? [] : ["-c", containerName]),
               `--tail=${String(tailLines)}`,
             ];
             return {
-              stackId: config.id,
-              namespace: config.namespace,
+              stackId: resolved.id,
+              namespace: resolved.namespace,
               podName: pod.name,
               containerName,
               tailLines,
@@ -595,12 +830,12 @@ export const makeNativeAppDevStackService = (
         ),
       ),
     getStackPodLogs: (input) =>
-      ensureKnownStack(config, "getStackPodLogs", input.stackId).pipe(
-        Effect.flatMap(() =>
+      resolveKnownStack("getStackPodLogs", input.stackId).pipe(
+        Effect.flatMap((resolved) =>
           Effect.gen(function* () {
             const tailLines = normalizeTailLines(input.tailLines);
             const pods = yield* nativeOperation("getStackPodLogs", () =>
-              readPods(config, runKubectl),
+              readPods(resolved, runKubectl),
             );
             const podContainers = pods.flatMap((pod) =>
               pod.containers.map((container) => ({ pod, container })),
@@ -612,7 +847,7 @@ export const makeNativeAppDevStackService = (
                   try {
                     const logs = await runKubectl([
                       "-n",
-                      config.namespace,
+                      resolved.namespace,
                       "logs",
                       pod.name,
                       "-c",
@@ -639,8 +874,8 @@ export const makeNativeAppDevStackService = (
               { concurrency: POD_LOG_FETCH_CONCURRENCY },
             );
             return {
-              stackId: config.id,
-              namespace: config.namespace,
+              stackId: resolved.id,
+              namespace: resolved.namespace,
               tailLines,
               pods,
               entries,

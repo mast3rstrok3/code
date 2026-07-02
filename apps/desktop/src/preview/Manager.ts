@@ -10,11 +10,9 @@ import type {
   DesktopPreviewPointerEvent,
   PreviewAnnotationPayload,
   PreviewAnnotationRect,
-  DesktopPreviewDevReviewReplayEventBatch,
   DesktopPreviewRecordingArtifact,
   DesktopPreviewRecordingFrame,
   DesktopPreviewScreenshotArtifact,
-  DevReviewReplayMetadata,
   PreviewAutomationClickInput,
   PreviewAutomationActionEvent,
   PreviewAutomationConsoleEntry,
@@ -59,10 +57,6 @@ import {
   ANNOTATION_CAPTURED_CHANNEL,
   ANNOTATION_THEME_CHANNEL,
   CANCEL_PICK_CHANNEL,
-  DEV_REVIEW_REPLAY_EVENTS_CHANNEL,
-  DEV_REVIEW_REPLAY_START_CHANNEL,
-  DEV_REVIEW_REPLAY_STOP_CHANNEL,
-  DEV_REVIEW_REPLAY_STOPPED_CHANNEL,
   ELEMENT_PICKED_CHANNEL,
   HUMAN_INPUT_CHANNEL,
   START_PICK_CHANNEL,
@@ -291,9 +285,6 @@ const nextZoomLevel = (current: number, direction: "in" | "out"): number => {
 
 type Listener = (tabId: string, state: PreviewTabState) => Effect.Effect<void>;
 type RecordingFrameListener = (frame: DesktopPreviewRecordingFrame) => Effect.Effect<void>;
-type DevReviewReplayEventBatchListener = (
-  batch: DesktopPreviewDevReviewReplayEventBatch,
-) => Effect.Effect<void>;
 
 type PreviewInputSignal =
   | { readonly kind: "pointer"; readonly x: number; readonly y: number; readonly button: number }
@@ -305,13 +296,6 @@ interface ManagedListeners {
 
 interface PickSession {
   readonly cancel: Effect.Effect<void>;
-}
-
-interface DevReviewReplaySession {
-  readonly reviewId: string;
-  readonly startedAt: string;
-  readonly eventCount: number;
-  readonly stopped: DevReviewReplayMetadata | null;
 }
 
 interface BrowserControlSession {
@@ -414,12 +398,6 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   const pointerEventListenersRef = yield* Ref.make<ReadonlySet<PointerEventListener>>(new Set());
   const recordingFrameListenersRef = yield* Ref.make<ReadonlySet<RecordingFrameListener>>(
     new Set(),
-  );
-  const devReviewReplayEventBatchListenersRef = yield* Ref.make<
-    ReadonlySet<DevReviewReplayEventBatchListener>
-  >(new Set());
-  const devReviewReplaySessionsRef = yield* Ref.make<ReadonlyMap<string, DevReviewReplaySession>>(
-    new Map(),
   );
   const pickSessionsRef = yield* Ref.make<ReadonlyMap<string, PickSession>>(new Map());
   const controlSessionsRef = yield* SynchronizedRef.make<
@@ -1251,92 +1229,6 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     const beforeInput = (event: Electron.Event, input: Electron.Input): void => {
       runFork(forwardShortcut(event, input));
     };
-    const handleDevReviewReplayEvents = Effect.fn("PreviewManager.handleDevReviewReplayEvents")(
-      function* (payload: unknown) {
-        if (typeof payload !== "object" || payload === null) return;
-        const reviewId =
-          "reviewId" in payload && typeof payload.reviewId === "string" ? payload.reviewId : "";
-        const events = "events" in payload && Array.isArray(payload.events) ? payload.events : [];
-        if (reviewId.length === 0 || events.length === 0) return;
-        const emittedAt =
-          "emittedAt" in payload && typeof payload.emittedAt === "string"
-            ? payload.emittedAt
-            : yield* currentIso;
-        const batch: DesktopPreviewDevReviewReplayEventBatch = {
-          tabId,
-          reviewId,
-          events,
-          eventCount: events.length,
-          emittedAt,
-        };
-        yield* Ref.update(devReviewReplaySessionsRef, (sessions) =>
-          replaceMap(sessions, (copy) => {
-            const existing = copy.get(tabId);
-            if (existing?.reviewId !== reviewId) return;
-            copy.set(tabId, {
-              ...existing,
-              eventCount: existing.eventCount + events.length,
-            });
-          }),
-        );
-        const listeners = yield* Ref.get(devReviewReplayEventBatchListenersRef);
-        yield* Effect.forEach(
-          listeners,
-          (listener) => deliverEvent("dev-review-replay-events", tabId, () => listener(batch)),
-          { discard: true },
-        );
-      },
-    );
-    const handleDevReviewReplayStopped = Effect.fn("PreviewManager.handleDevReviewReplayStopped")(
-      function* (payload: unknown) {
-        if (typeof payload !== "object" || payload === null) return;
-        const stoppedPayload = payload as Record<string, unknown>;
-        const reviewId = typeof stoppedPayload.reviewId === "string" ? stoppedPayload.reviewId : "";
-        if (reviewId.length === 0) return;
-        const completedAt =
-          typeof stoppedPayload.completedAt === "string"
-            ? stoppedPayload.completedAt
-            : yield* currentIso;
-        yield* Ref.update(devReviewReplaySessionsRef, (sessions) =>
-          replaceMap(sessions, (copy) => {
-            const existing = copy.get(tabId);
-            if (existing?.reviewId !== reviewId) return;
-            const eventCount =
-              typeof stoppedPayload.eventCount === "number" &&
-              Number.isInteger(stoppedPayload.eventCount) &&
-              stoppedPayload.eventCount >= 0
-                ? stoppedPayload.eventCount
-                : existing.eventCount;
-            copy.set(tabId, {
-              ...existing,
-              eventCount,
-              stopped: {
-                status: stoppedPayload.status === "failed" ? "failed" : "saved",
-                eventCount,
-                startedAt:
-                  typeof stoppedPayload.startedAt === "string"
-                    ? stoppedPayload.startedAt
-                    : existing.startedAt,
-                completedAt,
-                durationMs:
-                  typeof stoppedPayload.durationMs === "number" &&
-                  Number.isInteger(stoppedPayload.durationMs) &&
-                  stoppedPayload.durationMs >= 0
-                    ? stoppedPayload.durationMs
-                    : 0,
-                error: typeof stoppedPayload.error === "string" ? stoppedPayload.error : null,
-              },
-            });
-          }),
-        );
-      },
-    );
-    const devReviewReplayEvents = (_event: Electron.IpcMainEvent, payload: unknown): void => {
-      runFork(handleDevReviewReplayEvents(payload));
-    };
-    const devReviewReplayStopped = (_event: Electron.IpcMainEvent, payload: unknown): void => {
-      runFork(handleDevReviewReplayStopped(payload));
-    };
     yield* Scope.addFinalizer(
       scope,
       attempt({ operation: "detachListeners", tabId, webContentsId: wc.id }, () => {
@@ -1348,8 +1240,6 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         wc.off("did-fail-load", failed as never);
         wc.off("before-input-event", beforeInput);
         wc.ipc.off(HUMAN_INPUT_CHANNEL, humanInput);
-        wc.ipc.off(DEV_REVIEW_REPLAY_EVENTS_CHANNEL, devReviewReplayEvents);
-        wc.ipc.off(DEV_REVIEW_REPLAY_STOPPED_CHANNEL, devReviewReplayStopped);
       }).pipe(Effect.ignore),
     );
     const install = Effect.fn("PreviewManager.installWebContentsListeners")(function* () {
@@ -1361,8 +1251,6 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         wc.on("did-stop-loading", sync);
         wc.on("did-fail-load", failed as never);
         wc.ipc.on(HUMAN_INPUT_CHANNEL, humanInput);
-        wc.ipc.on(DEV_REVIEW_REPLAY_EVENTS_CHANNEL, devReviewReplayEvents);
-        wc.ipc.on(DEV_REVIEW_REPLAY_STOPPED_CHANNEL, devReviewReplayStopped);
         wc.setWindowOpenHandler(({ url }) => {
           runFork(
             attemptPromise({ operation: "openPreviewWindow", tabId, webContentsId: wc.id }, () =>
@@ -1883,93 +1771,6 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       send("Page.stopScreencast").pipe(Effect.asVoid),
     );
     yield* Ref.set(recordingTabIdRef, Option.none());
-  });
-
-  const replayDurationMs = (startedAt: string, completedAt: string): number => {
-    const started = Date.parse(startedAt);
-    const completed = Date.parse(completedAt);
-    return Number.isFinite(started) && Number.isFinite(completed)
-      ? Math.max(0, completed - started)
-      : 0;
-  };
-
-  const startDevReviewReplay = Effect.fn("PreviewManager.startDevReviewReplay")(function* (
-    tabId: string,
-    reviewId: string,
-  ) {
-    const wc = yield* requireWebContents(tabId);
-    const startedAt = yield* currentIso;
-    yield* Ref.update(devReviewReplaySessionsRef, (sessions) =>
-      replaceMap(sessions, (copy) => {
-        copy.set(tabId, {
-          reviewId,
-          startedAt,
-          eventCount: 0,
-          stopped: null,
-        });
-      }),
-    );
-    yield* attempt(
-      {
-        operation: "devReviewReplay.start",
-        tabId,
-        webContentsId: wc.id,
-      },
-      () => wc.send(DEV_REVIEW_REPLAY_START_CHANNEL, { reviewId }),
-    );
-    return {
-      status: "recording" as const,
-      eventCount: 0,
-      startedAt,
-      completedAt: null,
-      durationMs: null,
-      error: null,
-    };
-  });
-
-  const stopDevReviewReplay = Effect.fn("PreviewManager.stopDevReviewReplay")(function* (
-    tabId: string,
-    reviewId: string,
-  ) {
-    const wc = yield* requireWebContents(tabId);
-    const existing = (yield* Ref.get(devReviewReplaySessionsRef)).get(tabId);
-    if (!existing || existing.reviewId !== reviewId) {
-      return {
-        status: "failed" as const,
-        eventCount: 0,
-        startedAt: null,
-        completedAt: yield* currentIso,
-        durationMs: null,
-        error: "No active Dev Review replay capture was found for this tab.",
-      };
-    }
-    yield* attempt(
-      {
-        operation: "devReviewReplay.stop",
-        tabId,
-        webContentsId: wc.id,
-      },
-      () => wc.send(DEV_REVIEW_REPLAY_STOP_CHANNEL, { reviewId }),
-    );
-    yield* Effect.sleep(100);
-    const latest = (yield* Ref.get(devReviewReplaySessionsRef)).get(tabId) ?? existing;
-    const completedAt = yield* currentIso;
-    const replay =
-      latest.stopped ??
-      ({
-        status: "saved" as const,
-        eventCount: latest.eventCount,
-        startedAt: latest.startedAt,
-        completedAt,
-        durationMs: replayDurationMs(latest.startedAt, completedAt),
-        error: null,
-      } satisfies DevReviewReplayMetadata);
-    yield* Ref.update(devReviewReplaySessionsRef, (sessions) =>
-      replaceMap(sessions, (copy) => {
-        copy.delete(tabId);
-      }),
-    );
-    return replay;
   });
 
   const saveRecording = Effect.fn("PreviewManager.saveRecording")(function* (
@@ -2692,8 +2493,6 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         Ref.set(expectedAgentInputsRef, new Map()),
         Ref.set(pointerEventListenersRef, new Set()),
         Ref.set(recordingFrameListenersRef, new Set()),
-        Ref.set(devReviewReplayEventBatchListenersRef, new Set()),
-        Ref.set(devReviewReplaySessionsRef, new Map()),
       ],
       { discard: true },
     );
@@ -2728,14 +2527,10 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     saveRecording,
     setAnnotationTheme,
     setMainWindow,
-    startDevReviewReplay,
     startRecording,
-    stopDevReviewReplay,
     stopRecording,
     subscribePointerEvents: (listener: PointerEventListener) =>
       subscribe(pointerEventListenersRef, listener),
-    subscribeDevReviewReplayEventBatches: (listener: DevReviewReplayEventBatchListener) =>
-      subscribe(devReviewReplayEventBatchListenersRef, listener),
     subscribeRecordingFrames: (listener: RecordingFrameListener) =>
       subscribe(recordingFrameListenersRef, listener),
     subscribeStateChanges: (listener: Listener) => subscribe(listenersRef, listener),
@@ -3053,14 +2848,6 @@ export class PreviewManager extends Context.Service<
     readonly copyArtifactToClipboard: (path: string) => Effect.Effect<void, PreviewManagerError>;
     readonly startRecording: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly stopRecording: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
-    readonly startDevReviewReplay: (
-      tabId: string,
-      reviewId: string,
-    ) => Effect.Effect<DevReviewReplayMetadata, PreviewManagerError>;
-    readonly stopDevReviewReplay: (
-      tabId: string,
-      reviewId: string,
-    ) => Effect.Effect<DevReviewReplayMetadata, PreviewManagerError>;
     readonly saveRecording: (
       tabId: string,
       mimeType: string,
@@ -3102,9 +2889,6 @@ export class PreviewManager extends Context.Service<
     ) => Effect.Effect<void, never, Scope.Scope>;
     readonly subscribeRecordingFrames: (
       listener: RecordingFrameListener,
-    ) => Effect.Effect<void, never, Scope.Scope>;
-    readonly subscribeDevReviewReplayEventBatches: (
-      listener: DevReviewReplayEventBatchListener,
     ) => Effect.Effect<void, never, Scope.Scope>;
   }
 >()("@t3tools/desktop/preview/Manager/PreviewManager") {}
@@ -3171,8 +2955,6 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     copyArtifactToClipboard: operations.copyArtifactToClipboard,
     startRecording: operations.startRecording,
     stopRecording: operations.stopRecording,
-    startDevReviewReplay: operations.startDevReviewReplay,
-    stopDevReviewReplay: operations.stopDevReviewReplay,
     saveRecording: operations.saveRecording,
     automationStatus: operations.automationStatus,
     automationSnapshot: operations.automationSnapshot,
@@ -3185,7 +2967,6 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     subscribeStateChanges: operations.subscribeStateChanges,
     subscribePointerEvents: operations.subscribePointerEvents,
     subscribeRecordingFrames: operations.subscribeRecordingFrames,
-    subscribeDevReviewReplayEventBatches: operations.subscribeDevReviewReplayEventBatches,
   });
 }).pipe(Effect.withSpan("PreviewManager.make"));
 

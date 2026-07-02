@@ -211,10 +211,12 @@ describe("Codex developer instructions browser scoping", () => {
   });
 
   it("defines browser QA developer instructions for Browser Dev Review only", () => {
-    NodeAssert.match(CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS, /Agent Browser CLI/);
-    NodeAssert.match(CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS, /dev_review_replay_start/);
+    NodeAssert.match(CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS, /preview_open/);
+    NodeAssert.match(CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS, /dev_review_recording_start/);
+    NodeAssert.match(CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS, /dev_review_capture_screenshot/);
     NodeAssert.match(CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS, /t3-code/);
-    NodeAssert.doesNotMatch(CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS, /preview_status/);
+    NodeAssert.doesNotMatch(CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS, /agent-browser/i);
+    NodeAssert.doesNotMatch(CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS, /rrweb/i);
     NodeAssert.doesNotMatch(CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS, /Chrome DevTools MCP/);
     NodeAssert.match(CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS, /Browser Dev Review QA role only/);
   });
@@ -255,12 +257,16 @@ describe("Codex workflow prompt browser scoping", () => {
 
       const instructions = params.collaborationMode?.settings.developer_instructions ?? "";
       NodeAssert.match(instructions, /Browser Dev Review QA tools/);
-      NodeAssert.match(instructions, /Agent Browser CLI/);
-      NodeAssert.match(instructions, /agent-browser-cli\.md/);
-      NodeAssert.match(instructions, /pnpm exec agent-browser doctor --offline --quick/);
-      NodeAssert.match(instructions, /Do not continue to a passing result after replay failure/);
+      NodeAssert.match(instructions, /preview_open/);
+      NodeAssert.match(instructions, /preview_snapshot/);
+      NodeAssert.match(instructions, /dev_review_recording_start/);
+      NodeAssert.match(instructions, /dev_review_capture_screenshot/);
+      NodeAssert.match(instructions, /preview-browser-qa\.md/);
+      NodeAssert.match(instructions, /blocked rather than passed/);
+      NodeAssert.doesNotMatch(instructions, /Agent Browser CLI/);
+      NodeAssert.doesNotMatch(instructions, /agent-browser/);
+      NodeAssert.doesNotMatch(instructions, /rrweb/i);
       NodeAssert.doesNotMatch(instructions, /Chrome DevTools MCP/);
-      NodeAssert.doesNotMatch(instructions, /preview_status/);
       NodeAssert.doesNotMatch(instructions, /chrome-devtools-mcp/);
     }),
   );

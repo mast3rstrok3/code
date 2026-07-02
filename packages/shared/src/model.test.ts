@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { ProviderInstanceId, type ModelCapabilities } from "@t3tools/contracts";
+import { ProviderDriverKind, ProviderInstanceId, type ModelCapabilities } from "@t3tools/contracts";
 
 import {
   buildProviderOptionSelectionsFromDescriptors,
@@ -10,6 +10,7 @@ import {
   getProviderOptionDescriptors,
   getProviderOptionBooleanSelectionValue,
   getProviderOptionStringSelectionValue,
+  normalizeModelSlug,
 } from "./model.ts";
 
 const codexCaps: ModelCapabilities = createModelCapabilities({
@@ -142,5 +143,17 @@ describe("descriptor helpers", () => {
     ).toBeUndefined();
     expect(getModelSelectionStringOptionValue(selection, "reasoningEffort")).toBe("high");
     expect(getModelSelectionBooleanOptionValue(selection, "fastMode")).toBe(true);
+  });
+});
+
+describe("normalizeModelSlug", () => {
+  const codexDriver = ProviderDriverKind.make("codex");
+
+  it("expands the 5.5 codex alias to gpt-5.5", () => {
+    expect(normalizeModelSlug("5.5", codexDriver)).toBe("gpt-5.5");
+  });
+
+  it("passes gpt-5.5 through unchanged", () => {
+    expect(normalizeModelSlug("gpt-5.5", codexDriver)).toBe("gpt-5.5");
   });
 });

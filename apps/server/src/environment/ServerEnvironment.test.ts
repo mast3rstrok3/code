@@ -41,6 +41,7 @@ const makeServerConfig = Effect.fn(function* (baseDir: string) {
     previewBrowserMode: "off",
     previewBrowserSource: "auto",
     previewBrowserExecutablePath: undefined,
+    previewFfmpegExecutablePath: undefined,
     previewBrowserSandbox: "auto",
     previewBrowserMaxFps: 12,
     previewBrowserMaxFrameWidth: 1600,

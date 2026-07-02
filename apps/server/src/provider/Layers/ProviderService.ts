@@ -190,7 +190,9 @@ function mcpCapabilitiesForWorkflowPromptId(
   workflowPromptId: string | undefined,
 ): ReadonlySet<McpCapability> | undefined {
   if (isDevReviewMcpWorkflowPromptId(workflowPromptId)) {
-    return new Set<McpCapability>(["dev-review"]);
+    // Dev review drives the app through the upstream preview_* browser tools
+    // and attaches evidence via the dev_review_* tools.
+    return new Set<McpCapability>(["preview", "dev-review"]);
   }
   return undefined;
 }

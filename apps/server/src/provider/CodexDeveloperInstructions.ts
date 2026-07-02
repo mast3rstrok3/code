@@ -3,9 +3,9 @@ export const CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS = `
 
 This browser tooling context is scoped to the Implementation Workflow Browser Dev Review QA role only. It is not available in ordinary implementation, planning, Product Grill, or default sessions.
 
-Use the \`t3-code\` MCP server for durable Dev Review coordination tools: \`dev_review_get\`, \`dev_review_replay_start\`, \`dev_review_replay_stop\`, and \`dev_review_update\`. Do not use \`preview_*\` tools for Browser Dev Review.
+Use the \`t3-code\` MCP server for all browser work. Drive the browser with the \`preview_*\` tools (\`preview_open\`, \`preview_snapshot\`, \`preview_click\`, \`preview_type\`, \`preview_press\`, \`preview_scroll\`, \`preview_wait_for\`, \`preview_resize\`) and coordinate the durable Dev Review record with \`dev_review_get\`, \`dev_review_recording_start\`, \`dev_review_capture_screenshot\`, \`dev_review_recording_stop\`, and \`dev_review_update\`. Do not use external browsers, browser MCP servers, or standalone Playwright scripts.
 
-Use the Agent Browser CLI workflow documented in \`agent-browser-cli.md\` for browser navigation, inspection, interaction, console/network review, screenshots, and recordings. If replay start or stop fails, or replay stop reports zero RRweb events, mark the Dev Review blocked or failed rather than passed.`;
+Evidence is required: a terminal verdict (passed/failed) needs a saved screen recording plus at least one captioned screenshot, and \`dev_review_update\` rejects it otherwise. If recording start or stop fails, or the browser tools are unavailable, mark the Dev Review blocked rather than passed. See \`preview-browser-qa.md\` for the full workflow.`;
 
 export const CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS = `<collaboration_mode># Plan Mode (Conversational)
 

@@ -7,12 +7,7 @@ import * as Struct from "effect/Struct";
 import { ProviderOptionSelections } from "./model.ts";
 import { RepositoryIdentity } from "./environment.ts";
 import { ChangeRequest } from "./sourceControl.ts";
-import {
-  DevReviewDocument,
-  DevReviewId,
-  DevReviewRecord,
-  DevReviewReplayMetadata,
-} from "./review.ts";
+import { DevReviewDocument, DevReviewEvidence, DevReviewId, DevReviewRecord } from "./review.ts";
 import {
   ApprovalRequestId,
   CheckpointRef,
@@ -1569,12 +1564,12 @@ const ThreadDevReviewUpdateCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
-const ThreadDevReviewReplayMetadataUpdateCommand = Schema.Struct({
-  type: Schema.Literal("thread.dev-review.replay-metadata.update"),
+const ThreadDevReviewEvidenceUpdateCommand = Schema.Struct({
+  type: Schema.Literal("thread.dev-review.evidence.update"),
   commandId: CommandId,
   threadId: ThreadId,
   reviewId: DevReviewId,
-  replay: DevReviewReplayMetadata,
+  evidence: DevReviewEvidence,
   updatedAt: IsoDateTime,
   createdAt: IsoDateTime,
 });
@@ -1600,7 +1595,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadTurnDiffCompleteCommand,
   ThreadActivityAppendCommand,
   ThreadDevReviewUpdateCommand,
-  ThreadDevReviewReplayMetadataUpdateCommand,
+  ThreadDevReviewEvidenceUpdateCommand,
   ThreadRevertCompleteCommand,
 ]);
 export type InternalOrchestrationCommand = typeof InternalOrchestrationCommand.Type;
@@ -1644,7 +1639,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.proposed-plan-upserted",
   "thread.dev-review-created",
   "thread.dev-review-updated",
-  "thread.dev-review-replay-metadata-updated",
+  "thread.dev-review-evidence-updated",
   "thread.turn-diff-completed",
   "thread.activity-appended",
 ]);
@@ -1894,12 +1889,12 @@ export const ThreadDevReviewUpdatedPayload = Schema.Struct({
   updatedAt: IsoDateTime,
 });
 
-export const ThreadDevReviewReplayMetadataUpdatedPayload = Schema.Struct({
+export const ThreadDevReviewEvidenceUpdatedPayload = Schema.Struct({
   threadId: ThreadId,
   reviewId: DevReviewId,
   sourceThreadId: ThreadId,
   reviewThreadId: ThreadId,
-  replay: DevReviewReplayMetadata,
+  evidence: DevReviewEvidence,
   updatedAt: IsoDateTime,
 });
 
@@ -2103,8 +2098,8 @@ export const OrchestrationEvent = Schema.Union([
   }),
   Schema.Struct({
     ...EventBaseFields,
-    type: Schema.Literal("thread.dev-review-replay-metadata-updated"),
-    payload: ThreadDevReviewReplayMetadataUpdatedPayload,
+    type: Schema.Literal("thread.dev-review-evidence-updated"),
+    payload: ThreadDevReviewEvidenceUpdatedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

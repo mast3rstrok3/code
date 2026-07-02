@@ -1103,7 +1103,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
         }
 
-        case "thread.dev-review-replay-metadata-updated": {
+        case "thread.dev-review-evidence-updated": {
           const existing = yield* projectionThreadDevReviewRepository.getById({
             reviewId: event.payload.reviewId,
           });
@@ -1113,7 +1113,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           const record = projectionThreadDevReviewToRecord(existing.value);
           const updated: ProjectionThreadDevReview = devReviewRecordToProjection({
             ...record,
-            replay: event.payload.replay,
+            evidence: event.payload.evidence,
             updatedAt: event.payload.updatedAt,
           });
           yield* projectionThreadDevReviewRepository.upsert(updated);

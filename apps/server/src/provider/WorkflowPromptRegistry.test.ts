@@ -70,31 +70,34 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.doesNotMatch(adrDoc.content, /## Validation/);
   });
 
-  it("scopes Agent Browser CLI docs to Browser Dev Review", () => {
+  it("scopes the Preview Browser QA doc to Browser Dev Review", () => {
     const contracts = listWorkflowPromptContracts();
     const browserReview = contracts.find(
       (contract) => contract.id === WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
     );
 
     NodeAssert.ok(browserReview);
-    const agentBrowserDoc = browserReview.associatedDocs?.find(
-      (doc) => doc.id === "implementation.browser-dev-review.agent-browser-cli",
+    const previewQaDoc = browserReview.associatedDocs?.find(
+      (doc) => doc.id === "implementation.browser-dev-review.preview-browser-qa",
     );
-    NodeAssert.ok(agentBrowserDoc);
-    NodeAssert.equal(agentBrowserDoc.path, "agent-browser-cli.md");
-    NodeAssert.match(agentBrowserDoc.content, /pnpm exec agent-browser doctor --offline --quick/);
-    NodeAssert.match(agentBrowserDoc.content, /open --init-script "\$initScriptPath"/);
-    NodeAssert.match(agentBrowserDoc.content, /snapshot -i/);
-    NodeAssert.match(agentBrowserDoc.content, /record start/);
-    NodeAssert.match(agentBrowserDoc.content, /network requests/);
-    NodeAssert.match(agentBrowserDoc.content, /refs are stale after page changes/i);
-    NodeAssert.doesNotMatch(agentBrowserDoc.content, /chrome-devtools-mcp/);
+    NodeAssert.ok(previewQaDoc);
+    NodeAssert.equal(previewQaDoc.path, "preview-browser-qa.md");
+    NodeAssert.match(previewQaDoc.content, /preview_open/);
+    NodeAssert.match(previewQaDoc.content, /preview_snapshot/);
+    NodeAssert.match(previewQaDoc.content, /preview_resize/);
+    NodeAssert.match(previewQaDoc.content, /preview_evaluate/);
+    NodeAssert.match(previewQaDoc.content, /dev_review_recording_start/);
+    NodeAssert.match(previewQaDoc.content, /dev_review_capture_screenshot/);
+    NodeAssert.match(previewQaDoc.content, /go stale/i);
+    NodeAssert.doesNotMatch(previewQaDoc.content, /agent-browser/i);
+    NodeAssert.doesNotMatch(previewQaDoc.content, /rrweb/i);
+    NodeAssert.doesNotMatch(previewQaDoc.content, /chrome-devtools-mcp/);
 
     for (const contract of contracts.filter((entry) => entry.id !== browserReview.id)) {
       NodeAssert.equal(
         Boolean(
           contract.associatedDocs?.some(
-            (doc) => doc.id === "implementation.browser-dev-review.agent-browser-cli",
+            (doc) => doc.id === "implementation.browser-dev-review.preview-browser-qa",
           ),
         ),
         false,
@@ -120,25 +123,25 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /Planning Workflow: PRD/);
   });
 
-  it("renders Browser Dev Review with its Agent Browser CLI associated doc", () => {
+  it("renders Browser Dev Review around the preview_* and dev_review_* MCP tools", () => {
     const rendered = resolveWorkflowPromptText(
       WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
     );
 
     NodeAssert.match(rendered, /<associated-doc/);
-    NodeAssert.match(rendered, /agent-browser-cli\.md/);
-    NodeAssert.match(rendered, /pnpm exec agent-browser doctor --offline --quick/);
-    NodeAssert.match(rendered, /Agent Browser CLI workflow/);
+    NodeAssert.match(rendered, /preview-browser-qa\.md/);
+    NodeAssert.match(rendered, /preview_open/);
     NodeAssert.match(rendered, /dev_review_get/);
-    NodeAssert.match(rendered, /dev_review_replay_start/);
-    NodeAssert.match(rendered, /dev_review_replay_stop/);
-    NodeAssert.match(rendered, /Do not continue to a passing result after replay failure/);
-    NodeAssert.match(rendered, /Zero RRweb events is a blocking evidence failure/);
+    NodeAssert.match(rendered, /dev_review_recording_start/);
+    NodeAssert.match(rendered, /dev_review_recording_stop/);
+    NodeAssert.match(rendered, /dev_review_capture_screenshot/);
+    NodeAssert.match(rendered, /mark the review blocked/i);
+    NodeAssert.doesNotMatch(rendered, /agent-browser/i);
+    NodeAssert.doesNotMatch(rendered, /rrweb/i);
     NodeAssert.doesNotMatch(rendered, /Chrome DevTools MCP/);
     NodeAssert.doesNotMatch(rendered, /chrome-devtools-mcp/);
-    NodeAssert.equal(
+    NodeAssert.ok(
       isPreviewMcpWorkflowPromptId(WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex),
-      false,
     );
     NodeAssert.ok(
       isDevReviewMcpWorkflowPromptId(WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex),

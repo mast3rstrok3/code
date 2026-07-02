@@ -23,6 +23,7 @@ import {
   PowerIcon,
   RefreshCwIcon,
   Rows3Icon,
+  RotateCcwIcon,
   ScrollTextIcon,
   Trash2Icon,
   TriangleAlertIcon,
@@ -47,11 +48,14 @@ import { Input } from "./ui/input";
 import {
   displayNameFromStackPath as displayNameFromPath,
   displayStackName,
+  isSameOrChildStackPath,
   normalizeStackWorktreePath as normalizeWorktreePath,
+  resolveCurrentStackPath,
 } from "./AppDevStackLogsPanel.logic";
 
 const TRANSITIONING_STATUSES = new Set(["pending", "starting", "stopping"]);
 const PRIMARY_PREVIEW_SERVICE_NAMES = ["frontend-dev", "frontend", "web"] as const;
+const KUBERNETES_NAMESPACE_MAX_LENGTH = 63;
 
 interface AppDevStackPanelProps {
   readonly environmentId: EnvironmentId;
@@ -83,6 +87,36 @@ interface StartPathChoice {
 function nonEmpty(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
+}
+
+function trimKubernetesNamespace(value: string, fallback: string): string {
+  const trimmed = value
+    .slice(0, KUBERNETES_NAMESPACE_MAX_LENGTH)
+    .replace(/-+$/u, "")
+    .replace(/^-+/u, "");
+  return trimmed.length > 0 ? trimmed : fallback;
+}
+
+function normalizeKubernetesNamespace(value: string, fallback = "app-dev"): string {
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/gu, "-")
+    .replace(/-+/gu, "-")
+    .replace(/^-+|-+$/gu, "");
+
+  return trimKubernetesNamespace(normalized, fallback);
+}
+
+function deriveAppDevStackNamespaceFromPath(worktreePath: string): string {
+  const trimmed = worktreePath.trim().replace(/[\\/]+$/gu, "");
+  const separatorIndex = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+  const basename = separatorIndex === -1 ? trimmed : trimmed.slice(separatorIndex + 1);
+  const repoSlug = normalizeKubernetesNamespace(basename, "app");
+  const baseSlug = repoSlug.endsWith("-dev") ? repoSlug.slice(0, -4) : repoSlug;
+  const maxBaseLength = KUBERNETES_NAMESPACE_MAX_LENGTH - "-dev".length;
+  const boundedBase = trimKubernetesNamespace(baseSlug.slice(0, maxBaseLength), "app");
+  return `${boundedBase}-dev`;
 }
 
 function stackUpdatedTime(stack: AppDevStack): number {
@@ -386,11 +420,17 @@ function StackKubernetesInspect(props: {
 
 export function AppDevStackPanel(props: AppDevStackPanelProps) {
   const currentWorktreePath = useMemo(
-    () => props.activeThread?.worktreePath ?? props.gitCwd ?? props.workspaceRoot,
+    () =>
+      resolveCurrentStackPath({
+        activeThreadWorktreePath: props.activeThread?.worktreePath,
+        gitCwd: props.gitCwd,
+        workspaceRoot: props.workspaceRoot,
+      }) ?? props.workspaceRoot,
     [props.activeThread?.worktreePath, props.gitCwd, props.workspaceRoot],
   );
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [manualPath, setManualPath] = useState(currentWorktreePath);
+  const [manualNamespace, setManualNamespace] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
   const [pendingKey, setPendingKey] = useState<string | null>(null);
   const [inspectedStackId, setInspectedStackId] = useState<string | null>(null);
@@ -400,8 +440,28 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
   const previewSupported = isPreviewSupportedInRuntime(serverConfigs.get(props.environmentId));
 
   useEffect(() => {
-    setManualPath((current) => (current.trim().length === 0 ? currentWorktreePath : current));
-  }, [currentWorktreePath]);
+    const normalizedCurrentPath = normalizeWorktreePath(currentWorktreePath);
+    const normalizedGitCwd = normalizeWorktreePath(props.gitCwd ?? "");
+    setManualPath((current) => {
+      const normalizedManualPath = normalizeWorktreePath(current);
+      if (normalizedManualPath.length === 0) return currentWorktreePath;
+      if (
+        normalizedGitCwd.length > 0 &&
+        normalizedManualPath === normalizedGitCwd &&
+        normalizedManualPath !== normalizedCurrentPath
+      ) {
+        return currentWorktreePath;
+      }
+      if (
+        normalizedCurrentPath.length > 0 &&
+        normalizedManualPath !== normalizedCurrentPath &&
+        isSameOrChildStackPath(normalizedManualPath, normalizedCurrentPath)
+      ) {
+        return currentWorktreePath;
+      }
+      return current;
+    });
+  }, [currentWorktreePath, props.gitCwd]);
 
   const statusQuery = useEnvironmentQuery(
     appDevStackEnvironment.status({
@@ -413,7 +473,14 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
   const currentPath = normalizeWorktreePath(currentWorktreePath);
   const targetPath = normalizeWorktreePath(manualPath);
   const submittedPath = targetPath || currentPath;
-  const submittedPathStartKey = submittedPath ? `start:${submittedPath}` : null;
+  const submittedNamespace = submittedPath
+    ? manualNamespace.trim()
+      ? normalizeKubernetesNamespace(manualNamespace)
+      : deriveAppDevStackNamespaceFromPath(submittedPath)
+    : null;
+  const submittedPathStartKey = submittedPath
+    ? `start:${submittedPath}:${submittedNamespace ?? ""}`
+    : null;
   const startPathChoices = useMemo(() => {
     const choices: StartPathChoice[] = [];
     const seen = new Set<string>();
@@ -425,8 +492,8 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
     };
 
     addChoice("Active worktree", props.activeThread?.worktreePath);
-    addChoice("Git cwd", props.gitCwd);
     addChoice("Workspace root", props.workspaceRoot);
+    addChoice("Git cwd", props.gitCwd);
     return choices;
   }, [props.activeThread?.worktreePath, props.gitCwd, props.workspaceRoot]);
   const browsePath = manualPath.trim();
@@ -522,6 +589,7 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
     reportFailure: false,
   });
   const stopStack = useAtomCommand(appDevStackEnvironment.stop, { reportFailure: false });
+  const restartStack = useAtomCommand(appDevStackEnvironment.restart, { reportFailure: false });
   const deleteStack = useAtomCommand(appDevStackEnvironment.delete, { reportFailure: false });
 
   const refreshStacks = useCallback(() => {
@@ -548,10 +616,17 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
     null;
 
   const runStart = useCallback(
-    async (worktreePath: string, sourceStack?: AppDevStack | null) => {
+    async (
+      worktreePath: string,
+      sourceStack?: AppDevStack | null,
+      requestedNamespace?: string | null,
+    ) => {
       const normalizedPath = normalizeWorktreePath(worktreePath);
       if (!normalizedPath) return;
-      const key = `start:${sourceStack?.id ?? normalizedPath}`;
+      const namespace =
+        nonEmpty(sourceStack?.namespace) ??
+        (requestedNamespace ? normalizeKubernetesNamespace(requestedNamespace) : null);
+      const key = `start:${sourceStack?.id ?? `${normalizedPath}:${namespace ?? ""}`}`;
       setPendingKey(key);
       setActionError(null);
       try {
@@ -561,6 +636,7 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
             worktreePath: normalizedPath,
             displayName: sourceStack?.displayName ?? displayNameFromPath(normalizedPath),
             gitBranch: sourceStack?.branchName ?? props.activeThread?.branch ?? null,
+            namespace,
           },
         });
         if (result._tag === "Failure") {
@@ -602,6 +678,30 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
       }
     },
     [props.environmentId, refreshStacks, stopStack],
+  );
+
+  const runRestart = useCallback(
+    async (stack: AppDevStack) => {
+      const key = `restart:${stack.id}`;
+      setPendingKey(key);
+      setActionError(null);
+      try {
+        const result = await restartStack({
+          environmentId: props.environmentId,
+          input: { stackId: stack.id },
+        });
+        if (result._tag === "Failure") {
+          if (!isAtomCommandInterrupted(result)) {
+            setActionError(actionErrorMessage(squashAtomCommandFailure(result)));
+          }
+          return;
+        }
+        refreshStacks();
+      } finally {
+        setPendingKey((current) => (current === key ? null : current));
+      }
+    },
+    [props.environmentId, refreshStacks, restartStack],
   );
 
   const runDelete = useCallback(
@@ -653,8 +753,8 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
 
   const runCreateStart = useCallback(() => {
     if (!stackBackendEnabled || !submittedPath || pendingKey !== null) return;
-    void runStart(submittedPath, null);
-  }, [pendingKey, runStart, stackBackendEnabled, submittedPath]);
+    void runStart(submittedPath, null, submittedNamespace);
+  }, [pendingKey, runStart, stackBackendEnabled, submittedNamespace, submittedPath]);
 
   const browseToPath = useCallback((path: string) => {
     setManualPath(ensureBrowseDirectoryPath(path));
@@ -676,10 +776,12 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
     const isTransitioning = TRANSITIONING_STATUSES.has(stack.status);
     const startKey = `start:${stack.id}`;
     const stopKey = `stop:${stack.id}`;
+    const restartKey = `restart:${stack.id}`;
     const deleteKey = `delete:${stack.id}`;
     const inspectSelected = inspectedStackId === stack.id;
     const startPending = pendingKey === startKey;
     const stopPending = pendingKey === stopKey;
+    const restartPending = pendingKey === restartKey;
     const deletePending = pendingKey === deleteKey;
     const repoBranch = stackRepoBranchLabel(stack);
 
@@ -745,6 +847,19 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
               aria-label="Stop stack"
             >
               {stopPending ? <LoaderIcon className="size-3.5 animate-spin" /> : <PowerIcon />}
+            </Button>
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              onClick={() => void runRestart(stack)}
+              disabled={isTransitioning || pendingKey !== null}
+              aria-label="Restart stack"
+            >
+              {restartPending ? (
+                <LoaderIcon className="size-3.5 animate-spin" />
+              ) : (
+                <RotateCcwIcon />
+              )}
             </Button>
             <Button
               size="icon-xs"
@@ -868,7 +983,7 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
               </div>
 
               <form
-                className="flex gap-2"
+                className="grid gap-2"
                 onSubmit={(event) => {
                   event.preventDefault();
                   runCreateStart();
@@ -878,20 +993,30 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
                   value={manualPath}
                   onChange={(event) => setManualPath(event.currentTarget.value)}
                   placeholder={currentPath}
-                  className="min-w-0 flex-1"
+                  className="min-w-0"
+                  aria-label="Worktree path"
                 />
-                <Button
-                  size="sm"
-                  type="submit"
-                  disabled={!stackBackendEnabled || !submittedPath || pendingKey !== null}
-                >
-                  {pendingKey === submittedPathStartKey ? (
-                    <LoaderIcon className="animate-spin" />
-                  ) : (
-                    <PlayIcon />
-                  )}
-                  Start
-                </Button>
+                <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+                  <Input
+                    value={manualNamespace}
+                    onChange={(event) => setManualNamespace(event.currentTarget.value)}
+                    placeholder={submittedNamespace ?? "namespace"}
+                    className="min-w-0"
+                    aria-label="Kubernetes namespace"
+                  />
+                  <Button
+                    size="sm"
+                    type="submit"
+                    disabled={!stackBackendEnabled || !submittedPath || pendingKey !== null}
+                  >
+                    {pendingKey === submittedPathStartKey ? (
+                      <LoaderIcon className="animate-spin" />
+                    ) : (
+                      <PlayIcon />
+                    )}
+                    Start
+                  </Button>
+                </div>
               </form>
 
               {!stackBackendEnabled ? (

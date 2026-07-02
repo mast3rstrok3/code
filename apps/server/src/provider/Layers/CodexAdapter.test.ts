@@ -426,6 +426,39 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
     }),
   );
 
+  it.effect("sends the browser dev review hardlock selection as gpt-5.5 at xhigh effort", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("sess-hardlock"),
+        runtimeMode: "full-access",
+      });
+      const runtime = sessionRuntimeFactory.lastRuntime;
+      NodeAssert.ok(runtime);
+      runtime.sendTurnImpl.mockClear();
+
+      yield* Effect.ignore(
+        adapter.sendTurn({
+          threadId: asThreadId("sess-hardlock"),
+          input: "review the app",
+          modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.5", [
+            { id: "reasoningEffort", value: "xhigh" },
+          ]),
+          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
+          attachments: [],
+        }),
+      );
+
+      NodeAssert.deepStrictEqual(runtime.sendTurnImpl.mock.calls[0]?.[0], {
+        input: "review the app",
+        model: "gpt-5.5",
+        effort: "xhigh",
+        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
+      });
+    }),
+  );
+
   it.effect("maps codex model options for the adapter's bound custom instance id", () => {
     const customInstanceId = ProviderInstanceId.make("codex_personal");
     const customRuntimeFactory = makeRuntimeFactory();

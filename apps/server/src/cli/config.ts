@@ -173,6 +173,29 @@ const EnvServerConfig = Config.all({
   appDevStackNativeRepoName: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_REPO_NAME"),
   appDevStackNativeBranchName: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_BRANCH_NAME"),
   appDevStackNativeKubectlPath: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_KUBECTL"),
+  appDevStackNativeDockerPath: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_DOCKER"),
+  appDevStackNativeBuildctlPath: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_BUILDCTL"),
+  appDevStackNativeImageBuilder: Config.schema(
+    ServerConfig.NativeAppDevStackImageBuilder,
+    "T3CODE_APP_DEV_STACK_NATIVE_IMAGE_BUILDER",
+  ).pipe(Config.withDefault("auto")),
+  appDevStackNativeImageRegistry: optionalTrimmedString(
+    "T3CODE_APP_DEV_STACK_NATIVE_IMAGE_REGISTRY",
+  ),
+  appDevStackNativeImagePushRegistry: optionalTrimmedString(
+    "T3CODE_APP_DEV_STACK_NATIVE_IMAGE_PUSH_REGISTRY",
+  ),
+  appDevStackNativeImageProject: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_IMAGE_PROJECT"),
+  appDevStackNativeBuildkitAddr: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_BUILDKIT_ADDR"),
+  appDevStackNativeBuildkitDockerConfig: optionalTrimmedString(
+    "T3CODE_APP_DEV_STACK_NATIVE_BUILDKIT_DOCKER_CONFIG",
+  ),
+  appDevStackNativeBuildkitDockerConfigsDir: optionalTrimmedString(
+    "T3CODE_APP_DEV_STACK_NATIVE_BUILDKIT_DOCKER_CONFIGS_DIR",
+  ),
+  appDevStackNativeBuildkitHarborCaCert: optionalTrimmedString(
+    "T3CODE_APP_DEV_STACK_NATIVE_BUILDKIT_HARBOR_CA_CERT",
+  ),
   appDevStackNativeFrontendUrl: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_FRONTEND_URL"),
   appDevStackNativeBackendUrl: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_BACKEND_URL"),
   appDevStackNativeKeycloakUrl: optionalTrimmedString("T3CODE_APP_DEV_STACK_NATIVE_KEYCLOAK_URL"),
@@ -213,6 +236,7 @@ const EnvServerConfig = Config.all({
     "T3CODE_PREVIEW_BROWSER_SOURCE",
   ).pipe(Config.withDefault("auto")),
   previewBrowserExecutablePath: optionalTrimmedString("T3CODE_PREVIEW_BROWSER_EXECUTABLE"),
+  previewFfmpegExecutablePath: optionalTrimmedString("T3CODE_PREVIEW_FFMPEG_EXECUTABLE"),
   previewBrowserSandbox: Config.schema(
     ServerConfig.PreviewBrowserSandbox,
     "T3CODE_PREVIEW_BROWSER_SANDBOX",
@@ -445,28 +469,36 @@ export const resolveServerConfig = (
     );
     const logLevel = Option.getOrElse(cliLogLevel, () => env.logLevel);
     const appDevStackBackendOidcIssuer = env.appDevStackBackendOidcIssuer ?? env.codeOidcIssuer;
+    const appDevStackNativeWorktreePath =
+      env.appDevStackNativeWorktreePath === undefined
+        ? undefined
+        : path.resolve(yield* expandHomePath(env.appDevStackNativeWorktreePath));
     const appDevStackNative: ServerConfig.NativeAppDevStackConfig | undefined =
       env.appDevStackNativeEnabled
         ? {
-            id: env.appDevStackNativeId ?? "rudi-dev",
-            namespace: env.appDevStackNativeNamespace ?? "rudi-dev",
-            worktreePath: path.resolve(
-              yield* expandHomePath(
-                env.appDevStackNativeWorktreePath ?? "/home/nils/repos/nils/rudi",
-              ),
-            ),
+            id: env.appDevStackNativeId,
+            namespace: env.appDevStackNativeNamespace,
+            worktreePath: appDevStackNativeWorktreePath,
             composePath: env.appDevStackNativeComposePath ?? "infra/compose/compose.app-dev.yml",
-            displayName: env.appDevStackNativeDisplayName ?? "rudi",
+            displayName: env.appDevStackNativeDisplayName,
             displaySlug: env.appDevStackNativeDisplaySlug,
-            repoName: env.appDevStackNativeRepoName ?? "rudi",
-            branchName: env.appDevStackNativeBranchName ?? "dev",
+            repoName: env.appDevStackNativeRepoName,
+            branchName: env.appDevStackNativeBranchName,
             kubectlPath: env.appDevStackNativeKubectlPath ?? "kubectl",
-            frontendUrl: env.appDevStackNativeFrontendUrl ?? "https://rudi-dev.nightingale-ai.com",
-            backendUrl:
-              env.appDevStackNativeBackendUrl ?? "https://api-rudi-dev.nightingale-ai.com",
-            keycloakUrl:
-              env.appDevStackNativeKeycloakUrl ?? "https://rudi-dev-keycloak.nightingale-ai.com",
-            minioUrl: env.appDevStackNativeMinioUrl ?? "https://minio-rudi-dev.nightingale-ai.com",
+            dockerPath: env.appDevStackNativeDockerPath ?? "docker",
+            buildctlPath: env.appDevStackNativeBuildctlPath ?? "buildctl",
+            imageBuilder: env.appDevStackNativeImageBuilder,
+            imageRegistry: env.appDevStackNativeImageRegistry ?? "harbor.nightingale-ai.com",
+            imagePushRegistry: env.appDevStackNativeImagePushRegistry,
+            imageProject: env.appDevStackNativeImageProject,
+            buildkitAddr: env.appDevStackNativeBuildkitAddr,
+            buildkitDockerConfig: env.appDevStackNativeBuildkitDockerConfig,
+            buildkitDockerConfigsDir: env.appDevStackNativeBuildkitDockerConfigsDir,
+            buildkitHarborCaCert: env.appDevStackNativeBuildkitHarborCaCert,
+            frontendUrl: env.appDevStackNativeFrontendUrl,
+            backendUrl: env.appDevStackNativeBackendUrl,
+            keycloakUrl: env.appDevStackNativeKeycloakUrl,
+            minioUrl: env.appDevStackNativeMinioUrl,
           }
         : undefined;
 
@@ -516,6 +548,7 @@ export const resolveServerConfig = (
       previewBrowserMode,
       previewBrowserSource: env.previewBrowserSource,
       previewBrowserExecutablePath: env.previewBrowserExecutablePath,
+      previewFfmpegExecutablePath: env.previewFfmpegExecutablePath,
       previewBrowserSandbox: env.previewBrowserSandbox,
       previewBrowserMaxFps: Math.max(1, Math.min(60, env.previewBrowserMaxFps)),
       previewBrowserMaxFrameWidth: Math.max(240, Math.min(3840, env.previewBrowserMaxFrameWidth)),

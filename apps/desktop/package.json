@@ -15,7 +15,6 @@
     "@clerk/electron": "catalog:",
     "@clerk/electron-passkeys": "catalog:",
     "@effect/platform-node": "catalog:",
-    "@rrweb/record": "^2.0.1",
     "@t3tools/client-runtime": "workspace:*",
     "@t3tools/contracts": "workspace:*",
     "@t3tools/shared": "workspace:*",

@@ -178,6 +178,52 @@ Do not use hosted pairing for plain HTTP LAN URLs such as `http://192.168.x.y:37
 
 Hosted pairing does not proxy traffic through T3 Code. The browser still connects directly to the backend URL in the pairing link.
 
+## Cloudflare Tunnel
+
+Use a Cloudflare Tunnel when your home server should be reachable over HTTPS/WSS without opening an
+inbound port on the server. Cloudflare's `cloudflared` daemon runs on your server and maps a public
+hostname to a local origin service.
+
+For a home server running T3 Code on the default port, use an ingress rule like this:
+
+```yaml
+ingress:
+  - hostname: code-miners-dev.example.com
+    service: http://localhost:3773
+  - service: http_status:404
+```
+
+Run T3 Code on the same host as `cloudflared`. Binding T3 Code to loopback is fine when the tunnel
+daemon is local, because `cloudflared` connects to `http://localhost:3773` from that same machine.
+
+Before pairing from `https://app.t3.codes`, check the Cloudflare zone settings:
+
+- Ensure WebSockets are enabled for the zone. T3 Code uses WebSocket traffic for `/ws`.
+- Avoid Workers, WAF rules, Bot Fight Mode, and Access policies on `/ws` until baseline pairing and
+  preview frame streaming work. Add those controls back one at a time after the tunnel is proven.
+- If WebSocket handshakes fail, inspect the `cloudflared tunnel` logs first. A bad ingress rule, a
+  stopped local T3 server, or a tunnel that is not connected can all look like a client-side
+  WebSocket failure.
+
+Verify from the home server:
+
+```bash
+curl -I https://rudi-dev.nightingale-ai.com
+vp run --filter t3 install:preview-browser
+```
+
+Server-hosted Chromium runs on the home server. Preview URLs are fetched from the home server's
+network, not from the laptop or phone browser that is viewing T3 Code. If a URL only resolves or
+connects from your laptop, it will still fail in the server-hosted preview until the home server can
+reach it too.
+
+References:
+
+- [Cloudflare Tunnel overview](https://developers.cloudflare.com/tunnel/)
+- [Cloudflare tunnel ingress configuration](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/local-management/configuration-file/)
+- [Cloudflare WebSockets setting](https://developers.cloudflare.com/network/websockets/)
+- [Cloudflare tunnel WebSocket troubleshooting](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/troubleshoot-tunnels/common-errors/)
+
 ## Managing Access Later
 
 Use `t3 auth` to manage access after the initial pairing flow.

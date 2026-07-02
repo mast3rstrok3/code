@@ -15,6 +15,7 @@ import {
   DEFAULT_GIT_TEXT_GENERATION_MODEL_BY_PROVIDER,
   DEFAULT_MODEL_BY_PROVIDER,
   DEFAULT_SERVER_SETTINGS,
+  defaultInstanceIdForDriver,
   isProviderDriverKind,
   type ModelSelection,
   type ProviderInstanceConfig,
@@ -235,6 +236,61 @@ function fallbackTextGenerationProvider(settings: ServerSettings): ServerSetting
         DEFAULT_GIT_TEXT_GENERATION_MODEL,
     } satisfies ModelSelection,
   };
+}
+
+const providerInstanceConfigEnabledFlag = (config: unknown): boolean | undefined => {
+  if (!config || typeof config !== "object" || Array.isArray(config)) {
+    return undefined;
+  }
+  const enabled = (config as { readonly enabled?: unknown }).enabled;
+  return typeof enabled === "boolean" ? enabled : undefined;
+};
+
+/**
+ * Find an enabled provider instance for `driver`, scanning the same effective
+ * instance set the registry hydrates from (`deriveProviderInstanceConfigMap`):
+ * explicit `providerInstances` entries plus a synthesized
+ * `defaultInstanceIdForDriver(driver)` entry from the legacy
+ * `providers.<driver>` blob when that key is absent.
+ *
+ * Enablement matches `ProviderInstanceRegistryLive`:
+ * `entry.enabled ?? config.enabled ?? true`.
+ *
+ * Resolution order: `preferredInstanceId` (when it is an enabled instance of
+ * `driver`) → the default `defaultInstanceIdForDriver(driver)` instance →
+ * the first enabled instance of `driver` in insertion order → `undefined`.
+ */
+export function findEnabledProviderInstanceIdForDriver(
+  settings: ServerSettings,
+  driver: ProviderDriverKind,
+  preferredInstanceId?: ProviderInstanceId,
+): ProviderInstanceId | undefined {
+  const entries: Array<readonly [ProviderInstanceId, ProviderInstanceConfig]> = Object.entries(
+    settings.providerInstances,
+  ).map(([instanceId, entry]) => [ProviderInstanceId.make(instanceId), entry] as const);
+
+  const defaultInstanceId = defaultInstanceIdForDriver(driver);
+  if (!(defaultInstanceId in settings.providerInstances)) {
+    const legacyConfig = getLegacyProviderSettings(settings, driver);
+    if (legacyConfig !== undefined) {
+      entries.push([defaultInstanceId, { driver, config: legacyConfig }]);
+    }
+  }
+
+  const enabledInstanceIds = entries
+    .filter(
+      ([, entry]) =>
+        entry.driver === driver &&
+        (entry.enabled ?? providerInstanceConfigEnabledFlag(entry.config) ?? true),
+    )
+    .map(([instanceId]) => instanceId);
+
+  const findEnabled = (instanceId: ProviderInstanceId | undefined) =>
+    instanceId !== undefined && enabledInstanceIds.includes(instanceId) ? instanceId : undefined;
+
+  return (
+    findEnabled(preferredInstanceId) ?? findEnabled(defaultInstanceId) ?? enabledInstanceIds[0]
+  );
 }
 
 // Values under these keys are compared as a whole — never stripped field-by-field.

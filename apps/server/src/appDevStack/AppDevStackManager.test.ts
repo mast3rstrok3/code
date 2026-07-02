@@ -57,6 +57,7 @@ const makeConfigLayer = (input?: {
       }
     | undefined;
   readonly url?: URL | undefined;
+  readonly native?: ServerConfig.NativeAppDevStackConfig | undefined;
 }) =>
   ServerConfig.layer({
     logLevel: "Error",
@@ -84,7 +85,7 @@ const makeConfigLayer = (input?: {
     appDevStackBackendOidcClientId: input?.oidc?.clientId,
     appDevStackBackendOidcClientSecret:
       input?.oidc === undefined ? undefined : Redacted.make(input.oidc.clientSecret),
-    appDevStackNative: undefined,
+    appDevStackNative: input?.native,
     noBrowser: true,
     startupPresentation: "browser",
     desktopBootstrapToken: undefined,
@@ -95,6 +96,7 @@ const makeConfigLayer = (input?: {
     previewBrowserMode: "auto",
     previewBrowserSource: "auto",
     previewBrowserExecutablePath: undefined,
+    previewFfmpegExecutablePath: undefined,
     previewBrowserSandbox: "auto",
     previewBrowserMaxFps: 12,
     previewBrowserMaxFrameWidth: 1600,
@@ -114,12 +116,13 @@ const makeLayer = (input: {
     | undefined;
   readonly response: (request: HttpClientRequest.HttpClientRequest) => Response;
   readonly requests: Array<HttpClientRequest.HttpClientRequest>;
+  readonly native?: ServerConfig.NativeAppDevStackConfig | undefined;
 }) =>
   AppDevStackManager.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
         NodeServices.layer,
-        makeConfigLayer({ bearerToken: input.bearerToken, oidc: input.oidc }),
+        makeConfigLayer({ bearerToken: input.bearerToken, oidc: input.oidc, native: input.native }),
         Layer.succeed(
           HttpClient.HttpClient,
           HttpClient.make((request) => {
@@ -163,6 +166,151 @@ it.effect("sends the configured backend bearer token when starting a stack", () 
       `${backendUrl.href.replace(/\/+$/u, "")}/api/app-dev-stacks/auto-create`,
     );
     assert.equal(request.headers.authorization, "Bearer backend-token");
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("uses the configured controller backend before native kubectl mode", () => {
+  const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+  const layer = makeLayer({
+    requests,
+    native: {
+      id: undefined,
+      namespace: undefined,
+      worktreePath: undefined,
+      composePath: "infra/compose/compose.app-dev.yml",
+      displayName: undefined,
+      displaySlug: undefined,
+      repoName: undefined,
+      branchName: undefined,
+      kubectlPath: "kubectl-that-should-not-run",
+      dockerPath: "docker-that-should-not-run",
+      buildctlPath: "buildctl-that-should-not-run",
+      imageBuilder: "docker",
+      imageRegistry: "registry.example.test",
+      imagePushRegistry: undefined,
+      imageProject: undefined,
+      buildkitAddr: undefined,
+      buildkitDockerConfig: undefined,
+      buildkitDockerConfigsDir: undefined,
+      buildkitHarborCaCert: undefined,
+      frontendUrl: undefined,
+      backendUrl: undefined,
+      keycloakUrl: undefined,
+      minioUrl: undefined,
+    },
+    response: (request) => {
+      const url = new URL(request.url);
+      if (url.pathname === "/api/app-dev-stacks/auto-create") {
+        return Response.json({
+          stack: stackJson,
+          created: true,
+          frontendUrl: null,
+          frontendServiceName: null,
+        });
+      }
+      return new Response(`unexpected request ${request.url}`, { status: 404 });
+    },
+  });
+
+  return Effect.gen(function* () {
+    const manager = yield* AppDevStackManager;
+    const result = yield* manager.autoCreate({
+      worktreePath: "/home/nils/repos/nils/hero",
+      displayName: "hero",
+      gitBranch: "main",
+      namespace: "hero-dev",
+    });
+
+    assert.equal(result.created, true);
+    assert.deepEqual(
+      requests.map((request) => [request.method, new URL(request.url).pathname]),
+      [["POST", "/api/app-dev-stacks/auto-create"]],
+    );
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("restarts a stack through get, stop, and auto-create backend calls", () => {
+  const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+  const layer = makeLayer({
+    bearerToken: "backend-token",
+    requests,
+    response: (request) => {
+      const url = new URL(request.url);
+      if (url.pathname === "/api/app-dev-stacks/11111111-1111-1111-1111-111111111111") {
+        return Response.json(stackJson);
+      }
+      if (url.pathname === "/api/app-dev-stacks/11111111-1111-1111-1111-111111111111/stop") {
+        return Response.json({ ...stackJson, status: "stopped" });
+      }
+      if (url.pathname === "/api/app-dev-stacks/auto-create") {
+        return Response.json({
+          stack: { ...stackJson, status: "running" },
+          created: false,
+          frontendUrl: null,
+          frontendServiceName: null,
+        });
+      }
+      return new Response(`unexpected request ${request.url}`, { status: 404 });
+    },
+  });
+
+  return Effect.gen(function* () {
+    const manager = yield* AppDevStackManager;
+    const stack = yield* manager.restart({ stackId: stackJson.id });
+
+    assert.equal(stack.id, stackJson.id);
+    assert.equal(stack.status, "running");
+    assert.deepEqual(
+      requests.map((request) => {
+        const url = new URL(request.url);
+        return [request.method, url.pathname] as const;
+      }),
+      [
+        ["GET", "/api/app-dev-stacks/11111111-1111-1111-1111-111111111111"],
+        ["POST", "/api/app-dev-stacks/11111111-1111-1111-1111-111111111111/stop"],
+        ["POST", "/api/app-dev-stacks/auto-create"],
+      ],
+    );
+    assert.equal(
+      requests.every((request) => request.headers.authorization === "Bearer backend-token"),
+      true,
+    );
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("does not start a stack when restart stop fails", () => {
+  const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+  const layer = makeLayer({
+    bearerToken: "backend-token",
+    requests,
+    response: (request) => {
+      const url = new URL(request.url);
+      if (url.pathname === "/api/app-dev-stacks/11111111-1111-1111-1111-111111111111") {
+        return Response.json(stackJson);
+      }
+      if (url.pathname === "/api/app-dev-stacks/11111111-1111-1111-1111-111111111111/stop") {
+        return new Response("stop failed", { status: 500 });
+      }
+      return new Response(`unexpected request ${request.url}`, { status: 404 });
+    },
+  });
+
+  return Effect.gen(function* () {
+    const manager = yield* AppDevStackManager;
+    const error = yield* manager.restart({ stackId: stackJson.id }).pipe(Effect.flip);
+
+    assert.equal(error.status, 500);
+    assert.include(error.message, "stop failed");
+    assert.deepEqual(
+      requests.map((request) => {
+        const url = new URL(request.url);
+        return [request.method, url.pathname] as const;
+      }),
+      [
+        ["GET", "/api/app-dev-stacks/11111111-1111-1111-1111-111111111111"],
+        ["POST", "/api/app-dev-stacks/11111111-1111-1111-1111-111111111111/stop"],
+      ],
+    );
   }).pipe(Effect.provide(layer));
 });
 

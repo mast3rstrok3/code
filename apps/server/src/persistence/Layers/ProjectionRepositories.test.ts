@@ -14,11 +14,9 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { SqlitePersistenceMemory } from "./Sqlite.ts";
 import { ProjectionProjectRepositoryLive } from "./ProjectionProjects.ts";
 import { ProjectionThreadRepositoryLive } from "./ProjectionThreads.ts";
-import { DevReviewReplayEventRepositoryLive } from "./DevReviewReplayEvents.ts";
 import { ProjectionThreadDevReviewRepositoryLive } from "./ProjectionThreadDevReviews.ts";
 import { ProjectionProjectRepository } from "../Services/ProjectionProjects.ts";
 import { ProjectionThreadRepository } from "../Services/ProjectionThreads.ts";
-import { DevReviewReplayEventRepository } from "../Services/DevReviewReplayEvents.ts";
 import { ProjectionThreadDevReviewRepository } from "../Services/ProjectionThreadDevReviews.ts";
 
 const projectionRepositoriesLayer = it.layer(
@@ -26,7 +24,6 @@ const projectionRepositoriesLayer = it.layer(
     ProjectionProjectRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     ProjectionThreadRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     ProjectionThreadDevReviewRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
-    DevReviewReplayEventRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     SqlitePersistenceMemory,
   ),
 );
@@ -145,11 +142,30 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
     }),
   );
 
-  it.effect("stores Dev Review metadata separately from ordered RRweb replay chunks", () =>
+  it.effect("round-trips Dev Review evidence through the projection row", () =>
     Effect.gen(function* () {
       const devReviews = yield* ProjectionThreadDevReviewRepository;
-      const replayEvents = yield* DevReviewReplayEventRepository;
       const reviewId = DevReviewId.make("dev-review-persisted");
+      const evidence = {
+        recording: {
+          status: "saved" as const,
+          path: "dev-reviews/dev-review-persisted/recording.webm",
+          mimeType: "video/webm",
+          sizeBytes: 2048,
+          startedAt: "2026-03-24T00:00:00.000Z",
+          completedAt: "2026-03-24T00:00:05.000Z",
+          error: null,
+        },
+        screenshots: [
+          {
+            id: "screenshot-1",
+            path: "dev-reviews/dev-review-persisted/screenshot-1.png",
+            mimeType: "image/png" as const,
+            caption: "Landing page after load",
+            capturedAt: "2026-03-24T00:00:02.000Z",
+          },
+        ],
+      };
 
       yield* devReviews.upsert({
         reviewId,
@@ -165,30 +181,9 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
           questions: [],
           nextSteps: [],
         },
-        replay: {
-          status: "recording",
-          eventCount: 0,
-          startedAt: "2026-03-24T00:00:00.000Z",
-          completedAt: null,
-          durationMs: null,
-          error: null,
-        },
+        evidence,
         createdAt: "2026-03-24T00:00:00.000Z",
         updatedAt: "2026-03-24T00:00:00.000Z",
-      });
-
-      yield* replayEvents.appendEvents({
-        reviewId,
-        events: [{ type: 2, data: { href: "http://localhost:5173" } }],
-        createdAt: "2026-03-24T00:00:01.000Z",
-      });
-      yield* replayEvents.appendEvents({
-        reviewId,
-        events: [
-          { type: 3, data: { source: 0 } },
-          { type: 4, data: {} },
-        ],
-        createdAt: "2026-03-24T00:00:02.000Z",
       });
 
       const sourceRows = yield* devReviews.listByThreadId({
@@ -201,19 +196,10 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
       assert.strictEqual(reviewRows.length, 1);
       assert.strictEqual(sourceRows[0]?.reviewId, reviewId);
       assert.strictEqual(reviewRows[0]?.reviewId, reviewId);
+      assert.deepStrictEqual(sourceRows[0]?.evidence, evidence);
 
-      const chunks = yield* replayEvents.listByReviewId({ reviewId });
-      assert.deepStrictEqual(
-        chunks.map((chunk) => ({
-          chunkIndex: chunk.chunkIndex,
-          eventCount: chunk.eventCount,
-        })),
-        [
-          { chunkIndex: 0, eventCount: 1 },
-          { chunkIndex: 1, eventCount: 2 },
-        ],
-      );
-      assert.strictEqual(yield* replayEvents.countByReviewId({ reviewId }), 3);
+      const persisted = yield* devReviews.getById({ reviewId });
+      assert.deepStrictEqual(Option.getOrNull(persisted)?.evidence, evidence);
     }),
   );
 });

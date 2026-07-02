@@ -1,6 +1,8 @@
-import type { AssetResource } from "@t3tools/contracts";
+import type { AssetResource, DevReviewId } from "@t3tools/contracts";
 import {
   AssetAttachmentNotFoundError,
+  AssetDevReviewEvidenceNotFoundError,
+  AssetDevReviewEvidenceResolutionError,
   AssetPreviewTypeValidationError,
   AssetProjectFaviconInspectionError,
   AssetProjectFaviconNotFoundError,
@@ -12,6 +14,7 @@ import {
   AssetWorkspacePathValidationError,
   AssetWorkspaceResolutionError,
   AssetWorkspaceRootNormalizationError,
+  DEV_REVIEW_RECORDING_EVIDENCE_ID,
 } from "@t3tools/contracts";
 import {
   isWorkspaceImagePreviewPath,
@@ -36,6 +39,7 @@ import {
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { resolveAttachmentPathById } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
+import { ProjectionThreadDevReviewRepository } from "../persistence/Services/ProjectionThreadDevReviews.ts";
 import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 
@@ -82,6 +86,13 @@ const AssetClaimsSchema = Schema.Union([
     kind: Schema.Literal("project-favicon"),
     workspaceRoot: Schema.String,
     relativePath: Schema.NullOr(Schema.String),
+    expiresAt: Schema.Number,
+  }),
+  Schema.Struct({
+    version: Schema.Literal(1),
+    kind: Schema.Literal("dev-review-evidence"),
+    reviewId: Schema.String,
+    evidenceId: Schema.String,
     expiresAt: Schema.Number,
   }),
 ]);
@@ -163,6 +174,44 @@ const resolveCanonicalWorkspaceFileForRequest = (input: {
     ),
     Effect.orElseSucceed(() => null),
   );
+
+/**
+ * Resolve a Dev Review evidence file server-side from the review projection.
+ * The stored evidence path is authoritative — clients never supply paths — and
+ * must sit under `stateDir/preview-artifacts`.
+ */
+const resolveDevReviewEvidenceFile = Effect.fn("AssetAccess.resolveDevReviewEvidenceFile")(
+  function* (input: { readonly reviewId: string; readonly evidenceId: string }) {
+    const repository = yield* ProjectionThreadDevReviewRepository;
+    const config = yield* ServerConfig.ServerConfig;
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+
+    const review = yield* repository.getById({ reviewId: input.reviewId as DevReviewId });
+    if (Option.isNone(review)) return null;
+
+    const evidence = review.value.evidence;
+    const evidencePath =
+      input.evidenceId === DEV_REVIEW_RECORDING_EVIDENCE_ID
+        ? evidence.recording.status === "saved"
+          ? evidence.recording.path
+          : null
+        : (evidence.screenshots.find((shot) => shot.id === input.evidenceId)?.path ?? null);
+    if (!evidencePath) return null;
+
+    const [artifactsRoot, canonicalFile] = yield* Effect.all([
+      optionOnNotFound(fileSystem.realPath(path.join(config.stateDir, "preview-artifacts"))),
+      optionOnNotFound(fileSystem.realPath(evidencePath)),
+    ]);
+    if (Option.isNone(artifactsRoot) || Option.isNone(canonicalFile)) return null;
+
+    const relative = path.relative(artifactsRoot.value, canonicalFile.value);
+    if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) return null;
+
+    const info = yield* optionOnNotFound(fileSystem.stat(canonicalFile.value));
+    return Option.isSome(info) && info.value.type === "File" ? canonicalFile.value : null;
+  },
+);
 
 export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (input: {
   readonly resource: AssetResource;
@@ -329,6 +378,33 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       fileName = relativePath ? path.basename(relativePath) : "favicon.svg";
       break;
     }
+    case "dev-review-evidence": {
+      const resource = input.resource;
+      const evidenceFile = yield* resolveDevReviewEvidenceFile({
+        reviewId: resource.reviewId,
+        evidenceId: resource.evidenceId,
+      }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new AssetDevReviewEvidenceResolutionError({
+              resource,
+              cause,
+            }),
+        ),
+      );
+      if (!evidenceFile) {
+        return yield* new AssetDevReviewEvidenceNotFoundError({ resource });
+      }
+      claims = {
+        version: 1,
+        kind: "dev-review-evidence",
+        reviewId: resource.reviewId,
+        evidenceId: resource.evidenceId,
+        expiresAt,
+      };
+      fileName = path.basename(evidenceFile);
+      break;
+    }
   }
 
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
@@ -399,6 +475,23 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
       relativePath: claims.relativePath,
     });
     return faviconPath ? ({ kind: "file", path: faviconPath } satisfies ResolvedAsset) : null;
+  }
+
+  if (claims.kind === "dev-review-evidence") {
+    const evidenceFile = yield* resolveDevReviewEvidenceFile({
+      reviewId: claims.reviewId,
+      evidenceId: claims.evidenceId,
+    }).pipe(
+      Effect.tapError((cause) =>
+        Effect.logError("Failed to resolve Dev Review evidence asset.", {
+          reviewId: claims.reviewId,
+          evidenceId: claims.evidenceId,
+          cause,
+        }),
+      ),
+      Effect.orElseSucceed(() => null),
+    );
+    return evidenceFile ? ({ kind: "file", path: evidenceFile } satisfies ResolvedAsset) : null;
   }
 
   const decodedPath = decodeRelativePath(relativePath);

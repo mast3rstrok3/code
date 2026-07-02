@@ -1,4 +1,4 @@
-import { DevReviewDocument, DevReviewReplayMetadata } from "@t3tools/contracts";
+import { DevReviewDocument, DevReviewEvidence } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -19,7 +19,7 @@ import {
 const ProjectionThreadDevReviewDbRow = ProjectionThreadDevReview.mapFields(
   Struct.assign({
     document: Schema.fromJsonString(DevReviewDocument),
-    replay: Schema.fromJsonString(DevReviewReplayMetadata),
+    evidence: Schema.fromJsonString(DevReviewEvidence),
   }),
 );
 
@@ -36,7 +36,7 @@ const makeProjectionThreadDevReviewRepository = Effect.gen(function* () {
         source_turn_id,
         status,
         document_json,
-        replay_json,
+        evidence_json,
         created_at,
         updated_at
       )
@@ -47,7 +47,7 @@ const makeProjectionThreadDevReviewRepository = Effect.gen(function* () {
         ${row.sourceTurnId},
         ${row.status},
         ${JSON.stringify(row.document)},
-        ${JSON.stringify(row.replay)},
+        ${JSON.stringify(row.evidence)},
         ${row.createdAt},
         ${row.updatedAt}
       )
@@ -58,7 +58,7 @@ const makeProjectionThreadDevReviewRepository = Effect.gen(function* () {
         source_turn_id = excluded.source_turn_id,
         status = excluded.status,
         document_json = excluded.document_json,
-        replay_json = excluded.replay_json,
+        evidence_json = excluded.evidence_json,
         created_at = excluded.created_at,
         updated_at = excluded.updated_at
     `,
@@ -75,7 +75,7 @@ const makeProjectionThreadDevReviewRepository = Effect.gen(function* () {
         source_turn_id AS "sourceTurnId",
         status,
         document_json AS "document",
-        replay_json AS "replay",
+        evidence_json AS "evidence",
         created_at AS "createdAt",
         updated_at AS "updatedAt"
       FROM projection_thread_dev_reviews
@@ -95,7 +95,7 @@ const makeProjectionThreadDevReviewRepository = Effect.gen(function* () {
         source_turn_id AS "sourceTurnId",
         status,
         document_json AS "document",
-        replay_json AS "replay",
+        evidence_json AS "evidence",
         created_at AS "createdAt",
         updated_at AS "updatedAt"
       FROM projection_thread_dev_reviews
@@ -116,7 +116,7 @@ const makeProjectionThreadDevReviewRepository = Effect.gen(function* () {
         source_turn_id AS "sourceTurnId",
         status,
         document_json AS "document",
-        replay_json AS "replay",
+        evidence_json AS "evidence",
         created_at AS "createdAt",
         updated_at AS "updatedAt"
       FROM projection_thread_dev_reviews

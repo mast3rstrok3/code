@@ -1,14 +1,12 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useMemo } from "react";
 import { PlayCircle } from "lucide-react";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 
-import { reviewEnvironment } from "~/state/review";
-import { useEnvironmentQuery } from "~/state/query";
 import { useThreadDevReviews } from "~/state/entities";
 import { Button } from "./ui/button";
 import { DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { DevReviewDocument } from "./DevReviewDocument";
-import { selectActiveDevReviewRecord, shouldRefreshDevReviewReplay } from "./DevReviewPanel.logic";
+import { selectActiveDevReviewRecord } from "./DevReviewPanel.logic";
 
 export function DevReviewPanel(props: {
   mode: DiffPanelMode;
@@ -20,43 +18,6 @@ export function DevReviewPanel(props: {
   const activeRecord = useMemo(() => {
     return selectActiveDevReviewRecord(records, props.threadRef.threadId);
   }, [props.threadRef.threadId, records]);
-  const replayQuery = useEnvironmentQuery(
-    activeRecord
-      ? reviewEnvironment.getDevReviewReplay({
-          environmentId: props.threadRef.environmentId,
-          input: { reviewId: activeRecord.id },
-        })
-      : null,
-  );
-  const replayRefreshRevisionRef = useRef<string | null>(null);
-  useEffect(() => {
-    const decision = shouldRefreshDevReviewReplay({
-      record: activeRecord,
-      data: replayQuery.data,
-      isPending: replayQuery.isPending,
-      lastRefreshRevision: replayRefreshRevisionRef.current,
-    });
-    replayRefreshRevisionRef.current = decision.revision;
-    if (decision.refresh) {
-      replayQuery.refresh();
-    }
-  }, [activeRecord, replayQuery.data, replayQuery.isPending, replayQuery.refresh]);
-  const replay =
-    activeRecord === null
-      ? { kind: "empty" as const }
-      : replayQuery.error
-        ? { kind: "error" as const, message: replayQuery.error }
-        : replayQuery.data
-          ? replayQuery.data.events.length > 0
-            ? { kind: "ready" as const, events: replayQuery.data.events }
-            : activeRecord.replay.eventCount > 0
-              ? { kind: "loading" as const }
-              : { kind: "empty" as const }
-          : replayQuery.isPending
-            ? { kind: "loading" as const }
-            : activeRecord.replay.eventCount > 0
-              ? { kind: "loading" as const }
-              : { kind: "empty" as const };
 
   return (
     <DiffPanelShell
@@ -83,13 +44,14 @@ export function DevReviewPanel(props: {
       }
     >
       {activeRecord ? (
-        <DevReviewDocument record={activeRecord} replay={replay} />
+        <DevReviewDocument record={activeRecord} environmentId={props.threadRef.environmentId} />
       ) : (
         <div className="flex min-h-0 flex-1 items-center justify-center p-6 text-center">
           <div className="max-w-sm">
             <h3 className="text-sm font-medium">No Dev Review record</h3>
             <p className="mt-2 text-sm text-muted-foreground">
-              Launch Browser Dev Review to create a durable review thread and replay-backed record.
+              Launch Browser Dev Review to create a durable review thread with recording and
+              screenshot evidence.
             </p>
           </div>
         </div>

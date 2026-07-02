@@ -40,11 +40,6 @@ import {
   VcsStatusStreamEvent,
 } from "./git.ts";
 import {
-  DevReviewReplayAppendEventsInput,
-  DevReviewReplayAppendEventsResult,
-  DevReviewReplayError,
-  DevReviewReplayGetInput,
-  DevReviewReplayGetResult,
   ReviewDiffPreviewError,
   ReviewDiffPreviewInput,
   ReviewDiffPreviewResult,
@@ -211,8 +206,6 @@ export const WS_METHODS = {
 
   // Review methods
   reviewGetDiffPreview: "review.getDiffPreview",
-  reviewDevReviewReplayAppendEvents: "review.devReviewReplay.appendEvents",
-  reviewDevReviewReplayGet: "review.devReviewReplay.get",
 
   // Terminal methods
   terminalOpen: "terminal.open",
@@ -250,6 +243,7 @@ export const WS_METHODS = {
   appDevStackGet: "appDevStack.get",
   appDevStackAutoCreate: "appDevStack.autoCreate",
   appDevStackStop: "appDevStack.stop",
+  appDevStackRestart: "appDevStack.restart",
   appDevStackDelete: "appDevStack.delete",
   appDevStackListPods: "appDevStack.listPods",
   appDevStackGetPodLogs: "appDevStack.getPodLogs",
@@ -540,21 +534,6 @@ export const WsReviewGetDiffPreviewRpc = Rpc.make(WS_METHODS.reviewGetDiffPrevie
   error: Schema.Union([ReviewDiffPreviewError, EnvironmentAuthorizationError]),
 });
 
-export const WsReviewDevReviewReplayAppendEventsRpc = Rpc.make(
-  WS_METHODS.reviewDevReviewReplayAppendEvents,
-  {
-    payload: DevReviewReplayAppendEventsInput,
-    success: DevReviewReplayAppendEventsResult,
-    error: Schema.Union([DevReviewReplayError, EnvironmentAuthorizationError]),
-  },
-);
-
-export const WsReviewDevReviewReplayGetRpc = Rpc.make(WS_METHODS.reviewDevReviewReplayGet, {
-  payload: DevReviewReplayGetInput,
-  success: DevReviewReplayGetResult,
-  error: Schema.Union([DevReviewReplayError, EnvironmentAuthorizationError]),
-});
-
 export const WsTerminalOpenRpc = Rpc.make(WS_METHODS.terminalOpen, {
   payload: TerminalOpenInput,
   success: TerminalSessionSnapshot,
@@ -725,6 +704,12 @@ export const WsAppDevStackAutoCreateRpc = Rpc.make(WS_METHODS.appDevStackAutoCre
 });
 
 export const WsAppDevStackStopRpc = Rpc.make(WS_METHODS.appDevStackStop, {
+  payload: AppDevStackGetInput,
+  success: AppDevStack,
+  error: Schema.Union([AppDevStackError, EnvironmentAuthorizationError]),
+});
+
+export const WsAppDevStackRestartRpc = Rpc.make(WS_METHODS.appDevStackRestart, {
   payload: AppDevStackGetInput,
   success: AppDevStack,
   error: Schema.Union([AppDevStackError, EnvironmentAuthorizationError]),
@@ -901,8 +886,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsVcsSwitchRefRpc,
   WsVcsInitRpc,
   WsReviewGetDiffPreviewRpc,
-  WsReviewDevReviewReplayAppendEventsRpc,
-  WsReviewDevReviewReplayGetRpc,
   WsTerminalOpenRpc,
   WsTerminalAttachRpc,
   WsTerminalWriteRpc,
@@ -936,6 +919,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsAppDevStackGetRpc,
   WsAppDevStackAutoCreateRpc,
   WsAppDevStackStopRpc,
+  WsAppDevStackRestartRpc,
   WsAppDevStackDeleteRpc,
   WsAppDevStackListPodsRpc,
   WsAppDevStackGetPodLogsRpc,

@@ -25,12 +25,17 @@ import * as Stream from "effect/Stream";
 import { AppDevStackManager } from "../../appDevStack/AppDevStackManager.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import { WORKFLOW_PROMPT_IDS } from "../../provider/WorkflowPromptRegistry.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   ImplementationWorkflowReactor,
   type ImplementationWorkflowReactorShape,
 } from "../Services/ImplementationWorkflowReactor.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
+import {
+  resolveWorkflowSubagentModelSelection,
+  resolveWorkflowSubagentSpawnDefinition,
+} from "../workflowSubagents.ts";
 
 const MAX_BROWSER_REVIEW_ATTEMPTS = 5;
 
@@ -270,7 +275,7 @@ function buildBrowserDevReviewPrompt(input: {
   return [
     `Perform browser dev review for implementation run ${input.run.id}.`,
     "",
-    "Use the dev-review MCP tools to inspect the implemented product behavior in a browser. Do not ask the user questions.",
+    "Open the app with preview_open, record the session with dev_review_recording_start/stop, exercise the product with the preview_* tools, and capture captioned screenshots with dev_review_capture_screenshot. Do not ask the user questions.",
     "",
     input.frontendUrl === null
       ? "No frontend URL was resolved. If the app cannot be opened, mark the review blocked with concrete details."
@@ -320,6 +325,7 @@ const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const gitWorkflow = yield* GitWorkflowService;
   const appDevStackManager = yield* AppDevStackManager;
+  const serverSettingsService = yield* ServerSettingsService;
 
   const serverCommandId = (tag: string) =>
     crypto.randomUUIDv4.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
@@ -693,6 +699,33 @@ const make = Effect.gen(function* () {
         createdAt: input.createdAt,
       });
 
+      const settings = yield* serverSettingsService.getSettings.pipe(
+        Effect.orElseSucceed(() => undefined),
+      );
+      const spawnDefinition = resolveWorkflowSubagentSpawnDefinition(
+        WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
+      );
+      const resolved = resolveWorkflowSubagentModelSelection({
+        definition: spawnDefinition,
+        parentModelSelection: orchestratorThread.modelSelection,
+        settings,
+      });
+      if (resolved.fallbackDetail !== null) {
+        yield* appendActivity({
+          threadId: input.run.orchestratorThreadId,
+          tone: "info",
+          kind: "implementation-workflow.model-hardlock-fallback",
+          summary: "Browser dev review model hardlock not honored",
+          payload: {
+            runId: input.run.id,
+            detail: resolved.fallbackDetail,
+            requestedDriver: spawnDefinition?.modelOverride?.driver ?? null,
+            requestedModel: spawnDefinition?.modelOverride?.model ?? null,
+          },
+          createdAt: input.createdAt,
+        });
+      }
+
       yield* orchestrationEngine.dispatch({
         type: "thread.dev-review.launch",
         commandId: yield* serverCommandId("implementation-browser-review-launch"),
@@ -705,7 +738,7 @@ const make = Effect.gen(function* () {
           text: buildBrowserDevReviewPrompt({ run: input.run, frontendUrl: stack.frontendUrl }),
           attachments: [],
         },
-        modelSelection: orchestratorThread.modelSelection,
+        modelSelection: resolved.modelSelection,
         runtimeMode: orchestratorThread.runtimeMode,
         workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
         createdAt: input.createdAt,

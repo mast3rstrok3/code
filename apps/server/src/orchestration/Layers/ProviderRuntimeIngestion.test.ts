@@ -23,6 +23,7 @@ import {
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
+import { type DeepPartial } from "@t3tools/shared/Struct";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -53,7 +54,7 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 import { WORKFLOW_PROMPT_IDS } from "../../provider/WorkflowPromptRegistry.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
-function makeTestServerSettingsLayer(overrides: Partial<ServerSettings> = {}) {
+function makeTestServerSettingsLayer(overrides: DeepPartial<ServerSettings> = {}) {
   return ServerSettingsService.layerTest(overrides);
 }
 
@@ -239,7 +240,7 @@ describe("ProviderRuntimeIngestion", () => {
     }
   });
 
-  async function createHarness(options?: { serverSettings?: Partial<ServerSettings> }) {
+  async function createHarness(options?: { serverSettings?: DeepPartial<ServerSettings> }) {
     const workspaceRoot = makeTempDir("t3-provider-project-");
     NodeFS.mkdirSync(NodePath.join(workspaceRoot, ".git"));
     const provider = createProviderServiceHarness();
@@ -3192,6 +3193,157 @@ describe("ProviderRuntimeIngestion", () => {
     expect(childThread?.branch).toBe("feature/planning");
     expect(childThread?.worktreePath).toBe("/tmp/planning-worktree");
     expect(childThread?.messages[0]?.text).toContain("Expected result directive");
+    expect(childThread?.modelSelection).toEqual({
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5-codex",
+    });
+  });
+
+  it("hardlocks browser dev review sub-agents to codex gpt-5.5 at extra-high effort", async () => {
+    const harness = await createHarness();
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    const parentThreadId = asThreadId("thread-hardlock-parent");
+
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-hardlock-parent-create"),
+        threadId: parentThreadId,
+        projectId: asProjectId("project-1"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+        parentThreadId: null,
+        workflowRole: "implementation-orchestrator",
+        title: "Implementation Orchestrator",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("claudeAgent"),
+          model: "claude-opus-4-8",
+        },
+        interactionMode: "implementation-workflow",
+        runtimeMode: "approval-required",
+        branch: "implementation/checkout",
+        worktreePath: "/tmp/implementation-worktree",
+        createdAt,
+      }),
+    );
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-hardlock-subagent-create"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt,
+      threadId: parentThreadId,
+      turnId: asTurnId("turn-hardlock-subagent-create"),
+      itemId: asItemId("item-hardlock-subagent-create"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail: `\`\`\`json
+{
+  "type": "workflow-subagent-create",
+  "workflowPromptId": "${WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex}",
+  "title": "Review checkout in the browser",
+  "promptMarkdown": "Exercise the checkout flow in the browser."
+}
+\`\`\``,
+      },
+    });
+
+    const snapshot = await waitForReadModel(harness.readModel, (readModel) =>
+      readModel.threads.some(
+        (thread) =>
+          thread.parentThreadId === parentThreadId &&
+          thread.workflowRole === "implementation-qa-reviewer",
+      ),
+    );
+    const childThread = snapshot.threads.find(
+      (thread) =>
+        thread.parentThreadId === parentThreadId &&
+        thread.workflowRole === "implementation-qa-reviewer",
+    );
+
+    expect(childThread?.modelSelection).toEqual({
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5.5",
+      options: [{ id: "reasoningEffort", value: "xhigh" }],
+    });
+  });
+
+  it("falls back to the parent selection for browser dev review when codex is disabled", async () => {
+    const harness = await createHarness({
+      serverSettings: { providers: { codex: { enabled: false } } },
+    });
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    const parentThreadId = asThreadId("thread-hardlock-fallback-parent");
+    const parentModelSelection = {
+      instanceId: ProviderInstanceId.make("claudeAgent"),
+      model: "claude-opus-4-8",
+    };
+
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-hardlock-fallback-parent-create"),
+        threadId: parentThreadId,
+        projectId: asProjectId("project-1"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+        parentThreadId: null,
+        workflowRole: "implementation-orchestrator",
+        title: "Implementation Orchestrator",
+        modelSelection: parentModelSelection,
+        interactionMode: "implementation-workflow",
+        runtimeMode: "approval-required",
+        branch: "implementation/checkout",
+        worktreePath: "/tmp/implementation-worktree",
+        createdAt,
+      }),
+    );
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-hardlock-fallback-subagent-create"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt,
+      threadId: parentThreadId,
+      turnId: asTurnId("turn-hardlock-fallback-subagent-create"),
+      itemId: asItemId("item-hardlock-fallback-subagent-create"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail: `\`\`\`json
+{
+  "type": "workflow-subagent-create",
+  "workflowPromptId": "${WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex}",
+  "title": "Review checkout in the browser",
+  "promptMarkdown": "Exercise the checkout flow in the browser."
+}
+\`\`\``,
+      },
+    });
+
+    const snapshot = await waitForReadModel(harness.readModel, (readModel) =>
+      readModel.threads.some(
+        (thread) =>
+          thread.parentThreadId === parentThreadId &&
+          thread.workflowRole === "implementation-qa-reviewer",
+      ),
+    );
+    const childThread = snapshot.threads.find(
+      (thread) =>
+        thread.parentThreadId === parentThreadId &&
+        thread.workflowRole === "implementation-qa-reviewer",
+    );
+    expect(childThread?.modelSelection).toEqual(parentModelSelection);
+
+    const parentThread = snapshot.threads.find((thread) => thread.id === parentThreadId);
+    const fallbackActivity = parentThread?.activities.find(
+      (activity) => activity.kind === "workflow.subagent.model-fallback",
+    );
+    expect(fallbackActivity).toBeDefined();
+    expect(fallbackActivity?.tone).toBe("info");
+    expect(fallbackActivity?.payload).toMatchObject({
+      requestedDriver: "codex",
+      requestedModel: "gpt-5.5",
+    });
   });
 
   it("routes workflow agent messages to direct child agents by role", async () => {

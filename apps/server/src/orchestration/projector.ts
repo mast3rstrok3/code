@@ -22,7 +22,7 @@ import {
   ThreadCreatedPayload,
   ThreadDeletedPayload,
   ThreadDevReviewCreatedPayload,
-  ThreadDevReviewReplayMetadataUpdatedPayload,
+  ThreadDevReviewEvidenceUpdatedPayload,
   ThreadDevReviewUpdatedPayload,
   ThreadInteractionModeSetPayload,
   ThreadMetaUpdatedPayload,
@@ -882,10 +882,10 @@ export function projectEvent(
         };
       });
 
-    case "thread.dev-review-replay-metadata-updated":
+    case "thread.dev-review-evidence-updated":
       return Effect.gen(function* () {
         const payload = yield* decodeForEvent(
-          ThreadDevReviewReplayMetadataUpdatedPayload,
+          ThreadDevReviewEvidenceUpdatedPayload,
           event.payload,
           event.type,
           "payload",
@@ -900,7 +900,7 @@ export function projectEvent(
             if (!existing) return thread;
             const updated = {
               ...existing,
-              replay: payload.replay,
+              evidence: payload.evidence,
               updatedAt: payload.updatedAt,
             };
             return {

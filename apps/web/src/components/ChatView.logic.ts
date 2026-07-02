@@ -200,7 +200,7 @@ export function buildBrowserDevReviewLaunchMessage(input: {
     `Run Browser Dev Review for source implementation thread ${input.sourceThreadId}.`,
     `Source title: ${input.sourceTitle}`,
     `Dev Review record ID: ${input.reviewId}`,
-    "Use dev_review_get, dev_review_replay_start, the Agent Browser CLI workflow from agent-browser-cli.md, dev_review_replay_stop, and dev_review_update. Do not use T3 preview tools. If replay start or stop fails, mark the Dev Review blocked or failed, not passed.",
+    "Use dev_review_get, then preview_open on the feature URL, dev_review_recording_start, the preview_* tools (preview_snapshot, preview_click, preview_type, preview_press, preview_scroll, preview_wait_for) to exercise the app, dev_review_capture_screenshot at each meaningful state, dev_review_recording_stop, and dev_review_update. If recording start or stop fails, mark the Dev Review blocked, not passed.",
     input.recentSourceContext
       ? `Recent source thread context:\n${input.recentSourceContext}`
       : null,

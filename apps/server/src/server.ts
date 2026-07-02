@@ -72,8 +72,6 @@ import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
-import * as DevReviewReplayCapture from "./review/DevReviewReplayCapture.ts";
-import { DevReviewReplayEventRepositoryLive } from "./persistence/Layers/DevReviewReplayEvents.ts";
 import { ProjectionThreadDevReviewRepositoryLive } from "./persistence/Layers/ProjectionThreadDevReviews.ts";
 import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
@@ -232,11 +230,6 @@ const ReviewLayerLive = ReviewService.layer.pipe(
   Layer.provideMerge(GitVcsDriver.layer),
   Layer.provideMerge(VcsDriverRegistryLayerLive),
   Layer.provideMerge(ProjectionThreadDevReviewRepositoryLive),
-  Layer.provideMerge(DevReviewReplayEventRepositoryLive),
-);
-
-const DevReviewReplayCaptureLayerLive = DevReviewReplayCapture.layer.pipe(
-  Layer.provideMerge(DevReviewReplayEventRepositoryLive),
 );
 
 const VcsLayerLive = Layer.empty.pipe(
@@ -310,14 +303,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(SourceControlProviderRegistryLayerLive),
   Layer.provideMerge(GitLayerLive),
   Layer.provideMerge(VcsLayerLive),
-  Layer.provideMerge(
-    Layer.mergeAll(
-      ProviderRuntimeLayerLive,
-      TerminalLayerLive,
-      PreviewLayerLive,
-      DevReviewReplayCaptureLayerLive,
-    ),
-  ),
+  Layer.provideMerge(Layer.mergeAll(ProviderRuntimeLayerLive, TerminalLayerLive, PreviewLayerLive)),
   Layer.provideMerge(PersistenceLayerLive),
   Layer.provideMerge(Keybindings.layer),
   Layer.provideMerge(ProviderRegistryLive),
@@ -381,7 +367,6 @@ export const makeRoutesLayer = Layer.mergeAll(
     ),
     otlpTracesProxyRouteLayer,
     assetRouteLayer,
-    DevReviewReplayCapture.routeLayer,
     staticAndDevRouteLayer,
     websocketRpcRouteLayer,
   ),

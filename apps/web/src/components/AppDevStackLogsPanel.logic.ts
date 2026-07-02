@@ -43,12 +43,30 @@ export function normalizeStackWorktreePath(path: string): string {
   return path.trim().replace(/\/+$/u, "") || path.trim();
 }
 
+export function isSameOrChildStackPath(path: string, parent: string): boolean {
+  const normalizedPath = normalizeStackWorktreePath(path);
+  const normalizedParent = normalizeStackWorktreePath(parent);
+  return (
+    normalizedPath === normalizedParent ||
+    (normalizedParent !== "/" && normalizedPath.startsWith(`${normalizedParent}/`))
+  );
+}
+
 export function resolveCurrentStackPath(input: CurrentStackPathInput): string | null {
-  const candidates = [input.activeThreadWorktreePath, input.gitCwd, input.workspaceRoot];
-  for (const candidate of candidates) {
-    const normalized = normalizeStackWorktreePath(candidate ?? "");
-    if (normalized.length > 0) return normalized;
+  const activeThreadWorktreePath = normalizeStackWorktreePath(input.activeThreadWorktreePath ?? "");
+  const workspaceRoot = normalizeStackWorktreePath(input.workspaceRoot ?? "");
+  const gitCwd = normalizeStackWorktreePath(input.gitCwd ?? "");
+
+  if (
+    activeThreadWorktreePath.length > 0 &&
+    workspaceRoot.length > 0 &&
+    isSameOrChildStackPath(activeThreadWorktreePath, workspaceRoot)
+  ) {
+    return workspaceRoot;
   }
+  if (activeThreadWorktreePath.length > 0) return activeThreadWorktreePath;
+  if (workspaceRoot.length > 0) return workspaceRoot;
+  if (gitCwd.length > 0) return gitCwd;
   return null;
 }
 

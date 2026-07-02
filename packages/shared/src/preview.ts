@@ -29,6 +29,35 @@ export const LSOF_LOCAL_HOST_TOKENS: ReadonlySet<string> = new Set([
 ]);
 
 const LOOPBACK_PREFIX_PATTERN = /^(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\])(?::|\/|$)/i;
+const CHROMIUM_NET_ERROR_PATTERN = /\b(?:net::)?(ERR_[A-Z0-9_]+)\b/u;
+const DESCRIPTION_MAX_LENGTH = 256;
+
+const CHROMIUM_NET_ERROR_CODES: Readonly<Record<string, number>> = {
+  ERR_FAILED: -2,
+  ERR_ABORTED: -3,
+  ERR_TIMED_OUT: -7,
+  ERR_CONNECTION_CLOSED: -100,
+  ERR_CONNECTION_RESET: -101,
+  ERR_CONNECTION_REFUSED: -102,
+  ERR_CONNECTION_ABORTED: -103,
+  ERR_CONNECTION_FAILED: -104,
+  ERR_NAME_NOT_RESOLVED: -105,
+  ERR_INTERNET_DISCONNECTED: -106,
+  ERR_SSL_PROTOCOL_ERROR: -107,
+  ERR_ADDRESS_INVALID: -108,
+  ERR_ADDRESS_UNREACHABLE: -109,
+  ERR_TUNNEL_CONNECTION_FAILED: -111,
+  ERR_CONNECTION_TIMED_OUT: -118,
+  ERR_NETWORK_ACCESS_DENIED: -138,
+  ERR_CERT_COMMON_NAME_INVALID: -200,
+  ERR_CERT_DATE_INVALID: -201,
+  ERR_CERT_AUTHORITY_INVALID: -202,
+  ERR_CERT_CONTAINS_ERRORS: -203,
+  ERR_CERT_NO_REVOCATION_MECHANISM: -204,
+  ERR_CERT_UNABLE_TO_CHECK_REVOCATION: -205,
+  ERR_CERT_REVOKED: -206,
+  ERR_CERT_INVALID: -207,
+};
 
 export function isLoopbackHost(host: string): boolean {
   if (LOOPBACK_HOSTS.has(host)) return true;
@@ -106,4 +135,54 @@ export function normalizePreviewUrl(rawUrl: string): string {
     });
   }
   return parsed.href;
+}
+
+export interface ChromiumNetError {
+  readonly code: number;
+  readonly description: string;
+}
+
+function errorText(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  return String(error);
+}
+
+function redactUrlSecrets(value: string): string {
+  return value.replace(/\bhttps?:\/\/[^\s"'<>)]*/giu, (match) => {
+    try {
+      const url = new URL(match);
+      url.username = "";
+      url.password = "";
+      url.search = "";
+      url.hash = "";
+      return url.href;
+    } catch {
+      return match;
+    }
+  });
+}
+
+export function extractChromiumNetError(error: unknown): ChromiumNetError | null {
+  const description = CHROMIUM_NET_ERROR_PATTERN.exec(errorText(error))?.[1];
+  if (!description) return null;
+  return {
+    code: CHROMIUM_NET_ERROR_CODES[description] ?? -1,
+    description,
+  };
+}
+
+export function sanitizePreviewNavigationFailureDescription(error: unknown): string {
+  const raw = errorText(error);
+  const firstLine = raw
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+  const cleaned = redactUrlSecrets(firstLine ?? "Navigation failed.")
+    .replace(/\p{Cc}+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  if (cleaned.length === 0) return "Navigation failed.";
+  if (cleaned.length <= DESCRIPTION_MAX_LENGTH) return cleaned;
+  return `${cleaned.slice(0, DESCRIPTION_MAX_LENGTH - 3)}...`;
 }

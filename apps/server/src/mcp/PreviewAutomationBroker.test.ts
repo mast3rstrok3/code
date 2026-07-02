@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
+  PREVIEW_AUTOMATION_OPERATIONS,
   PreviewAutomationClientDisconnectedError,
   PreviewAutomationInvalidSelectorError,
   PreviewAutomationMalformedResponseError,
@@ -709,6 +710,60 @@ it.effect("routes resize to a capable host instead of a newer legacy connection"
       expect(
         yield* broker.invoke<string>({ scope, operation: "resize", input: { mode: "fill" } }),
       ).toBe("capable");
+    }),
+  ),
+);
+
+it.effect("routes recording operations only to hosts that advertise them", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const withoutRecording = PREVIEW_AUTOMATION_OPERATIONS.filter(
+        (operation) => operation !== "recordingStart" && operation !== "recordingStop",
+      );
+      const restrictedRequests = requestsFrom(
+        yield* broker.connect(
+          makeHost({ clientId: "client-no-recording", supportedOperations: withoutRecording }),
+        ),
+      );
+      yield* Stream.runForEach(restrictedRequests, (request) =>
+        broker.respond({
+          clientId: "client-no-recording",
+          connectionId: request.connectionId,
+          requestId: request.requestId,
+          ok: true,
+          result: "restricted",
+        }),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      const error = yield* broker
+        .invoke<void>({ scope, operation: "recordingStart", input: {} })
+        .pipe(Effect.flip);
+      expect(error).toBeInstanceOf(PreviewAutomationNoAvailableHostError);
+
+      const capableRequests = requestsFrom(
+        yield* broker.connect(
+          makeHost({
+            clientId: "client-recording",
+            supportedOperations: [...PREVIEW_AUTOMATION_OPERATIONS],
+          }),
+        ),
+      );
+      yield* Stream.runForEach(capableRequests, (request) =>
+        broker.respond({
+          clientId: "client-recording",
+          connectionId: request.connectionId,
+          requestId: request.requestId,
+          ok: true,
+          result: "recording",
+        }),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      expect(yield* broker.invoke<string>({ scope, operation: "recordingStart", input: {} })).toBe(
+        "recording",
+      );
     }),
   ),
 );

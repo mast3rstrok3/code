@@ -118,7 +118,7 @@ describe("buildLocalDraftThread", () => {
 });
 
 describe("buildBrowserDevReviewLaunchMessage", () => {
-  it("points Browser Dev Review at Agent Browser without preview wildcard guidance", () => {
+  it("points Browser Dev Review at the preview tools and evidence capture", () => {
     const message = buildBrowserDevReviewLaunchMessage({
       sourceThreadId: threadId,
       sourceTitle: "Implementation thread",
@@ -127,13 +127,14 @@ describe("buildBrowserDevReviewLaunchMessage", () => {
     });
 
     expect(message).toContain("dev_review_get");
-    expect(message).toContain("dev_review_replay_start");
-    expect(message).toContain("agent-browser-cli.md");
-    expect(message).toContain("dev_review_replay_stop");
+    expect(message).toContain("preview_open");
+    expect(message).toContain("dev_review_recording_start");
+    expect(message).toContain("dev_review_capture_screenshot");
+    expect(message).toContain("dev_review_recording_stop");
     expect(message).toContain("dev_review_update");
-    expect(message).toContain("blocked or failed, not passed");
-    expect(message).not.toContain("preview_*");
-    expect(message).not.toContain("preview_* testing");
+    expect(message).toContain("blocked, not passed");
+    expect(message).not.toContain("agent-browser");
+    expect(message).not.toContain("replay");
   });
 });
 

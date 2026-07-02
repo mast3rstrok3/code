@@ -48,6 +48,7 @@ import {
 } from "../workflowDirectives.ts";
 import {
   isWorkflowSubagentParentRoleAllowed,
+  resolveWorkflowSubagentModelSelection,
   resolveWorkflowSubagentSpawnDefinition,
 } from "../workflowSubagents.ts";
 
@@ -752,6 +753,39 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const appendWorkflowSubagentModelFallbackActivity = Effect.fn(
+    "ProviderRuntimeIngestion.appendWorkflowSubagentModelFallbackActivity",
+  )(function* (input: {
+    readonly event: ProviderRuntimeEvent;
+    readonly threadId: ThreadId;
+    readonly workflowPromptId: string;
+    readonly detail: string;
+    readonly requestedDriver: string | null;
+    readonly requestedModel: string | null;
+    readonly createdAt: string;
+  }) {
+    yield* orchestrationEngine.dispatch({
+      type: "thread.activity.append",
+      commandId: yield* providerCommandId(input.event, "workflow-subagent-model-fallback"),
+      threadId: input.threadId,
+      activity: {
+        id: EventId.make(yield* crypto.randomUUIDv4),
+        tone: "info",
+        kind: "workflow.subagent.model-fallback",
+        summary: "Workflow sub-agent model hardlock not honored",
+        payload: {
+          workflowPromptId: input.workflowPromptId,
+          detail: input.detail,
+          requestedDriver: input.requestedDriver,
+          requestedModel: input.requestedModel,
+        },
+        turnId: null,
+        createdAt: input.createdAt,
+      },
+      createdAt: input.createdAt,
+    });
+  });
+
   const listActiveThreadShells = Effect.fn("ProviderRuntimeIngestion.listActiveThreadShells")(
     function* () {
       const snapshot = yield* projectionSnapshotQuery.getShellSnapshot();
@@ -1068,6 +1102,26 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    const settings = yield* serverSettingsService.getSettings.pipe(
+      Effect.orElseSucceed(() => undefined),
+    );
+    const resolvedModel = resolveWorkflowSubagentModelSelection({
+      definition: spawnDefinition,
+      parentModelSelection: input.thread.modelSelection,
+      settings,
+    });
+    if (resolvedModel.fallbackDetail !== null) {
+      yield* appendWorkflowSubagentModelFallbackActivity({
+        event: input.event,
+        threadId: input.thread.id,
+        workflowPromptId: spawnDefinition.workflowPromptId,
+        detail: resolvedModel.fallbackDetail,
+        requestedDriver: spawnDefinition.modelOverride?.driver ?? null,
+        requestedModel: spawnDefinition.modelOverride?.model ?? null,
+        createdAt: input.createdAt,
+      });
+    }
+
     const childThreadId = yield* serverThreadId(spawnDefinition.threadIdTag);
     const childMessageId = yield* serverMessageId(spawnDefinition.threadIdTag);
     const expectedResult = input.directive.expectedResult ?? spawnDefinition.expectedResult;
@@ -1087,7 +1141,7 @@ const make = Effect.gen(function* () {
       parentThreadId: input.thread.id,
       workflowRole: spawnDefinition.workflowRole,
       title: input.directive.title || spawnDefinition.defaultTitlePrefix,
-      modelSelection: input.thread.modelSelection,
+      modelSelection: resolvedModel.modelSelection,
       runtimeMode: input.thread.runtimeMode,
       interactionMode: spawnDefinition.interactionMode,
       branch: input.thread.branch,

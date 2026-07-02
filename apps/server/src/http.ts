@@ -173,6 +173,44 @@ export const otlpTracesProxyRouteLayer = HttpRouter.add(
   ),
 );
 
+/**
+ * Parse a single-range `Range: bytes=start-end` header against a known file
+ * size. Returns `null` to serve the full file (absent, malformed, or
+ * multi-range headers) and `"unsatisfiable"` for well-formed ranges outside
+ * the file (RFC 9110 §14).
+ */
+export function parseByteRangeHeader(
+  header: string | undefined,
+  sizeBytes: number,
+): { readonly offset: number; readonly bytesToRead: number } | "unsatisfiable" | null {
+  if (!header) return null;
+  const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (!match) return null;
+  const startText = match[1] ?? "";
+  const endText = match[2] ?? "";
+  if (startText === "" && endText === "") return null;
+
+  if (startText === "") {
+    // Suffix range: the final N bytes of the file.
+    const suffixLength = Number(endText);
+    if (suffixLength === 0) return "unsatisfiable";
+    const offset = Math.max(0, sizeBytes - suffixLength);
+    return { offset, bytesToRead: sizeBytes - offset };
+  }
+
+  const start = Number(startText);
+  if (start >= sizeBytes) return "unsatisfiable";
+  const end = endText === "" ? sizeBytes - 1 : Math.min(Number(endText), sizeBytes - 1);
+  if (end < start) return "unsatisfiable";
+  return { offset: start, bytesToRead: end - start + 1 };
+}
+
+const ASSET_FILE_HEADERS = {
+  "Cache-Control": "private, max-age=3600",
+  "X-Content-Type-Options": "nosniff",
+  "Accept-Ranges": "bytes",
+} as const;
+
 export const assetRouteLayer = HttpRouter.add(
   "GET",
   `${ASSET_ROUTE_PREFIX}/*`,
@@ -207,12 +245,34 @@ export const assetRouteLayer = HttpRouter.add(
       });
     }
 
+    // Range/206 support so <video> elements can seek recordings.
+    const fileSystem = yield* FileSystem.FileSystem;
+    const sizeBytes = yield* fileSystem.stat(asset.path).pipe(
+      Effect.map((info) => Number(info.size)),
+      Effect.orElseSucceed(() => null),
+    );
+    if (sizeBytes === null) {
+      return HttpServerResponse.text("Not Found", { status: 404 });
+    }
+
+    const range = parseByteRangeHeader(request.headers.range, sizeBytes);
+    if (range === "unsatisfiable") {
+      return HttpServerResponse.empty({
+        status: 416,
+        headers: { ...ASSET_FILE_HEADERS, "Content-Range": `bytes */${sizeBytes}` },
+      });
+    }
+
     return yield* HttpServerResponse.file(asset.path, {
-      status: 200,
-      headers: {
-        "Cache-Control": "private, max-age=3600",
-        "X-Content-Type-Options": "nosniff",
-      },
+      status: range === null ? 200 : 206,
+      headers:
+        range === null
+          ? ASSET_FILE_HEADERS
+          : {
+              ...ASSET_FILE_HEADERS,
+              "Content-Range": `bytes ${range.offset}-${range.offset + range.bytesToRead - 1}/${sizeBytes}`,
+            },
+      ...(range === null ? {} : { offset: range.offset, bytesToRead: range.bytesToRead }),
     }).pipe(
       Effect.orElseSucceed(() => HttpServerResponse.text("Internal Server Error", { status: 500 })),
     );

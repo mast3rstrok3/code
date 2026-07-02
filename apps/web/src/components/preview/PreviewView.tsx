@@ -18,6 +18,7 @@ import {
   useThreadPreviewState,
 } from "~/previewStateStore";
 import { resolveDiscoveredServerUrl } from "~/browser/browserTargetResolver";
+import { useServerConfigs } from "~/state/entities";
 import { useEnvironment, useEnvironmentHttpBaseUrl } from "~/state/environments";
 import { previewEnvironment } from "~/state/preview";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -75,6 +76,7 @@ export function PreviewView({ threadRef, tabId: requestedTabId, configuredUrls, 
   const addImage = useComposerDraftStore((store) => store.addImage);
   const environment = useEnvironment(threadRef.environmentId);
   const environmentHttpBaseUrl = useEnvironmentHttpBaseUrl(threadRef.environmentId);
+  const serverConfigs = useServerConfigs();
   const open = useAtomCommand(previewEnvironment.open);
   const resize = useAtomCommand(previewEnvironment.resize, "preview viewport resize");
   const runtimeBridge = usePreviewRuntimeBridge(threadRef);
@@ -227,10 +229,15 @@ export function PreviewView({ threadRef, tabId: requestedTabId, configuredUrls, 
       const bridge = runtimeBridge;
       if (bridge.kind === "server") {
         if (record) {
+          const recordingAvailable =
+            serverConfigs.get(threadRef.environmentId)?.previewBrowser?.capabilities.recording ??
+            false;
           toastManager.add({
             type: "warning",
             title: "Recording unavailable",
-            description: "Server-hosted preview supports screenshots, but not recording yet.",
+            description: recordingAvailable
+              ? "The server can record this preview for Dev Reviews, but the manual record button is not wired up yet."
+              : "Recording requires ffmpeg on the server. Install ffmpeg or run `pnpm --filter t3 run install:preview-browser`.",
           });
           return;
         }
@@ -514,7 +521,7 @@ export function PreviewView({ threadRef, tabId: requestedTabId, configuredUrls, 
         },
       );
     },
-    [activeRecordingTabId, runtimeBridge, tabId],
+    [activeRecordingTabId, runtimeBridge, serverConfigs, tabId, threadRef.environmentId],
   );
 
   const handlePickElement = useCallback(() => {

@@ -108,8 +108,6 @@ import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
-import * as DevReviewReplayCapture from "./review/DevReviewReplayCapture.ts";
-import { DevReviewReplayEventRepository } from "./persistence/Services/DevReviewReplayEvents.ts";
 import { ProjectionThreadDevReviewRepository } from "./persistence/Services/ProjectionThreadDevReviews.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
@@ -407,6 +405,7 @@ const buildAppUnderTest = (options?: {
       previewBrowserMode: "off",
       previewBrowserSource: "auto",
       previewBrowserExecutablePath: undefined,
+      previewFfmpegExecutablePath: undefined,
       previewBrowserSandbox: "auto",
       previewBrowserMaxFps: 12,
       previewBrowserMaxFrameWidth: 1600,
@@ -538,11 +537,16 @@ const buildAppUnderTest = (options?: {
     const vcsProvisioningLayer = VcsProvisioningService.layer.pipe(
       Layer.provide(vcsDriverRegistryLayer),
     );
-    const devReviewReplayEventRepositoryLayer = Layer.succeed(DevReviewReplayEventRepository, {
-      appendEvents: () => Effect.die("unexpected Dev Review replay append"),
-      listByReviewId: () => Effect.succeed([]),
-      countByReviewId: () => Effect.succeed(0),
-    });
+    const projectionThreadDevReviewRepositoryLayer = Layer.succeed(
+      ProjectionThreadDevReviewRepository,
+      {
+        upsert: () => Effect.die("unexpected Dev Review upsert"),
+        getById: () => Effect.succeed(Option.none()),
+        listByThreadId: () => Effect.succeed([]),
+        listAll: () => Effect.succeed([]),
+        deleteByThreadId: () => Effect.die("unexpected Dev Review delete"),
+      },
+    );
     const reviewLayer = options?.layers?.reviewService
       ? Layer.mock(ReviewService.ReviewService)({
           ...options.layers.reviewService,
@@ -550,21 +554,7 @@ const buildAppUnderTest = (options?: {
       : ReviewService.layer.pipe(
           Layer.provideMerge(gitVcsDriverLayer),
           Layer.provide(vcsDriverRegistryLayer),
-          Layer.provide(
-            Layer.succeed(ProjectionThreadDevReviewRepository, {
-              upsert: () => Effect.die("unexpected Dev Review upsert"),
-              getById: () => Effect.succeed(Option.none()),
-              listByThreadId: () => Effect.succeed([]),
-              listAll: () => Effect.succeed([]),
-              deleteByThreadId: () => Effect.die("unexpected Dev Review delete"),
-            }),
-          ),
-          Layer.provide(devReviewReplayEventRepositoryLayer),
         );
-    const reviewAndReplayCaptureLayer = Layer.mergeAll(
-      reviewLayer,
-      DevReviewReplayCapture.layer.pipe(Layer.provide(devReviewReplayEventRepositoryLayer)),
-    );
     const vcsStatusBroadcasterLayer = options?.layers?.vcsStatusBroadcaster
       ? Layer.mock(VcsStatusBroadcaster.VcsStatusBroadcaster)({
           ...options.layers.vcsStatusBroadcaster,
@@ -680,7 +670,7 @@ const buildAppUnderTest = (options?: {
       Layer.provide(gitManagerLayer),
       Layer.provide(gitVcsDriverLayer),
       Layer.provide(gitWorkflowLayer),
-      Layer.provide(reviewAndReplayCaptureLayer),
+      Layer.provide(Layer.mergeAll(reviewLayer, projectionThreadDevReviewRepositoryLayer)),
       Layer.provide(vcsProvisioningLayer),
       Layer.provide(
         Layer.mock(SourceControlRepositoryService.SourceControlRepositoryService)({
@@ -850,6 +840,7 @@ const buildAppUnderTest = (options?: {
           get: () => Effect.die("AppDevStackManager.get not stubbed in this test"),
           autoCreate: () => Effect.die("AppDevStackManager.autoCreate not stubbed in this test"),
           stop: () => Effect.die("AppDevStackManager.stop not stubbed in this test"),
+          restart: () => Effect.die("AppDevStackManager.restart not stubbed in this test"),
           delete: () => Effect.succeed({ deleted: true as const }),
           listPods: (input) =>
             Effect.succeed({ stackId: input.stackId, namespace: "test", pods: [] }),

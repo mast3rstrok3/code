@@ -21,13 +21,13 @@ export const DevReviewStatus = Schema.Literals([
 ]);
 export type DevReviewStatus = typeof DevReviewStatus.Type;
 
-export const DevReviewReplayStatus = Schema.Literals([
+export const DevReviewRecordingStatus = Schema.Literals([
   "not-started",
   "recording",
   "saved",
   "failed",
 ]);
-export type DevReviewReplayStatus = typeof DevReviewReplayStatus.Type;
+export type DevReviewRecordingStatus = typeof DevReviewRecordingStatus.Type;
 
 export const DevReviewFindingSeverity = Schema.Literals(["blocker", "major", "minor", "note"]);
 export type DevReviewFindingSeverity = typeof DevReviewFindingSeverity.Type;
@@ -70,24 +70,52 @@ export const DevReviewDocument = Schema.Struct({
 });
 export type DevReviewDocument = typeof DevReviewDocument.Type;
 
-export const DevReviewReplayMetadata = Schema.Struct({
-  status: DevReviewReplayStatus,
-  eventCount: NonNegativeInt,
+export const DevReviewRecordingEvidence = Schema.Struct({
+  status: DevReviewRecordingStatus,
+  path: Schema.NullOr(TrimmedNonEmptyString),
+  mimeType: Schema.NullOr(TrimmedNonEmptyString),
+  sizeBytes: Schema.NullOr(NonNegativeInt),
   startedAt: Schema.NullOr(IsoDateTime),
   completedAt: Schema.NullOr(IsoDateTime),
-  durationMs: Schema.NullOr(NonNegativeInt),
   error: Schema.NullOr(Schema.String),
-  agentBrowser: Schema.optionalKey(
-    Schema.Struct({
-      namespace: TrimmedNonEmptyString,
-      session: TrimmedNonEmptyString,
-      evidenceDir: TrimmedNonEmptyString,
-      initScriptPath: TrimmedNonEmptyString,
-      ingestUrl: TrimmedNonEmptyString,
-    }),
-  ),
 });
-export type DevReviewReplayMetadata = typeof DevReviewReplayMetadata.Type;
+export type DevReviewRecordingEvidence = typeof DevReviewRecordingEvidence.Type;
+
+export const DevReviewScreenshotEvidence = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  path: TrimmedNonEmptyString,
+  mimeType: Schema.Literal("image/png"),
+  caption: Schema.String,
+  capturedAt: IsoDateTime,
+});
+export type DevReviewScreenshotEvidence = typeof DevReviewScreenshotEvidence.Type;
+
+/**
+ * Browser evidence captured during a Dev Review: one screen recording plus a
+ * captioned screenshot gallery (gallery order = array order; findings'
+ * `evidenceIds` reference screenshot ids).
+ */
+export const DevReviewEvidence = Schema.Struct({
+  recording: DevReviewRecordingEvidence,
+  screenshots: Schema.Array(DevReviewScreenshotEvidence),
+});
+export type DevReviewEvidence = typeof DevReviewEvidence.Type;
+
+/** Evidence id used to mint asset URLs for the review's screen recording. */
+export const DEV_REVIEW_RECORDING_EVIDENCE_ID = "recording";
+
+export const EMPTY_DEV_REVIEW_EVIDENCE: DevReviewEvidence = {
+  recording: {
+    status: "not-started",
+    path: null,
+    mimeType: null,
+    sizeBytes: null,
+    startedAt: null,
+    completedAt: null,
+    error: null,
+  },
+  screenshots: [],
+};
 
 export const DevReviewRecord = Schema.Struct({
   id: DevReviewId,
@@ -96,40 +124,17 @@ export const DevReviewRecord = Schema.Struct({
   sourceTurnId: Schema.NullOr(TurnId),
   status: DevReviewStatus,
   document: DevReviewDocument,
-  replay: DevReviewReplayMetadata,
+  evidence: DevReviewEvidence,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
 export type DevReviewRecord = typeof DevReviewRecord.Type;
 
-export const DevReviewReplayAppendEventsInput = Schema.Struct({
-  reviewId: DevReviewId,
-  events: Schema.Array(Schema.Unknown),
-});
-export type DevReviewReplayAppendEventsInput = typeof DevReviewReplayAppendEventsInput.Type;
-
-export const DevReviewReplayAppendEventsResult = DevReviewReplayMetadata;
-export type DevReviewReplayAppendEventsResult = typeof DevReviewReplayAppendEventsResult.Type;
-
-export const DevReviewReplayGetInput = Schema.Struct({
-  reviewId: DevReviewId,
-});
-export type DevReviewReplayGetInput = typeof DevReviewReplayGetInput.Type;
-
-export const DevReviewReplayGetResult = Schema.Struct({
-  reviewId: DevReviewId,
-  events: Schema.Array(Schema.Unknown),
-});
-export type DevReviewReplayGetResult = typeof DevReviewReplayGetResult.Type;
-
-export class DevReviewReplayError extends Schema.TaggedErrorClass<DevReviewReplayError>()(
-  "DevReviewReplayError",
-  {
-    reviewId: Schema.optional(DevReviewId),
-    message: TrimmedNonEmptyString,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {}
+export class DevReviewError extends Schema.TaggedErrorClass<DevReviewError>()("DevReviewError", {
+  reviewId: Schema.optional(DevReviewId),
+  message: TrimmedNonEmptyString,
+  cause: Schema.optional(Schema.Defect()),
+}) {}
 
 export const ReviewDiffPreviewInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,

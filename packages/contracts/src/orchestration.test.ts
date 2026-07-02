@@ -752,13 +752,17 @@ it.effect("decodes Dev Review metadata events", () =>
             questions: [],
             nextSteps: [],
           },
-          replay: {
-            status: "not-started",
-            eventCount: 0,
-            startedAt: null,
-            completedAt: null,
-            durationMs: null,
-            error: null,
+          evidence: {
+            recording: {
+              status: "not-started",
+              path: null,
+              mimeType: null,
+              sizeBytes: null,
+              startedAt: null,
+              completedAt: null,
+              error: null,
+            },
+            screenshots: [],
           },
           createdAt: "2026-01-01T00:00:00.000Z",
           updatedAt: "2026-01-01T00:00:00.000Z",
@@ -768,7 +772,7 @@ it.effect("decodes Dev Review metadata events", () =>
 
     assert.strictEqual(parsed.type, "thread.dev-review-created");
     if (parsed.type !== "thread.dev-review-created") return;
-    assert.strictEqual(parsed.payload.devReview.replay.status, "not-started");
+    assert.strictEqual(parsed.payload.devReview.evidence.recording.status, "not-started");
   }),
 );
 

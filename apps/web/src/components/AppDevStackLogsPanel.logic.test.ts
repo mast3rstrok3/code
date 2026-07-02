@@ -6,6 +6,7 @@ import {
   filterStackPodLogEntries,
   formatStackPodLogsForClipboard,
   groupStackPodLogEntriesByService,
+  isSameOrChildStackPath,
   resolveCurrentStackPath,
 } from "./AppDevStackLogsPanel.logic";
 
@@ -69,7 +70,17 @@ const entries: AppDevStackPodLogEntry[] = [
 ];
 
 describe("resolveCurrentStackPath", () => {
-  it("uses active worktree, then git cwd, then workspace root", () => {
+  it("uses the workspace root when the active worktree path is nested inside it", () => {
+    expect(
+      resolveCurrentStackPath({
+        activeThreadWorktreePath: "/repo/root/apps/server",
+        gitCwd: "/repo/root/apps/server",
+        workspaceRoot: "/repo/root/",
+      }),
+    ).toBe("/repo/root");
+  });
+
+  it("uses active worktree, then workspace root, then git cwd", () => {
     expect(
       resolveCurrentStackPath({
         activeThreadWorktreePath: "/repo/worktree/",
@@ -83,14 +94,22 @@ describe("resolveCurrentStackPath", () => {
         gitCwd: "/repo/git/",
         workspaceRoot: "/repo/root",
       }),
-    ).toBe("/repo/git");
+    ).toBe("/repo/root");
     expect(
       resolveCurrentStackPath({
         activeThreadWorktreePath: "",
-        gitCwd: null,
-        workspaceRoot: "/repo/root/",
+        gitCwd: "/repo/git/",
+        workspaceRoot: null,
       }),
-    ).toBe("/repo/root");
+    ).toBe("/repo/git");
+  });
+});
+
+describe("isSameOrChildStackPath", () => {
+  it("matches exact and descendant paths only", () => {
+    expect(isSameOrChildStackPath("/repo/root", "/repo/root/")).toBe(true);
+    expect(isSameOrChildStackPath("/repo/root/apps/server", "/repo/root")).toBe(true);
+    expect(isSameOrChildStackPath("/repo/root-other", "/repo/root")).toBe(false);
   });
 });
 

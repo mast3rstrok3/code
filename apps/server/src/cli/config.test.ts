@@ -52,6 +52,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     previewBrowserMode: "auto",
     previewBrowserSource: "auto",
     previewBrowserExecutablePath: undefined,
+    previewFfmpegExecutablePath: undefined,
     previewBrowserSandbox: "auto",
     previewBrowserMaxFps: 12,
     previewBrowserMaxFrameWidth: 1600,
@@ -270,6 +271,70 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
       }
       assert.equal(Redacted.value(resolved.appDevStackBackendOidcClientSecret), clientSecret);
       assert.equal(String(resolved.appDevStackBackendOidcClientSecret), "<redacted>");
+    }),
+  );
+
+  it.effect("enables native app dev stacks without binding to a hard-coded repository", () =>
+    Effect.gen(function* () {
+      const { join } = yield* Path.Path;
+      const baseDir = join(NodeOS.tmpdir(), "t3-cli-config-native-app-dev-stack");
+
+      const resolved = yield* resolveServerConfig(
+        {
+          mode: Option.some("web"),
+          port: Option.some(3773),
+          host: Option.none(),
+          baseDir: Option.some(baseDir),
+          cwd: Option.none(),
+          devUrl: Option.none(),
+          noBrowser: Option.none(),
+          bootstrapFd: Option.none(),
+          autoBootstrapProjectFromCwd: Option.none(),
+          logWebSocketEvents: Option.none(),
+          tailscaleServeEnabled: Option.none(),
+          tailscaleServePort: Option.none(),
+        },
+        Option.none(),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({
+                env: {
+                  T3CODE_APP_DEV_STACK_NATIVE_ENABLED: "true",
+                },
+              }),
+            ),
+            NetService.layer,
+          ),
+        ),
+      );
+
+      expect(resolved.appDevStackNative).toEqual({
+        id: undefined,
+        namespace: undefined,
+        worktreePath: undefined,
+        composePath: "infra/compose/compose.app-dev.yml",
+        displayName: undefined,
+        displaySlug: undefined,
+        repoName: undefined,
+        branchName: undefined,
+        kubectlPath: "kubectl",
+        dockerPath: "docker",
+        buildctlPath: "buildctl",
+        imageBuilder: "auto",
+        imageRegistry: "harbor.nightingale-ai.com",
+        imagePushRegistry: undefined,
+        imageProject: undefined,
+        buildkitAddr: undefined,
+        buildkitDockerConfig: undefined,
+        buildkitDockerConfigsDir: undefined,
+        buildkitHarborCaCert: undefined,
+        frontendUrl: undefined,
+        backendUrl: undefined,
+        keycloakUrl: undefined,
+        minioUrl: undefined,
+      });
     }),
   );
 

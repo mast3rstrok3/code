@@ -11,6 +11,14 @@
       "types": "./src/advertisedEndpoint.ts",
       "import": "./src/advertisedEndpoint.ts"
     },
+    "./appDevStack": {
+      "types": "./src/appDevStack.ts",
+      "module": "./src/appDevStack.ts",
+      "browser": "./src/appDevStack.ts",
+      "development": "./src/appDevStack.ts",
+      "import": "./src/appDevStack.ts",
+      "default": "./src/appDevStack.ts"
+    },
     "./agentAwareness": {
       "types": "./src/agentAwareness.ts",
       "import": "./src/agentAwareness.ts"

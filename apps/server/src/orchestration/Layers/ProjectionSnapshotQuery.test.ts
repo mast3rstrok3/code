@@ -556,7 +556,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           source_turn_id,
           status,
           document_json,
-          replay_json,
+          evidence_json,
           created_at,
           updated_at
         )
@@ -567,7 +567,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           NULL,
           'running',
           '{"verdict":"pending","summary":"","checks":[],"findings":[],"questions":[],"nextSteps":[]}',
-          '{"status":"not-started","eventCount":0,"startedAt":null,"completedAt":null,"durationMs":null,"error":null}',
+          '{"recording":{"status":"not-started","path":null,"mimeType":null,"sizeBytes":null,"startedAt":null,"completedAt":null,"error":null},"screenshots":[]}',
           '2026-05-01T00:00:06.000Z',
           '2026-05-01T00:00:06.000Z'
         )

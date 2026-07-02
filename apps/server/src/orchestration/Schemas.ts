@@ -21,7 +21,7 @@ import {
   ThreadUnarchivedPayload as ContractsThreadUnarchivedPayloadSchema,
   ThreadMessageSentPayload as ContractsThreadMessageSentPayloadSchema,
   ThreadDevReviewCreatedPayload as ContractsThreadDevReviewCreatedPayloadSchema,
-  ThreadDevReviewReplayMetadataUpdatedPayload as ContractsThreadDevReviewReplayMetadataUpdatedPayloadSchema,
+  ThreadDevReviewEvidenceUpdatedPayload as ContractsThreadDevReviewEvidenceUpdatedPayloadSchema,
   ThreadDevReviewUpdatedPayload as ContractsThreadDevReviewUpdatedPayloadSchema,
   ThreadProposedPlanUpsertedPayload as ContractsThreadProposedPlanUpsertedPayloadSchema,
   ThreadSessionSetPayload as ContractsThreadSessionSetPayloadSchema,
@@ -67,8 +67,8 @@ export const ThreadUnarchivedPayload = ContractsThreadUnarchivedPayloadSchema;
 export const MessageSentPayloadSchema = ContractsThreadMessageSentPayloadSchema;
 export const ThreadDevReviewCreatedPayload = ContractsThreadDevReviewCreatedPayloadSchema;
 export const ThreadDevReviewUpdatedPayload = ContractsThreadDevReviewUpdatedPayloadSchema;
-export const ThreadDevReviewReplayMetadataUpdatedPayload =
-  ContractsThreadDevReviewReplayMetadataUpdatedPayloadSchema;
+export const ThreadDevReviewEvidenceUpdatedPayload =
+  ContractsThreadDevReviewEvidenceUpdatedPayloadSchema;
 export const ThreadProposedPlanUpsertedPayload = ContractsThreadProposedPlanUpsertedPayloadSchema;
 export const ThreadSessionSetPayload = ContractsThreadSessionSetPayloadSchema;
 export const ThreadTurnDiffCompletedPayload = ContractsThreadTurnDiffCompletedPayloadSchema;

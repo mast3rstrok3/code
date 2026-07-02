@@ -8,7 +8,6 @@ import {
   DesktopPreviewAutomationTypeInputSchema,
   DesktopPreviewAutomationWaitForInputSchema,
   DesktopPreviewConfigInputSchema,
-  DesktopPreviewDevReviewReplayInputSchema,
   DesktopPreviewNavigateInputSchema,
   DesktopPreviewRecordingArtifactSchema,
   DesktopPreviewRecordingSaveInputSchema,
@@ -19,9 +18,7 @@ import {
   PreviewAnnotationPayloadSchema,
   PreviewAutomationSnapshot,
   PreviewAutomationStatus,
-  DevReviewReplayMetadata,
 } from "@t3tools/contracts";
-import type { DesktopPreviewDevReviewReplayEventBatch } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as NodeURL from "node:url";
@@ -42,10 +39,6 @@ export const installPreviewEventForwarding = Effect.fn(
   );
   yield* manager.subscribeRecordingFrames((frame) =>
     electronWindow.sendAll(IpcChannels.PREVIEW_RECORDING_FRAME_CHANNEL, frame),
-  );
-  yield* manager.subscribeDevReviewReplayEventBatches(
-    (batch: DesktopPreviewDevReviewReplayEventBatch) =>
-      electronWindow.sendAll(IpcChannels.PREVIEW_DEV_REVIEW_REPLAY_EVENTS_CHANNEL, batch),
   );
   yield* manager.subscribePointerEvents((event) =>
     electronWindow.sendAll(IpcChannels.PREVIEW_POINTER_EVENT_CHANNEL, event),
@@ -165,26 +158,6 @@ export const stopRecording = tabMethod(
   "desktop.ipc.preview.stopRecording",
   (manager, tabId) => manager.stopRecording(tabId),
 );
-
-export const startDevReviewReplay = DesktopIpc.makeIpcMethod({
-  channel: IpcChannels.PREVIEW_DEV_REVIEW_REPLAY_START_CHANNEL,
-  payload: DesktopPreviewDevReviewReplayInputSchema,
-  result: DevReviewReplayMetadata,
-  handler: Effect.fn("desktop.ipc.preview.startDevReviewReplay")(function* ({ tabId, reviewId }) {
-    const manager = yield* PreviewManager.PreviewManager;
-    return yield* manager.startDevReviewReplay(tabId, reviewId);
-  }),
-});
-
-export const stopDevReviewReplay = DesktopIpc.makeIpcMethod({
-  channel: IpcChannels.PREVIEW_DEV_REVIEW_REPLAY_STOP_CHANNEL,
-  payload: DesktopPreviewDevReviewReplayInputSchema,
-  result: DevReviewReplayMetadata,
-  handler: Effect.fn("desktop.ipc.preview.stopDevReviewReplay")(function* ({ tabId, reviewId }) {
-    const manager = yield* PreviewManager.PreviewManager;
-    return yield* manager.stopDevReviewReplay(tabId, reviewId);
-  }),
-});
 
 export const clearCookies = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.PREVIEW_CLEAR_COOKIES_CHANNEL,
@@ -393,7 +366,5 @@ export const methods = [
   automationWaitFor,
   startRecording,
   stopRecording,
-  startDevReviewReplay,
-  stopDevReviewReplay,
   saveRecording,
 ] as const;
