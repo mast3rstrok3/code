@@ -540,3 +540,104 @@ it.effect("aggregates stack pod logs through existing pod endpoints with backend
     );
   }).pipe(Effect.provide(layer));
 });
+
+it.effect("aggregates all stack pod logs through remote list and pod endpoints", () => {
+  const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+  const podList = {
+    stackId: "rudi-dev",
+    namespace: "rudi-dev",
+    pods: [
+      {
+        name: "backend-pod",
+        phase: "Running",
+        readyContainerCount: 1,
+        totalContainerCount: 1,
+        restartCount: 0,
+        ownerKind: "ReplicaSet",
+        ownerName: "backend-7cdbbbfdd8",
+        containers: [{ name: "backend", ready: true, restartCount: 0, state: "running" }],
+      },
+    ],
+  } as const;
+  const layer = makeLayer({
+    bearerToken: "backend-token",
+    requests,
+    response: (request) => {
+      const url = new URL(request.url);
+      if (url.pathname === "/api/app-dev-stacks") {
+        return Response.json([{ ...stackJson, id: "rudi-dev", namespace: "rudi-dev" }]);
+      }
+      if (url.pathname === "/api/app-dev-stacks/rudi-dev/pods") {
+        return Response.json(podList);
+      }
+      if (url.pathname === "/api/app-dev-stacks/rudi-dev/pods/backend-pod/logs") {
+        return Response.json({
+          stackId: "rudi-dev",
+          namespace: "rudi-dev",
+          podName: "backend-pod",
+          containerName: "backend",
+          tailLines: 1000,
+          logs: "backend ready\n",
+          fetchedAt: "2026-06-25T00:00:00.000Z",
+        });
+      }
+      return new Response(`unexpected request ${request.url}`, { status: 404 });
+    },
+  });
+
+  return Effect.gen(function* () {
+    const manager = yield* AppDevStackManager;
+    const result = yield* manager.getAllStackPodLogs({
+      limit: { mode: "tail", tailLines: 1000 },
+    });
+
+    assert.equal(result.limit.mode, "tail");
+    assert.equal(result.limit.mode === "tail" ? result.limit.tailLines : null, 1000);
+    assert.deepEqual(
+      result.stacks.map((stack) => ({
+        stackId: stack.stackId,
+        namespace: stack.namespace,
+        entries: stack.entries.map((entry) => [entry.containerName, entry.logs]),
+      })),
+      [
+        {
+          stackId: "rudi-dev",
+          namespace: "rudi-dev",
+          entries: [["backend", "backend ready\n"]],
+        },
+      ],
+    );
+    assert.deepEqual(
+      requests.map((request) => {
+        const url = new URL(request.url);
+        return `${request.method} ${url.pathname}${url.search}`;
+      }),
+      [
+        "GET /api/app-dev-stacks",
+        "GET /api/app-dev-stacks/rudi-dev/pods",
+        "GET /api/app-dev-stacks/rudi-dev/pods/backend-pod/logs?containerName=backend&tailLines=1000",
+      ],
+    );
+    assert.equal(
+      requests.every((request) => request.headers.authorization === "Bearer backend-token"),
+      true,
+    );
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("reports all-mode as unsupported for remote all-stack log reads", () => {
+  const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+  const layer = makeLayer({
+    bearerToken: "backend-token",
+    requests,
+    response: () => Response.json([]),
+  });
+
+  return Effect.gen(function* () {
+    const manager = yield* AppDevStackManager;
+    const error = yield* manager.getAllStackPodLogs({ limit: { mode: "all" } }).pipe(Effect.flip);
+
+    assert.include(error.message, "not supported");
+    assert.deepEqual(requests, []);
+  }).pipe(Effect.provide(layer));
+});

@@ -348,6 +348,275 @@ it.effect("keeps successful aggregate log entries when a container log read fail
   });
 });
 
+it.effect(
+  "discovers app-dev stack namespaces by component label and includes t3code and tilt stacks",
+  () => {
+    const calls: Array<ReadonlyArray<string>> = [];
+    const namespacesJson = JSON.stringify({
+      items: [
+        {
+          metadata: {
+            name: "hero-dev",
+            creationTimestamp: "2026-06-25T15:00:00.000Z",
+            labels: {
+              "cortex.ai/component": "app-dev-stack",
+              "cortex.ai/stack-id": "hero-stack",
+              "app.kubernetes.io/managed-by": "tilt",
+            },
+          },
+        },
+        {
+          metadata: {
+            name: "rudi-dev",
+            creationTimestamp: "2026-06-25T15:30:00.000Z",
+            labels: {
+              "cortex.ai/component": "app-dev-stack",
+              "cortex.ai/stack-id": "rudi-dev",
+              "app.kubernetes.io/managed-by": "t3code",
+            },
+          },
+        },
+      ],
+    });
+    const runKubectl: KubectlRunner = async (args) => {
+      calls.push(args);
+      if (args.join(" ") === "get namespaces -l cortex.ai/component=app-dev-stack -o json") {
+        return namespacesJson;
+      }
+      if (args.join(" ") === "get namespace hero-dev -o json") return namespaceJson;
+      if (args.join(" ") === "get namespace rudi-dev -o json") return namespaceJson;
+      if (args.join(" ") === "-n hero-dev get deployments -o json") return deploymentsJson;
+      if (args.join(" ") === "-n rudi-dev get deployments -o json") return deploymentsJson;
+      throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
+    };
+    const service = makeNativeAppDevStackService(
+      {
+        ...nativeConfig,
+        id: undefined,
+        namespace: undefined,
+        worktreePath: undefined,
+        displayName: undefined,
+        repoName: undefined,
+        branchName: undefined,
+      },
+      runKubectl,
+    );
+
+    return Effect.gen(function* () {
+      const result = yield* service.list({});
+
+      assert.deepEqual(
+        result.stacks.map((stack) => [stack.id, stack.namespace]),
+        [
+          ["hero-stack", "hero-dev"],
+          ["rudi-dev", "rudi-dev"],
+        ],
+      );
+      assert.deepEqual(calls[0], [
+        "get",
+        "namespaces",
+        "-l",
+        "cortex.ai/component=app-dev-stack",
+        "-o",
+        "json",
+      ]);
+    });
+  },
+);
+
+it.effect("resolves an unknown stack id after app-dev namespace discovery", () => {
+  const calls: Array<ReadonlyArray<string>> = [];
+  const namespacesJson = JSON.stringify({
+    items: [
+      {
+        metadata: {
+          name: "hero-dev",
+          labels: {
+            "cortex.ai/component": "app-dev-stack",
+            "cortex.ai/stack-id": "hero-stack",
+            "app.kubernetes.io/managed-by": "tilt",
+          },
+        },
+      },
+    ],
+  });
+  const runKubectl: KubectlRunner = async (args) => {
+    calls.push(args);
+    if (args.join(" ") === "get namespaces -l cortex.ai/component=app-dev-stack -o json") {
+      return namespacesJson;
+    }
+    if (args.join(" ") === "-n hero-dev get pods -o json") return podsJson;
+    throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
+  };
+  const service = makeNativeAppDevStackService(
+    {
+      ...nativeConfig,
+      id: undefined,
+      namespace: undefined,
+      worktreePath: undefined,
+      displayName: undefined,
+      repoName: undefined,
+      branchName: undefined,
+    },
+    runKubectl,
+  );
+
+  return Effect.gen(function* () {
+    const result = yield* service.listPods({ stackId: "hero-stack" });
+
+    assert.equal(result.stackId, "hero-stack");
+    assert.equal(result.namespace, "hero-dev");
+    assert.equal(result.pods.length, 1);
+    assert.deepEqual(calls, [
+      ["get", "namespaces", "-l", "cortex.ai/component=app-dev-stack", "-o", "json"],
+      ["-n", "hero-dev", "get", "pods", "-o", "json"],
+    ]);
+  });
+});
+
+it.effect(
+  "aggregates all discovered stack logs while isolating stack and container failures",
+  () => {
+    const calls: Array<ReadonlyArray<string>> = [];
+    const namespacesJson = JSON.stringify({
+      items: [
+        {
+          metadata: {
+            name: "hero-dev",
+            labels: {
+              "cortex.ai/component": "app-dev-stack",
+              "cortex.ai/stack-id": "hero-stack",
+              "app.kubernetes.io/managed-by": "tilt",
+            },
+          },
+        },
+        {
+          metadata: {
+            name: "rudi-dev",
+            labels: {
+              "cortex.ai/component": "app-dev-stack",
+              "cortex.ai/stack-id": "rudi-dev",
+              "app.kubernetes.io/managed-by": "t3code",
+            },
+          },
+        },
+      ],
+    });
+    const runKubectl: KubectlRunner = async (args) => {
+      calls.push(args);
+      if (args.join(" ") === "get namespaces -l cortex.ai/component=app-dev-stack -o json") {
+        return namespacesJson;
+      }
+      if (args.join(" ") === "-n hero-dev get pods -o json") return podsJson;
+      if (args.join(" ") === "-n rudi-dev get pods -o json") throw new Error("rudi API timeout");
+      if (args.join(" ") === "-n hero-dev logs backend-7cdbbbfdd8-l9mpx -c backend --tail=300") {
+        return "backend log line\n";
+      }
+      if (args.join(" ") === "-n hero-dev logs backend-7cdbbbfdd8-l9mpx -c sidecar --tail=300") {
+        throw new Error("sidecar logs unavailable");
+      }
+      throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
+    };
+    const service = makeNativeAppDevStackService(
+      {
+        ...nativeConfig,
+        id: undefined,
+        namespace: undefined,
+        worktreePath: undefined,
+        displayName: undefined,
+        repoName: undefined,
+        branchName: undefined,
+      },
+      runKubectl,
+    );
+
+    return Effect.gen(function* () {
+      const result = yield* service.getAllStackPodLogs({});
+
+      assert.deepEqual(
+        result.stacks.map((stack) => ({
+          stackId: stack.stackId,
+          namespace: stack.namespace,
+          managedBy: stack.managedBy,
+          entryErrors: stack.entries.map((entry) => entry.error),
+          error: stack.error,
+        })),
+        [
+          {
+            stackId: "hero-stack",
+            namespace: "hero-dev",
+            managedBy: "tilt",
+            entryErrors: [null, "sidecar logs unavailable"],
+            error: null,
+          },
+          {
+            stackId: "rudi-dev",
+            namespace: "rudi-dev",
+            managedBy: "t3code",
+            entryErrors: [],
+            error: "rudi API timeout",
+          },
+        ],
+      );
+      assert.equal(result.limit.mode, "tail");
+      assert.equal(result.limit.mode === "tail" ? result.limit.tailLines : null, 300);
+    });
+  },
+);
+
+it.effect("omits kubectl --tail when reading all available discovered stack logs", () => {
+  const calls: Array<ReadonlyArray<string>> = [];
+  const namespacesJson = JSON.stringify({
+    items: [
+      {
+        metadata: {
+          name: "hero-dev",
+          labels: {
+            "cortex.ai/component": "app-dev-stack",
+            "cortex.ai/stack-id": "hero-stack",
+          },
+        },
+      },
+    ],
+  });
+  const runKubectl: KubectlRunner = async (args) => {
+    calls.push(args);
+    if (args.join(" ") === "get namespaces -l cortex.ai/component=app-dev-stack -o json") {
+      return namespacesJson;
+    }
+    if (args.join(" ") === "-n hero-dev get pods -o json") return podsJson;
+    if (args.join(" ") === "-n hero-dev logs backend-7cdbbbfdd8-l9mpx -c backend") {
+      return "backend log line\n";
+    }
+    if (args.join(" ") === "-n hero-dev logs backend-7cdbbbfdd8-l9mpx -c sidecar") {
+      return "sidecar log line\n";
+    }
+    throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
+  };
+  const service = makeNativeAppDevStackService(
+    {
+      ...nativeConfig,
+      id: undefined,
+      namespace: undefined,
+      worktreePath: undefined,
+      displayName: undefined,
+      repoName: undefined,
+      branchName: undefined,
+    },
+    runKubectl,
+  );
+
+  return Effect.gen(function* () {
+    const result = yield* service.getAllStackPodLogs({ limit: { mode: "all" } });
+
+    assert.equal(result.limit.mode, "all");
+    assert.equal(
+      calls.some((args) => args.some((arg) => arg.startsWith("--tail="))),
+      false,
+    );
+  });
+});
+
 it.effect("scales deployments when auto-creating an existing native stack", () => {
   const tempDir = makeTempHeroComposeWorktree(undefined, "rudi");
   const calls: Array<ReadonlyArray<string>> = [];

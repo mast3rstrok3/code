@@ -1,6 +1,5 @@
 import type { AppDevStackPodLogEntry, EnvironmentId, TimestampFormat } from "@t3tools/contracts";
 import {
-  BoxesIcon,
   ChevronDownIcon,
   ChevronRightIcon,
   CheckIcon,
@@ -20,12 +19,12 @@ import { useEnvironmentQuery } from "~/state/query";
 import { formatShortTimestamp } from "~/timestampFormat";
 
 import {
-  countStackLogContainers,
-  displayStackName,
-  filterStackPodLogEntries,
-  formatStackPodLogsForClipboard,
-  groupStackPodLogEntriesByService,
-  resolveCurrentStackPath,
+  buildStackPodLogViews,
+  formatAllStackPodLogsForClipboard,
+  stackLogReadLimitLabel,
+  stackLogTailSelectionLabel,
+  stackLogTailSelectionToReadLimit,
+  type StackLogTailSelection,
   stackPodLogOwnerLabel,
 } from "./AppDevStackLogsPanel.logic";
 import { Button } from "./ui/button";
@@ -35,18 +34,11 @@ import { ScrollArea } from "./ui/scroll-area";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "./ui/select";
 import { Switch } from "./ui/switch";
 
-const TAIL_LINE_OPTIONS = [100, 300, 1000, 5000] as const;
-type TailLineOption = (typeof TAIL_LINE_OPTIONS)[number];
+const TAIL_LINE_OPTIONS = [100, 300, 1000, 5000, "all"] as const;
 
 interface AppDevStackLogsPanelProps {
   readonly environmentId: EnvironmentId;
-  readonly activeThread: {
-    readonly worktreePath: string | null;
-  } | null;
-  readonly workspaceRoot: string;
-  readonly gitCwd: string | null;
   readonly timestampFormat: TimestampFormat;
-  readonly onOpenAppDevStack: () => void;
 }
 
 function PanelState(props: {
@@ -86,10 +78,6 @@ function readyLabel(entry: AppDevStackPodLogEntry): string {
 
 function restartLabel(count: number): string {
   return count === 1 ? "1 restart" : `${String(count)} restarts`;
-}
-
-function tailLinesLabel(value: number): string {
-  return `${String(value)} lines`;
 }
 
 function podCountLabel(count: number): string {
@@ -157,7 +145,7 @@ function ContainerLogBlock({ entry }: { readonly entry: AppDevStackPodLogEntry }
 }
 
 export function AppDevStackLogsPanel(props: AppDevStackLogsPanelProps) {
-  const [tailLines, setTailLines] = useState<TailLineOption>(300);
+  const [tailSelection, setTailSelection] = useState<StackLogTailSelection>(300);
   const [search, setSearch] = useState("");
   const [hideEmpty, setHideEmpty] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
@@ -166,15 +154,7 @@ export function AppDevStackLogsPanel(props: AppDevStackLogsPanelProps) {
   );
   const { copyToClipboard, isCopied } = useCopyToClipboard({ target: "app stack pod logs" });
 
-  const currentStackPath = useMemo(
-    () =>
-      resolveCurrentStackPath({
-        activeThreadWorktreePath: props.activeThread?.worktreePath,
-        gitCwd: props.gitCwd,
-        workspaceRoot: props.workspaceRoot,
-      }),
-    [props.activeThread?.worktreePath, props.gitCwd, props.workspaceRoot],
-  );
+  const readLimit = useMemo(() => stackLogTailSelectionToReadLimit(tailSelection), [tailSelection]);
 
   const statusQuery = useEnvironmentQuery(
     appDevStackEnvironment.status({
@@ -183,37 +163,33 @@ export function AppDevStackLogsPanel(props: AppDevStackLogsPanelProps) {
     }),
   );
   const backendEnabled = statusQuery.data?.enabled === true;
-  const currentStackQuery = useEnvironmentQuery(
-    backendEnabled && currentStackPath
-      ? appDevStackEnvironment.byWorktree({
-          environmentId: props.environmentId,
-          input: { worktreePath: currentStackPath },
-        })
-      : null,
-  );
-  const stack = currentStackQuery.data?.stack ?? null;
   const logsQuery = useEnvironmentQuery(
-    backendEnabled && stack !== null
-      ? appDevStackEnvironment.getStackPodLogs({
+    backendEnabled
+      ? appDevStackEnvironment.getAllStackPodLogs({
           environmentId: props.environmentId,
-          input: { stackId: stack.id, tailLines },
+          input: { limit: readLimit },
         })
       : null,
   );
 
   const refresh = useCallback(() => {
     statusQuery.refresh();
-    currentStackQuery.refresh();
     logsQuery.refresh();
-  }, [currentStackQuery, logsQuery, statusQuery]);
+  }, [logsQuery, statusQuery]);
 
   useEffect(() => {
-    if (!autoRefresh || stack === null) return;
+    if (!autoRefresh || tailSelection === "all") return;
     const intervalId = window.setInterval(() => {
       logsQuery.refresh();
     }, 5_000);
     return () => window.clearInterval(intervalId);
-  }, [autoRefresh, logsQuery, stack]);
+  }, [autoRefresh, logsQuery, tailSelection]);
+
+  useEffect(() => {
+    if (tailSelection === "all" && autoRefresh) {
+      setAutoRefresh(false);
+    }
+  }, [autoRefresh, tailSelection]);
 
   useEffect(() => {
     if (search.trim().length === 0 || collapsedServiceKeys.size === 0) return;
@@ -233,32 +209,18 @@ export function AppDevStackLogsPanel(props: AppDevStackLogsPanelProps) {
   }, []);
 
   const result = logsQuery.data;
-  const stackName = stack ? displayStackName(stack) : "App Stack";
-  const filteredEntries = useMemo(
-    () =>
-      filterStackPodLogEntries(result?.entries ?? [], {
-        search,
-        hideEmpty,
-      }),
-    [hideEmpty, result?.entries, search],
+  const stackViews = useMemo(
+    () => buildStackPodLogViews(result?.stacks ?? [], { search, hideEmpty }),
+    [hideEmpty, result?.stacks, search],
   );
-  const serviceGroups = useMemo(
-    () => groupStackPodLogEntriesByService(filteredEntries),
-    [filteredEntries],
+  const stackFailureCount = (result?.stacks ?? []).filter((stack) => stack.error !== null).length;
+  const partialFailureCount = (result?.stacks ?? []).reduce(
+    (total, stack) => total + stack.entries.filter((entry) => entry.error !== null).length,
+    0,
   );
-  const partialFailureCount = (result?.entries ?? []).filter(
-    (entry) => entry.error !== null,
-  ).length;
   const clipboardText = useMemo(
-    () =>
-      result === null
-        ? ""
-        : formatStackPodLogsForClipboard({
-            stackName,
-            result,
-            entries: result.entries,
-          }),
-    [result, stackName],
+    () => (result === null ? "" : formatAllStackPodLogsForClipboard({ result })),
+    [result],
   );
 
   if (statusQuery.isPending && statusQuery.data === null) {
@@ -284,46 +246,6 @@ export function AppDevStackLogsPanel(props: AppDevStackLogsPanelProps) {
       />
     );
   }
-  if (currentStackPath === null) {
-    return (
-      <PanelState
-        title="No project context"
-        description="Open a project or worktree to inspect App Stack pod logs."
-      />
-    );
-  }
-  if (currentStackQuery.isPending && currentStackQuery.data === null) {
-    return (
-      <PanelState
-        icon="loading"
-        title="Finding App Stack"
-        description="Resolving the App Stack for the current worktree."
-      />
-    );
-  }
-  if (currentStackQuery.error) {
-    return (
-      <PanelState
-        icon="warning"
-        title="Failed to find App Stack"
-        description={currentStackQuery.error}
-      />
-    );
-  }
-  if (stack === null) {
-    return (
-      <PanelState
-        title="No App Stack"
-        description="No App Stack is registered for the current worktree."
-        action={
-          <Button size="sm" variant="outline" onClick={props.onOpenAppDevStack}>
-            <BoxesIcon className="size-4" />
-            Open App Stack
-          </Button>
-        }
-      />
-    );
-  }
   if (logsQuery.isPending && result === null) {
     return (
       <PanelState
@@ -339,8 +261,12 @@ export function AppDevStackLogsPanel(props: AppDevStackLogsPanelProps) {
     );
   }
 
-  const podCount = result?.pods.length ?? 0;
-  const containerCount = result ? countStackLogContainers(result.pods) : 0;
+  const visiblePodCount = stackViews.reduce((total, stack) => total + stack.podCount, 0);
+  const visibleContainerCount = stackViews.reduce(
+    (total, stack) => total + stack.containerCount,
+    0,
+  );
+  const totalStackCount = result?.stacks.length ?? 0;
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-background">
@@ -349,13 +275,14 @@ export function AppDevStackLogsPanel(props: AppDevStackLogsPanelProps) {
           <div className="flex min-w-0 items-start gap-2">
             <ScrollTextIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
             <div className="min-w-0">
-              <div className="truncate text-sm font-medium">{stackName}</div>
+              <div className="truncate text-sm font-medium">App Stack Logs</div>
               <div className="mt-0.5 flex min-w-0 flex-wrap gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
-                <span className="truncate">
-                  namespace {result?.namespace ?? stack.namespace ?? "unknown"}
+                <span>
+                  {totalStackCount === 1 ? "1 stack" : `${String(totalStackCount)} stacks`}
                 </span>
-                <span>{String(podCount)} pods</span>
-                <span>{String(containerCount)} containers</span>
+                <span>{String(visiblePodCount)} pods</span>
+                <span>{String(visibleContainerCount)} containers</span>
+                {result ? <span>{stackLogReadLimitLabel(result.limit)}</span> : null}
                 {result ? (
                   <span>fetched {formatFetchedAt(result.fetchedAt, props.timestampFormat)}</span>
                 ) : null}
@@ -367,14 +294,13 @@ export function AppDevStackLogsPanel(props: AppDevStackLogsPanelProps) {
               size="icon-xs"
               variant="ghost"
               onClick={refresh}
-              disabled={statusQuery.isPending || currentStackQuery.isPending || logsQuery.isPending}
+              disabled={statusQuery.isPending || logsQuery.isPending}
               aria-label="Refresh App Stack pod logs"
             >
               <RefreshCwIcon
                 className={cn(
                   "size-3.5",
-                  (statusQuery.isPending || currentStackQuery.isPending || logsQuery.isPending) &&
-                    "animate-spin",
+                  (statusQuery.isPending || logsQuery.isPending) && "animate-spin",
                 )}
               />
             </Button>
@@ -382,7 +308,7 @@ export function AppDevStackLogsPanel(props: AppDevStackLogsPanelProps) {
               size="icon-xs"
               variant="ghost"
               onClick={() => copyToClipboard(clipboardText)}
-              disabled={clipboardText.length === 0 || (result?.entries.length ?? 0) === 0}
+              disabled={clipboardText.length === 0 || (result?.stacks.length ?? 0) === 0}
               aria-label="Copy all App Stack pod logs"
             >
               {isCopied ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
@@ -394,21 +320,26 @@ export function AppDevStackLogsPanel(props: AppDevStackLogsPanelProps) {
           <div className="flex h-7 shrink-0 items-center gap-2 rounded-md text-xs text-muted-foreground">
             <span>Tail</span>
             <Select
-              value={String(tailLines)}
+              value={String(tailSelection)}
               onValueChange={(value) => {
-                const parsed = Number(value);
-                if (TAIL_LINE_OPTIONS.includes(parsed as TailLineOption)) {
-                  setTailLines(parsed as TailLineOption);
+                if (value === "all") {
+                  setTailSelection("all");
+                  setAutoRefresh(false);
+                  return;
+                }
+                const parsed = Number(value) as StackLogTailSelection;
+                if (TAIL_LINE_OPTIONS.includes(parsed)) {
+                  setTailSelection(parsed);
                 }
               }}
             >
               <SelectTrigger size="xs" className="w-32 min-w-0" aria-label="Log tail line count">
-                <SelectValue>{tailLinesLabel(tailLines)}</SelectValue>
+                <SelectValue>{stackLogTailSelectionLabel(tailSelection)}</SelectValue>
               </SelectTrigger>
               <SelectPopup align="start" alignItemWithTrigger={false}>
                 {TAIL_LINE_OPTIONS.map((value) => (
                   <SelectItem key={value} hideIndicator value={String(value)}>
-                    {tailLinesLabel(value)}
+                    {stackLogTailSelectionLabel(value)}
                   </SelectItem>
                 ))}
               </SelectPopup>
@@ -438,6 +369,7 @@ export function AppDevStackLogsPanel(props: AppDevStackLogsPanelProps) {
             <Switch
               checked={autoRefresh}
               onCheckedChange={(checked) => setAutoRefresh(Boolean(checked))}
+              disabled={tailSelection === "all"}
               className="[--thumb-size:--spacing(3.5)]"
               aria-label="Auto-refresh pod logs"
             />
@@ -446,87 +378,146 @@ export function AppDevStackLogsPanel(props: AppDevStackLogsPanelProps) {
         </div>
       </div>
 
-      {partialFailureCount > 0 ? (
+      {stackFailureCount > 0 || partialFailureCount > 0 ? (
         <div className="border-b border-border/60 bg-destructive/5 px-4 py-2 text-xs text-destructive">
-          {partialFailureCount === 1
-            ? "1 container failed to return logs."
-            : `${String(partialFailureCount)} containers failed to return logs.`}
+          {[
+            stackFailureCount === 1
+              ? "1 stack failed to load"
+              : stackFailureCount > 1
+                ? `${String(stackFailureCount)} stacks failed to load`
+                : null,
+            partialFailureCount === 1
+              ? "1 container failed to return logs"
+              : partialFailureCount > 1
+                ? `${String(partialFailureCount)} containers failed to return logs`
+                : null,
+          ]
+            .filter((value): value is string => value !== null)
+            .join("; ")}
+          .
         </div>
       ) : null}
 
-      {podCount === 0 ? (
+      {totalStackCount === 0 ? (
+        <PanelState
+          title="No App Stacks"
+          description="Kubernetes did not report any App Dev Stack namespaces for this environment."
+        />
+      ) : visiblePodCount === 0 && stackFailureCount === 0 ? (
         <PanelState
           title="No pods"
-          description="Kubernetes did not report any pods for this stack."
+          description="Kubernetes did not report any pods for these stacks."
         />
-      ) : result && result.entries.length === 0 ? (
-        <PanelState
-          title="No containers"
-          description="Kubernetes did not report any containers for this stack."
-        />
-      ) : filteredEntries.length === 0 ? (
+      ) : stackViews.length === 0 ? (
         <PanelState
           title="No matching logs"
-          description="No containers match the current filters."
+          description="No stacks or containers match the current filters."
         />
       ) : (
         <ScrollArea className="min-h-0 flex-1">
           <div className="space-y-3 p-4">
-            {serviceGroups.map((group) => {
-              const isCollapsed = collapsedServiceKeys.has(group.serviceKey);
-              return (
-                <section key={group.serviceKey} className="space-y-2">
-                  <button
-                    type="button"
-                    className="flex min-h-9 w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring"
-                    aria-expanded={!isCollapsed}
-                    onClick={() => toggleServiceGroup(group.serviceKey)}
-                  >
-                    {isCollapsed ? (
-                      <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                    ) : (
-                      <ChevronDownIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                    )}
-                    <span className="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
-                      {group.serviceName}
+            {stackViews.map((stackView) => (
+              <section
+                key={`${stackView.stack.namespace}\u0000${stackView.stack.stackId}`}
+                className="space-y-3"
+              >
+                <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-2">
+                  <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className="min-w-0 truncate text-xs font-semibold text-foreground">
+                      {stackView.stackName}
                     </span>
-                    <span className="shrink-0 text-[11px] text-muted-foreground">
-                      {podCountLabel(group.pods.length)}
+                    <span className="truncate text-[11px] text-muted-foreground">
+                      namespace {stackView.stack.namespace}
                     </span>
-                    <span className="shrink-0 text-[11px] text-muted-foreground">
-                      {containerCountLabel(group.entryCount)}
-                    </span>
-                    {group.errorCount > 0 ? (
-                      <span className="shrink-0 rounded-full border border-destructive/25 bg-destructive/5 px-1.5 text-[11px] text-destructive">
-                        {String(group.errorCount)} errors
+                    {stackView.stack.managedBy ? (
+                      <span className="truncate text-[11px] text-muted-foreground">
+                        managed by {stackView.stack.managedBy}
                       </span>
                     ) : null}
-                  </button>
-                  {isCollapsed ? null : (
-                    <div className="space-y-3">
-                      {group.pods.map((pod) => (
-                        <section key={pod.podName} className="space-y-2">
-                          <div className="flex min-w-0 items-center gap-2 px-1 text-[11px] text-muted-foreground">
-                            <span className="min-w-0 truncate font-medium">{pod.podName}</span>
-                            <span className="shrink-0">
-                              {containerCountLabel(pod.entries.length)}
+                    <span className="text-[11px] text-muted-foreground">
+                      {podCountLabel(stackView.podCount)}
+                    </span>
+                    <span className="text-[11px] text-muted-foreground">
+                      {containerCountLabel(stackView.containerCount)}
+                    </span>
+                    <span className="text-[11px] text-muted-foreground">
+                      fetched {formatFetchedAt(stackView.stack.fetchedAt, props.timestampFormat)}
+                    </span>
+                  </div>
+                  {stackView.stack.error ? (
+                    <div className="mt-2 flex items-start gap-2 rounded-md border border-destructive/25 bg-destructive/5 px-2 py-1.5 text-xs text-destructive">
+                      <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0" />
+                      <span className="min-w-0 break-words">{stackView.stack.error}</span>
+                    </div>
+                  ) : null}
+                </div>
+
+                {stackView.filteredEntries.length === 0 ? (
+                  <div className="px-2 text-xs text-muted-foreground">
+                    No containers match the current filters for this stack.
+                  </div>
+                ) : (
+                  stackView.serviceGroups.map((group) => {
+                    const groupKey = `${stackView.stack.namespace}\u0000${group.serviceKey}`;
+                    const isCollapsed = collapsedServiceKeys.has(groupKey);
+                    return (
+                      <section key={group.serviceKey} className="space-y-2">
+                        <button
+                          type="button"
+                          className="flex min-h-9 w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring"
+                          aria-expanded={!isCollapsed}
+                          onClick={() => toggleServiceGroup(groupKey)}
+                        >
+                          {isCollapsed ? (
+                            <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                          ) : (
+                            <ChevronDownIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                          )}
+                          <span className="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
+                            {group.serviceName}
+                          </span>
+                          <span className="shrink-0 text-[11px] text-muted-foreground">
+                            {podCountLabel(group.pods.length)}
+                          </span>
+                          <span className="shrink-0 text-[11px] text-muted-foreground">
+                            {containerCountLabel(group.entryCount)}
+                          </span>
+                          {group.errorCount > 0 ? (
+                            <span className="shrink-0 rounded-full border border-destructive/25 bg-destructive/5 px-1.5 text-[11px] text-destructive">
+                              {String(group.errorCount)} errors
                             </span>
-                          </div>
-                          <div className="space-y-2">
-                            {pod.entries.map((entry) => (
-                              <ContainerLogBlock
-                                key={`${entry.podName}\u0000${entry.containerName}`}
-                                entry={entry}
-                              />
+                          ) : null}
+                        </button>
+                        {isCollapsed ? null : (
+                          <div className="space-y-3">
+                            {group.pods.map((pod) => (
+                              <section key={pod.podName} className="space-y-2">
+                                <div className="flex min-w-0 items-center gap-2 px-1 text-[11px] text-muted-foreground">
+                                  <span className="min-w-0 truncate font-medium">
+                                    {pod.podName}
+                                  </span>
+                                  <span className="shrink-0">
+                                    {containerCountLabel(pod.entries.length)}
+                                  </span>
+                                </div>
+                                <div className="space-y-2">
+                                  {pod.entries.map((entry) => (
+                                    <ContainerLogBlock
+                                      key={`${entry.podName}\u0000${entry.containerName}`}
+                                      entry={entry}
+                                    />
+                                  ))}
+                                </div>
+                              </section>
                             ))}
                           </div>
-                        </section>
-                      ))}
-                    </div>
-                  )}
-                </section>
-              );
-            })}
+                        )}
+                      </section>
+                    );
+                  })
+                )}
+              </section>
+            ))}
           </div>
         </ScrollArea>
       )}

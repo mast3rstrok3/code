@@ -1,13 +1,22 @@
-import type { AppDevStackPod, AppDevStackPodLogEntry } from "@t3tools/contracts";
+import type {
+  AppDevStackDiscoveredStackPodLogs,
+  AppDevStackPod,
+  AppDevStackPodLogEntry,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  buildStackPodLogViews,
   countStackLogContainers,
   filterStackPodLogEntries,
+  formatAllStackPodLogsForClipboard,
   formatStackPodLogsForClipboard,
   groupStackPodLogEntriesByService,
   isSameOrChildStackPath,
   resolveCurrentStackPath,
+  stackLogReadLimitLabel,
+  stackLogTailSelectionLabel,
+  stackLogTailSelectionToReadLimit,
 } from "./AppDevStackLogsPanel.logic";
 
 const backendEntry: AppDevStackPodLogEntry = {
@@ -68,6 +77,45 @@ const entries: AppDevStackPodLogEntry[] = [
   redisErrorEntry,
   emptyMinioEntry,
 ];
+
+const makeDiscoveredStack = (
+  input: Pick<AppDevStackDiscoveredStackPodLogs, "stackId" | "namespace" | "entries"> &
+    Partial<AppDevStackDiscoveredStackPodLogs>,
+): AppDevStackDiscoveredStackPodLogs => ({
+  stackId: input.stackId,
+  namespace: input.namespace,
+  displayName: input.displayName ?? input.namespace,
+  displaySlug: input.displaySlug ?? null,
+  repoName: input.repoName ?? input.namespace.replace(/-dev$/u, ""),
+  branchName: input.branchName ?? null,
+  worktreePath: input.worktreePath ?? `/repo/${input.namespace}`,
+  managedBy: input.managedBy ?? null,
+  limit: input.limit ?? { mode: "tail", tailLines: 300 },
+  pods:
+    input.pods ??
+    input.entries.map((entry) => ({
+      name: entry.podName,
+      phase: entry.phase,
+      readyContainerCount: entry.ready ? 1 : 0,
+      totalContainerCount: 1,
+      restartCount: entry.restartCount,
+      createdAt: null,
+      nodeName: null,
+      ownerKind: entry.ownerKind,
+      ownerName: entry.ownerName,
+      containers: [
+        {
+          name: entry.containerName,
+          ready: entry.ready,
+          restartCount: entry.restartCount,
+          state: entry.state,
+        },
+      ],
+    })),
+  entries: input.entries,
+  error: input.error ?? null,
+  fetchedAt: input.fetchedAt ?? "2026-06-25T00:00:10.000Z",
+});
 
 describe("resolveCurrentStackPath", () => {
   it("uses the workspace root when the active worktree path is nested inside it", () => {
@@ -234,6 +282,61 @@ describe("groupStackPodLogEntriesByService", () => {
   });
 });
 
+describe("buildStackPodLogViews", () => {
+  it("groups and filters logs across multiple discovered stacks", () => {
+    const heroStack = makeDiscoveredStack({
+      stackId: "hero-stack",
+      namespace: "hero-dev",
+      displayName: "Hero",
+      entries: [backendEntry, emptyMinioEntry],
+    });
+    const rudiStack = makeDiscoveredStack({
+      stackId: "rudi-dev",
+      namespace: "rudi-dev",
+      displayName: "Rudi",
+      entries: [frontendEntry, redisErrorEntry],
+    });
+
+    const views = buildStackPodLogViews([heroStack, rudiStack], {
+      search: "rudi",
+      hideEmpty: true,
+    });
+
+    expect(
+      views.map((view) => ({
+        namespace: view.stack.namespace,
+        stackName: view.stackName,
+        services: view.serviceGroups.map((group) => group.serviceKey),
+        containers: view.filteredEntries.map((entry) => entry.containerName),
+      })),
+    ).toEqual([
+      {
+        namespace: "rudi-dev",
+        stackName: "Rudi",
+        services: ["frontend", "redis"],
+        containers: ["vite", "redis"],
+      },
+    ]);
+  });
+
+  it("keeps stack-level failures visible when filters remove all entries", () => {
+    const failedStack = makeDiscoveredStack({
+      stackId: "hero-stack",
+      namespace: "hero-dev",
+      entries: [],
+      error: "pod list failed",
+    });
+
+    const views = buildStackPodLogViews([failedStack], {
+      search: "missing",
+      hideEmpty: true,
+    });
+
+    expect(views).toHaveLength(1);
+    expect(views[0]?.stack.error).toBe("pod list failed");
+  });
+});
+
 describe("formatStackPodLogsForClipboard", () => {
   it("includes pod and container headers plus per-container errors", () => {
     const text = formatStackPodLogsForClipboard({
@@ -252,6 +355,49 @@ describe("formatStackPodLogsForClipboard", () => {
     expect(text).toContain("--- redis-ghi / redis ---");
     expect(text).toContain("error=pod is restarting");
     expect(text).toContain("No log lines returned.");
+  });
+});
+
+describe("formatAllStackPodLogsForClipboard", () => {
+  it("formats multiple stacks with per-stack and per-container errors", () => {
+    const text = formatAllStackPodLogsForClipboard({
+      result: {
+        limit: { mode: "tail", tailLines: 300 },
+        fetchedAt: "2026-06-25T00:00:20.000Z",
+        stacks: [
+          makeDiscoveredStack({
+            stackId: "hero-stack",
+            namespace: "hero-dev",
+            displayName: "Hero",
+            entries: [backendEntry, redisErrorEntry],
+          }),
+          makeDiscoveredStack({
+            stackId: "rudi-dev",
+            namespace: "rudi-dev",
+            displayName: "Rudi",
+            entries: [],
+            error: "pod list failed",
+          }),
+        ],
+      },
+    });
+
+    expect(text).toContain("App Stack Pod Logs");
+    expect(text).toContain("== Hero ==");
+    expect(text).toContain("Namespace: hero-dev");
+    expect(text).toContain("error=pod is restarting");
+    expect(text).toContain("== Rudi ==");
+    expect(text).toContain("Stack error: pod list failed");
+  });
+});
+
+describe("stack log tail labels and limits", () => {
+  it("maps bounded tails and all-mode for the selector", () => {
+    expect(stackLogTailSelectionLabel(300)).toBe("300 lines");
+    expect(stackLogTailSelectionLabel("all")).toBe("All");
+    expect(stackLogTailSelectionToReadLimit(5000)).toEqual({ mode: "tail", tailLines: 5000 });
+    expect(stackLogTailSelectionToReadLimit("all")).toEqual({ mode: "all" });
+    expect(stackLogReadLimitLabel({ mode: "all" })).toBe("All available current logs");
   });
 });
 

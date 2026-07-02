@@ -1,6 +1,9 @@
 import type {
   AppDevStack,
+  AppDevStackDiscoveredStackPodLogs,
+  AppDevStackGetAllStackPodLogsResult,
   AppDevStackGetStackPodLogsResult,
+  AppDevStackLogReadLimit,
   AppDevStackPod,
   AppDevStackPodLogEntry,
 } from "@t3tools/contracts";
@@ -16,6 +19,8 @@ export interface StackPodLogFilterOptions {
   readonly hideEmpty: boolean;
 }
 
+export type StackLogTailSelection = 100 | 300 | 1000 | 5000 | "all";
+
 export interface StackPodLogPodGroup {
   readonly podName: string;
   readonly entries: AppDevStackPodLogEntry[];
@@ -28,6 +33,17 @@ export interface StackPodLogServiceGroup {
   readonly entryCount: number;
   readonly emptyCount: number;
   readonly errorCount: number;
+}
+
+export interface StackPodLogStackView {
+  readonly stack: AppDevStackDiscoveredStackPodLogs;
+  readonly stackName: string;
+  readonly filteredEntries: AppDevStackPodLogEntry[];
+  readonly serviceGroups: StackPodLogServiceGroup[];
+  readonly podCount: number;
+  readonly containerCount: number;
+  readonly errorCount: number;
+  readonly emptyCount: number;
 }
 
 interface MutableStackPodLogServiceGroup {
@@ -100,6 +116,32 @@ export function displayStackName(stack: AppDevStack): string {
     nonEmpty(stack.repoName) ??
     displayNameFromStackPath(stack.worktreePath)
   );
+}
+
+export function displayDiscoveredStackName(stack: AppDevStackDiscoveredStackPodLogs): string {
+  return (
+    nonEmpty(stack.displayName) ??
+    nonEmpty(stack.repoName) ??
+    nonEmpty(stack.worktreePath) ??
+    nonEmpty(stack.namespace) ??
+    stack.stackId
+  );
+}
+
+export function stackLogTailSelectionLabel(selection: StackLogTailSelection): string {
+  return selection === "all" ? "All" : `${String(selection)} lines`;
+}
+
+export function stackLogReadLimitLabel(limit: AppDevStackLogReadLimit): string {
+  return limit.mode === "all"
+    ? "All available current logs"
+    : `${String(limit.tailLines ?? 300)} lines`;
+}
+
+export function stackLogTailSelectionToReadLimit(
+  selection: StackLogTailSelection,
+): AppDevStackLogReadLimit {
+  return selection === "all" ? { mode: "all" } : { mode: "tail", tailLines: selection };
 }
 
 export function stackPodLogOwnerLabel(
@@ -214,6 +256,23 @@ function searchableEntryText(entry: AppDevStackPodLogEntry): string {
     .toLowerCase();
 }
 
+function searchableStackText(stack: AppDevStackDiscoveredStackPodLogs): string {
+  return [
+    stack.stackId,
+    stack.namespace,
+    stack.displayName,
+    stack.displaySlug,
+    stack.repoName,
+    stack.branchName,
+    stack.worktreePath,
+    stack.managedBy,
+    stack.error,
+  ]
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .join("\n")
+    .toLowerCase();
+}
+
 export function filterStackPodLogEntries(
   entries: ReadonlyArray<AppDevStackPodLogEntry>,
   options: StackPodLogFilterOptions,
@@ -224,6 +283,45 @@ export function filterStackPodLogEntries(
     if (query.length === 0) return true;
     return searchableEntryText(entry).includes(query);
   });
+}
+
+export function filterStackPodLogEntriesForStack(
+  stack: AppDevStackDiscoveredStackPodLogs,
+  options: StackPodLogFilterOptions,
+): AppDevStackPodLogEntry[] {
+  const query = options.search.trim().toLowerCase();
+  const stackMatches = query.length > 0 && searchableStackText(stack).includes(query);
+  return stack.entries.filter((entry) => {
+    if (options.hideEmpty && entryIsEmpty(entry)) return false;
+    if (query.length === 0 || stackMatches) return true;
+    return searchableEntryText(entry).includes(query);
+  });
+}
+
+export function buildStackPodLogViews(
+  stacks: ReadonlyArray<AppDevStackDiscoveredStackPodLogs>,
+  options: StackPodLogFilterOptions,
+): StackPodLogStackView[] {
+  return stacks
+    .map((stack) => {
+      const filteredEntries = filterStackPodLogEntriesForStack(stack, options);
+      const serviceGroups = groupStackPodLogEntriesByService(filteredEntries);
+      return {
+        stack,
+        stackName: displayDiscoveredStackName(stack),
+        filteredEntries,
+        serviceGroups,
+        podCount: stack.pods.length,
+        containerCount: countStackLogContainers(stack.pods),
+        errorCount: stack.entries.filter((entry) => entry.error !== null).length,
+        emptyCount: stack.entries.filter(entryIsEmpty).length,
+      };
+    })
+    .filter((view) => {
+      if (view.stack.error !== null) return true;
+      if (options.search.trim().length > 0) return view.filteredEntries.length > 0;
+      return true;
+    });
 }
 
 export function formatStackPodLogsForClipboard(input: {
@@ -258,6 +356,57 @@ export function formatStackPodLogsForClipboard(input: {
       lines.push(`error=${entry.error}`);
     }
     lines.push(entry.logs.trimEnd().length > 0 ? entry.logs.trimEnd() : "No log lines returned.");
+  }
+
+  return lines.join("\n");
+}
+
+export function formatAllStackPodLogsForClipboard(input: {
+  readonly result: Pick<AppDevStackGetAllStackPodLogsResult, "limit" | "stacks" | "fetchedAt">;
+}): string {
+  const lines: string[] = [
+    "App Stack Pod Logs",
+    `Limit: ${stackLogReadLimitLabel(input.result.limit)}`,
+    `Fetched: ${input.result.fetchedAt}`,
+  ];
+
+  for (const stack of input.result.stacks) {
+    lines.push(
+      "",
+      `== ${displayDiscoveredStackName(stack)} ==`,
+      `Stack ID: ${stack.stackId}`,
+      `Namespace: ${stack.namespace}`,
+      `Limit: ${stackLogReadLimitLabel(stack.limit)}`,
+      `Fetched: ${stack.fetchedAt}`,
+    );
+    if (stack.managedBy) lines.push(`Managed by: ${stack.managedBy}`);
+    if (stack.error) lines.push(`Stack error: ${stack.error}`);
+
+    for (const entry of stack.entries) {
+      const owner = stackPodLogOwnerLabel(entry);
+      lines.push(
+        "",
+        `--- ${entry.podName} / ${entry.containerName} ---`,
+        [
+          `phase=${entry.phase}`,
+          `ready=${String(entry.ready)}`,
+          `restarts=${String(entry.restartCount)}`,
+          entry.state ? `state=${entry.state}` : null,
+          owner ? `owner=${owner}` : null,
+          `fetchedAt=${entry.fetchedAt}`,
+        ]
+          .filter((value): value is string => value !== null)
+          .join(" "),
+      );
+      if (entry.error) {
+        lines.push(`error=${entry.error}`);
+      }
+      lines.push(entry.logs.trimEnd().length > 0 ? entry.logs.trimEnd() : "No log lines returned.");
+    }
+
+    if (stack.entries.length === 0 && stack.error === null) {
+      lines.push("No containers returned logs.");
+    }
   }
 
   return lines.join("\n");

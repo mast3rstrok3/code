@@ -6,6 +6,8 @@ import {
   type AppDevStackByWorktreeResult,
   type AppDevStackDeleteResult,
   AppDevStackError,
+  type AppDevStackGetAllStackPodLogsInput,
+  type AppDevStackGetAllStackPodLogsResult,
   type AppDevStackGetPodLogsInput,
   type AppDevStackGetPodLogsResult,
   type AppDevStackGetStackPodLogsInput,
@@ -27,6 +29,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
@@ -39,6 +42,11 @@ import {
 const NATIVE_USER_ID = "00000000-0000-0000-0000-000000000000";
 const DEFAULT_LOG_TAIL_LINES = 300;
 const POD_LOG_FETCH_CONCURRENCY = 4;
+const STACK_LOG_FETCH_CONCURRENCY = 3;
+const APP_DEV_STACK_COMPONENT_LABEL = "cortex.ai/component";
+const APP_DEV_STACK_COMPONENT_VALUE = "app-dev-stack";
+const APP_DEV_STACK_STACK_ID_LABEL = "cortex.ai/stack-id";
+const APP_DEV_STACK_MANAGED_BY_LABEL = "app.kubernetes.io/managed-by";
 
 interface KubectlDeploymentList {
   readonly items?: ReadonlyArray<{
@@ -58,8 +66,15 @@ interface KubectlDeploymentList {
 
 interface KubectlNamespace {
   readonly metadata?: {
+    readonly name?: string;
     readonly creationTimestamp?: string;
+    readonly labels?: Record<string, string>;
+    readonly annotations?: Record<string, string>;
   };
+}
+
+interface KubectlNamespaceList {
+  readonly items?: ReadonlyArray<KubectlNamespace>;
 }
 
 interface KubectlPodList {
@@ -156,6 +171,9 @@ export interface NativeAppDevStackService {
   readonly getStackPodLogs: (
     input: AppDevStackGetStackPodLogsInput,
   ) => Effect.Effect<AppDevStackGetStackPodLogsResult, AppDevStackError>;
+  readonly getAllStackPodLogs: (
+    input: AppDevStackGetAllStackPodLogsInput,
+  ) => Effect.Effect<AppDevStackGetAllStackPodLogsResult, AppDevStackError>;
 }
 
 const collectProcessOutput = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.Effect<string, E> =>
@@ -262,6 +280,79 @@ const optionalConfiguredUrls = (
         minioUrl: undefined,
       };
 
+const nonEmptyString = (value: string | null | undefined): string | undefined => {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+};
+
+const labelValue = (
+  labels: Readonly<Record<string, string>> | undefined,
+  key: string,
+): string | undefined => nonEmptyString(labels?.[key]);
+
+const annotationValue = (
+  annotations: Readonly<Record<string, string>> | undefined,
+  key: string,
+): string | undefined => nonEmptyString(annotations?.[key]);
+
+const displayNameFromNamespace = (namespace: string): string =>
+  namespace.replace(/-dev$/u, "") || namespace;
+
+const resolveNativeConfigForNamespace = (
+  config: NativeAppDevStackConfig,
+  namespace: KubectlNamespace,
+): ResolvedNativeAppDevStackConfig | null => {
+  const rawNamespace = namespace.metadata?.name;
+  const normalizedNamespace = normalizeOptionalNamespace(rawNamespace);
+  if (normalizedNamespace === undefined) return null;
+
+  const labels = namespace.metadata?.labels;
+  const annotations = namespace.metadata?.annotations;
+  const stackId = labelValue(labels, APP_DEV_STACK_STACK_ID_LABEL) ?? normalizedNamespace;
+  const repoName =
+    annotationValue(annotations, "cortex.ai/repo-name") ??
+    labelValue(labels, "cortex.ai/repo-name") ??
+    displayNameFromNamespace(normalizedNamespace);
+  const displayName =
+    annotationValue(annotations, "cortex.ai/display-name") ??
+    labelValue(labels, "cortex.ai/display-name") ??
+    repoName;
+  const worktreePath =
+    annotationValue(annotations, "cortex.ai/worktree-path") ??
+    labelValue(labels, "cortex.ai/worktree-path") ??
+    `/app-dev-stacks/${normalizedNamespace}`;
+
+  return {
+    id: stackId,
+    namespace: normalizedNamespace,
+    worktreePath,
+    composePath:
+      annotationValue(annotations, "cortex.ai/compose-path") ??
+      labelValue(labels, "cortex.ai/compose-path") ??
+      config.composePath,
+    displayName,
+    displaySlug:
+      annotationValue(annotations, "cortex.ai/display-slug") ??
+      labelValue(labels, "cortex.ai/display-slug"),
+    repoName,
+    branchName:
+      annotationValue(annotations, "cortex.ai/branch-name") ??
+      labelValue(labels, "cortex.ai/branch-name"),
+    kubectlPath: config.kubectlPath,
+    dockerPath: config.dockerPath,
+    buildctlPath: config.buildctlPath,
+    imageBuilder: config.imageBuilder,
+    imageRegistry: config.imageRegistry,
+    imagePushRegistry: config.imagePushRegistry,
+    imageProject: config.imageProject,
+    buildkitAddr: config.buildkitAddr,
+    buildkitDockerConfig: config.buildkitDockerConfig,
+    buildkitDockerConfigsDir: config.buildkitDockerConfigsDir,
+    buildkitHarborCaCert: config.buildkitHarborCaCert,
+    ...optionalConfiguredUrls(config, normalizedNamespace),
+  };
+};
+
 const resolveNativeConfigForWorktree = (
   config: NativeAppDevStackConfig,
   input: {
@@ -366,6 +457,24 @@ const readNamespace = async (
     if (isNotFound(cause)) return null;
     throw cause;
   }
+};
+
+const readAppDevStackNamespaces = async (
+  runKubectl: KubectlRunner,
+): Promise<ReadonlyArray<KubectlNamespace>> => {
+  const list = parseJson<KubectlNamespaceList>(
+    await runKubectl([
+      "get",
+      "namespaces",
+      "-l",
+      `${APP_DEV_STACK_COMPONENT_LABEL}=${APP_DEV_STACK_COMPONENT_VALUE}`,
+      "-o",
+      "json",
+    ]),
+  );
+  return [...(list.items ?? [])].sort((left, right) =>
+    (left.metadata?.name ?? "").localeCompare(right.metadata?.name ?? ""),
+  );
 };
 
 const readDeployments = async (
@@ -498,6 +607,36 @@ const normalizeTailLines = (tailLines: number | undefined): number =>
     ? DEFAULT_LOG_TAIL_LINES
     : Math.min(5_000, Math.max(1, Math.trunc(tailLines)));
 
+const normalizeAllStackLogLimit = (
+  limit: AppDevStackGetAllStackPodLogsInput["limit"] | undefined,
+): AppDevStackGetAllStackPodLogsResult["limit"] =>
+  limit?.mode === "all"
+    ? { mode: "all" }
+    : {
+        mode: "tail",
+        tailLines: Math.min(
+          5_000,
+          Math.max(100, Math.trunc(limit?.tailLines ?? DEFAULT_LOG_TAIL_LINES)),
+        ),
+      };
+
+const tailLinesFromLimit = (limit: AppDevStackGetAllStackPodLogsResult["limit"]): number | null =>
+  limit.mode === "all" ? null : normalizeTailLines(limit.tailLines ?? DEFAULT_LOG_TAIL_LINES);
+
+const kubectlLogArgs = (
+  namespace: string,
+  podName: string,
+  containerName: string | null,
+  tailLines: number | null,
+): ReadonlyArray<string> => [
+  "-n",
+  namespace,
+  "logs",
+  podName,
+  ...(containerName === null ? [] : ["-c", containerName]),
+  ...(tailLines === null ? [] : [`--tail=${String(tailLines)}`]),
+];
+
 const logFailureMessage = (cause: unknown): string =>
   cause instanceof Error && cause.message.trim().length > 0
     ? cause.message
@@ -610,13 +749,18 @@ const buildStack = async (
   };
 };
 
+const isAppDevStackError = Schema.is(AppDevStackError);
+
 const appDevStackError = (operation: string, cause: unknown) =>
-  new AppDevStackError({
-    operation,
-    reason: "request_failed",
-    message: cause instanceof Error ? cause.message : `Native app-dev stack ${operation} failed.`,
-    cause,
-  });
+  isAppDevStackError(cause)
+    ? cause
+    : new AppDevStackError({
+        operation,
+        reason: "request_failed",
+        message:
+          cause instanceof Error ? cause.message : `Native app-dev stack ${operation} failed.`,
+        cause,
+      });
 
 const nativeOperation = <Value>(
   operation: string,
@@ -643,11 +787,18 @@ export const makeNativeAppDevStackService = (
   const configuredStack = resolveConfiguredNativeConfig(config);
   const knownByStackId = new Map<string, ResolvedNativeAppDevStackConfig>();
   const knownByWorktreePath = new Map<string, ResolvedNativeAppDevStackConfig>();
+  const knownNamespaceMetadata = new Map<string, KubectlNamespace>();
 
-  const rememberStack = (resolved: ResolvedNativeAppDevStackConfig) => {
+  const rememberStack = (
+    resolved: ResolvedNativeAppDevStackConfig,
+    namespace?: KubectlNamespace | undefined,
+  ) => {
     knownByStackId.set(resolved.id, resolved);
     knownByStackId.set(resolved.namespace, resolved);
     knownByWorktreePath.set(normalizePath(resolved.worktreePath), resolved);
+    if (namespace !== undefined) {
+      knownNamespaceMetadata.set(resolved.namespace, namespace);
+    }
     return resolved;
   };
 
@@ -655,18 +806,86 @@ export const makeNativeAppDevStackService = (
     rememberStack(configuredStack);
   }
 
+  const knownStacks = () =>
+    [...new Set(knownByStackId.values())].sort((left, right) =>
+      left.namespace.localeCompare(right.namespace),
+    );
+
+  const discoverAppDevStacks = async () => {
+    const namespaces = await readAppDevStackNamespaces(runKubectl);
+    for (const namespace of namespaces) {
+      const resolved = resolveNativeConfigForNamespace(config, namespace);
+      if (resolved !== null) {
+        rememberStack(resolved, namespace);
+      }
+    }
+    return knownStacks();
+  };
+
   const resolveKnownStack = (
     operation: string,
     stackId: string,
-  ): Effect.Effect<ResolvedNativeAppDevStackConfig, AppDevStackError> => {
-    const known = knownByStackId.get(stackId);
-    return known === undefined
-      ? Effect.fail(unknownStackError(operation, stackId))
-      : Effect.succeed(known);
-  };
+  ): Effect.Effect<ResolvedNativeAppDevStackConfig, AppDevStackError> =>
+    Effect.gen(function* () {
+      const known = knownByStackId.get(stackId);
+      if (known !== undefined) return known;
+
+      return yield* nativeOperation(operation, async () => {
+        await discoverAppDevStacks();
+        const discovered = knownByStackId.get(stackId);
+        if (discovered === undefined) {
+          throw unknownStackError(operation, stackId);
+        }
+        return discovered;
+      });
+    });
 
   const readStack = (operation: string, resolved: ResolvedNativeAppDevStackConfig) =>
     nativeOperation(operation, () => buildStack(resolved, runKubectl));
+
+  const readStackPodLogsForResolved = (
+    operation: string,
+    resolved: ResolvedNativeAppDevStackConfig,
+    tailLines: number | null,
+  ) =>
+    Effect.gen(function* () {
+      const pods = yield* nativeOperation(operation, () => readPods(resolved, runKubectl));
+      const podContainers = pods.flatMap((pod) =>
+        pod.containers.map((container) => ({ pod, container })),
+      );
+      const entries = yield* Effect.forEach(
+        podContainers,
+        ({ pod, container }) =>
+          Effect.promise(async () => {
+            try {
+              const logs = await runKubectl(
+                kubectlLogArgs(resolved.namespace, pod.name, container.name, tailLines),
+              );
+              return buildPodLogEntry(
+                pod,
+                container,
+                logs,
+                null,
+                DateTime.formatIso(DateTime.nowUnsafe()),
+              );
+            } catch (cause) {
+              return buildPodLogEntry(
+                pod,
+                container,
+                "",
+                logFailureMessage(cause),
+                DateTime.formatIso(DateTime.nowUnsafe()),
+              );
+            }
+          }),
+        { concurrency: POD_LOG_FETCH_CONCURRENCY },
+      );
+      return {
+        pods,
+        entries,
+        fetchedAt: DateTime.formatIso(DateTime.nowUnsafe()),
+      };
+    });
 
   return {
     status: Effect.succeed({
@@ -677,11 +896,14 @@ export const makeNativeAppDevStackService = (
           : `native://${configuredStack.namespace}`,
     }),
     list: () =>
-      Effect.forEach(
-        [...new Set(knownByStackId.values())],
-        (resolved) => readStack("list", resolved),
-        { concurrency: 4 },
-      ).pipe(Effect.map((stacks) => ({ stacks }))),
+      nativeOperation("list", discoverAppDevStacks).pipe(
+        Effect.flatMap((resolvedStacks) =>
+          Effect.forEach(resolvedStacks, (resolved) => readStack("list", resolved), {
+            concurrency: 4,
+          }),
+        ),
+        Effect.map((stacks) => ({ stacks })),
+      ),
     getByWorktree: (input) =>
       nativeOperation("getByWorktree", async () => {
         const normalizedPath = normalizePath(input.worktreePath);
@@ -809,21 +1031,15 @@ export const makeNativeAppDevStackService = (
               input.containerName,
             );
             const tailLines = normalizeTailLines(input.tailLines);
-            const logArgs = [
-              "-n",
-              resolved.namespace,
-              "logs",
-              pod.name,
-              ...(containerName === null ? [] : ["-c", containerName]),
-              `--tail=${String(tailLines)}`,
-            ];
             return {
               stackId: resolved.id,
               namespace: resolved.namespace,
               podName: pod.name,
               containerName,
               tailLines,
-              logs: await runKubectl(logArgs),
+              logs: await runKubectl(
+                kubectlLogArgs(resolved.namespace, pod.name, containerName, tailLines),
+              ),
               fetchedAt: DateTime.formatIso(DateTime.nowUnsafe()),
             };
           }),
@@ -834,44 +1050,10 @@ export const makeNativeAppDevStackService = (
         Effect.flatMap((resolved) =>
           Effect.gen(function* () {
             const tailLines = normalizeTailLines(input.tailLines);
-            const pods = yield* nativeOperation("getStackPodLogs", () =>
-              readPods(resolved, runKubectl),
-            );
-            const podContainers = pods.flatMap((pod) =>
-              pod.containers.map((container) => ({ pod, container })),
-            );
-            const entries = yield* Effect.forEach(
-              podContainers,
-              ({ pod, container }) =>
-                Effect.promise(async () => {
-                  try {
-                    const logs = await runKubectl([
-                      "-n",
-                      resolved.namespace,
-                      "logs",
-                      pod.name,
-                      "-c",
-                      container.name,
-                      `--tail=${String(tailLines)}`,
-                    ]);
-                    return buildPodLogEntry(
-                      pod,
-                      container,
-                      logs,
-                      null,
-                      DateTime.formatIso(DateTime.nowUnsafe()),
-                    );
-                  } catch (cause) {
-                    return buildPodLogEntry(
-                      pod,
-                      container,
-                      "",
-                      logFailureMessage(cause),
-                      DateTime.formatIso(DateTime.nowUnsafe()),
-                    );
-                  }
-                }),
-              { concurrency: POD_LOG_FETCH_CONCURRENCY },
+            const { pods, entries, fetchedAt } = yield* readStackPodLogsForResolved(
+              "getStackPodLogs",
+              resolved,
+              tailLines,
             );
             return {
               stackId: resolved.id,
@@ -879,10 +1061,68 @@ export const makeNativeAppDevStackService = (
               tailLines,
               pods,
               entries,
-              fetchedAt: DateTime.formatIso(DateTime.nowUnsafe()),
+              fetchedAt,
             };
           }),
         ),
       ),
+    getAllStackPodLogs: (input) =>
+      Effect.gen(function* () {
+        const limit = normalizeAllStackLogLimit(input.limit);
+        const tailLines = tailLinesFromLimit(limit);
+        const resolvedStacks = yield* nativeOperation("getAllStackPodLogs", discoverAppDevStacks);
+        const stacks = yield* Effect.forEach(
+          resolvedStacks,
+          (resolved) =>
+            readStackPodLogsForResolved("getAllStackPodLogs", resolved, tailLines).pipe(
+              Effect.map(({ pods, entries, fetchedAt }) => {
+                const namespace = knownNamespaceMetadata.get(resolved.namespace);
+                const managedBy =
+                  labelValue(namespace?.metadata?.labels, APP_DEV_STACK_MANAGED_BY_LABEL) ?? null;
+                return {
+                  stackId: resolved.id,
+                  namespace: resolved.namespace,
+                  displayName: resolved.displayName,
+                  displaySlug: resolved.displaySlug ?? null,
+                  repoName: resolved.repoName ?? null,
+                  branchName: resolved.branchName ?? null,
+                  worktreePath: resolved.worktreePath,
+                  managedBy,
+                  limit,
+                  pods,
+                  entries,
+                  error: null,
+                  fetchedAt,
+                };
+              }),
+              Effect.catch((error) => {
+                const namespace = knownNamespaceMetadata.get(resolved.namespace);
+                const managedBy =
+                  labelValue(namespace?.metadata?.labels, APP_DEV_STACK_MANAGED_BY_LABEL) ?? null;
+                return Effect.succeed({
+                  stackId: resolved.id,
+                  namespace: resolved.namespace,
+                  displayName: resolved.displayName,
+                  displaySlug: resolved.displaySlug ?? null,
+                  repoName: resolved.repoName ?? null,
+                  branchName: resolved.branchName ?? null,
+                  worktreePath: resolved.worktreePath,
+                  managedBy,
+                  limit,
+                  pods: [],
+                  entries: [],
+                  error: error.message,
+                  fetchedAt: DateTime.formatIso(DateTime.nowUnsafe()),
+                });
+              }),
+            ),
+          { concurrency: STACK_LOG_FETCH_CONCURRENCY },
+        );
+        return {
+          limit,
+          stacks,
+          fetchedAt: DateTime.formatIso(DateTime.nowUnsafe()),
+        };
+      }),
   };
 };

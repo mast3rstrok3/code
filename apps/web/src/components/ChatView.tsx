@@ -5336,14 +5336,11 @@ function ChatViewContent(props: ChatViewProps) {
         gitCwd={gitCwd}
         openPreview={openPreview}
       />
-    ) : activeRightPanelSurface?.kind === "logs" && activeProject && activeWorkspaceRoot ? (
+    ) : activeRightPanelSurface?.kind === "logs" &&
+      activeEnvironmentConnectionPhase === "connected" ? (
       <AppDevStackLogsPanel
-        environmentId={activeProject.environmentId}
-        activeThread={activeThread}
-        workspaceRoot={activeWorkspaceRoot}
-        gitCwd={gitCwd}
+        environmentId={activeThread.environmentId}
         timestampFormat={timestampFormat}
-        onOpenAppDevStack={addAppDevStackSurface}
       />
     ) : (activeRightPanelSurface?.kind === "files" || activeRightPanelSurface?.kind === "file") &&
       activeProject &&
@@ -5689,7 +5686,7 @@ function ChatViewContent(props: ChatViewProps) {
             previewRuntimeCapability.supported ? undefined : previewRuntimeCapability.message
           }
           reviewAvailable={isServerThread && isGitRepo}
-          logsAvailable={activeProject !== null}
+          logsAvailable={activeEnvironmentConnectionPhase === "connected"}
           diffAvailable={isServerThread && isGitRepo}
           filesAvailable={activeProject !== null}
           appDevStackAvailable={activeProject !== null}
@@ -5726,7 +5723,7 @@ function ChatViewContent(props: ChatViewProps) {
               previewRuntimeCapability.supported ? undefined : previewRuntimeCapability.message
             }
             reviewAvailable={isServerThread && isGitRepo}
-            logsAvailable={activeProject !== null}
+            logsAvailable={activeEnvironmentConnectionPhase === "connected"}
             diffAvailable={isServerThread && isGitRepo}
             filesAvailable={activeProject !== null}
             appDevStackAvailable={activeProject !== null}

@@ -171,6 +171,21 @@ export type AppDevStackListPodsResult = typeof AppDevStackListPodsResult.Type;
 export const AppDevStackPodLogTailLines = PositiveInt.check(Schema.isLessThanOrEqualTo(5_000));
 export type AppDevStackPodLogTailLines = typeof AppDevStackPodLogTailLines.Type;
 
+export const AppDevStackLogReadLimit = Schema.Union([
+  Schema.Struct({
+    mode: Schema.Literal("tail"),
+    tailLines: Schema.optional(
+      PositiveInt.check(Schema.isGreaterThanOrEqualTo(100)).check(
+        Schema.isLessThanOrEqualTo(5_000),
+      ),
+    ),
+  }),
+  Schema.Struct({
+    mode: Schema.Literal("all"),
+  }),
+]);
+export type AppDevStackLogReadLimit = typeof AppDevStackLogReadLimit.Type;
+
 export const AppDevStackGetPodLogsInput = Schema.Struct({
   stackId: TrimmedNonEmptyString,
   podName: TrimmedNonEmptyString,
@@ -220,6 +235,35 @@ export const AppDevStackGetStackPodLogsResult = Schema.Struct({
   fetchedAt: IsoDateTime,
 });
 export type AppDevStackGetStackPodLogsResult = typeof AppDevStackGetStackPodLogsResult.Type;
+
+export const AppDevStackDiscoveredStackPodLogs = Schema.Struct({
+  stackId: TrimmedNonEmptyString,
+  namespace: TrimmedNonEmptyString,
+  displayName: Schema.optionalKey(NullableString),
+  displaySlug: Schema.optionalKey(NullableString),
+  repoName: Schema.optionalKey(NullableString),
+  branchName: Schema.optionalKey(NullableString),
+  worktreePath: Schema.optionalKey(NullableString),
+  managedBy: Schema.optionalKey(NullableTrimmedNonEmptyString),
+  limit: AppDevStackLogReadLimit,
+  pods: Schema.Array(AppDevStackPod),
+  entries: Schema.Array(AppDevStackPodLogEntry),
+  error: Schema.NullOr(TrimmedNonEmptyString),
+  fetchedAt: IsoDateTime,
+});
+export type AppDevStackDiscoveredStackPodLogs = typeof AppDevStackDiscoveredStackPodLogs.Type;
+
+export const AppDevStackGetAllStackPodLogsInput = Schema.Struct({
+  limit: Schema.optional(AppDevStackLogReadLimit),
+});
+export type AppDevStackGetAllStackPodLogsInput = typeof AppDevStackGetAllStackPodLogsInput.Type;
+
+export const AppDevStackGetAllStackPodLogsResult = Schema.Struct({
+  limit: AppDevStackLogReadLimit,
+  stacks: Schema.Array(AppDevStackDiscoveredStackPodLogs),
+  fetchedAt: IsoDateTime,
+});
+export type AppDevStackGetAllStackPodLogsResult = typeof AppDevStackGetAllStackPodLogsResult.Type;
 
 export class AppDevStackError extends Schema.TaggedErrorClass<AppDevStackError>()(
   "AppDevStackError",

@@ -1978,6 +1978,12 @@ const makeWsRpcLayer = (
             appDevStackManager.getStackPodLogs(input),
             { "rpc.aggregate": "app-dev-stack" },
           ),
+        [WS_METHODS.appDevStackGetAllStackPodLogs]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.appDevStackGetAllStackPodLogs,
+            appDevStackManager.getAllStackPodLogs(input),
+            { "rpc.aggregate": "app-dev-stack" },
+          ),
         [WS_METHODS.subscribePreviewEvents]: (_input) =>
           observeRpcStream(WS_METHODS.subscribePreviewEvents, previewManager.events, {
             "rpc.aggregate": "preview",

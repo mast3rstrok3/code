@@ -863,6 +863,12 @@ const buildAppUnderTest = (options?: {
               entries: [],
               fetchedAt: "2026-06-25T00:00:00.000Z",
             }),
+          getAllStackPodLogs: (input) =>
+            Effect.succeed({
+              limit: input.limit ?? { mode: "tail" as const, tailLines: 300 },
+              stacks: [],
+              fetchedAt: "2026-06-25T00:00:00.000Z",
+            }),
           ...options?.layers?.appDevStackManager,
         }),
       ),

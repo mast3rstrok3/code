@@ -4,6 +4,8 @@ import {
   AppDevStackByWorktreeResult,
   AppDevStackDeleteResult,
   AppDevStackError,
+  type AppDevStackGetAllStackPodLogsInput,
+  type AppDevStackGetAllStackPodLogsResult,
   AppDevStackGetPodLogsResult,
   type AppDevStackGetStackPodLogsResult,
   AppDevStackListResult,
@@ -84,6 +86,9 @@ export class AppDevStackManager extends Context.Service<
     readonly getStackPodLogs: (
       input: AppDevStackGetStackPodLogsInput,
     ) => Effect.Effect<AppDevStackGetStackPodLogsResult, AppDevStackError>;
+    readonly getAllStackPodLogs: (
+      input: AppDevStackGetAllStackPodLogsInput,
+    ) => Effect.Effect<AppDevStackGetAllStackPodLogsResult, AppDevStackError>;
   }
 >()("t3/appDevStack/AppDevStackManager") {
   static readonly layer = Layer.effect(
@@ -531,6 +536,66 @@ export class AppDevStackManager extends Context.Service<
         };
       });
 
+      const getAllStackPodLogs = Effect.fn("AppDevStackManager.getAllStackPodLogs")(function* (
+        input: AppDevStackGetAllStackPodLogsInput,
+      ) {
+        const limit = normalizeAllStackLogLimit(input.limit);
+        if (limit.mode === "all") {
+          return yield* new AppDevStackError({
+            operation: "getAllStackPodLogs",
+            reason: "request_failed",
+            message:
+              "Reading all App Dev Stack logs is not supported by the configured remote App Dev Stack backend.",
+          });
+        }
+        const tailLines = limit.tailLines;
+        const listResult = yield* list({});
+        const stacks = yield* Effect.forEach(
+          listResult.stacks,
+          (stack) =>
+            getStackPodLogs({ stackId: stack.id, tailLines }).pipe(
+              Effect.map((result) => ({
+                stackId: result.stackId,
+                namespace: result.namespace,
+                displayName: stack.displayName,
+                displaySlug: stack.displaySlug ?? null,
+                repoName: stack.repoName ?? null,
+                branchName: stack.branchName ?? null,
+                worktreePath: stack.worktreePath,
+                managedBy: null,
+                limit,
+                pods: result.pods,
+                entries: result.entries,
+                error: null,
+                fetchedAt: result.fetchedAt,
+              })),
+              Effect.catch((error) =>
+                Effect.succeed({
+                  stackId: stack.id,
+                  namespace: stack.namespace ?? stack.id,
+                  displayName: stack.displayName,
+                  displaySlug: stack.displaySlug ?? null,
+                  repoName: stack.repoName ?? null,
+                  branchName: stack.branchName ?? null,
+                  worktreePath: stack.worktreePath,
+                  managedBy: null,
+                  limit,
+                  pods: [],
+                  entries: [],
+                  error: error.message,
+                  fetchedAt: DateTime.formatIso(DateTime.nowUnsafe()),
+                }),
+              ),
+            ),
+          { concurrency: 3 },
+        );
+        return {
+          limit,
+          stacks,
+          fetchedAt: DateTime.formatIso(DateTime.nowUnsafe()),
+        };
+      });
+
       return AppDevStackManager.of({
         status,
         list,
@@ -543,6 +608,7 @@ export class AppDevStackManager extends Context.Service<
         listPods,
         getPodLogs,
         getStackPodLogs,
+        getAllStackPodLogs,
       });
     }),
   );
@@ -567,6 +633,19 @@ const stackPodLogEntryFromResult = (
   error,
   fetchedAt,
 });
+
+const normalizeAllStackLogLimit = (
+  limit: AppDevStackGetAllStackPodLogsInput["limit"] | undefined,
+): AppDevStackGetAllStackPodLogsResult["limit"] =>
+  limit?.mode === "all"
+    ? { mode: "all" }
+    : {
+        mode: "tail",
+        tailLines: Math.min(
+          5_000,
+          Math.max(100, Math.trunc(limit?.tailLines ?? DEFAULT_LOG_TAIL_LINES)),
+        ),
+      };
 
 const displayNameForRestart = (stack: AppDevStack): string => {
   const candidates = [
