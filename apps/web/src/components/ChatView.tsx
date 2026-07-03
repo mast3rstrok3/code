@@ -228,6 +228,7 @@ import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/Compos
 import {
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
   buildBrowserDevReviewLaunchMessage,
+  type BrowserDevReviewLaunchRequest,
   buildExpiredTerminalContextToastCopy,
   buildLocalDraftThread,
   buildThreadTurnInterruptInput,
@@ -248,6 +249,7 @@ import {
   resolveSendEnvMode,
   revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
+  selectBrowserDevReviewAutoContext,
   waitForStartedServerThread,
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
@@ -2970,118 +2972,147 @@ function ChatViewContent(props: ChatViewProps) {
     useRightPanelStore.getState().open(activeThreadRef, "review");
     onDiffPanelOpen?.();
   }, [activeThreadRef, isGitRepo, isServerThread, onDiffPanelOpen]);
-  const launchBrowserDevReview = useCallback(async () => {
-    if (
-      !activeThread ||
-      !activeThreadRef ||
-      !activeProject ||
-      !isServerThread ||
-      devReviewLaunchInFlight
-    ) {
-      return;
-    }
-    const sendCtx = composerRef.current?.getSendContext();
-    if (!sendCtx) return;
-    setDevReviewLaunchInFlight(true);
-    const reviewThreadId = newThreadId();
-    const reviewThreadRef = scopeThreadRef(activeThread.environmentId, reviewThreadId);
-    const reviewId = DevReviewId.make(`dev-review-${Date.now().toString(36)}-${randomHex(6)}`);
-    const createdAt = new Date().toISOString();
-    const sourceMessages = activeThread.messages
-      .slice(-12)
-      .map((message) => `${message.role}: ${truncate(message.text, 1_200)}`)
-      .join("\n\n");
-    const messageText = buildBrowserDevReviewLaunchMessage({
-      sourceThreadId: activeThread.id,
-      sourceTitle: activeThread.title,
-      reviewId,
-      recentSourceContext: sourceMessages,
-    });
-
-    const result = await launchDevReview({
-      environmentId,
-      input: {
+  const browserDevReviewAutoContext = useMemo(
+    () =>
+      activeThread
+        ? selectBrowserDevReviewAutoContext({
+            messages: activeThread.messages,
+            latestTurn: activeThread.latestTurn,
+          })
+        : null,
+    [activeThread],
+  );
+  const launchBrowserDevReview = useCallback(
+    async (request: BrowserDevReviewLaunchRequest) => {
+      if (
+        !activeThread ||
+        !activeThreadRef ||
+        !activeProject ||
+        !isServerThread ||
+        devReviewLaunchInFlight
+      ) {
+        return;
+      }
+      const sendCtx = composerRef.current?.getSendContext();
+      if (!sendCtx) return;
+      setDevReviewLaunchInFlight(true);
+      const reviewThreadId = newThreadId();
+      const reviewThreadRef = scopeThreadRef(activeThread.environmentId, reviewThreadId);
+      const reviewId = DevReviewId.make(`dev-review-${Date.now().toString(36)}-${randomHex(6)}`);
+      const createdAt = new Date().toISOString();
+      const sourceContext =
+        request.mode === "auto"
+          ? selectBrowserDevReviewAutoContext({
+              messages: activeThread.messages,
+              latestTurn: activeThread.latestTurn,
+            })
+          : null;
+      if (request.mode === "auto" && sourceContext === null) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "warning",
+            title: "No source turn available",
+            description: "Use Specifics to launch a Browser Dev Review without a completed turn.",
+          }),
+        );
+        setDevReviewLaunchInFlight(false);
+        return;
+      }
+      const messageText = buildBrowserDevReviewLaunchMessage({
         sourceThreadId: activeThread.id,
-        reviewThreadId,
-        reviewId,
-        message: {
-          messageId: newMessageId(),
-          role: "user",
-          text: messageText,
-          attachments: [],
-        },
-        modelSelection: sendCtx.selectedModelSelection,
-        runtimeMode,
-        workflowPromptId: BROWSER_DEV_REVIEW_WORKFLOW_PROMPT_ID,
-        createdAt,
-      },
-    });
+        sourceTitle: activeThread.title,
+        mode: request.mode,
+        sourceContext,
+        customPrompt: request.customPrompt ?? null,
+        previewUrls: getConfiguredPreviewUrls(activeProject.scripts),
+      });
 
-    if (result._tag === "Failure") {
-      if (!isAtomCommandInterrupted(result)) {
-        const error = squashAtomCommandFailure(result);
+      const result = await launchDevReview({
+        environmentId,
+        input: {
+          sourceThreadId: activeThread.id,
+          reviewThreadId,
+          reviewId,
+          message: {
+            messageId: newMessageId(),
+            role: "user",
+            text: messageText,
+            attachments: [],
+          },
+          modelSelection: sendCtx.selectedModelSelection,
+          runtimeMode,
+          workflowPromptId: BROWSER_DEV_REVIEW_WORKFLOW_PROMPT_ID,
+          createdAt,
+        },
+      });
+
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not launch Dev Review",
+              description:
+                error instanceof Error
+                  ? error.message
+                  : "An error occurred while creating the review thread.",
+            }),
+          );
+        }
+        setDevReviewLaunchInFlight(false);
+        return;
+      }
+
+      useRightPanelStore.getState().open(activeThreadRef, "review");
+      useRightPanelStore.getState().open(reviewThreadRef, "review");
+      const startedResult = await settlePromise(() => waitForStartedServerThread(reviewThreadRef));
+      if (startedResult._tag === "Failure") {
+        toastManager.add(
+          stackedThreadToast({
+            type: "warning",
+            title: "Dev Review record created",
+            description: "The review thread did not report a running agent yet.",
+          }),
+        );
+      }
+      const navigateResult = await settlePromise(() =>
+        navigate({
+          to: "/$environmentId/$threadId",
+          params: {
+            environmentId: activeThread.environmentId,
+            threadId: reviewThreadId,
+          },
+        }),
+      );
+      if (navigateResult._tag === "Failure" && !isAtomCommandInterrupted(navigateResult)) {
+        const error = squashAtomCommandFailure(navigateResult);
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Could not launch Dev Review",
+            title: "Could not open review thread",
             description:
               error instanceof Error
                 ? error.message
-                : "An error occurred while creating the review thread.",
+                : "The review thread was created but not opened.",
           }),
         );
       }
       setDevReviewLaunchInFlight(false);
-      return;
-    }
-
-    useRightPanelStore.getState().open(activeThreadRef, "review");
-    useRightPanelStore.getState().open(reviewThreadRef, "review");
-    const startedResult = await settlePromise(() => waitForStartedServerThread(reviewThreadRef));
-    if (startedResult._tag === "Failure") {
-      toastManager.add(
-        stackedThreadToast({
-          type: "warning",
-          title: "Dev Review record created",
-          description: "The review thread did not report a running agent yet.",
-        }),
-      );
-    }
-    const navigateResult = await settlePromise(() =>
-      navigate({
-        to: "/$environmentId/$threadId",
-        params: {
-          environmentId: activeThread.environmentId,
-          threadId: reviewThreadId,
-        },
-      }),
-    );
-    if (navigateResult._tag === "Failure" && !isAtomCommandInterrupted(navigateResult)) {
-      const error = squashAtomCommandFailure(navigateResult);
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: "Could not open review thread",
-          description:
-            error instanceof Error
-              ? error.message
-              : "The review thread was created but not opened.",
-        }),
-      );
-    }
-    setDevReviewLaunchInFlight(false);
-  }, [
-    activeProject,
-    activeThread,
-    activeThreadRef,
-    composerRef,
-    devReviewLaunchInFlight,
-    environmentId,
-    isServerThread,
-    launchDevReview,
-    navigate,
-    runtimeMode,
-  ]);
+    },
+    [
+      activeProject,
+      activeThread,
+      activeThreadRef,
+      composerRef,
+      devReviewLaunchInFlight,
+      environmentId,
+      isServerThread,
+      launchDevReview,
+      navigate,
+      runtimeMode,
+    ],
+  );
   const addLogsSurface = useCallback(() => {
     if (!activeThreadRef) return;
     useRightPanelStore.getState().open(activeThreadRef, "logs");
@@ -5300,6 +5331,7 @@ function ChatViewContent(props: ChatViewProps) {
           mode="embedded"
           threadRef={activeThreadRef}
           launchInFlight={devReviewLaunchInFlight}
+          autoContext={browserDevReviewAutoContext}
           onLaunch={launchBrowserDevReview}
         />
       </Suspense>

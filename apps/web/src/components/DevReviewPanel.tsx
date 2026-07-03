@@ -1,19 +1,26 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { PlayCircle } from "lucide-react";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 
 import { useThreadDevReviews } from "~/state/entities";
+import type {
+  BrowserDevReviewLaunchRequest,
+  BrowserDevReviewSourceContext,
+} from "./ChatView.logic";
 import { Button } from "./ui/button";
 import { DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { DevReviewDocument } from "./DevReviewDocument";
+import { DevReviewLaunchDialog } from "./DevReviewLaunchDialog";
 import { selectActiveDevReviewRecord } from "./DevReviewPanel.logic";
 
 export function DevReviewPanel(props: {
   mode: DiffPanelMode;
   threadRef: ScopedThreadRef;
   launchInFlight: boolean;
-  onLaunch: () => void;
+  autoContext: BrowserDevReviewSourceContext | null;
+  onLaunch: (request: BrowserDevReviewLaunchRequest) => void;
 }) {
+  const [launchDialogOpen, setLaunchDialogOpen] = useState(false);
   const records = useThreadDevReviews(props.threadRef);
   const activeRecord = useMemo(() => {
     return selectActiveDevReviewRecord(records, props.threadRef.threadId);
@@ -35,7 +42,7 @@ export function DevReviewPanel(props: {
             size="sm"
             variant="outline"
             disabled={props.launchInFlight}
-            onClick={props.onLaunch}
+            onClick={() => setLaunchDialogOpen(true)}
           >
             <PlayCircle className="size-4" />
             Launch Browser Dev Review
@@ -56,6 +63,16 @@ export function DevReviewPanel(props: {
           </div>
         </div>
       )}
+      <DevReviewLaunchDialog
+        open={launchDialogOpen}
+        onOpenChange={setLaunchDialogOpen}
+        launchInFlight={props.launchInFlight}
+        autoContext={props.autoContext}
+        onLaunch={(request) => {
+          props.onLaunch(request);
+          setLaunchDialogOpen(false);
+        }}
+      />
     </DiffPanelShell>
   );
 }

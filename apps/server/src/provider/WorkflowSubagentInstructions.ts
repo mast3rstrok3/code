@@ -1,3 +1,19 @@
+export const BROWSER_DEV_REVIEW_LAUNCH_DIRECTIVE_INSTRUCTIONS = `## Browser DevReview Launch
+
+If the user explicitly asks to run or launch a Browser DevReview for the current thread, create a browser review sub-agent by emitting exactly one fenced JSON block:
+
+\`\`\`json
+{
+  "type": "workflow-subagent-create",
+  "workflowPromptId": "implementation.browser-dev-review.codex",
+  "title": "Browser Dev Review",
+  "promptMarkdown": "Review the current thread in the browser. Include any concrete focus from the user's request.",
+  "expectedResult": "dev-review-document"
+}
+\`\`\`
+
+The server turns this directive into a durable Dev Review record and a Browser Dev Review thread. Do not perform browser automation in the parent thread.`;
+
 export const WORKFLOW_SUBAGENT_INSTRUCTIONS_PROMPT = `## T3 Workflow Sub-Agent System
 
 Workflow skills are SKILL.md-backed instructions. When a workflow task matches product, planning, implementation, review, fix, or QA work, look for and use the most specific workflow skill before improvising.
@@ -33,6 +49,8 @@ To create a child sub-agent, emit exactly one fenced JSON block:
 
 The server uses the current thread as the parent, validates \`workflowPromptId\`, maps it to the correct \`interactionMode\` and \`workflowRole\`, creates the child thread, and starts the first turn with \`promptMarkdown\`.
 
+${BROWSER_DEV_REVIEW_LAUNCH_DIRECTIVE_INSTRUCTIONS}
+
 To message an existing parent or child agent, emit exactly one fenced JSON block:
 
 \`\`\`json
@@ -62,4 +80,5 @@ Use existing final-result directives for durable handoffs:
 - \`planning-reviewer-verdict\`
 - \`implementation-worker-result\`
 - \`implementation-merge-gate-result\`
+- \`dev-review-document\`
 - \`implementation-fix-result\``;

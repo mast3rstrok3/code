@@ -3199,7 +3199,7 @@ describe("ProviderRuntimeIngestion", () => {
     });
   });
 
-  it("hardlocks browser dev review sub-agents to codex gpt-5.5 at extra-high effort", async () => {
+  it("creates durable browser dev reviews from sub-agent directives with the codex hardlock", async () => {
     const harness = await createHarness();
     const createdAt = "2026-01-01T00:00:00.000Z";
     const parentThreadId = asThreadId("thread-hardlock-parent");
@@ -3260,12 +3260,19 @@ describe("ProviderRuntimeIngestion", () => {
         thread.parentThreadId === parentThreadId &&
         thread.workflowRole === "implementation-qa-reviewer",
     );
+    const parentThread = snapshot.threads.find((thread) => thread.id === parentThreadId);
 
     expect(childThread?.modelSelection).toEqual({
       instanceId: ProviderInstanceId.make("codex"),
       model: "gpt-5.5",
       options: [{ id: "reasoningEffort", value: "xhigh" }],
     });
+    expect(parentThread?.devReviews).toHaveLength(1);
+    expect(parentThread?.devReviews[0]?.reviewThreadId).toBe(childThread?.id);
+    expect(parentThread?.devReviews[0]?.status).toBe("running");
+    expect(childThread?.messages[0]?.text).toContain("Run Browser Dev Review");
+    expect(childThread?.messages[0]?.text).toContain("Exercise the checkout flow in the browser.");
+    expect(childThread?.messages[0]?.text).not.toContain("Expected result directive");
   });
 
   it("falls back to the parent selection for browser dev review when codex is disabled", async () => {
@@ -3332,9 +3339,11 @@ describe("ProviderRuntimeIngestion", () => {
         thread.parentThreadId === parentThreadId &&
         thread.workflowRole === "implementation-qa-reviewer",
     );
-    expect(childThread?.modelSelection).toEqual(parentModelSelection);
-
     const parentThread = snapshot.threads.find((thread) => thread.id === parentThreadId);
+    expect(childThread?.modelSelection).toEqual(parentModelSelection);
+    expect(parentThread?.devReviews).toHaveLength(1);
+    expect(parentThread?.devReviews[0]?.reviewThreadId).toBe(childThread?.id);
+
     const fallbackActivity = parentThread?.activities.find(
       (activity) => activity.kind === "workflow.subagent.model-fallback",
     );

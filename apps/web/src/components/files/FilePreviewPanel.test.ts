@@ -1,5 +1,8 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
+import { FilePreviewMediaContent, resolveWorkspaceMediaAssetPath } from "./FilePreviewPanel";
 import {
   formatFileCommentRange,
   normalizeFileCommentRange,
@@ -74,6 +77,32 @@ describe("resolveWorkspaceFilePreviewKind", () => {
       "video",
     );
     expect(resolveWorkspaceFilePreviewKind("src/index.ts")).toBe("text");
+  });
+});
+
+describe("workspace media preview assets", () => {
+  it("resolves media asset paths against the workspace cwd before minting URLs", () => {
+    expect(resolveWorkspaceMediaAssetPath(".logs/recordings/page@abcd.webm", "/repo/app")).toBe(
+      "/repo/app/.logs/recordings/page@abcd.webm",
+    );
+    expect(resolveWorkspaceMediaAssetPath("/repo/app/recording.webm", "/repo/app")).toBe(
+      "/repo/app/recording.webm",
+    );
+  });
+
+  it("renders URL minting failures with the server error and retry action", () => {
+    const html = renderToStaticMarkup(
+      createElement(FilePreviewMediaContent, {
+        kind: "video",
+        relativePath: ".logs/recordings/page@abcd.webm",
+        mediaUrl: null,
+        errorMessage: "Workspace asset was not found.",
+        onRetry: () => undefined,
+      }),
+    );
+
+    expect(html).toContain("Workspace asset was not found.");
+    expect(html).toContain("Retry");
   });
 });
 

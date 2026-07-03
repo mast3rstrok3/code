@@ -19,6 +19,7 @@ import {
   type OrchestrationThreadActivity,
   type ProviderRuntimeEvent,
   isPlanningWorkflowInteractionMode,
+  DevReviewId,
 } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
@@ -41,6 +42,7 @@ import {
   type ProviderRuntimeIngestionShape,
 } from "../Services/ProviderRuntimeIngestion.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { WORKFLOW_PROMPT_IDS } from "../../provider/WorkflowPromptRegistry.ts";
 import {
   parseWorkflowDirectiveFromMarkdown,
   type WorkflowDirective,
@@ -677,6 +679,8 @@ const make = Effect.gen(function* () {
     crypto.randomUUIDv4.pipe(Effect.map((uuid) => MessageId.make(`message-${tag}-${uuid}`)));
   const serverThreadId = (tag: string) =>
     crypto.randomUUIDv4.pipe(Effect.map((uuid) => ThreadId.make(`thread-${tag}-${uuid}`)));
+  const serverDevReviewId = (tag: string) =>
+    crypto.randomUUIDv4.pipe(Effect.map((uuid) => DevReviewId.make(`dev-review-${tag}-${uuid}`)));
 
   const turnMessageIdsByTurnKey = yield* Cache.make<string, Set<MessageId>>({
     capacity: TURN_MESSAGE_IDS_BY_TURN_CACHE_CAPACITY,
@@ -1131,6 +1135,35 @@ const make = Effect.gen(function* () {
       `Expected result directive: '${expectedResult}'.`,
       input.directive.promptMarkdown,
     ].join("\n\n");
+
+    if (
+      spawnDefinition.workflowPromptId === WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex
+    ) {
+      const reviewPrompt = [
+        `Run Browser Dev Review for source thread ${input.thread.id}.`,
+        `Source title: ${input.thread.title}`,
+        `Launch mode: Agent request`,
+        `Review request:\n${input.directive.promptMarkdown}`,
+      ].join("\n\n");
+      yield* orchestrationEngine.dispatch({
+        type: "thread.dev-review.launch",
+        commandId: yield* providerCommandId(input.event, "workflow-browser-dev-review-launch"),
+        sourceThreadId: input.thread.id,
+        reviewThreadId: childThreadId,
+        reviewId: yield* serverDevReviewId("workflow-browser-dev-review"),
+        message: {
+          messageId: childMessageId,
+          role: "user",
+          text: reviewPrompt,
+          attachments: [],
+        },
+        modelSelection: resolvedModel.modelSelection,
+        runtimeMode: input.thread.runtimeMode,
+        workflowPromptId: spawnDefinition.workflowPromptId,
+        createdAt: input.createdAt,
+      });
+      return;
+    }
 
     yield* orchestrationEngine.dispatch({
       type: "thread.create",

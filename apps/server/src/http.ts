@@ -5,6 +5,7 @@ import {
   EnvironmentHttpApi,
 } from "@t3tools/contracts";
 import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
+import { workspacePreviewMimeType } from "@t3tools/shared/filePreview";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -189,6 +190,7 @@ export function parseByteRangeHeader(
   const startText = match[1] ?? "";
   const endText = match[2] ?? "";
   if (startText === "" && endText === "") return null;
+  if (sizeBytes <= 0) return "unsatisfiable";
 
   if (startText === "") {
     // Suffix range: the final N bytes of the file.
@@ -210,6 +212,10 @@ const ASSET_FILE_HEADERS = {
   "X-Content-Type-Options": "nosniff",
   "Accept-Ranges": "bytes",
 } as const;
+
+function resolveAssetFileContentType(path: string): string {
+  return workspacePreviewMimeType(path) ?? Mime.getType(path) ?? "application/octet-stream";
+}
 
 export const assetRouteLayer = HttpRouter.add(
   "GET",
@@ -256,15 +262,21 @@ export const assetRouteLayer = HttpRouter.add(
     }
 
     const range = parseByteRangeHeader(request.headers.range, sizeBytes);
+    const contentType = resolveAssetFileContentType(asset.path);
     if (range === "unsatisfiable") {
       return HttpServerResponse.empty({
         status: 416,
-        headers: { ...ASSET_FILE_HEADERS, "Content-Range": `bytes */${sizeBytes}` },
+        headers: {
+          ...ASSET_FILE_HEADERS,
+          "Content-Range": `bytes */${sizeBytes}`,
+          "Content-Type": contentType,
+        },
       });
     }
 
     return yield* HttpServerResponse.file(asset.path, {
       status: range === null ? 200 : 206,
+      contentType,
       headers:
         range === null
           ? ASSET_FILE_HEADERS

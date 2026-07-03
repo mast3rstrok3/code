@@ -4,7 +4,7 @@ Browser Dev Review drives the T3-hosted collaborative browser through the \`prev
 
 ## Session flow
 
-1. \`preview_open\` with the app-dev-stack URL from the launch message. It opens (or reuses) the thread's browser tab.
+1. \`preview_open\` to show and initialize the thread's browser tab, then \`preview_navigate\` to the feature URL when the launch message provides one.
 2. \`dev_review_recording_start\` to begin the screen recording. Everything you do in the tab until \`dev_review_recording_stop\` ends up in the review's video.
 3. Interact, snapshotting between steps (see below).
 4. \`dev_review_capture_screenshot\` with a descriptive caption at each meaningful state.
@@ -38,4 +38,5 @@ The review's evidence is server-authoritative: recordings and screenshots are st
 - \`dev_review_recording_start\` / \`dev_review_recording_stop\` bracket the whole testing session. Stop returns the recording evidence; status \`failed\` means no video was saved.
 - \`dev_review_capture_screenshot\` saves a PNG of the current tab with your caption and returns \`{id, caption, capturedAt}\`. Reference these ids in findings' \`evidenceIds\`.
 - A terminal verdict (\`passed\`/\`failed\`) requires a saved recording plus at least one screenshot — \`dev_review_update\` rejects it otherwise. If the browser tools fail or are unavailable, set the review to \`blocked\` with an explanation instead of forcing a verdict.
+- If no URL is provided and no usable preview is already open, mark the review \`blocked\` with concrete details instead of inventing a target.
 `;

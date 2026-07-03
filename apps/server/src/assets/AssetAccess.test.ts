@@ -235,11 +235,16 @@ describe("AssetAccess", () => {
       const recordingPath = path.join(assetsDirectory, "recording.webm");
       const siblingVideoPath = path.join(assetsDirectory, "other.webm");
       const siblingImagePath = path.join(assetsDirectory, "other.png");
+      const browserRecordingDirectory = path.join(root, ".logs", "recordings", "run-1");
+      const browserRecordingPath = path.join(browserRecordingDirectory, "page@abcd1234.webm");
       yield* fileSystem.makeDirectory(assetsDirectory, { recursive: true });
+      yield* fileSystem.makeDirectory(browserRecordingDirectory, { recursive: true });
       yield* fileSystem.writeFile(recordingPath, new Uint8Array([0x1a, 0x45, 0xdf, 0xa3]));
       yield* fileSystem.writeFile(siblingVideoPath, new Uint8Array([0x1a, 0x45, 0xdf, 0xa3]));
       yield* fileSystem.writeFile(siblingImagePath, new Uint8Array([137, 80, 78, 71]));
+      yield* fileSystem.writeFile(browserRecordingPath, new Uint8Array([0x1a, 0x45, 0xdf, 0xa3]));
       const canonicalRecordingPath = yield* fileSystem.realPath(recordingPath);
+      const canonicalBrowserRecordingPath = yield* fileSystem.realPath(browserRecordingPath);
 
       const result = yield* issueAssetUrl({
         resource: {
@@ -260,6 +265,26 @@ describe("AssetAccess", () => {
       expect(yield* resolveAsset(token, "other.webm")).toBeNull();
       expect(yield* resolveAsset(token, "other.png")).toBeNull();
       expect(yield* resolveAsset(token, "../recording.webm")).toBeNull();
+
+      const browserRecordingResult = yield* issueAssetUrl({
+        resource: {
+          _tag: "workspace-file",
+          threadId: ThreadId.make("thread-1"),
+          path: browserRecordingPath,
+        },
+        workspaceRoot: root,
+      });
+      expect(browserRecordingResult.relativeUrl.endsWith("/page%40abcd1234.webm")).toBe(true);
+      const browserRecordingSuffix = browserRecordingResult.relativeUrl.slice(
+        `${ASSET_ROUTE_PREFIX}/`.length,
+      );
+      const browserRecordingSeparatorIndex = browserRecordingSuffix.indexOf("/");
+      const browserRecordingToken = browserRecordingSuffix.slice(0, browserRecordingSeparatorIndex);
+
+      expect(yield* resolveAsset(browserRecordingToken, "page@abcd1234.webm")).toEqual({
+        kind: "file",
+        path: canonicalBrowserRecordingPath,
+      });
     }).pipe(Effect.provide(testLayer)),
   );
 

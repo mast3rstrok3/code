@@ -83,6 +83,7 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.ok(previewQaDoc);
     NodeAssert.equal(previewQaDoc.path, "preview-browser-qa.md");
     NodeAssert.match(previewQaDoc.content, /preview_open/);
+    NodeAssert.match(previewQaDoc.content, /preview_navigate/);
     NodeAssert.match(previewQaDoc.content, /preview_snapshot/);
     NodeAssert.match(previewQaDoc.content, /preview_resize/);
     NodeAssert.match(previewQaDoc.content, /preview_evaluate/);
@@ -119,6 +120,8 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /planning\.issue-reviewer\.codex/);
     NodeAssert.match(rendered, /implementation\.browser-dev-review\.codex/);
     NodeAssert.match(rendered, /workflow-subagent-create/);
+    NodeAssert.match(rendered, /durable Dev Review record/);
+    NodeAssert.match(rendered, /dev-review-document/);
     NodeAssert.match(rendered, /workflow-agent-message/);
     NodeAssert.match(rendered, /Planning Workflow: PRD/);
   });
@@ -132,6 +135,7 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /preview-browser-qa\.md/);
     NodeAssert.match(rendered, /preview_open/);
     NodeAssert.match(rendered, /dev_review_get/);
+    NodeAssert.match(rendered, /preview_navigate/);
     NodeAssert.match(rendered, /dev_review_recording_start/);
     NodeAssert.match(rendered, /dev_review_recording_stop/);
     NodeAssert.match(rendered, /dev_review_capture_screenshot/);

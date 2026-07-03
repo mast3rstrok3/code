@@ -10,6 +10,7 @@ import { useMemo, useState } from "react";
 
 import { useAssetUrls } from "~/assets/assetUrls";
 import { cn } from "~/lib/utils";
+import { MediaPreviewSurface } from "./media/MediaPreviewSurface";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 
@@ -68,11 +69,11 @@ function RecordingSection(props: {
       </div>
       {recording.status === "saved" ? (
         props.recordingUrl ? (
-          <video
-            controls
-            preload="metadata"
-            src={props.recordingUrl}
-            className="max-h-[360px] w-full rounded-md border border-border bg-black"
+          <MediaPreviewSurface
+            kind="video"
+            name={recording.path ?? "recording.webm"}
+            url={props.recordingUrl}
+            mediaClassName="max-h-[360px] w-full rounded-md border border-border bg-black"
           />
         ) : (
           <div className="rounded-md border border-border px-3 py-4 text-sm text-muted-foreground">

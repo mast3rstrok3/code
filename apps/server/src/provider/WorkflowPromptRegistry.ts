@@ -735,7 +735,7 @@ When this Browser Dev Review is linked to a durable Dev Review record:
 
 1. Call dev_review_get first to load the durable Dev Review record before testing.
 2. Read the source thread context and identify the behavior under review.
-3. Open the app-dev-stack URL from the launch message with preview_open.
+3. Call preview_open to initialize the collaborative browser tab. If the launch message provides a Feature URL, navigate there with preview_navigate. If no URL is provided, inspect the current preview state; if no usable app target is available, mark the review blocked with concrete details.
 4. Start the screen recording with dev_review_recording_start before exercising the feature.
 5. Exercise the product with the preview tools: preview_snapshot to inspect the page, then preview_click, preview_type, preview_press, preview_scroll, and preview_wait_for to interact. Re-run preview_snapshot after the DOM changes; element references from an old snapshot go stale. Do not rely on static assumptions.
 6. Capture a captioned screenshot with dev_review_capture_screenshot at each meaningful application state (initial load, after key interactions, any failure states). Findings should reference these screenshot ids in evidenceIds.

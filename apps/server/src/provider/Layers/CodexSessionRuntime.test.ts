@@ -208,10 +208,17 @@ describe("Codex developer instructions browser scoping", () => {
       NodeAssert.doesNotMatch(instructions, /preview_status/);
       NodeAssert.doesNotMatch(instructions, /Do not switch to global browser skills/);
     }
+    NodeAssert.match(CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS, /workflow-subagent-create/);
+    NodeAssert.match(
+      CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
+      /implementation\.browser-dev-review\.codex/,
+    );
+    NodeAssert.doesNotMatch(CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS, /workflow-subagent-create/);
   });
 
   it("defines browser QA developer instructions for Browser Dev Review only", () => {
     NodeAssert.match(CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS, /preview_open/);
+    NodeAssert.match(CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS, /preview_navigate/);
     NodeAssert.match(CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS, /dev_review_recording_start/);
     NodeAssert.match(CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS, /dev_review_capture_screenshot/);
     NodeAssert.match(CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS, /t3-code/);

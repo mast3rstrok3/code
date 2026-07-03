@@ -6,6 +6,7 @@ import {
   isWorkspaceMediaPreviewPath,
   isWorkspacePreviewEntryPath,
   isWorkspaceVideoPreviewPath,
+  workspacePreviewMimeType,
 } from "./filePreview.ts";
 
 describe("workspace file previews", () => {
@@ -41,4 +42,25 @@ describe("workspace file previews", () => {
       expect(isWorkspacePreviewEntryPath(path)).toBe(false);
     },
   );
+
+  it.each([
+    ["recording.webm", "video/webm"],
+    ["clip.MP4?download=1", "video/mp4"],
+    ["icon.png", "image/png"],
+    ["photo.jpeg", "image/jpeg"],
+    ["vector.svg#mark", "image/svg+xml"],
+    ["animation.gif", "image/gif"],
+    ["texture.webp", "image/webp"],
+    ["image.avif", "image/avif"],
+    ["favicon.ico", "image/x-icon"],
+    ["document.pdf", "application/pdf"],
+    ["report.html", "text/html; charset=utf-8"],
+  ])("resolves preview MIME type for %s", (path, mimeType) => {
+    expect(workspacePreviewMimeType(path)).toBe(mimeType);
+  });
+
+  it("returns null for unknown preview MIME types", () => {
+    expect(workspacePreviewMimeType("src/index.ts")).toBeNull();
+    expect(workspacePreviewMimeType("archive.webm.txt")).toBeNull();
+  });
 });

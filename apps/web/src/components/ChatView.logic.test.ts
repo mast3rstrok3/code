@@ -1,6 +1,7 @@
 import {
   DEFAULT_WORKSPACE_USER_ID,
   EnvironmentId,
+  MessageId,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
@@ -25,6 +26,7 @@ import {
   reconcileRetainedMountedThreadIds,
   resolveProductGrillPlanningThreadId,
   resolveSendEnvMode,
+  selectBrowserDevReviewAutoContext,
   shouldWriteThreadErrorToCurrentServerThread,
 } from "./ChatView.logic";
 
@@ -86,6 +88,27 @@ const readySession = {
   updatedAt: "2026-03-29T00:00:10.000Z",
 };
 
+function makeMessage(input: {
+  id: string;
+  role: Thread["messages"][number]["role"];
+  text: string;
+  turnId?: Thread["messages"][number]["turnId"];
+  streaming?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}): Thread["messages"][number] {
+  return {
+    id: MessageId.make(input.id),
+    role: input.role,
+    text: input.text,
+    attachments: [],
+    turnId: input.turnId ?? null,
+    streaming: input.streaming ?? false,
+    createdAt: input.createdAt ?? now,
+    updatedAt: input.updatedAt ?? now,
+  };
+}
+
 describe("buildLocalDraftThread", () => {
   it("uses the stored draft owner", () => {
     const ownerUserId = WorkspaceUserId.make("ada");
@@ -118,23 +141,145 @@ describe("buildLocalDraftThread", () => {
 });
 
 describe("buildBrowserDevReviewLaunchMessage", () => {
-  it("points Browser Dev Review at the preview tools and evidence capture", () => {
+  it("builds an auto launch message from source context without tool choreography", () => {
+    const sourceContext = {
+      turnId: TurnId.make("turn-2"),
+      messages: [
+        {
+          role: "user" as const,
+          text: "Please add login validation.",
+          createdAt: "2026-03-29T00:00:01.000Z",
+        },
+        {
+          role: "assistant" as const,
+          text: "Implemented validation and updated tests.",
+          createdAt: "2026-03-29T00:00:09.000Z",
+        },
+      ],
+    };
     const message = buildBrowserDevReviewLaunchMessage({
       sourceThreadId: threadId,
       sourceTitle: "Implementation thread",
-      reviewId: "dev-review-1",
-      recentSourceContext: "user: please review the flow",
+      mode: "auto",
+      sourceContext,
+      customPrompt: null,
+      previewUrls: ["http://localhost:5173"],
     });
 
-    expect(message).toContain("dev_review_get");
-    expect(message).toContain("preview_open");
-    expect(message).toContain("dev_review_recording_start");
-    expect(message).toContain("dev_review_capture_screenshot");
-    expect(message).toContain("dev_review_recording_stop");
-    expect(message).toContain("dev_review_update");
-    expect(message).toContain("blocked, not passed");
+    expect(message).toContain("Run Browser Dev Review");
+    expect(message).toContain("Auto: latest settled source turn");
+    expect(message).toContain("Feature URL: http://localhost:5173");
+    expect(message).toContain("Please add login validation.");
+    expect(message).toContain("Implemented validation and updated tests.");
+    expect(message).not.toContain("dev_review_get");
+    expect(message).not.toContain("preview_open");
+    expect(message).not.toContain("dev_review_recording_start");
     expect(message).not.toContain("agent-browser");
     expect(message).not.toContain("replay");
+  });
+
+  it("builds a custom launch message from user specifics", () => {
+    const message = buildBrowserDevReviewLaunchMessage({
+      sourceThreadId: threadId,
+      sourceTitle: "Implementation thread",
+      mode: "custom",
+      sourceContext: null,
+      customPrompt: "Focus on the empty-state and failed-login flows.",
+      previewUrls: ["http://localhost:5173", "http://localhost:3000"],
+    });
+
+    expect(message).toContain("Specifics: custom request");
+    expect(message).toContain("Focus on the empty-state and failed-login flows.");
+    expect(message).toContain("Feature URL candidates");
+    expect(message).toContain("http://localhost:3000");
+    expect(message).not.toContain("dev_review_update");
+  });
+});
+
+describe("selectBrowserDevReviewAutoContext", () => {
+  it("selects the latest settled user turn and following assistant output", () => {
+    const turn1 = TurnId.make("turn-1");
+    const turn2 = TurnId.make("turn-2");
+    const context = selectBrowserDevReviewAutoContext({
+      latestTurn: { ...completedTurn, turnId: turn2 },
+      messages: [
+        makeMessage({ id: "user-1", role: "user", text: "First request", turnId: turn1 }),
+        makeMessage({
+          id: "assistant-1",
+          role: "assistant",
+          text: "First answer",
+          turnId: turn1,
+        }),
+        makeMessage({ id: "user-2", role: "user", text: "Review this login flow", turnId: turn2 }),
+        makeMessage({
+          id: "assistant-2",
+          role: "assistant",
+          text: "Login flow implemented",
+          turnId: turn2,
+        }),
+      ],
+    });
+
+    expect(context?.turnId).toBe(turn2);
+    expect(context?.messages.map((message) => message.text)).toEqual([
+      "Review this login flow",
+      "Login flow implemented",
+    ]);
+  });
+
+  it("skips a running latest turn and falls back to the previous settled turn", () => {
+    const settledTurn = TurnId.make("turn-settled");
+    const runningTurn = TurnId.make("turn-running");
+    const context = selectBrowserDevReviewAutoContext({
+      latestTurn: {
+        ...completedTurn,
+        turnId: runningTurn,
+        state: "running",
+        completedAt: null,
+      },
+      messages: [
+        makeMessage({
+          id: "user-settled",
+          role: "user",
+          text: "Settled request",
+          turnId: settledTurn,
+        }),
+        makeMessage({
+          id: "assistant-settled",
+          role: "assistant",
+          text: "Settled answer",
+          turnId: settledTurn,
+        }),
+        makeMessage({
+          id: "user-running",
+          role: "user",
+          text: "Still running request",
+          turnId: runningTurn,
+        }),
+        makeMessage({
+          id: "assistant-running",
+          role: "assistant",
+          text: "Partial answer",
+          turnId: runningTurn,
+          streaming: true,
+        }),
+      ],
+    });
+
+    expect(context?.turnId).toBe(settledTurn);
+    expect(context?.messages.map((message) => message.text)).toEqual([
+      "Settled request",
+      "Settled answer",
+    ]);
+  });
+
+  it("returns null when there is no settled user turn", () => {
+    expect(
+      selectBrowserDevReviewAutoContext({
+        latestTurn: null,
+        messages: [makeMessage({ id: "assistant-only", role: "assistant", text: "No user turn" })],
+      }),
+    ).toBeNull();
   });
 });
 
