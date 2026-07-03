@@ -2,7 +2,13 @@ import type {
   EnvironmentProject,
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
-import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  DEFAULT_WORKSPACE_USER_ID,
+  EnvironmentId,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -35,6 +41,7 @@ function makeProject(id: string, title: string): EnvironmentProject {
 function makeThread(id: string, projectId: ProjectId): EnvironmentThreadShell {
   return {
     environmentId,
+    ownerUserId: DEFAULT_WORKSPACE_USER_ID,
     id: ThreadId.make(id),
     projectId,
     title: `Thread ${id}`,
@@ -52,6 +59,8 @@ function makeThread(id: string, projectId: ProjectId): EnvironmentThreadShell {
     hasPendingApprovals: false,
     hasPendingUserInput: false,
     hasActionableProposedPlan: false,
+    parentThreadId: null,
+    workflowRole: null,
   };
 }
 

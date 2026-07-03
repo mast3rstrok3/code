@@ -47,6 +47,7 @@ function threadDetailToShell(
   return {
     environmentId,
     id: thread.id,
+    ownerUserId: thread.ownerUserId,
     projectId: thread.projectId,
     title: thread.title,
     modelSelection: thread.modelSelection,
@@ -63,6 +64,8 @@ function threadDetailToShell(
     hasPendingApprovals: false,
     hasPendingUserInput: false,
     hasActionableProposedPlan: false,
+    parentThreadId: thread.parentThreadId ?? null,
+    workflowRole: thread.workflowRole ?? null,
   };
 }
 
