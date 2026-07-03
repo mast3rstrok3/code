@@ -224,6 +224,45 @@ describe("AssetAccess", () => {
     }).pipe(Effect.provide(testLayer)),
   );
 
+  it.effect("issues exact workspace URLs for video previews", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-asset-video-workspace-",
+      });
+      const assetsDirectory = path.join(root, "artifacts", "hero-captures");
+      const recordingPath = path.join(assetsDirectory, "recording.webm");
+      const siblingVideoPath = path.join(assetsDirectory, "other.webm");
+      const siblingImagePath = path.join(assetsDirectory, "other.png");
+      yield* fileSystem.makeDirectory(assetsDirectory, { recursive: true });
+      yield* fileSystem.writeFile(recordingPath, new Uint8Array([0x1a, 0x45, 0xdf, 0xa3]));
+      yield* fileSystem.writeFile(siblingVideoPath, new Uint8Array([0x1a, 0x45, 0xdf, 0xa3]));
+      yield* fileSystem.writeFile(siblingImagePath, new Uint8Array([137, 80, 78, 71]));
+      const canonicalRecordingPath = yield* fileSystem.realPath(recordingPath);
+
+      const result = yield* issueAssetUrl({
+        resource: {
+          _tag: "workspace-file",
+          threadId: ThreadId.make("thread-1"),
+          path: recordingPath,
+        },
+        workspaceRoot: root,
+      });
+      const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+      const separatorIndex = suffix.indexOf("/");
+      const token = suffix.slice(0, separatorIndex);
+
+      expect(yield* resolveAsset(token, "recording.webm")).toEqual({
+        kind: "file",
+        path: canonicalRecordingPath,
+      });
+      expect(yield* resolveAsset(token, "other.webm")).toBeNull();
+      expect(yield* resolveAsset(token, "other.png")).toBeNull();
+      expect(yield* resolveAsset(token, "../recording.webm")).toBeNull();
+    }).pipe(Effect.provide(testLayer)),
+  );
+
   it.effect("issues exact attachment capabilities by attachment id", () =>
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;

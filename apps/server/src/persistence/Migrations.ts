@@ -56,6 +56,7 @@ import Migration0050 from "./Migrations/050_ProjectionThreadLoadedPrdBundles.ts"
 import Migration0051 from "./Migrations/051_ProjectionImplementationRuns.ts";
 import Migration0052 from "./Migrations/052_RenameYoloWorkflowToProductWorkflow.ts";
 import Migration0053 from "./Migrations/053_ScopePlanningReviewCycleMessageIndex.ts";
+import Migration0054 from "./Migrations/054_ProjectionThreadDevReviewEvidenceColumn.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -111,6 +112,7 @@ export const migrationEntries = [
   [51, "ProjectionImplementationRuns", Migration0051],
   [52, "RenameYoloWorkflowToProductWorkflow", Migration0052],
   [53, "ScopePlanningReviewCycleMessageIndex", Migration0053],
+  [54, "ProjectionThreadDevReviewEvidenceColumn", Migration0054],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

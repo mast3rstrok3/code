@@ -6818,6 +6818,24 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("routes websocket rpc appDevStack.getAllStackPodLogs", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.appDevStackGetAllStackPodLogs]({
+            limit: { mode: "tail", tailLines: 300 },
+          }),
+        ),
+      );
+
+      assert.deepEqual(result.limit, { mode: "tail", tailLines: 300 });
+      assert.deepEqual(result.stacks, []);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("routes websocket rpc terminal.write errors", () =>
     Effect.gen(function* () {
       const terminalError = new TerminalNotRunningError({

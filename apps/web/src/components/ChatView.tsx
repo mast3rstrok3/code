@@ -5341,6 +5341,9 @@ function ChatViewContent(props: ChatViewProps) {
       <AppDevStackLogsPanel
         environmentId={activeThread.environmentId}
         timestampFormat={timestampFormat}
+        activeThreadWorktreePath={activeThread.worktreePath}
+        workspaceRoot={activeWorkspaceRoot}
+        gitCwd={gitCwd}
       />
     ) : (activeRightPanelSurface?.kind === "files" || activeRightPanelSurface?.kind === "file") &&
       activeProject &&

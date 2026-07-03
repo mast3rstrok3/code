@@ -1,17 +1,14 @@
-import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
+import { useAtomValue } from "@effect/atom-react";
 import type {
   EnvironmentId,
   ProjectListEntriesResult,
   ProjectReadFileResult,
 } from "@t3tools/contracts";
-import * as Cause from "effect/Cause";
-import * as Option from "effect/Option";
-import { AsyncResult } from "effect/unstable/reactivity";
-import { useCallback } from "react";
+import { executeAtomQuery } from "@t3tools/client-runtime/state/runtime";
 
 import { appAtomRegistry } from "~/rpc/atomRegistry";
+import { useEnvironmentQuery } from "~/state/query";
 import { projectEnvironment } from "~/state/projects";
-import { executeAtomQuery } from "@t3tools/client-runtime/state/runtime";
 
 const EMPTY_PROJECT_FILE_PATH = "";
 function optimisticFileAtom(environmentId: EnvironmentId, cwd: string, relativePath: string) {
@@ -32,11 +29,11 @@ export function getProjectEntriesQueryAtom(environmentId: EnvironmentId, cwd: st
 export function getProjectFileQueryAtom(
   environmentId: EnvironmentId,
   cwd: string,
-  relativePath: string | null,
+  relativePath: string,
 ) {
   return projectEnvironment.readFile({
     environmentId,
-    input: { cwd, relativePath: relativePath ?? EMPTY_PROJECT_FILE_PATH },
+    input: { cwd, relativePath },
   });
 }
 
@@ -111,26 +108,12 @@ export function clearProjectFileQueryData(
   appAtomRegistry.set(optimisticFileAtom(environmentId, cwd, relativePath), null);
 }
 
-function errorMessage<A>(result: AsyncResult.AsyncResult<A, unknown>): string | null {
-  if (result._tag !== "Failure") return null;
-  const cause = Cause.squash(result.cause);
-  return cause instanceof Error ? cause.message : "Workspace query failed.";
-}
-
 export function useProjectEntriesQuery(
   environmentId: EnvironmentId,
   cwd: string,
 ): ProjectQueryState<ProjectListEntriesResult> {
   const atom = getProjectEntriesQueryAtom(environmentId, cwd);
-  const result = useAtomValue(atom);
-  const refreshAtom = useAtomRefresh(atom);
-  const refresh = useCallback(() => refreshAtom(), [refreshAtom]);
-  return {
-    data: Option.getOrNull(AsyncResult.value(result)),
-    error: errorMessage(result),
-    isPending: result.waiting,
-    refresh,
-  };
+  return useEnvironmentQuery(atom);
 }
 
 export function useProjectFileQuery(
@@ -138,20 +121,18 @@ export function useProjectFileQuery(
   cwd: string,
   relativePath: string | null,
 ): ProjectQueryState<ProjectReadFileResult> {
-  const atom = getProjectFileQueryAtom(environmentId, cwd, relativePath);
-  const result = useAtomValue(atom);
-  const refreshAtom = useAtomRefresh(atom);
-  const refresh = useCallback(() => refreshAtom(), [refreshAtom]);
-  const data = Option.getOrNull(AsyncResult.value(result));
+  const query = useEnvironmentQuery(
+    relativePath === null ? null : getProjectFileQueryAtom(environmentId, cwd, relativePath),
+  );
   const optimisticResult = useAtomValue(
     optimisticFileAtom(environmentId, cwd, relativePath ?? EMPTY_PROJECT_FILE_PATH),
   );
   const optimisticFile = relativePath === null ? null : optimisticResult;
 
   return {
-    data: optimisticFile?.data ?? data,
-    error: errorMessage(result),
-    isPending: result.waiting,
-    refresh,
+    data: optimisticFile?.data ?? query.data,
+    error: query.error,
+    isPending: query.isPending,
+    refresh: query.refresh,
   };
 }

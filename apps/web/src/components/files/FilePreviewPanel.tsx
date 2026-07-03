@@ -1,4 +1,5 @@
 import type {
+  AssetCreateUrlResult,
   EditorId,
   EnvironmentId,
   ResolvedKeybindingsConfig,
@@ -15,6 +16,7 @@ import { ChevronRight, Code2, Eye, FolderTree, Globe2, LoaderCircle } from "luci
 import * as Schema from "effect/Schema";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { resolveAssetUrl } from "~/assets/assetUrls";
 import { isBrowserPreviewFile, openFileInPreview } from "~/browser/openFileInPreview";
 import ChatMarkdown from "~/components/ChatMarkdown";
 import { OpenInPicker } from "~/components/chat/OpenInPicker";
@@ -36,6 +38,7 @@ import { useServerConfigs } from "~/state/entities";
 import { useEnvironmentHttpBaseUrl, usePrimaryEnvironmentId } from "~/state/environments";
 import { previewEnvironment } from "~/state/preview";
 import { projectEnvironment } from "~/state/projects";
+import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { useAtomQueryRunner } from "~/state/use-atom-query-runner";
 
@@ -61,6 +64,10 @@ import {
   setProjectFileQueryData,
   useProjectFileQuery,
 } from "./projectFilesQueryState";
+import {
+  resolveWorkspaceFilePreviewKind,
+  type WorkspaceFilePreviewKind,
+} from "./workspaceFilePreviewKind";
 
 interface FilePreviewPanelProps {
   environmentId: EnvironmentId;
@@ -259,6 +266,8 @@ interface FileSelectionOverride {
   revealRequestId: number;
   range: SelectedLineRange | null;
 }
+
+type WorkspaceMediaPreviewKind = Extract<WorkspaceFilePreviewKind, "image" | "video">;
 
 function useFileSaveCoordinator({
   environmentId,
@@ -598,6 +607,34 @@ function RenderedMarkdownSurface({
   );
 }
 
+function WorkspaceMediaSurface({
+  kind,
+  relativePath,
+  url,
+}: {
+  readonly kind: WorkspaceMediaPreviewKind;
+  readonly relativePath: string;
+  readonly url: string;
+}) {
+  return (
+    <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-background p-3">
+      {kind === "image" ? (
+        <img src={url} alt={relativePath} className="h-full w-full object-contain" />
+      ) : (
+        <video controls preload="metadata" src={url} className="max-h-full max-w-full" />
+      )}
+    </div>
+  );
+}
+
+function resolveWorkspaceMediaUrl(
+  httpBaseUrl: string | null,
+  asset: AssetCreateUrlResult | null,
+): string | null {
+  if (!httpBaseUrl || !asset) return null;
+  return resolveAssetUrl(httpBaseUrl, asset.relativeUrl);
+}
+
 function initialExplorerOpen(): boolean {
   try {
     return getLocalStorageItem(FILE_EXPLORER_STORAGE_KEY, Schema.Boolean) ?? true;
@@ -633,14 +670,38 @@ export default function FilePreviewPanel({
   const openPreview = useAtomCommand(previewEnvironment.open, {
     reportFailure: false,
   });
-  const file = useProjectFileQuery(environmentId, cwd, relativePath);
+  const previewKind = relativePath ? resolveWorkspaceFilePreviewKind(relativePath) : null;
+  const mediaPreviewKind: WorkspaceMediaPreviewKind | null =
+    previewKind === "image" || previewKind === "video" ? previewKind : null;
+  const file = useProjectFileQuery(
+    environmentId,
+    cwd,
+    mediaPreviewKind === null ? relativePath : null,
+  );
+  const mediaAsset = useEnvironmentQuery(
+    relativePath !== null && mediaPreviewKind !== null
+      ? assetEnvironment.createUrl({
+          environmentId,
+          input: {
+            resource: {
+              _tag: "workspace-file",
+              threadId: threadRef.threadId,
+              path: relativePath,
+            },
+          },
+        })
+      : null,
+  );
   const [explorerOpen, setExplorerOpen] = useState(initialExplorerOpen);
   const [markdownView, setMarkdownView] = useState<{
     path: string | null;
     revealRequestId: number | null;
   }>({ path: null, revealRequestId: null });
   const breadcrumbRef = useRef<HTMLDivElement>(null);
-  const isMarkdown = relativePath ? isMarkdownPreviewFile(relativePath) : false;
+  const isMarkdown =
+    relativePath !== null && mediaPreviewKind === null
+      ? isMarkdownPreviewFile(relativePath)
+      : false;
   const renderMarkdown =
     isMarkdown &&
     markdownView.path === relativePath &&
@@ -655,6 +716,13 @@ export default function FilePreviewPanel({
     [projectName, relativePath],
   );
   const onFilePostRender = useFileLineReveal(relativePath, revealLine, revealRequestId);
+  const mediaUrl = useMemo(
+    () => resolveWorkspaceMediaUrl(environmentHttpBaseUrl, mediaAsset.data),
+    [environmentHttpBaseUrl, mediaAsset.data],
+  );
+  const mediaError =
+    mediaAsset.error !== null ||
+    (mediaPreviewKind !== null && mediaAsset.data !== null && !mediaUrl);
 
   useEffect(() => {
     const currentCrumb = breadcrumbRef.current?.querySelector<HTMLElement>(
@@ -824,7 +892,23 @@ export default function FilePreviewPanel({
             relativePath ? "flex" : "hidden",
           )}
         >
-          {relativePath && file.error && file.data === null ? (
+          {relativePath && mediaPreviewKind !== null ? (
+            mediaError ? (
+              <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs leading-relaxed text-destructive">
+                Unable to load media preview.
+              </div>
+            ) : mediaUrl ? (
+              <WorkspaceMediaSurface
+                kind={mediaPreviewKind}
+                relativePath={relativePath}
+                url={mediaUrl}
+              />
+            ) : (
+              <div className="flex min-h-0 flex-1 items-center justify-center text-muted-foreground">
+                <LoaderCircle className="size-5 animate-spin" />
+              </div>
+            )
+          ) : relativePath && file.error && file.data === null ? (
             <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs leading-relaxed text-destructive">
               {file.error}
             </div>

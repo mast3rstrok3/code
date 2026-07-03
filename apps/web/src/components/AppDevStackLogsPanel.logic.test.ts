@@ -1,4 +1,5 @@
 import type {
+  AppDevStack,
   AppDevStackDiscoveredStackPodLogs,
   AppDevStackPod,
   AppDevStackPodLogEntry,
@@ -6,6 +7,7 @@ import type {
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  buildAssociatedStackPodLogsResult,
   buildStackPodLogViews,
   countStackLogContainers,
   filterStackPodLogEntries,
@@ -77,6 +79,27 @@ const entries: AppDevStackPodLogEntry[] = [
   redisErrorEntry,
   emptyMinioEntry,
 ];
+
+const makeStack = (input: Partial<AppDevStack> & Pick<AppDevStack, "id" | "worktreePath">) => {
+  const { id, worktreePath, ...rest } = input;
+  return {
+    id,
+    uuid: rest.uuid ?? id,
+    userId: rest.userId ?? "user-1",
+    worktreePath,
+    composePath: rest.composePath ?? "infra/compose/compose.app-dev.yml",
+    displayName: rest.displayName ?? null,
+    description: rest.description ?? null,
+    status: rest.status ?? "running",
+    services: rest.services ?? null,
+    serviceCount: rest.serviceCount ?? 0,
+    lastError: rest.lastError ?? null,
+    errorCount: rest.errorCount ?? 0,
+    createdAt: rest.createdAt ?? "2026-06-25T00:00:00.000Z",
+    updatedAt: rest.updatedAt ?? "2026-06-25T00:00:00.000Z",
+    ...rest,
+  } satisfies AppDevStack;
+};
 
 const makeDiscoveredStack = (
   input: Pick<AppDevStackDiscoveredStackPodLogs, "stackId" | "namespace" | "entries"> &
@@ -334,6 +357,58 @@ describe("buildStackPodLogViews", () => {
 
     expect(views).toHaveLength(1);
     expect(views[0]?.stack.error).toBe("pod list failed");
+  });
+});
+
+describe("buildAssociatedStackPodLogsResult", () => {
+  it("wraps stack-specific pod logs in the shared result shape", () => {
+    const stack = makeStack({
+      id: "hero-stack",
+      displayName: "Hero",
+      displaySlug: "hero",
+      repoName: "hero",
+      branchName: "feature/logs",
+      worktreePath: "/repo/worktrees/hero",
+    });
+    const discovered = makeDiscoveredStack({
+      stackId: "hero-stack",
+      namespace: "hero-dev",
+      entries: [backendEntry],
+    });
+    const result = buildAssociatedStackPodLogsResult({
+      stack,
+      limit: { mode: "tail", tailLines: 1000 },
+      result: {
+        stackId: "hero-stack",
+        namespace: "hero-dev",
+        tailLines: 1000,
+        pods: discovered.pods,
+        entries: [backendEntry],
+        fetchedAt: "2026-06-25T00:00:11.000Z",
+      },
+    });
+
+    expect(result).toEqual({
+      limit: { mode: "tail", tailLines: 1000 },
+      fetchedAt: "2026-06-25T00:00:11.000Z",
+      stacks: [
+        {
+          stackId: "hero-stack",
+          namespace: "hero-dev",
+          displayName: "Hero",
+          displaySlug: "hero",
+          repoName: "hero",
+          branchName: "feature/logs",
+          worktreePath: "/repo/worktrees/hero",
+          managedBy: null,
+          limit: { mode: "tail", tailLines: 1000 },
+          pods: discovered.pods,
+          entries: [backendEntry],
+          error: null,
+          fetchedAt: "2026-06-25T00:00:11.000Z",
+        },
+      ],
+    });
   });
 });
 

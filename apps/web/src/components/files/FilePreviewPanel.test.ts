@@ -6,6 +6,7 @@ import {
   remapFileCommentAnnotations,
 } from "./fileCommentAnnotations";
 import { isMarkdownPreviewFile, setMarkdownTaskChecked } from "./filePreviewMode";
+import { resolveWorkspaceFilePreviewKind } from "./workspaceFilePreviewKind";
 
 describe("file comment annotations", () => {
   it("normalizes and formats selected line ranges", () => {
@@ -63,6 +64,16 @@ describe("isMarkdownPreviewFile", () => {
   it("does not treat other text files as markdown", () => {
     expect(isMarkdownPreviewFile("docs/guide.txt")).toBe(false);
     expect(isMarkdownPreviewFile("docs/markdown.ts")).toBe(false);
+  });
+});
+
+describe("resolveWorkspaceFilePreviewKind", () => {
+  it("classifies workspace media separately from text files", () => {
+    expect(resolveWorkspaceFilePreviewKind("artifacts/hero-captures/01-hero.png")).toBe("image");
+    expect(resolveWorkspaceFilePreviewKind("artifacts/hero-captures/hero-navigation.webm")).toBe(
+      "video",
+    );
+    expect(resolveWorkspaceFilePreviewKind("src/index.ts")).toBe("text");
   });
 });
 

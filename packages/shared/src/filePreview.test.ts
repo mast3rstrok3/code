@@ -3,7 +3,9 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   isWorkspaceBrowserPreviewPath,
   isWorkspaceImagePreviewPath,
+  isWorkspaceMediaPreviewPath,
   isWorkspacePreviewEntryPath,
+  isWorkspaceVideoPreviewPath,
 } from "./filePreview.ts";
 
 describe("workspace file previews", () => {
@@ -24,6 +26,12 @@ describe("workspace file previews", () => {
     "image.avif",
   ])("recognizes image preview path %s", (path) => {
     expect(isWorkspaceImagePreviewPath(path)).toBe(true);
+    expect(isWorkspacePreviewEntryPath(path)).toBe(true);
+  });
+
+  it.each(["recording.webm", "clip.MP4?download=1"])("recognizes video preview path %s", (path) => {
+    expect(isWorkspaceVideoPreviewPath(path)).toBe(true);
+    expect(isWorkspaceMediaPreviewPath(path)).toBe(true);
     expect(isWorkspacePreviewEntryPath(path)).toBe(true);
   });
 

@@ -324,6 +324,46 @@ export function buildStackPodLogViews(
     });
 }
 
+export function stackPodLogsResultToDiscoveredStack(input: {
+  readonly stack: AppDevStack;
+  readonly result: AppDevStackGetStackPodLogsResult;
+  readonly limit: AppDevStackLogReadLimit;
+}): AppDevStackDiscoveredStackPodLogs {
+  return {
+    stackId: input.result.stackId,
+    namespace: input.result.namespace,
+    displayName: input.stack.displayName,
+    displaySlug: input.stack.displaySlug ?? null,
+    repoName: input.stack.repoName ?? null,
+    branchName: input.stack.branchName ?? null,
+    worktreePath: input.stack.worktreePath,
+    managedBy: null,
+    limit: input.limit,
+    pods: input.result.pods,
+    entries: input.result.entries,
+    error: null,
+    fetchedAt: input.result.fetchedAt,
+  };
+}
+
+export function buildAssociatedStackPodLogsResult(input: {
+  readonly stack: AppDevStack;
+  readonly result: AppDevStackGetStackPodLogsResult;
+  readonly limit: AppDevStackLogReadLimit;
+}): AppDevStackGetAllStackPodLogsResult {
+  return {
+    limit: input.limit,
+    stacks: [
+      stackPodLogsResultToDiscoveredStack({
+        stack: input.stack,
+        result: input.result,
+        limit: input.limit,
+      }),
+    ],
+    fetchedAt: input.result.fetchedAt,
+  };
+}
+
 export function formatStackPodLogsForClipboard(input: {
   readonly stackName: string;
   readonly result: Pick<AppDevStackGetStackPodLogsResult, "namespace" | "tailLines" | "fetchedAt">;

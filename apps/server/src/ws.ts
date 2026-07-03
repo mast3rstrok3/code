@@ -499,6 +499,7 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.appDevStackListPods, AuthOrchestrationReadScope],
   [WS_METHODS.appDevStackGetPodLogs, AuthOrchestrationReadScope],
   [WS_METHODS.appDevStackGetStackPodLogs, AuthOrchestrationReadScope],
+  [WS_METHODS.appDevStackGetAllStackPodLogs, AuthOrchestrationReadScope],
   [WS_METHODS.subscribePreviewEvents, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeDiscoveredLocalServers, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeServerConfig, AuthOrchestrationReadScope],

@@ -107,6 +107,18 @@ describe("resolveMarkdownFileLinkTarget", () => {
     });
   });
 
+  it("resolves workspace-relative browser recordings from markdown links", () => {
+    expect(
+      resolveMarkdownFileLinkMeta(
+        "artifacts/hero-captures/hero-navigation.webm",
+        "/home/nils/repos/nils/hero",
+      ),
+    ).toMatchObject({
+      filePath: "/home/nils/repos/nils/hero/artifacts/hero-captures/hero-navigation.webm",
+      workspaceRelativePath: "artifacts/hero-captures/hero-navigation.webm",
+    });
+  });
+
   it("normalizes slash-prefixed windows drive paths before resolving", () => {
     expect(
       resolveMarkdownFileLinkTarget(

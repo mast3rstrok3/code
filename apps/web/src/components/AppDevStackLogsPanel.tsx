@@ -19,8 +19,11 @@ import { useEnvironmentQuery } from "~/state/query";
 import { formatShortTimestamp } from "~/timestampFormat";
 
 import {
+  buildAssociatedStackPodLogsResult,
   buildStackPodLogViews,
   formatAllStackPodLogsForClipboard,
+  normalizeStackWorktreePath,
+  resolveCurrentStackPath,
   stackLogReadLimitLabel,
   stackLogTailSelectionLabel,
   stackLogTailSelectionToReadLimit,
@@ -39,6 +42,9 @@ const TAIL_LINE_OPTIONS = [100, 300, 1000, 5000, "all"] as const;
 interface AppDevStackLogsPanelProps {
   readonly environmentId: EnvironmentId;
   readonly timestampFormat: TimestampFormat;
+  readonly activeThreadWorktreePath?: string | null | undefined;
+  readonly workspaceRoot?: string | null | undefined;
+  readonly gitCwd?: string | null | undefined;
 }
 
 function PanelState(props: {
@@ -155,6 +161,15 @@ export function AppDevStackLogsPanel(props: AppDevStackLogsPanelProps) {
   const { copyToClipboard, isCopied } = useCopyToClipboard({ target: "app stack pod logs" });
 
   const readLimit = useMemo(() => stackLogTailSelectionToReadLimit(tailSelection), [tailSelection]);
+  const associatedWorktreePath = useMemo(
+    () =>
+      resolveCurrentStackPath({
+        activeThreadWorktreePath: props.activeThreadWorktreePath,
+        workspaceRoot: props.workspaceRoot,
+        gitCwd: props.gitCwd,
+      }),
+    [props.activeThreadWorktreePath, props.gitCwd, props.workspaceRoot],
+  );
 
   const statusQuery = useEnvironmentQuery(
     appDevStackEnvironment.status({
@@ -163,27 +178,51 @@ export function AppDevStackLogsPanel(props: AppDevStackLogsPanelProps) {
     }),
   );
   const backendEnabled = statusQuery.data?.enabled === true;
-  const logsQuery = useEnvironmentQuery(
-    backendEnabled
+  const associatedStackQuery = useEnvironmentQuery(
+    backendEnabled && associatedWorktreePath !== null
+      ? appDevStackEnvironment.byWorktree({
+          environmentId: props.environmentId,
+          input: { worktreePath: associatedWorktreePath },
+        })
+      : null,
+  );
+  const associatedStack = associatedStackQuery.data?.stack ?? null;
+  const stackLogsQuery = useEnvironmentQuery(
+    backendEnabled && associatedStack !== null && readLimit.mode === "tail"
+      ? appDevStackEnvironment.getStackPodLogs({
+          environmentId: props.environmentId,
+          input: {
+            stackId: associatedStack.id,
+            tailLines: readLimit.tailLines,
+          },
+        })
+      : null,
+  );
+  const allLogsQuery = useEnvironmentQuery(
+    backendEnabled && associatedStack !== null && readLimit.mode === "all"
       ? appDevStackEnvironment.getAllStackPodLogs({
           environmentId: props.environmentId,
           input: { limit: readLimit },
         })
       : null,
   );
+  const activeLogsQuery = readLimit.mode === "all" ? allLogsQuery : stackLogsQuery;
 
   const refresh = useCallback(() => {
     statusQuery.refresh();
-    logsQuery.refresh();
-  }, [logsQuery, statusQuery]);
+    associatedStackQuery.refresh();
+    stackLogsQuery.refresh();
+    allLogsQuery.refresh();
+  }, [allLogsQuery, associatedStackQuery, stackLogsQuery, statusQuery]);
 
   useEffect(() => {
     if (!autoRefresh || tailSelection === "all") return;
     const intervalId = window.setInterval(() => {
-      logsQuery.refresh();
+      associatedStackQuery.refresh();
+      stackLogsQuery.refresh();
     }, 5_000);
     return () => window.clearInterval(intervalId);
-  }, [autoRefresh, logsQuery, tailSelection]);
+  }, [associatedStackQuery, autoRefresh, stackLogsQuery, tailSelection]);
 
   useEffect(() => {
     if (tailSelection === "all" && autoRefresh) {
@@ -208,7 +247,32 @@ export function AppDevStackLogsPanel(props: AppDevStackLogsPanelProps) {
     });
   }, []);
 
-  const result = logsQuery.data;
+  const result = useMemo(() => {
+    if (associatedStack === null) return null;
+
+    if (readLimit.mode === "tail") {
+      if (stackLogsQuery.data === null) return null;
+      return buildAssociatedStackPodLogsResult({
+        stack: associatedStack,
+        result: stackLogsQuery.data,
+        limit: readLimit,
+      });
+    }
+
+    if (allLogsQuery.data === null) return null;
+    const normalizedWorktreePath = normalizeStackWorktreePath(associatedStack.worktreePath);
+    return {
+      ...allLogsQuery.data,
+      stacks: allLogsQuery.data.stacks.filter((stack) => {
+        if (stack.stackId === associatedStack.id) return true;
+        if (stack.namespace === associatedStack.namespace) return true;
+        return (
+          typeof stack.worktreePath === "string" &&
+          normalizeStackWorktreePath(stack.worktreePath) === normalizedWorktreePath
+        );
+      }),
+    };
+  }, [allLogsQuery.data, associatedStack, readLimit, stackLogsQuery.data]);
   const stackViews = useMemo(
     () => buildStackPodLogViews(result?.stacks ?? [], { search, hideEmpty }),
     [hideEmpty, result?.stacks, search],
@@ -246,7 +310,41 @@ export function AppDevStackLogsPanel(props: AppDevStackLogsPanelProps) {
       />
     );
   }
-  if (logsQuery.isPending && result === null) {
+  if (associatedWorktreePath === null) {
+    return (
+      <PanelState
+        title="No thread worktree"
+        description="This thread is not associated with a worktree that can be resolved to an App Dev Stack."
+      />
+    );
+  }
+  if (associatedStackQuery.isPending && associatedStackQuery.data === null) {
+    return (
+      <PanelState
+        icon="loading"
+        title="Loading App Stack"
+        description="Resolving the App Dev Stack for this thread worktree."
+      />
+    );
+  }
+  if (associatedStackQuery.error) {
+    return (
+      <PanelState
+        icon="warning"
+        title="Failed to resolve App Stack"
+        description={associatedStackQuery.error}
+      />
+    );
+  }
+  if (associatedStack === null) {
+    return (
+      <PanelState
+        title="No App Stack"
+        description={`No App Dev Stack is associated with ${associatedWorktreePath}.`}
+      />
+    );
+  }
+  if (activeLogsQuery.isPending && result === null) {
     return (
       <PanelState
         icon="loading"
@@ -255,9 +353,13 @@ export function AppDevStackLogsPanel(props: AppDevStackLogsPanelProps) {
       />
     );
   }
-  if (logsQuery.error) {
+  if (activeLogsQuery.error) {
     return (
-      <PanelState icon="warning" title="Failed to load pod logs" description={logsQuery.error} />
+      <PanelState
+        icon="warning"
+        title="Failed to load pod logs"
+        description={activeLogsQuery.error}
+      />
     );
   }
 
@@ -294,13 +396,18 @@ export function AppDevStackLogsPanel(props: AppDevStackLogsPanelProps) {
               size="icon-xs"
               variant="ghost"
               onClick={refresh}
-              disabled={statusQuery.isPending || logsQuery.isPending}
+              disabled={
+                statusQuery.isPending || associatedStackQuery.isPending || activeLogsQuery.isPending
+              }
               aria-label="Refresh App Stack pod logs"
             >
               <RefreshCwIcon
                 className={cn(
                   "size-3.5",
-                  (statusQuery.isPending || logsQuery.isPending) && "animate-spin",
+                  (statusQuery.isPending ||
+                    associatedStackQuery.isPending ||
+                    activeLogsQuery.isPending) &&
+                    "animate-spin",
                 )}
               />
             </Button>
@@ -400,8 +507,8 @@ export function AppDevStackLogsPanel(props: AppDevStackLogsPanelProps) {
 
       {totalStackCount === 0 ? (
         <PanelState
-          title="No App Stacks"
-          description="Kubernetes did not report any App Dev Stack namespaces for this environment."
+          title="No App Stack logs"
+          description="No pod log result was returned for the App Dev Stack associated with this worktree."
         />
       ) : visiblePodCount === 0 && stackFailureCount === 0 ? (
         <PanelState
