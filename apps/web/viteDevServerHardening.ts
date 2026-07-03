@@ -16,6 +16,14 @@ const VITE_FS_PREFIX = "/@fs";
 const VITE_OPTIMIZED_DEPS_PREFIX = "/node_modules/.vite/deps/";
 const LOCAL_HOSTNAMES = new Set(["localhost"]);
 
+export function resolveDevProxyTarget(input: {
+  readonly explicitProxyTarget?: string;
+  readonly wsUrl?: string;
+}): string | undefined {
+  const explicitProxyTarget = input.explicitProxyTarget?.trim();
+  return normalizeProxyTarget(explicitProxyTarget || input.wsUrl);
+}
+
 export function shouldHardenPublicDevServerCache(devServerUrl: string): boolean {
   let url: URL;
   try {
@@ -56,6 +64,30 @@ export function resolveViteInternalFilesystemRequest(
   }
 
   return null;
+}
+
+function normalizeProxyTarget(rawValue: string | undefined): string | undefined {
+  if (!rawValue) {
+    return undefined;
+  }
+
+  try {
+    const url = new URL(rawValue);
+    if (url.protocol === "ws:") {
+      url.protocol = "http:";
+    } else if (url.protocol === "wss:") {
+      url.protocol = "https:";
+    }
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return undefined;
+    }
+    url.pathname = "";
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return undefined;
+  }
 }
 
 export function createViteInternalModuleFallbackGuardMiddleware(

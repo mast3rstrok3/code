@@ -9,6 +9,7 @@ import type { Connect } from "vite";
 import {
   createViteInternalModuleFallbackGuardMiddleware,
   PUBLIC_DEV_CACHE_HEADERS,
+  resolveDevProxyTarget,
   resolveViteInternalFilesystemRequest,
   shouldHardenPublicDevServerCache,
 } from "./viteDevServerHardening";
@@ -42,6 +43,32 @@ describe("shouldHardenPublicDevServerCache", () => {
     "http://[::1]:5733",
   ])("does not harden local or non-http dev URL %s", (devServerUrl) => {
     expect(shouldHardenPublicDevServerCache(devServerUrl)).toBe(false);
+  });
+});
+
+describe("resolveDevProxyTarget", () => {
+  it("prefers an explicit HTTP proxy target over the browser-facing WebSocket URL", () => {
+    expect(
+      resolveDevProxyTarget({
+        explicitProxyTarget: " http://127.0.0.1:7020/backend?ignored=1#ignored ",
+        wsUrl: "wss://code-dev.nightingale-ai.com",
+      }),
+    ).toBe("http://127.0.0.1:7020/");
+  });
+
+  it("derives an HTTP proxy target from the WebSocket URL when no override is configured", () => {
+    expect(
+      resolveDevProxyTarget({
+        wsUrl: "wss://code-dev.nightingale-ai.com/ws?ticket=secret",
+      }),
+    ).toBe("https://code-dev.nightingale-ai.com/");
+  });
+
+  it("ignores invalid or unsupported proxy targets", () => {
+    expect(resolveDevProxyTarget({ explicitProxyTarget: "file:///tmp/server.sock" })).toBe(
+      undefined,
+    );
+    expect(resolveDevProxyTarget({ explicitProxyTarget: "not a url" })).toBe(undefined);
   });
 });
 

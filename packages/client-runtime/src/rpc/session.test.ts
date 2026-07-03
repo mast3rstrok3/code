@@ -6,9 +6,11 @@ import {
   WS_METHODS,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import * as Socket from "effect/unstable/socket/Socket";
@@ -146,6 +148,19 @@ const decodeJson = Schema.decodeUnknownSync(Schema.UnknownFromJsonString);
 const decodeRpcRequest = Schema.decodeUnknownSync(RpcRequest);
 const encodeJson = Schema.encodeUnknownSync(Schema.UnknownFromJsonString);
 const encodeServerConfig = Schema.encodeSync(ServerConfig);
+
+function hasRpcMessageTag(value: unknown, tag: string): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "_tag" in value &&
+    (value as { readonly _tag?: unknown })._tag === tag
+  );
+}
+
+function countSentPings(socket: TestWebSocket): number {
+  return socket.sent.filter((message) => hasRpcMessageTag(decodeJson(message), "Ping")).length;
+}
 
 const makeFactory = Effect.fn("TestRpcSessionFactory.make")(function* () {
   const sockets: TestWebSocket[] = [];
@@ -329,5 +344,47 @@ describe("RpcSessionFactory", () => {
       );
       expect(error.message).toContain("WebSocket error event");
     }),
+  );
+
+  it.effect("tolerates two missed RPC heartbeat pongs before timing out", () =>
+    Effect.gen(function* () {
+      const { factory, sockets } = yield* makeFactory();
+      const session = yield* factory.connect(PREPARED);
+      const readyFiber = yield* Effect.forkChild(session.ready);
+      const socket = yield* awaitSocket(sockets);
+      socket.open();
+      yield* completeInitialConfig(socket);
+      yield* Fiber.join(readyFiber);
+
+      const disconnected = yield* Deferred.make<ConnectionTransientError>();
+      yield* session.closed.pipe(
+        Effect.flip,
+        Effect.flatMap((error) => Deferred.succeed(disconnected, error)),
+        Effect.forkChild,
+      );
+
+      yield* TestClock.adjust("5 seconds");
+      yield* Effect.yieldNow;
+      expect(countSentPings(socket)).toBe(1);
+      expect(Option.isNone(yield* Deferred.poll(disconnected))).toBe(true);
+
+      yield* TestClock.adjust("5 seconds");
+      yield* Effect.yieldNow;
+      expect(countSentPings(socket)).toBe(2);
+      expect(Option.isNone(yield* Deferred.poll(disconnected))).toBe(true);
+
+      yield* TestClock.adjust("5 seconds");
+      yield* Effect.yieldNow;
+      expect(countSentPings(socket)).toBe(3);
+      expect(Option.isNone(yield* Deferred.poll(disconnected))).toBe(true);
+
+      yield* TestClock.adjust("5 seconds");
+      yield* Effect.yieldNow;
+      const error = yield* Deferred.await(disconnected);
+      expect(error).toBeInstanceOf(ConnectionTransientError);
+      expect(error.reason).toBe("transport");
+      expect(error.message).toContain("RPC heartbeat timed out after 3 missed pongs.");
+      expect(countSentPings(socket)).toBe(3);
+    }).pipe(Effect.provide(TestClock.layer())),
   );
 });

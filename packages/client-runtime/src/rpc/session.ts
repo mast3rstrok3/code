@@ -21,6 +21,7 @@ import {
 } from "../connection/model.ts";
 
 const SOCKET_OPEN_TIMEOUT = "15 seconds";
+const RPC_PING_MISS_TOLERANCE = 3;
 const MAX_CLOSE_REASON_LENGTH = 200;
 
 interface ObservedWebSocketClose {
@@ -39,6 +40,17 @@ interface ObservedWebSocketLifecycle {
   close: ObservedWebSocketClose | null;
   error: ObservedWebSocketError | null;
   openedAtMs: number | null;
+}
+
+interface ObservedRpcHeartbeat {
+  awaitingPong: boolean;
+  consecutiveMissedPongs: number;
+  lastPingAtMs: number | null;
+  lastPongAtMs: number | null;
+  pingCount: number;
+  pongCount: number;
+  timedOut: boolean;
+  timeoutAtMs: number | null;
 }
 
 export interface RpcSession {
@@ -68,6 +80,12 @@ function currentElapsedTimeMs(): number {
 
 function elapsedSince(startedAtMs: number | null, fallbackStartedAtMs: number): number {
   return Math.max(0, Math.round(currentElapsedTimeMs() - (startedAtMs ?? fallbackStartedAtMs)));
+}
+
+function elapsedSinceOptional(startedAtMs: number | null): number | null {
+  return startedAtMs === null
+    ? null
+    : Math.max(0, Math.round(currentElapsedTimeMs() - startedAtMs));
 }
 
 function truncateCloseReason(reason: string): string {
@@ -103,7 +121,17 @@ function observedDisconnectDetail(observed: ObservedWebSocketLifecycle | null): 
   return error ? formatErrorDetail(error) : null;
 }
 
+function observedHeartbeatDisconnectDetail(heartbeat: ObservedRpcHeartbeat): string | null {
+  if (!heartbeat.timedOut) {
+    return null;
+  }
+  const missed = Math.max(heartbeat.consecutiveMissedPongs, RPC_PING_MISS_TOLERANCE);
+  const plural = missed === 1 ? "" : "s";
+  return `RPC heartbeat timed out after ${missed} missed pong${plural}.`;
+}
+
 function disconnectDetail(input: {
+  readonly heartbeat: ObservedRpcHeartbeat;
   readonly label: string;
   readonly observed: ObservedWebSocketLifecycle | null;
   readonly wasConnected: boolean;
@@ -112,11 +140,13 @@ function disconnectDetail(input: {
     ? `${input.label} disconnected.`
     : `${input.label} could not establish a WebSocket connection.`;
   const detail = observedDisconnectDetail(input.observed);
-  return detail ? `${base} ${detail}` : base;
+  const heartbeatDetail = observedHeartbeatDisconnectDetail(input.heartbeat);
+  return [base, detail, heartbeatDetail].filter((value) => value !== null).join(" ");
 }
 
 function disconnectLogAttributes(input: {
   readonly connection: PreparedConnection;
+  readonly heartbeat: ObservedRpcHeartbeat;
   readonly observed: ObservedWebSocketLifecycle | null;
   readonly wasConnected: boolean;
 }): Record<string, string | number | boolean> {
@@ -140,6 +170,25 @@ function disconnectLogAttributes(input: {
   if (input.observed?.error) {
     attributes["websocket.error.type"] = input.observed.error.type;
     attributes["websocket.error.age_ms"] = input.observed.error.ageMs;
+  }
+  if (input.heartbeat.pingCount > 0 || input.heartbeat.pongCount > 0 || input.heartbeat.timedOut) {
+    attributes["rpc.heartbeat.ping_count"] = input.heartbeat.pingCount;
+    attributes["rpc.heartbeat.pong_count"] = input.heartbeat.pongCount;
+    attributes["rpc.heartbeat.consecutive_missed_pongs"] = input.heartbeat.consecutiveMissedPongs;
+    attributes["rpc.heartbeat.awaiting_pong"] = input.heartbeat.awaitingPong;
+    attributes["rpc.heartbeat.timed_out"] = input.heartbeat.timedOut;
+    const lastPingAgeMs = elapsedSinceOptional(input.heartbeat.lastPingAtMs);
+    const lastPongAgeMs = elapsedSinceOptional(input.heartbeat.lastPongAtMs);
+    const timeoutAgeMs = elapsedSinceOptional(input.heartbeat.timeoutAtMs);
+    if (lastPingAgeMs !== null) {
+      attributes["rpc.heartbeat.last_ping_age_ms"] = lastPingAgeMs;
+    }
+    if (lastPongAgeMs !== null) {
+      attributes["rpc.heartbeat.last_pong_age_ms"] = lastPongAgeMs;
+    }
+    if (timeoutAgeMs !== null) {
+      attributes["rpc.heartbeat.timeout_age_ms"] = timeoutAgeMs;
+    }
   }
   return attributes;
 }
@@ -211,6 +260,16 @@ export const make = Effect.gen(function* () {
 
     const connected = yield* Deferred.make<void>();
     const disconnected = yield* Deferred.make<never, ConnectionTransientError>();
+    const heartbeat: ObservedRpcHeartbeat = {
+      awaitingPong: false,
+      consecutiveMissedPongs: 0,
+      lastPingAtMs: null,
+      lastPongAtMs: null,
+      pingCount: 0,
+      pongCount: 0,
+      timedOut: false,
+      timeoutAtMs: null,
+    };
     let observedWebSocket: ObservedWebSocketLifecycle | null = null;
     const observedWebSocketConstructor: typeof webSocketConstructor = (url, protocols) => {
       const createdAtMs = currentElapsedTimeMs();
@@ -232,6 +291,7 @@ export const make = Effect.gen(function* () {
           const error = new ConnectionTransientErrorClass({
             reason: "transport",
             detail: disconnectDetail({
+              heartbeat,
               label: connection.label,
               observed,
               wasConnected,
@@ -241,6 +301,7 @@ export const make = Effect.gen(function* () {
             Effect.annotateLogs(
               disconnectLogAttributes({
                 connection,
+                heartbeat,
                 observed,
                 wasConnected,
               }),
@@ -250,6 +311,27 @@ export const make = Effect.gen(function* () {
         }),
         Effect.asVoid,
       ),
+      onPing: Effect.sync(() => {
+        if (heartbeat.awaitingPong) {
+          heartbeat.consecutiveMissedPongs += 1;
+        }
+        heartbeat.awaitingPong = true;
+        heartbeat.lastPingAtMs = currentElapsedTimeMs();
+        heartbeat.pingCount += 1;
+      }),
+      onPong: Effect.sync(() => {
+        heartbeat.awaitingPong = false;
+        heartbeat.consecutiveMissedPongs = 0;
+        heartbeat.lastPongAtMs = currentElapsedTimeMs();
+        heartbeat.pongCount += 1;
+      }),
+      onPingTimeout: Effect.sync(() => {
+        heartbeat.timedOut = true;
+        heartbeat.timeoutAtMs = currentElapsedTimeMs();
+        heartbeat.consecutiveMissedPongs = heartbeat.awaitingPong
+          ? Math.max(heartbeat.consecutiveMissedPongs + 1, RPC_PING_MISS_TOLERANCE)
+          : Math.max(heartbeat.consecutiveMissedPongs, RPC_PING_MISS_TOLERANCE);
+      }),
     });
     const socketLayer = Socket.layerWebSocket(connection.socketUrl, {
       openTimeout: SOCKET_OPEN_TIMEOUT,
@@ -259,6 +341,7 @@ export const make = Effect.gen(function* () {
     const protocolLayer = Layer.effect(
       RpcClient.Protocol,
       RpcClient.makeProtocolSocket({
+        pingMissTolerance: RPC_PING_MISS_TOLERANCE,
         retryTransientErrors: false,
         retryPolicy: Schedule.recurs(0),
       }),

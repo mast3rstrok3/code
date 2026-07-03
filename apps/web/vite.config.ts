@@ -13,6 +13,7 @@ import {
 } from "../../scripts/lib/public-config";
 import {
   PUBLIC_DEV_CACHE_HEADERS,
+  resolveDevProxyTarget,
   shouldHardenPublicDevServerCache,
   viteInternalModuleFallbackGuardPlugin,
 } from "./viteDevServerHardening";
@@ -71,33 +72,18 @@ const unitTestProject = {
   },
 } satisfies TestProjectInlineConfiguration;
 
-function resolveDevProxyTarget(wsUrl: string | undefined): string | undefined {
-  if (!wsUrl) {
-    return undefined;
-  }
-
-  try {
-    const url = new URL(wsUrl);
-    if (url.protocol === "ws:") {
-      url.protocol = "http:";
-    } else if (url.protocol === "wss:") {
-      url.protocol = "https:";
-    }
-    url.pathname = "";
-    url.search = "";
-    url.hash = "";
-    return url.toString();
-  } catch {
-    return undefined;
-  }
-}
-
 export default defineConfig(({ command }) => {
   const primaryEnvironmentConfig = resolveWebPrimaryEnvironmentBuildConfig({
     command,
     env: process.env,
   });
-  const devProxyTarget = resolveDevProxyTarget(primaryEnvironmentConfig.wsUrl || undefined);
+  const explicitProxyTarget =
+    process.env.T3CODE_WEB_DEV_PROXY_TARGET || process.env.VITE_DEV_PROXY_TARGET || undefined;
+  const configuredProxyWsUrl = primaryEnvironmentConfig.wsUrl || undefined;
+  const devProxyTarget = resolveDevProxyTarget({
+    ...(explicitProxyTarget !== undefined ? { explicitProxyTarget } : {}),
+    ...(configuredProxyWsUrl !== undefined ? { wsUrl: configuredProxyWsUrl } : {}),
+  });
   const publicDevServerHeaders = shouldHardenPublicDevServerCache(
     primaryEnvironmentConfig.devServerUrl,
   )
@@ -171,6 +157,11 @@ export default defineConfig(({ command }) => {
               "/api": {
                 target: devProxyTarget,
                 changeOrigin: true,
+              },
+              "/ws": {
+                target: devProxyTarget,
+                changeOrigin: true,
+                ws: true,
               },
               "/attachments": {
                 target: devProxyTarget,

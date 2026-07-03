@@ -156,6 +156,15 @@ export function webSocketRequestLogAttributes(
   addOptionalLogAttribute(attributes, "http.user_agent", request.headers["user-agent"]);
   addOptionalLogAttribute(attributes, "http.forwarded_for", request.headers["x-forwarded-for"]);
   addOptionalLogAttribute(attributes, "http.forwarded_proto", request.headers["x-forwarded-proto"]);
+  addOptionalLogAttribute(
+    attributes,
+    "http.forwarded_server",
+    request.headers["x-forwarded-server"],
+  );
+  addOptionalLogAttribute(attributes, "http.cf_connecting_ip", request.headers["cf-connecting-ip"]);
+  addOptionalLogAttribute(attributes, "http.cf_ipcountry", request.headers["cf-ipcountry"]);
+  addOptionalLogAttribute(attributes, "http.cf_ray", request.headers["cf-ray"]);
+  addOptionalLogAttribute(attributes, "http.cf_warp_tag_id", request.headers["cf-warp-tag-id"]);
   return attributes;
 }
 
