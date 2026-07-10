@@ -22,6 +22,7 @@ import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import { EnvironmentCacheStore } from "../platform/persistence.ts";
 import { subscribe } from "../rpc/client.ts";
+import { ShellSnapshotLoader } from "./shellSnapshotHttp.ts";
 import { applyShellStreamEvent } from "./shellReducer.ts";
 import type { EnvironmentCatalogState } from "./connections.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
@@ -53,6 +54,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
 ) {
   const supervisor = yield* EnvironmentSupervisor;
   const cache = yield* EnvironmentCacheStore;
+  const snapshotLoader = yield* ShellSnapshotLoader;
   const environmentId = supervisor.target.environmentId;
   const cachedSnapshot = yield* cache.loadShell(environmentId, userView).pipe(
     Effect.catch((error) =>
@@ -152,13 +154,47 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
     yield* Queue.offer(persistence, nextSnapshot);
   });
 
-  yield* subscribe(
-    ORCHESTRATION_WS_METHODS.subscribeShell,
-    { userView },
-    {
-      onExpectedFailure: (cause) => setStreamError(Cause.squash(cause)),
-    },
-  ).pipe(Stream.runForEach(applyItem), Effect.forkScoped);
+  yield* Effect.forkScoped(
+    Effect.gen(function* () {
+      // Establish the base shell snapshot to resume from, minimizing bytes over
+      // the wire:
+      // - Warm cache: reuse the cached snapshot (zero network) and resume via
+      //   `afterSequence` so we only receive shell events since the cached
+      //   sequence.
+      // - Cold cache: load the full shell snapshot over HTTP (gzip-compressible,
+      //   and off the socket), then resume via `afterSequence`.
+      // If no base can be established we fall back to the socket-embedded
+      // snapshot so the shell still synchronizes. Overlapping/replayed events are
+      // deduped by sequence in applyItem.
+      const base = Option.isSome(cachedSnapshot)
+        ? cachedSnapshot
+        : userView.kind === "all"
+          ? yield* Effect.gen(function* () {
+              const prepared = yield* SubscriptionRef.changes(supervisor.prepared).pipe(
+                Stream.filter(Option.isSome),
+                Stream.map((current) => current.value),
+                Stream.runHead,
+              );
+              return Option.isSome(prepared)
+                ? yield* snapshotLoader.load(prepared.value)
+                : Option.none<OrchestrationShellSnapshot>();
+            })
+          : Option.none<OrchestrationShellSnapshot>();
+
+      if (Option.isSome(base)) {
+        yield* applyItem({ kind: "snapshot", snapshot: base.value });
+      }
+
+      const subscribeInput = Option.match(base, {
+        onNone: () => ({ userView }),
+        onSome: (snapshot) => ({ userView, afterSequence: snapshot.snapshotSequence }),
+      });
+
+      yield* subscribe(ORCHESTRATION_WS_METHODS.subscribeShell, subscribeInput, {
+        onExpectedFailure: (cause) => setStreamError(Cause.squash(cause)),
+      }).pipe(Stream.runForEach(applyItem));
+    }),
+  );
   yield* SubscriptionRef.changes(supervisor.state).pipe(
     Stream.runForEach((connectionState) => {
       switch (connectionProjectionPhase(connectionState)) {
@@ -301,7 +337,10 @@ export function createEnvironmentServerConfigsAtom(input: {
 }
 
 export function createEnvironmentShellAtoms<R, E>(
-  runtime: Atom.AtomRuntime<EnvironmentRegistry | EnvironmentCacheStore | R, E>,
+  runtime: Atom.AtomRuntime<
+    EnvironmentRegistry | EnvironmentCacheStore | ShellSnapshotLoader | R,
+    E
+  >,
   options?: {
     readonly userViewAtom?: Atom.Atom<WorkspaceUserView>;
   },
@@ -352,4 +391,5 @@ export function createEnvironmentShellAtoms<R, E>(
 export * from "./models.ts";
 export * from "./shellCommands.ts";
 export * from "./shellReducer.ts";
+export * from "./shellSnapshotHttp.ts";
 export * from "./snapshots.ts";

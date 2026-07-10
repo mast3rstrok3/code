@@ -20,6 +20,7 @@ import {
   OrchestrationReadModel,
   OrchestrationShellSnapshot,
   OrchestrationThread,
+  OrchestrationThreadDetailSnapshot,
   ProjectScript,
   TurnId,
   type OrchestrationCheckpointSummary,
@@ -30,7 +31,6 @@ import {
   type OrchestrationProject,
   type OrchestrationSession,
   type OrchestrationThreadActivity,
-  type OrchestrationThreadDetailSnapshot,
   type OrchestrationThreadShell,
   type DevReviewRecord,
   ModelSelection,
@@ -2862,6 +2862,35 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       Effect.map((snapshot) => Option.map(snapshot, (value) => value.thread)),
     );
 
+  const getThreadDetailSnapshot: ProjectionSnapshotQueryShape["getThreadDetailSnapshot"] = (
+    threadId,
+  ) =>
+    // Read the thread detail and the snapshot sequence within a single
+    // transaction so the sequence is consistent with the returned state; a
+    // projector update landing between two separate reads could otherwise return
+    // a sequence ahead of the thread detail, causing the client to resume from
+    // too far and drop events.
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const thread = yield* getThreadDetailById(threadId);
+          if (Option.isNone(thread)) {
+            return Option.none<OrchestrationThreadDetailSnapshot>();
+          }
+          const { snapshotSequence } = yield* getSnapshotSequence();
+          return Option.some({ snapshotSequence, thread: thread.value });
+        }),
+      )
+      .pipe(
+        Effect.mapError((error) =>
+          isPersistenceError(error)
+            ? error
+            : toPersistenceSqlError("ProjectionSnapshotQuery.getThreadDetailSnapshot:transaction")(
+                error,
+              ),
+        ),
+      );
+
   return {
     getCommandReadModel,
     getSnapshot,
@@ -2877,6 +2906,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getThreadShellById,
     getThreadDetailSnapshotById,
     getThreadDetailById,
+    getThreadDetailSnapshot,
   } satisfies ProjectionSnapshotQueryShape;
 });
 

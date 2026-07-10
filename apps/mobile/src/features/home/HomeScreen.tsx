@@ -12,6 +12,8 @@ import type {
   SidebarProjectGroupingMode,
   SidebarThreadSortOrder,
 } from "@t3tools/contracts";
+import { useAtomSet, useAtomValue } from "@effect/atom-react";
+import { AsyncResult } from "effect/unstable/reactivity";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Platform, View } from "react-native";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
@@ -22,7 +24,10 @@ import { EmptyState } from "../../components/EmptyState";
 import type { WorkspaceState } from "../../state/workspaceModel";
 import type { SavedRemoteConnection } from "../../lib/connection";
 import { scopedProjectKey } from "../../lib/scopedEntities";
+import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
+import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import {
+  PendingTaskListRow,
   ThreadListGroupHeader,
   ThreadListRow,
   ThreadListShowMoreRow,
@@ -47,6 +52,7 @@ import { shouldShowWorkspaceConnectionStatus } from "./workspace-connection-stat
 interface HomeScreenProps {
   readonly projects: ReadonlyArray<EnvironmentProject>;
   readonly threads: ReadonlyArray<EnvironmentThreadShell>;
+  readonly pendingTasks: ReadonlyArray<PendingNewTask>;
   readonly catalogState: WorkspaceState;
   readonly savedConnectionsById: Readonly<Record<string, SavedRemoteConnection>>;
   readonly environments: ReadonlyArray<HomeListFilterMenuEnvironment>;
@@ -67,6 +73,9 @@ interface HomeScreenProps {
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
   readonly onArchiveThread: (thread: EnvironmentThreadShell) => void;
   readonly onDeleteThread: (thread: EnvironmentThreadShell) => void;
+  readonly onSelectPendingTask: (pendingTask: PendingNewTask) => void;
+  readonly onDeletePendingTask: (pendingTask: PendingNewTask) => void;
+  readonly onNewThreadInProject: (project: EnvironmentProject) => void;
 }
 
 /* ─── Layout constants ───────────────────────────────────────────────── */
@@ -148,21 +157,48 @@ export function HomeScreen(props: HomeScreenProps) {
   const [groupDisplayStates, setGroupDisplayStates] = useState<
     ReadonlyMap<string, HomeGroupDisplayState>
   >(() => new Map());
+  const preferencesResult = useAtomValue(mobilePreferencesAtom);
+  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const openSwipeableRef = useRef<SwipeableMethods | null>(null);
   const listRef = useRef<LegendListRef | null>(null);
   const insets = useSafeAreaInsets();
   const accentColor = useThemeColor("--color-icon-muted");
 
-  const updateGroupDisplay = useCallback((key: string, action: HomeGroupDisplayAction) => {
-    setGroupDisplayStates((previous) => {
-      const next = new Map(previous);
-      next.set(
-        key,
-        nextGroupDisplayState(previous.get(key) ?? DEFAULT_GROUP_DISPLAY_STATE, action),
-      );
+  const effectiveGroupDisplayStates = useMemo(() => {
+    const next = new Map(groupDisplayStates);
+    if (!AsyncResult.isSuccess(preferencesResult)) {
       return next;
-    });
-  }, []);
+    }
+    for (const key of preferencesResult.value.collapsedProjectGroups ?? []) {
+      const existing = next.get(key);
+      next.set(key, {
+        ...(existing ?? DEFAULT_GROUP_DISPLAY_STATE),
+        collapsed: true,
+      });
+    }
+    return next;
+  }, [groupDisplayStates, preferencesResult]);
+  const effectiveGroupDisplayStatesRef = useRef(effectiveGroupDisplayStates);
+  effectiveGroupDisplayStatesRef.current = effectiveGroupDisplayStates;
+
+  const updateGroupDisplay = useCallback(
+    (key: string, action: HomeGroupDisplayAction) => {
+      const next = new Map(effectiveGroupDisplayStatesRef.current);
+      next.set(key, nextGroupDisplayState(next.get(key) ?? DEFAULT_GROUP_DISPLAY_STATE, action));
+      effectiveGroupDisplayStatesRef.current = next;
+      setGroupDisplayStates(next);
+      if (action === "toggle-collapsed") {
+        const collapsedProjectGroups: string[] = [];
+        for (const [groupKey, state] of next) {
+          if (state.collapsed) {
+            collapsedProjectGroups.push(groupKey);
+          }
+        }
+        savePreferences({ collapsedProjectGroups });
+      }
+    },
+    [savePreferences],
+  );
 
   const handleSwipeableWillOpen = useCallback((methods: SwipeableMethods) => {
     if (openSwipeableRef.current !== methods) {
@@ -189,6 +225,7 @@ export function HomeScreen(props: HomeScreenProps) {
       buildHomeThreadGroups({
         projects: props.projects,
         threads: props.threads,
+        pendingTasks: props.pendingTasks,
         environmentId: props.selectedEnvironmentId,
         searchQuery: props.searchQuery,
         projectSortOrder: props.projectSortOrder,
@@ -196,6 +233,7 @@ export function HomeScreen(props: HomeScreenProps) {
         projectGroupingMode: props.projectGroupingMode,
       }),
     [
+      props.pendingTasks,
       props.projectGroupingMode,
       props.projects,
       props.projectSortOrder,
@@ -211,10 +249,10 @@ export function HomeScreen(props: HomeScreenProps) {
     () =>
       buildHomeListLayout({
         groups: projectGroups,
-        displayStates: groupDisplayStates,
+        displayStates: effectiveGroupDisplayStates,
         showAllThreads: hasSearchQuery,
       }),
-    [projectGroups, groupDisplayStates, hasSearchQuery],
+    [projectGroups, effectiveGroupDisplayStates, hasSearchQuery],
   );
 
   const projectCwdByKey = useMemo(() => {
@@ -241,9 +279,29 @@ export function HomeScreen(props: HomeScreenProps) {
               isFirst={item.isFirst}
               groupKey={item.group.key}
               onGroupAction={updateGroupDisplay}
+              // Aggregated groups (same repo across machines) have no single
+              // target project, and `pending-project:` groups hold a placeholder
+              // built from queued-task metadata rather than a real project shell,
+              // so the quick new-thread button is single-real-project only.
+              newThreadTarget={item.group.newThreadTarget}
+              onNewThread={props.onNewThreadInProject}
               project={item.group.representative}
-              threadCount={item.group.threads.length}
+              threadCount={item.group.threads.length + item.group.pendingTasks.length}
               title={item.group.title}
+            />
+          );
+        case "pending-task":
+          return (
+            <PendingTaskListRow
+              variant="compact"
+              pendingTask={item.pendingTask}
+              environmentLabel={
+                props.savedConnectionsById[item.pendingTask.message.environmentId]
+                  ?.environmentLabel ?? null
+              }
+              isLast={item.isLast}
+              onSelectPendingTask={props.onSelectPendingTask}
+              onDeletePendingTask={props.onDeletePendingTask}
             />
           );
         case "thread": {
@@ -285,7 +343,10 @@ export function HomeScreen(props: HomeScreenProps) {
       handleSwipeableWillOpen,
       projectCwdByKey,
       props.onArchiveThread,
+      props.onDeletePendingTask,
       props.onDeleteThread,
+      props.onNewThreadInProject,
+      props.onSelectPendingTask,
       props.onSelectThread,
       props.savedConnectionsById,
       updateGroupDisplay,
@@ -295,7 +356,8 @@ export function HomeScreen(props: HomeScreenProps) {
   const keyExtractor = useCallback((item: HomeListItem) => item.key, []);
 
   /* Empty states */
-  const hasAnyThreads = props.threads.some((thread) => thread.archivedAt === null);
+  const hasAnyThreads =
+    props.threads.some((thread) => thread.archivedAt === null) || props.pendingTasks.length > 0;
   const hasResults = projectGroups.length > 0;
   const selectedEnvironmentLabel =
     props.selectedEnvironmentId === null
@@ -350,7 +412,7 @@ export function HomeScreen(props: HomeScreenProps) {
       {Platform.OS === "ios" ? null : <HomeTopContentSpacer topInset={insets.top} />}
 
       {shouldShowConnectionStatus && Platform.OS === "ios" ? (
-        <View style={{ paddingBottom: 16 }}>
+        <View className="pb-4">
           <WorkspaceConnectionStatus
             state={props.catalogState}
             onPress={props.onOpenEnvironments}
