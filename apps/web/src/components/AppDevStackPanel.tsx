@@ -2,7 +2,6 @@ import {
   type AppDevStack,
   type AppDevStackGetPodLogsResult,
   type AppDevStackPod,
-  type AppDevStackService,
   type EnvironmentId,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
@@ -18,6 +17,7 @@ import {
   ExternalLinkIcon,
   FolderIcon,
   LoaderIcon,
+  PanelRightIcon,
   PlayIcon,
   PlusIcon,
   PowerIcon,
@@ -46,6 +46,12 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import {
+  primaryPreviewForStack,
+  previewForPod,
+  previewUrlForService,
+  type PreviewCandidate,
+} from "./AppDevStackPanel.logic";
+import {
   displayNameFromStackPath as displayNameFromPath,
   displayStackName,
   isSameOrChildStackPath,
@@ -54,7 +60,6 @@ import {
 } from "./AppDevStackLogsPanel.logic";
 
 const TRANSITIONING_STATUSES = new Set(["pending", "starting", "stopping"]);
-const PRIMARY_PREVIEW_SERVICE_NAMES = ["frontend-dev", "frontend", "web"] as const;
 const KUBERNETES_NAMESPACE_MAX_LENGTH = 63;
 
 interface AppDevStackPanelProps {
@@ -72,11 +77,6 @@ interface AppDevStackPanelProps {
   readonly workspaceRoot: string;
   readonly gitCwd: string | null;
   readonly openPreview: OpenPreviewMutation;
-}
-
-interface PreviewCandidate {
-  readonly serviceName: string;
-  readonly url: string;
 }
 
 interface StartPathChoice {
@@ -129,43 +129,6 @@ function stackRepoBranchLabel(stack: AppDevStack): string | null {
   const branch = nonEmpty(stack.branchName);
   if (repo && branch) return `${repo} / ${branch}`;
   return repo ?? branch;
-}
-
-function collectPreviewCandidates(stack: AppDevStack): readonly PreviewCandidate[] {
-  const candidates: PreviewCandidate[] = [];
-  const seen = new Set<string>();
-  const previewUrls = stack.previewUrls ?? {};
-
-  const addCandidate = (serviceName: string, url: string | null | undefined) => {
-    const trimmedUrl = nonEmpty(url);
-    if (!trimmedUrl) return;
-    const key = `${serviceName}\u0000${trimmedUrl}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    candidates.push({ serviceName, url: trimmedUrl });
-  };
-
-  for (const service of stack.services ?? []) {
-    addCandidate(service.name, service.previewUrl);
-    addCandidate(service.name, previewUrls[service.name]);
-  }
-  for (const [serviceName, url] of Object.entries(previewUrls)) {
-    addCandidate(serviceName, url);
-  }
-  return candidates;
-}
-
-function primaryPreviewForStack(stack: AppDevStack): PreviewCandidate | null {
-  const candidates = collectPreviewCandidates(stack);
-  for (const serviceName of PRIMARY_PREVIEW_SERVICE_NAMES) {
-    const candidate = candidates.find((item) => item.serviceName === serviceName);
-    if (candidate) return candidate;
-  }
-  return candidates[0] ?? null;
-}
-
-function previewUrlForService(service: AppDevStackService, stack: AppDevStack): string | null {
-  return nonEmpty(service.previewUrl) ?? nonEmpty(stack.previewUrls?.[service.name]) ?? null;
 }
 
 function actionErrorMessage(error: unknown): string {
@@ -231,6 +194,7 @@ function StackServices({ stack }: { readonly stack: AppDevStack }) {
                 href={previewUrl}
                 target="_blank"
                 rel="noreferrer"
+                title={previewUrl}
                 className="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
                 aria-label={`Open ${service.name}`}
               >
@@ -271,6 +235,7 @@ function podOwnerLabel(pod: AppDevStackPod): string | null {
 }
 
 function StackKubernetesInspect(props: {
+  readonly stack: AppDevStack;
   readonly pods: ReadonlyArray<AppDevStackPod>;
   readonly podsError: string | null;
   readonly podsPending: boolean;
@@ -331,28 +296,45 @@ function StackKubernetesInspect(props: {
           {props.pods.map((pod) => {
             const owner = podOwnerLabel(pod);
             const selected = pod.name === selectedPod?.name;
+            const preview = previewForPod(pod, props.stack);
             return (
-              <button
+              <div
                 key={pod.name}
-                type="button"
                 className={cn(
                   "grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-md border px-2 py-1.5 text-left transition-colors",
                   selected
                     ? "border-primary/35 bg-primary/8"
                     : "border-transparent bg-muted/40 hover:bg-accent",
                 )}
-                onClick={() => props.onSelectPod(pod)}
               >
-                <span className="min-w-0">
+                <button
+                  type="button"
+                  className="min-w-0 text-left"
+                  onClick={() => props.onSelectPod(pod)}
+                >
                   <span className="block truncate text-xs font-medium">{pod.name}</span>
                   <span className="block truncate text-[11px] text-muted-foreground">
                     {pod.readyContainerCount}/{pod.totalContainerCount} ready
                     {pod.restartCount > 0 ? ` · ${pod.restartCount} restarts` : ""}
                     {owner ? ` · ${owner}` : ""}
                   </span>
+                </button>
+                <span className="flex shrink-0 items-center gap-1">
+                  {preview ? (
+                    <a
+                      href={preview.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      title={preview.url}
+                      className="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                      aria-label={`Open ${preview.serviceName}`}
+                    >
+                      <ExternalLinkIcon className="size-3.5" />
+                    </a>
+                  ) : null}
+                  <PodPhaseBadge phase={pod.phase} />
                 </span>
-                <PodPhaseBadge phase={pod.phase} />
-              </button>
+              </div>
             );
           })}
         </div>
@@ -801,6 +783,15 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
           <div className="flex shrink-0 items-center gap-1">
             {preview ? (
               <>
+                <Button
+                  size="icon-xs"
+                  variant="ghost"
+                  render={<a href={preview.url} target="_blank" rel="noreferrer" />}
+                  title={preview.url}
+                  aria-label={`Open ${preview.serviceName} externally`}
+                >
+                  <ExternalLinkIcon className="size-3.5" />
+                </Button>
                 {previewSupported ? (
                   <Button
                     size="icon-xs"
@@ -808,17 +799,9 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
                     onClick={() => void openPreview(preview)}
                     aria-label={`Open ${preview.serviceName} in the browser panel`}
                   >
-                    <ExternalLinkIcon className="size-3.5" />
+                    <PanelRightIcon className="size-3.5" />
                   </Button>
                 ) : null}
-                <Button
-                  size="icon-xs"
-                  variant="ghost"
-                  render={<a href={preview.url} target="_blank" rel="noreferrer" />}
-                  aria-label={`Open ${preview.serviceName} externally`}
-                >
-                  <ExternalLinkIcon className="size-3.5" />
-                </Button>
               </>
             ) : null}
             <Button
@@ -883,6 +866,7 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
         </div>
         {inspectSelected ? (
           <StackKubernetesInspect
+            stack={stack}
             pods={podsQuery.data?.pods ?? []}
             podsError={podsQuery.error}
             podsPending={podsQuery.isPending}

@@ -4,6 +4,7 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeHttps from "node:https";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import { appDevStackPreviewUrlForService } from "@t3tools/shared/appDevStack";
 import { parseYamlValue, stringifyYamlValue } from "@t3tools/shared/schemaYaml";
 
 import type { KubectlRunner } from "./NativeAppDevStackManager.ts";
@@ -73,7 +74,6 @@ export type NativeCommandRunner = (
   options?: NativeCommandOptions,
 ) => Promise<string>;
 
-const DEFAULT_APP_DEV_DOMAIN = "nightingale-ai.com";
 const APP_LABEL_PREFIXES = ["cortex.appDevStack", "rudi.appDevStack"] as const;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -350,21 +350,16 @@ const configuredPreviewUrl = (
     return host.length > 0 ? `https://${host}` : undefined;
   }
 
-  switch (sanitizeKubernetesName(service.name)) {
-    case "frontend":
-    case "web":
-    case "app":
-      return config.frontendUrl ?? `https://${config.namespace}.${DEFAULT_APP_DEV_DOMAIN}`;
-    case "backend":
-    case "api":
-      return config.backendUrl ?? `https://api-${config.namespace}.${DEFAULT_APP_DEV_DOMAIN}`;
-    case "keycloak":
-      return config.keycloakUrl ?? `https://${config.namespace}-keycloak.${DEFAULT_APP_DEV_DOMAIN}`;
-    case "minio":
-      return config.minioUrl ?? `https://minio-${config.namespace}.${DEFAULT_APP_DEV_DOMAIN}`;
-    default:
-      return undefined;
-  }
+  return (
+    appDevStackPreviewUrlForService({
+      namespace: config.namespace,
+      serviceName: service.name,
+      frontendUrl: config.frontendUrl,
+      backendUrl: config.backendUrl,
+      keycloakUrl: config.keycloakUrl,
+      minioUrl: config.minioUrl,
+    }) ?? undefined
+  );
 };
 
 const servicePortDocuments = (

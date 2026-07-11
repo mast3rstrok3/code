@@ -152,6 +152,8 @@ export const AppDevStackPod = Schema.Struct({
   nodeName: Schema.optionalKey(NullableTrimmedNonEmptyString),
   ownerKind: Schema.optionalKey(NullableTrimmedNonEmptyString),
   ownerName: Schema.optionalKey(NullableTrimmedNonEmptyString),
+  previewUrl: Schema.optionalKey(NullableTrimmedNonEmptyString),
+  previewServiceName: Schema.optionalKey(NullableTrimmedNonEmptyString),
   containers: Schema.Array(AppDevStackPodContainer),
 });
 export type AppDevStackPod = typeof AppDevStackPod.Type;

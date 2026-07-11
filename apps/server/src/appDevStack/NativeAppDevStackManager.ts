@@ -23,6 +23,7 @@ import {
   type AppDevStackService,
 } from "@t3tools/contracts";
 import {
+  appDevStackPreviewUrlForService,
   deriveAppDevStackNamespaceFromPath,
   normalizeKubernetesNamespace,
 } from "@t3tools/shared/appDevStack";
@@ -85,6 +86,7 @@ interface KubectlPod {
   readonly metadata?: {
     readonly name?: string;
     readonly creationTimestamp?: string;
+    readonly labels?: Record<string, string>;
     readonly ownerReferences?: ReadonlyArray<{
       readonly kind?: string;
       readonly name?: string;
@@ -100,6 +102,43 @@ interface KubectlPod {
     readonly phase?: string;
     readonly containerStatuses?: ReadonlyArray<KubectlContainerStatus>;
   };
+}
+
+interface KubectlIngressRouteList {
+  readonly items?: ReadonlyArray<{
+    readonly spec?: {
+      readonly routes?: ReadonlyArray<{
+        readonly match?: string;
+        readonly services?: ReadonlyArray<{
+          readonly name?: string;
+        }>;
+      }>;
+    };
+  }>;
+}
+
+interface KubectlIngressList {
+  readonly items?: ReadonlyArray<{
+    readonly spec?: {
+      readonly defaultBackend?: {
+        readonly service?: {
+          readonly name?: string;
+        };
+      };
+      readonly rules?: ReadonlyArray<{
+        readonly host?: string;
+        readonly http?: {
+          readonly paths?: ReadonlyArray<{
+            readonly backend?: {
+              readonly service?: {
+                readonly name?: string;
+              };
+            };
+          }>;
+        };
+      }>;
+    };
+  }>;
 }
 
 interface KubectlContainerStatus {
@@ -424,23 +463,193 @@ const isNotFound = (cause: unknown) =>
     cause.message.includes("namespaces") ||
     cause.message.includes("Namespace"));
 
-const previewUrlForService = (config: ResolvedNativeAppDevStackConfig, name: string) => {
-  switch (name) {
-    case "frontend":
-      return config.frontendUrl;
-    case "backend":
-      return config.backendUrl;
-    case "keycloak":
-      return config.keycloakUrl;
-    case "minio":
-      return config.minioUrl;
-    default:
-      return undefined;
+const serviceLookupKey = (value: string): string =>
+  value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/gu, "-")
+    .replace(/-+/gu, "-")
+    .replace(/^-+|-+$/gu, "");
+
+const previewUrlForService = (
+  config: ResolvedNativeAppDevStackConfig,
+  discoveredPreviewUrls: ReadonlyMap<string, string>,
+  name: string,
+): string | undefined =>
+  discoveredPreviewUrls.get(serviceLookupKey(name)) ??
+  appDevStackPreviewUrlForService({
+    namespace: config.namespace,
+    serviceName: name,
+    frontendUrl: config.frontendUrl,
+    backendUrl: config.backendUrl,
+    keycloakUrl: config.keycloakUrl,
+    minioUrl: config.minioUrl,
+  }) ??
+  undefined;
+
+const previewUrlFromHost = (host: string | null | undefined): string | null => {
+  const trimmed = host?.trim();
+  if (!trimmed) return null;
+  return trimmed.includes("://") ? trimmed : `https://${trimmed}`;
+};
+
+const addPreviewUrl = (
+  previewUrls: Map<string, string>,
+  serviceName: string | null | undefined,
+  url: string | null | undefined,
+) => {
+  const serviceKey =
+    serviceName === undefined || serviceName === null ? "" : serviceLookupKey(serviceName);
+  const previewUrl = url?.trim();
+  if (!serviceKey || !previewUrl || previewUrls.has(serviceKey)) return;
+  previewUrls.set(serviceKey, previewUrl);
+};
+
+const HOST_ARGUMENT_PATTERN = /Host\(([^)]*)\)/gu;
+const QUOTED_HOST_PATTERN = /[`'"]([^`'"]+)[`'"]/gu;
+
+const hostsFromTraefikMatch = (match: string | null | undefined): ReadonlyArray<string> => {
+  if (!match) return [];
+  const hosts: string[] = [];
+  for (const hostArguments of match.matchAll(HOST_ARGUMENT_PATTERN)) {
+    const rawArguments = hostArguments[1] ?? "";
+    for (const host of rawArguments.matchAll(QUOTED_HOST_PATTERN)) {
+      const value = host[1]?.trim();
+      if (value) hosts.push(value);
+    }
+  }
+  return hosts;
+};
+
+const readTraefikPreviewUrls = async (
+  config: ResolvedNativeAppDevStackConfig,
+  runKubectl: KubectlRunner,
+): Promise<Map<string, string> | null> => {
+  try {
+    const list = parseJson<KubectlIngressRouteList>(
+      await runKubectl(["-n", config.namespace, "get", "ingressroutes.traefik.io", "-o", "json"]),
+    );
+    const previewUrls = new Map<string, string>();
+    for (const item of list.items ?? []) {
+      for (const route of item.spec?.routes ?? []) {
+        const host = hostsFromTraefikMatch(route.match)[0];
+        const previewUrl = previewUrlFromHost(host);
+        if (previewUrl === null) continue;
+        for (const service of route.services ?? []) {
+          addPreviewUrl(previewUrls, service.name, previewUrl);
+        }
+      }
+    }
+    return previewUrls;
+  } catch {
+    return null;
   }
 };
 
+const readIngressPreviewUrls = async (
+  config: ResolvedNativeAppDevStackConfig,
+  runKubectl: KubectlRunner,
+): Promise<Map<string, string>> => {
+  try {
+    const list = parseJson<KubectlIngressList>(
+      await runKubectl(["-n", config.namespace, "get", "ingress", "-o", "json"]),
+    );
+    const previewUrls = new Map<string, string>();
+    for (const item of list.items ?? []) {
+      const defaultUrl = previewUrlFromHost(item.spec?.rules?.[0]?.host);
+      addPreviewUrl(previewUrls, item.spec?.defaultBackend?.service?.name, defaultUrl);
+      for (const rule of item.spec?.rules ?? []) {
+        const previewUrl = previewUrlFromHost(rule.host);
+        if (previewUrl === null) continue;
+        for (const path of rule.http?.paths ?? []) {
+          addPreviewUrl(previewUrls, path.backend?.service?.name, previewUrl);
+        }
+      }
+    }
+    return previewUrls;
+  } catch {
+    return new Map();
+  }
+};
+
+const readPreviewUrls = async (
+  config: ResolvedNativeAppDevStackConfig,
+  runKubectl: KubectlRunner,
+): Promise<Map<string, string>> => {
+  const traefikPreviewUrls = await readTraefikPreviewUrls(config, runKubectl);
+  if (traefikPreviewUrls === null || traefikPreviewUrls.size > 0) {
+    return traefikPreviewUrls ?? new Map();
+  }
+  return readIngressPreviewUrls(config, runKubectl);
+};
+
+const stripReplicaSetHash = (value: string): string => value.replace(/-[a-z0-9]{8,10}$/u, "");
+
+interface PodPreviewContext {
+  readonly config: ResolvedNativeAppDevStackConfig;
+  readonly discoveredPreviewUrls: ReadonlyMap<string, string>;
+}
+
+const resolvePodPreview = (
+  pod: KubectlPod,
+  containers: ReadonlyArray<AppDevStackPodContainer>,
+  ownerName: string | null,
+  previewContext: PodPreviewContext | undefined,
+): { readonly serviceName: string; readonly url: string } | null => {
+  if (previewContext === undefined) return null;
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  const addCandidate = (value: string | null | undefined) => {
+    const key = value === undefined || value === null ? "" : serviceLookupKey(value);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    candidates.push(key);
+  };
+
+  const labels = pod.metadata?.labels;
+  addCandidate(labels?.["cortex.ai/service"]);
+  addCandidate(labels?.["app.kubernetes.io/name"]);
+  for (const container of containers) {
+    addCandidate(container.name);
+  }
+  addCandidate(ownerName === null ? null : stripReplicaSetHash(ownerName));
+
+  const podName = serviceLookupKey(pod.metadata?.name ?? "");
+  for (const serviceName of previewContext.discoveredPreviewUrls.keys()) {
+    if (podName === serviceName || podName.startsWith(`${serviceName}-`)) {
+      addCandidate(serviceName);
+    }
+  }
+  for (const serviceName of ["frontend", "web", "app", "backend", "api", "keycloak", "minio"]) {
+    if (podName === serviceName || podName.startsWith(`${serviceName}-`)) {
+      addCandidate(serviceName);
+    }
+  }
+
+  for (const serviceName of candidates) {
+    const url = previewUrlForService(
+      previewContext.config,
+      previewContext.discoveredPreviewUrls,
+      serviceName,
+    );
+    if (url !== undefined) return { serviceName, url };
+  }
+  return null;
+};
+
 const serviceOrder = (name: string) => {
-  const order = ["frontend", "backend", "keycloak", "postgres", "redis", "minio", "codex-runner"];
+  const order = [
+    "frontend",
+    "web",
+    "app",
+    "backend",
+    "api",
+    "keycloak",
+    "postgres",
+    "redis",
+    "minio",
+    "codex-runner",
+  ];
   const index = order.indexOf(name);
   return index === -1 ? order.length : index;
 };
@@ -533,7 +742,10 @@ const buildPodContainer = (
   };
 };
 
-const buildPods = (podList: KubectlPodList): Array<AppDevStackPod> =>
+const buildPods = (
+  podList: KubectlPodList,
+  previewContext?: PodPreviewContext,
+): Array<AppDevStackPod> =>
   (podList.items ?? [])
     .flatMap((pod) => {
       const name = pod.metadata?.name?.trim();
@@ -556,6 +768,8 @@ const buildPods = (podList: KubectlPodList): Array<AppDevStackPod> =>
         0,
       );
       const owner = pod.metadata?.ownerReferences?.[0];
+      const ownerName = owner?.name ?? null;
+      const preview = resolvePodPreview(pod, containers, ownerName, previewContext);
       return [
         {
           name,
@@ -566,7 +780,9 @@ const buildPods = (podList: KubectlPodList): Array<AppDevStackPod> =>
           createdAt: pod.metadata?.creationTimestamp ?? null,
           nodeName: pod.spec?.nodeName ?? null,
           ownerKind: owner?.kind ?? null,
-          ownerName: owner?.name ?? null,
+          ownerName,
+          previewUrl: preview?.url ?? null,
+          previewServiceName: preview?.serviceName ?? null,
           containers,
         },
       ];
@@ -576,7 +792,9 @@ const buildPods = (podList: KubectlPodList): Array<AppDevStackPod> =>
 const readPods = async (
   config: ResolvedNativeAppDevStackConfig,
   runKubectl: KubectlRunner,
-): Promise<Array<AppDevStackPod>> => buildPods(await readPodList(config, runKubectl));
+  previewContext?: PodPreviewContext,
+): Promise<Array<AppDevStackPod>> =>
+  buildPods(await readPodList(config, runKubectl), previewContext);
 
 const findPodForLogs = async (
   config: ResolvedNativeAppDevStackConfig,
@@ -695,7 +913,10 @@ const buildStack = async (
     };
   }
 
-  const deployments = await readDeployments(config, runKubectl);
+  const [deployments, discoveredPreviewUrls] = await Promise.all([
+    readDeployments(config, runKubectl),
+    readPreviewUrls(config, runKubectl),
+  ]);
   const services: Array<AppDevStackService> = (deployments.items ?? [])
     .map((deployment) => {
       const name = deployment.metadata?.name ?? "unknown";
@@ -704,11 +925,12 @@ const buildStack = async (
       const ready = deployment.status?.readyReplicas ?? 0;
       const stopped = desired === 0;
       const running = desired > 0 && available >= desired && ready >= desired;
+      const previewUrl = previewUrlForService(config, discoveredPreviewUrls, name) ?? null;
       return {
         name,
         status: stopped ? "stopped" : running ? "running" : "starting",
         health: running ? "healthy" : stopped ? "unknown" : "starting",
-        previewUrl: previewUrlForService(config, name) ?? null,
+        previewUrl,
       };
     })
     .sort((left, right) => serviceOrder(left.name) - serviceOrder(right.name));
@@ -1013,11 +1235,17 @@ export const makeNativeAppDevStackService = (
     listPods: (input) =>
       resolveKnownStack("listPods", input.stackId).pipe(
         Effect.flatMap((resolved) =>
-          nativeOperation("listPods", async () => ({
-            stackId: resolved.id,
-            namespace: resolved.namespace,
-            pods: await readPods(resolved, runKubectl),
-          })),
+          nativeOperation("listPods", async () => {
+            const previewUrls = await readPreviewUrls(resolved, runKubectl);
+            return {
+              stackId: resolved.id,
+              namespace: resolved.namespace,
+              pods: await readPods(resolved, runKubectl, {
+                config: resolved,
+                discoveredPreviewUrls: previewUrls,
+              }),
+            };
+          }),
         ),
       ),
     getPodLogs: (input) =>

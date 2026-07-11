@@ -135,7 +135,110 @@ it.effect("reports the configured Rudi stack from Kubernetes deployments", () =>
     assert.deepEqual(calls, [
       ["get", "namespace", "rudi-dev", "-o", "json"],
       ["-n", "rudi-dev", "get", "deployments", "-o", "json"],
+      ["-n", "rudi-dev", "get", "ingressroutes.traefik.io", "-o", "json"],
     ]);
+  });
+});
+
+it.effect(
+  "reports conventional preview URLs for native web, api, keycloak, and minio services",
+  () => {
+    const deployments = JSON.stringify({
+      items: [
+        {
+          metadata: { name: "web" },
+          spec: { replicas: 1 },
+          status: { availableReplicas: 1, readyReplicas: 1 },
+        },
+        {
+          metadata: { name: "api" },
+          spec: { replicas: 1 },
+          status: { availableReplicas: 1, readyReplicas: 1 },
+        },
+        {
+          metadata: { name: "keycloak" },
+          spec: { replicas: 1 },
+          status: { availableReplicas: 1, readyReplicas: 1 },
+        },
+        {
+          metadata: { name: "minio" },
+          spec: { replicas: 1 },
+          status: { availableReplicas: 1, readyReplicas: 1 },
+        },
+      ],
+    });
+    const runKubectl: KubectlRunner = async (args) => {
+      if (args.join(" ") === "get namespace hero-dev -o json") return namespaceJson;
+      if (args.join(" ") === "-n hero-dev get deployments -o json") return deployments;
+      if (args.join(" ") === "-n hero-dev get ingressroutes.traefik.io -o json") {
+        return JSON.stringify({ items: [] });
+      }
+      if (args.join(" ") === "-n hero-dev get ingress -o json") {
+        return JSON.stringify({ items: [] });
+      }
+      throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
+    };
+    const service = makeNativeAppDevStackService(nativeConfig, runKubectl);
+
+    return Effect.gen(function* () {
+      const result = yield* service.getByWorktree({ worktreePath: "/home/nils/repos/nils/hero" });
+      const urls = new Map(result.stack?.services?.map((item) => [item.name, item.previewUrl]));
+
+      assert.equal(urls.get("web"), "https://hero-dev.nightingale-ai.com");
+      assert.equal(urls.get("api"), "https://api-hero-dev.nightingale-ai.com");
+      assert.equal(urls.get("keycloak"), "https://hero-dev-keycloak.nightingale-ai.com");
+      assert.equal(urls.get("minio"), "https://minio-hero-dev.nightingale-ai.com");
+      assert.deepEqual(result.stack?.previewUrls, {
+        web: "https://hero-dev.nightingale-ai.com",
+        api: "https://api-hero-dev.nightingale-ai.com",
+        keycloak: "https://hero-dev-keycloak.nightingale-ai.com",
+        minio: "https://minio-hero-dev.nightingale-ai.com",
+      });
+    });
+  },
+);
+
+it.effect("uses Traefik IngressRoute hosts ahead of conventional preview URLs", () => {
+  const deployments = JSON.stringify({
+    items: [
+      {
+        metadata: { name: "web" },
+        spec: { replicas: 1 },
+        status: { availableReplicas: 1, readyReplicas: 1 },
+      },
+    ],
+  });
+  const ingressRoutes = JSON.stringify({
+    items: [
+      {
+        spec: {
+          routes: [
+            {
+              match: "Host(`hero-preview.example.test`)",
+              services: [{ name: "web" }],
+            },
+          ],
+        },
+      },
+    ],
+  });
+  const runKubectl: KubectlRunner = async (args) => {
+    if (args.join(" ") === "get namespace hero-dev -o json") return namespaceJson;
+    if (args.join(" ") === "-n hero-dev get deployments -o json") return deployments;
+    if (args.join(" ") === "-n hero-dev get ingressroutes.traefik.io -o json") {
+      return ingressRoutes;
+    }
+    throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
+  };
+  const service = makeNativeAppDevStackService(nativeConfig, runKubectl);
+
+  return Effect.gen(function* () {
+    const result = yield* service.getByWorktree({ worktreePath: "/home/nils/repos/nils/hero" });
+
+    assert.equal(result.stack?.services?.[0]?.previewUrl, "https://hero-preview.example.test");
+    assert.deepEqual(result.stack?.previewUrls, {
+      web: "https://hero-preview.example.test",
+    });
   });
 });
 
@@ -162,6 +265,8 @@ it.effect("lists pods with container readiness and restart counts", () => {
         restartCount: pod.restartCount,
         ownerKind: pod.ownerKind,
         ownerName: pod.ownerName,
+        previewUrl: pod.previewUrl,
+        previewServiceName: pod.previewServiceName,
         containers: pod.containers,
       })),
       [
@@ -173,6 +278,8 @@ it.effect("lists pods with container readiness and restart counts", () => {
           restartCount: 3,
           ownerKind: "ReplicaSet",
           ownerName: "backend-7cdbbbfdd8",
+          previewUrl: "https://api-rudi-dev.nightingale-ai.com",
+          previewServiceName: "backend",
           containers: [
             { name: "backend", ready: true, restartCount: 1, state: "running" },
             { name: "sidecar", ready: false, restartCount: 2, state: "CrashLoopBackOff" },
@@ -180,7 +287,10 @@ it.effect("lists pods with container readiness and restart counts", () => {
         },
       ],
     );
-    assert.deepEqual(calls, [["-n", "rudi-dev", "get", "pods", "-o", "json"]]);
+    assert.deepEqual(calls, [
+      ["-n", "rudi-dev", "get", "ingressroutes.traefik.io", "-o", "json"],
+      ["-n", "rudi-dev", "get", "pods", "-o", "json"],
+    ]);
   });
 });
 
@@ -469,6 +579,7 @@ it.effect("resolves an unknown stack id after app-dev namespace discovery", () =
     assert.equal(result.pods.length, 1);
     assert.deepEqual(calls, [
       ["get", "namespaces", "-l", "cortex.ai/component=app-dev-stack", "-o", "json"],
+      ["-n", "hero-dev", "get", "ingressroutes.traefik.io", "-o", "json"],
       ["-n", "hero-dev", "get", "pods", "-o", "json"],
     ]);
   });
@@ -652,6 +763,7 @@ it.effect("scales deployments when auto-creating an existing native stack", () =
       ["-n", "rudi-dev", "scale", "deployment", "--all", "--replicas=1"],
       ["get", "namespace", "rudi-dev", "-o", "json"],
       ["-n", "rudi-dev", "get", "deployments", "-o", "json"],
+      ["-n", "rudi-dev", "get", "ingressroutes.traefik.io", "-o", "json"],
     ]);
   }).pipe(
     Effect.ensuring(
@@ -693,6 +805,7 @@ it.effect("derives a native namespace for a different worktree instead of reject
       ["-n", "hero-dev", "scale", "deployment", "--all", "--replicas=1"],
       ["get", "namespace", "hero-dev", "-o", "json"],
       ["-n", "hero-dev", "get", "deployments", "-o", "json"],
+      ["-n", "hero-dev", "get", "ingressroutes.traefik.io", "-o", "json"],
     ]);
   }).pipe(
     Effect.ensuring(
@@ -746,6 +859,7 @@ it.effect("uses an explicit native namespace for a new worktree when provided", 
       ["-n", "hero-preview", "scale", "deployment", "--all", "--replicas=1"],
       ["get", "namespace", "hero-preview", "-o", "json"],
       ["-n", "hero-preview", "get", "deployments", "-o", "json"],
+      ["-n", "hero-preview", "get", "ingressroutes.traefik.io", "-o", "json"],
     ]);
   }).pipe(
     Effect.ensuring(
@@ -812,6 +926,7 @@ it.effect("provisions Kubernetes resources when auto-creating a missing native n
         ["apply", "-f"],
         ["-n", "hero-dev"],
         ["get", "namespace"],
+        ["-n", "hero-dev"],
         ["-n", "hero-dev"],
       ],
     );
@@ -921,6 +1036,7 @@ it.effect("builds and pushes compose build services before applying Kubernetes r
         ["apply", "-f"],
         ["-n", "hero-dev"],
         ["get", "namespace"],
+        ["-n", "hero-dev"],
         ["-n", "hero-dev"],
       ],
     );
@@ -1194,6 +1310,7 @@ it.effect("restores Kubernetes resources when auto-creating an empty native name
         ["-n", "hero-dev"],
         ["get", "namespace"],
         ["-n", "hero-dev"],
+        ["-n", "hero-dev"],
       ],
     );
   }).pipe(
@@ -1257,6 +1374,7 @@ it.effect("scales native deployments down and back up when restarting", () => {
       ["-n", "rudi-dev", "scale", "deployment", "--all", "--replicas=1"],
       ["get", "namespace", "rudi-dev", "-o", "json"],
       ["-n", "rudi-dev", "get", "deployments", "-o", "json"],
+      ["-n", "rudi-dev", "get", "ingressroutes.traefik.io", "-o", "json"],
     ]);
   });
 });
