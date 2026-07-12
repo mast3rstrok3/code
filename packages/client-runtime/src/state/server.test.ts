@@ -30,7 +30,7 @@ import {
 
 const CONFIG = {
   availableEditors: [],
-  issues: [],
+  tickets: [],
   keybindings: {},
   keybindingsConfigPath: null,
   observability: null,

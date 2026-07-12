@@ -424,7 +424,7 @@ it.effect("ProviderServiceLive rejects new sessions for disabled providers", () 
     );
 
     assert.instanceOf(failure, ProviderValidationError);
-    assert.include(failure.issue, "Provider instance 'claudeAgent' is disabled");
+    assert.include(failure.ticket, "Provider instance 'claudeAgent' is disabled");
     assert.equal(claude.startSession.mock.calls.length, 0);
   }).pipe(Effect.provide(NodeServices.layer)),
 );
@@ -578,7 +578,7 @@ it.effect("ProviderServiceLive rejects new sessions for disabled custom instance
     );
 
     assert.instanceOf(failure, ProviderValidationError);
-    assert.include(failure.issue, "Provider instance 'codex_personal' is disabled");
+    assert.include(failure.ticket, "Provider instance 'codex_personal' is disabled");
     assert.equal(codex.startSession.mock.calls.length, 0);
   }).pipe(Effect.provide(NodeServices.layer)),
 );
@@ -1797,7 +1797,7 @@ validation.layer("ProviderServiceLive validation", (it) => {
       );
 
       assert.instanceOf(failure, ProviderValidationError);
-      assert.include(failure.issue, "Provider instance id is required for provider 'codex'.");
+      assert.include(failure.ticket, "Provider instance id is required for provider 'codex'.");
       assert.equal(validation.codex.startSession.mock.calls.length, 0);
     }),
   );
@@ -1819,7 +1819,7 @@ validation.layer("ProviderServiceLive validation", (it) => {
 
       assert.instanceOf(failure, ProviderValidationError);
       assert.include(
-        failure.issue,
+        failure.ticket,
         "Provider instance 'claudeAgent' belongs to driver 'claudeAgent', not 'codex'.",
       );
       assert.equal(validation.codex.startSession.mock.calls.length, 0);
@@ -1848,7 +1848,7 @@ validation.layer("ProviderServiceLive validation", (it) => {
         return;
       }
       assert.equal(failure.failure.operation, "ProviderService.startSession");
-      assert.equal(failure.failure.issue.includes("invalid-provider"), true);
+      assert.equal(failure.failure.ticket.includes("invalid-provider"), true);
     }),
   );
 

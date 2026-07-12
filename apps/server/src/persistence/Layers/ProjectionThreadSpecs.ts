@@ -8,37 +8,37 @@ import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 
 import { toPersistenceSqlError } from "../Errors.ts";
 import {
-  DeleteProjectionThreadPrdsInput,
-  ListProjectionThreadPrdsInput,
-  ProjectionThreadPrd,
-  ProjectionThreadPrdRepository,
-  type ProjectionThreadPrdRepositoryShape,
-} from "../Services/ProjectionThreadPrds.ts";
+  DeleteProjectionThreadSpecsInput,
+  ListProjectionThreadSpecsInput,
+  ProjectionThreadSpec,
+  ProjectionThreadSpecRepository,
+  type ProjectionThreadSpecRepositoryShape,
+} from "../Services/ProjectionThreadSpecs.ts";
 
-const ProjectionThreadPrdDbRow = ProjectionThreadPrd.mapFields(
+const ProjectionThreadSpecDbRow = ProjectionThreadSpec.mapFields(
   Struct.assign({
     sourceMessageIds: Schema.fromJsonString(Schema.Array(MessageId)),
   }),
 );
 
-const makeProjectionThreadPrdRepository = Effect.gen(function* () {
+const makeProjectionThreadSpecRepository = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
-  const upsertProjectionThreadPrdRow = SqlSchema.void({
-    Request: ProjectionThreadPrd,
+  const upsertProjectionThreadSpecRow = SqlSchema.void({
+    Request: ProjectionThreadSpec,
     execute: (row) => sql`
-      INSERT INTO projection_thread_prds (
-        prd_id, thread_id, title, summary_markdown, tenant_id, team_id,
+      INSERT INTO projection_thread_specs (
+        spec_id, thread_id, title, summary_markdown, tenant_id, team_id,
         source_thread_id, source_message_ids_json, created_by, workflow_id,
-        issue_count, created_at, updated_at
+        ticket_count, created_at, updated_at
       )
       VALUES (
-        ${row.prdId}, ${row.threadId}, ${row.title}, ${row.summaryMarkdown},
+        ${row.specId}, ${row.threadId}, ${row.title}, ${row.summaryMarkdown},
         ${row.tenantId}, ${row.teamId}, ${row.sourceThreadId},
         ${JSON.stringify(row.sourceMessageIds)}, ${row.createdBy}, ${row.workflowId},
-        ${row.issueCount}, ${row.createdAt}, ${row.updatedAt}
+        ${row.ticketCount}, ${row.createdAt}, ${row.updatedAt}
       )
-      ON CONFLICT (prd_id)
+      ON CONFLICT (spec_id)
       DO UPDATE SET
         thread_id = excluded.thread_id,
         title = excluded.title,
@@ -49,18 +49,18 @@ const makeProjectionThreadPrdRepository = Effect.gen(function* () {
         source_message_ids_json = excluded.source_message_ids_json,
         created_by = excluded.created_by,
         workflow_id = excluded.workflow_id,
-        issue_count = excluded.issue_count,
+        ticket_count = excluded.ticket_count,
         created_at = excluded.created_at,
         updated_at = excluded.updated_at
     `,
   });
 
-  const listProjectionThreadPrdRows = SqlSchema.findAll({
-    Request: ListProjectionThreadPrdsInput,
-    Result: ProjectionThreadPrdDbRow,
+  const listProjectionThreadSpecRows = SqlSchema.findAll({
+    Request: ListProjectionThreadSpecsInput,
+    Result: ProjectionThreadSpecDbRow,
     execute: ({ threadId }) => sql`
       SELECT
-        prd_id AS "prdId",
+        spec_id AS "specId",
         thread_id AS "threadId",
         title,
         summary_markdown AS "summaryMarkdown",
@@ -70,44 +70,44 @@ const makeProjectionThreadPrdRepository = Effect.gen(function* () {
         source_message_ids_json AS "sourceMessageIds",
         created_by AS "createdBy",
         workflow_id AS "workflowId",
-        issue_count AS "issueCount",
+        ticket_count AS "ticketCount",
         created_at AS "createdAt",
         updated_at AS "updatedAt"
-      FROM projection_thread_prds
+      FROM projection_thread_specs
       WHERE thread_id = ${threadId}
-      ORDER BY created_at ASC, prd_id ASC
+      ORDER BY created_at ASC, spec_id ASC
     `,
   });
 
-  const deleteProjectionThreadPrdRows = SqlSchema.void({
-    Request: DeleteProjectionThreadPrdsInput,
+  const deleteProjectionThreadSpecRows = SqlSchema.void({
+    Request: DeleteProjectionThreadSpecsInput,
     execute: ({ threadId }) => sql`
-      DELETE FROM projection_thread_prds
+      DELETE FROM projection_thread_specs
       WHERE thread_id = ${threadId}
     `,
   });
 
   return {
     upsert: (row) =>
-      upsertProjectionThreadPrdRow(row).pipe(
-        Effect.mapError(toPersistenceSqlError("ProjectionThreadPrdRepository.upsert:query")),
+      upsertProjectionThreadSpecRow(row).pipe(
+        Effect.mapError(toPersistenceSqlError("ProjectionThreadSpecRepository.upsert:query")),
       ),
     listByThreadId: (input) =>
-      listProjectionThreadPrdRows(input).pipe(
+      listProjectionThreadSpecRows(input).pipe(
         Effect.mapError(
-          toPersistenceSqlError("ProjectionThreadPrdRepository.listByThreadId:query"),
+          toPersistenceSqlError("ProjectionThreadSpecRepository.listByThreadId:query"),
         ),
       ),
     deleteByThreadId: (input) =>
-      deleteProjectionThreadPrdRows(input).pipe(
+      deleteProjectionThreadSpecRows(input).pipe(
         Effect.mapError(
-          toPersistenceSqlError("ProjectionThreadPrdRepository.deleteByThreadId:query"),
+          toPersistenceSqlError("ProjectionThreadSpecRepository.deleteByThreadId:query"),
         ),
       ),
-  } satisfies ProjectionThreadPrdRepositoryShape;
+  } satisfies ProjectionThreadSpecRepositoryShape;
 });
 
-export const ProjectionThreadPrdRepositoryLive = Layer.effect(
-  ProjectionThreadPrdRepository,
-  makeProjectionThreadPrdRepository,
+export const ProjectionThreadSpecRepositoryLive = Layer.effect(
+  ProjectionThreadSpecRepository,
+  makeProjectionThreadSpecRepository,
 );

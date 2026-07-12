@@ -29,9 +29,9 @@ Find workflow skills in this order:
 
 Built-in workflow stages:
 
-- Product: \`product.grill-stage.codex\`.
-- Planning: \`planning.grill-stage.codex\`, \`planning.prd.codex\`, \`planning.issues.codex\`, \`planning.issue-reviewer.codex\`.
-- Implementation: \`implementation.orchestrator-planning.codex\`, \`implementation.tdd.codex\`, \`implementation.merge-gate.codex\`, \`implementation.browser-dev-review.codex\`, \`implementation.fix.codex\`.
+- Product: \`product.workflow.codex\`.
+- Planning: \`planning.grill-stage.codex\`, \`planning.spec.codex\`, \`planning.tickets.codex\`, \`planning.ticket-reviewer.codex\`.
+- Implementation: \`implementation.orchestrator-planning.codex\`, \`implementation.tdd.codex\`, \`implementation.merge-gate.codex\`, \`implementation.browser-dev-review.codex\`, \`implementation.fix.codex\`, \`implementation.code-review.codex\`.
 
 Workflow thread relationships use \`parentThreadId\`, \`workflowRole\`, \`interactionMode\`, and \`workflowPromptId\`. Parent agents start child agents with a focused first message. Child agents send durable results back to parents with final-result workflow directives, not informal prose.
 
@@ -40,9 +40,9 @@ To create a child sub-agent, emit exactly one fenced JSON block:
 \`\`\`json
 {
   "type": "workflow-subagent-create",
-  "workflowPromptId": "planning.issue-reviewer.codex",
-  "title": "Review planning issues for <feature>",
-  "promptMarkdown": "Review these issues...",
+  "workflowPromptId": "planning.ticket-reviewer.codex",
+  "title": "Review planning tickets for <feature>",
+  "promptMarkdown": "Review these tickets...",
   "expectedResult": "planning-reviewer-verdict"
 }
 \`\`\`
@@ -60,7 +60,7 @@ To message an existing parent or child agent, emit exactly one fenced JSON block
     "relation": "parent"
   },
   "purpose": "blocker",
-  "messageMarkdown": "I need the PRD artifact before I can continue."
+  "messageMarkdown": "I need the Spec artifact before I can continue."
 }
 \`\`\`
 
@@ -75,10 +75,11 @@ Targets must be the current thread, the direct parent, or a descendant. Ambiguou
 Use existing final-result directives for durable handoffs:
 
 - \`product-intent-locked\`
-- \`planning-prd-artifact\`
-- \`planning-issues-artifact\`
+- \`planning-spec-artifact\`
+- \`planning-tickets-artifact\`
 - \`planning-reviewer-verdict\`
 - \`implementation-worker-result\`
 - \`implementation-merge-gate-result\`
 - \`dev-review-document\`
-- \`implementation-fix-result\``;
+- \`implementation-fix-result\`
+- \`implementation-code-review-result\``;

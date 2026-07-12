@@ -363,11 +363,11 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
       | "thread.dev-review-updated"
       | "thread.dev-review-evidence-updated"
       | "thread.planning-stage-started"
-      | "thread.planning-prd-created"
-      | "thread.planning-issues-created"
-      | "thread.planning-issues-revised"
-      | "thread.planning-issue-review-requested"
-      | "thread.planning-prd-bundle-loaded"
+      | "thread.planning-spec-created"
+      | "thread.planning-tickets-created"
+      | "thread.planning-tickets-revised"
+      | "thread.planning-ticket-review-requested"
+      | "thread.planning-spec-bundle-loaded"
       | "thread.planning-workflow-stage-set"
       | "thread.implementation-run-updated"
       | "thread.activity-appended"
@@ -383,11 +383,11 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
     event.type === "thread.dev-review-updated" ||
     event.type === "thread.dev-review-evidence-updated" ||
     event.type === "thread.planning-stage-started" ||
-    event.type === "thread.planning-prd-created" ||
-    event.type === "thread.planning-issues-created" ||
-    event.type === "thread.planning-issues-revised" ||
-    event.type === "thread.planning-issue-review-requested" ||
-    event.type === "thread.planning-prd-bundle-loaded" ||
+    event.type === "thread.planning-spec-created" ||
+    event.type === "thread.planning-tickets-created" ||
+    event.type === "thread.planning-tickets-revised" ||
+    event.type === "thread.planning-ticket-review-requested" ||
+    event.type === "thread.planning-spec-bundle-loaded" ||
     event.type === "thread.planning-workflow-stage-set" ||
     event.type === "thread.implementation-run-updated" ||
     event.type === "thread.activity-appended" ||
@@ -417,7 +417,7 @@ function threadDetailEventMatchesThread(event: OrchestrationEvent, threadId: str
       return (
         event.payload.sourceThreadId === threadId ||
         event.payload.run.orchestratorThreadId === threadId ||
-        event.payload.run.issueStates.some((state) => state.workerThreadId === threadId)
+        event.payload.run.ticketStates.some((state) => state.workerThreadId === threadId)
       );
     default:
       return false;
@@ -1131,7 +1131,7 @@ const makeWsRpcLayer = (
           cwd: config.cwd,
           keybindingsConfigPath: config.keybindingsConfigPath,
           keybindings: keybindingsConfig.keybindings,
-          issues: keybindingsConfig.issues,
+          tickets: keybindingsConfig.tickets,
           providers,
           availableEditors: yield* externalLauncher.resolveAvailableEditors(),
           observability: {
@@ -1509,7 +1509,7 @@ const makeWsRpcLayer = (
             WS_METHODS.serverUpsertKeybinding,
             Effect.gen(function* () {
               const keybindingsConfig = yield* keybindings.upsertKeybindingRule(rule);
-              return { keybindings: keybindingsConfig, issues: [] };
+              return { keybindings: keybindingsConfig, tickets: [] };
             }),
             { "rpc.aggregate": "server" },
           ),
@@ -1518,7 +1518,7 @@ const makeWsRpcLayer = (
             WS_METHODS.serverRemoveKeybinding,
             Effect.gen(function* () {
               const keybindingsConfig = yield* keybindings.removeKeybindingRule(rule);
-              return { keybindings: keybindingsConfig, issues: [] };
+              return { keybindings: keybindingsConfig, tickets: [] };
             }),
             { "rpc.aggregate": "server" },
           ),
@@ -2124,7 +2124,7 @@ const makeWsRpcLayer = (
                   type: "keybindingsUpdated" as const,
                   payload: {
                     keybindings: event.keybindings,
-                    issues: event.issues,
+                    tickets: event.tickets,
                   },
                 })),
               );

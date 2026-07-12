@@ -81,8 +81,8 @@ describe("buildTurnStartParams", () => {
 
     NodeAssert.equal(error.operation, "decode-request-payload");
     NodeAssert.equal(error.method, "turn/start");
-    NodeAssert.ok((error.issueCount ?? 0) > 0);
-    NodeAssert.ok(error.issueKinds?.includes("Pointer"));
+    NodeAssert.ok((error.ticketCount ?? 0) > 0);
+    NodeAssert.ok(error.ticketKinds?.includes("Pointer"));
     NodeAssert.ok((error.maximumPathDepth ?? 0) > 0);
     NodeAssert.ok(Schema.isSchemaError(cause));
     NodeAssert.doesNotMatch(error.message, new RegExp(secret));

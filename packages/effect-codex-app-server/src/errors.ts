@@ -9,7 +9,7 @@ export const CodexAppServerRequestOperation = Schema.Literals([
 ]);
 export type CodexAppServerRequestOperation = typeof CodexAppServerRequestOperation.Type;
 
-export const CodexAppServerSchemaIssueKind = Schema.Literals([
+export const CodexAppServerSchemaTicketKind = Schema.Literals([
   "Filter",
   "Encoding",
   "Pointer",
@@ -22,42 +22,44 @@ export const CodexAppServerSchemaIssueKind = Schema.Literals([
   "Forbidden",
   "OneOf",
 ]);
-export type CodexAppServerSchemaIssueKind = typeof CodexAppServerSchemaIssueKind.Type;
+export type CodexAppServerSchemaTicketKind = typeof CodexAppServerSchemaTicketKind.Type;
 
-export interface CodexAppServerSchemaIssueDiagnostics {
-  readonly issueCount: number;
-  readonly issueKinds: ReadonlyArray<CodexAppServerSchemaIssueKind>;
+export interface CodexAppServerSchemaTicketDiagnostics {
+  readonly ticketCount: number;
+  readonly ticketKinds: ReadonlyArray<CodexAppServerSchemaTicketKind>;
   readonly maximumPathDepth: number;
 }
 
-const schemaIssueDiagnostics = (root: SchemaIssue.Issue): CodexAppServerSchemaIssueDiagnostics => {
-  let issueCount = 0;
+const schemaTicketDiagnostics = (
+  root: SchemaIssue.Issue,
+): CodexAppServerSchemaTicketDiagnostics => {
+  let ticketCount = 0;
   let maximumPathDepth = 0;
-  const issueKinds = new Set<CodexAppServerSchemaIssueKind>();
+  const ticketKinds = new Set<CodexAppServerSchemaTicketKind>();
 
-  const visit = (issue: SchemaIssue.Issue, pathDepth: number): void => {
-    issueCount += 1;
-    issueKinds.add(issue._tag);
+  const visit = (ticket: SchemaIssue.Issue, pathDepth: number): void => {
+    ticketCount += 1;
+    ticketKinds.add(ticket._tag);
     maximumPathDepth = Math.max(maximumPathDepth, pathDepth);
-    switch (issue._tag) {
+    switch (ticket._tag) {
       case "Filter":
       case "Encoding":
-        visit(issue.issue, pathDepth);
+        visit(ticket.issue, pathDepth);
         break;
       case "Pointer":
-        visit(issue.issue, pathDepth + issue.path.length);
+        visit(ticket.issue, pathDepth + ticket.path.length);
         break;
       case "Composite":
       case "AnyOf":
-        for (const child of issue.issues) visit(child, pathDepth);
+        for (const child of ticket.issues) visit(child, pathDepth);
         break;
     }
   };
 
   visit(root, 0);
   return {
-    issueCount,
-    issueKinds: [...issueKinds],
+    ticketCount,
+    ticketKinds: [...ticketKinds],
     maximumPathDepth,
   };
 };
@@ -92,8 +94,8 @@ export interface CodexAppServerRequestDiagnostics {
   readonly requestId?: string;
   readonly operation?: CodexAppServerRequestOperation;
   readonly cause?: unknown;
-  readonly issueCount?: number;
-  readonly issueKinds?: ReadonlyArray<CodexAppServerSchemaIssueKind>;
+  readonly ticketCount?: number;
+  readonly ticketKinds?: ReadonlyArray<CodexAppServerSchemaTicketKind>;
   readonly maximumPathDepth?: number;
   readonly payloadKind?: CodexAppServerPayloadKind;
 }
@@ -165,8 +167,8 @@ export class CodexAppServerProtocolParseError extends Schema.TaggedErrorClass<Co
     requestId: Schema.optionalKey(Schema.String),
     payloadKind: Schema.optionalKey(CodexAppServerPayloadKind),
     presentFields: Schema.optionalKey(Schema.Array(CodexAppServerProtocolMessageField)),
-    issueCount: Schema.optionalKey(Schema.Number),
-    issueKinds: Schema.optionalKey(Schema.Array(CodexAppServerSchemaIssueKind)),
+    ticketCount: Schema.optionalKey(Schema.Number),
+    ticketKinds: Schema.optionalKey(Schema.Array(CodexAppServerSchemaTicketKind)),
     maximumPathDepth: Schema.optionalKey(Schema.Number),
     cause: Schema.optional(Schema.Defect()),
   },
@@ -184,7 +186,7 @@ export class CodexAppServerProtocolParseError extends Schema.TaggedErrorClass<Co
     return new CodexAppServerProtocolParseError({
       operation,
       ...context,
-      ...schemaIssueDiagnostics(cause.issue),
+      ...schemaTicketDiagnostics(cause.issue),
       cause,
     });
   }
@@ -197,8 +199,8 @@ export class CodexAppServerProtocolParseError extends Schema.TaggedErrorClass<Co
     return new CodexAppServerProtocolParseError({
       operation,
       method,
-      ...(cause.issueCount === undefined ? {} : { issueCount: cause.issueCount }),
-      ...(cause.issueKinds === undefined ? {} : { issueKinds: cause.issueKinds }),
+      ...(cause.ticketCount === undefined ? {} : { ticketCount: cause.ticketCount }),
+      ...(cause.ticketKinds === undefined ? {} : { ticketKinds: cause.ticketKinds }),
       ...(cause.maximumPathDepth === undefined ? {} : { maximumPathDepth: cause.maximumPathDepth }),
       cause,
     });
@@ -273,8 +275,8 @@ export class CodexAppServerRequestError extends Schema.TaggedErrorClass<CodexApp
     method: Schema.optionalKey(Schema.String),
     requestId: Schema.optionalKey(Schema.String),
     operation: Schema.optionalKey(CodexAppServerRequestOperation),
-    issueCount: Schema.optionalKey(Schema.Number),
-    issueKinds: Schema.optionalKey(Schema.Array(CodexAppServerSchemaIssueKind)),
+    ticketCount: Schema.optionalKey(Schema.Number),
+    ticketKinds: Schema.optionalKey(Schema.Array(CodexAppServerSchemaTicketKind)),
     maximumPathDepth: Schema.optionalKey(Schema.Number),
     payloadKind: Schema.optionalKey(CodexAppServerPayloadKind),
     cause: Schema.optionalKey(Schema.Defect()),
@@ -356,7 +358,7 @@ export class CodexAppServerRequestError extends Schema.TaggedErrorClass<CodexApp
     operation: "decode-payload" | "encode-payload",
     cause: Schema.SchemaError,
   ) {
-    const diagnostics = schemaIssueDiagnostics(cause.issue);
+    const diagnostics = schemaTicketDiagnostics(cause.issue);
     return new CodexAppServerRequestError({
       code: -32602,
       errorMessage: `Invalid payload for method '${method}' during '${operation}'`,

@@ -32,15 +32,15 @@ import {
   ProjectionThreadMessageRepository,
 } from "../../persistence/Services/ProjectionThreadMessages.ts";
 import {
-  projectionIssueFromContract,
-  ProjectionThreadPlanningIssueRepository,
-} from "../../persistence/Services/ProjectionThreadPlanningIssues.ts";
+  projectionTicketFromContract,
+  ProjectionThreadPlanningTicketRepository,
+} from "../../persistence/Services/ProjectionThreadPlanningTickets.ts";
 import {
   projectionReviewCycleFromContract,
   ProjectionThreadPlanningReviewCycleRepository,
 } from "../../persistence/Services/ProjectionThreadPlanningReviewCycles.ts";
-import { ProjectionThreadLoadedPrdBundleRepository } from "../../persistence/Services/ProjectionThreadLoadedPrdBundles.ts";
-import { ProjectionThreadPrdRepository } from "../../persistence/Services/ProjectionThreadPrds.ts";
+import { ProjectionThreadLoadedSpecBundleRepository } from "../../persistence/Services/ProjectionThreadLoadedSpecBundles.ts";
+import { ProjectionThreadSpecRepository } from "../../persistence/Services/ProjectionThreadSpecs.ts";
 import {
   type ProjectionThreadProposedPlan,
   ProjectionThreadProposedPlanRepository,
@@ -59,10 +59,10 @@ import { ProjectionThreadMessageRepositoryLive } from "../../persistence/Layers/
 import { ProjectionThreadDevReviewRepositoryLive } from "../../persistence/Layers/ProjectionThreadDevReviews.ts";
 import { ProjectionImplementationRunRepositoryLive } from "../../persistence/Layers/ProjectionImplementationRuns.ts";
 import { ProjectionThreadProposedPlanRepositoryLive } from "../../persistence/Layers/ProjectionThreadProposedPlans.ts";
-import { ProjectionThreadPlanningIssueRepositoryLive } from "../../persistence/Layers/ProjectionThreadPlanningIssues.ts";
+import { ProjectionThreadPlanningTicketRepositoryLive } from "../../persistence/Layers/ProjectionThreadPlanningTickets.ts";
 import { ProjectionThreadPlanningReviewCycleRepositoryLive } from "../../persistence/Layers/ProjectionThreadPlanningReviewCycles.ts";
-import { ProjectionThreadLoadedPrdBundleRepositoryLive } from "../../persistence/Layers/ProjectionThreadLoadedPrdBundles.ts";
-import { ProjectionThreadPrdRepositoryLive } from "../../persistence/Layers/ProjectionThreadPrds.ts";
+import { ProjectionThreadLoadedSpecBundleRepositoryLive } from "../../persistence/Layers/ProjectionThreadLoadedSpecBundles.ts";
+import { ProjectionThreadSpecRepositoryLive } from "../../persistence/Layers/ProjectionThreadSpecs.ts";
 import { ProjectionThreadSessionRepositoryLive } from "../../persistence/Layers/ProjectionThreadSessions.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { ProjectionThreadRepositoryLive } from "../../persistence/Layers/ProjectionThreads.ts";
@@ -84,10 +84,10 @@ export const ORCHESTRATION_PROJECTOR_NAMES = {
   threadMessages: "projection.thread-messages",
   threadProposedPlans: "projection.thread-proposed-plans",
   threadDevReviews: "projection.thread-dev-reviews",
-  threadPrds: "projection.thread-prds",
-  threadPlanningIssues: "projection.thread-planning-issues",
+  threadSpecs: "projection.thread-specs",
+  threadPlanningTickets: "projection.thread-planning-tickets",
   threadPlanningReviewCycles: "projection.thread-planning-review-cycles",
-  threadLoadedPrdBundles: "projection.thread-loaded-prd-bundles",
+  threadLoadedSpecBundles: "projection.thread-loaded-spec-bundles",
   implementationRuns: "projection.implementation-runs",
   threadActivities: "projection.thread-activities",
   threadSessions: "projection.thread-sessions",
@@ -506,12 +506,13 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     const projectionThreadMessageRepository = yield* ProjectionThreadMessageRepository;
     const projectionThreadProposedPlanRepository = yield* ProjectionThreadProposedPlanRepository;
     const projectionThreadDevReviewRepository = yield* ProjectionThreadDevReviewRepository;
-    const projectionThreadPrdRepository = yield* ProjectionThreadPrdRepository;
-    const projectionThreadPlanningIssueRepository = yield* ProjectionThreadPlanningIssueRepository;
+    const projectionThreadSpecRepository = yield* ProjectionThreadSpecRepository;
+    const projectionThreadPlanningTicketRepository =
+      yield* ProjectionThreadPlanningTicketRepository;
     const projectionThreadPlanningReviewCycleRepository =
       yield* ProjectionThreadPlanningReviewCycleRepository;
-    const projectionThreadLoadedPrdBundleRepository =
-      yield* ProjectionThreadLoadedPrdBundleRepository;
+    const projectionThreadLoadedSpecBundleRepository =
+      yield* ProjectionThreadLoadedSpecBundleRepository;
     const projectionImplementationRunRepository = yield* ProjectionImplementationRunRepository;
     const projectionThreadActivityRepository = yield* ProjectionThreadActivityRepository;
     const projectionThreadSessionRepository = yield* ProjectionThreadSessionRepository;
@@ -756,7 +757,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
         }
 
-        case "thread.planning-prd-created": {
+        case "thread.planning-spec-created": {
           const existingRow = yield* projectionThreadRepository.getById({
             threadId: event.payload.threadId,
           });
@@ -765,14 +766,14 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           }
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
-            planningWorkflowStage: event.payload.stage ?? "issues-authoring",
-            updatedAt: event.payload.prd.updatedAt,
+            planningWorkflowStage: event.payload.stage ?? "tickets-authoring",
+            updatedAt: event.payload.spec.updatedAt,
           });
           return;
         }
 
-        case "thread.planning-issues-created":
-        case "thread.planning-issues-revised": {
+        case "thread.planning-tickets-created":
+        case "thread.planning-tickets-revised": {
           const existingRow = yield* projectionThreadRepository.getById({
             threadId: event.payload.threadId,
           });
@@ -783,14 +784,14 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...existingRow.value,
             planningWorkflowStage: event.payload.stage ?? existingRow.value.planningWorkflowStage,
             updatedAt:
-              event.type === "thread.planning-issues-revised"
+              event.type === "thread.planning-tickets-revised"
                 ? event.payload.revisedAt
                 : event.occurredAt,
           });
           return;
         }
 
-        case "thread.planning-issue-review-requested": {
+        case "thread.planning-ticket-review-requested": {
           const existingRow = yield* projectionThreadRepository.getById({
             threadId: event.payload.threadId,
           });
@@ -805,7 +806,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
         }
 
-        case "thread.planning-prd-bundle-loaded": {
+        case "thread.planning-spec-bundle-loaded": {
           const existingRow = yield* projectionThreadRepository.getById({
             threadId: event.payload.threadId,
           });
@@ -1131,51 +1132,51 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       }
     });
 
-    const applyThreadPrdsProjection: ProjectorDefinition["apply"] = Effect.fn(
-      "applyThreadPrdsProjection",
+    const applyThreadSpecsProjection: ProjectorDefinition["apply"] = Effect.fn(
+      "applyThreadSpecsProjection",
     )(function* (event, _attachmentSideEffects) {
       switch (event.type) {
-        case "thread.planning-prd-created":
-          yield* projectionThreadPrdRepository.upsert({
-            prdId: event.payload.prd.id,
+        case "thread.planning-spec-created":
+          yield* projectionThreadSpecRepository.upsert({
+            specId: event.payload.spec.id,
             threadId: event.payload.threadId,
-            title: event.payload.prd.title,
-            summaryMarkdown: event.payload.prd.summaryMarkdown,
-            tenantId: event.payload.prd.tenantId,
-            teamId: event.payload.prd.teamId,
-            sourceThreadId: event.payload.prd.sourceThreadId,
-            sourceMessageIds: event.payload.prd.sourceMessageIds,
-            createdBy: event.payload.prd.createdBy,
-            workflowId: event.payload.prd.workflowId,
-            issueCount: event.payload.prd.issueCount,
-            createdAt: event.payload.prd.createdAt,
-            updatedAt: event.payload.prd.updatedAt,
+            title: event.payload.spec.title,
+            summaryMarkdown: event.payload.spec.summaryMarkdown,
+            tenantId: event.payload.spec.tenantId,
+            teamId: event.payload.spec.teamId,
+            sourceThreadId: event.payload.spec.sourceThreadId,
+            sourceMessageIds: event.payload.spec.sourceMessageIds,
+            createdBy: event.payload.spec.createdBy,
+            workflowId: event.payload.spec.workflowId,
+            ticketCount: event.payload.spec.ticketCount,
+            createdAt: event.payload.spec.createdAt,
+            updatedAt: event.payload.spec.updatedAt,
           });
           return;
 
-        case "thread.planning-prd-bundle-loaded":
+        case "thread.planning-spec-bundle-loaded":
           if (event.payload.bundle === undefined) {
             return;
           }
-          yield* projectionThreadPrdRepository.upsert({
-            prdId: event.payload.bundle.prd.id,
+          yield* projectionThreadSpecRepository.upsert({
+            specId: event.payload.bundle.spec.id,
             threadId: event.payload.threadId,
-            title: event.payload.bundle.prd.title,
-            summaryMarkdown: event.payload.bundle.prd.summaryMarkdown,
-            tenantId: event.payload.bundle.prd.tenantId,
-            teamId: event.payload.bundle.prd.teamId,
-            sourceThreadId: event.payload.bundle.prd.sourceThreadId,
-            sourceMessageIds: event.payload.bundle.prd.sourceMessageIds,
-            createdBy: event.payload.bundle.prd.createdBy,
-            workflowId: event.payload.bundle.prd.workflowId,
-            issueCount: event.payload.bundle.issues.length,
-            createdAt: event.payload.bundle.prd.createdAt,
-            updatedAt: event.payload.bundle.prd.updatedAt,
+            title: event.payload.bundle.spec.title,
+            summaryMarkdown: event.payload.bundle.spec.summaryMarkdown,
+            tenantId: event.payload.bundle.spec.tenantId,
+            teamId: event.payload.bundle.spec.teamId,
+            sourceThreadId: event.payload.bundle.spec.sourceThreadId,
+            sourceMessageIds: event.payload.bundle.spec.sourceMessageIds,
+            createdBy: event.payload.bundle.spec.createdBy,
+            workflowId: event.payload.bundle.spec.workflowId,
+            ticketCount: event.payload.bundle.tickets.length,
+            createdAt: event.payload.bundle.spec.createdAt,
+            updatedAt: event.payload.bundle.spec.updatedAt,
           });
           return;
 
         case "thread.deleted":
-          yield* projectionThreadPrdRepository.deleteByThreadId({
+          yield* projectionThreadSpecRepository.deleteByThreadId({
             threadId: event.payload.threadId,
           });
           return;
@@ -1185,44 +1186,44 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       }
     });
 
-    const applyThreadPlanningIssuesProjection: ProjectorDefinition["apply"] = Effect.fn(
-      "applyThreadPlanningIssuesProjection",
+    const applyThreadPlanningTicketsProjection: ProjectorDefinition["apply"] = Effect.fn(
+      "applyThreadPlanningTicketsProjection",
     )(function* (event, _attachmentSideEffects) {
       switch (event.type) {
-        case "thread.planning-issues-created":
-        case "thread.planning-issues-revised":
-          yield* projectionThreadPlanningIssueRepository.deleteByThreadId({
+        case "thread.planning-tickets-created":
+        case "thread.planning-tickets-revised":
+          yield* projectionThreadPlanningTicketRepository.deleteByThreadId({
             threadId: event.payload.threadId,
           });
           yield* Effect.forEach(
-            event.payload.issues,
-            (issue) =>
-              projectionThreadPlanningIssueRepository.upsert(
-                projectionIssueFromContract(event.payload.threadId, issue),
+            event.payload.tickets,
+            (ticket) =>
+              projectionThreadPlanningTicketRepository.upsert(
+                projectionTicketFromContract(event.payload.threadId, ticket),
               ),
             { concurrency: 1 },
           ).pipe(Effect.asVoid);
           return;
 
-        case "thread.planning-prd-bundle-loaded":
+        case "thread.planning-spec-bundle-loaded":
           if (event.payload.bundle === undefined) {
             return;
           }
-          yield* projectionThreadPlanningIssueRepository.deleteByThreadId({
+          yield* projectionThreadPlanningTicketRepository.deleteByThreadId({
             threadId: event.payload.threadId,
           });
           yield* Effect.forEach(
-            event.payload.bundle.issues,
-            (issue) =>
-              projectionThreadPlanningIssueRepository.upsert(
-                projectionIssueFromContract(event.payload.threadId, issue),
+            event.payload.bundle.tickets,
+            (ticket) =>
+              projectionThreadPlanningTicketRepository.upsert(
+                projectionTicketFromContract(event.payload.threadId, ticket),
               ),
             { concurrency: 1 },
           ).pipe(Effect.asVoid);
           return;
 
         case "thread.deleted":
-          yield* projectionThreadPlanningIssueRepository.deleteByThreadId({
+          yield* projectionThreadPlanningTicketRepository.deleteByThreadId({
             threadId: event.payload.threadId,
           });
           return;
@@ -1236,20 +1237,20 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       "applyThreadPlanningReviewCyclesProjection",
     )(function* (event, _attachmentSideEffects) {
       switch (event.type) {
-        case "thread.planning-issues-revised":
+        case "thread.planning-tickets-revised":
           if (event.payload.reviewCycle === undefined) {
             return;
           }
           yield* projectionThreadPlanningReviewCycleRepository.upsert(
             projectionReviewCycleFromContract(
               event.payload.threadId,
-              event.payload.prdId,
+              event.payload.specId,
               event.payload.reviewCycle,
             ),
           );
           return;
 
-        case "thread.planning-prd-bundle-loaded":
+        case "thread.planning-spec-bundle-loaded":
           if (event.payload.bundle === undefined) {
             return;
           }
@@ -1262,7 +1263,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               projectionThreadPlanningReviewCycleRepository.upsert(
                 projectionReviewCycleFromContract(
                   event.payload.threadId,
-                  event.payload.prdId,
+                  event.payload.specId,
                   reviewCycle,
                 ),
               ),
@@ -1281,21 +1282,21 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       }
     });
 
-    const applyThreadLoadedPrdBundlesProjection: ProjectorDefinition["apply"] = Effect.fn(
-      "applyThreadLoadedPrdBundlesProjection",
+    const applyThreadLoadedSpecBundlesProjection: ProjectorDefinition["apply"] = Effect.fn(
+      "applyThreadLoadedSpecBundlesProjection",
     )(function* (event, _attachmentSideEffects) {
       switch (event.type) {
-        case "thread.planning-prd-bundle-loaded":
-          yield* projectionThreadLoadedPrdBundleRepository.upsert({
+        case "thread.planning-spec-bundle-loaded":
+          yield* projectionThreadLoadedSpecBundleRepository.upsert({
             threadId: event.payload.threadId,
-            prdId: event.payload.prdId,
+            specId: event.payload.specId,
             sourceThreadId: event.payload.sourceThreadId,
             loadedAt: event.payload.loadedAt,
           });
           return;
 
         case "thread.deleted":
-          yield* projectionThreadLoadedPrdBundleRepository.deleteByThreadId({
+          yield* projectionThreadLoadedSpecBundleRepository.deleteByThreadId({
             threadId: event.payload.threadId,
           });
           return;
@@ -1871,20 +1872,20 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         apply: applyThreadDevReviewsProjection,
       },
       {
-        name: ORCHESTRATION_PROJECTOR_NAMES.threadPrds,
-        apply: applyThreadPrdsProjection,
+        name: ORCHESTRATION_PROJECTOR_NAMES.threadSpecs,
+        apply: applyThreadSpecsProjection,
       },
       {
-        name: ORCHESTRATION_PROJECTOR_NAMES.threadPlanningIssues,
-        apply: applyThreadPlanningIssuesProjection,
+        name: ORCHESTRATION_PROJECTOR_NAMES.threadPlanningTickets,
+        apply: applyThreadPlanningTicketsProjection,
       },
       {
         name: ORCHESTRATION_PROJECTOR_NAMES.threadPlanningReviewCycles,
         apply: applyThreadPlanningReviewCyclesProjection,
       },
       {
-        name: ORCHESTRATION_PROJECTOR_NAMES.threadLoadedPrdBundles,
-        apply: applyThreadLoadedPrdBundlesProjection,
+        name: ORCHESTRATION_PROJECTOR_NAMES.threadLoadedSpecBundles,
+        apply: applyThreadLoadedSpecBundlesProjection,
       },
       {
         name: ORCHESTRATION_PROJECTOR_NAMES.implementationRuns,
@@ -2013,10 +2014,10 @@ export const OrchestrationProjectionPipelineLive = Layer.effect(
   Layer.provideMerge(ProjectionThreadMessageRepositoryLive),
   Layer.provideMerge(ProjectionThreadProposedPlanRepositoryLive),
   Layer.provideMerge(ProjectionThreadDevReviewRepositoryLive),
-  Layer.provideMerge(ProjectionThreadPrdRepositoryLive),
-  Layer.provideMerge(ProjectionThreadPlanningIssueRepositoryLive),
+  Layer.provideMerge(ProjectionThreadSpecRepositoryLive),
+  Layer.provideMerge(ProjectionThreadPlanningTicketRepositoryLive),
   Layer.provideMerge(ProjectionThreadPlanningReviewCycleRepositoryLive),
-  Layer.provideMerge(ProjectionThreadLoadedPrdBundleRepositoryLive),
+  Layer.provideMerge(ProjectionThreadLoadedSpecBundleRepositoryLive),
   Layer.provideMerge(ProjectionImplementationRunRepositoryLive),
   Layer.provideMerge(ProjectionThreadActivityRepositoryLive),
   Layer.provideMerge(ProjectionThreadSessionRepositoryLive),

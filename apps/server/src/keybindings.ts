@@ -17,7 +17,7 @@ import {
   ResolvedKeybindingsConfig,
   type ServerRemoveKeybindingInput,
   type ServerUpsertKeybindingInput,
-  type ServerConfigIssue,
+  type ServerConfigTicket,
 } from "@t3tools/contracts";
 import * as Array from "effect/Array";
 import * as Cache from "effect/Cache";
@@ -178,31 +178,31 @@ const encodeKeybindingsConfigPrettyJson = Schema.encodeEffect(KeybindingsConfigP
 
 export interface KeybindingsConfigState {
   readonly keybindings: ResolvedKeybindingsConfig;
-  readonly issues: readonly ServerConfigIssue[];
+  readonly tickets: readonly ServerConfigTicket[];
 }
 
 export interface KeybindingsChangeEvent {
   readonly keybindings: ResolvedKeybindingsConfig;
-  readonly issues: readonly ServerConfigIssue[];
+  readonly tickets: readonly ServerConfigTicket[];
 }
 
-function trimIssueMessage(message: string): string {
+function trimTicketMessage(message: string): string {
   const trimmed = message.trim();
   return trimmed.length > 0 ? trimmed : "Invalid keybindings configuration.";
 }
 
-function malformedConfigIssue(detail: string): ServerConfigIssue {
+function malformedConfigTicket(detail: string): ServerConfigTicket {
   return {
     kind: "keybindings.malformed-config",
-    message: trimIssueMessage(detail),
+    message: trimTicketMessage(detail),
   };
 }
 
-function invalidEntryIssue(index: number, detail: string): ServerConfigIssue {
+function invalidEntryTicket(index: number, detail: string): ServerConfigTicket {
   return {
     kind: "keybindings.invalid-entry",
     index,
-    message: trimIssueMessage(detail),
+    message: trimTicketMessage(detail),
   };
 }
 
@@ -254,7 +254,7 @@ export class Keybindings extends Context.Service<
     readonly syncDefaultKeybindingsOnStartup: Effect.Effect<void, KeybindingsConfigError>;
 
     /**
-     * Load runtime keybindings state along with non-fatal configuration issues.
+     * Load runtime keybindings state along with non-fatal configuration tickets.
      */
     readonly loadConfigState: Effect.Effect<KeybindingsConfigState, KeybindingsConfigError>;
 
@@ -371,12 +371,12 @@ const make = Effect.gen(function* () {
   const loadRuntimeCustomKeybindingsConfig = Effect.fn(function* (): Effect.fn.Return<
     {
       readonly keybindings: readonly KeybindingRule[];
-      readonly issues: readonly ServerConfigIssue[];
+      readonly tickets: readonly ServerConfigTicket[];
     },
     KeybindingsConfigError
   > {
     if (!(yield* readConfigExists)) {
-      return { keybindings: [], issues: [] };
+      return { keybindings: [], tickets: [] };
     }
 
     const rawConfig = yield* readRawConfig;
@@ -385,17 +385,17 @@ const make = Effect.gen(function* () {
       const detail = `expected JSON array (${Cause.pretty(decodedEntries.cause)})`;
       return {
         keybindings: [],
-        issues: [malformedConfigIssue(detail)],
+        tickets: [malformedConfigTicket(detail)],
       };
     }
 
     const keybindings: KeybindingRule[] = [];
-    const issues: ServerConfigIssue[] = [];
+    const tickets: ServerConfigTicket[] = [];
     for (const [index, entry] of decodedEntries.value.entries()) {
       const decodedRule = decodeKeybindingRuleExit(entry);
       if (decodedRule._tag === "Failure") {
         const detail = Cause.pretty(decodedRule.cause);
-        issues.push(invalidEntryIssue(index, detail));
+        tickets.push(invalidEntryTicket(index, detail));
         yield* Effect.logWarning("ignoring invalid keybinding entry", {
           path: keybindingsConfigPath,
           index,
@@ -408,7 +408,7 @@ const make = Effect.gen(function* () {
       const resolvedRule = decodeResolvedKeybindingFromConfigExit(decodedRule.value);
       if (resolvedRule._tag === "Failure") {
         const detail = Cause.pretty(resolvedRule.cause);
-        issues.push(invalidEntryIssue(index, detail));
+        tickets.push(invalidEntryTicket(index, detail));
         yield* Effect.logWarning("ignoring invalid keybinding entry", {
           path: keybindingsConfigPath,
           index,
@@ -420,7 +420,7 @@ const make = Effect.gen(function* () {
       keybindings.push(decodedRule.value);
     }
 
-    return { keybindings, issues };
+    return { keybindings, tickets };
   });
 
   const writeConfigAtomically = (rules: readonly KeybindingRule[]) => {
@@ -447,9 +447,9 @@ const make = Effect.gen(function* () {
   };
 
   const loadConfigStateFromDisk = loadRuntimeCustomKeybindingsConfig().pipe(
-    Effect.map(({ keybindings, issues }) => ({
+    Effect.map(({ keybindings, tickets }) => ({
       keybindings: mergeWithDefaultKeybindings(compileResolvedKeybindingsConfig(keybindings)),
-      issues,
+      tickets,
     })),
   );
 
@@ -482,12 +482,12 @@ const make = Effect.gen(function* () {
       }
 
       const runtimeConfig = yield* loadRuntimeCustomKeybindingsConfig();
-      if (runtimeConfig.issues.length > 0) {
+      if (runtimeConfig.tickets.length > 0) {
         yield* Effect.logWarning(
-          "skipping startup keybindings default sync because config has issues",
+          "skipping startup keybindings default sync because config has tickets",
           {
             path: keybindingsConfigPath,
-            issues: runtimeConfig.issues,
+            tickets: runtimeConfig.tickets,
           },
         );
         yield* Cache.invalidate(resolvedConfigCache, resolvedConfigCacheKey);
@@ -666,11 +666,11 @@ const make = Effect.gen(function* () {
           );
           yield* Cache.set(resolvedConfigCache, resolvedConfigCacheKey, {
             keybindings: nextResolved,
-            issues: [],
+            tickets: [],
           });
           yield* emitChange({
             keybindings: nextResolved,
-            issues: [],
+            tickets: [],
           });
           return nextResolved;
         }),
@@ -687,11 +687,11 @@ const make = Effect.gen(function* () {
           );
           yield* Cache.set(resolvedConfigCache, resolvedConfigCacheKey, {
             keybindings: nextResolved,
-            issues: [],
+            tickets: [],
           });
           yield* emitChange({
             keybindings: nextResolved,
-            issues: [],
+            tickets: [],
           });
           return nextResolved;
         }),

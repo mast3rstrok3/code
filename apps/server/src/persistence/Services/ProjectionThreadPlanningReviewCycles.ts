@@ -2,11 +2,11 @@ import {
   IsoDateTime,
   MessageId,
   NonNegativeInt,
-  OrchestrationPlanningIssueId,
-  OrchestrationPlanningPrdId,
+  OrchestrationPlanningTicketId,
+  OrchestrationPlanningSpecId,
   OrchestrationPlanningReviewCycle,
   OrchestrationPlanningReviewCycleStatus,
-  OrchestrationPlanningReviewIssueFeedback,
+  OrchestrationPlanningReviewTicketFeedback,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -17,35 +17,35 @@ import type { ProjectionRepositoryError } from "../Errors.ts";
 
 export const ProjectionThreadPlanningReviewCycle = Schema.Struct({
   threadId: ThreadId,
-  prdId: OrchestrationPlanningPrdId,
+  specId: OrchestrationPlanningSpecId,
   cycleNumber: NonNegativeInt,
   status: OrchestrationPlanningReviewCycleStatus,
   reviewerThreadId: ThreadId,
   reviewerMessageId: MessageId,
   verdictMarkdown: Schema.String,
-  failingPlanningIssueIds: Schema.Array(OrchestrationPlanningIssueId),
+  failingPlanningTicketIds: Schema.Array(OrchestrationPlanningTicketId),
   dependencyFeedback: Schema.Array(Schema.String),
-  perIssueFeedback: Schema.Array(OrchestrationPlanningReviewIssueFeedback),
+  perTicketFeedback: Schema.Array(OrchestrationPlanningReviewTicketFeedback),
   createdAt: IsoDateTime,
 });
 export type ProjectionThreadPlanningReviewCycle = typeof ProjectionThreadPlanningReviewCycle.Type;
 
 export function projectionReviewCycleFromContract(
   threadId: ThreadId,
-  prdId: OrchestrationPlanningPrdId,
+  specId: OrchestrationPlanningSpecId,
   reviewCycle: OrchestrationPlanningReviewCycle,
 ): ProjectionThreadPlanningReviewCycle {
   return {
     threadId,
-    prdId,
+    specId,
     cycleNumber: reviewCycle.cycleNumber,
     status: reviewCycle.status,
     reviewerThreadId: reviewCycle.reviewerThreadId,
     reviewerMessageId: reviewCycle.reviewerMessageId,
     verdictMarkdown: reviewCycle.verdictMarkdown,
-    failingPlanningIssueIds: reviewCycle.failingPlanningIssueIds,
+    failingPlanningTicketIds: reviewCycle.failingPlanningTicketIds,
     dependencyFeedback: reviewCycle.dependencyFeedback,
-    perIssueFeedback: reviewCycle.perIssueFeedback,
+    perTicketFeedback: reviewCycle.perTicketFeedback,
     createdAt: reviewCycle.createdAt,
   };
 }
@@ -59,9 +59,9 @@ export function projectionReviewCycleToContract(
     reviewerThreadId: reviewCycle.reviewerThreadId,
     reviewerMessageId: reviewCycle.reviewerMessageId,
     verdictMarkdown: reviewCycle.verdictMarkdown,
-    failingPlanningIssueIds: reviewCycle.failingPlanningIssueIds,
+    failingPlanningTicketIds: reviewCycle.failingPlanningTicketIds,
     dependencyFeedback: reviewCycle.dependencyFeedback,
-    perIssueFeedback: reviewCycle.perIssueFeedback,
+    perTicketFeedback: reviewCycle.perTicketFeedback,
     createdAt: reviewCycle.createdAt,
   };
 }

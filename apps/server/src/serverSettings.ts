@@ -381,7 +381,7 @@ const make = Effect.gen(function* () {
     if (decoded._tag === "Failure") {
       yield* Effect.logWarning("failed to parse settings.json, using defaults", {
         path: settingsPath,
-        issues: Cause.pretty(decoded.cause),
+        tickets: Cause.pretty(decoded.cause),
         cause: decoded.cause,
       });
       return DEFAULT_SERVER_SETTINGS;

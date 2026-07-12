@@ -6,7 +6,7 @@ import {
 import type {
   EnvironmentId,
   OrchestrationImplementationRun,
-  OrchestrationPlanningPrdId,
+  OrchestrationPlanningSpecId,
   OrchestrationPlanningWorkflow,
   OrchestrationThreadShell,
   ScopedThreadRef,
@@ -155,9 +155,9 @@ interface PlanSidebarProps {
   mode?: "sheet" | "sidebar" | "embedded";
   automationOwned?: boolean | undefined;
   onOpenThread?: (threadId: ThreadId) => void;
-  onLoadPrdBundle?: (prdId: OrchestrationPlanningPrdId) => void;
-  onRequestIssueReview?: (prdId: OrchestrationPlanningPrdId) => void;
-  onLaunchImplementationRun?: (prdId: OrchestrationPlanningPrdId) => void;
+  onLoadSpecBundle?: (specId: OrchestrationPlanningSpecId) => void;
+  onRequestTicketReview?: (specId: OrchestrationPlanningSpecId) => void;
+  onLaunchImplementationRun?: (specId: OrchestrationPlanningSpecId) => void;
   onRetryImplementationChangeRequest?: (runId: OrchestrationImplementationRun["id"]) => void;
 }
 
@@ -179,14 +179,14 @@ const PlanSidebar = memo(function PlanSidebar({
   mode = "sidebar",
   automationOwned = false,
   onOpenThread,
-  onLoadPrdBundle,
-  onRequestIssueReview,
+  onLoadSpecBundle,
+  onRequestTicketReview,
   onLaunchImplementationRun,
   onRetryImplementationChangeRequest,
 }: PlanSidebarProps) {
   const [proposedPlanExpanded, setProposedPlanExpanded] = useState(false);
-  const [issuesSectionExpanded, setIssuesSectionExpanded] = useState(true);
-  const [expandedIssueIds, setExpandedIssueIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [ticketsSectionExpanded, setTicketsSectionExpanded] = useState(true);
+  const [expandedTicketIds, setExpandedTicketIds] = useState<ReadonlySet<string>>(() => new Set());
   const [isSavingToWorkspace, setIsSavingToWorkspace] = useState(false);
   const writeProjectFile = useAtomCommand(projectEnvironment.writeFile, {
     reportFailure: false,
@@ -196,10 +196,11 @@ const PlanSidebar = memo(function PlanSidebar({
   const planMarkdown = activeProposedPlan?.planMarkdown ?? null;
   const displayedPlanMarkdown = planMarkdown ? stripDisplayedPlanMarkdown(planMarkdown) : null;
   const planTitle = planMarkdown ? proposedPlanTitle(planMarkdown) : null;
-  const prd = planningWorkflow?.prd ?? null;
-  const issues = useMemo(
-    () => [...(planningWorkflow?.issues ?? [])].sort((left, right) => left.ordinal - right.ordinal),
-    [planningWorkflow?.issues],
+  const spec = planningWorkflow?.spec ?? null;
+  const tickets = useMemo(
+    () =>
+      [...(planningWorkflow?.tickets ?? [])].sort((left, right) => left.ordinal - right.ordinal),
+    [planningWorkflow?.tickets],
   );
   const reviewCycles = useMemo(
     () =>
@@ -208,9 +209,9 @@ const PlanSidebar = memo(function PlanSidebar({
       ),
     [planningWorkflow?.reviewCycles],
   );
-  const activePrdImplementationRuns = useMemo(
-    () => (prd ? implementationRuns.filter((run) => run.prdId === prd.id) : []),
-    [implementationRuns, prd],
+  const activeSpecImplementationRuns = useMemo(
+    () => (spec ? implementationRuns.filter((run) => run.specId === spec.id) : []),
+    [implementationRuns, spec],
   );
   const workflowThreadsById = useMemo(
     () => new Map(workflowThreadShells.map((thread) => [thread.id, thread] as const)),
@@ -218,9 +219,9 @@ const PlanSidebar = memo(function PlanSidebar({
   );
 
   useEffect(() => {
-    setExpandedIssueIds(new Set());
-    setIssuesSectionExpanded(true);
-  }, [prd?.id]);
+    setExpandedTicketIds(new Set());
+    setTicketsSectionExpanded(true);
+  }, [spec?.id]);
 
   const handleCopyPlan = useCallback(() => {
     if (!planMarkdown) return;
@@ -268,25 +269,25 @@ const PlanSidebar = memo(function PlanSidebar({
     })();
   }, [environmentId, planMarkdown, workspaceRoot, writeProjectFile]);
 
-  const toggleIssue = useCallback((issueId: string) => {
-    setExpandedIssueIds((current) => {
+  const toggleTicket = useCallback((ticketId: string) => {
+    setExpandedTicketIds((current) => {
       const next = new Set(current);
-      if (next.has(issueId)) {
-        next.delete(issueId);
+      if (next.has(ticketId)) {
+        next.delete(ticketId);
       } else {
-        next.add(issueId);
+        next.add(ticketId);
       }
       return next;
     });
   }, []);
 
-  const expandAllIssues = useCallback(() => {
-    setIssuesSectionExpanded(true);
-    setExpandedIssueIds(new Set(issues.map((issue) => issue.id)));
-  }, [issues]);
+  const expandAllTickets = useCallback(() => {
+    setTicketsSectionExpanded(true);
+    setExpandedTicketIds(new Set(tickets.map((ticket) => ticket.id)));
+  }, [tickets]);
 
-  const collapseAllIssues = useCallback(() => {
-    setExpandedIssueIds(new Set());
+  const collapseAllTickets = useCallback(() => {
+    setExpandedTicketIds(new Set());
   }, []);
 
   const handleOpenThread = useCallback(
@@ -427,43 +428,43 @@ const PlanSidebar = memo(function PlanSidebar({
           ) : null}
 
           <div className="space-y-2">
-            <SectionHeader title="PRD">
-              {prd && onLoadPrdBundle ? (
+            <SectionHeader title="Spec">
+              {spec && onLoadSpecBundle ? (
                 <Button
                   size="xs"
                   variant="ghost"
                   className="h-6 px-1.5 text-[11px]"
-                  onClick={() => onLoadPrdBundle(prd.id)}
+                  onClick={() => onLoadSpecBundle(spec.id)}
                 >
                   <RefreshCwIcon className="size-3" />
                   Refresh
                 </Button>
               ) : null}
             </SectionHeader>
-            {prd ? (
+            {spec ? (
               <div className="space-y-2">
                 <div className="space-y-1">
                   <div className="flex min-w-0 items-center gap-2">
                     <FileTextIcon className="size-3.5 shrink-0 text-muted-foreground/45" />
-                    <h3 className="min-w-0 truncate text-sm font-medium">{prd.title}</h3>
+                    <h3 className="min-w-0 truncate text-sm font-medium">{spec.title}</h3>
                     <Badge variant={statusVariant(planningWorkflow?.stage ?? "unknown")} size="sm">
                       {planningWorkflow?.stage ?? "unknown"}
                     </Badge>
                   </div>
-                  <MetadataLine label="Workflow" value={prd.workflowId} />
-                  <MetadataLine label="Source" value={prd.sourceThreadId} />
+                  <MetadataLine label="Workflow" value={spec.workflowId} />
+                  <MetadataLine label="Source" value={spec.sourceThreadId} />
                   <MetadataLine
                     label="Created"
-                    value={formatCompactTimestamp(prd.createdAt, timestampFormat)}
+                    value={formatCompactTimestamp(spec.createdAt, timestampFormat)}
                   />
                   <MetadataLine
                     label="Updated"
-                    value={formatCompactTimestamp(prd.updatedAt, timestampFormat)}
+                    value={formatCompactTimestamp(spec.updatedAt, timestampFormat)}
                   />
                 </div>
                 <div className="rounded-md border border-border/50 bg-background/45 p-2">
                   <ChatMarkdown
-                    text={prd.summaryMarkdown}
+                    text={spec.summaryMarkdown}
                     cwd={markdownCwd}
                     threadRef={threadRef}
                     isStreaming={false}
@@ -475,19 +476,19 @@ const PlanSidebar = memo(function PlanSidebar({
                       size="xs"
                       variant="outline"
                       className="h-6 text-[11px]"
-                      onClick={() => handleOpenThread(prd.sourceThreadId)}
+                      onClick={() => handleOpenThread(spec.sourceThreadId)}
                     >
                       <ExternalLinkIcon className="size-3" />
                       Source
                     </Button>
                   ) : null}
-                  {!automationOwned && onRequestIssueReview ? (
+                  {!automationOwned && onRequestTicketReview ? (
                     <Button
                       size="xs"
                       variant="outline"
                       className="h-6 text-[11px]"
-                      onClick={() => onRequestIssueReview(prd.id)}
-                      disabled={issues.length === 0}
+                      onClick={() => onRequestTicketReview(spec.id)}
+                      disabled={tickets.length === 0}
                     >
                       <RefreshCwIcon className="size-3" />
                       Review
@@ -498,8 +499,8 @@ const PlanSidebar = memo(function PlanSidebar({
                       size="xs"
                       variant="outline"
                       className="h-6 text-[11px]"
-                      onClick={() => onLaunchImplementationRun(prd.id)}
-                      disabled={issues.length === 0}
+                      onClick={() => onLaunchImplementationRun(spec.id)}
+                      disabled={tickets.length === 0}
                     >
                       <PlayIcon className="size-3" />
                       Implement
@@ -509,22 +510,22 @@ const PlanSidebar = memo(function PlanSidebar({
               </div>
             ) : (
               <p className="text-[12px] text-muted-foreground/45">
-                No projected PRD is available for this thread.
+                No projected Spec is available for this thread.
               </p>
             )}
           </div>
 
           <div className="space-y-2">
-            <SectionHeader title="Issues" count={issues.length}>
+            <SectionHeader title="Tickets" count={tickets.length}>
               <Button
                 size="icon-xs"
                 variant="ghost"
                 aria-label={
-                  issuesSectionExpanded ? "Collapse issues section" : "Expand issues section"
+                  ticketsSectionExpanded ? "Collapse tickets section" : "Expand tickets section"
                 }
-                onClick={() => setIssuesSectionExpanded((value) => !value)}
+                onClick={() => setTicketsSectionExpanded((value) => !value)}
               >
-                {issuesSectionExpanded ? (
+                {ticketsSectionExpanded ? (
                   <ChevronDownIcon className="size-3.5" />
                 ) : (
                   <ChevronRightIcon className="size-3.5" />
@@ -534,8 +535,8 @@ const PlanSidebar = memo(function PlanSidebar({
                 size="xs"
                 variant="ghost"
                 className="h-6 px-1.5 text-[11px]"
-                onClick={expandAllIssues}
-                disabled={issues.length === 0}
+                onClick={expandAllTickets}
+                disabled={tickets.length === 0}
               >
                 Expand
               </Button>
@@ -543,23 +544,23 @@ const PlanSidebar = memo(function PlanSidebar({
                 size="xs"
                 variant="ghost"
                 className="h-6 px-1.5 text-[11px]"
-                onClick={collapseAllIssues}
-                disabled={issues.length === 0}
+                onClick={collapseAllTickets}
+                disabled={tickets.length === 0}
               >
                 Collapse
               </Button>
             </SectionHeader>
-            {issuesSectionExpanded ? (
-              issues.length > 0 ? (
+            {ticketsSectionExpanded ? (
+              tickets.length > 0 ? (
                 <div className="divide-y divide-border/45">
-                  {issues.map((issue) => {
-                    const expanded = expandedIssueIds.has(issue.id);
+                  {tickets.map((ticket) => {
+                    const expanded = expandedTicketIds.has(ticket.id);
                     return (
-                      <div key={issue.id} className="py-2 first:pt-0 last:pb-0">
+                      <div key={ticket.id} className="py-2 first:pt-0 last:pb-0">
                         <button
                           type="button"
                           className="flex w-full min-w-0 items-start gap-2 text-left"
-                          onClick={() => toggleIssue(issue.id)}
+                          onClick={() => toggleTicket(ticket.id)}
                         >
                           {expanded ? (
                             <ChevronDownIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground/45" />
@@ -567,25 +568,25 @@ const PlanSidebar = memo(function PlanSidebar({
                             <ChevronRightIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground/45" />
                           )}
                           <span className="mt-px min-w-6 shrink-0 text-[11px] tabular-nums text-muted-foreground/45">
-                            #{issue.ordinal + 1}
+                            #{ticket.ordinal + 1}
                           </span>
                           <span className="min-w-0 flex-1 text-[13px] leading-5 text-foreground/90">
-                            {issue.title}
+                            {ticket.title}
                           </span>
-                          <Badge variant={statusVariant(issue.status)} size="sm">
-                            {issue.status}
+                          <Badge variant={statusVariant(ticket.status)} size="sm">
+                            {ticket.status}
                           </Badge>
                         </button>
-                        {issue.dependencies.length > 0 ? (
+                        {ticket.dependencies.length > 0 ? (
                           <div className="mt-1 flex flex-wrap gap-1 pl-12">
-                            {issue.dependencies.map((dependency) => (
+                            {ticket.dependencies.map((dependency) => (
                               <Badge
-                                key={`${issue.id}:${dependency.issueId}`}
+                                key={`${ticket.id}:${dependency.ticketId}`}
                                 variant="outline"
                                 size="sm"
                                 className="h-4 px-1 text-[10px]"
                               >
-                                dep {dependency.issueId}
+                                dep {dependency.ticketId}
                               </Badge>
                             ))}
                           </div>
@@ -593,7 +594,7 @@ const PlanSidebar = memo(function PlanSidebar({
                         {expanded ? (
                           <div className="mt-2 rounded-md border border-border/50 bg-background/45 p-2">
                             <ChatMarkdown
-                              text={issue.bodyMarkdown}
+                              text={ticket.bodyMarkdown}
                               cwd={markdownCwd}
                               threadRef={threadRef}
                               isStreaming={false}
@@ -606,14 +607,14 @@ const PlanSidebar = memo(function PlanSidebar({
                 </div>
               ) : (
                 <p className="text-[12px] text-muted-foreground/45">
-                  No projected issues are available for this PRD.
+                  No projected tickets are available for this Spec.
                 </p>
               )
             ) : null}
           </div>
 
           <div className="space-y-2">
-            <SectionHeader title="Issue Review Cycles" count={reviewCycles.length} />
+            <SectionHeader title="Ticket Review Cycles" count={reviewCycles.length} />
             {reviewCycles.length > 0 ? (
               <div className="space-y-2">
                 {reviewCycles.map((cycle) => (
@@ -640,10 +641,10 @@ const PlanSidebar = memo(function PlanSidebar({
                       ) : null}
                     </div>
                     <MetadataLine label="Reviewer" value={cycle.reviewerThreadId} />
-                    {cycle.failingPlanningIssueIds.length > 0 ? (
+                    {cycle.failingPlanningTicketIds.length > 0 ? (
                       <MetadataLine
                         label="Failing"
-                        value={cycle.failingPlanningIssueIds.join(", ")}
+                        value={cycle.failingPlanningTicketIds.join(", ")}
                       />
                     ) : null}
                     {cycle.verdictMarkdown.trim().length > 0 ? (
@@ -667,10 +668,13 @@ const PlanSidebar = memo(function PlanSidebar({
           </div>
 
           <div className="space-y-2">
-            <SectionHeader title="Implementation Runs" count={activePrdImplementationRuns.length} />
-            {activePrdImplementationRuns.length > 0 ? (
+            <SectionHeader
+              title="Implementation Runs"
+              count={activeSpecImplementationRuns.length}
+            />
+            {activeSpecImplementationRuns.length > 0 ? (
               <div className="space-y-3">
-                {activePrdImplementationRuns.map((run) => {
+                {activeSpecImplementationRuns.map((run) => {
                   const orchestratorThread = workflowThreadsById.get(run.orchestratorThreadId);
                   return (
                     <div
@@ -713,14 +717,14 @@ const PlanSidebar = memo(function PlanSidebar({
                         ) : null}
                       </div>
                       <div className="flex flex-wrap gap-1">
-                        {run.issueStates.map((issueState) => (
+                        {run.ticketStates.map((ticketState) => (
                           <Badge
-                            key={`${run.id}:${issueState.issueId}`}
-                            variant={statusVariant(issueState.status)}
+                            key={`${run.id}:${ticketState.ticketId}`}
+                            variant={statusVariant(ticketState.status)}
                             size="sm"
                             className="h-4 px-1 text-[10px]"
                           >
-                            {issueState.issueId}: {issueState.status}
+                            {ticketState.ticketId}: {ticketState.status}
                           </Badge>
                         ))}
                       </div>
@@ -752,22 +756,22 @@ const PlanSidebar = memo(function PlanSidebar({
                         </div>
                       </div>
                       <div className="flex flex-wrap gap-1.5">
-                        {run.issueStates
-                          .filter((issueState) => issueState.workerThreadId !== null)
-                          .map((issueState) => (
+                        {run.ticketStates
+                          .filter((ticketState) => ticketState.workerThreadId !== null)
+                          .map((ticketState) => (
                             <Button
-                              key={`${run.id}:worker:${issueState.issueId}`}
+                              key={`${run.id}:worker:${ticketState.ticketId}`}
                               size="xs"
                               variant="outline"
                               className="h-6 text-[11px]"
                               onClick={() =>
-                                issueState.workerThreadId
-                                  ? handleOpenThread(issueState.workerThreadId)
+                                ticketState.workerThreadId
+                                  ? handleOpenThread(ticketState.workerThreadId)
                                   : undefined
                               }
                               disabled={!onOpenThread}
                             >
-                              Worker {issueState.issueId}
+                              Worker {ticketState.ticketId}
                             </Button>
                           ))}
                         {run.changeRequest?.url ? (
@@ -801,13 +805,13 @@ const PlanSidebar = memo(function PlanSidebar({
               </div>
             ) : (
               <p className="text-[12px] text-muted-foreground/45">
-                No implementation runs have been projected for this PRD.
+                No implementation runs have been projected for this Spec.
               </p>
             )}
           </div>
 
           {/* Empty state */}
-          {!activePlan && !planMarkdown && !prd && activePrdImplementationRuns.length === 0 ? (
+          {!activePlan && !planMarkdown && !spec && activeSpecImplementationRuns.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-12 text-center">
               <p className="text-[13px] text-muted-foreground/40">No active plan yet.</p>
               <p className="mt-1 text-[11px] text-muted-foreground/30">

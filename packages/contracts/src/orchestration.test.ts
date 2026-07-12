@@ -11,6 +11,7 @@ import {
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetTurnDiffInput,
   OrchestrationLatestTurn,
+  OrchestrationPlanningWorkflowStage,
   ProjectCreatedPayload,
   ProjectMetaUpdatedPayload,
   ProviderInteractionMode,
@@ -52,14 +53,174 @@ const decodeOrchestrationCommand = Schema.decodeUnknownEffect(OrchestrationComma
 const decodeOrchestrationEvent = Schema.decodeUnknownEffect(OrchestrationEvent);
 const decodeThreadMetaUpdatedPayload = Schema.decodeUnknownEffect(ThreadMetaUpdatedPayload);
 const decodeProviderInteractionMode = Schema.decodeUnknownEffect(ProviderInteractionMode);
+const decodePlanningWorkflowStage = Schema.decodeUnknownEffect(OrchestrationPlanningWorkflowStage);
 const decodeOrchestrationThreadWorkflowRole = Schema.decodeUnknownEffect(
   OrchestrationThreadWorkflowRole,
 );
 
-it.effect("decodes legacy YOLO Workflow interaction mode as Product Workflow", () =>
+it.effect("rejects legacy YOLO Workflow interaction mode", () =>
+  decodeProviderInteractionMode("yolo-workflow").pipe(Effect.flip, Effect.asVoid),
+);
+
+it.effect("accepts canonical planning stages and rejects legacy stages", () =>
   Effect.gen(function* () {
-    const parsed = yield* decodeProviderInteractionMode("yolo-workflow");
-    assert.strictEqual(parsed, "product-workflow");
+    for (const stage of [
+      "grill",
+      "spec-authoring",
+      "tickets-authoring",
+      "ticket-review",
+      "ticket-revision",
+      "completed",
+      "needs-human-attention",
+    ] as const) {
+      assert.strictEqual(yield* decodePlanningWorkflowStage(stage), stage);
+    }
+
+    for (const stage of [
+      "prd-authoring",
+      "issues-authoring",
+      "issue-review",
+      "issue-revision",
+      "artifact-generation-gate",
+      "artifact-generation",
+    ]) {
+      yield* decodePlanningWorkflowStage(stage).pipe(Effect.flip);
+    }
+  }),
+);
+
+it.effect("decodes canonical Spec and Ticket commands and rejects legacy wire shapes", () =>
+  Effect.gen(function* () {
+    const spec = yield* decodeOrchestrationCommand({
+      type: "thread.planning-spec.apply",
+      commandId: "cmd-spec",
+      threadId: "thread-planning",
+      sourceMessageId: "message-spec",
+      title: "Checkout",
+      summaryMarkdown: "Checkout Spec.",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(spec.type, "thread.planning-spec.apply");
+
+    const tickets = yield* decodeOrchestrationCommand({
+      type: "thread.planning-tickets.apply",
+      commandId: "cmd-tickets",
+      threadId: "thread-planning",
+      sourceMessageId: "message-tickets",
+      specId: "spec-1",
+      tickets: [
+        {
+          key: "ticket-1",
+          title: "Implement checkout",
+          bodyMarkdown: "Build checkout.",
+          dependencyKeys: [],
+        },
+      ],
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(tickets.type, "thread.planning-tickets.apply");
+
+    for (const type of [
+      "thread.planning-prd.create",
+      "thread.planning-prd.apply",
+      "thread.planning-issues.apply",
+      "thread.planning-issue-review.request",
+      "thread.planning-prd-bundle.load",
+    ]) {
+      yield* decodeOrchestrationCommand({
+        type,
+        commandId: "cmd-legacy",
+        threadId: "thread-planning",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }).pipe(Effect.flip);
+    }
+
+    yield* decodeOrchestrationCommand({
+      type: "thread.planning-tickets.apply",
+      commandId: "cmd-legacy-fields",
+      threadId: "thread-planning",
+      sourceMessageId: "message-tickets",
+      prdId: "prd-1",
+      issues: [],
+      createdAt: "2026-01-01T00:00:00.000Z",
+    }).pipe(Effect.flip);
+  }),
+);
+
+it.effect("decodes canonical Spec and Ticket events and rejects legacy event discriminants", () =>
+  Effect.gen(function* () {
+    const baseEvent = {
+      sequence: 1,
+      aggregateKind: "thread",
+      aggregateId: "thread-planning",
+      commandId: "cmd-planning",
+      causationEventId: null,
+      correlationId: "cmd-planning",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      metadata: {},
+    } as const;
+    const spec = {
+      id: "spec-1",
+      title: "Checkout",
+      summaryMarkdown: "Checkout Spec.",
+      tenantId: null,
+      teamId: null,
+      sourceThreadId: "thread-planning",
+      sourceMessageIds: ["message-spec"],
+      createdBy: null,
+      workflowId: "workflow-1",
+      ticketCount: 1,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    } as const;
+
+    const specEvent = yield* decodeOrchestrationEvent({
+      ...baseEvent,
+      eventId: "event-spec",
+      type: "thread.planning-spec-created",
+      payload: { threadId: "thread-planning", spec, stage: "tickets-authoring" },
+    });
+    assert.strictEqual(specEvent.type, "thread.planning-spec-created");
+
+    const ticketEvent = yield* decodeOrchestrationEvent({
+      ...baseEvent,
+      eventId: "event-tickets",
+      type: "thread.planning-tickets-created",
+      payload: {
+        threadId: "thread-planning",
+        specId: spec.id,
+        tickets: [
+          {
+            id: "planning-ticket-1",
+            specId: spec.id,
+            ordinal: 0,
+            title: "Implement checkout",
+            bodyMarkdown: "Build checkout.",
+            dependencies: [],
+            status: "open",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+        stage: "ticket-review",
+      },
+    });
+    assert.strictEqual(ticketEvent.type, "thread.planning-tickets-created");
+
+    for (const type of [
+      "thread.planning-prd-created",
+      "thread.planning-issues-created",
+      "thread.planning-issues-revised",
+      "thread.planning-issue-review-requested",
+      "thread.planning-prd-bundle-loaded",
+    ]) {
+      yield* decodeOrchestrationEvent({
+        ...baseEvent,
+        eventId: "event-legacy",
+        type,
+        payload: {},
+      }).pipe(Effect.flip);
+    }
   }),
 );
 

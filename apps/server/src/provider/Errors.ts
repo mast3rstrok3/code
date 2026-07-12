@@ -10,12 +10,12 @@ export class ProviderAdapterValidationError extends Schema.TaggedErrorClass<Prov
   {
     provider: Schema.String,
     operation: Schema.String,
-    issue: Schema.String,
+    ticket: Schema.String,
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
-    return `Provider adapter validation failed (${this.provider}) in ${this.operation}: ${this.issue}`;
+    return `Provider adapter validation failed (${this.provider}) in ${this.operation}: ${this.ticket}`;
   }
 }
 
@@ -92,12 +92,12 @@ export class ProviderValidationError extends Schema.TaggedErrorClass<ProviderVal
   "ProviderValidationError",
   {
     operation: Schema.String,
-    issue: Schema.String,
+    ticket: Schema.String,
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
-    return `Provider validation failed in ${this.operation}: ${this.issue}`;
+    return `Provider validation failed in ${this.operation}: ${this.ticket}`;
   }
 }
 

@@ -3,7 +3,7 @@ import { BROWSER_DEV_REVIEW_LAUNCH_DIRECTIVE_INSTRUCTIONS } from "./WorkflowSuba
 export const CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS = `
 ## Browser Dev Review QA tools
 
-This browser tooling context is scoped to the Implementation Workflow Browser Dev Review QA role only. It is not available in ordinary implementation, planning, Product Grill, or default sessions.
+This browser tooling context is scoped to the Implementation Workflow Browser Dev Review QA role only. It is not available in ordinary implementation, planning, Product Workflow, or default sessions.
 
 Use the \`t3-code\` MCP server for all browser work. Drive the browser with the \`preview_*\` tools (\`preview_open\`, \`preview_navigate\`, \`preview_snapshot\`, \`preview_click\`, \`preview_type\`, \`preview_press\`, \`preview_scroll\`, \`preview_wait_for\`, \`preview_resize\`) and coordinate the durable Dev Review record with \`dev_review_get\`, \`dev_review_recording_start\`, \`dev_review_capture_screenshot\`, \`dev_review_recording_stop\`, and \`dev_review_update\`. Do not use external browsers, browser MCP servers, or standalone Playwright scripts.
 

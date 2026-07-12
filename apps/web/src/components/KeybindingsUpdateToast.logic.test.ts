@@ -14,7 +14,7 @@ function keybindingsEvent(
     type: "keybindingsUpdated",
     payload: {
       keybindings: [],
-      issues: [],
+      tickets: [],
     },
     ...overrides,
   };
@@ -36,7 +36,7 @@ describe("keybindings update toast policy", () => {
     expect(controller.handle(keybindingsEvent())).toEqual({ _tag: "Success" });
   });
 
-  it("surfaces keybinding configuration issues", () => {
+  it("surfaces keybinding configuration tickets", () => {
     const controller = createKeybindingsUpdateToastController({});
 
     expect(
@@ -44,7 +44,7 @@ describe("keybindings update toast policy", () => {
         keybindingsEvent({
           payload: {
             keybindings: [],
-            issues: [
+            tickets: [
               {
                 kind: "keybindings.malformed-config",
                 message: "Expected JSON array",

@@ -168,34 +168,34 @@ export function applyThreadDetailEvent(
           planningWorkflow: {
             ...workflow,
             stage: event.payload.stage,
-            createIssuesAvailable: event.payload.stage === "issues-authoring",
+            createTicketsAvailable: event.payload.stage === "tickets-authoring",
           },
           updatedAt: event.occurredAt,
         },
       };
     }
 
-    case "thread.planning-prd-created": {
+    case "thread.planning-spec-created": {
       const workflow = thread.planningWorkflow ?? emptyPlanningWorkflow();
-      const stage = event.payload.stage ?? "issues-authoring";
+      const stage = event.payload.stage ?? "tickets-authoring";
       return {
         kind: "updated",
         thread: {
           ...thread,
           planningWorkflow: {
             ...workflow,
-            prd: event.payload.prd,
+            spec: event.payload.spec,
             stage,
-            createIssuesAvailable: stage === "issues-authoring",
+            createTicketsAvailable: stage === "tickets-authoring",
           },
-          updatedAt: event.payload.prd.updatedAt,
+          updatedAt: event.payload.spec.updatedAt,
         },
       };
     }
 
-    case "thread.planning-issues-created": {
+    case "thread.planning-tickets-created": {
       const workflow = thread.planningWorkflow ?? emptyPlanningWorkflow();
-      const stage = event.payload.stage ?? "issue-review";
+      const stage = event.payload.stage ?? "ticket-review";
       return {
         kind: "updated",
         thread: {
@@ -203,15 +203,15 @@ export function applyThreadDetailEvent(
           planningWorkflow: {
             ...workflow,
             stage,
-            createIssuesAvailable: false,
-            issues: event.payload.issues,
+            createTicketsAvailable: false,
+            tickets: event.payload.tickets,
           },
           updatedAt: event.occurredAt,
         },
       };
     }
 
-    case "thread.planning-issues-revised": {
+    case "thread.planning-tickets-revised": {
       const workflow = thread.planningWorkflow ?? emptyPlanningWorkflow();
       const reviewCycles =
         event.payload.reviewCycle === undefined
@@ -230,8 +230,8 @@ export function applyThreadDetailEvent(
           planningWorkflow: {
             ...workflow,
             stage,
-            createIssuesAvailable: stage === "issues-authoring",
-            issues: event.payload.issues,
+            createTicketsAvailable: stage === "tickets-authoring",
+            tickets: event.payload.tickets,
             reviewCycles,
           },
           updatedAt: event.payload.revisedAt,
@@ -239,7 +239,7 @@ export function applyThreadDetailEvent(
       };
     }
 
-    case "thread.planning-issue-review-requested": {
+    case "thread.planning-ticket-review-requested": {
       const workflow = thread.planningWorkflow ?? emptyPlanningWorkflow();
       return {
         kind: "updated",
@@ -248,7 +248,7 @@ export function applyThreadDetailEvent(
           planningWorkflow: {
             ...workflow,
             stage: event.payload.stage,
-            createIssuesAvailable: false,
+            createTicketsAvailable: false,
           },
           updatedAt: event.payload.requestedAt,
         },
@@ -264,14 +264,14 @@ export function applyThreadDetailEvent(
           planningWorkflow: {
             ...workflow,
             stage: event.payload.stage,
-            createIssuesAvailable: event.payload.stage === "issues-authoring",
+            createTicketsAvailable: event.payload.stage === "tickets-authoring",
           },
           updatedAt: event.payload.updatedAt,
         },
       };
     }
 
-    case "thread.planning-prd-bundle-loaded": {
+    case "thread.planning-spec-bundle-loaded": {
       if (event.payload.bundle === undefined) {
         return { kind: "unchanged" };
       }
@@ -281,9 +281,9 @@ export function applyThreadDetailEvent(
           ...thread,
           planningWorkflow: {
             stage: "completed",
-            createIssuesAvailable: false,
-            prd: event.payload.bundle.prd,
-            issues: event.payload.bundle.issues,
+            createTicketsAvailable: false,
+            spec: event.payload.bundle.spec,
+            tickets: event.payload.bundle.tickets,
             reviewCycles: event.payload.bundle.reviewCycles,
           },
           updatedAt: event.payload.loadedAt,
@@ -760,9 +760,9 @@ function rebindCheckpointAssistantMessage(
 function emptyPlanningWorkflow(): OrchestrationPlanningWorkflow {
   return {
     stage: "grill",
-    createIssuesAvailable: false,
-    prd: null,
-    issues: [],
+    createTicketsAvailable: false,
+    spec: null,
+    tickets: [],
     reviewCycles: [],
   };
 }

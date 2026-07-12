@@ -1327,7 +1327,7 @@ const make = Effect.gen(function* () {
           return;
         }
 
-        case "planning-prd-artifact": {
+        case "planning-spec-artifact": {
           if (!isPlanningArtifactThread(thread)) {
             yield* Effect.logWarning(
               "provider workflow directive ignored for non-planning thread",
@@ -1341,8 +1341,8 @@ const make = Effect.gen(function* () {
           }
 
           yield* orchestrationEngine.dispatch({
-            type: "thread.planning-prd.apply",
-            commandId: yield* providerCommandId(input.event, "workflow-planning-prd-apply"),
+            type: "thread.planning-spec.apply",
+            commandId: yield* providerCommandId(input.event, "workflow-planning-spec-apply"),
             threadId: thread.id,
             sourceMessageId: input.messageId,
             title: input.directive.title,
@@ -1352,7 +1352,7 @@ const make = Effect.gen(function* () {
           return;
         }
 
-        case "planning-issues-artifact": {
+        case "planning-tickets-artifact": {
           if (!isPlanningArtifactThread(thread)) {
             yield* Effect.logWarning(
               "provider workflow directive ignored for non-planning thread",
@@ -1366,16 +1366,16 @@ const make = Effect.gen(function* () {
           }
 
           yield* orchestrationEngine.dispatch({
-            type: "thread.planning-issues.apply",
-            commandId: yield* providerCommandId(input.event, "workflow-planning-issues-apply"),
+            type: "thread.planning-tickets.apply",
+            commandId: yield* providerCommandId(input.event, "workflow-planning-tickets-apply"),
             threadId: thread.id,
             sourceMessageId: input.messageId,
-            prdId: input.directive.prdId,
-            issues: input.directive.issues.map((issue) => ({
-              key: issue.key,
-              title: issue.title,
-              bodyMarkdown: issue.bodyMarkdown,
-              dependencyKeys: [...issue.dependencyKeys],
+            specId: input.directive.specId,
+            tickets: input.directive.tickets.map((ticket) => ({
+              key: ticket.key,
+              title: ticket.title,
+              bodyMarkdown: ticket.bodyMarkdown,
+              dependencyKeys: [...ticket.dependencyKeys],
             })),
             createdAt: input.createdAt,
           });
@@ -1396,7 +1396,7 @@ const make = Effect.gen(function* () {
           }
 
           const verdictMarkdown = [
-            `Issue review cycle ${input.directive.cycleNumber}: ${
+            `Ticket review cycle ${input.directive.cycleNumber}: ${
               input.directive.passed ? "passed" : "failed"
             }.`,
             input.directive.dependencyFeedback.length > 0
@@ -1404,11 +1404,11 @@ const make = Effect.gen(function* () {
                   .map((entry) => `- ${entry}`)
                   .join("\n")}`
               : "",
-            input.directive.perIssueFeedback.length > 0
-              ? `Per-issue feedback:\n${input.directive.perIssueFeedback
+            input.directive.perTicketFeedback.length > 0
+              ? `Per-ticket feedback:\n${input.directive.perTicketFeedback
                   .map(
                     (entry) =>
-                      `- ${entry.issueId}: ${entry.passed ? "passed" : "failed"}\n  ${
+                      `- ${entry.ticketId}: ${entry.passed ? "passed" : "failed"}\n  ${
                         entry.feedbackMarkdown
                       }`,
                   )
@@ -1426,10 +1426,10 @@ const make = Effect.gen(function* () {
             reviewerMessageId: input.messageId,
             verdictMarkdown,
             passed: input.directive.passed,
-            failingPlanningIssueIds: [...input.directive.failingPlanningIssueIds],
+            failingPlanningTicketIds: [...input.directive.failingPlanningTicketIds],
             dependencyFeedback: [...input.directive.dependencyFeedback],
-            perIssueFeedback: input.directive.perIssueFeedback.map((entry) => ({
-              issueId: entry.issueId,
+            perTicketFeedback: input.directive.perTicketFeedback.map((entry) => ({
+              ticketId: entry.ticketId,
               passed: entry.passed,
               feedbackMarkdown: entry.feedbackMarkdown,
             })),
@@ -1459,7 +1459,7 @@ const make = Effect.gen(function* () {
               id: EventId.make(yield* crypto.randomUUIDv4),
               tone: input.directive.status === "succeeded" ? "info" : "error",
               kind: "implementation-worker-result",
-              summary: `Worker ${input.directive.issueId} ${input.directive.status}`,
+              summary: `Worker ${input.directive.ticketId} ${input.directive.status}`,
               payload: input.directive,
               turnId: null,
               createdAt: input.createdAt,
@@ -1519,6 +1519,37 @@ const make = Effect.gen(function* () {
               tone: input.directive.status === "succeeded" ? "info" : "error",
               kind: "implementation-fix-result",
               summary: `Implementation fix ${input.directive.status}`,
+              payload: input.directive,
+              turnId: null,
+              createdAt: input.createdAt,
+            },
+            createdAt: input.createdAt,
+          });
+          return;
+        }
+
+        case "implementation-code-review-result": {
+          if (thread.workflowRole !== "implementation-code-reviewer") {
+            yield* Effect.logWarning(
+              "provider workflow code-review result ignored for non-code-reviewer thread",
+              {
+                directiveType: input.directive.type,
+                threadId: thread.id,
+                workflowRole: thread.workflowRole,
+              },
+            );
+            return;
+          }
+
+          yield* orchestrationEngine.dispatch({
+            type: "thread.activity.append",
+            commandId: yield* providerCommandId(input.event, "workflow-code-review-result"),
+            threadId: thread.id,
+            activity: {
+              id: EventId.make(yield* crypto.randomUUIDv4),
+              tone: input.directive.status === "blocked" ? "error" : "info",
+              kind: "implementation-code-review-result",
+              summary: `Implementation code review ${input.directive.status}`,
               payload: input.directive,
               turnId: null,
               createdAt: input.createdAt,

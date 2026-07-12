@@ -259,7 +259,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
         new ProviderAdapterValidationError({
           provider: ProviderDriverKind.make("codex"),
           operation: "startSession",
-          issue: "Expected provider 'codex' but received 'claudeAgent'.",
+          ticket: "Expected provider 'codex' but received 'claudeAgent'.",
         }),
       );
       NodeAssert.equal(validationRuntimeFactory.factory.mock.calls.length, 0);

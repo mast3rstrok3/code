@@ -292,7 +292,7 @@ describe("ClaudeAdapterLive", () => {
         new ProviderAdapterValidationError({
           provider: ProviderDriverKind.make("claudeAgent"),
           operation: "startSession",
-          issue: "Expected provider 'claudeAgent' but received 'codex'.",
+          ticket: "Expected provider 'claudeAgent' but received 'codex'.",
         }),
       );
     }).pipe(
@@ -768,7 +768,7 @@ describe("ClaudeAdapterLive", () => {
         input: "Start planning",
         attachments: [],
         interactionMode: "planning-workflow",
-        workflowPromptId: WORKFLOW_PROMPT_IDS.planningPrdCodex,
+        workflowPromptId: WORKFLOW_PROMPT_IDS.planningSpecCodex,
       });
 
       const createInput = harness.getLastCreateQueryInput();
@@ -776,7 +776,7 @@ describe("ClaudeAdapterLive", () => {
       assert.match(promptText, /<workflow-instructions>/);
       assert.match(promptText, /T3 Workflow Sub-Agent System/);
       assert.match(promptText, /workflow-subagent-create/);
-      assert.match(promptText, /Planning Workflow: PRD/);
+      assert.match(promptText, /Planning Workflow: Spec/);
       assert.match(promptText, /<user-message>\nStart planning\n<\/user-message>/);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -3616,7 +3616,7 @@ describe("ClaudeAdapterLive", () => {
 
       // Compatibility check for #2388: the answers shape we hand to the SDK
       // must produce a non-empty rendered tool_result on BOTH SDK iteration
-      // patterns we have seen, so we don't regress the issue and we don't
+      // patterns we have seen, so we don't regress the ticket and we don't
       // break users still on the older Claude CLI.
       const sdkAnswers = updatedInput.answers as Record<string, unknown>;
       const sdkQuestions = updatedInput.questions as ReadonlyArray<{

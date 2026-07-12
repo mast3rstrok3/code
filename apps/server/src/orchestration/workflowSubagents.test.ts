@@ -20,7 +20,7 @@ const browserDevReviewDefinition = resolveWorkflowSubagentSpawnDefinition(
   WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
 );
 const planningReviewerDefinition = resolveWorkflowSubagentSpawnDefinition(
-  WORKFLOW_PROMPT_IDS.planningIssueReviewerCodex,
+  WORKFLOW_PROMPT_IDS.planningTicketReviewerCodex,
 );
 
 const claudeParentSelection: ModelSelection = {
@@ -48,6 +48,21 @@ function settingsWith(input: {
     },
   };
 }
+
+describe("resolveWorkflowSubagentSpawnDefinition", () => {
+  it("registers the implementation code reviewer sub-agent", () => {
+    const definition = resolveWorkflowSubagentSpawnDefinition(
+      WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+    );
+    expect(definition).toMatchObject({
+      workflowPromptId: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+      interactionMode: "implementation-workflow",
+      workflowRole: "implementation-code-reviewer",
+      expectedResult: "implementation-code-review-result",
+      allowedParentWorkflowRoles: [null, "implementation-orchestrator"],
+    });
+  });
+});
 
 describe("resolveWorkflowSubagentModelSelection", () => {
   it("inherits the parent selection for definitions without a model override", () => {

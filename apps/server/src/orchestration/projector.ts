@@ -29,11 +29,11 @@ import {
   ThreadImplementationChangeRequestRetryRequestedPayload,
   ThreadImplementationRunLaunchedPayload,
   ThreadImplementationRunUpdatedPayload,
-  ThreadPlanningIssueReviewRequestedPayload,
-  ThreadPlanningIssuesCreatedPayload,
-  ThreadPlanningIssuesRevisedPayload,
-  ThreadPlanningPrdBundleLoadedPayload,
-  ThreadPlanningPrdCreatedPayload,
+  ThreadPlanningTicketReviewRequestedPayload,
+  ThreadPlanningTicketsCreatedPayload,
+  ThreadPlanningTicketsRevisedPayload,
+  ThreadPlanningSpecBundleLoadedPayload,
+  ThreadPlanningSpecCreatedPayload,
   ThreadPlanningStageStartedPayload,
   ThreadPlanningWorkflowStageSetPayload,
   ThreadProposedPlanUpsertedPayload,
@@ -224,9 +224,9 @@ function upsertImplementationRun(
 function emptyPlanningWorkflow(): OrchestrationPlanningWorkflow {
   return {
     stage: "grill",
-    createIssuesAvailable: false,
-    prd: null,
-    issues: [],
+    createTicketsAvailable: false,
+    spec: null,
+    tickets: [],
     reviewCycles: [],
   };
 }
@@ -458,7 +458,7 @@ export function projectEvent(
               planningWorkflow: {
                 ...workflow,
                 stage: payload.stage,
-                createIssuesAvailable: payload.stage === "issues-authoring",
+                createTicketsAvailable: payload.stage === "tickets-authoring",
               },
               updatedAt: event.occurredAt,
             }),
@@ -466,9 +466,9 @@ export function projectEvent(
         }),
       );
 
-    case "thread.planning-prd-created":
+    case "thread.planning-spec-created":
       return decodeForEvent(
-        ThreadPlanningPrdCreatedPayload,
+        ThreadPlanningSpecCreatedPayload,
         event.payload,
         event.type,
         "payload",
@@ -477,25 +477,25 @@ export function projectEvent(
           const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
           if (!thread) return nextBase;
           const workflow = thread.planningWorkflow ?? emptyPlanningWorkflow();
-          const stage = payload.stage ?? "issues-authoring";
+          const stage = payload.stage ?? "tickets-authoring";
           return {
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {
               planningWorkflow: {
                 ...workflow,
-                prd: payload.prd,
+                spec: payload.spec,
                 stage,
-                createIssuesAvailable: stage === "issues-authoring",
+                createTicketsAvailable: stage === "tickets-authoring",
               },
-              updatedAt: payload.prd.updatedAt,
+              updatedAt: payload.spec.updatedAt,
             }),
           };
         }),
       );
 
-    case "thread.planning-issues-created":
+    case "thread.planning-tickets-created":
       return decodeForEvent(
-        ThreadPlanningIssuesCreatedPayload,
+        ThreadPlanningTicketsCreatedPayload,
         event.payload,
         event.type,
         "payload",
@@ -504,15 +504,15 @@ export function projectEvent(
           const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
           if (!thread) return nextBase;
           const workflow = thread.planningWorkflow ?? emptyPlanningWorkflow();
-          const stage = payload.stage ?? "issue-review";
+          const stage = payload.stage ?? "ticket-review";
           return {
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {
               planningWorkflow: {
                 ...workflow,
                 stage,
-                createIssuesAvailable: false,
-                issues: payload.issues,
+                createTicketsAvailable: false,
+                tickets: payload.tickets,
               },
               updatedAt: event.occurredAt,
             }),
@@ -520,9 +520,9 @@ export function projectEvent(
         }),
       );
 
-    case "thread.planning-issues-revised":
+    case "thread.planning-tickets-revised":
       return decodeForEvent(
-        ThreadPlanningIssuesRevisedPayload,
+        ThreadPlanningTicketsRevisedPayload,
         event.payload,
         event.type,
         "payload",
@@ -547,8 +547,8 @@ export function projectEvent(
               planningWorkflow: {
                 ...workflow,
                 stage,
-                createIssuesAvailable: stage === "issues-authoring",
-                issues: payload.issues,
+                createTicketsAvailable: stage === "tickets-authoring",
+                tickets: payload.tickets,
                 reviewCycles,
               },
               updatedAt: payload.revisedAt,
@@ -557,9 +557,9 @@ export function projectEvent(
         }),
       );
 
-    case "thread.planning-issue-review-requested":
+    case "thread.planning-ticket-review-requested":
       return decodeForEvent(
-        ThreadPlanningIssueReviewRequestedPayload,
+        ThreadPlanningTicketReviewRequestedPayload,
         event.payload,
         event.type,
         "payload",
@@ -574,7 +574,7 @@ export function projectEvent(
               planningWorkflow: {
                 ...workflow,
                 stage: payload.stage,
-                createIssuesAvailable: false,
+                createTicketsAvailable: false,
               },
               updatedAt: payload.requestedAt,
             }),
@@ -582,9 +582,9 @@ export function projectEvent(
         }),
       );
 
-    case "thread.planning-prd-bundle-loaded":
+    case "thread.planning-spec-bundle-loaded":
       return decodeForEvent(
-        ThreadPlanningPrdBundleLoadedPayload,
+        ThreadPlanningSpecBundleLoadedPayload,
         event.payload,
         event.type,
         "payload",
@@ -597,9 +597,9 @@ export function projectEvent(
             threads: updateThread(nextBase.threads, payload.threadId, {
               planningWorkflow: {
                 stage: "completed",
-                createIssuesAvailable: false,
-                prd: payload.bundle.prd,
-                issues: payload.bundle.issues,
+                createTicketsAvailable: false,
+                spec: payload.bundle.spec,
+                tickets: payload.bundle.tickets,
                 reviewCycles: payload.bundle.reviewCycles,
               },
               updatedAt: payload.loadedAt,
@@ -625,7 +625,7 @@ export function projectEvent(
               planningWorkflow: {
                 ...workflow,
                 stage: payload.stage,
-                createIssuesAvailable: payload.stage === "issues-authoring",
+                createTicketsAvailable: payload.stage === "tickets-authoring",
               },
               updatedAt: payload.updatedAt,
             }),

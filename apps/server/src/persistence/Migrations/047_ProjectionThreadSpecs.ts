@@ -5,8 +5,8 @@ export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
   yield* sql`
-    CREATE TABLE IF NOT EXISTS projection_thread_prds (
-      prd_id TEXT PRIMARY KEY,
+    CREATE TABLE IF NOT EXISTS projection_thread_specs (
+      spec_id TEXT PRIMARY KEY,
       thread_id TEXT NOT NULL,
       title TEXT NOT NULL,
       summary_markdown TEXT NOT NULL,
@@ -16,19 +16,19 @@ export default Effect.gen(function* () {
       source_message_ids_json TEXT NOT NULL,
       created_by TEXT,
       workflow_id TEXT NOT NULL,
-      issue_count INTEGER NOT NULL DEFAULT 0,
+      ticket_count INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )
   `;
 
   yield* sql`
-    CREATE INDEX IF NOT EXISTS idx_projection_thread_prds_thread_created
-    ON projection_thread_prds(thread_id, created_at)
+    CREATE INDEX IF NOT EXISTS idx_projection_thread_specs_thread_created
+    ON projection_thread_specs(thread_id, created_at)
   `;
 
   yield* sql`
-    CREATE INDEX IF NOT EXISTS idx_projection_thread_prds_workflow
-    ON projection_thread_prds(workflow_id)
+    CREATE INDEX IF NOT EXISTS idx_projection_thread_specs_workflow
+    ON projection_thread_specs(workflow_id)
   `;
 });

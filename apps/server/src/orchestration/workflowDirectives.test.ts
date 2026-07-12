@@ -16,14 +16,73 @@ describe("workflowDirectives", () => {
     NodeAssert.equal(result.directive.title, "Checkout");
   });
 
+  it("parses canonical Spec, Ticket, and Ticket review directives", () => {
+    const spec = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
+{ "type": "planning-spec-artifact", "title": "Checkout", "summaryMarkdown": "Build checkout." }
+\`\`\``);
+    const tickets = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
+{
+  "type": "planning-tickets-artifact",
+  "specId": "spec-1",
+  "tickets": [{
+    "key": "ticket-1",
+    "title": "Implement checkout",
+    "bodyMarkdown": "Build checkout.",
+    "dependencyKeys": []
+  }]
+}
+\`\`\``);
+    const review = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
+{
+  "type": "planning-reviewer-verdict",
+  "cycleNumber": 1,
+  "passed": false,
+  "failingPlanningTicketIds": ["planning-ticket-1"],
+  "dependencyFeedback": [],
+  "perTicketFeedback": [{
+    "ticketId": "planning-ticket-1",
+    "passed": false,
+    "feedbackMarkdown": "Missing validation."
+  }]
+}
+\`\`\``);
+
+    NodeAssert.equal(spec.kind, "parsed");
+    NodeAssert.equal(tickets.kind, "parsed");
+    NodeAssert.equal(review.kind, "parsed");
+  });
+
+  it("rejects legacy planning artifact directives and Ticket fields", () => {
+    for (const markdown of [
+      `\`\`\`json
+{ "type": "planning-prd-artifact", "title": "Checkout", "summaryMarkdown": "Legacy." }
+\`\`\``,
+      `\`\`\`json
+{ "type": "planning-issues-artifact", "prdId": "prd-1", "issues": [] }
+\`\`\``,
+      `\`\`\`json
+{
+  "type": "planning-reviewer-verdict",
+  "cycleNumber": 1,
+  "passed": false,
+  "failingPlanningIssueIds": ["planning-issue-1"],
+  "dependencyFeedback": [],
+  "perIssueFeedback": []
+}
+\`\`\``,
+    ]) {
+      NodeAssert.equal(parseWorkflowDirectiveFromMarkdown(markdown).kind, "error");
+    }
+  });
+
   it("parses implementation worker success directives with branded worker thread ids", () => {
     const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
 {
   "type": "implementation-worker-result",
-  "issueId": "planning-issue-1",
+  "ticketId": "planning-ticket-1",
   "workerThreadId": "thread-worker-1",
-  "branch": "implementation/demo/issue-1",
-  "worktreePath": "/tmp/demo-issue-1",
+  "branch": "implementation/demo/ticket-1",
+  "worktreePath": "/tmp/demo-ticket-1",
   "status": "succeeded",
   "commitSha": "abc123",
   "validations": [
@@ -50,10 +109,10 @@ describe("workflowDirectives", () => {
     const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
 {
   "type": "implementation-worker-result",
-  "issueId": "planning-issue-1",
+  "ticketId": "planning-ticket-1",
   "workerThreadId": "thread-worker-1",
-  "branch": "implementation/demo/issue-1",
-  "worktreePath": "/tmp/demo-issue-1",
+  "branch": "implementation/demo/ticket-1",
+  "worktreePath": "/tmp/demo-ticket-1",
   "status": "succeeded",
   "validations": [],
   "reportedAt": "2026-01-01T00:00:01.000Z"
@@ -98,13 +157,55 @@ describe("workflowDirectives", () => {
     }
   });
 
+  it("parses code-review result directives", () => {
+    const clean = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
+{
+  "type": "implementation-code-review-result",
+  "runId": "implementation-run-1",
+  "status": "clean",
+  "reportMarkdown": "## Standards\\nNo findings.\\n\\n## Spec\\nNo findings."
+}
+\`\`\``);
+    const findings = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
+{
+  "type": "implementation-code-review-result",
+  "runId": "implementation-run-1",
+  "status": "findings",
+  "reportMarkdown": "## Standards\\n- Mysterious Name in checkout.ts"
+}
+\`\`\``);
+    const invalid = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
+{
+  "type": "implementation-code-review-result",
+  "runId": "implementation-run-1",
+  "status": "passed",
+  "reportMarkdown": "report"
+}
+\`\`\``);
+
+    NodeAssert.equal(clean.kind, "parsed");
+    if (clean.kind === "parsed") {
+      NodeAssert.equal(clean.directive.type, "implementation-code-review-result");
+      NodeAssert.equal(clean.directive.status, "clean");
+    }
+    NodeAssert.equal(findings.kind, "parsed");
+    if (findings.kind === "parsed") {
+      NodeAssert.equal(findings.directive.type, "implementation-code-review-result");
+      NodeAssert.equal(findings.directive.status, "findings");
+    }
+    NodeAssert.equal(invalid.kind, "error");
+    if (invalid.kind === "error") {
+      NodeAssert.match(invalid.message, /must be clean, findings, or blocked/);
+    }
+  });
+
   it("parses workflow sub-agent create directives", () => {
     const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
 {
   "type": "workflow-subagent-create",
-  "workflowPromptId": "planning.issue-reviewer.codex",
-  "title": "Review planning issues",
-  "promptMarkdown": "Review these issues.",
+  "workflowPromptId": "planning.ticket-reviewer.codex",
+  "title": "Review planning tickets",
+  "promptMarkdown": "Review these tickets.",
   "expectedResult": "planning-reviewer-verdict"
 }
 \`\`\``);
@@ -112,7 +213,7 @@ describe("workflowDirectives", () => {
     NodeAssert.equal(result.kind, "parsed");
     if (result.kind !== "parsed") return;
     NodeAssert.equal(result.directive.type, "workflow-subagent-create");
-    NodeAssert.equal(result.directive.workflowPromptId, "planning.issue-reviewer.codex");
+    NodeAssert.equal(result.directive.workflowPromptId, "planning.ticket-reviewer.codex");
     NodeAssert.equal(result.directive.expectedResult, "planning-reviewer-verdict");
   });
 

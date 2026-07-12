@@ -601,7 +601,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         throw new Error("Unexpected error type");
       }
       NodeAssert.equal(
-        error.issue,
+        error.ticket,
         "OpenCode model selection is bound to instance 'opencode', expected 'opencode_zen'.",
       );
       NodeAssert.deepEqual(runtimeMock.state.promptCalls, []);

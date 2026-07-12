@@ -106,7 +106,7 @@ Done.`),
     );
   });
 
-  it("bounds the number of formatted schema issues", () => {
+  it("bounds the number of formatted schema tickets", () => {
     const decode = decodeJsonResult(Schema.Struct({ token: Schema.Number }));
     const failures: Array<Cause.Cause<Schema.SchemaError>> = [];
     for (let index = 0; index < 10; index += 1) {
@@ -119,10 +119,10 @@ Done.`),
     const cause = Cause.fromReasons(failures.flatMap((cause) => cause.reasons));
     const diagnostic = formatSchemaError(cause);
     expect(diagnostic.match(/Invalid type/g)).toHaveLength(8);
-    expect(diagnostic).toContain("... and 2 more issue(s)");
+    expect(diagnostic).toContain("... and 2 more ticket(s)");
   });
 
-  it("retains the omitted issue count when bounding long diagnostics", () => {
+  it("retains the omitted ticket count when bounding long diagnostics", () => {
     const longPath = Array.from({ length: 16 }, (_, index) => `${index}-${"segment".repeat(16)}`);
     const decode = decodeJsonResult(
       Schema.String.check(
@@ -140,6 +140,6 @@ Done.`),
     const cause = Cause.fromReasons(failures.flatMap((cause) => cause.reasons));
     const diagnostic = formatSchemaError(cause);
     expect(diagnostic.length).toBeLessThanOrEqual(2_048);
-    expect(diagnostic.endsWith("\n... and 2 more issue(s)")).toBe(true);
+    expect(diagnostic.endsWith("\n... and 2 more ticket(s)")).toBe(true);
   });
 });

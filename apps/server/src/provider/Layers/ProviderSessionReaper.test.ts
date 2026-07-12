@@ -460,7 +460,7 @@ describe("ProviderSessionReaper", () => {
           ? Effect.fail(
               new ProviderValidationError({
                 operation: "ProviderSessionReaper.test",
-                issue: "simulated stop failure",
+                ticket: "simulated stop failure",
               }),
             )
           : Effect.void,

@@ -121,7 +121,7 @@ export function stringifyYaml(
  *
  * **Details**
  *
- * Decode and encode failures become `InvalidValue` schema issues.
+ * Decode and encode failures become `InvalidValue` schema tickets.
  *
  * **Example** (Parsing YAML)
  *

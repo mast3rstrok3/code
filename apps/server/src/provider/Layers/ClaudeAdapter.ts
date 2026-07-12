@@ -1451,7 +1451,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       return yield* new ProviderAdapterValidationError({
         provider: PROVIDER,
         operation: "readThread",
-        issue: "Session thread id is not initialized yet.",
+        ticket: "Session thread id is not initialized yet.",
       });
     }
     return {
@@ -3081,7 +3081,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         return yield* new ProviderAdapterValidationError({
           provider: PROVIDER,
           operation: "startSession",
-          issue: `Expected provider '${PROVIDER}' but received '${input.provider}'.`,
+          ticket: `Expected provider '${PROVIDER}' but received '${input.provider}'.`,
         });
       }
 

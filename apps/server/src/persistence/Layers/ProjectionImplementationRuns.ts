@@ -17,19 +17,19 @@ const makeProjectionImplementationRunRepository = Effect.gen(function* () {
     Request: ProjectionImplementationRun,
     execute: (row) => sql`
       INSERT INTO projection_implementation_runs (
-        run_id, prd_id, orchestrator_thread_id, source_thread_id, status,
+        run_id, spec_id, orchestrator_thread_id, source_thread_id, status,
         base_branch, pinned_commit, orchestrator_branch, orchestrator_worktree_path,
-        launch_summary_json, issue_states_json, worker_results_json,
-        terminal_lineage_issue_ids_json, final_validation_json, dev_review_ids_json,
+        launch_summary_json, ticket_states_json, worker_results_json,
+        terminal_lineage_ticket_ids_json, final_validation_json, dev_review_ids_json,
         qa_attempt_count, handoff_target, base_branch_merge_policy, run_json,
         created_at, updated_at
       )
       VALUES (
-        ${row.runId}, ${row.run.prdId}, ${row.run.orchestratorThreadId},
+        ${row.runId}, ${row.run.specId}, ${row.run.orchestratorThreadId},
         ${row.sourceThreadId}, ${row.run.status}, ${row.run.baseBranch}, ${row.run.pinnedCommit},
         ${row.run.orchestratorBranch}, ${row.run.orchestratorWorktreePath},
-        ${JSON.stringify(row.run.launchSummary)}, ${JSON.stringify(row.run.issueStates)},
-        ${JSON.stringify(row.run.workerResults)}, ${JSON.stringify(row.run.terminalLineageIssueIds)},
+        ${JSON.stringify(row.run.launchSummary)}, ${JSON.stringify(row.run.ticketStates)},
+        ${JSON.stringify(row.run.workerResults)}, ${JSON.stringify(row.run.terminalLineageTicketIds)},
         ${row.run.finalValidation === null ? null : JSON.stringify(row.run.finalValidation)},
         ${JSON.stringify(row.run.devReviewIds)}, ${row.run.qaAttemptCount}, ${row.run.handoffTarget},
         ${row.run.baseBranchMergePolicy}, ${JSON.stringify(row.run)}, ${row.run.createdAt},
@@ -37,7 +37,7 @@ const makeProjectionImplementationRunRepository = Effect.gen(function* () {
       )
       ON CONFLICT (run_id)
       DO UPDATE SET
-        prd_id = excluded.prd_id,
+        spec_id = excluded.spec_id,
         orchestrator_thread_id = excluded.orchestrator_thread_id,
         source_thread_id = COALESCE(projection_implementation_runs.source_thread_id, excluded.source_thread_id),
         status = excluded.status,
@@ -46,9 +46,9 @@ const makeProjectionImplementationRunRepository = Effect.gen(function* () {
         orchestrator_branch = excluded.orchestrator_branch,
         orchestrator_worktree_path = excluded.orchestrator_worktree_path,
         launch_summary_json = excluded.launch_summary_json,
-        issue_states_json = excluded.issue_states_json,
+        ticket_states_json = excluded.ticket_states_json,
         worker_results_json = excluded.worker_results_json,
-        terminal_lineage_issue_ids_json = excluded.terminal_lineage_issue_ids_json,
+        terminal_lineage_ticket_ids_json = excluded.terminal_lineage_ticket_ids_json,
         final_validation_json = excluded.final_validation_json,
         dev_review_ids_json = excluded.dev_review_ids_json,
         qa_attempt_count = excluded.qa_attempt_count,

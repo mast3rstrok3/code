@@ -226,27 +226,27 @@ function seedPlanning(
       createdAt: now,
     });
     yield* system.engine.dispatch({
-      type: "thread.planning-prd.apply",
-      commandId: commandId("prd-apply"),
+      type: "thread.planning-spec.apply",
+      commandId: commandId("spec-apply"),
       threadId: sourceThreadId,
-      sourceMessageId: messageId("prd-source"),
+      sourceMessageId: messageId("spec-source"),
       title: "Checkout",
       summaryMarkdown: "Build checkout.",
       createdAt: now,
     });
-    const snapshotAfterPrd = yield* system.query.getSnapshot();
-    const prd = snapshotAfterPrd.threads.find((thread) => thread.id === sourceThreadId)
-      ?.planningWorkflow?.prd;
-    if (!prd) throw new Error("PRD missing.");
+    const snapshotAfterSpec = yield* system.query.getSnapshot();
+    const spec = snapshotAfterSpec.threads.find((thread) => thread.id === sourceThreadId)
+      ?.planningWorkflow?.spec;
+    if (!spec) throw new Error("Spec missing.");
     yield* system.engine.dispatch({
-      type: "thread.planning-issues.apply",
-      commandId: commandId("issues-apply"),
+      type: "thread.planning-tickets.apply",
+      commandId: commandId("tickets-apply"),
       threadId: sourceThreadId,
-      sourceMessageId: messageId("issues-source"),
-      prdId: prd.id,
-      issues: [
+      sourceMessageId: messageId("tickets-source"),
+      specId: spec.id,
+      tickets: [
         {
-          key: "ISSUE-1",
+          key: "TICKET-1",
           title: "Checkout tracer",
           bodyMarkdown: "Implement checkout tracer.",
           dependencyKeys: [],
@@ -255,10 +255,10 @@ function seedPlanning(
       createdAt: now,
     });
     const snapshot = yield* system.query.getSnapshot();
-    const issue = snapshot.threads.find((thread) => thread.id === sourceThreadId)?.planningWorkflow
-      ?.issues[0];
-    if (!issue) throw new Error("Issue missing.");
-    return { prd, issue };
+    const ticket = snapshot.threads.find((thread) => thread.id === sourceThreadId)?.planningWorkflow
+      ?.tickets[0];
+    if (!ticket) throw new Error("Ticket missing.");
+    return { spec, ticket };
   });
 }
 
@@ -267,12 +267,12 @@ function launchRun(
   options?: { readonly modelSelection?: ModelSelection },
 ) {
   return Effect.gen(function* () {
-    const { issue, prd } = yield* seedPlanning(system, options);
+    const { ticket, spec } = yield* seedPlanning(system, options);
     yield* system.engine.dispatch({
       type: "thread.implementation-run.launch",
       commandId: commandId("implementation-launch"),
       threadId: sourceThreadId,
-      prdId: prd.id,
+      specId: spec.id,
       baseBranch: "main",
       pinnedCommit: "abc123",
       orchestratorBranch: "implementation/checkout",
@@ -284,7 +284,7 @@ function launchRun(
     const snapshot = yield* system.query.getSnapshot();
     const run = snapshot.implementationRuns[0];
     if (!run) throw new Error("Run missing.");
-    return { issue, run };
+    return { ticket, run };
   });
 }
 
@@ -296,7 +296,7 @@ function appendWorkerResult(
   },
 ) {
   return Effect.gen(function* () {
-    const state = input.run.issueStates[0];
+    const state = input.run.ticketStates[0];
     if (!state?.workerThreadId || !state.branch || !state.worktreePath) {
       throw new Error("Worker was not started.");
     }
@@ -311,7 +311,7 @@ function appendWorkerResult(
         summary: `Worker ${input.status}`,
         payload: {
           type: "implementation-worker-result",
-          issueId: state.issueId,
+          ticketId: state.ticketId,
           workerThreadId: state.workerThreadId,
           branch: state.branch,
           worktreePath: state.worktreePath,
@@ -362,6 +362,109 @@ function passMergeGate(system: ImplementationSystem, run: OrchestrationImplement
   });
 }
 
+function passDevReview(system: ImplementationSystem, run: OrchestrationImplementationRun) {
+  return Effect.gen(function* () {
+    const snapshot = yield* system.query.getSnapshot();
+    const reviewingRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+    const reviewId = reviewingRun?.devReviewIds[0];
+    if (reviewId === undefined) throw new Error("Dev review missing.");
+    yield* system.engine.dispatch({
+      type: "thread.dev-review.update",
+      commandId: commandId("dev-review-pass"),
+      threadId: run.orchestratorThreadId,
+      reviewId: DevReviewId.make(reviewId),
+      status: "passed",
+      updatedAt: "2026-01-01T00:00:03.000Z",
+      createdAt: "2026-01-01T00:00:03.000Z",
+    });
+    yield* system.reactor.drain;
+  });
+}
+
+function appendCodeReviewResult(
+  system: ImplementationSystem,
+  input: {
+    readonly run: OrchestrationImplementationRun;
+    readonly threadId: ThreadId;
+    readonly status: "clean" | "findings" | "blocked";
+    readonly tag: string;
+  },
+) {
+  return Effect.gen(function* () {
+    yield* system.engine.dispatch({
+      type: "thread.activity.append",
+      commandId: commandId(`code-review-${input.tag}`),
+      threadId: input.threadId,
+      activity: {
+        id: eventId(`code-review-${input.tag}`),
+        tone: input.status === "blocked" ? "error" : "info",
+        kind: "implementation-code-review-result",
+        summary: `Implementation code review ${input.status}`,
+        payload: {
+          type: "implementation-code-review-result",
+          runId: input.run.id,
+          status: input.status,
+          reportMarkdown: "## Standards\n- finding\n\n## Spec\n- finding",
+        },
+        turnId: null,
+        createdAt: "2026-01-01T00:00:04.000Z",
+      },
+      createdAt: "2026-01-01T00:00:04.000Z",
+    });
+    yield* system.reactor.drain;
+  });
+}
+
+function appendCodeReviewFixResult(
+  system: ImplementationSystem,
+  input: {
+    readonly run: OrchestrationImplementationRun;
+    readonly threadId: ThreadId;
+    readonly tag: string;
+  },
+) {
+  return Effect.gen(function* () {
+    yield* system.engine.dispatch({
+      type: "thread.activity.append",
+      commandId: commandId(`code-review-fix-${input.tag}`),
+      threadId: input.threadId,
+      activity: {
+        id: eventId(`code-review-fix-${input.tag}`),
+        tone: "info",
+        kind: "implementation-fix-result",
+        summary: "Implementation fix succeeded",
+        payload: {
+          type: "implementation-fix-result",
+          runId: input.run.id,
+          status: "succeeded",
+          validations: [],
+          notesMarkdown: "Applied code review findings.",
+        },
+        turnId: null,
+        createdAt: "2026-01-01T00:00:05.000Z",
+      },
+      createdAt: "2026-01-01T00:00:05.000Z",
+    });
+    yield* system.reactor.drain;
+  });
+}
+
+function nextThreadForRole(
+  system: ImplementationSystem,
+  role: "implementation-code-reviewer" | "implementation-fixer",
+  seen: Set<string>,
+) {
+  return Effect.gen(function* () {
+    const snapshot = yield* system.query.getSnapshot();
+    const thread = snapshot.threads.find(
+      (candidate) => candidate.workflowRole === role && !seen.has(candidate.id),
+    );
+    if (!thread) throw new Error(`No new ${role} thread found.`);
+    seen.add(thread.id);
+    return thread;
+  });
+}
+
 const claudeParentSelection: ModelSelection = {
   instanceId: ProviderInstanceId.make("claudeAgent"),
   model: "claude-opus-4-8",
@@ -400,7 +503,7 @@ describe("ImplementationWorkflowReactor", () => {
         const snapshot = yield* system.query.getSnapshot();
         const updated = snapshot.implementationRuns.find((entry) => entry.id === run.id);
         expect(updated?.status).toBe("needs-human-attention");
-        expect(updated?.issueStates[0]?.status).toBe("failed");
+        expect(updated?.ticketStates[0]?.status).toBe("failed");
       }),
     ),
   );
@@ -464,13 +567,139 @@ describe("ImplementationWorkflowReactor", () => {
         yield* system.reactor.drain;
 
         snapshot = yield* system.query.getSnapshot();
-        const completedRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        const codeReviewingRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
         const createOrOpenChangeRequestCount = yield* Ref.get(
           system.createOrOpenChangeRequestCount,
         );
         expect(createOrOpenChangeRequestCount).toBe(1);
+        expect(codeReviewingRun?.status).toBe("code-reviewing");
+        expect(codeReviewingRun?.codeReviewAttemptCount).toBe(1);
+        expect(codeReviewingRun?.changeRequest?.url).toBe("https://example.test/pr/1");
+
+        const reviewerThread = snapshot.threads.find(
+          (thread) => thread.workflowRole === "implementation-code-reviewer",
+        );
+        expect(reviewerThread).toBeDefined();
+        expect(reviewerThread?.parentThreadId).toBe(run.orchestratorThreadId);
+
+        yield* appendCodeReviewResult(system, {
+          run,
+          threadId: reviewerThread!.id,
+          status: "clean",
+          tag: "clean",
+        });
+
+        snapshot = yield* system.query.getSnapshot();
+        const completedRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
         expect(completedRun?.status).toBe("completed");
         expect(completedRun?.changeRequest?.url).toBe("https://example.test/pr/1");
+      }),
+    ),
+  );
+
+  it.effect("cycles code review findings through the fixer and re-reviews the change request", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+        yield* passMergeGate(system, run);
+        yield* passDevReview(system, run);
+
+        const seenReviewers = new Set<string>();
+        const seenFixers = new Set<string>();
+
+        const firstReviewer = yield* nextThreadForRole(
+          system,
+          "implementation-code-reviewer",
+          seenReviewers,
+        );
+        yield* appendCodeReviewResult(system, {
+          run,
+          threadId: firstReviewer.id,
+          status: "findings",
+          tag: "cycle-1",
+        });
+
+        let snapshot = yield* system.query.getSnapshot();
+        const fixingRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(fixingRun?.status).toBe("code-review-fixing");
+
+        const fixer = yield* nextThreadForRole(system, "implementation-fixer", seenFixers);
+        expect(fixer.title).toBe("Fix code review findings");
+        yield* appendCodeReviewFixResult(system, { run, threadId: fixer.id, tag: "cycle-1" });
+
+        snapshot = yield* system.query.getSnapshot();
+        const reReviewingRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        const createOrOpenChangeRequestCount = yield* Ref.get(
+          system.createOrOpenChangeRequestCount,
+        );
+        expect(createOrOpenChangeRequestCount).toBe(2);
+        expect(reReviewingRun?.status).toBe("code-reviewing");
+        expect(reReviewingRun?.codeReviewAttemptCount).toBe(2);
+
+        const secondReviewer = yield* nextThreadForRole(
+          system,
+          "implementation-code-reviewer",
+          seenReviewers,
+        );
+        yield* appendCodeReviewResult(system, {
+          run,
+          threadId: secondReviewer.id,
+          status: "clean",
+          tag: "cycle-2",
+        });
+
+        snapshot = yield* system.query.getSnapshot();
+        const completedRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(completedRun?.status).toBe("completed");
+      }),
+    ),
+  );
+
+  it.effect("blocks the run when code review findings persist after five cycles", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+        yield* passMergeGate(system, run);
+        yield* passDevReview(system, run);
+
+        const seenReviewers = new Set<string>();
+        const seenFixers = new Set<string>();
+
+        for (let cycle = 1; cycle <= 5; cycle += 1) {
+          const reviewer = yield* nextThreadForRole(
+            system,
+            "implementation-code-reviewer",
+            seenReviewers,
+          );
+          yield* appendCodeReviewResult(system, {
+            run,
+            threadId: reviewer.id,
+            status: "findings",
+            tag: `max-cycle-${cycle}`,
+          });
+          if (cycle < 5) {
+            const fixer = yield* nextThreadForRole(system, "implementation-fixer", seenFixers);
+            yield* appendCodeReviewFixResult(system, {
+              run,
+              threadId: fixer.id,
+              tag: `max-cycle-${cycle}`,
+            });
+          }
+        }
+
+        const snapshot = yield* system.query.getSnapshot();
+        const blockedRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(blockedRun?.status).toBe("needs-human-attention");
+        expect(blockedRun?.codeReviewAttemptCount).toBe(5);
+        const orchestratorThread = snapshot.threads.find(
+          (thread) => thread.id === run.orchestratorThreadId,
+        );
+        const attentionActivity = orchestratorThread?.activities.find(
+          (activity) => activity.kind === "implementation-workflow.needs-human-attention",
+        );
+        expect(attentionActivity).toBeDefined();
       }),
     ),
   );

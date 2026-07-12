@@ -33,8 +33,8 @@ type ProductWorkflowEvent = Extract<
   {
     type:
       | "thread.activity-appended"
-      | "thread.planning-issues-created"
-      | "thread.planning-issues-revised";
+      | "thread.planning-tickets-created"
+      | "thread.planning-tickets-revised";
   }
 >;
 
@@ -127,15 +127,15 @@ const make = Effect.gen(function* () {
     });
   });
 
-  const requestIssueReview = Effect.fn("ProductWorkflowReactor.requestIssueReview")(function* (
+  const requestTicketReview = Effect.fn("ProductWorkflowReactor.requestTicketReview")(function* (
     event: Extract<
       ProductWorkflowEvent,
-      { type: "thread.planning-issues-created" | "thread.planning-issues-revised" }
+      { type: "thread.planning-tickets-created" | "thread.planning-tickets-revised" }
     >,
   ) {
-    if (event.payload.stage !== "issue-review") return;
+    if (event.payload.stage !== "ticket-review") return;
     if (
-      event.type === "thread.planning-issues-revised" &&
+      event.type === "thread.planning-tickets-revised" &&
       event.payload.reviewCycle !== undefined
     ) {
       return;
@@ -144,21 +144,21 @@ const make = Effect.gen(function* () {
     if (!thread) return;
     const context = yield* resolveProductPlanningContext(thread);
     if (context === null) return;
-    const prd = context.planningThread.planningWorkflow?.prd;
-    if (!prd || prd.id !== event.payload.prdId) return;
+    const spec = context.planningThread.planningWorkflow?.spec;
+    if (!spec || spec.id !== event.payload.specId) return;
 
     yield* orchestrationEngine.dispatch({
-      type: "thread.planning-issue-review.request",
-      commandId: yield* serverCommandId("product-issue-review-request"),
+      type: "thread.planning-ticket-review.request",
+      commandId: yield* serverCommandId("product-ticket-review-request"),
       threadId: context.planningThread.id,
-      prdId: prd.id,
+      specId: spec.id,
       createdAt: event.occurredAt,
     });
   });
 
-  const reviseIssues = Effect.fn("ProductWorkflowReactor.reviseIssues")(function* (input: {
+  const reviseTickets = Effect.fn("ProductWorkflowReactor.reviseTickets")(function* (input: {
     readonly threadId: ThreadId;
-    readonly prdId: string;
+    readonly specId: string;
     readonly cycle: OrchestrationPlanningReviewCycle;
     readonly createdAt: string;
   }) {
@@ -166,27 +166,27 @@ const make = Effect.gen(function* () {
     if (!thread) return;
     const context = yield* resolveProductPlanningContext(thread);
     if (context === null) return;
-    const prd = context.planningThread.planningWorkflow?.prd;
-    if (!prd || prd.id !== input.prdId) return;
+    const spec = context.planningThread.planningWorkflow?.spec;
+    if (!spec || spec.id !== input.specId) return;
 
-    const messageId = yield* serverMessageId("product-issues-revision");
+    const messageId = yield* serverMessageId("product-tickets-revision");
     const feedback = [
-      `Revise planning issues for PRD "${prd.title}" after failed review cycle ${input.cycle.cycleNumber}.`,
+      `Revise planning tickets for Spec "${spec.title}" after failed review cycle ${input.cycle.cycleNumber}.`,
       "",
-      "Do not ask the user questions. Apply the concrete reviewer feedback and finish with a planning-issues-artifact JSON directive.",
+      "Do not ask the user questions. Apply the concrete reviewer feedback and finish with a planning-tickets-artifact JSON directive.",
       "",
       "Reviewer verdict:",
       input.cycle.verdictMarkdown,
       "",
-      "Failing issue ids:",
-      input.cycle.failingPlanningIssueIds.length > 0
-        ? input.cycle.failingPlanningIssueIds.map((id) => `- ${id}`).join("\n")
+      "Failing ticket ids:",
+      input.cycle.failingPlanningTicketIds.length > 0
+        ? input.cycle.failingPlanningTicketIds.map((id) => `- ${id}`).join("\n")
         : "- None specified",
     ].join("\n");
 
     yield* orchestrationEngine.dispatch({
       type: "thread.turn.start",
-      commandId: yield* serverCommandId("product-issues-revision-turn"),
+      commandId: yield* serverCommandId("product-tickets-revision-turn"),
       threadId: context.planningThread.id,
       message: {
         messageId,
@@ -194,7 +194,7 @@ const make = Effect.gen(function* () {
         text: feedback,
         attachments: [],
       },
-      workflowPromptId: WORKFLOW_PROMPT_IDS.planningIssuesCodex,
+      workflowPromptId: WORKFLOW_PROMPT_IDS.planningTicketsCodex,
       runtimeMode: context.planningThread.runtimeMode,
       interactionMode: context.planningThread.interactionMode,
       createdAt: input.createdAt,
@@ -219,27 +219,27 @@ const make = Effect.gen(function* () {
       threadId: input.productRootThreadId,
       tone: "error",
       kind: "product-workflow.needs-human-attention",
-      summary: "Product Grill needs human attention",
+      summary: "Product Workflow needs human attention",
       payload: { reasonMarkdown: input.reasonMarkdown },
       createdAt: input.createdAt,
     });
   });
 
   const launchImplementation = Effect.fn("ProductWorkflowReactor.launchImplementation")(function* (
-    event: Extract<ProductWorkflowEvent, { type: "thread.planning-issues-revised" }>,
+    event: Extract<ProductWorkflowEvent, { type: "thread.planning-tickets-revised" }>,
   ) {
     const thread = yield* resolveThread(event.payload.threadId);
     if (!thread) return;
     const context = yield* resolveProductPlanningContext(thread);
     if (context === null) return;
     const workflow = context.planningThread.planningWorkflow;
-    const prd = workflow?.prd ?? null;
+    const spec = workflow?.spec ?? null;
     if (!workflow) return;
-    if (!prd || prd.id !== event.payload.prdId || workflow.issues.length === 0) return;
+    if (!spec || spec.id !== event.payload.specId || workflow.tickets.length === 0) return;
 
     const existingRun =
       (yield* projectionSnapshotQuery.getCommandReadModel()).implementationRuns.find(
-        (run) => run.prdId === prd.id && run.status !== "canceled",
+        (run) => run.specId === spec.id && run.status !== "canceled",
       );
     if (existingRun !== undefined) return;
 
@@ -250,8 +250,8 @@ const make = Effect.gen(function* () {
       .resolveCommit({ cwd: sourceCwd, ref: "HEAD" })
       .pipe(Effect.map((result) => result.commitSha));
     const identity = resolveImplementationBranchIdentity({
-      prdId: prd.id,
-      prdTitle: prd.title,
+      specId: spec.id,
+      specTitle: spec.title,
       baseBranch: context.productRootThread.branch ?? "main",
       workspaceRoot: sourceCwd,
       implementationRuns: (yield* projectionSnapshotQuery.getCommandReadModel()).implementationRuns,
@@ -261,7 +261,7 @@ const make = Effect.gen(function* () {
       type: "thread.implementation-run.launch",
       commandId: yield* serverCommandId("product-implementation-launch"),
       threadId: context.productRootThread.id,
-      prdId: prd.id,
+      specId: spec.id,
       baseBranch: identity.baseBranch,
       pinnedCommit,
       orchestratorBranch: identity.orchestratorBranch,
@@ -272,7 +272,7 @@ const make = Effect.gen(function* () {
   });
 
   const handleReviewCycle = Effect.fn("ProductWorkflowReactor.handleReviewCycle")(function* (
-    event: Extract<ProductWorkflowEvent, { type: "thread.planning-issues-revised" }>,
+    event: Extract<ProductWorkflowEvent, { type: "thread.planning-tickets-revised" }>,
   ) {
     const cycle = event.payload.reviewCycle;
     if (cycle === undefined) return;
@@ -283,9 +283,9 @@ const make = Effect.gen(function* () {
 
     if (cycle.status === "failed") {
       if (cycle.cycleNumber < MAX_PLANNING_REVIEW_CYCLE_NUMBER) {
-        yield* reviseIssues({
+        yield* reviseTickets({
           threadId: context.planningThread.id,
-          prdId: event.payload.prdId,
+          specId: event.payload.specId,
           cycle,
           createdAt: event.payload.revisedAt,
         });
@@ -294,7 +294,7 @@ const make = Effect.gen(function* () {
       yield* blockPlanning({
         planningThreadId: context.planningThread.id,
         productRootThreadId: context.productRootThread.id,
-        reasonMarkdown: `Planning issue review failed ${cycle.cycleNumber} times. Latest verdict:\n\n${cycle.verdictMarkdown}`,
+        reasonMarkdown: `Planning ticket review failed ${cycle.cycleNumber} times. Latest verdict:\n\n${cycle.verdictMarkdown}`,
         createdAt: event.payload.revisedAt,
       });
       return;
@@ -339,12 +339,12 @@ const make = Effect.gen(function* () {
       case "thread.activity-appended":
         yield* handleProductIntentLocked(event);
         return;
-      case "thread.planning-issues-created":
-        yield* requestIssueReview(event);
+      case "thread.planning-tickets-created":
+        yield* requestTicketReview(event);
         return;
-      case "thread.planning-issues-revised":
+      case "thread.planning-tickets-revised":
         yield* handleReviewCycle(event);
-        yield* requestIssueReview(event);
+        yield* requestTicketReview(event);
         return;
     }
   });
@@ -369,8 +369,8 @@ const make = Effect.gen(function* () {
       Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
         if (
           event.type !== "thread.activity-appended" &&
-          event.type !== "thread.planning-issues-created" &&
-          event.type !== "thread.planning-issues-revised"
+          event.type !== "thread.planning-tickets-created" &&
+          event.type !== "thread.planning-tickets-revised"
         ) {
           return Effect.void;
         }

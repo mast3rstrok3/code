@@ -8,10 +8,7 @@ import {
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 
-import {
-  normalizeWorkflowPromptId,
-  WORKFLOW_PROMPT_IDS,
-} from "../provider/WorkflowPromptRegistry.ts";
+import { WORKFLOW_PROMPT_IDS } from "../provider/WorkflowPromptRegistry.ts";
 import { findEnabledProviderInstanceIdForDriver } from "../serverSettings.ts";
 
 export type WorkflowSubagentParentWorkflowRole = OrchestrationThreadWorkflowRole | null;
@@ -39,11 +36,11 @@ export interface WorkflowSubagentSpawnDefinition {
 
 const WORKFLOW_SUBAGENT_SPAWN_DEFINITIONS: ReadonlyArray<WorkflowSubagentSpawnDefinition> = [
   {
-    workflowPromptId: WORKFLOW_PROMPT_IDS.productGrillStageCodex,
+    workflowPromptId: WORKFLOW_PROMPT_IDS.productWorkflowCodex,
     interactionMode: "product-workflow",
     workflowRole: null,
-    threadIdTag: "workflow-product-grill",
-    defaultTitlePrefix: "Product Grill",
+    threadIdTag: "workflow-product-workflow",
+    defaultTitlePrefix: "Product Workflow",
     expectedResult: "product-intent-locked",
     allowedParentWorkflowRoles: "any",
   },
@@ -53,29 +50,29 @@ const WORKFLOW_SUBAGENT_SPAWN_DEFINITIONS: ReadonlyArray<WorkflowSubagentSpawnDe
     workflowRole: "planning-orchestrator",
     threadIdTag: "workflow-planning-grill",
     defaultTitlePrefix: "Planning Grill",
-    expectedResult: "planning-prd-artifact",
+    expectedResult: "planning-spec-artifact",
     allowedParentWorkflowRoles: "any",
   },
   {
-    workflowPromptId: WORKFLOW_PROMPT_IDS.planningPrdCodex,
+    workflowPromptId: WORKFLOW_PROMPT_IDS.planningSpecCodex,
     interactionMode: "planning-workflow",
     workflowRole: "planning-orchestrator",
-    threadIdTag: "workflow-planning-prd",
-    defaultTitlePrefix: "Planning PRD",
-    expectedResult: "planning-prd-artifact",
+    threadIdTag: "workflow-planning-spec",
+    defaultTitlePrefix: "Planning Spec",
+    expectedResult: "planning-spec-artifact",
     allowedParentWorkflowRoles: "any",
   },
   {
-    workflowPromptId: WORKFLOW_PROMPT_IDS.planningIssuesCodex,
+    workflowPromptId: WORKFLOW_PROMPT_IDS.planningTicketsCodex,
     interactionMode: "planning-workflow",
     workflowRole: "planning-orchestrator",
-    threadIdTag: "workflow-planning-issues",
-    defaultTitlePrefix: "Planning Issues",
-    expectedResult: "planning-issues-artifact",
+    threadIdTag: "workflow-planning-tickets",
+    defaultTitlePrefix: "Planning Tickets",
+    expectedResult: "planning-tickets-artifact",
     allowedParentWorkflowRoles: "any",
   },
   {
-    workflowPromptId: WORKFLOW_PROMPT_IDS.planningIssueReviewerCodex,
+    workflowPromptId: WORKFLOW_PROMPT_IDS.planningTicketReviewerCodex,
     interactionMode: "planning-workflow",
     workflowRole: "planning-reviewer",
     threadIdTag: "workflow-planning-reviewer",
@@ -133,11 +130,20 @@ const WORKFLOW_SUBAGENT_SPAWN_DEFINITIONS: ReadonlyArray<WorkflowSubagentSpawnDe
     expectedResult: "implementation-fix-result",
     allowedParentWorkflowRoles: [null, "implementation-orchestrator"],
   },
+  {
+    workflowPromptId: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+    interactionMode: "implementation-workflow",
+    workflowRole: "implementation-code-reviewer",
+    threadIdTag: "workflow-implementation-code-reviewer",
+    defaultTitlePrefix: "Implementation Code Review",
+    expectedResult: "implementation-code-review-result",
+    allowedParentWorkflowRoles: [null, "implementation-orchestrator"],
+  },
 ];
 
 const WORKFLOW_SUBAGENT_SPAWN_DEFINITION_BY_PROMPT_ID = new Map(
   WORKFLOW_SUBAGENT_SPAWN_DEFINITIONS.map((definition) => [
-    normalizeWorkflowPromptId(definition.workflowPromptId),
+    definition.workflowPromptId,
     definition,
   ]),
 );
@@ -145,9 +151,7 @@ const WORKFLOW_SUBAGENT_SPAWN_DEFINITION_BY_PROMPT_ID = new Map(
 export function resolveWorkflowSubagentSpawnDefinition(
   workflowPromptId: string,
 ): WorkflowSubagentSpawnDefinition | undefined {
-  return WORKFLOW_SUBAGENT_SPAWN_DEFINITION_BY_PROMPT_ID.get(
-    normalizeWorkflowPromptId(workflowPromptId),
-  );
+  return WORKFLOW_SUBAGENT_SPAWN_DEFINITION_BY_PROMPT_ID.get(workflowPromptId);
 }
 
 export function isWorkflowSubagentParentRoleAllowed(

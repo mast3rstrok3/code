@@ -135,7 +135,7 @@ export function mapRemoteEnvironmentError(
     case "EnvironmentResourceNotFoundError":
       // Not expected during connection authorization, but the shared request
       // error type now includes it (used by resource fetches like the thread
-      // snapshot). Treat it as a configuration issue with the endpoint.
+      // snapshot). Treat it as a configuration ticket with the endpoint.
       return new ConnectionBlockedError({
         reason: "configuration",
         detail: "The environment endpoint could not be found.",

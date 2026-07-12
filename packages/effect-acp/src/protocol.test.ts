@@ -168,8 +168,8 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
       const { cause, ...directDiagnostics } = parseError;
       assert.equal(parseError.operation, "decode-notification-payload");
       assert.equal(parseError.method, "session/update");
-      assert.isAbove(parseError.issueCount ?? 0, 0);
-      assert.include(parseError.issueKinds ?? [], "Pointer");
+      assert.isAbove(parseError.ticketCount ?? 0, 0);
+      assert.include(parseError.ticketKinds ?? [], "Pointer");
       assert.isAbove(parseError.maximumPathDepth ?? 0, 0);
       assert.isTrue(Schema.isSchemaError(cause));
       assert.notInclude(parseError.message, secret);

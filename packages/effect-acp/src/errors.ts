@@ -13,7 +13,7 @@ export const AcpRequestOperation = Schema.Literals([
 ]);
 export type AcpRequestOperation = typeof AcpRequestOperation.Type;
 
-export const AcpSchemaIssueKind = Schema.Literals([
+export const AcpSchemaTicketKind = Schema.Literals([
   "Filter",
   "Encoding",
   "Pointer",
@@ -26,42 +26,42 @@ export const AcpSchemaIssueKind = Schema.Literals([
   "Forbidden",
   "OneOf",
 ]);
-export type AcpSchemaIssueKind = typeof AcpSchemaIssueKind.Type;
+export type AcpSchemaTicketKind = typeof AcpSchemaTicketKind.Type;
 
-export interface AcpSchemaIssueDiagnostics {
-  readonly issueCount: number;
-  readonly issueKinds: ReadonlyArray<AcpSchemaIssueKind>;
+export interface AcpSchemaTicketDiagnostics {
+  readonly ticketCount: number;
+  readonly ticketKinds: ReadonlyArray<AcpSchemaTicketKind>;
   readonly maximumPathDepth: number;
 }
 
-const schemaIssueDiagnostics = (root: SchemaIssue.Issue): AcpSchemaIssueDiagnostics => {
-  let issueCount = 0;
+const schemaTicketDiagnostics = (root: SchemaIssue.Issue): AcpSchemaTicketDiagnostics => {
+  let ticketCount = 0;
   let maximumPathDepth = 0;
-  const issueKinds = new Set<AcpSchemaIssueKind>();
+  const ticketKinds = new Set<AcpSchemaTicketKind>();
 
-  const visit = (issue: SchemaIssue.Issue, pathDepth: number): void => {
-    issueCount += 1;
-    issueKinds.add(issue._tag);
+  const visit = (ticket: SchemaIssue.Issue, pathDepth: number): void => {
+    ticketCount += 1;
+    ticketKinds.add(ticket._tag);
     maximumPathDepth = Math.max(maximumPathDepth, pathDepth);
-    switch (issue._tag) {
+    switch (ticket._tag) {
       case "Filter":
       case "Encoding":
-        visit(issue.issue, pathDepth);
+        visit(ticket.issue, pathDepth);
         break;
       case "Pointer":
-        visit(issue.issue, pathDepth + issue.path.length);
+        visit(ticket.issue, pathDepth + ticket.path.length);
         break;
       case "Composite":
       case "AnyOf":
-        for (const child of issue.issues) visit(child, pathDepth);
+        for (const child of ticket.issues) visit(child, pathDepth);
         break;
     }
   };
 
   visit(root, 0);
   return {
-    issueCount,
-    issueKinds: [...issueKinds],
+    ticketCount,
+    ticketKinds: [...ticketKinds],
     maximumPathDepth,
   };
 };
@@ -71,8 +71,8 @@ export interface AcpRequestDiagnostics {
   readonly requestId?: string;
   readonly operation?: AcpRequestOperation;
   readonly cause?: unknown;
-  readonly issueCount?: number;
-  readonly issueKinds?: ReadonlyArray<AcpSchemaIssueKind>;
+  readonly ticketCount?: number;
+  readonly ticketKinds?: ReadonlyArray<AcpSchemaTicketKind>;
   readonly maximumPathDepth?: number;
 }
 
@@ -115,8 +115,8 @@ export class AcpProtocolParseError extends Schema.TaggedErrorClass<AcpProtocolPa
     operation: AcpProtocolParseOperation,
     method: Schema.optionalKey(Schema.String),
     requestId: Schema.optionalKey(Schema.String),
-    issueCount: Schema.optionalKey(Schema.Number),
-    issueKinds: Schema.optionalKey(Schema.Array(AcpSchemaIssueKind)),
+    ticketCount: Schema.optionalKey(Schema.Number),
+    ticketKinds: Schema.optionalKey(Schema.Array(AcpSchemaTicketKind)),
     maximumPathDepth: Schema.optionalKey(Schema.Number),
     cause: Schema.Defect(),
   },
@@ -134,7 +134,7 @@ export class AcpProtocolParseError extends Schema.TaggedErrorClass<AcpProtocolPa
     return new AcpProtocolParseError({
       operation,
       method,
-      ...schemaIssueDiagnostics(cause.issue),
+      ...schemaTicketDiagnostics(cause.issue),
       cause,
     });
   }
@@ -189,8 +189,8 @@ export class AcpRequestError extends Schema.TaggedErrorClass<AcpRequestError>()(
   method: Schema.optionalKey(Schema.String),
   requestId: Schema.optionalKey(Schema.String),
   operation: Schema.optionalKey(AcpRequestOperation),
-  issueCount: Schema.optionalKey(Schema.Number),
-  issueKinds: Schema.optionalKey(Schema.Array(AcpSchemaIssueKind)),
+  ticketCount: Schema.optionalKey(Schema.Number),
+  ticketKinds: Schema.optionalKey(Schema.Array(AcpSchemaTicketKind)),
   maximumPathDepth: Schema.optionalKey(Schema.Number),
   cause: Schema.optionalKey(Schema.Defect()),
 }) {
@@ -313,7 +313,7 @@ export class AcpRequestError extends Schema.TaggedErrorClass<AcpRequestError>()(
   }
 
   static invalidExtensionPayload(method: string, cause: Schema.SchemaError) {
-    const diagnostics = schemaIssueDiagnostics(cause.issue);
+    const diagnostics = schemaTicketDiagnostics(cause.issue);
     return new AcpRequestError({
       code: -32602,
       errorMessage: `Invalid payload for ACP extension method '${method}'.`,

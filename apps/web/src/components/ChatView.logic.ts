@@ -91,7 +91,7 @@ export function buildThreadTurnInterruptInput(thread: Pick<Thread, "id" | "sessi
   };
 }
 
-export function resolveProductGrillPlanningThreadId(input: {
+export function resolveProductWorkflowPlanningThreadId(input: {
   activeThread: Pick<Thread, "id" | "interactionMode" | "workflowRole"> | null | undefined;
   workflowThreadShells: ReadonlyArray<Pick<ThreadShell, "id" | "parentThreadId" | "workflowRole">>;
 }): ThreadId | null {

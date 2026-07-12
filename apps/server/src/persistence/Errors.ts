@@ -1,17 +1,17 @@
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 
-function summarizeSchemaIssue(issue: SchemaIssue.Issue): string {
-  switch (issue._tag) {
+function summarizeSchemaTicket(ticket: SchemaIssue.Issue): string {
+  switch (ticket._tag) {
     case "Filter":
     case "Encoding":
     case "Pointer":
-      return `${issue._tag}(${summarizeSchemaIssue(issue.issue)})`;
+      return `${ticket._tag}(${summarizeSchemaTicket(ticket.issue)})`;
     case "Composite":
     case "AnyOf":
-      return `${issue._tag}(${issue.issues.map(summarizeSchemaIssue).join(",")})`;
+      return `${ticket._tag}(${ticket.issues.map(summarizeSchemaTicket).join(",")})`;
     default:
-      return issue._tag;
+      return ticket._tag;
   }
 }
 
@@ -47,7 +47,7 @@ export class PersistenceDecodeError extends Schema.TaggedErrorClass<PersistenceD
   "PersistenceDecodeError",
   {
     operation: Schema.String,
-    issue: Schema.String,
+    ticket: Schema.String,
     correlation: Schema.optional(PersistenceErrorCorrelation),
     cause: Schema.optional(Schema.Defect()),
   },
@@ -59,14 +59,14 @@ export class PersistenceDecodeError extends Schema.TaggedErrorClass<PersistenceD
   ): PersistenceDecodeError {
     return new PersistenceDecodeError({
       operation,
-      issue: summarizeSchemaIssue(cause.issue),
+      ticket: summarizeSchemaTicket(cause.issue),
       ...(correlation === undefined ? {} : { correlation }),
       cause,
     });
   }
 
   override get message(): string {
-    return `Decode error in ${this.operation}: ${this.issue}`;
+    return `Decode error in ${this.operation}: ${this.ticket}`;
   }
 }
 const isPersistenceSqlError = Schema.is(PersistenceSqlError);
@@ -99,12 +99,12 @@ export class ProviderSessionRepositoryValidationError extends Schema.TaggedError
   "ProviderSessionRepositoryValidationError",
   {
     operation: Schema.String,
-    issue: Schema.String,
+    ticket: Schema.String,
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
-    return `Provider session repository validation failed in ${this.operation}: ${this.issue}`;
+    return `Provider session repository validation failed in ${this.operation}: ${this.ticket}`;
   }
 }
 

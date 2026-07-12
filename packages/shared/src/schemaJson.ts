@@ -8,18 +8,18 @@ import * as SchemaGetter from "effect/SchemaGetter";
 import * as SchemaIssue from "effect/SchemaIssue";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 
-const MAX_SCHEMA_DIAGNOSTIC_ISSUES = 8;
+const MAX_SCHEMA_DIAGNOSTIC_TICKETS = 8;
 const MAX_SCHEMA_DIAGNOSTIC_PATH_SEGMENTS = 16;
 const MAX_SCHEMA_DIAGNOSTIC_PATH_SEGMENT_LENGTH = 64;
 const MAX_SCHEMA_DIAGNOSTIC_LENGTH = 2_048;
 
-interface SchemaDiagnosticIssue {
+interface SchemaDiagnosticTicket {
   readonly message: string;
   readonly path: ReadonlyArray<PropertyKey>;
 }
 
 // Schema's default formatter includes actual values. These diagnostics cross
-// process and UI boundaries, so retain only issue kinds and bounded paths.
+// process and UI boundaries, so retain only ticket kinds and bounded paths.
 
 function truncateDiagnostic(value: string, maxLength: number): string {
   return value.length <= maxLength ? value : `${value.slice(0, maxLength - 3)}...`;
@@ -36,20 +36,20 @@ function formatDiagnosticPathSegment(key: PropertyKey): string {
   return `[${JSON.stringify(value)}]`;
 }
 
-function formatDiagnosticIssue(issue: SchemaDiagnosticIssue): string {
-  if (issue.path.length === 0) {
-    return issue.message;
+function formatDiagnosticTicket(ticket: SchemaDiagnosticTicket): string {
+  if (ticket.path.length === 0) {
+    return ticket.message;
   }
-  const path = issue.path
+  const path = ticket.path
     .slice(0, MAX_SCHEMA_DIAGNOSTIC_PATH_SEGMENTS)
     .map(formatDiagnosticPathSegment)
     .join("");
-  const suffix = issue.path.length > MAX_SCHEMA_DIAGNOSTIC_PATH_SEGMENTS ? "[...]" : "";
-  return `${issue.message}\n  at ${path}${suffix}`;
+  const suffix = ticket.path.length > MAX_SCHEMA_DIAGNOSTIC_PATH_SEGMENTS ? "[...]" : "";
+  return `${ticket.message}\n  at ${path}${suffix}`;
 }
 
-function schemaDiagnosticMessage(issue: SchemaIssue.Issue): string {
-  switch (issue._tag) {
+function schemaDiagnosticMessage(ticket: SchemaIssue.Issue): string {
+  switch (ticket._tag) {
     case "InvalidType":
       return "Invalid type";
     case "InvalidValue":
@@ -70,38 +70,38 @@ function schemaDiagnosticMessage(issue: SchemaIssue.Issue): string {
   }
 }
 
-function collectSchemaDiagnosticIssues(
-  issue: SchemaIssue.Issue,
+function collectSchemaDiagnosticTickets(
+  ticket: SchemaIssue.Issue,
   path: ReadonlyArray<PropertyKey>,
-  diagnostics: Array<SchemaDiagnosticIssue>,
+  diagnostics: Array<SchemaDiagnosticTicket>,
 ): number {
-  switch (issue._tag) {
+  switch (ticket._tag) {
     case "Encoding":
-      return collectSchemaDiagnosticIssues(issue.issue, path, diagnostics);
+      return collectSchemaDiagnosticTickets(ticket.issue, path, diagnostics);
     case "Filter":
-      if (issue.issue._tag !== "InvalidValue") {
-        return collectSchemaDiagnosticIssues(issue.issue, path, diagnostics);
+      if (ticket.issue._tag !== "InvalidValue") {
+        return collectSchemaDiagnosticTickets(ticket.issue, path, diagnostics);
       }
       break;
     case "Pointer":
-      return collectSchemaDiagnosticIssues(issue.issue, [...path, ...issue.path], diagnostics);
+      return collectSchemaDiagnosticTickets(ticket.issue, [...path, ...ticket.path], diagnostics);
     case "Composite":
-      return issue.issues.reduce(
-        (count, issue) => count + collectSchemaDiagnosticIssues(issue, path, diagnostics),
+      return ticket.issues.reduce(
+        (count, ticket) => count + collectSchemaDiagnosticTickets(ticket, path, diagnostics),
         0,
       );
     case "AnyOf":
-      if (issue.issues.length > 0) {
-        return issue.issues.reduce(
-          (count, issue) => count + collectSchemaDiagnosticIssues(issue, path, diagnostics),
+      if (ticket.issues.length > 0) {
+        return ticket.issues.reduce(
+          (count, ticket) => count + collectSchemaDiagnosticTickets(ticket, path, diagnostics),
           0,
         );
       }
       break;
   }
 
-  if (diagnostics.length < MAX_SCHEMA_DIAGNOSTIC_ISSUES) {
-    diagnostics.push({ message: schemaDiagnosticMessage(issue), path });
+  if (diagnostics.length < MAX_SCHEMA_DIAGNOSTIC_TICKETS) {
+    diagnostics.push({ message: schemaDiagnosticMessage(ticket), path });
   }
   return 1;
 }
@@ -133,8 +133,8 @@ export const decodeUnknownJsonResult = <S extends Schema.Codec<unknown, unknown,
 };
 
 export const formatSchemaError = (cause: Cause.Cause<Schema.SchemaError>) => {
-  const issues: Array<SchemaDiagnosticIssue> = [];
-  let issueCount = 0;
+  const tickets: Array<SchemaDiagnosticTicket> = [];
+  let ticketCount = 0;
   let failureCount = 0;
   let defectCount = 0;
   let interruptionCount = 0;
@@ -144,7 +144,7 @@ export const formatSchemaError = (cause: Cause.Cause<Schema.SchemaError>) => {
       case "Fail":
         failureCount += 1;
         if (Schema.isSchemaError(reason.error)) {
-          issueCount += collectSchemaDiagnosticIssues(reason.error.issue, [], issues);
+          ticketCount += collectSchemaDiagnosticTickets(reason.error.issue, [], tickets);
         }
         break;
       case "Die":
@@ -156,16 +156,16 @@ export const formatSchemaError = (cause: Cause.Cause<Schema.SchemaError>) => {
     }
   }
 
-  if (issues.length === 0) {
+  if (tickets.length === 0) {
     return `Schema validation failed (failureCount=${failureCount}, defectCount=${defectCount}, interruptionCount=${interruptionCount}).`;
   }
 
-  const omittedIssueCount = issueCount - issues.length;
-  const formatted = issues.map(formatDiagnosticIssue).join("\n");
-  if (omittedIssueCount === 0) {
+  const omittedTicketCount = ticketCount - tickets.length;
+  const formatted = tickets.map(formatDiagnosticTicket).join("\n");
+  if (omittedTicketCount === 0) {
     return truncateDiagnostic(formatted, MAX_SCHEMA_DIAGNOSTIC_LENGTH);
   }
-  const suffix = `\n... and ${omittedIssueCount} more issue(s)`;
+  const suffix = `\n... and ${omittedTicketCount} more ticket(s)`;
   return truncateDiagnostic(formatted, MAX_SCHEMA_DIAGNOSTIC_LENGTH - suffix.length) + suffix;
 };
 

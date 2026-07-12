@@ -9,9 +9,9 @@ import {
   type InterruptThreadTurnInput,
   type LaunchThreadImplementationRunInput,
   type LaunchThreadDevReviewInput,
-  type LoadThreadPlanningPrdBundleInput,
-  type CreateThreadPlanningPrdInput,
-  type RequestThreadPlanningIssueReviewInput,
+  type LoadThreadPlanningSpecBundleInput,
+  type CreateThreadPlanningSpecInput,
+  type RequestThreadPlanningTicketReviewInput,
   type RespondToThreadApprovalInput,
   type RespondToThreadUserInputInput,
   type RevertThreadCheckpointInput,
@@ -24,14 +24,14 @@ import {
   type UnarchiveThreadInput,
   type UpdateThreadMetadataInput,
   archiveThread,
-  createThreadPlanningPrd,
+  createThreadPlanningSpec,
   createThread,
   deleteThread,
   interruptThreadTurn,
   launchThreadImplementationRun,
   launchThreadDevReview,
-  loadThreadPlanningPrdBundle,
-  requestThreadPlanningIssueReview,
+  loadThreadPlanningSpecBundle,
+  requestThreadPlanningTicketReview,
   respondToThreadApproval,
   respondToThreadUserInput,
   revertThreadCheckpoint,
@@ -53,9 +53,9 @@ export type {
   InterruptThreadTurnInput,
   LaunchThreadImplementationRunInput,
   LaunchThreadDevReviewInput,
-  LoadThreadPlanningPrdBundleInput,
-  CreateThreadPlanningPrdInput,
-  RequestThreadPlanningIssueReviewInput,
+  LoadThreadPlanningSpecBundleInput,
+  CreateThreadPlanningSpecInput,
+  RequestThreadPlanningTicketReviewInput,
   RespondToThreadApprovalInput,
   RespondToThreadUserInputInput,
   RevertThreadCheckpointInput,
@@ -142,9 +142,9 @@ export function createThreadEnvironmentAtoms<R, E>(
         }) => JSON.stringify([environmentId, input.sourceThreadId, input.reviewThreadId]),
       },
     }),
-    createPlanningPrd: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:planning-prd:create",
-      execute: (input: CreateThreadPlanningPrdInput) => createThreadPlanningPrd(input),
+    createPlanningSpec: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:planning-spec:create",
+      execute: (input: CreateThreadPlanningSpecInput) => createThreadPlanningSpec(input),
       scheduler,
       concurrency,
     }),
@@ -154,16 +154,16 @@ export function createThreadEnvironmentAtoms<R, E>(
       scheduler,
       concurrency,
     }),
-    loadPlanningPrdBundle: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:planning-prd-bundle:load",
-      execute: (input: LoadThreadPlanningPrdBundleInput) => loadThreadPlanningPrdBundle(input),
+    loadPlanningSpecBundle: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:planning-spec-bundle:load",
+      execute: (input: LoadThreadPlanningSpecBundleInput) => loadThreadPlanningSpecBundle(input),
       scheduler,
       concurrency,
     }),
-    requestPlanningIssueReview: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:planning-issue-review:request",
-      execute: (input: RequestThreadPlanningIssueReviewInput) =>
-        requestThreadPlanningIssueReview(input),
+    requestPlanningTicketReview: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:planning-ticket-review:request",
+      execute: (input: RequestThreadPlanningTicketReviewInput) =>
+        requestThreadPlanningTicketReview(input),
       scheduler,
       concurrency: {
         mode: "serial" as const,
@@ -172,8 +172,8 @@ export function createThreadEnvironmentAtoms<R, E>(
           input,
         }: {
           environmentId: string;
-          input: RequestThreadPlanningIssueReviewInput;
-        }) => JSON.stringify([environmentId, input.threadId, input.prdId]),
+          input: RequestThreadPlanningTicketReviewInput;
+        }) => JSON.stringify([environmentId, input.threadId, input.specId]),
       },
     }),
     launchImplementationRun: createEnvironmentCommand(runtime, {
@@ -188,7 +188,7 @@ export function createThreadEnvironmentAtoms<R, E>(
         }: {
           environmentId: string;
           input: LaunchThreadImplementationRunInput;
-        }) => JSON.stringify([environmentId, input.threadId, input.prdId]),
+        }) => JSON.stringify([environmentId, input.threadId, input.specId]),
       },
     }),
     retryImplementationChangeRequest: createEnvironmentCommand(runtime, {

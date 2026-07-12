@@ -18,7 +18,7 @@ import { getRouter } from "./router";
 import { syncDocumentWindowControlsOverlayClass } from "./lib/windowControlsOverlay";
 import { AppRoot } from "./AppRoot";
 
-// Electron loads the app from a file-backed shell, so hash history avoids path resolution issues.
+// Electron loads the app from a file-backed shell, so hash history avoids path resolution tickets.
 const history = isElectron ? createHashHistory() : createBrowserHistory();
 
 const router = getRouter(history);

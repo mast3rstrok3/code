@@ -339,8 +339,8 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
               operation: error.operation,
               ...(error.method === undefined ? {} : { method: error.method }),
               ...(error.requestId === undefined ? {} : { requestId: error.requestId }),
-              ...(error.issueCount === undefined ? {} : { issueCount: error.issueCount }),
-              ...(error.issueKinds === undefined ? {} : { issueKinds: error.issueKinds }),
+              ...(error.ticketCount === undefined ? {} : { ticketCount: error.ticketCount }),
+              ...(error.ticketKinds === undefined ? {} : { ticketKinds: error.ticketKinds }),
               ...(error.maximumPathDepth === undefined
                 ? {}
                 : { maximumPathDepth: error.maximumPathDepth }),

@@ -30,7 +30,7 @@ describe("composer planning workflow provider gate", () => {
     ).toBe("implementation-workflow");
   });
 
-  it("allows Planning Workflow and Product Grill for Claude providers", () => {
+  it("allows Planning Workflow and Product Workflow for Claude providers", () => {
     const provider = ProviderDriverKind.make("claudeAgent");
 
     expect(isPlanningWorkflowAvailableForProvider(provider)).toBe(true);

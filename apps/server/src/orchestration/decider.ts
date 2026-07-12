@@ -6,9 +6,9 @@ import {
   type OrchestrationImplementationRun,
   type OrchestrationCommand,
   type OrchestrationEvent,
-  type OrchestrationPlanningIssue,
-  type OrchestrationPlanningPrd,
-  type OrchestrationPlanningPrdBundle,
+  type OrchestrationPlanningTicket,
+  type OrchestrationPlanningSpec,
+  type OrchestrationPlanningSpecBundle,
   type OrchestrationReadModel,
   ThreadId,
 } from "@t3tools/contracts";
@@ -50,23 +50,23 @@ function optionalScopeMatches(
   return requested === undefined || requested === actual;
 }
 
-function findPlanningBundleByPrdId(
+function findPlanningBundleBySpecId(
   readModel: OrchestrationReadModel,
-  prdId: string,
+  specId: string,
 ):
-  | (OrchestrationPlanningPrdBundle & {
+  | (OrchestrationPlanningSpecBundle & {
       readonly sourceThread: OrchestrationReadModel["threads"][number] | null;
     })
   | null {
   for (const thread of readModel.threads) {
     const workflow = thread.planningWorkflow;
-    if (workflow?.prd?.id !== prdId) continue;
+    if (workflow?.spec?.id !== specId) continue;
     return {
-      prd: {
-        ...workflow.prd,
-        issueCount: workflow.issues.length,
+      spec: {
+        ...workflow.spec,
+        ticketCount: workflow.tickets.length,
       },
-      issues: workflow.issues,
+      tickets: workflow.tickets,
       reviewCycles: workflow.reviewCycles,
       sourceThread: thread,
     };
@@ -74,37 +74,37 @@ function findPlanningBundleByPrdId(
   return null;
 }
 
-function validatePlanningIssueGraph(
-  prdId: string,
-  issues: ReadonlyArray<OrchestrationPlanningIssue>,
+function validatePlanningTicketGraph(
+  specId: string,
+  tickets: ReadonlyArray<OrchestrationPlanningTicket>,
 ): string | null {
-  const issueIds = new Set(issues.map((issue) => issue.id));
-  for (const issue of issues) {
-    if (issue.prdId !== prdId) {
-      return `Planning Issue '${issue.id}' belongs to PRD '${issue.prdId}', expected '${prdId}'.`;
+  const ticketIds = new Set(tickets.map((ticket) => ticket.id));
+  for (const ticket of tickets) {
+    if (ticket.specId !== specId) {
+      return `Planning Ticket '${ticket.id}' belongs to Spec '${ticket.specId}', expected '${specId}'.`;
     }
-    for (const dependency of issue.dependencies) {
-      if (dependency.prdId !== prdId) {
-        return `Planning Issue '${issue.id}' has a dependency in a different PRD.`;
+    for (const dependency of ticket.dependencies) {
+      if (dependency.specId !== specId) {
+        return `Planning Ticket '${ticket.id}' has a dependency in a different Spec.`;
       }
-      if (!issueIds.has(dependency.issueId)) {
-        return `Planning Issue '${issue.id}' depends on unknown issue '${dependency.issueId}'.`;
+      if (!ticketIds.has(dependency.ticketId)) {
+        return `Planning Ticket '${ticket.id}' depends on unknown ticket '${dependency.ticketId}'.`;
       }
-      if (dependency.issueId === issue.id) {
-        return `Planning Issue '${issue.id}' cannot depend on itself.`;
+      if (dependency.ticketId === ticket.id) {
+        return `Planning Ticket '${ticket.id}' cannot depend on itself.`;
       }
     }
   }
   return null;
 }
 
-function buildPlanningPrdFromArtifact(input: {
-  readonly prdId: string;
+function buildPlanningSpecFromArtifact(input: {
+  readonly specId: string;
   readonly threadId: ThreadId;
-  readonly command: Extract<OrchestrationCommand, { type: "thread.planning-prd.apply" }>;
-}): OrchestrationPlanningPrd {
+  readonly command: Extract<OrchestrationCommand, { type: "thread.planning-spec.apply" }>;
+}): OrchestrationPlanningSpec {
   return {
-    id: input.prdId,
+    id: input.specId,
     title: input.command.title,
     summaryMarkdown: input.command.summaryMarkdown,
     tenantId: input.command.tenantId ?? null,
@@ -112,50 +112,50 @@ function buildPlanningPrdFromArtifact(input: {
     sourceThreadId: input.threadId,
     sourceMessageIds: [input.command.sourceMessageId],
     createdBy: input.command.createdBy ?? null,
-    workflowId: `workflow-${input.prdId}`,
-    issueCount: 0,
+    workflowId: `workflow-${input.specId}`,
+    ticketCount: 0,
     createdAt: input.command.createdAt,
     updatedAt: input.command.createdAt,
   };
 }
 
-function buildPlanningIssuesFromArtifact(input: {
-  readonly prdId: string;
-  readonly command: Extract<OrchestrationCommand, { type: "thread.planning-issues.apply" }>;
-  readonly generatedIssueIds: ReadonlyArray<string>;
-}): OrchestrationPlanningIssue[] | string {
+function buildPlanningTicketsFromArtifact(input: {
+  readonly specId: string;
+  readonly command: Extract<OrchestrationCommand, { type: "thread.planning-tickets.apply" }>;
+  readonly generatedTicketIds: ReadonlyArray<string>;
+}): OrchestrationPlanningTicket[] | string {
   const idByKey = new Map<string, string>();
-  for (let index = 0; index < input.command.issues.length; index += 1) {
-    const issue = input.command.issues[index];
-    const id = input.generatedIssueIds[index];
-    if (!issue || !id) continue;
-    if (idByKey.has(issue.key)) {
-      return `Planning Issue key '${issue.key}' is duplicated.`;
+  for (let index = 0; index < input.command.tickets.length; index += 1) {
+    const ticket = input.command.tickets[index];
+    const id = input.generatedTicketIds[index];
+    if (!ticket || !id) continue;
+    if (idByKey.has(ticket.key)) {
+      return `Planning Ticket key '${ticket.key}' is duplicated.`;
     }
-    idByKey.set(issue.key, id);
+    idByKey.set(ticket.key, id);
   }
 
-  return input.command.issues.map((issue, index) => {
-    const issueId = idByKey.get(issue.key) ?? input.generatedIssueIds[index] ?? issue.key;
-    const dependencies = issue.dependencyKeys.map((dependencyKey) => {
-      const dependencyIssueId = idByKey.get(dependencyKey);
-      if (dependencyIssueId === undefined) {
+  return input.command.tickets.map((ticket, index) => {
+    const ticketId = idByKey.get(ticket.key) ?? input.generatedTicketIds[index] ?? ticket.key;
+    const dependencies = ticket.dependencyKeys.map((dependencyKey) => {
+      const dependencyTicketId = idByKey.get(dependencyKey);
+      if (dependencyTicketId === undefined) {
         return {
-          prdId: input.prdId,
-          issueId: dependencyKey,
+          specId: input.specId,
+          ticketId: dependencyKey,
         };
       }
       return {
-        prdId: input.prdId,
-        issueId: dependencyIssueId,
+        specId: input.specId,
+        ticketId: dependencyTicketId,
       };
     });
     return {
-      id: issueId,
-      prdId: input.prdId,
+      id: ticketId,
+      specId: input.specId,
       ordinal: index + 1,
-      title: issue.title,
-      bodyMarkdown: issue.bodyMarkdown,
+      title: ticket.title,
+      bodyMarkdown: ticket.bodyMarkdown,
       dependencies,
       status: "open",
       createdAt: input.command.createdAt,
@@ -164,18 +164,18 @@ function buildPlanningIssuesFromArtifact(input: {
   });
 }
 
-function buildPlanningPrdStagePrompt(): string {
+function buildPlanningSpecStagePrompt(): string {
   return [
-    "Create the PRD artifact for this planning workflow.",
+    "Create the Spec artifact for this planning workflow.",
     "",
     "When ready, finish with exactly one fenced JSON block using this shape:",
     "```json",
     JSON.stringify(
       {
-        type: "planning-prd-artifact",
-        title: "Short PRD title",
+        type: "planning-spec-artifact",
+        title: "Short Spec title",
         summaryMarkdown:
-          "Full PRD markdown with goals, non-goals, workflows, data, risks, and acceptance criteria.",
+          "Full Spec markdown with goals, non-goals, workflows, data, risks, and acceptance criteria.",
       },
       null,
       2,
@@ -184,11 +184,11 @@ function buildPlanningPrdStagePrompt(): string {
   ].join("\n");
 }
 
-function buildProductPlanningPrdStagePrompt(
+function buildProductPlanningSpecStagePrompt(
   command: Extract<OrchestrationCommand, { type: "thread.planning-workflow.launch" }>,
 ): string {
   return [
-    "Run the Planning Workflow PRD authoring stage from this locked Product Grill intent.",
+    "Run the Planning Workflow Spec authoring stage from this locked Product Workflow intent.",
     "",
     "Use this locked product intent as the authoritative source. Do not ask the user questions or reopen product intent.",
     "",
@@ -201,10 +201,10 @@ function buildProductPlanningPrdStagePrompt(
     "```json",
     JSON.stringify(
       {
-        type: "planning-prd-artifact",
-        title: "Short PRD title",
+        type: "planning-spec-artifact",
+        title: "Short Spec title",
         summaryMarkdown:
-          "Full PRD markdown with goals, non-goals, workflows, data, risks, and acceptance criteria.",
+          "Full Spec markdown with goals, non-goals, workflows, data, risks, and acceptance criteria.",
       },
       null,
       2,
@@ -213,22 +213,22 @@ function buildProductPlanningPrdStagePrompt(
   ].join("\n");
 }
 
-function buildPlanningIssuesStagePrompt(prd: OrchestrationPlanningPrd): string {
+function buildPlanningTicketsStagePrompt(spec: OrchestrationPlanningSpec): string {
   return [
-    "Decompose this PRD into implementation-ready planning issues.",
+    "Decompose this Spec into implementation-ready planning tickets.",
     "",
-    `PRD id: ${prd.id}`,
+    `Spec id: ${spec.id}`,
     "",
-    "When ready, finish with exactly one fenced JSON block using this shape. Dependencies must reference issue keys from the same JSON payload.",
+    "When ready, finish with exactly one fenced JSON block using this shape. Dependencies must reference ticket keys from the same JSON payload.",
     "```json",
     JSON.stringify(
       {
-        type: "planning-issues-artifact",
-        prdId: prd.id,
-        issues: [
+        type: "planning-tickets-artifact",
+        specId: spec.id,
+        tickets: [
           {
-            key: "ISSUE-1",
-            title: "Narrow implementation issue",
+            key: "TICKET-1",
+            title: "Narrow implementation ticket",
             bodyMarkdown: "Outcome, touched surfaces, acceptance criteria, and expected tests.",
             dependencyKeys: [],
           },
@@ -239,36 +239,36 @@ function buildPlanningIssuesStagePrompt(prd: OrchestrationPlanningPrd): string {
     ),
     "```",
     "",
-    `# ${prd.title}`,
+    `# ${spec.title}`,
     "",
-    prd.summaryMarkdown,
+    spec.summaryMarkdown,
   ].join("\n");
 }
 
 function buildPlanningReviewerPrompt(input: {
-  readonly prd: OrchestrationPlanningPrd;
-  readonly issues: ReadonlyArray<OrchestrationPlanningIssue>;
+  readonly spec: OrchestrationPlanningSpec;
+  readonly tickets: ReadonlyArray<OrchestrationPlanningTicket>;
   readonly cycleNumber: number;
 }): string {
   return [
-    `Review planning issue cycle ${input.cycleNumber} for PRD "${input.prd.title}".`,
+    `Review planning ticket cycle ${input.cycleNumber} for Spec "${input.spec.title}".`,
     "",
-    "Decide whether the issue set is complete against the PRD and available context, and whether the proposed issues are correct tracer-bullet vertical slices.",
+    "Decide whether the ticket set is complete against the Spec and available context, and whether the proposed tickets are correct tracer-bullet vertical slices.",
     "",
-    "Review for missing PRD coverage, incorrect horizontal slicing, oversized or undersized slices, incorrect dependency ordering, hidden prefactoring/migration/contract work, vague acceptance criteria, and missing expected tests.",
+    "Review for missing Spec coverage, incorrect horizontal slicing, oversized or undersized slices, incorrect dependency ordering, hidden prefactoring/migration/contract work, vague acceptance criteria, and missing expected tests.",
     "",
-    "When ready, finish with exactly one fenced JSON block using this shape. Use the planning issue ids shown below.",
+    "When ready, finish with exactly one fenced JSON block using this shape. Use the planning ticket ids shown below.",
     "```json",
     JSON.stringify(
       {
         type: "planning-reviewer-verdict",
         cycleNumber: input.cycleNumber,
         passed: false,
-        failingPlanningIssueIds: ["planning-issue-id"],
+        failingPlanningTicketIds: ["planning-ticket-id"],
         dependencyFeedback: ["Dependency graph correction or empty array."],
-        perIssueFeedback: [
+        perTicketFeedback: [
           {
-            issueId: "planning-issue-id",
+            ticketId: "planning-ticket-id",
             passed: false,
             feedbackMarkdown: "Concrete correction or approval note.",
           },
@@ -279,14 +279,16 @@ function buildPlanningReviewerPrompt(input: {
     ),
     "```",
     "",
-    "## PRD",
+    "## Spec",
     "",
-    input.prd.summaryMarkdown,
+    input.spec.summaryMarkdown,
     "",
-    "## Planning Issues",
+    "## Planning Tickets",
     "",
-    input.issues
-      .map((issue) => `#${issue.ordinal} ${issue.title}\nID: ${issue.id}\n${issue.bodyMarkdown}`)
+    input.tickets
+      .map(
+        (ticket) => `#${ticket.ordinal} ${ticket.title}\nID: ${ticket.id}\n${ticket.bodyMarkdown}`,
+      )
       .join("\n\n"),
   ].join("\n");
 }
@@ -295,18 +297,18 @@ function buildImplementationRun(input: {
   readonly runId: string;
   readonly orchestratorThreadId: ThreadId;
   readonly command: Extract<OrchestrationCommand, { type: "thread.implementation-run.launch" }>;
-  readonly issues: ReadonlyArray<OrchestrationPlanningIssue>;
+  readonly tickets: ReadonlyArray<OrchestrationPlanningTicket>;
   readonly publisherUserId: string | null;
 }): OrchestrationImplementationRun {
-  const issueIds = input.issues.map((issue) => issue.id);
+  const ticketIds = input.tickets.map((ticket) => ticket.id);
   const succeeded = new Set<string>();
-  const issueStates = input.issues.map((issue) => {
-    const dependencyIssueIds = issue.dependencies.map((dependency) => dependency.issueId);
-    const ready = dependencyIssueIds.every((issueId) => succeeded.has(issueId));
+  const ticketStates = input.tickets.map((ticket) => {
+    const dependencyTicketIds = ticket.dependencies.map((dependency) => dependency.ticketId);
+    const ready = dependencyTicketIds.every((ticketId) => succeeded.has(ticketId));
     return {
-      issueId: issue.id,
+      ticketId: ticket.id,
       status: ready ? ("ready" as const) : ("blocked" as const),
-      dependencyIssueIds,
+      dependencyTicketIds,
       workerThreadId: null,
       branch: null,
       worktreePath: null,
@@ -318,16 +320,16 @@ function buildImplementationRun(input: {
     input.command.validationCommands !== undefined && input.command.validationCommands.length > 0
       ? input.command.validationCommands
       : [...DEFAULT_IMPLEMENTATION_VALIDATION_COMMANDS];
-  const plannedWorkers = input.issues.map((issue) => ({
-    issueId: issue.id,
-    dependencyIssueIds: issue.dependencies.map((dependency) => dependency.issueId),
-    branch: `${input.command.orchestratorBranch}/issue-${issue.ordinal}`,
-    worktreePath: `${input.command.orchestratorWorktreePath}-issue-${issue.ordinal}`,
+  const plannedWorkers = input.tickets.map((ticket) => ({
+    ticketId: ticket.id,
+    dependencyTicketIds: ticket.dependencies.map((dependency) => dependency.ticketId),
+    branch: `${input.command.orchestratorBranch}/ticket-${ticket.ordinal}`,
+    worktreePath: `${input.command.orchestratorWorktreePath}-ticket-${ticket.ordinal}`,
   }));
   return {
     id: input.runId,
-    prdId: input.command.prdId,
-    planningIssueIds: issueIds,
+    specId: input.command.specId,
+    planningTicketIds: ticketIds,
     orchestratorThreadId: input.orchestratorThreadId,
     status: "launch-pending",
     baseBranch: input.command.baseBranch,
@@ -335,21 +337,21 @@ function buildImplementationRun(input: {
     orchestratorBranch: input.command.orchestratorBranch,
     orchestratorWorktreePath: input.command.orchestratorWorktreePath,
     launchSummary: {
-      prdId: input.command.prdId,
-      planningIssueIds: issueIds,
+      specId: input.command.specId,
+      planningTicketIds: ticketIds,
       baseBranch: input.command.baseBranch,
       pinnedCommit: input.command.pinnedCommit,
       orchestratorBranch: input.command.orchestratorBranch,
       orchestratorWorktreePath: input.command.orchestratorWorktreePath,
-      dependencyEdges: input.issues.flatMap((issue) =>
-        issue.dependencies.map((dependency) => ({
-          blockingIssueId: dependency.issueId,
-          dependentIssueId: issue.id,
+      dependencyEdges: input.tickets.flatMap((ticket) =>
+        ticket.dependencies.map((dependency) => ({
+          blockingTicketId: dependency.ticketId,
+          dependentTicketId: ticket.id,
         })),
       ),
-      initialReadyIssueIds: issueStates
+      initialReadyTicketIds: ticketStates
         .filter((state) => state.status === "ready")
-        .map((state) => state.issueId),
+        .map((state) => state.ticketId),
       plannedWorkers,
       validationCommands,
       finalDevReview: {
@@ -362,9 +364,9 @@ function buildImplementationRun(input: {
       },
       createdAt: input.command.createdAt,
     },
-    issueStates,
+    ticketStates,
     workerResults: [],
-    terminalLineageIssueIds: [],
+    terminalLineageTicketIds: [],
     finalValidation: null,
     appDevStack: {
       status: "not-requested",
@@ -386,6 +388,7 @@ function buildImplementationRun(input: {
     devReviewIds: [],
     devReviews: [],
     qaAttemptCount: 0,
+    codeReviewAttemptCount: 0,
     handoffTarget: "orchestrator-worktree",
     baseBranchMergePolicy: "never-auto-merge",
     changeRequest: null,
@@ -771,14 +774,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
-    case "thread.planning-prd.create":
+    case "thread.planning-spec.create":
       return yield* decideOrchestrationCommand({
         readModel,
         command: {
           type: "thread.planning-stage.start",
           commandId: command.commandId,
           threadId: command.threadId,
-          stage: "prd",
+          stage: "spec",
           createdAt: command.createdAt,
         },
       });
@@ -795,7 +798,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       ) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Thread '${command.threadId}' is not a Product Grill root thread.`,
+          detail: `Thread '${command.threadId}' is not a Product Workflow root thread.`,
         });
       }
 
@@ -803,7 +806,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const planningThreadUuid = yield* crypto.randomUUIDv4;
       const messageUuid = yield* crypto.randomUUIDv4;
       const planningThreadId = ThreadId.make(`thread-planning-orchestrator-${planningThreadUuid}`);
-      const messageId = MessageId.make(`message-product-prd-stage-${messageUuid}`);
+      const messageId = MessageId.make(`message-product-spec-stage-${messageUuid}`);
       const planningThreadCreatedEvent: PlannedOrchestrationEvent = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -839,7 +842,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "thread.planning-stage-started",
         payload: {
           threadId: planningThreadId,
-          stage: "prd-authoring",
+          stage: "spec-authoring",
           startedAt: command.createdAt,
         },
       };
@@ -856,7 +859,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: planningThreadId,
           messageId,
           role: "user",
-          text: buildProductPlanningPrdStagePrompt(command),
+          text: buildProductPlanningSpecStagePrompt(command),
           turnId: null,
           streaming: false,
           createdAt: command.createdAt,
@@ -878,7 +881,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           modelSelection: productRootThread.modelSelection,
           runtimeMode: productRootThread.runtimeMode,
           interactionMode: "planning-workflow",
-          workflowPromptId: WORKFLOW_PROMPT_IDS.planningPrdCodex,
+          workflowPromptId: WORKFLOW_PROMPT_IDS.planningSpecCodex,
           createdAt: command.createdAt,
         },
       };
@@ -897,16 +900,16 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Thread '${command.threadId}' is not in Planning Workflow mode.`,
         });
       }
-      if (thread.planningWorkflow?.prd !== null && thread.planningWorkflow?.prd !== undefined) {
+      if (thread.planningWorkflow?.spec !== null && thread.planningWorkflow?.spec !== undefined) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Thread '${command.threadId}' already has a PRD for this Planning Workflow.`,
+          detail: `Thread '${command.threadId}' already has a Spec for this Planning Workflow.`,
         });
       }
 
       const crypto = yield* Crypto.Crypto;
       const messageUuid = yield* crypto.randomUUIDv4;
-      const messageId = MessageId.make(`message-planning-prd-stage-${messageUuid}`);
+      const messageId = MessageId.make(`message-planning-spec-stage-${messageUuid}`);
       const stageStartedEvent: PlannedOrchestrationEvent = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -917,7 +920,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "thread.planning-stage-started",
         payload: {
           threadId: thread.id,
-          stage: "prd-authoring",
+          stage: "spec-authoring",
           startedAt: command.createdAt,
         },
       };
@@ -934,7 +937,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: thread.id,
           messageId,
           role: "user",
-          text: buildPlanningPrdStagePrompt(),
+          text: buildPlanningSpecStagePrompt(),
           turnId: null,
           streaming: false,
           createdAt: command.createdAt,
@@ -956,7 +959,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           modelSelection: thread.modelSelection,
           runtimeMode: thread.runtimeMode,
           interactionMode: thread.interactionMode,
-          workflowPromptId: WORKFLOW_PROMPT_IDS.planningPrdCodex,
+          workflowPromptId: WORKFLOW_PROMPT_IDS.planningSpecCodex,
           createdAt: command.createdAt,
         },
       };
@@ -994,7 +997,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
-    case "thread.planning-prd.apply": {
+    case "thread.planning-spec.apply": {
       const thread = yield* requireThread({
         readModel,
         command,
@@ -1006,119 +1009,119 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Thread '${command.threadId}' is not in Planning Workflow mode.`,
         });
       }
-      if (thread.planningWorkflow?.prd !== null && thread.planningWorkflow?.prd !== undefined) {
+      if (thread.planningWorkflow?.spec !== null && thread.planningWorkflow?.spec !== undefined) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Thread '${command.threadId}' already has a PRD for this Planning Workflow.`,
+          detail: `Thread '${command.threadId}' already has a Spec for this Planning Workflow.`,
         });
       }
       const crypto = yield* Crypto.Crypto;
-      const prdUuid = yield* crypto.randomUUIDv4;
-      const issueMessageUuid = yield* crypto.randomUUIDv4;
-      const prd = buildPlanningPrdFromArtifact({
-        prdId: `prd-${prdUuid}`,
+      const specUuid = yield* crypto.randomUUIDv4;
+      const ticketMessageUuid = yield* crypto.randomUUIDv4;
+      const spec = buildPlanningSpecFromArtifact({
+        specId: `spec-${specUuid}`,
         threadId: thread.id,
         command,
       });
-      const issueMessageId = MessageId.make(`message-planning-issues-stage-${issueMessageUuid}`);
-      const prdCreatedEvent: PlannedOrchestrationEvent = {
+      const ticketMessageId = MessageId.make(`message-planning-tickets-stage-${ticketMessageUuid}`);
+      const specCreatedEvent: PlannedOrchestrationEvent = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
           aggregateId: thread.id,
           occurredAt: command.createdAt,
           commandId: command.commandId,
         })),
-        type: "thread.planning-prd-created",
+        type: "thread.planning-spec-created",
         payload: {
           threadId: thread.id,
-          prd,
-          stage: "issues-authoring",
+          spec,
+          stage: "tickets-authoring",
         },
       };
-      const issuesPromptEvent: PlannedOrchestrationEvent = {
+      const ticketsPromptEvent: PlannedOrchestrationEvent = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
           aggregateId: thread.id,
           occurredAt: command.createdAt,
           commandId: command.commandId,
         })),
-        causationEventId: prdCreatedEvent.eventId,
+        causationEventId: specCreatedEvent.eventId,
         type: "thread.message-sent",
         payload: {
           threadId: thread.id,
-          messageId: issueMessageId,
+          messageId: ticketMessageId,
           role: "user",
-          text: buildPlanningIssuesStagePrompt(prd),
+          text: buildPlanningTicketsStagePrompt(spec),
           turnId: null,
           streaming: false,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
       };
-      const issuesTurnStartRequestedEvent: PlannedOrchestrationEvent = {
+      const ticketsTurnStartRequestedEvent: PlannedOrchestrationEvent = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
           aggregateId: thread.id,
           occurredAt: command.createdAt,
           commandId: command.commandId,
         })),
-        causationEventId: issuesPromptEvent.eventId,
+        causationEventId: ticketsPromptEvent.eventId,
         type: "thread.turn-start-requested",
         payload: {
           threadId: thread.id,
-          messageId: issueMessageId,
+          messageId: ticketMessageId,
           modelSelection: thread.modelSelection,
           runtimeMode: thread.runtimeMode,
           interactionMode: thread.interactionMode,
-          workflowPromptId: WORKFLOW_PROMPT_IDS.planningIssuesCodex,
+          workflowPromptId: WORKFLOW_PROMPT_IDS.planningTicketsCodex,
           createdAt: command.createdAt,
         },
       };
-      return [prdCreatedEvent, issuesPromptEvent, issuesTurnStartRequestedEvent];
+      return [specCreatedEvent, ticketsPromptEvent, ticketsTurnStartRequestedEvent];
     }
 
-    case "thread.planning-issues.apply": {
+    case "thread.planning-tickets.apply": {
       const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
       const workflow = thread.planningWorkflow;
-      const prd = workflow?.prd ?? null;
+      const spec = workflow?.spec ?? null;
       if (thread.interactionMode !== "planning-workflow") {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: `Thread '${command.threadId}' is not in Planning Workflow mode.`,
         });
       }
-      if (workflow === null || workflow === undefined || prd === null) {
+      if (workflow === null || workflow === undefined || spec === null) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Planning Thread '${thread.id}' does not have a PRD for Planning Issues.`,
+          detail: `Planning Thread '${thread.id}' does not have a Spec for Planning Tickets.`,
         });
       }
-      if (prd.id !== command.prdId) {
+      if (spec.id !== command.specId) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Planning Issues artifact targets PRD '${command.prdId}', expected '${prd.id}'.`,
+          detail: `Planning Tickets artifact targets Spec '${command.specId}', expected '${spec.id}'.`,
         });
       }
       const crypto = yield* Crypto.Crypto;
-      const generatedIssueIds = yield* Effect.forEach(command.issues, () =>
-        crypto.randomUUIDv4.pipe(Effect.map((uuid) => `planning-issue-${uuid}`)),
+      const generatedTicketIds = yield* Effect.forEach(command.tickets, () =>
+        crypto.randomUUIDv4.pipe(Effect.map((uuid) => `planning-ticket-${uuid}`)),
       );
-      const issues = buildPlanningIssuesFromArtifact({
-        prdId: prd.id,
+      const tickets = buildPlanningTicketsFromArtifact({
+        specId: spec.id,
         command,
-        generatedIssueIds,
+        generatedTicketIds,
       });
-      if (typeof issues === "string") {
+      if (typeof tickets === "string") {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: issues,
+          detail: tickets,
         });
       }
-      const validationError = validatePlanningIssueGraph(prd.id, issues);
+      const validationError = validatePlanningTicketGraph(spec.id, tickets);
       if (validationError !== null) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -1133,55 +1136,55 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           commandId: command.commandId,
         })),
         type:
-          workflow.stage === "issue-revision"
-            ? "thread.planning-issues-revised"
-            : "thread.planning-issues-created",
+          workflow.stage === "ticket-revision"
+            ? "thread.planning-tickets-revised"
+            : "thread.planning-tickets-created",
         payload:
-          workflow.stage === "issue-revision"
+          workflow.stage === "ticket-revision"
             ? {
                 threadId: thread.id,
-                prdId: prd.id,
-                issues,
-                stage: "issue-review",
+                specId: spec.id,
+                tickets,
+                stage: "ticket-review",
                 revisedAt: command.createdAt,
               }
             : {
                 threadId: thread.id,
-                prdId: prd.id,
-                issues,
-                stage: "issue-review",
+                specId: spec.id,
+                tickets,
+                stage: "ticket-review",
               },
       } satisfies PlannedOrchestrationEvent;
     }
 
-    case "thread.planning-issue-review.request": {
+    case "thread.planning-ticket-review.request": {
       const planningThread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
       const workflow = planningThread.planningWorkflow;
-      const prd = workflow?.prd ?? null;
-      const issues = workflow?.issues ?? [];
-      if (prd === null || workflow === null || workflow === undefined) {
+      const spec = workflow?.spec ?? null;
+      const tickets = workflow?.tickets ?? [];
+      if (spec === null || workflow === null || workflow === undefined) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Planning Thread '${planningThread.id}' does not have a PRD to review.`,
+          detail: `Planning Thread '${planningThread.id}' does not have a Spec to review.`,
         });
       }
-      if (prd.id !== command.prdId) {
+      if (spec.id !== command.specId) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Planning issue review requested PRD '${command.prdId}', expected '${prd.id}'.`,
+          detail: `Planning ticket review requested Spec '${command.specId}', expected '${spec.id}'.`,
         });
       }
-      if (issues.length === 0) {
+      if (tickets.length === 0) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Planning PRD '${prd.id}' has no Planning Issues to review.`,
+          detail: `Planning Spec '${spec.id}' has no Planning Tickets to review.`,
         });
       }
-      const validationError = validatePlanningIssueGraph(prd.id, issues);
+      const validationError = validatePlanningTicketGraph(spec.id, tickets);
       if (validationError !== null) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -1201,14 +1204,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           occurredAt: command.createdAt,
           commandId: command.commandId,
         })),
-        type: "thread.planning-issue-review-requested",
+        type: "thread.planning-ticket-review-requested",
         payload: {
           threadId: planningThread.id,
-          prdId: prd.id,
+          specId: spec.id,
           cycleNumber,
           reviewerThreadId,
           reviewerMessageId,
-          stage: "issue-review",
+          stage: "ticket-review",
           requestedAt: command.createdAt,
         },
       };
@@ -1227,7 +1230,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ownerUserId: planningThread.ownerUserId,
           parentThreadId: planningThread.id,
           workflowRole: "planning-reviewer",
-          title: `Review ${prd.title}`,
+          title: `Review ${spec.title}`,
           modelSelection: planningThread.modelSelection,
           runtimeMode: planningThread.runtimeMode,
           interactionMode: planningThread.interactionMode,
@@ -1250,7 +1253,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: reviewerThreadId,
           messageId: reviewerMessageId,
           role: "user",
-          text: buildPlanningReviewerPrompt({ prd, issues, cycleNumber }),
+          text: buildPlanningReviewerPrompt({ spec, tickets, cycleNumber }),
           turnId: null,
           streaming: false,
           createdAt: command.createdAt,
@@ -1272,7 +1275,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           modelSelection: planningThread.modelSelection,
           runtimeMode: planningThread.runtimeMode,
           interactionMode: planningThread.interactionMode,
-          workflowPromptId: WORKFLOW_PROMPT_IDS.planningIssueReviewerCodex,
+          workflowPromptId: WORKFLOW_PROMPT_IDS.planningTicketReviewerCodex,
           createdAt: command.createdAt,
         },
       };
@@ -1291,11 +1294,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadId: command.threadId,
       });
       const workflow = planningThread.planningWorkflow;
-      const prd = workflow?.prd ?? null;
-      if (workflow === null || workflow === undefined || prd === null) {
+      const spec = workflow?.spec ?? null;
+      if (workflow === null || workflow === undefined || spec === null) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Planning Thread '${planningThread.id}' does not have a PRD to review.`,
+          detail: `Planning Thread '${planningThread.id}' does not have a Spec to review.`,
         });
       }
       const passed =
@@ -1309,29 +1312,29 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           occurredAt: command.createdAt,
           commandId: command.commandId,
         })),
-        type: "thread.planning-issues-revised",
+        type: "thread.planning-tickets-revised",
         payload: {
           threadId: planningThread.id,
-          prdId: prd.id,
+          specId: spec.id,
           reviewCycle: {
             cycleNumber,
             status: passed ? "passed" : "failed",
             reviewerThreadId: command.reviewerThreadId,
             reviewerMessageId: command.reviewerMessageId,
             verdictMarkdown: command.verdictMarkdown,
-            failingPlanningIssueIds: command.failingPlanningIssueIds ?? [],
+            failingPlanningTicketIds: command.failingPlanningTicketIds ?? [],
             dependencyFeedback: command.dependencyFeedback ?? [],
-            perIssueFeedback: command.perIssueFeedback ?? [],
+            perTicketFeedback: command.perTicketFeedback ?? [],
             createdAt: command.createdAt,
           },
-          issues: workflow.issues,
-          stage: passed ? "completed" : "issue-revision",
+          tickets: workflow.tickets,
+          stage: passed ? "completed" : "ticket-revision",
           revisedAt: command.createdAt,
         },
       };
     }
 
-    case "thread.planning-prd-bundle.load": {
+    case "thread.planning-spec-bundle.load": {
       const targetThread = yield* requireThread({
         readModel,
         command,
@@ -1341,33 +1344,33 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command.bundle === undefined
           ? null
           : ({
-              prd: {
-                ...command.bundle.prd,
-                issueCount: command.bundle.issues.length,
+              spec: {
+                ...command.bundle.spec,
+                ticketCount: command.bundle.tickets.length,
               },
-              issues: command.bundle.issues,
+              tickets: command.bundle.tickets,
               reviewCycles: command.bundle.reviewCycles,
               sourceThread: null,
-            } satisfies OrchestrationPlanningPrdBundle & {
+            } satisfies OrchestrationPlanningSpecBundle & {
               readonly sourceThread: OrchestrationReadModel["threads"][number] | null;
             });
-      const bundle = embeddedBundle ?? findPlanningBundleByPrdId(readModel, command.prdId);
+      const bundle = embeddedBundle ?? findPlanningBundleBySpecId(readModel, command.specId);
       if (bundle === null) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Planning PRD '${command.prdId}' is not visible to this environment.`,
+          detail: `Planning Spec '${command.specId}' is not visible to this environment.`,
         });
       }
-      if (!optionalScopeMatches(command.tenantId, bundle.prd.tenantId)) {
+      if (!optionalScopeMatches(command.tenantId, bundle.spec.tenantId)) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Planning PRD '${command.prdId}' is not in tenant '${command.tenantId}'.`,
+          detail: `Planning Spec '${command.specId}' is not in tenant '${command.tenantId}'.`,
         });
       }
-      if (!optionalScopeMatches(command.teamId, bundle.prd.teamId)) {
+      if (!optionalScopeMatches(command.teamId, bundle.spec.teamId)) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Planning PRD '${command.prdId}' is not in team '${command.teamId}'.`,
+          detail: `Planning Spec '${command.specId}' is not in team '${command.teamId}'.`,
         });
       }
       if (
@@ -1376,7 +1379,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       ) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Planning PRD '${command.prdId}' belongs to a different project.`,
+          detail: `Planning Spec '${command.specId}' belongs to a different project.`,
         });
       }
       return {
@@ -1386,14 +1389,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           occurredAt: command.createdAt,
           commandId: command.commandId,
         })),
-        type: "thread.planning-prd-bundle-loaded",
+        type: "thread.planning-spec-bundle-loaded",
         payload: {
           threadId: command.threadId,
-          prdId: bundle.prd.id,
-          sourceThreadId: bundle.prd.sourceThreadId,
+          specId: bundle.spec.id,
+          sourceThreadId: bundle.spec.sourceThreadId,
           bundle: {
-            prd: bundle.prd,
-            issues: [...bundle.issues],
+            spec: bundle.spec,
+            tickets: [...bundle.tickets],
             reviewCycles: [...bundle.reviewCycles],
           },
           loadedAt: command.createdAt,
@@ -1407,17 +1410,17 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
-      const bundle = findPlanningBundleByPrdId(readModel, command.prdId);
+      const bundle = findPlanningBundleBySpecId(readModel, command.specId);
       if (bundle === null) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Planning PRD '${command.prdId}' is not visible to this environment.`,
+          detail: `Planning Spec '${command.specId}' is not visible to this environment.`,
         });
       }
-      if (bundle.issues.length === 0) {
+      if (bundle.tickets.length === 0) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Planning PRD '${command.prdId}' has no Planning Issues to implement.`,
+          detail: `Planning Spec '${command.specId}' has no Planning Tickets to implement.`,
         });
       }
       if (
@@ -1426,19 +1429,19 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       ) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Planning PRD '${command.prdId}' belongs to a different project.`,
+          detail: `Planning Spec '${command.specId}' belongs to a different project.`,
         });
       }
       const duplicateRun = readModel.implementationRuns.find(
         (run) =>
-          run.prdId === command.prdId &&
+          run.specId === command.specId &&
           run.orchestratorBranch === command.orchestratorBranch &&
           run.status !== "canceled",
       );
       if (duplicateRun !== undefined) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Implementation Run '${duplicateRun.id}' already uses orchestrator branch '${command.orchestratorBranch}' for PRD '${command.prdId}'.`,
+          detail: `Implementation Run '${duplicateRun.id}' already uses orchestrator branch '${command.orchestratorBranch}' for Spec '${command.specId}'.`,
         });
       }
       const crypto = yield* Crypto.Crypto;
@@ -1451,7 +1454,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         runId: `implementation-run-${runUuid}`,
         orchestratorThreadId,
         command,
-        issues: bundle.issues,
+        tickets: bundle.tickets,
         publisherUserId: launcherThread.ownerUserId,
       });
       const orchestratorThreadCreatedEvent: PlannedOrchestrationEvent = {
@@ -1468,7 +1471,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ownerUserId: launcherThread.ownerUserId,
           parentThreadId: launcherThread.id,
           workflowRole: "implementation-orchestrator",
-          title: `Implement ${bundle.prd.title}`,
+          title: `Implement ${bundle.spec.title}`,
           modelSelection: launcherThread.modelSelection,
           runtimeMode: launcherThread.runtimeMode,
           interactionMode: "implementation-workflow",
@@ -1486,14 +1489,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           commandId: command.commandId,
         })),
         causationEventId: orchestratorThreadCreatedEvent.eventId,
-        type: "thread.planning-prd-bundle-loaded",
+        type: "thread.planning-spec-bundle-loaded",
         payload: {
           threadId: orchestratorThreadId,
-          prdId: bundle.prd.id,
-          sourceThreadId: bundle.prd.sourceThreadId,
+          specId: bundle.spec.id,
+          sourceThreadId: bundle.spec.sourceThreadId,
           bundle: {
-            prd: bundle.prd,
-            issues: [...bundle.issues],
+            spec: bundle.spec,
+            tickets: [...bundle.tickets],
             reviewCycles: [...bundle.reviewCycles],
           },
           loadedAt: command.createdAt,

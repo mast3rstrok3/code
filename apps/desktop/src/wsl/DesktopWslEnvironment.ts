@@ -345,29 +345,29 @@ export const formatMissingToolsReason = (
     return null;
   }
 
-  const issues: string[] = [];
+  const tickets: string[] = [];
   const remediations: string[] = [];
 
   if (nodeMissing) {
-    issues.push("node");
+    tickets.push("node");
     remediations.push(
       `Node.js${requiredRange ? ` satisfying \`${requiredRange}\`` : " 18+"} (e.g. via nvm)`,
     );
   } else if (nodeOutOfRange) {
-    issues.push(`node ${report.nodeVersion} (requires ${requiredRange})`);
+    tickets.push(`node ${report.nodeVersion} (requires ${requiredRange})`);
     remediations.push(
       `a newer Node.js satisfying \`${requiredRange}\` (e.g. \`nvm install 24 && nvm alias default 24\`)`,
     );
   }
 
   if (buildToolsMissing.length > 0) {
-    issues.push(...buildToolsMissing);
+    tickets.push(...buildToolsMissing);
     remediations.push(
       "the build toolchain (e.g. `sudo apt install -y build-essential python3` on Ubuntu/Debian)",
     );
   }
 
-  return `WSL distro is missing required tools: ${issues.join(", ")}. Install ${remediations.join(" and ")}, then retry.`;
+  return `WSL distro is missing required tools: ${tickets.join(", ")}. Install ${remediations.join(" and ")}, then retry.`;
 };
 
 const ensureNodePtyImpl = (

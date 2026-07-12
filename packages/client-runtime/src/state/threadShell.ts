@@ -1,7 +1,7 @@
 import type {
   EnvironmentId,
   OrchestrationImplementationRun,
-  OrchestrationPlanningPrdId,
+  OrchestrationPlanningSpecId,
   OrchestrationShellSnapshot,
   OrchestrationThreadShell,
   ProjectId,
@@ -52,24 +52,24 @@ export function createEnvironmentThreadShellAtoms(input: {
     ).pipe(Atom.withLabel(`environment-implementation-runs:${environmentId}`)),
   );
 
-  const implementationRunsByPrdAtomFamily = Atom.family((key: string) => {
+  const implementationRunsBySpecAtomFamily = Atom.family((key: string) => {
     const separator = key.indexOf("\u0000");
     if (separator < 0) {
-      throw new Error(`Invalid implementation runs by PRD atom key: ${JSON.stringify(key)}.`);
+      throw new Error(`Invalid implementation runs by Spec atom key: ${JSON.stringify(key)}.`);
     }
     const environmentId = key.slice(0, separator) as EnvironmentId;
-    const prdId = key.slice(separator + 1) as OrchestrationPlanningPrdId;
+    const specId = key.slice(separator + 1) as OrchestrationPlanningSpecId;
     let previous: ReadonlyArray<OrchestrationImplementationRun> = [];
     return Atom.make((get) => {
       const next = get(environmentImplementationRunsAtom(environmentId)).filter(
-        (run) => run.prdId === prdId,
+        (run) => run.specId === specId,
       );
       if (arrayElementsEqual(previous, next)) {
         return previous;
       }
       previous = next;
       return previous;
-    }).pipe(Atom.withLabel(`environment-implementation-runs-by-prd:${key}`));
+    }).pipe(Atom.withLabel(`environment-implementation-runs-by-spec:${key}`));
   });
 
   const environmentThreadIndexAtom = Atom.family((environmentId: EnvironmentId) =>
@@ -205,10 +205,10 @@ export function createEnvironmentThreadShellAtoms(input: {
   return {
     environmentThreadsAtom,
     environmentImplementationRunsAtom,
-    implementationRunsByPrdAtom: (input: {
+    implementationRunsBySpecAtom: (input: {
       readonly environmentId: EnvironmentId;
-      readonly prdId: OrchestrationPlanningPrdId;
-    }) => implementationRunsByPrdAtomFamily(`${input.environmentId}\u0000${input.prdId}`),
+      readonly specId: OrchestrationPlanningSpecId;
+    }) => implementationRunsBySpecAtomFamily(`${input.environmentId}\u0000${input.specId}`),
     environmentThreadIndexAtom,
     environmentThreadRefsAtom,
     environmentThreadRefsByProjectAtom,

@@ -43,3 +43,17 @@ Set `T3CODE_DEV_INSTANCE` to any value to deterministically shift all dev ports 
 - Example: `T3CODE_DEV_INSTANCE=branch-a bun run dev:desktop`
 
 If you want full control instead of hashing, set `T3CODE_PORT_OFFSET` to a numeric offset.
+
+## Resetting the workflow database
+
+The Product Workflow/Spec/Ticket terminology change intentionally does not migrate older workflow databases. Startup fails with reset guidance when legacy workflow tables are detected.
+
+Stop T3 Code before resetting it. In the configured state directory, delete all three SQLite files when present:
+
+- `state.sqlite`
+- `state.sqlite-wal`
+- `state.sqlite-shm`
+
+The default development state directory is `~/.t3/dev/`. The default production and desktop state directory is `<T3CODE_HOME>/userdata/`.
+
+This reset permanently deletes projects, conversations, workflow artifacts, and all other database-backed state. It does not automatically delete settings, credentials, logs, or attachments stored outside the SQLite files.

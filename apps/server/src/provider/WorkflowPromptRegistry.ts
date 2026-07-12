@@ -7,27 +7,21 @@ import { WORKFLOW_SUBAGENT_INSTRUCTIONS_PROMPT } from "./WorkflowSubagentInstruc
 export const WORKFLOW_PROMPT_IDS = {
   workflowAgentCommunications: "workflow.agent-communications",
   planningGrillStageCodex: "planning.grill-stage.codex",
-  planningPrdCodex: "planning.prd.codex",
-  planningIssuesCodex: "planning.issues.codex",
-  planningIssueReviewerCodex: "planning.issue-reviewer.codex",
+  planningSpecCodex: "planning.spec.codex",
+  planningTicketsCodex: "planning.tickets.codex",
+  planningTicketReviewerCodex: "planning.ticket-reviewer.codex",
   implementationOrchestratorPlanningCodex: "implementation.orchestrator-planning.codex",
   implementationTddCodex: "implementation.tdd.codex",
   implementationMergeGateCodex: "implementation.merge-gate.codex",
   implementationBrowserDevReviewCodex: "implementation.browser-dev-review.codex",
   implementationFixCodex: "implementation.fix.codex",
-  productGrillStageCodex: "product.grill-stage.codex",
+  implementationCodeReviewCodex: "implementation.code-review.codex",
+  productWorkflowCodex: "product.workflow.codex",
 } as const;
-
-const LEGACY_WORKFLOW_PROMPT_ID_ALIASES = {
-  "implementation.qna-dev-review.codex": WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
-  "yolo.grill-stage.codex": WORKFLOW_PROMPT_IDS.productGrillStageCodex,
-} as const satisfies Record<string, string>;
 
 const WORKFLOW_AGENT_COMMUNICATIONS_PROMPT = WORKFLOW_SUBAGENT_INSTRUCTIONS_PROMPT;
 
 const CONTEXT_FORMAT_ASSOCIATED_DOC_CONTENT = `# CONTEXT.md Format
-
-CONTEXT.md is a glossary for domain language only. It must not contain implementation details, planning notes, TODOs, API specs, or architecture decisions.
 
 ## Structure
 
@@ -75,65 +69,71 @@ _Avoid_: Client, buyer, account
 
 ## Relationships
 
-- **Ordering -> Fulfillment**: Ordering emits \`OrderPlaced\` events; Fulfillment consumes them to start picking
-- **Fulfillment -> Billing**: Fulfillment emits \`ShipmentDispatched\` events; Billing consumes them to generate invoices
-- **Ordering <-> Billing**: Shared types for \`CustomerId\` and \`Money\`
+- **Ordering → Fulfillment**: Ordering emits \`OrderPlaced\` events; Fulfillment consumes them to start picking
+- **Fulfillment → Billing**: Fulfillment emits \`ShipmentDispatched\` events; Billing consumes them to generate invoices
+- **Ordering ↔ Billing**: Shared types for \`CustomerId\` and \`Money\`
 \`\`\`
 
 The skill infers which structure applies:
 
-- If \`CONTEXT-MAP.md\` exists, read it to find contexts.
-- If only a root \`CONTEXT.md\` exists, use the single context.
+- If \`CONTEXT-MAP.md\` exists, read it to find contexts
+- If only a root \`CONTEXT.md\` exists, use the single context
 - If neither exists, create a root \`CONTEXT.md\` lazily when the first term is resolved.
-- When multiple contexts exist, infer which one the current topic relates to. If unclear, ask.`;
+
+When multiple contexts exist, infer which one the current topic relates to. If unclear, ask.`;
 
 const PLANNING_GRILL_PROMPT = `<collaboration_mode># Planning Workflow: Grill With Domain Modeling
 
-Run a relentless planning interview that also sharpens the project's domain model.
+Interview me relentlessly about every aspect of this plan until we reach a shared understanding. Walk down each branch of the design tree, resolving dependencies between decisions one-by-one. For each question, provide your recommended answer.
 
-Your job is to stress-test the user's plan or design until there is a shared, decision-complete understanding. Walk down each branch of the design tree, resolving dependencies between decisions one by one. Ask exactly one question at a time and wait for feedback before continuing. For every question, include your recommended answer and the reason for that recommendation.
+Ask the questions one at a time, waiting for feedback on each question before continuing. Asking multiple questions at once is bewildering.
 
-If a question can be answered by exploring the repository, explore the repository instead of asking. Use the codebase, existing docs, schemas, tests, and configuration as sources of truth. When the user's description conflicts with the code, surface the contradiction directly and ask which should become authoritative.
+If a *fact* can be found by exploring the codebase, look it up rather than asking me. The *decisions*, though, are mine — put each one to me and wait for my answer.
 
-Actively maintain the domain model while grilling:
+Do not enact the plan until I confirm we have reached a shared understanding.
 
-1. Resolve the context structure before relying on domain terms. If a root CONTEXT-MAP.md exists, read it to find the right bounded context. If only a root CONTEXT.md exists, use it as the single context. If neither exists, create a root CONTEXT.md lazily when the first term is resolved.
-2. Challenge glossary conflicts immediately. If the glossary defines a term one way and the user appears to mean another, ask which meaning should win.
-3. Sharpen fuzzy or overloaded language by proposing precise canonical terms and listing rejected synonyms under _Avoid_.
-4. Stress-test domain relationships with concrete scenarios and edge cases.
-5. When a term is resolved, capture it in the relevant CONTEXT.md immediately with a tight definition. Include only project-specific domain concepts, not general programming concepts.
-6. Offer an ADR only when the decision is hard to reverse, surprising without context, and the result of a real trade-off. If any criterion is missing, do not create an ADR.
+Actively build and sharpen the project's domain model as you design. Actively maintain the domain model while grilling:
 
-Create domain-modeling files lazily. If no CONTEXT.md or CONTEXT-MAP.md exists, create a root CONTEXT.md only when the first term is resolved. When multiple contexts exist, infer the target context from the topic; if unclear, ask. If no docs/adr/ directory exists, create it only when the first ADR is accepted.
+1. **Resolve the context structure** before relying on domain terms. If \`CONTEXT-MAP.md\` exists, read it to find contexts. If only a root \`CONTEXT.md\` exists, use the single context. If neither exists, create a root \`CONTEXT.md\` lazily when the first term is resolved. When multiple contexts exist, infer which one the current topic relates to. If unclear, ask.
+2. **Challenge against the glossary.** When the user uses a term that conflicts with the existing language in \`CONTEXT.md\`, call it out immediately. "Your glossary defines 'cancellation' as X, but you seem to mean Y — which is it?"
+3. **Sharpen fuzzy language.** When the user uses vague or overloaded terms, propose a precise canonical term. "You're saying 'account' — do you mean the Customer or the User? Those are different things."
+4. **Discuss concrete scenarios.** When domain relationships are being discussed, stress-test them with specific scenarios. Invent scenarios that probe edge cases and force the user to be precise about the boundaries between concepts.
+5. **Cross-reference with code.** When the user states how something works, check whether the code agrees. If you find a contradiction, surface it: "Your code cancels entire Orders, but you just said partial cancellation is possible — which is right?"
+6. **Update CONTEXT.md inline.** When a term is resolved, update \`CONTEXT.md\` right there. Don't batch these up — capture them as they happen. Use the format in CONTEXT-FORMAT.md. \`CONTEXT.md\` should be totally devoid of implementation details. Do not treat \`CONTEXT.md\` as a spec, a scratch pad, or a repository for implementation decisions. It is a glossary and nothing else.
+7. **Offer ADRs sparingly.** Only offer to create an ADR when all three are true: 1. **Hard to reverse** — the cost of changing your mind later is meaningful 2. **Surprising without context** — a future reader will wonder "why did they do it this way?" 3. **The result of a real trade-off** — there were genuine alternatives and you picked one for specific reasons. If any of the three is missing, skip the ADR. Use the format in ADR-FORMAT.md.
+
+Create files lazily — only when you have something to write. If no \`CONTEXT.md\` exists, create one when the first term is resolved. If no \`docs/adr/\` exists, create it when the first ADR is needed. If a \`CONTEXT-MAP.md\` exists at the root, the repo has multiple contexts. The map points to where each one lives.
+
+## Workflow stage constraints
 
 Planning artifact writes are allowed for this workflow only when they are glossary or ADR updates produced by the grilling session. Do not make implementation changes during the grill.
 
-Finish the grill only when the goal, audience, success criteria, scope, non-goals, terminology, key decisions, risks, edge cases, failure modes, and acceptance criteria are clear enough that the PRD stage can proceed without reopening product intent.
+Finish the grill only when the goal, audience, success criteria, scope, non-goals, terminology, key decisions, risks, edge cases, failure modes, and acceptance criteria are clear enough that the Spec stage can proceed without reopening product intent.
 </collaboration_mode>`;
 
-const PLANNING_PRD_PROMPT = `<collaboration_mode># Planning Workflow: PRD
+const PLANNING_SPEC_PROMPT = `<collaboration_mode># Planning Workflow: Spec
 
 ---
-name: to-prd
-description: Turn the current conversation into a PRD and publish it to the project issue tracker - no interview, just synthesis of what you've already discussed.
+name: to-spec
+description: Turn the current conversation into a spec and publish it to the project issue tracker — no interview, just synthesis of what you've already discussed.
 disable-model-invocation: true
 ---
 
-This skill takes the current conversation context and codebase understanding and produces a PRD. Do NOT interview the user - just synthesize what you already know.
+This skill takes the current conversation context and codebase understanding and produces a spec (you may know this document as a PRD). Do NOT interview the user — just synthesize what you already know.
 
-The issue tracker and triage label vocabulary should have been provided to you - run \`/setup-matt-pocock-skills\` if not.
+The issue tracker and triage label vocabulary should have been provided to you — run \`/setup-matt-pocock-skills\` if not.
 
 ## Process
 
-1. Explore the repo to understand the current state of the codebase, if you haven't already. Use the project's domain glossary vocabulary throughout the PRD, and respect any ADRs in the area you're touching.
+1. Explore the repo to understand the current state of the codebase, if you haven't already. Use the project's domain glossary vocabulary throughout the spec, and respect any ADRs in the area you're touching.
 
 2. Sketch out the seams at which you're going to test the feature. Existing seams should be preferred to new ones. Use the highest seam possible. If new seams are needed, propose them at the highest point you can. The fewer seams across the codebase, the better - the ideal number is one.
 
 Check with the user that these seams match their expectations.
 
-3. Write the PRD using the template below, then publish it to the project issue tracker. Apply the \`ready-for-agent\` triage label - no need for additional triage.
+3. Write the spec using the template below, then publish it to the project issue tracker. Apply the \`ready-for-agent\` triage label - no need for additional triage.
 
-<prd-template>
+<spec-template>
 
 ## Problem Statement
 
@@ -169,7 +169,7 @@ A list of implementation decisions that were made. This can include:
 
 Do NOT include specific file paths or code snippets. They may end up being outdated very quickly.
 
-Exception: if a prototype produced a snippet that encodes a decision more precisely than prose can (state machine, reducer, schema, type shape), inline it within the relevant decision and note briefly that it came from a prototype. Trim to the decision-rich parts - not a working demo, just the important bits.
+Exception: if a prototype produced a snippet that encodes a decision more precisely than prose can (state machine, reducer, schema, type shape), inline it within the relevant decision and note briefly that it came from a prototype. Trim to the decision-rich parts — not a working demo, just the important bits.
 
 ## Testing Decisions
 
@@ -181,44 +181,44 @@ A list of testing decisions that were made. Include:
 
 ## Out of Scope
 
-A description of the things that are out of scope for this PRD.
+A description of the things that are out of scope for this spec.
 
 ## Further Notes
 
 Any further notes about the feature.
 
-</prd-template>
+</spec-template>
 </collaboration_mode>`;
 
-const PLANNING_ISSUES_PROMPT = `<collaboration_mode># Planning Workflow: Issues
+const PLANNING_TICKETS_PROMPT = `<collaboration_mode># Planning Workflow: Tickets
 
 ---
-name: to-issues
-description: Break a plan, spec, or PRD into independently-grabbable issues on the project issue tracker using tracer-bullet vertical slices.
+name: to-tickets
+description: Break a plan, spec, or Spec into independently-grabbable tickets on the project ticket tracker using tracer-bullet vertical slices.
 disable-model-invocation: true
 ---
 
-# To Issues
+# To Tickets
 
-Break a plan into independently-grabbable issues using vertical slices (tracer bullets).
+Break a plan into independently-grabbable tickets using vertical slices (tracer bullets).
 
-The issue tracker and triage label vocabulary should have been provided to you - run \`/setup-matt-pocock-skills\` if not.
+The ticket tracker and triage label vocabulary should have been provided to you - run \`/setup-matt-pocock-skills\` if not.
 
 ## Process
 
 ### 1. Gather context
 
-Work from whatever is already in the conversation context. If the user passes an issue reference (issue number, URL, or path) as an argument, fetch it from the issue tracker and read its full body and comments.
+Work from whatever is already in the conversation context. If the user passes an ticket reference (ticket number, URL, or path) as an argument, fetch it from the ticket tracker and read its full body and comments.
 
 ### 2. Explore the codebase (optional)
 
-If you have not already explored the codebase, do so to understand the current state of the code. Issue titles and descriptions should use the project's domain glossary vocabulary, and respect ADRs in the area you're touching.
+If you have not already explored the codebase, do so to understand the current state of the code. Ticket titles and descriptions should use the project's domain glossary vocabulary, and respect ADRs in the area you're touching.
 
 Look for opportunities to prefactor the code to make the implementation easier. "Make the change easy, then make the easy change."
 
 ### 3. Draft vertical slices
 
-Break the plan into **tracer bullet** issues. Each issue is a thin vertical slice that cuts through ALL integration layers end-to-end, NOT a horizontal slice of one layer.
+Break the plan into **tracer bullet** tickets. Each ticket is a thin vertical slice that cuts through ALL integration layers end-to-end, NOT a horizontal slice of one layer.
 
 <vertical-slice-rules>
 
@@ -228,36 +228,36 @@ Break the plan into **tracer bullet** issues. Each issue is a thin vertical slic
 
 </vertical-slice-rules>
 
-### 4. Hand off for issue review
+### 4. Hand off for ticket review
 
-Stop after drafting the proposed issue set. Do not quiz the user and do not publish the issues from this stage.
+Stop after drafting the proposed ticket set. Do not quiz the user and do not publish the tickets from this stage.
 
-The Issues Review stage owns completeness review against the PRD and context, adjustment cycles, final user quiz, and issue tracker publishing.
+The Ticket Review stage owns completeness review against the Spec and context, adjustment cycles, final user quiz, and ticket tracker publishing.
 </collaboration_mode>`;
 
-const PLANNING_REVIEW_PROMPT = `<collaboration_mode># Planning Workflow: Issue Review
+const PLANNING_REVIEW_PROMPT = `<collaboration_mode># Planning Workflow: Ticket Review
 
-Review the PRD, conversation context, durable project context, and drafted planning issues. The goal is to decide whether the issue set is complete and whether the vertical slices are correct tracer bullets.
+Review the Spec, conversation context, durable project context, and drafted planning tickets. The goal is to decide whether the ticket set is complete and whether the vertical slices are correct tracer bullets.
 
 ## Review goals
 
-- Check that the drafted issues cover the PRD's user stories, acceptance criteria, implementation decisions, testing decisions, out-of-scope boundaries, and relevant context.
-- Check that each issue is a narrow but complete vertical slice through the necessary integration layers, not a horizontal layer-only task.
+- Check that the drafted tickets cover the Spec's user stories, acceptance criteria, implementation decisions, testing decisions, out-of-scope boundaries, and relevant context.
+- Check that each ticket is a narrow but complete vertical slice through the necessary integration layers, not a horizontal layer-only task.
 - Check that each completed slice is independently demoable or verifiable.
 - Check that prefactoring, contract/schema work, migrations, operational safeguards, and test seams are represented when they are required to make later slices reliable.
 - Check dependency ordering, including blockers-first sequencing and whether any slices should be merged or split.
-- Check that issue bodies are ready for AFK agents: concrete outcome, clear acceptance criteria, useful tests, and no stale implementation path prescriptions.
+- Check that ticket bodies are ready for AFK agents: concrete outcome, clear acceptance criteria, useful tests, and no stale implementation path prescriptions.
 
 ## Review cycle
 
-1. Read the PRD and all available context before judging the issues.
-2. Review the proposed issue set against the PRD and context.
-3. If anything is missing, too broad, too narrow, horizontally sliced, incorrectly blocked, or vague, return concrete corrections. Do not quiz the user while the issue set still needs review corrections.
-4. Repeat review after issue adjustments until the issue set is complete and the vertical slices are correct.
+1. Read the Spec and all available context before judging the tickets.
+2. Review the proposed ticket set against the Spec and context.
+3. If anything is missing, too broad, too narrow, horizontally sliced, incorrectly blocked, or vague, return concrete corrections. Do not quiz the user while the ticket set still needs review corrections.
+4. Repeat review after ticket adjustments until the ticket set is complete and the vertical slices are correct.
 
 ## User quiz
 
-The reviewer subagent should not quiz the user; it should return review verdicts and concrete corrections. After the subagent issues reviewer has completed all review cycles and the requested issue adjustments are done, the planning thread should present the proposed breakdown to the user as a numbered list. For each slice, show:
+The reviewer subagent should not quiz the user; it should return review verdicts and concrete corrections. After the subagent tickets reviewer has completed all review cycles and the requested ticket adjustments are done, the planning thread should present the proposed breakdown to the user as a numbered list. For each slice, show:
 
 - **Title**: short descriptive name
 - **Blocked by**: which other slices (if any) must complete first
@@ -271,16 +271,16 @@ Ask the user:
 
 Iterate until the user approves the breakdown.
 
-## Publish approved issues
+## Publish approved tickets
 
-For each approved slice, publish a new issue to the issue tracker. Use the issue body template below. These issues are considered ready for AFK agents, so publish them with the correct triage label unless instructed otherwise.
+For each approved slice, publish a new ticket to the ticket tracker. Use the ticket body template below. These tickets are considered ready for AFK agents, so publish them with the correct triage label unless instructed otherwise.
 
-Publish issues in dependency order (blockers first) so you can reference real issue identifiers in the "Blocked by" field.
+Publish tickets in dependency order (blockers first) so you can reference real ticket identifiers in the "Blocked by" field.
 
-<issue-template>
+<ticket-template>
 ## Parent
 
-A reference to the parent issue on the issue tracker (if the source was an existing issue, otherwise omit this section).
+A reference to the parent ticket on the ticket tracker (if the source was an existing ticket, otherwise omit this section).
 
 ## What to build
 
@@ -300,9 +300,9 @@ Avoid specific file paths or code snippets - they go stale fast. Exception: if a
 
 Or "None - can start immediately" if no blockers.
 
-</issue-template>
+</ticket-template>
 
-Do NOT close or modify any parent issue.
+Do NOT close or modify any parent ticket.
 </collaboration_mode>`;
 
 const PLANNING_ADR_FORMAT_ASSOCIATED_DOC_CONTENT = `# ADR Format
@@ -355,7 +355,7 @@ If a decision is easy to reverse, skip it - you'll just reverse it. If it's not 
 
 const IMPLEMENTATION_ORCHESTRATOR_PROMPT = `<collaboration_mode># Implementation Workflow: Orchestrator Start
 
-Plan the implementation run from the PRD and planning issues. Identify worktree strategy, issue order, validation commands, required app-dev/browser review surfaces, merge gates, and how progress will be reported.
+Plan the implementation run from the Spec and planning tickets. Identify worktree strategy, ticket order, validation commands, required app-dev/browser review surfaces, merge gates, and how progress will be reported.
 </collaboration_mode>`;
 
 const IMPLEMENTATION_TDD_MOCKING_ASSOCIATED_DOC_CONTENT = `# When to Mock
@@ -418,17 +418,6 @@ The SDK approach means:
 - Easier to see which endpoints a test exercises
 - Type safety per endpoint`;
 
-const IMPLEMENTATION_TDD_REFACTORING_ASSOCIATED_DOC_CONTENT = `# Refactor Candidates
-
-After TDD cycle, look for:
-
-- **Duplication** -> Extract function/class
-- **Long methods** -> Break into private helpers (keep tests on public interface)
-- **Shallow modules** -> Combine or deepen
-- **Feature envy** -> Move logic to where data lives
-- **Primitive obsession** -> Introduce value objects
-- **Existing code** the new code reveals as problematic`;
-
 const IMPLEMENTATION_TDD_GOOD_AND_BAD_TESTS_ASSOCIATED_DOC_CONTENT = `# Good and Bad Tests
 
 ## Good Tests
@@ -488,6 +477,22 @@ test("createUser makes user retrievable", async () => {
   const user = await createUser({ name: "Alice" });
   const retrieved = await getUser(user.id);
   expect(retrieved.name).toBe("Alice");
+});
+\`\`\`
+
+**Tautological tests**: Expected value restates the implementation, so the test passes by construction.
+
+\`\`\`typescript
+// BAD: Expected value is recomputed the way the code computes it
+test("calculateTotal sums line items", () => {
+  const items = [{ price: 10 }, { price: 5 }];
+  const expected = items.reduce((sum, i) => sum + i.price, 0);
+  expect(calculateTotal(items)).toBe(expected);
+});
+
+// GOOD: Expected value is an independent, known literal
+test("calculateTotal sums line items", () => {
+  expect(calculateTotal([{ price: 10 }, { price: 5 }])).toBe(15);
 });
 \`\`\``;
 
@@ -560,118 +565,48 @@ description: Test-driven development. Use when the user wants to build features 
 
 # Test-Driven Development
 
-## Philosophy
+TDD is the red → green loop. This skill is the reference that makes that loop produce tests worth keeping: what a good test is, where tests go, the anti-patterns, and the rules of the loop. Every section applies on every cycle — consult them before and during the loop, not after.
 
-**Core principle**: Tests should verify behavior through public interfaces, not implementation details. Code can change entirely; tests shouldn't.
+When exploring the codebase, read \`CONTEXT.md\` (if it exists) so test names and interface vocabulary match the project's domain language, and respect ADRs in the area you're touching.
 
-**Good tests** are integration-style: they exercise real code paths through public APIs. They describe _what_ the system does, not _how_ it does it. A good test reads like a specification - "user can checkout with valid cart" tells you exactly what capability exists. These tests survive refactors because they don't care about internal structure.
+## What a good test is
 
-**Bad tests** are coupled to implementation. They mock internal collaborators, test private methods, or verify through external means (like querying a database directly instead of using the interface). The warning sign: your test breaks when you refactor, but behavior hasn't changed. If you rename an internal function and tests fail, those tests were testing implementation, not behavior.
+Tests verify behavior through public interfaces, not implementation details. Code can change entirely; tests shouldn't. A good test reads like a specification — "user can checkout with valid cart" tells you exactly what capability exists — and survives refactors because it doesn't care about internal structure.
 
 See [tests.md](tests.md) for examples and [mocking.md](mocking.md) for mocking guidelines.
 
+## Seams — where tests go
+
+A **seam** is the public boundary you test at: the interface where you observe behavior without reaching inside. Tests live at seams, never against internals.
+
+**Test only at pre-agreed seams.** Before writing any test, write down the seams under test and confirm them with the user. No test is written at an unconfirmed seam. You can't test everything — agreeing the seams up front is how testing effort lands on the critical paths and complex logic instead of every edge case.
+
+Ask: "What's the public interface, and which seams should we test?"
+
+## Anti-patterns
+
+- **Implementation-coupled** — mocks internal collaborators, tests private methods, or verifies through a side channel (querying the database instead of using the interface). The tell: the test breaks when you refactor but behavior hasn't changed.
+- **Tautological** — the assertion recomputes the expected value the way the code does (\`expect(add(a, b)).toBe(a + b)\`, a snapshot derived by hand the same way, a constant asserted equal to itself), so it passes by construction and can never disagree with the code. Expected values must come from an independent source of truth — a known-good literal, a worked example, the spec.
+- **Horizontal slicing** — writing all tests first, then all implementation. Bulk tests verify _imagined_ behavior: you test the _shape_ of things rather than user-facing behavior, the tests go insensitive to real changes, and you commit to test structure before understanding the implementation. Work in **vertical slices** instead — one test → one implementation → repeat, each test a **tracer bullet** that responds to what the last cycle taught you.
+
+## Rules of the loop
+
+- **Red before green.** Write the failing test first, then only enough code to pass it. Don't anticipate future tests or add speculative features.
+- **One slice at a time.** One seam, one test, one minimal implementation per cycle.
+- **Refactoring is not part of the loop.** It belongs to the review stage (see the \`code-review\` skill), not the red → green implementation cycle.
+
 ## Logging
 
-Do not add scattered string logs as a debugging diary. Add logging when the new behavior creates an operational question that tests cannot answer, such as failure cause, retry outcome, external boundary latency, fallback selection, or state transition.
-
-Prefer context-rich structured logs or span events at meaningful boundaries. Treat wide events / canonical log lines as the target shape: one queryable record for what happened to this request, command, provider turn, external process, or service boundary.
-
-Include high-cardinality debugging context where it is useful: thread IDs, turn IDs, provider IDs, provider instance IDs, request IDs, trace IDs, operation names, outcomes, durations, and error type/code.
-
-In Effect code, prefer \`Effect.annotateCurrentSpan\` plus \`Effect.log...\` inside active spans so the context and logs become part of the trace story. Never log secrets, credentials, tokens, raw authorization headers, private keys, or full prompts.
-
-See [logging.md](logging.md) for the detailed logging checklist.
-
-## Anti-Pattern: Horizontal Slices
-
-**DO NOT write all tests first, then all implementation.** This is "horizontal slicing" - treating RED as "write all tests" and GREEN as "write all code."
-
-This produces **crap tests**:
-
-- Tests written in bulk test _imagined_ behavior, not _actual_ behavior
-- You end up testing the _shape_ of things (data structures, function signatures) rather than user-facing behavior
-- Tests become insensitive to real changes - they pass when behavior breaks, fail when behavior is fine
-- You outrun your headlights, committing to test structure before understanding the implementation
-
-**Correct approach**: Vertical slices via tracer bullets. One test -> one implementation -> repeat. Each test responds to what you learned from the previous cycle. Because you just wrote the code, you know exactly what behavior matters and how to verify it.
-
-\`\`\`
-WRONG (horizontal):
-  RED:   test1, test2, test3, test4, test5
-  GREEN: impl1, impl2, impl3, impl4, impl5
-
-RIGHT (vertical):
-  RED->GREEN: test1->impl1
-  RED->GREEN: test2->impl2
-  RED->GREEN: test3->impl3
-  ...
-\`\`\`
-
-## Workflow
-
-### 1. Planning
-
-When exploring the codebase, read the relevant \`CONTEXT.md\` before relying on domain terms. If a root \`CONTEXT-MAP.md\` exists, use it to find the right context; otherwise read the root \`CONTEXT.md\` if it exists. Make test names and interface vocabulary match the project's domain language, and respect ADRs in the area you're touching.
-
-Before writing any code:
-
-- [ ] Confirm with user what interface changes are needed
-- [ ] Confirm with user which behaviors to test (prioritize)
-- [ ] Identify opportunities for deep modules (small interface, deep implementation) - run the \`/codebase-design\` skill for the vocabulary and the testability checks
-- [ ] List the behaviors to test (not implementation steps)
-- [ ] Get user approval on the plan
-
-Ask: "What should the public interface look like? Which behaviors are most important to test?"
-
-**You can't test everything.** Confirm with the user exactly which behaviors matter most. Focus testing effort on critical paths and complex logic, not every possible edge case.
-
-### 2. Tracer Bullet
-
-Write ONE test that confirms ONE thing about the system:
-
-\`\`\`
-RED:   Write test for first behavior -> test fails
-GREEN: Write minimal code to pass -> test passes
-\`\`\`
-
-This is your tracer bullet - proves the path works end-to-end.
-
-### 3. Incremental Loop
-
-For each remaining behavior:
-
-\`\`\`
-RED:   Write next test -> fails
-GREEN: Minimal code to pass -> passes
-\`\`\`
-
-Rules:
-
-- One test at a time
-- Only enough code to pass current test
-- Don't anticipate future tests
-- Keep tests focused on observable behavior
-
-### 4. Refactor
-
-After all tests pass, look for [refactor candidates](refactoring.md):
-
-- [ ] Extract duplication
-- [ ] Deepen modules (move complexity behind simple interfaces)
-- [ ] Apply SOLID principles where natural
-- [ ] Consider what new code reveals about existing code
-- [ ] Run tests after each refactor step
-
-**Never refactor while RED.** Get to GREEN first.
+Do not add scattered string logs as a debugging diary. Add logging when the new behavior creates an operational question that tests cannot answer — failure cause, retry outcome, external boundary latency, fallback selection, state transition. See [logging.md](logging.md) for the target shape and the checklist.
 
 ## Orchestrated Worker Result
 
-When this prompt is run by an automatic implementation-worker thread, do not ask the user questions. Implement the assigned planning issue, run focused validation, and finish with exactly one fenced JSON block using this shape:
+When this prompt is run by an automatic implementation-worker thread, do not ask the user questions. Implement the assigned planning ticket, run focused validation, and finish with exactly one fenced JSON block using this shape:
 
 \`\`\`json
 {
   "type": "implementation-worker-result",
-  "issueId": "planning-issue-id",
+  "ticketId": "planning-ticket-id",
   "workerThreadId": "thread-id",
   "branch": "worker-branch",
   "worktreePath": "/absolute/worktree",
@@ -688,16 +623,6 @@ When this prompt is run by an automatic implementation-worker thread, do not ask
   "notesMarkdown": "What changed and remaining risks.",
   "reportedAt": "2026-01-01T00:00:00.000Z"
 }
-\`\`\`
-
-## Checklist Per Cycle
-
-\`\`\`
-[ ] Test describes behavior, not implementation
-[ ] Test uses public interface only
-[ ] Test would survive internal refactor
-[ ] Code is minimal for this test
-[ ] No speculative features added
 \`\`\`
 </collaboration_mode>`;
 
@@ -751,7 +676,7 @@ Use only the preview_* and dev_review_* MCP tools for browser work. Do not use e
 
 const IMPLEMENTATION_FIX_PROMPT = `<collaboration_mode># Implementation Workflow: Fix
 
-Fix the Browser Dev Review or merge-gate failures in the orchestrator worktree. Do not ask the user questions. Make the smallest reliable change, run relevant validation, and report whether the run can continue.
+Fix the Browser Dev Review, merge-gate, or code-review failures in the orchestrator worktree. Do not ask the user questions. Make the smallest reliable change, run relevant validation, and report whether the run can continue.
 
 When ready, finish with exactly one fenced JSON block using this shape:
 
@@ -774,22 +699,140 @@ When ready, finish with exactly one fenced JSON block using this shape:
 \`\`\`
 </collaboration_mode>`;
 
-const PRODUCT_GRILL_PROMPT = `<collaboration_mode># Product Grill: Intent Grill
+const IMPLEMENTATION_CODE_REVIEW_PROMPT = `<collaboration_mode># Implementation Workflow: Code Review
 
-Align with the user on product outcome and intent only. This is the workflow's single human gate. After you lock intent, all later planning, review, implementation, merge, browser review, and PR filing transitions are automatic.
+---
+name: code-review
+description: Review the changes since a fixed point (commit, branch, tag, or merge-base) along two axes — Standards (does the code follow this repo's documented coding standards?) and Spec (does the code match what the originating issue/PRD asked for?). Runs both reviews in parallel sub-agents and reports them side by side. Use when the user wants to review a branch, a PR, work-in-progress changes, or asks to "review since X".
+---
 
-Explore repository facts before asking. Use code, docs, tests, schemas, configuration, and existing vocabulary to answer questions yourself when possible. Ask exactly one product-alignment question at a time only when intent cannot be inferred. Every question must include a recommended answer and the reason for that recommendation.
+Two-axis review of the diff between \`HEAD\` and a fixed point the user supplies:
+
+- **Standards** — does the code conform to this repo's documented coding standards?
+- **Spec** — does the code faithfully implement the originating issue / PRD / spec?
+
+Both axes run as **parallel sub-agents** so they don't pollute each other's context, then this skill aggregates their findings.
+
+The issue tracker should have been provided to you — run \`/setup-matt-pocock-skills\` if \`docs/agents/issue-tracker.md\` is missing.
+
+## Process
+
+### 1. Pin the fixed point
+
+Whatever the user said is the fixed point — a commit SHA, branch name, tag, \`main\`, \`HEAD~5\`, etc. If they didn't specify one, ask for it.
+
+Capture the diff command once: \`git diff <fixed-point>...HEAD\` (three-dot, so the comparison is against the merge-base). Also note the list of commits via \`git log <fixed-point>..HEAD --oneline\`.
+
+Before going further, confirm the fixed point resolves (\`git rev-parse <fixed-point>\`) and the diff is non-empty. A bad ref or empty diff should fail here — not inside two parallel sub-agents.
+
+### 2. Identify the spec source
+
+Look for the originating spec, in this order:
+
+1. Issue references in the commit messages (\`#123\`, \`Closes #45\`, GitLab \`!67\`, etc.) — fetch via the workflow in \`docs/agents/issue-tracker.md\`.
+2. A path the user passed as an argument.
+3. A PRD/spec file under \`docs/\`, \`specs/\`, or \`.scratch/\` matching the branch name or feature.
+4. If nothing is found, ask the user where the spec is. If they say there isn't one, the **Spec** sub-agent will skip and report "no spec available".
+
+### 3. Identify the standards sources
+
+Anything in the repo that documents how code should be written, such as \`CODING_STANDARDS.md\` or \`CONTRIBUTING.md\`.
+
+On top of whatever the repo documents, the Standards axis always carries the **smell baseline** below — a fixed set of Fowler code smells (_Refactoring_, ch.3) that applies even when a repo documents nothing. Two rules bind it:
+
+- **The repo overrides.** A documented repo standard always wins; where it endorses something the baseline would flag, suppress the smell.
+- **Always a judgement call.** Each smell is a labelled heuristic ("possible Feature Envy"), never a hard violation — and, like any standard here, skip anything tooling already enforces.
+
+Each smell reads *what it is* → *how to fix*; match it against the diff:
+
+- **Mysterious Name** — a function, variable, or type whose name doesn't reveal what it does or holds. → rename it; if no honest name comes, the design's murky.
+- **Duplicated Code** — the same logic shape appears in more than one hunk or file in the change. → extract the shared shape, call it from both.
+- **Feature Envy** — a method that reaches into another object's data more than its own. → move the method onto the data it envies.
+- **Data Clumps** — the same few fields or params keep travelling together (a type wanting to be born). → bundle them into one type, pass that.
+- **Primitive Obsession** — a primitive or string standing in for a domain concept that deserves its own type. → give the concept its own small type.
+- **Repeated Switches** — the same \`switch\`/\`if\`-cascade on the same type recurs across the change. → replace with polymorphism, or one map both sites share.
+- **Shotgun Surgery** — one logical change forces scattered edits across many files in the diff. → gather what changes together into one module.
+- **Divergent Change** — one file or module is edited for several unrelated reasons. → split so each module changes for one reason.
+- **Speculative Generality** — abstraction, parameters, or hooks added for needs the spec doesn't have. → delete it; inline back until a real need shows.
+- **Message Chains** — long \`a.b().c().d()\` navigation the caller shouldn't depend on. → hide the walk behind one method on the first object.
+- **Middle Man** — a class or function that mostly just delegates onward. → cut it, call the real target direct.
+- **Refused Bequest** — a subclass or implementer that ignores or overrides most of what it inherits. → drop the inheritance, use composition.
+
+### 4. Spawn both sub-agents in parallel
+
+Send a single message with two \`Agent\` tool calls. Use the \`general-purpose\` subagent for both.
+
+**Standards sub-agent prompt** — include:
+
+- The full diff command and commit list.
+- The list of standards-source files you found in step 3, **plus the smell baseline from step 3** pasted in full — the sub-agent has no other access to it.
+- The brief: "Report — per file/hunk where relevant — (a) every place the diff violates a documented standard: cite the standard (file + the rule); and (b) any baseline smell you spot: name it and quote the hunk. Distinguish hard violations from judgement calls — documented-standard breaches can be hard, but baseline smells are always judgement calls, and a documented repo standard overrides the baseline. Skip anything tooling enforces. Under 400 words."
+
+**Spec sub-agent prompt** — include:
+
+- The diff command and commit list.
+- The path or fetched contents of the spec.
+- The brief: "Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding. Under 400 words."
+
+If the spec is missing, skip the Spec sub-agent and note this in the final report.
+
+### 5. Aggregate
+
+Present the two reports under \`## Standards\` and \`## Spec\` headings, verbatim or lightly cleaned. Do **not** merge or rerank findings — the two axes are deliberately separate (see _Why two axes_).
+
+End with a one-line summary: total findings per axis, and the worst issue _within each axis_ (if any). Don't pick a single winner across axes — that's the reranking the separation exists to prevent.
+
+## Why two axes
+
+A change can pass one axis and fail the other:
+
+- Code that follows every standard but implements the wrong thing → **Standards pass, Spec fail.**
+- Code that does exactly what the issue asked but breaks the project's conventions → **Spec pass, Standards fail.**
+
+Reporting them separately stops one axis from masking the other.
+
+## Orchestrated Code Review Result
+
+When this prompt is run by an automatic implementation run, do not ask the user questions. The launch message provides the fixed point, the diff command, the worktree, the change request, and the Spec source — use those instead of asking or searching the issue tracker. Run both axes, aggregate the report, and finish with exactly one fenced JSON block using this shape:
+
+\`\`\`json
+{
+  "type": "implementation-code-review-result",
+  "runId": "implementation-run-id",
+  "status": "clean",
+  "reportMarkdown": "## Standards\\n...\\n\\n## Spec\\n..."
+}
+\`\`\`
+
+Use status "clean" only when neither axis has findings that require code changes, "findings" when code changes are required (include every finding in reportMarkdown), and "blocked" when the review cannot be performed (say why in reportMarkdown).
+</collaboration_mode>`;
+
+const PRODUCT_WORKFLOW_PROMPT = `<collaboration_mode># Product Workflow: Intent Grill
+
+This is the workflow's single human gate. After intent is locked, all later planning, review, implementation, merge, browser review, and PR filing transitions are automatic.
+
+Interview me relentlessly about every aspect of this product intent until we reach a shared understanding. Walk down each branch of the decision tree, resolving dependencies between decisions one-by-one. For each question, provide your recommended answer.
+
+Ask the questions one at a time, waiting for feedback on each question before continuing. Asking multiple questions at once is bewildering.
+
+If a *fact* can be found by exploring the codebase, look it up rather than asking me. The *decisions*, though, are mine — put each one to me and wait for my answer.
+
+Do not lock intent until I confirm we have reached a shared understanding.
+
+Grill product questions only: the problem, the desired outcome, the audience, success criteria, scope, and non-goals. Do not grill implementation, architecture, or testing decisions — after intent locks, the automated Planning and Implementation workflows resolve those without asking the user.
 
 Actively maintain durable product context while grilling:
 
 1. Resolve the context structure before relying on domain terms. If a root CONTEXT-MAP.md exists, read it to find the right bounded context. If only a root CONTEXT.md exists, use it as the single context.
-2. Create or update CONTEXT.md lazily only when the first domain term is resolved. CONTEXT.md is a glossary only: no implementation details, planning notes, TODOs, API specs, or architecture decisions. Use tight definitions, list rejected synonyms under _Avoid_, and include only project-specific domain concepts.
-3. Create docs/adr/000N-slug.md lazily only when an ADR is warranted: the decision is hard to reverse, surprising without context, and the result of a real trade-off.
+2. Create or update CONTEXT.md lazily only when the first domain term is resolved. CONTEXT.md is a glossary only: no implementation details, planning notes, TODOs, API specs, or architecture decisions. Use tight definitions, list rejected synonyms under _Avoid_, and include only project-specific domain concepts. Use the format in CONTEXT-FORMAT.md.
+3. Create docs/adr/000N-slug.md lazily only when an ADR is warranted: the decision is hard to reverse, surprising without context, and the result of a real trade-off. Use the format in ADR-FORMAT.md.
 4. When multiple contexts exist, infer the target context from the topic; if unclear, ask. If existing context conflicts with the user's intent, ask which should become authoritative before locking intent.
+
+## Workflow stage constraints
 
 Do not make implementation changes during the grill.
 
-Before locking intent, finish any required CONTEXT.md glossary updates and ADR files. Finish only when the product intent is locked enough that the Planning Workflow sub-agent can create the PRD, planning issues, and issue review, and the Implementation Workflow sub-agent can proceed without further user questions.
+Before locking intent, finish any required CONTEXT.md glossary updates and ADR files. Finish only when the product intent is locked enough that the Planning Workflow sub-agent can create the Spec, planning tickets, and ticket review, and the Implementation Workflow sub-agent can proceed without further user questions.
 
 Your final response for this stage must contain exactly one JSON directive and no other fenced JSON blocks:
 
@@ -817,7 +860,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     role: "planning-thread",
     stage: "grill",
     title: "1. Grill",
-    description: "Challenges the plan against repo language and constraints before PRD authoring.",
+    description: "Challenges the plan against repo language and constraints before Spec authoring.",
     promptText: PLANNING_GRILL_PROMPT,
     associatedDocs: [
       {
@@ -835,35 +878,35 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     ],
   },
   {
-    id: WORKFLOW_PROMPT_IDS.planningPrdCodex,
+    id: WORKFLOW_PROMPT_IDS.planningSpecCodex,
     order: 2,
     workflow: "planning",
     role: "planning-thread",
-    stage: "prd",
-    title: "2. PRD",
-    description: "Creates the durable PRD artifact from planning context and locked decisions.",
-    promptText: PLANNING_PRD_PROMPT,
+    stage: "spec-authoring",
+    title: "2. Spec",
+    description: "Creates the durable Spec artifact from planning context and locked decisions.",
+    promptText: PLANNING_SPEC_PROMPT,
   },
   {
-    id: WORKFLOW_PROMPT_IDS.planningIssuesCodex,
+    id: WORKFLOW_PROMPT_IDS.planningTicketsCodex,
     order: 3,
     workflow: "planning",
     role: "planning-thread",
-    stage: "issues",
-    title: "3. Issues",
+    stage: "tickets-authoring",
+    title: "3. Tickets",
     description:
-      "Decomposes the PRD into implementation-ready planning issues with dependencies and tests.",
-    promptText: PLANNING_ISSUES_PROMPT,
+      "Decomposes the Spec into implementation-ready planning tickets with dependencies and tests.",
+    promptText: PLANNING_TICKETS_PROMPT,
   },
   {
-    id: WORKFLOW_PROMPT_IDS.planningIssueReviewerCodex,
+    id: WORKFLOW_PROMPT_IDS.planningTicketReviewerCodex,
     order: 4,
     workflow: "planning",
     role: "planning-reviewer",
-    stage: "issue-review",
-    title: "4. Issues Review",
+    stage: "ticket-review",
+    title: "4. Ticket Review",
     description:
-      "Reviews planning issues for dependency correctness, readiness, and PRD alignment.",
+      "Reviews planning tickets for dependency correctness, readiness, and Spec alignment.",
     promptText: PLANNING_REVIEW_PROMPT,
   },
   {
@@ -873,7 +916,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     role: "implementation-orchestrator",
     stage: "orchestrator-start",
     title: "1. Orchestrator Start",
-    description: "Plans a durable implementation orchestration run from a PRD.",
+    description: "Plans a durable implementation orchestration run from a Spec.",
     promptText: IMPLEMENTATION_ORCHESTRATOR_PROMPT,
   },
   {
@@ -884,7 +927,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     stage: "tdd",
     title: "2. TDD Implementation",
     description:
-      "Implements planning issues with a red-green-refactor loop and focused validation.",
+      "Implements planning tickets with a red-green-refactor loop and focused validation.",
     promptText: IMPLEMENTATION_TDD_PROMPT,
     associatedDocs: [
       {
@@ -892,12 +935,6 @@ export const WORKFLOW_PROMPT_REGISTRY = [
         title: "When to Mock",
         path: "mocking.md",
         content: IMPLEMENTATION_TDD_MOCKING_ASSOCIATED_DOC_CONTENT,
-      },
-      {
-        id: "implementation.tdd.refactoring",
-        title: "Refactor Candidates",
-        path: "refactoring.md",
-        content: IMPLEMENTATION_TDD_REFACTORING_ASSOCIATED_DOC_CONTENT,
       },
       {
         id: "implementation.tdd.tests",
@@ -948,28 +985,40 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     role: "implementation-fixer",
     stage: "fix",
     title: "5. Fix",
-    description: "Fixes merge-gate or browser-review failures before rerunning validation.",
+    description:
+      "Fixes merge-gate, browser-review, or code-review failures before rerunning validation.",
     promptText: IMPLEMENTATION_FIX_PROMPT,
   },
   {
-    id: WORKFLOW_PROMPT_IDS.productGrillStageCodex,
+    id: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+    order: 6,
+    workflow: "implementation",
+    role: "implementation-code-reviewer",
+    stage: "code-review",
+    title: "6. Code Review",
+    description:
+      "Reviews the filed change request along the Standards and Spec axes via parallel sub-agents.",
+    promptText: IMPLEMENTATION_CODE_REVIEW_PROMPT,
+  },
+  {
+    id: WORKFLOW_PROMPT_IDS.productWorkflowCodex,
     order: 1,
     workflow: "product",
     role: "planning-thread",
-    stage: "grill",
-    title: "Product Grill",
+    stage: "intent",
+    title: "Product Workflow",
     description:
-      "Asks product-intent questions, updates durable product context, and locks intent.",
-    promptText: PRODUCT_GRILL_PROMPT,
+      "Gathers and locks product intent before automatically running Planning and Implementation.",
+    promptText: PRODUCT_WORKFLOW_PROMPT,
     associatedDocs: [
       {
-        id: "product.grill-stage.context-format",
+        id: "product.workflow.context-format",
         title: "CONTEXT.md Format",
         path: "CONTEXT-FORMAT.md",
         content: CONTEXT_FORMAT_ASSOCIATED_DOC_CONTENT,
       },
       {
-        id: "product.grill-stage.adr-format",
+        id: "product.workflow.adr-format",
         title: "ADR Format",
         path: "ADR-FORMAT.md",
         content: PLANNING_ADR_FORMAT_ASSOCIATED_DOC_CONTENT,
@@ -989,15 +1038,8 @@ export function listWorkflowPromptContracts(): WorkflowPromptContract[] {
   return WORKFLOW_PROMPT_REGISTRY.map(cloneWorkflowPromptContract);
 }
 
-export function normalizeWorkflowPromptId(id: string): string {
-  return (
-    LEGACY_WORKFLOW_PROMPT_ID_ALIASES[id as keyof typeof LEGACY_WORKFLOW_PROMPT_ID_ALIASES] ?? id
-  );
-}
-
 export function resolveWorkflowPromptContract(id: string): WorkflowPromptContract {
-  const normalizedId = normalizeWorkflowPromptId(id);
-  const contract = WORKFLOW_PROMPT_REGISTRY.find((entry) => entry.id === normalizedId);
+  const contract = WORKFLOW_PROMPT_REGISTRY.find((entry) => entry.id === id);
   if (contract === undefined) {
     throw new Error(`Unknown workflow prompt contract '${id}'`);
   }
@@ -1005,8 +1047,7 @@ export function resolveWorkflowPromptContract(id: string): WorkflowPromptContrac
 }
 
 export function isRegisteredWorkflowPromptId(id: string): boolean {
-  const normalizedId = normalizeWorkflowPromptId(id);
-  return WORKFLOW_PROMPT_REGISTRY.some((entry) => entry.id === normalizedId);
+  return WORKFLOW_PROMPT_REGISTRY.some((entry) => entry.id === id);
 }
 
 export function isBrowserDevReviewWorkflowPromptId(
@@ -1015,8 +1056,7 @@ export function isBrowserDevReviewWorkflowPromptId(
   return (
     workflowPromptId !== null &&
     workflowPromptId !== undefined &&
-    normalizeWorkflowPromptId(workflowPromptId) ===
-      WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex
+    workflowPromptId === WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex
   );
 }
 
@@ -1054,13 +1094,13 @@ export function resolveWorkflowPromptId(input: {
     input.workflowPromptId !== undefined &&
     isRegisteredWorkflowPromptId(input.workflowPromptId)
   ) {
-    return normalizeWorkflowPromptId(input.workflowPromptId);
+    return input.workflowPromptId;
   }
   switch (input.interactionMode) {
     case "planning-workflow":
       return WORKFLOW_PROMPT_IDS.planningGrillStageCodex;
     case "product-workflow":
-      return WORKFLOW_PROMPT_IDS.productGrillStageCodex;
+      return WORKFLOW_PROMPT_IDS.productWorkflowCodex;
     case "implementation-workflow":
       return WORKFLOW_PROMPT_IDS.implementationOrchestratorPlanningCodex;
     default:

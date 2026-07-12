@@ -1,6 +1,5 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import * as SchemaTransformation from "effect/SchemaTransformation";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import { ServerAuthDescriptor } from "./auth.ts";
 import {
@@ -30,28 +29,7 @@ export const WorkflowPromptAssociatedDocContract = Schema.Struct({
 });
 export type WorkflowPromptAssociatedDocContract = typeof WorkflowPromptAssociatedDocContract.Type;
 
-const WorkflowPromptWorkflowWire = Schema.Literals([
-  "shared",
-  "planning",
-  "implementation",
-  "yolo",
-  "product",
-]);
-const WorkflowPromptWorkflowCanonical = Schema.Literals([
-  "shared",
-  "planning",
-  "implementation",
-  "product",
-]);
-const WorkflowPromptWorkflow = WorkflowPromptWorkflowWire.pipe(
-  Schema.decodeTo(
-    WorkflowPromptWorkflowCanonical,
-    SchemaTransformation.transformOrFail({
-      decode: (workflow) => Effect.succeed(workflow === "yolo" ? ("product" as const) : workflow),
-      encode: (workflow) => Effect.succeed(workflow),
-    }),
-  ),
-);
+const WorkflowPromptWorkflow = Schema.Literals(["shared", "planning", "implementation", "product"]);
 
 export const WorkflowPromptContract = Schema.Struct({
   id: TrimmedNonEmptyString,
@@ -66,6 +44,7 @@ export const WorkflowPromptContract = Schema.Struct({
     "implementation-validator",
     "implementation-qa-reviewer",
     "implementation-fixer",
+    "implementation-code-reviewer",
   ]),
   stage: TrimmedNonEmptyString,
   title: TrimmedNonEmptyString,
@@ -78,24 +57,24 @@ export type WorkflowPromptContract = typeof WorkflowPromptContract.Type;
 export const WorkflowPromptContracts = Schema.Array(WorkflowPromptContract);
 export type WorkflowPromptContracts = typeof WorkflowPromptContracts.Type;
 
-const KeybindingsMalformedConfigIssue = Schema.Struct({
+const KeybindingsMalformedConfigTicket = Schema.Struct({
   kind: Schema.Literal("keybindings.malformed-config"),
   message: TrimmedNonEmptyString,
 });
 
-const KeybindingsInvalidEntryIssue = Schema.Struct({
+const KeybindingsInvalidEntryTicket = Schema.Struct({
   kind: Schema.Literal("keybindings.invalid-entry"),
   message: TrimmedNonEmptyString,
   index: Schema.Number,
 });
 
-export const ServerConfigIssue = Schema.Union([
-  KeybindingsMalformedConfigIssue,
-  KeybindingsInvalidEntryIssue,
+export const ServerConfigTicket = Schema.Union([
+  KeybindingsMalformedConfigTicket,
+  KeybindingsInvalidEntryTicket,
 ]);
-export type ServerConfigIssue = typeof ServerConfigIssue.Type;
+export type ServerConfigTicket = typeof ServerConfigTicket.Type;
 
-const ServerConfigIssues = Schema.Array(ServerConfigIssue);
+const ServerConfigTickets = Schema.Array(ServerConfigTicket);
 
 export const ServerProviderState = Schema.Literals(["ready", "warning", "error", "disabled"]);
 export type ServerProviderState = typeof ServerProviderState.Type;
@@ -485,7 +464,7 @@ export const ServerConfig = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   keybindingsConfigPath: TrimmedNonEmptyString,
   keybindings: ResolvedKeybindingsConfig,
-  issues: ServerConfigIssues,
+  tickets: ServerConfigTickets,
   providers: ServerProviders,
   availableEditors: Schema.Array(EditorId),
   observability: ServerObservability,
@@ -513,7 +492,7 @@ export type ServerRemoveKeybindingInput = typeof ServerRemoveKeybindingInput.Typ
 
 export const ServerUpsertKeybindingResult = Schema.Struct({
   keybindings: ResolvedKeybindingsConfig,
-  issues: ServerConfigIssues,
+  tickets: ServerConfigTickets,
 });
 export type ServerUpsertKeybindingResult = typeof ServerUpsertKeybindingResult.Type;
 
@@ -521,7 +500,7 @@ export const ServerRemoveKeybindingResult = ServerUpsertKeybindingResult;
 export type ServerRemoveKeybindingResult = typeof ServerRemoveKeybindingResult.Type;
 
 export const ServerConfigUpdatedPayload = Schema.Struct({
-  issues: ServerConfigIssues,
+  tickets: ServerConfigTickets,
   providers: ServerProviders,
   settings: Schema.optional(ServerSettings),
 });
@@ -529,7 +508,7 @@ export type ServerConfigUpdatedPayload = typeof ServerConfigUpdatedPayload.Type;
 
 export const ServerConfigKeybindingsUpdatedPayload = Schema.Struct({
   keybindings: ResolvedKeybindingsConfig,
-  issues: ServerConfigIssues,
+  tickets: ServerConfigTickets,
 });
 export type ServerConfigKeybindingsUpdatedPayload =
   typeof ServerConfigKeybindingsUpdatedPayload.Type;

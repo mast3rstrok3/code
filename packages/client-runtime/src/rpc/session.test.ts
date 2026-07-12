@@ -127,7 +127,7 @@ const SERVER_CONFIG: ServerConfigType = {
   cwd: "/tmp/workspace",
   keybindingsConfigPath: "/tmp/workspace/keybindings.json",
   keybindings: [],
-  issues: [],
+  tickets: [],
   providers: [],
   availableEditors: [],
   observability: {

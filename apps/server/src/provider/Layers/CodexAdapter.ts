@@ -1374,7 +1374,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
             operation: "startSession",
-            issue: `Expected provider '${PROVIDER}' but received '${input.provider}'.`,
+            ticket: `Expected provider '${PROVIDER}' but received '${input.provider}'.`,
           });
         }
 
@@ -1605,7 +1605,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         new ProviderAdapterValidationError({
           provider: PROVIDER,
           operation: "rollbackThread",
-          issue: "numTurns must be an integer >= 1.",
+          ticket: "numTurns must be an integer >= 1.",
         }),
       );
     }

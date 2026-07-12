@@ -173,30 +173,30 @@ function lockProductIntent(system: ProductSystem) {
   });
 }
 
-function seedProductPrdAndIssues(system: ProductSystem, threadId: ThreadId) {
+function seedProductSpecAndTickets(system: ProductSystem, threadId: ThreadId) {
   return Effect.gen(function* () {
     yield* system.engine.dispatch({
-      type: "thread.planning-prd.apply",
-      commandId: commandId("prd-apply"),
+      type: "thread.planning-spec.apply",
+      commandId: commandId("spec-apply"),
       threadId,
-      sourceMessageId: messageId("prd-source"),
+      sourceMessageId: messageId("spec-source"),
       title: "Checkout",
       summaryMarkdown: "Build checkout.",
       createdAt: now,
     });
-    const snapshotAfterPrd = yield* system.query.getSnapshot();
-    const prd = snapshotAfterPrd.threads.find((thread) => thread.id === threadId)?.planningWorkflow
-      ?.prd;
-    if (!prd) throw new Error("PRD was not projected.");
+    const snapshotAfterSpec = yield* system.query.getSnapshot();
+    const spec = snapshotAfterSpec.threads.find((thread) => thread.id === threadId)
+      ?.planningWorkflow?.spec;
+    if (!spec) throw new Error("Spec was not projected.");
     yield* system.engine.dispatch({
-      type: "thread.planning-issues.apply",
-      commandId: commandId("issues-apply"),
+      type: "thread.planning-tickets.apply",
+      commandId: commandId("tickets-apply"),
       threadId,
-      sourceMessageId: messageId("issues-source"),
-      prdId: prd.id,
-      issues: [
+      sourceMessageId: messageId("tickets-source"),
+      specId: spec.id,
+      tickets: [
         {
-          key: "ISSUE-1",
+          key: "TICKET-1",
           title: "Checkout tracer",
           bodyMarkdown: "Add a vertical checkout slice.",
           dependencyKeys: [],
@@ -205,7 +205,7 @@ function seedProductPrdAndIssues(system: ProductSystem, threadId: ThreadId) {
       createdAt: now,
     });
     yield* system.reactor.drain;
-    return prd;
+    return spec;
   });
 }
 
@@ -245,25 +245,25 @@ describe("ProductWorkflowReactor", () => {
         expect(planningChildren).toHaveLength(1);
         expect(planningChildren[0]?.id).toBe(planningThread.id);
         expect(planningChildren[0]?.interactionMode).toBe("planning-workflow");
-        expect(planningThread.planningWorkflow?.stage).toBe("prd-authoring");
+        expect(planningThread.planningWorkflow?.stage).toBe("spec-authoring");
         expect(
           events.some(
             (event) =>
               event.type === "thread.turn-start-requested" &&
               event.payload.threadId === planningThread.id &&
-              event.payload.workflowPromptId === WORKFLOW_PROMPT_IDS.planningPrdCodex,
+              event.payload.workflowPromptId === WORKFLOW_PROMPT_IDS.planningSpecCodex,
           ),
         ).toBe(true);
       }),
     ),
   );
 
-  it.effect("requests automatic issue review when product issues are created", () =>
+  it.effect("requests automatic ticket review when product tickets are created", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         yield* seedProjectAndThread(system);
         const planningThread = yield* lockProductIntent(system);
-        yield* seedProductPrdAndIssues(system, planningThread.id);
+        yield* seedProductSpecAndTickets(system, planningThread.id);
 
         const snapshot = yield* system.query.getSnapshot();
         const child = snapshot.threads.find((entry) => entry.id === planningThread.id);
@@ -273,7 +273,7 @@ describe("ProductWorkflowReactor", () => {
         const events = yield* Stream.runCollect(system.engine.readEvents(0)).pipe(
           Effect.map((chunk) => Array.from(chunk)),
         );
-        expect(child?.planningWorkflow?.stage).toBe("issue-review");
+        expect(child?.planningWorkflow?.stage).toBe("ticket-review");
         expect(reviewer?.parentThreadId).toBe(planningThread.id);
         expect(reviewer?.interactionMode).toBe("planning-workflow");
         expect(
@@ -281,19 +281,19 @@ describe("ProductWorkflowReactor", () => {
             (event) =>
               event.type === "thread.turn-start-requested" &&
               event.payload.threadId === reviewer?.id &&
-              event.payload.workflowPromptId === WORKFLOW_PROMPT_IDS.planningIssueReviewerCodex,
+              event.payload.workflowPromptId === WORKFLOW_PROMPT_IDS.planningTicketReviewerCodex,
           ),
         ).toBe(true);
       }),
     ),
   );
 
-  it.effect("revises product issues after failed review and blocks at max failed reviews", () =>
+  it.effect("revises product tickets after failed review and blocks at max failed reviews", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         yield* seedProjectAndThread(system);
         const planningThread = yield* lockProductIntent(system);
-        const prd = yield* seedProductPrdAndIssues(system, planningThread.id);
+        const spec = yield* seedProductSpecAndTickets(system, planningThread.id);
 
         for (let index = 1; index <= 5; index += 1) {
           yield* system.engine.dispatch({
@@ -304,7 +304,7 @@ describe("ProductWorkflowReactor", () => {
             reviewerMessageId: messageId(`reviewer-${index}`),
             verdictMarkdown: "failed: missing acceptance detail",
             passed: false,
-            failingPlanningIssueIds: [prd.id],
+            failingPlanningTicketIds: [spec.id],
             createdAt: `2026-01-01T00:00:0${index}.000Z`,
           });
           yield* system.reactor.drain;
@@ -327,39 +327,41 @@ describe("ProductWorkflowReactor", () => {
             (event) =>
               event.type === "thread.turn-start-requested" &&
               event.payload.threadId === planningThread.id &&
-              event.payload.workflowPromptId === WORKFLOW_PROMPT_IDS.planningIssuesCodex,
+              event.payload.workflowPromptId === WORKFLOW_PROMPT_IDS.planningTicketsCodex,
           ),
         ).toBe(true);
       }),
     ),
   );
 
-  it.effect("launches implementation from the Product Grill root after passed product review", () =>
-    withSystem((system) =>
-      Effect.gen(function* () {
-        yield* seedProjectAndThread(system);
-        const planningThread = yield* lockProductIntent(system);
-        const prd = yield* seedProductPrdAndIssues(system, planningThread.id);
-        yield* system.engine.dispatch({
-          type: "thread.planning-reviewer-verdict.apply",
-          commandId: commandId("passed-verdict"),
-          threadId: planningThread.id,
-          reviewerThreadId: ThreadId.make("thread-reviewer-pass"),
-          reviewerMessageId: messageId("reviewer-pass"),
-          verdictMarkdown: "passed",
-          passed: true,
-          createdAt: "2026-01-01T00:00:10.000Z",
-        });
-        yield* system.reactor.drain;
+  it.effect(
+    "launches implementation from the Product Workflow root after passed product review",
+    () =>
+      withSystem((system) =>
+        Effect.gen(function* () {
+          yield* seedProjectAndThread(system);
+          const planningThread = yield* lockProductIntent(system);
+          const spec = yield* seedProductSpecAndTickets(system, planningThread.id);
+          yield* system.engine.dispatch({
+            type: "thread.planning-reviewer-verdict.apply",
+            commandId: commandId("passed-verdict"),
+            threadId: planningThread.id,
+            reviewerThreadId: ThreadId.make("thread-reviewer-pass"),
+            reviewerMessageId: messageId("reviewer-pass"),
+            verdictMarkdown: "passed",
+            passed: true,
+            createdAt: "2026-01-01T00:00:10.000Z",
+          });
+          yield* system.reactor.drain;
 
-        const snapshot = yield* system.query.getSnapshot();
-        expect(snapshot.implementationRuns.some((run) => run.prdId === prd.id)).toBe(true);
-        const implementationOrchestrator = snapshot.threads.find(
-          (thread) => thread.workflowRole === "implementation-orchestrator",
-        );
-        expect(implementationOrchestrator?.parentThreadId).toBe(productThreadId);
-      }),
-    ),
+          const snapshot = yield* system.query.getSnapshot();
+          expect(snapshot.implementationRuns.some((run) => run.specId === spec.id)).toBe(true);
+          const implementationOrchestrator = snapshot.threads.find(
+            (thread) => thread.workflowRole === "implementation-orchestrator",
+          );
+          expect(implementationOrchestrator?.parentThreadId).toBe(productThreadId);
+        }),
+      ),
   );
 
   it.effect("ignores normal planning workflows", () =>
@@ -372,18 +374,18 @@ describe("ProductWorkflowReactor", () => {
           createProject: false,
         });
         yield* system.engine.dispatch({
-          type: "thread.planning-prd.apply",
-          commandId: commandId("normal-prd-apply"),
+          type: "thread.planning-spec.apply",
+          commandId: commandId("normal-spec-apply"),
           threadId: planningThreadId,
-          sourceMessageId: messageId("normal-prd-source"),
+          sourceMessageId: messageId("normal-spec-source"),
           title: "Normal plan",
           summaryMarkdown: "Normal planning workflow.",
           createdAt: now,
         });
         let snapshot = yield* system.query.getSnapshot();
-        const normalPrd = snapshot.threads.find((thread) => thread.id === planningThreadId)
-          ?.planningWorkflow?.prd;
-        if (!normalPrd) throw new Error("Normal PRD missing.");
+        const normalSpec = snapshot.threads.find((thread) => thread.id === planningThreadId)
+          ?.planningWorkflow?.spec;
+        if (!normalSpec) throw new Error("Normal Spec missing.");
         yield* system.engine.dispatch({
           type: "thread.planning-reviewer-verdict.apply",
           commandId: commandId("normal-passed-verdict"),
@@ -397,7 +399,7 @@ describe("ProductWorkflowReactor", () => {
         yield* system.reactor.drain;
 
         snapshot = yield* system.query.getSnapshot();
-        expect(snapshot.implementationRuns.some((run) => run.prdId === normalPrd.id)).toBe(false);
+        expect(snapshot.implementationRuns.some((run) => run.specId === normalSpec.id)).toBe(false);
       }),
     ),
   );

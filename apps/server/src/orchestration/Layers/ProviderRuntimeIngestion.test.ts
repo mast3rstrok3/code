@@ -3049,7 +3049,7 @@ describe("ProviderRuntimeIngestion", () => {
     });
   });
 
-  it("accepts planning PRD artifacts from Product Grill planning orchestrator children", async () => {
+  it("accepts planning Spec artifacts from Product Workflow planning orchestrator children", async () => {
     const harness = await createHarness();
     const createdAt = "2026-01-01T00:00:00.000Z";
     const rootThreadId = asThreadId("thread-product-root");
@@ -3064,7 +3064,7 @@ describe("ProviderRuntimeIngestion", () => {
         ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         parentThreadId: null,
         workflowRole: null,
-        title: "Product Grill",
+        title: "Product Workflow",
         modelSelection: {
           instanceId: ProviderInstanceId.make("codex"),
           model: "gpt-5-codex",
@@ -3100,27 +3100,27 @@ describe("ProviderRuntimeIngestion", () => {
 
     harness.emit({
       type: "item.completed",
-      eventId: asEventId("evt-product-planning-prd"),
+      eventId: asEventId("evt-product-planning-spec"),
       provider: ProviderDriverKind.make("codex"),
       createdAt,
       threadId: planningThreadId,
-      turnId: asTurnId("turn-product-planning-prd"),
-      itemId: asItemId("item-product-planning-prd"),
+      turnId: asTurnId("turn-product-planning-spec"),
+      itemId: asItemId("item-product-planning-spec"),
       payload: {
         itemType: "assistant_message",
         status: "completed",
         detail:
-          '```json\n{ "type": "planning-prd-artifact", "title": "Checkout", "summaryMarkdown": "Build checkout." }\n```',
+          '```json\n{ "type": "planning-spec-artifact", "title": "Checkout", "summaryMarkdown": "Build checkout." }\n```',
       },
     });
 
     const planningThread = await waitForThread(
       harness.readModel,
-      (thread) => thread.planningWorkflow?.prd?.title === "Checkout",
+      (thread) => thread.planningWorkflow?.spec?.title === "Checkout",
       2_000,
       planningThreadId,
     );
-    expect(planningThread.planningWorkflow?.prd?.summaryMarkdown).toBe("Build checkout.");
+    expect(planningThread.planningWorkflow?.spec?.summaryMarkdown).toBe("Build checkout.");
   });
 
   it("creates workflow sub-agent threads from provider directives", async () => {
@@ -3164,9 +3164,9 @@ describe("ProviderRuntimeIngestion", () => {
         detail: `\`\`\`json
 {
   "type": "workflow-subagent-create",
-  "workflowPromptId": "${WORKFLOW_PROMPT_IDS.planningIssueReviewerCodex}",
-  "title": "Review checkout planning issues",
-  "promptMarkdown": "Review these checkout planning issues.",
+  "workflowPromptId": "${WORKFLOW_PROMPT_IDS.planningTicketReviewerCodex}",
+  "title": "Review checkout planning tickets",
+  "promptMarkdown": "Review these checkout planning tickets.",
   "expectedResult": "planning-reviewer-verdict"
 }
 \`\`\``,
@@ -3179,7 +3179,7 @@ describe("ProviderRuntimeIngestion", () => {
           thread.parentThreadId === parentThreadId &&
           thread.workflowRole === "planning-reviewer" &&
           thread.messages.some((message) =>
-            message.text.includes("Review these checkout planning issues."),
+            message.text.includes("Review these checkout planning tickets."),
           ),
       ),
     );
@@ -3189,7 +3189,7 @@ describe("ProviderRuntimeIngestion", () => {
     );
 
     expect(childThread?.interactionMode).toBe("planning-workflow");
-    expect(childThread?.title).toBe("Review checkout planning issues");
+    expect(childThread?.title).toBe("Review checkout planning tickets");
     expect(childThread?.branch).toBe("feature/planning");
     expect(childThread?.worktreePath).toBe("/tmp/planning-worktree");
     expect(childThread?.messages[0]?.text).toContain("Expected result directive");
@@ -3443,21 +3443,21 @@ describe("ProviderRuntimeIngestion", () => {
     expect(childThread.messages[0]?.text).toContain("Purpose: status.");
   });
 
-  it("rejects planning PRD artifacts from Product Grill root threads", async () => {
+  it("rejects planning Spec artifacts from Product Workflow root threads", async () => {
     const harness = await createHarness();
     const createdAt = "2026-01-01T00:00:00.000Z";
-    const rootThreadId = asThreadId("thread-product-root-prd-reject");
+    const rootThreadId = asThreadId("thread-product-root-spec-reject");
 
     await runtime!.runPromise(
       harness.engine.dispatch({
         type: "thread.create",
-        commandId: CommandId.make("cmd-product-root-prd-reject-create"),
+        commandId: CommandId.make("cmd-product-root-spec-reject-create"),
         threadId: rootThreadId,
         projectId: asProjectId("project-1"),
         ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         parentThreadId: null,
         workflowRole: null,
-        title: "Product Grill",
+        title: "Product Workflow",
         modelSelection: {
           instanceId: ProviderInstanceId.make("codex"),
           model: "gpt-5-codex",
@@ -3472,24 +3472,24 @@ describe("ProviderRuntimeIngestion", () => {
 
     harness.emit({
       type: "item.completed",
-      eventId: asEventId("evt-product-root-prd-reject"),
+      eventId: asEventId("evt-product-root-spec-reject"),
       provider: ProviderDriverKind.make("codex"),
       createdAt,
       threadId: rootThreadId,
-      turnId: asTurnId("turn-product-root-prd-reject"),
-      itemId: asItemId("item-product-root-prd-reject"),
+      turnId: asTurnId("turn-product-root-spec-reject"),
+      itemId: asItemId("item-product-root-spec-reject"),
       payload: {
         itemType: "assistant_message",
         status: "completed",
         detail:
-          '```json\n{ "type": "planning-prd-artifact", "title": "Checkout", "summaryMarkdown": "Build checkout." }\n```',
+          '```json\n{ "type": "planning-spec-artifact", "title": "Checkout", "summaryMarkdown": "Build checkout." }\n```',
       },
     });
 
     await harness.drain();
     const readModel = await harness.readModel();
     const rootThread = readModel.threads.find((thread) => thread.id === rootThreadId);
-    expect(rootThread?.planningWorkflow?.prd ?? null).toBe(null);
+    expect(rootThread?.planningWorkflow?.spec ?? null).toBe(null);
   });
 
   it("rejects product intent locks from non-root product threads", async () => {
@@ -3507,7 +3507,7 @@ describe("ProviderRuntimeIngestion", () => {
         ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         parentThreadId: null,
         workflowRole: null,
-        title: "Product Grill",
+        title: "Product Workflow",
         modelSelection: {
           instanceId: ProviderInstanceId.make("codex"),
           model: "gpt-5-codex",

@@ -535,14 +535,14 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
             return yield* new ProviderAdapterValidationError({
               provider: PROVIDER,
               operation: "startSession",
-              issue: `Expected provider '${PROVIDER}' but received '${input.provider}'.`,
+              ticket: `Expected provider '${PROVIDER}' but received '${input.provider}'.`,
             });
           }
           if (!input.cwd?.trim()) {
             return yield* new ProviderAdapterValidationError({
               provider: PROVIDER,
               operation: "startSession",
-              issue: "cwd is required and must be non-empty.",
+              ticket: "cwd is required and must be non-empty.",
             });
           }
 
@@ -992,7 +992,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                 return yield* new ProviderAdapterValidationError({
                   provider: PROVIDER,
                   operation: "sendTurn",
-                  issue: "Turn requires non-empty text or attachments.",
+                  ticket: "Turn requires non-empty text or attachments.",
                 });
               }
 
@@ -1403,7 +1403,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
             operation: "rollbackThread",
-            issue: "numTurns must be an integer >= 1.",
+            ticket: "numTurns must be an integer >= 1.",
           });
         }
         return yield* new ProviderAdapterRequestError({

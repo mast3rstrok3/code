@@ -110,7 +110,7 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
     if (!resolvedThreadId) {
       return yield* new ProviderValidationError({
         operation: "ProviderSessionDirectory.upsert",
-        issue: "threadId must be a non-empty string.",
+        ticket: "threadId must be a non-empty string.",
       });
     }
 
@@ -122,7 +122,7 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
     if (providerInstanceId === null || providerInstanceId === undefined) {
       return yield* new ProviderValidationError({
         operation: "ProviderSessionDirectory.upsert",
-        issue: "providerInstanceId is required for provider session runtime bindings.",
+        ticket: "providerInstanceId is required for provider session runtime bindings.",
       });
     }
     yield* repository

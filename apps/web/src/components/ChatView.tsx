@@ -201,11 +201,11 @@ import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
   useImplementationRuns,
   useLaunchImplementationRunCommand,
-  useLoadPlanningPrdBundleCommand,
+  useLoadPlanningSpecBundleCommand,
   usePlanningWorkflowThreadShells,
   useProject,
   useProjects,
-  useRequestPlanningIssueReviewCommand,
+  useRequestPlanningTicketReviewCommand,
   useRetryImplementationChangeRequestCommand,
   useThread,
   useThreadPlanningWorkflow,
@@ -245,7 +245,7 @@ import {
   deriveLockedProvider,
   readFileAsDataUrl,
   reconcileMountedTerminalThreadIds,
-  resolveProductGrillPlanningThreadId,
+  resolveProductWorkflowPlanningThreadId,
   resolveSendEnvMode,
   revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
@@ -1036,8 +1036,8 @@ function ChatViewContent(props: ChatViewProps) {
   const launchDevReview = useAtomCommand(threadEnvironment.launchDevReview, {
     reportFailure: false,
   });
-  const loadPlanningPrdBundle = useLoadPlanningPrdBundleCommand();
-  const requestPlanningIssueReview = useRequestPlanningIssueReviewCommand();
+  const loadPlanningSpecBundle = useLoadPlanningSpecBundleCommand();
+  const requestPlanningTicketReview = useRequestPlanningTicketReviewCommand();
   const launchImplementationRun = useLaunchImplementationRunCommand();
   const retryImplementationChangeRequest = useRetryImplementationChangeRequestCommand();
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, {
@@ -1457,25 +1457,27 @@ function ChatViewContent(props: ChatViewProps) {
     activeThread?.environmentId ?? null,
     activeProject?.id ?? null,
   );
-  const productGrillPlanningThreadId = useMemo(
+  const productWorkflowPlanningThreadId = useMemo(
     () =>
-      resolveProductGrillPlanningThreadId({
+      resolveProductWorkflowPlanningThreadId({
         activeThread,
         workflowThreadShells: activeWorkflowThreadShells,
       }),
     [activeThread, activeWorkflowThreadShells],
   );
-  const productGrillPlanningThreadRef = useMemo(
+  const productWorkflowPlanningThreadRef = useMemo(
     () =>
-      activeThread && productGrillPlanningThreadId
-        ? scopeThreadRef(activeThread.environmentId, productGrillPlanningThreadId)
+      activeThread && productWorkflowPlanningThreadId
+        ? scopeThreadRef(activeThread.environmentId, productWorkflowPlanningThreadId)
         : null,
-    [activeThread, productGrillPlanningThreadId],
+    [activeThread, productWorkflowPlanningThreadId],
   );
-  const productGrillPlanningWorkflow = useThreadPlanningWorkflow(productGrillPlanningThreadRef);
+  const productWorkflowPlanningWorkflow = useThreadPlanningWorkflow(
+    productWorkflowPlanningThreadRef,
+  );
   const displayedPlanningWorkflow =
     activeThread?.interactionMode === "product-workflow" && activeThread.workflowRole === null
-      ? productGrillPlanningWorkflow
+      ? productWorkflowPlanningWorkflow
       : activePlanningWorkflow;
   const activeEnvironmentShell = useEnvironmentQuery(
     activeThread ? environmentShell.stateAtom(activeThread.environmentId) : null,
@@ -2254,17 +2256,17 @@ function ChatViewContent(props: ChatViewProps) {
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const activeWorkspaceRoot = activeThreadWorktreePath ?? activeProjectCwd ?? undefined;
   const implementationBranchIdentity = useMemo(() => {
-    if (!activeWorkspaceRoot || !activePlanningWorkflow?.prd) {
+    if (!activeWorkspaceRoot || !activePlanningWorkflow?.spec) {
       return null;
     }
     return resolveImplementationBranchIdentity({
       workspaceRoot: activeWorkspaceRoot,
-      prdId: activePlanningWorkflow.prd.id,
-      prdTitle: activePlanningWorkflow.prd.title,
+      specId: activePlanningWorkflow.spec.id,
+      specTitle: activePlanningWorkflow.spec.title,
       baseBranch: activeThread?.branch ?? null,
       implementationRuns: activeImplementationRuns,
     });
-  }, [activeImplementationRuns, activePlanningWorkflow?.prd, activeWorkspaceRoot]);
+  }, [activeImplementationRuns, activePlanningWorkflow?.spec, activeWorkspaceRoot]);
   const openWorkflowThread = useCallback(
     (targetThreadId: ThreadId) => {
       void navigate({
@@ -2277,41 +2279,41 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [environmentId, navigate],
   );
-  const handleLoadPlanningPrdBundle = useCallback(
-    (prdId: string) => {
+  const handleLoadPlanningSpecBundle = useCallback(
+    (specId: string) => {
       if (!activeThread) return;
-      void loadPlanningPrdBundle({
+      void loadPlanningSpecBundle({
         environmentId: activeThread.environmentId,
         input: {
           threadId: activeThread.id,
-          prdId,
+          specId,
           source: "projection",
         },
       });
     },
-    [activeThread, loadPlanningPrdBundle],
+    [activeThread, loadPlanningSpecBundle],
   );
-  const handleRequestPlanningIssueReview = useCallback(
-    (prdId: string) => {
+  const handleRequestPlanningTicketReview = useCallback(
+    (specId: string) => {
       if (!activeThread) return;
-      void requestPlanningIssueReview({
+      void requestPlanningTicketReview({
         environmentId: activeThread.environmentId,
         input: {
           threadId: activeThread.id,
-          prdId,
+          specId,
         },
       });
     },
-    [activeThread, requestPlanningIssueReview],
+    [activeThread, requestPlanningTicketReview],
   );
   const handleLaunchImplementationRun = useCallback(
-    (prdId: string) => {
+    (specId: string) => {
       if (!activeThread || implementationBranchIdentity === null) return;
       void launchImplementationRun({
         environmentId: activeThread.environmentId,
         input: {
           threadId: activeThread.id,
-          prdId,
+          specId,
           baseBranch: activeThread.branch ?? "main",
           pinnedCommit: "HEAD",
           orchestratorBranch: implementationBranchIdentity.orchestratorBranch,
@@ -5350,9 +5352,9 @@ function ChatViewContent(props: ChatViewProps) {
         timestampFormat={timestampFormat}
         mode="embedded"
         onOpenThread={openWorkflowThread}
-        onLoadPrdBundle={handleLoadPlanningPrdBundle}
+        onLoadSpecBundle={handleLoadPlanningSpecBundle}
         automationOwned={activeThread?.interactionMode === "product-workflow"}
-        onRequestIssueReview={handleRequestPlanningIssueReview}
+        onRequestTicketReview={handleRequestPlanningTicketReview}
         onLaunchImplementationRun={handleLaunchImplementationRun}
         onRetryImplementationChangeRequest={handleRetryImplementationChangeRequest}
       />

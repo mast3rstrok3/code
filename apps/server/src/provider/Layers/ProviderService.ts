@@ -83,12 +83,12 @@ const ProviderRollbackConversationInput = Schema.Struct({
 
 function toValidationError(
   operation: string,
-  issue: string,
+  ticket: string,
   cause?: unknown,
 ): ProviderValidationError {
   return new ProviderValidationError({
     operation,
-    issue,
+    ticket,
     ...(cause !== undefined ? { cause } : {}),
   });
 }
@@ -104,7 +104,7 @@ const decodeInputOrValidationError = <S extends Schema.Top>(input: {
       (schemaError) =>
         new ProviderValidationError({
           operation: input.operation,
-          issue: SchemaIssue.makeFormatterDefault()(schemaError.issue),
+          ticket: SchemaIssue.makeFormatterDefault()(schemaError.issue),
           cause: schemaError,
         }),
     ),

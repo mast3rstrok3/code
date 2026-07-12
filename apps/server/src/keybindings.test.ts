@@ -221,17 +221,17 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
         configState.keybindings,
         Keybindings.compileResolvedKeybindingsConfig(Keybindings.DEFAULT_KEYBINDINGS),
       );
-      assert.deepEqual(configState.issues, [
+      assert.deepEqual(configState.tickets, [
         {
           kind: "keybindings.malformed-config",
-          message: configState.issues[0]?.message ?? "",
+          message: configState.tickets[0]?.message ?? "",
         },
       ]);
       assert.equal(yield* fs.readFileString(keybindingsConfigPath), "{ not-json");
     }).pipe(Effect.provide(makeKeybindingsLayer())),
   );
 
-  it.effect("ignores invalid entries in runtime and reports them as issues", () =>
+  it.effect("ignores invalid entries in runtime and reports them as tickets", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
@@ -254,16 +254,16 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
       assert.isFalse(
         configState.keybindings.some((entry) => String(entry.command) === "invalid.command"),
       );
-      assert.deepEqual(configState.issues, [
+      assert.deepEqual(configState.tickets, [
         {
           kind: "keybindings.invalid-entry",
           index: 1,
-          message: configState.issues[0]?.message ?? "",
+          message: configState.tickets[0]?.message ?? "",
         },
         {
           kind: "keybindings.invalid-entry",
           index: 2,
-          message: configState.issues[1]?.message ?? "",
+          message: configState.tickets[1]?.message ?? "",
         },
       ]);
     }).pipe(Effect.provide(makeKeybindingsLayer())),

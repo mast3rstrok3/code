@@ -569,7 +569,7 @@ const buildAppUnderTest = (options?: {
         Layer.mock(Keybindings.Keybindings)({
           loadConfigState: Effect.succeed({
             keybindings: [],
-            issues: [],
+            tickets: [],
           }),
           streamChanges: Stream.empty,
           ...options?.layers?.keybindings,
@@ -4194,7 +4194,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         withWsRpcClient(wsUrl, (client) => client[WS_METHODS.serverUpsertKeybinding](rule)),
       );
 
-      assert.deepEqual(response.issues, []);
+      assert.deepEqual(response.tickets, []);
       assert.deepEqual(response.keybindings, [resolved]);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
@@ -4230,7 +4230,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         withWsRpcClient(wsUrl, (client) => client[WS_METHODS.serverRemoveKeybinding](rule)),
       );
 
-      assert.deepEqual(response.issues, []);
+      assert.deepEqual(response.tickets, []);
       assert.deepEqual(response.keybindings, [resolved]);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
@@ -4329,7 +4329,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       ] as const;
       const changeEvent = {
         keybindings: [],
-        issues: [],
+        tickets: [],
       } as const;
 
       yield* buildAppUnderTest({
@@ -4341,7 +4341,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           keybindings: {
             loadConfigState: Effect.succeed({
               keybindings: [],
-              issues: [],
+              tickets: [],
             }),
             streamChanges: Stream.succeed(changeEvent),
           },
@@ -4363,7 +4363,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       if (first?.type === "snapshot") {
         assert.equal(first.version, 1);
         assert.deepEqual(first.config.keybindings, []);
-        assert.deepEqual(first.config.issues, []);
+        assert.deepEqual(first.config.tickets, []);
         assert.deepEqual(first.config.providers, providers);
         assert.equal(first.config.observability.logsDirectoryPath.endsWith("/logs"), true);
         assert.equal(first.config.observability.localTracingEnabled, true);
@@ -4376,7 +4376,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.deepEqual(second, {
         version: 1,
         type: "keybindingsUpdated",
-        payload: { keybindings: [], issues: [] },
+        payload: { keybindings: [], tickets: [] },
       });
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
@@ -4404,7 +4404,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           keybindings: {
             loadConfigState: Effect.succeed({
               keybindings: [],
-              issues: [],
+              tickets: [],
             }),
             streamChanges: Stream.empty,
           },
@@ -5624,6 +5624,21 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             getSnapshot: () => Effect.succeed(snapshot),
             getSnapshotSequence: () => Effect.die("subscribeThread should use detail snapshots"),
             getThreadDetailSnapshotById: (threadId) =>
+              Effect.succeed(
+                threadId === ThreadId.make("thread-1")
+                  ? Option.some({
+                      snapshotSequence: 99,
+                      thread: snapshot.threads[0]!,
+                    })
+                  : Option.none(),
+              ),
+            getThreadDetailById: (threadId) =>
+              Effect.succeed(
+                threadId === ThreadId.make("thread-1")
+                  ? Option.some(snapshot.threads[0]!)
+                  : Option.none(),
+              ),
+            getThreadDetailSnapshot: (threadId) =>
               Effect.succeed(
                 threadId === ThreadId.make("thread-1")
                   ? Option.some({

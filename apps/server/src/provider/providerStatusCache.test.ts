@@ -71,7 +71,7 @@ it.layer(NodeServices.layer)("providerStatusCache", (it) => {
       assert.strictEqual(failure.path, cachePath);
       assert.strictEqual(typeof failure.errorTag, "string");
       assert.ok(!("cause" in failure));
-      assert.ok(!("issues" in failure));
+      assert.ok(!("tickets" in failure));
       assert.ok(!Object.values(failure).map(String).join("\n").includes(secretCacheValue));
     }).pipe(Effect.provide(Logger.layer([logger], { mergeWithExisting: false })));
   });

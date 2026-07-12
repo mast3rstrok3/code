@@ -24,14 +24,14 @@ export type WorkflowDirective =
       readonly summaryMarkdown: string;
     }
   | {
-      readonly type: "planning-prd-artifact";
+      readonly type: "planning-spec-artifact";
       readonly title: string;
       readonly summaryMarkdown: string;
     }
   | {
-      readonly type: "planning-issues-artifact";
-      readonly prdId: string;
-      readonly issues: ReadonlyArray<{
+      readonly type: "planning-tickets-artifact";
+      readonly specId: string;
+      readonly tickets: ReadonlyArray<{
         readonly key: string;
         readonly title: string;
         readonly bodyMarkdown: string;
@@ -42,10 +42,10 @@ export type WorkflowDirective =
       readonly type: "planning-reviewer-verdict";
       readonly cycleNumber: number;
       readonly passed: boolean;
-      readonly failingPlanningIssueIds: ReadonlyArray<string>;
+      readonly failingPlanningTicketIds: ReadonlyArray<string>;
       readonly dependencyFeedback: ReadonlyArray<string>;
-      readonly perIssueFeedback: ReadonlyArray<{
-        readonly issueId: string;
+      readonly perTicketFeedback: ReadonlyArray<{
+        readonly ticketId: string;
         readonly passed: boolean;
         readonly feedbackMarkdown: string;
       }>;
@@ -67,6 +67,12 @@ export type WorkflowDirective =
       readonly commitSha?: string;
       readonly validations: ReadonlyArray<OrchestrationImplementationValidationResult>;
       readonly notesMarkdown: string;
+    }
+  | {
+      readonly type: "implementation-code-review-result";
+      readonly runId: string;
+      readonly status: "clean" | "findings" | "blocked";
+      readonly reportMarkdown: string;
     }
   | {
       readonly type: "workflow-subagent-create";
@@ -133,6 +139,7 @@ const WORKFLOW_AGENT_MESSAGE_WORKFLOW_ROLES: ReadonlySet<OrchestrationThreadWork
     "implementation-validator",
     "implementation-qa-reviewer",
     "implementation-fixer",
+    "implementation-code-reviewer",
   ]);
 
 function parseWorkflowAgentMessageTarget(value: unknown): WorkflowAgentMessageTarget | string {
@@ -204,7 +211,7 @@ function parseValidationResults(
   return validations;
 }
 
-function parsePlanningIssues(value: unknown):
+function parsePlanningTickets(value: unknown):
   | ReadonlyArray<{
       readonly key: string;
       readonly title: string;
@@ -213,13 +220,13 @@ function parsePlanningIssues(value: unknown):
     }>
   | string {
   if (!Array.isArray(value)) {
-    return "planning-issues-artifact.issues must be an array.";
+    return "planning-tickets-artifact.tickets must be an array.";
   }
-  const issues = [];
+  const tickets = [];
   for (const entry of value) {
     const record = asRecord(entry);
     if (record === null) {
-      return "planning-issues-artifact issues must be objects.";
+      return "planning-tickets-artifact tickets must be objects.";
     }
     const key = requiredString(record, "key");
     const title = requiredString(record, "title");
@@ -229,37 +236,37 @@ function parsePlanningIssues(value: unknown):
     if (title.startsWith("Directive field")) return title;
     if (bodyMarkdown.startsWith("Directive field")) return bodyMarkdown;
     if (typeof dependencyKeys === "string") return dependencyKeys;
-    issues.push({ key, title, bodyMarkdown, dependencyKeys });
+    tickets.push({ key, title, bodyMarkdown, dependencyKeys });
   }
-  return issues;
+  return tickets;
 }
 
-function parsePerIssueFeedback(value: unknown):
+function parsePerTicketFeedback(value: unknown):
   | ReadonlyArray<{
-      readonly issueId: string;
+      readonly ticketId: string;
       readonly passed: boolean;
       readonly feedbackMarkdown: string;
     }>
   | string {
   if (!Array.isArray(value)) {
-    return "planning-reviewer-verdict.perIssueFeedback must be an array.";
+    return "planning-reviewer-verdict.perTicketFeedback must be an array.";
   }
   const feedbackEntries = [];
   for (const entry of value) {
     const record = asRecord(entry);
     if (record === null) {
-      return "planning-reviewer-verdict perIssueFeedback entries must be objects.";
+      return "planning-reviewer-verdict perTicketFeedback entries must be objects.";
     }
-    const issueId = requiredString(record, "issueId");
+    const ticketId = requiredString(record, "ticketId");
     const feedbackMarkdown = requiredString(record, "feedbackMarkdown");
     const passed = record["passed"];
-    if (issueId.startsWith("Directive field")) return issueId;
+    if (ticketId.startsWith("Directive field")) return ticketId;
     if (feedbackMarkdown.startsWith("Directive field")) return feedbackMarkdown;
     if (typeof passed !== "boolean") {
-      return "planning-reviewer-verdict perIssueFeedback.passed must be boolean.";
+      return "planning-reviewer-verdict perTicketFeedback.passed must be boolean.";
     }
     feedbackEntries.push({
-      issueId,
+      ticketId,
       passed,
       feedbackMarkdown,
     });
@@ -276,21 +283,27 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
       if (summaryMarkdown.startsWith("Directive field")) return summaryMarkdown;
       return { type: "product-intent-locked", title, summaryMarkdown };
     }
-    case "planning-prd-artifact": {
+    case "planning-spec-artifact": {
       const title = requiredString(record, "title");
       const summaryMarkdown = requiredString(record, "summaryMarkdown");
       if (title.startsWith("Directive field")) return title;
       if (summaryMarkdown.startsWith("Directive field")) return summaryMarkdown;
-      return { type: "planning-prd-artifact", title, summaryMarkdown };
+      return { type: "planning-spec-artifact", title, summaryMarkdown };
     }
-    case "planning-issues-artifact": {
-      const prdId = requiredString(record, "prdId");
-      const issues = parsePlanningIssues(record["issues"]);
-      if (prdId.startsWith("Directive field")) return prdId;
-      if (typeof issues === "string") return issues;
-      return { type: "planning-issues-artifact", prdId, issues };
+    case "planning-tickets-artifact": {
+      const specId = requiredString(record, "specId");
+      const tickets = parsePlanningTickets(record["tickets"]);
+      if (specId.startsWith("Directive field")) return specId;
+      if (typeof tickets === "string") return tickets;
+      return { type: "planning-tickets-artifact", specId, tickets };
     }
     case "planning-reviewer-verdict": {
+      if (
+        record["failingPlanningIssueIds"] !== undefined ||
+        record["perIssueFeedback"] !== undefined
+      ) {
+        return "planning-reviewer-verdict uses Ticket fields; legacy Issue fields are not accepted.";
+      }
       const cycleNumber = record["cycleNumber"];
       const passed = record["passed"];
       if (typeof cycleNumber !== "number" || !Number.isInteger(cycleNumber) || cycleNumber < 1) {
@@ -299,23 +312,23 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
       if (typeof passed !== "boolean") {
         return "planning-reviewer-verdict.passed must be boolean.";
       }
-      const failingPlanningIssueIds = stringArray(record["failingPlanningIssueIds"] ?? []);
+      const failingPlanningTicketIds = stringArray(record["failingPlanningTicketIds"] ?? []);
       const dependencyFeedback = stringArray(record["dependencyFeedback"] ?? []);
-      const perIssueFeedback = parsePerIssueFeedback(record["perIssueFeedback"] ?? []);
-      if (typeof failingPlanningIssueIds === "string") return failingPlanningIssueIds;
+      const perTicketFeedback = parsePerTicketFeedback(record["perTicketFeedback"] ?? []);
+      if (typeof failingPlanningTicketIds === "string") return failingPlanningTicketIds;
       if (typeof dependencyFeedback === "string") return dependencyFeedback;
-      if (typeof perIssueFeedback === "string") return perIssueFeedback;
+      if (typeof perTicketFeedback === "string") return perTicketFeedback;
       return {
         type: "planning-reviewer-verdict",
         cycleNumber,
         passed,
-        failingPlanningIssueIds,
+        failingPlanningTicketIds,
         dependencyFeedback,
-        perIssueFeedback,
+        perTicketFeedback,
       };
     }
     case "implementation-worker-result": {
-      const issueId = requiredString(record, "issueId");
+      const ticketId = requiredString(record, "ticketId");
       const workerThreadId = requiredString(record, "workerThreadId");
       const branch = requiredString(record, "branch");
       const worktreePath = requiredString(record, "worktreePath");
@@ -324,7 +337,7 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
       const validations = parseValidationResults(record["validations"] ?? []);
       const notesMarkdown = record["notesMarkdown"];
       const commitSha = record["commitSha"];
-      for (const value of [issueId, workerThreadId, branch, worktreePath, reportedAt]) {
+      for (const value of [ticketId, workerThreadId, branch, worktreePath, reportedAt]) {
         if (value.startsWith("Directive field")) return value;
       }
       if (status !== "succeeded" && status !== "failed") {
@@ -340,7 +353,7 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
         }
         return {
           type: "implementation-worker-result",
-          issueId,
+          ticketId,
           workerThreadId: ThreadId.make(workerThreadId),
           branch,
           worktreePath,
@@ -360,7 +373,7 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
       }
       return {
         type: "implementation-worker-result",
-        issueId,
+        ticketId,
         workerThreadId: ThreadId.make(workerThreadId),
         branch,
         worktreePath,
@@ -414,6 +427,22 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
         notesMarkdown,
       };
     }
+    case "implementation-code-review-result": {
+      const runId = requiredString(record, "runId");
+      const reportMarkdown = requiredString(record, "reportMarkdown");
+      const status = record["status"];
+      if (runId.startsWith("Directive field")) return runId;
+      if (reportMarkdown.startsWith("Directive field")) return reportMarkdown;
+      if (status !== "clean" && status !== "findings" && status !== "blocked") {
+        return "implementation-code-review-result.status must be clean, findings, or blocked.";
+      }
+      return {
+        type: "implementation-code-review-result",
+        runId,
+        status,
+        reportMarkdown,
+      };
+    }
     case "workflow-subagent-create": {
       const workflowPromptId = requiredString(record, "workflowPromptId");
       const title = requiredString(record, "title");
@@ -447,6 +476,9 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
         messageMarkdown,
       };
     }
+    case "planning-prd-artifact":
+    case "planning-issues-artifact":
+      return "Legacy planning artifact directives are not accepted; use Spec and Ticket directives.";
     default:
       return "none";
   }

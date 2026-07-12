@@ -18,12 +18,12 @@ export class OrchestrationCommandJsonParseError extends Schema.TaggedErrorClass<
 export class OrchestrationCommandDecodeError extends Schema.TaggedErrorClass<OrchestrationCommandDecodeError>()(
   "OrchestrationCommandDecodeError",
   {
-    issue: Schema.String,
+    ticket: Schema.String,
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
-    return `Invalid orchestration command payload: ${this.issue}`;
+    return `Invalid orchestration command payload: ${this.ticket}`;
   }
 }
 
@@ -57,12 +57,12 @@ export class OrchestrationProjectorDecodeError extends Schema.TaggedErrorClass<O
   "OrchestrationProjectorDecodeError",
   {
     eventType: Schema.String,
-    issue: Schema.String,
+    ticket: Schema.String,
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
-    return `Projector decode failed for ${this.eventType}: ${this.issue}`;
+    return `Projector decode failed for ${this.eventType}: ${this.ticket}`;
   }
 }
 
@@ -93,7 +93,7 @@ export type OrchestrationEngineError =
 
 export function toOrchestrationCommandDecodeError(error: Schema.SchemaError) {
   return new OrchestrationCommandDecodeError({
-    issue: SchemaIssue.makeFormatterDefault()(error.issue),
+    ticket: SchemaIssue.makeFormatterDefault()(error.issue),
     cause: error,
   });
 }
@@ -102,7 +102,7 @@ export function toProjectorDecodeError(eventType: string) {
   return (error: Schema.SchemaError): OrchestrationProjectorDecodeError =>
     new OrchestrationProjectorDecodeError({
       eventType,
-      issue: SchemaIssue.makeFormatterDefault()(error.issue),
+      ticket: SchemaIssue.makeFormatterDefault()(error.issue),
       cause: error,
     });
 }

@@ -124,31 +124,13 @@ export const RuntimeMode = Schema.Literals([
 ]);
 export type RuntimeMode = typeof RuntimeMode.Type;
 export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
-const ProviderInteractionModeWire = Schema.Literals([
-  "default",
-  "plan",
-  "planning-workflow",
-  "implementation-workflow",
-  "yolo-workflow",
-  "product-workflow",
-]);
-const ProviderInteractionModeCanonical = Schema.Literals([
+export const ProviderInteractionMode = Schema.Literals([
   "default",
   "plan",
   "planning-workflow",
   "implementation-workflow",
   "product-workflow",
 ]);
-export const ProviderInteractionMode = ProviderInteractionModeWire.pipe(
-  Schema.decodeTo(
-    ProviderInteractionModeCanonical,
-    SchemaTransformation.transformOrFail({
-      decode: (mode) =>
-        Effect.succeed(mode === "yolo-workflow" ? ("product-workflow" as const) : mode),
-      encode: (mode) => Effect.succeed(mode),
-    }),
-  ),
-);
 export type ProviderInteractionMode = typeof ProviderInteractionMode.Type;
 export const DEFAULT_PROVIDER_INTERACTION_MODE: ProviderInteractionMode = "default";
 export const isPlanningWorkflowInteractionMode = (
@@ -283,11 +265,11 @@ export const OrchestrationProposedPlan = Schema.Struct({
 });
 export type OrchestrationProposedPlan = typeof OrchestrationProposedPlan.Type;
 
-export const OrchestrationPlanningPrdId = TrimmedNonEmptyString;
-export type OrchestrationPlanningPrdId = typeof OrchestrationPlanningPrdId.Type;
+export const OrchestrationPlanningSpecId = TrimmedNonEmptyString;
+export type OrchestrationPlanningSpecId = typeof OrchestrationPlanningSpecId.Type;
 
-export const OrchestrationPlanningPrd = Schema.Struct({
-  id: OrchestrationPlanningPrdId,
+export const OrchestrationPlanningSpec = Schema.Struct({
+  id: OrchestrationPlanningSpecId,
   title: TrimmedNonEmptyString,
   summaryMarkdown: TrimmedNonEmptyString,
   tenantId: Schema.NullOr(TrimmedNonEmptyString).pipe(
@@ -302,43 +284,44 @@ export const OrchestrationPlanningPrd = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   workflowId: TrimmedNonEmptyString,
-  issueCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+  ticketCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
-export type OrchestrationPlanningPrd = typeof OrchestrationPlanningPrd.Type;
+export type OrchestrationPlanningSpec = typeof OrchestrationPlanningSpec.Type;
 
-export const OrchestrationPlanningIssueId = TrimmedNonEmptyString;
-export type OrchestrationPlanningIssueId = typeof OrchestrationPlanningIssueId.Type;
+export const OrchestrationPlanningTicketId = TrimmedNonEmptyString;
+export type OrchestrationPlanningTicketId = typeof OrchestrationPlanningTicketId.Type;
 
-export const OrchestrationPlanningIssueDependency = Schema.Struct({
-  prdId: OrchestrationPlanningPrdId,
-  issueId: OrchestrationPlanningIssueId,
+export const OrchestrationPlanningTicketDependency = Schema.Struct({
+  specId: OrchestrationPlanningSpecId,
+  ticketId: OrchestrationPlanningTicketId,
 });
-export type OrchestrationPlanningIssueDependency = typeof OrchestrationPlanningIssueDependency.Type;
+export type OrchestrationPlanningTicketDependency =
+  typeof OrchestrationPlanningTicketDependency.Type;
 
-export const OrchestrationPlanningIssue = Schema.Struct({
-  id: OrchestrationPlanningIssueId,
-  prdId: OrchestrationPlanningPrdId,
+export const OrchestrationPlanningTicket = Schema.Struct({
+  id: OrchestrationPlanningTicketId,
+  specId: OrchestrationPlanningSpecId,
   ordinal: NonNegativeInt,
   title: TrimmedNonEmptyString,
   bodyMarkdown: TrimmedNonEmptyString,
-  dependencies: Schema.Array(OrchestrationPlanningIssueDependency).pipe(
+  dependencies: Schema.Array(OrchestrationPlanningTicketDependency).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   status: TrimmedNonEmptyString.pipe(Schema.withDecodingDefault(Effect.succeed("open"))),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
-export type OrchestrationPlanningIssue = typeof OrchestrationPlanningIssue.Type;
+export type OrchestrationPlanningTicket = typeof OrchestrationPlanningTicket.Type;
 
-export const OrchestrationPlanningReviewIssueFeedback = Schema.Struct({
-  issueId: OrchestrationPlanningIssueId,
+export const OrchestrationPlanningReviewTicketFeedback = Schema.Struct({
+  ticketId: OrchestrationPlanningTicketId,
   passed: Schema.Boolean,
   feedbackMarkdown: Schema.String,
 });
-export type OrchestrationPlanningReviewIssueFeedback =
-  typeof OrchestrationPlanningReviewIssueFeedback.Type;
+export type OrchestrationPlanningReviewTicketFeedback =
+  typeof OrchestrationPlanningReviewTicketFeedback.Type;
 
 export const OrchestrationPlanningReviewCycleStatus = Schema.Literals(["passed", "failed"]);
 export type OrchestrationPlanningReviewCycleStatus =
@@ -350,66 +333,35 @@ export const OrchestrationPlanningReviewCycle = Schema.Struct({
   reviewerThreadId: ThreadId,
   reviewerMessageId: MessageId,
   verdictMarkdown: Schema.String,
-  failingPlanningIssueIds: Schema.Array(OrchestrationPlanningIssueId).pipe(
+  failingPlanningTicketIds: Schema.Array(OrchestrationPlanningTicketId).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   dependencyFeedback: Schema.Array(Schema.String).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
-  perIssueFeedback: Schema.Array(OrchestrationPlanningReviewIssueFeedback).pipe(
+  perTicketFeedback: Schema.Array(OrchestrationPlanningReviewTicketFeedback).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   createdAt: IsoDateTime,
 });
 export type OrchestrationPlanningReviewCycle = typeof OrchestrationPlanningReviewCycle.Type;
 
-const OrchestrationPlanningWorkflowStageWire = Schema.Literals([
+export const OrchestrationPlanningWorkflowStage = Schema.Literals([
   "grill",
-  "artifact-generation-gate",
-  "artifact-generation",
-  "prd-authoring",
-  "issues-authoring",
-  "issue-review",
-  "issue-revision",
+  "spec-authoring",
+  "tickets-authoring",
+  "ticket-review",
+  "ticket-revision",
   "completed",
   "needs-human-attention",
 ]);
-
-const OrchestrationPlanningWorkflowStageCanonical = Schema.Literals([
-  "grill",
-  "prd-authoring",
-  "issues-authoring",
-  "issue-review",
-  "issue-revision",
-  "completed",
-  "needs-human-attention",
-]);
-
-export const OrchestrationPlanningWorkflowStage = OrchestrationPlanningWorkflowStageWire.pipe(
-  Schema.decodeTo(
-    OrchestrationPlanningWorkflowStageCanonical,
-    SchemaTransformation.transformOrFail({
-      decode: (stage) => {
-        switch (stage) {
-          case "artifact-generation-gate":
-            return Effect.succeed("prd-authoring" as const);
-          case "artifact-generation":
-            return Effect.succeed("issue-review" as const);
-          default:
-            return Effect.succeed(stage);
-        }
-      },
-      encode: (stage) => Effect.succeed(stage),
-    }),
-  ),
-);
 export type OrchestrationPlanningWorkflowStage = typeof OrchestrationPlanningWorkflowStage.Type;
 
 export const OrchestrationPlanningWorkflow = Schema.Struct({
   stage: OrchestrationPlanningWorkflowStage,
-  createIssuesAvailable: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  prd: Schema.NullOr(OrchestrationPlanningPrd),
-  issues: Schema.Array(OrchestrationPlanningIssue).pipe(
+  createTicketsAvailable: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  spec: Schema.NullOr(OrchestrationPlanningSpec),
+  tickets: Schema.Array(OrchestrationPlanningTicket).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   reviewCycles: Schema.Array(OrchestrationPlanningReviewCycle).pipe(
@@ -418,16 +370,16 @@ export const OrchestrationPlanningWorkflow = Schema.Struct({
 });
 export type OrchestrationPlanningWorkflow = typeof OrchestrationPlanningWorkflow.Type;
 
-export const OrchestrationPlanningPrdBundle = Schema.Struct({
-  prd: OrchestrationPlanningPrd,
-  issues: Schema.Array(OrchestrationPlanningIssue).pipe(
+export const OrchestrationPlanningSpecBundle = Schema.Struct({
+  spec: OrchestrationPlanningSpec,
+  tickets: Schema.Array(OrchestrationPlanningTicket).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   reviewCycles: Schema.Array(OrchestrationPlanningReviewCycle).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
 });
-export type OrchestrationPlanningPrdBundle = typeof OrchestrationPlanningPrdBundle.Type;
+export type OrchestrationPlanningSpecBundle = typeof OrchestrationPlanningSpecBundle.Type;
 
 export const IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS = 5;
 
@@ -465,6 +417,8 @@ export const OrchestrationImplementationRunStatus = Schema.Literals([
   "validating",
   "qa-reviewing",
   "fixing",
+  "code-reviewing",
+  "code-review-fixing",
   "needs-human-attention",
   "completed",
   "canceled",
@@ -472,15 +426,15 @@ export const OrchestrationImplementationRunStatus = Schema.Literals([
 export type OrchestrationImplementationRunStatus = typeof OrchestrationImplementationRunStatus.Type;
 
 export const OrchestrationImplementationDependencyEdge = Schema.Struct({
-  blockingIssueId: OrchestrationPlanningIssueId,
-  dependentIssueId: OrchestrationPlanningIssueId,
+  blockingTicketId: OrchestrationPlanningTicketId,
+  dependentTicketId: OrchestrationPlanningTicketId,
 });
 export type OrchestrationImplementationDependencyEdge =
   typeof OrchestrationImplementationDependencyEdge.Type;
 
 export const OrchestrationImplementationPlannedWorker = Schema.Struct({
-  issueId: OrchestrationPlanningIssueId,
-  dependencyIssueIds: Schema.Array(OrchestrationPlanningIssueId).pipe(
+  ticketId: OrchestrationPlanningTicketId,
+  dependencyTicketIds: Schema.Array(OrchestrationPlanningTicketId).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   branch: TrimmedNonEmptyString,
@@ -548,8 +502,8 @@ export type OrchestrationImplementationQaToolingState =
   typeof OrchestrationImplementationQaToolingState.Type;
 
 export const OrchestrationImplementationLaunchSummary = Schema.Struct({
-  prdId: OrchestrationPlanningPrdId,
-  planningIssueIds: Schema.Array(OrchestrationPlanningIssueId),
+  specId: OrchestrationPlanningSpecId,
+  planningTicketIds: Schema.Array(OrchestrationPlanningTicketId),
   baseBranch: TrimmedNonEmptyString,
   pinnedCommit: TrimmedNonEmptyString,
   orchestratorBranch: TrimmedNonEmptyString,
@@ -557,7 +511,7 @@ export const OrchestrationImplementationLaunchSummary = Schema.Struct({
   dependencyEdges: Schema.Array(OrchestrationImplementationDependencyEdge).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
-  initialReadyIssueIds: Schema.Array(OrchestrationPlanningIssueId).pipe(
+  initialReadyTicketIds: Schema.Array(OrchestrationPlanningTicketId).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   plannedWorkers: Schema.Array(OrchestrationImplementationPlannedWorker).pipe(
@@ -625,7 +579,7 @@ export const OrchestrationImplementationDevReviewDocument = Schema.Struct({
       ),
     }),
   ).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
-  issues: Schema.Array(
+  tickets: Schema.Array(
     Schema.Struct({
       severity: Schema.Literals(["blocker", "major", "minor"]),
       title: TrimmedNonEmptyString,
@@ -635,7 +589,7 @@ export const OrchestrationImplementationDevReviewDocument = Schema.Struct({
       expectedMarkdown: Schema.String,
       actualMarkdown: Schema.String,
       suggestedFixMarkdown: Schema.String,
-      impactedIssueIds: Schema.Array(OrchestrationPlanningIssueId).pipe(
+      impactedTicketIds: Schema.Array(OrchestrationPlanningTicketId).pipe(
         Schema.withDecodingDefault(Effect.succeed([])),
       ),
     }),
@@ -669,7 +623,7 @@ export type OrchestrationImplementationDevReviewArtifact =
   typeof OrchestrationImplementationDevReviewArtifact.Type;
 
 const OrchestrationImplementationWorkerResultBase = {
-  issueId: OrchestrationPlanningIssueId,
+  ticketId: OrchestrationPlanningTicketId,
   workerThreadId: ThreadId,
   branch: TrimmedNonEmptyString,
   worktreePath: TrimmedNonEmptyString,
@@ -697,20 +651,20 @@ export const OrchestrationImplementationWorkerResult = Schema.Union([
 export type OrchestrationImplementationWorkerResult =
   typeof OrchestrationImplementationWorkerResult.Type;
 
-export const OrchestrationImplementationIssueStateStatus = Schema.Literals([
+export const OrchestrationImplementationTicketStateStatus = Schema.Literals([
   "blocked",
   "ready",
   "running",
   "succeeded",
   "failed",
 ]);
-export type OrchestrationImplementationIssueStateStatus =
-  typeof OrchestrationImplementationIssueStateStatus.Type;
+export type OrchestrationImplementationTicketStateStatus =
+  typeof OrchestrationImplementationTicketStateStatus.Type;
 
-export const OrchestrationImplementationIssueState = Schema.Struct({
-  issueId: OrchestrationPlanningIssueId,
-  status: OrchestrationImplementationIssueStateStatus,
-  dependencyIssueIds: Schema.Array(OrchestrationPlanningIssueId).pipe(
+export const OrchestrationImplementationTicketState = Schema.Struct({
+  ticketId: OrchestrationPlanningTicketId,
+  status: OrchestrationImplementationTicketStateStatus,
+  dependencyTicketIds: Schema.Array(OrchestrationPlanningTicketId).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   workerThreadId: Schema.NullOr(ThreadId).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
@@ -725,13 +679,13 @@ export const OrchestrationImplementationIssueState = Schema.Struct({
   ),
   updatedAt: IsoDateTime,
 });
-export type OrchestrationImplementationIssueState =
-  typeof OrchestrationImplementationIssueState.Type;
+export type OrchestrationImplementationTicketState =
+  typeof OrchestrationImplementationTicketState.Type;
 
 export const OrchestrationImplementationRun = Schema.Struct({
   id: OrchestrationImplementationRunId,
-  prdId: OrchestrationPlanningPrdId,
-  planningIssueIds: Schema.Array(OrchestrationPlanningIssueId),
+  specId: OrchestrationPlanningSpecId,
+  planningTicketIds: Schema.Array(OrchestrationPlanningTicketId),
   orchestratorThreadId: ThreadId,
   status: OrchestrationImplementationRunStatus.pipe(
     Schema.withDecodingDefault(Effect.succeed("launch-pending" as const)),
@@ -741,13 +695,13 @@ export const OrchestrationImplementationRun = Schema.Struct({
   orchestratorBranch: TrimmedNonEmptyString,
   orchestratorWorktreePath: TrimmedNonEmptyString,
   launchSummary: OrchestrationImplementationLaunchSummary,
-  issueStates: Schema.Array(OrchestrationImplementationIssueState).pipe(
+  ticketStates: Schema.Array(OrchestrationImplementationTicketState).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   workerResults: Schema.Array(OrchestrationImplementationWorkerResult).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
-  terminalLineageIssueIds: Schema.Array(OrchestrationPlanningIssueId).pipe(
+  terminalLineageTicketIds: Schema.Array(OrchestrationPlanningTicketId).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   finalValidation: Schema.NullOr(OrchestrationImplementationValidationResult).pipe(
@@ -785,6 +739,7 @@ export const OrchestrationImplementationRun = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   qaAttemptCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+  codeReviewAttemptCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
   handoffTarget: Schema.Literal("orchestrator-worktree").pipe(
     Schema.withDecodingDefault(Effect.succeed("orchestrator-worktree" as const)),
   ),
@@ -829,6 +784,7 @@ export const OrchestrationThreadWorkflowRole = Schema.Literals([
   "implementation-validator",
   "implementation-qa-reviewer",
   "implementation-fixer",
+  "implementation-code-reviewer",
 ]);
 export type OrchestrationThreadWorkflowRole = typeof OrchestrationThreadWorkflowRole.Type;
 
@@ -995,13 +951,13 @@ export const OrchestrationThreadShell = Schema.Struct({
   planningWorkflowSummary: Schema.optionalKey(
     Schema.Struct({
       stage: OrchestrationPlanningWorkflowStage,
-      prdId: Schema.NullOr(OrchestrationPlanningPrdId),
-      prdTitle: Schema.optional(TrimmedNonEmptyString),
-      prdSourceThreadId: Schema.optional(ThreadId),
-      prdWorkflowId: Schema.optional(TrimmedNonEmptyString),
-      prdIssueCount: Schema.optional(NonNegativeInt),
-      prdCreatedAt: Schema.optional(IsoDateTime),
-      prdUpdatedAt: Schema.optional(IsoDateTime),
+      specId: Schema.NullOr(OrchestrationPlanningSpecId),
+      specTitle: Schema.optional(TrimmedNonEmptyString),
+      specSourceThreadId: Schema.optional(ThreadId),
+      specWorkflowId: Schema.optional(TrimmedNonEmptyString),
+      specTicketCount: Schema.optional(NonNegativeInt),
+      specCreatedAt: Schema.optional(IsoDateTime),
+      specUpdatedAt: Schema.optional(IsoDateTime),
     }),
   ),
 });
@@ -1193,8 +1149,8 @@ const ThreadInteractionModeSetCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
-const ThreadPlanningPrdCreateCommand = Schema.Struct({
-  type: Schema.Literal("thread.planning-prd.create"),
+const ThreadPlanningSpecCreateCommand = Schema.Struct({
+  type: Schema.Literal("thread.planning-spec.create"),
   commandId: CommandId,
   threadId: ThreadId,
   tenantId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
@@ -1207,7 +1163,7 @@ const ThreadPlanningStageStartCommand = Schema.Struct({
   type: Schema.Literal("thread.planning-stage.start"),
   commandId: CommandId,
   threadId: ThreadId,
-  stage: Schema.Literals(["prd"]),
+  stage: Schema.Literals(["spec"]),
   createdAt: IsoDateTime,
 });
 
@@ -1229,8 +1185,8 @@ const ThreadPlanningWorkflowStageSetCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
-const ThreadPlanningPrdApplyCommand = Schema.Struct({
-  type: Schema.Literal("thread.planning-prd.apply"),
+const ThreadPlanningSpecApplyCommand = Schema.Struct({
+  type: Schema.Literal("thread.planning-spec.apply"),
   commandId: CommandId,
   threadId: ThreadId,
   sourceMessageId: MessageId,
@@ -1242,7 +1198,7 @@ const ThreadPlanningPrdApplyCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
-export const ThreadPlanningIssueArtifactInput = Schema.Struct({
+export const ThreadPlanningTicketArtifactInput = Schema.Struct({
   key: TrimmedNonEmptyString,
   title: TrimmedNonEmptyString,
   bodyMarkdown: TrimmedNonEmptyString,
@@ -1250,23 +1206,23 @@ export const ThreadPlanningIssueArtifactInput = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
 });
-export type ThreadPlanningIssueArtifactInput = typeof ThreadPlanningIssueArtifactInput.Type;
+export type ThreadPlanningTicketArtifactInput = typeof ThreadPlanningTicketArtifactInput.Type;
 
-const ThreadPlanningIssuesApplyCommand = Schema.Struct({
-  type: Schema.Literal("thread.planning-issues.apply"),
+const ThreadPlanningTicketsApplyCommand = Schema.Struct({
+  type: Schema.Literal("thread.planning-tickets.apply"),
   commandId: CommandId,
   threadId: ThreadId,
   sourceMessageId: MessageId,
-  prdId: OrchestrationPlanningPrdId,
-  issues: Schema.Array(ThreadPlanningIssueArtifactInput),
+  specId: OrchestrationPlanningSpecId,
+  tickets: Schema.Array(ThreadPlanningTicketArtifactInput),
   createdAt: IsoDateTime,
 });
 
-const ThreadPlanningIssueReviewRequestCommand = Schema.Struct({
-  type: Schema.Literal("thread.planning-issue-review.request"),
+const ThreadPlanningTicketReviewRequestCommand = Schema.Struct({
+  type: Schema.Literal("thread.planning-ticket-review.request"),
   commandId: CommandId,
   threadId: ThreadId,
-  prdId: OrchestrationPlanningPrdId,
+  specId: OrchestrationPlanningSpecId,
   createdAt: IsoDateTime,
 });
 
@@ -1278,21 +1234,21 @@ const ThreadPlanningReviewerVerdictApplyCommand = Schema.Struct({
   reviewerMessageId: MessageId,
   verdictMarkdown: Schema.String,
   passed: Schema.optional(Schema.Boolean),
-  failingPlanningIssueIds: Schema.optional(Schema.Array(OrchestrationPlanningIssueId)),
+  failingPlanningTicketIds: Schema.optional(Schema.Array(OrchestrationPlanningTicketId)),
   dependencyFeedback: Schema.optional(Schema.Array(Schema.String)),
-  perIssueFeedback: Schema.optional(Schema.Array(OrchestrationPlanningReviewIssueFeedback)),
+  perTicketFeedback: Schema.optional(Schema.Array(OrchestrationPlanningReviewTicketFeedback)),
   createdAt: IsoDateTime,
 });
 
-const ThreadPlanningPrdBundleLoadCommand = Schema.Struct({
-  type: Schema.Literal("thread.planning-prd-bundle.load"),
+const ThreadPlanningSpecBundleLoadCommand = Schema.Struct({
+  type: Schema.Literal("thread.planning-spec-bundle.load"),
   commandId: CommandId,
   threadId: ThreadId,
-  prdId: OrchestrationPlanningPrdId,
+  specId: OrchestrationPlanningSpecId,
   tenantId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   teamId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   source: Schema.optional(Schema.Literals(["projection"])),
-  bundle: Schema.optional(OrchestrationPlanningPrdBundle),
+  bundle: Schema.optional(OrchestrationPlanningSpecBundle),
   createdAt: IsoDateTime,
 });
 
@@ -1300,7 +1256,7 @@ const ThreadImplementationRunLaunchCommand = Schema.Struct({
   type: Schema.Literal("thread.implementation-run.launch"),
   commandId: CommandId,
   threadId: ThreadId,
-  prdId: OrchestrationPlanningPrdId,
+  specId: OrchestrationPlanningSpecId,
   baseBranch: TrimmedNonEmptyString,
   pinnedCommit: TrimmedNonEmptyString,
   orchestratorBranch: TrimmedNonEmptyString,
@@ -1468,11 +1424,11 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadMetaUpdateCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
-  ThreadPlanningPrdCreateCommand,
+  ThreadPlanningSpecCreateCommand,
   ThreadPlanningStageStartCommand,
   ThreadPlanningWorkflowLaunchCommand,
-  ThreadPlanningIssueReviewRequestCommand,
-  ThreadPlanningPrdBundleLoadCommand,
+  ThreadPlanningTicketReviewRequestCommand,
+  ThreadPlanningSpecBundleLoadCommand,
   ThreadImplementationRunLaunchCommand,
   ThreadImplementationChangeRequestRetryCommand,
   ThreadDevReviewLaunchCommand,
@@ -1497,11 +1453,11 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadMetaUpdateCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
-  ThreadPlanningPrdCreateCommand,
+  ThreadPlanningSpecCreateCommand,
   ThreadPlanningStageStartCommand,
   ThreadPlanningWorkflowLaunchCommand,
-  ThreadPlanningIssueReviewRequestCommand,
-  ThreadPlanningPrdBundleLoadCommand,
+  ThreadPlanningTicketReviewRequestCommand,
+  ThreadPlanningSpecBundleLoadCommand,
   ThreadImplementationRunLaunchCommand,
   ThreadImplementationChangeRequestRetryCommand,
   ThreadDevReviewLaunchCommand,
@@ -1605,8 +1561,8 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadMessageAssistantDeltaCommand,
   ThreadMessageAssistantCompleteCommand,
   ThreadProposedPlanUpsertCommand,
-  ThreadPlanningPrdApplyCommand,
-  ThreadPlanningIssuesApplyCommand,
+  ThreadPlanningSpecApplyCommand,
+  ThreadPlanningTicketsApplyCommand,
   ThreadPlanningReviewerVerdictApplyCommand,
   ThreadPlanningWorkflowStageSetCommand,
   ThreadImplementationRunUpdateCommand,
@@ -1636,11 +1592,11 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.runtime-mode-set",
   "thread.interaction-mode-set",
   "thread.planning-stage-started",
-  "thread.planning-prd-created",
-  "thread.planning-issues-created",
-  "thread.planning-issues-revised",
-  "thread.planning-issue-review-requested",
-  "thread.planning-prd-bundle-loaded",
+  "thread.planning-spec-created",
+  "thread.planning-tickets-created",
+  "thread.planning-tickets-revised",
+  "thread.planning-ticket-review-requested",
+  "thread.planning-spec-bundle-loaded",
   "thread.planning-workflow-stage-set",
   "thread.implementation-run-launched",
   "thread.implementation-run-updated",
@@ -1759,43 +1715,43 @@ export const ThreadPlanningStageStartedPayload = Schema.Struct({
   startedAt: IsoDateTime,
 });
 
-export const ThreadPlanningPrdCreatedPayload = Schema.Struct({
+export const ThreadPlanningSpecCreatedPayload = Schema.Struct({
   threadId: ThreadId,
-  prd: OrchestrationPlanningPrd,
+  spec: OrchestrationPlanningSpec,
   stage: Schema.optional(OrchestrationPlanningWorkflowStage),
 });
 
-export const ThreadPlanningIssuesCreatedPayload = Schema.Struct({
+export const ThreadPlanningTicketsCreatedPayload = Schema.Struct({
   threadId: ThreadId,
-  prdId: OrchestrationPlanningPrdId,
-  issues: Schema.Array(OrchestrationPlanningIssue),
+  specId: OrchestrationPlanningSpecId,
+  tickets: Schema.Array(OrchestrationPlanningTicket),
   stage: Schema.optional(OrchestrationPlanningWorkflowStage),
 });
 
-export const ThreadPlanningIssuesRevisedPayload = Schema.Struct({
+export const ThreadPlanningTicketsRevisedPayload = Schema.Struct({
   threadId: ThreadId,
-  prdId: OrchestrationPlanningPrdId,
+  specId: OrchestrationPlanningSpecId,
   reviewCycle: Schema.optional(OrchestrationPlanningReviewCycle),
-  issues: Schema.Array(OrchestrationPlanningIssue),
+  tickets: Schema.Array(OrchestrationPlanningTicket),
   stage: Schema.optional(OrchestrationPlanningWorkflowStage),
   revisedAt: IsoDateTime,
 });
 
-export const ThreadPlanningIssueReviewRequestedPayload = Schema.Struct({
+export const ThreadPlanningTicketReviewRequestedPayload = Schema.Struct({
   threadId: ThreadId,
-  prdId: OrchestrationPlanningPrdId,
+  specId: OrchestrationPlanningSpecId,
   cycleNumber: NonNegativeInt,
   reviewerThreadId: ThreadId,
   reviewerMessageId: MessageId,
-  stage: Schema.Literal("issue-review"),
+  stage: Schema.Literal("ticket-review"),
   requestedAt: IsoDateTime,
 });
 
-export const ThreadPlanningPrdBundleLoadedPayload = Schema.Struct({
+export const ThreadPlanningSpecBundleLoadedPayload = Schema.Struct({
   threadId: ThreadId,
-  prdId: OrchestrationPlanningPrdId,
+  specId: OrchestrationPlanningSpecId,
   sourceThreadId: ThreadId,
-  bundle: Schema.optional(OrchestrationPlanningPrdBundle),
+  bundle: Schema.optional(OrchestrationPlanningSpecBundle),
   loadedAt: IsoDateTime,
 });
 
@@ -2011,28 +1967,28 @@ export const OrchestrationEvent = Schema.Union([
   }),
   Schema.Struct({
     ...EventBaseFields,
-    type: Schema.Literal("thread.planning-prd-created"),
-    payload: ThreadPlanningPrdCreatedPayload,
+    type: Schema.Literal("thread.planning-spec-created"),
+    payload: ThreadPlanningSpecCreatedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
-    type: Schema.Literal("thread.planning-issues-created"),
-    payload: ThreadPlanningIssuesCreatedPayload,
+    type: Schema.Literal("thread.planning-tickets-created"),
+    payload: ThreadPlanningTicketsCreatedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
-    type: Schema.Literal("thread.planning-issues-revised"),
-    payload: ThreadPlanningIssuesRevisedPayload,
+    type: Schema.Literal("thread.planning-tickets-revised"),
+    payload: ThreadPlanningTicketsRevisedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
-    type: Schema.Literal("thread.planning-issue-review-requested"),
-    payload: ThreadPlanningIssueReviewRequestedPayload,
+    type: Schema.Literal("thread.planning-ticket-review-requested"),
+    payload: ThreadPlanningTicketReviewRequestedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
-    type: Schema.Literal("thread.planning-prd-bundle-loaded"),
-    payload: ThreadPlanningPrdBundleLoadedPayload,
+    type: Schema.Literal("thread.planning-spec-bundle-loaded"),
+    payload: ThreadPlanningSpecBundleLoadedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

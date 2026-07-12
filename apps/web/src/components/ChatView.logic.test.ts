@@ -24,7 +24,7 @@ import {
   hasServerAcknowledgedLocalDispatch,
   reconcileMountedTerminalThreadIds,
   reconcileRetainedMountedThreadIds,
-  resolveProductGrillPlanningThreadId,
+  resolveProductWorkflowPlanningThreadId,
   resolveSendEnvMode,
   selectBrowserDevReviewAutoContext,
   shouldWriteThreadErrorToCurrentServerThread,
@@ -307,12 +307,12 @@ describe("buildThreadTurnInterruptInput", () => {
   });
 });
 
-describe("resolveProductGrillPlanningThreadId", () => {
-  it("selects the planning-orchestrator child for a Product Grill root", () => {
+describe("resolveProductWorkflowPlanningThreadId", () => {
+  it("selects the planning-orchestrator child for a Product Workflow root", () => {
     const planningThreadId = ThreadId.make("thread-product-planning");
 
     expect(
-      resolveProductGrillPlanningThreadId({
+      resolveProductWorkflowPlanningThreadId({
         activeThread: makeThread({
           interactionMode: "product-workflow",
           workflowRole: null,
@@ -335,7 +335,7 @@ describe("resolveProductGrillPlanningThreadId", () => {
 
   it("does not select a child for non-root product threads", () => {
     expect(
-      resolveProductGrillPlanningThreadId({
+      resolveProductWorkflowPlanningThreadId({
         activeThread: makeThread({
           interactionMode: "product-workflow",
           workflowRole: "planning-orchestrator",

@@ -60,10 +60,10 @@ describe("persistence error correlation", () => {
       assert.deepStrictEqual(decodeError.correlation, { sessionId });
       assert.equal(
         decodeError.message,
-        `Decode error in AuthSessionRepository.listActive:decodeRows: ${decodeError.issue}`,
+        `Decode error in AuthSessionRepository.listActive:decodeRows: ${decodeError.ticket}`,
       );
-      assert.notInclude(decodeError.issue, subject);
-      assert.notInclude(decodeError.issue, "session-scopes-secret-sentinel");
+      assert.notInclude(decodeError.ticket, subject);
+      assert.notInclude(decodeError.ticket, "session-scopes-secret-sentinel");
       assert.notInclude(decodeError.message, subject);
 
       yield* sql`DROP TABLE auth_sessions`;
@@ -147,11 +147,11 @@ describe("persistence error correlation", () => {
       assert.deepStrictEqual(decodeError.correlation, { pairingLinkId: id });
       assert.equal(
         decodeError.message,
-        `Decode error in AuthPairingLinkRepository.getByCredential:decodeRow: ${decodeError.issue}`,
+        `Decode error in AuthPairingLinkRepository.getByCredential:decodeRow: ${decodeError.ticket}`,
       );
-      assert.notInclude(decodeError.issue, credential);
-      assert.notInclude(decodeError.issue, subject);
-      assert.notInclude(decodeError.issue, scopesPayload);
+      assert.notInclude(decodeError.ticket, credential);
+      assert.notInclude(decodeError.ticket, subject);
+      assert.notInclude(decodeError.ticket, scopesPayload);
       assert.notInclude(decodeError.message, DateTime.formatIso(issuedAt));
 
       yield* sql`DROP TABLE auth_pairing_links`;
@@ -220,9 +220,9 @@ describe("persistence error correlation", () => {
       assert.deepStrictEqual(decodeError.correlation, { threadId });
       assert.equal(
         decodeError.message,
-        `Decode error in ProviderSessionRuntimeRepository.list:decodeRows: ${decodeError.issue}`,
+        `Decode error in ProviderSessionRuntimeRepository.list:decodeRows: ${decodeError.ticket}`,
       );
-      assert.notInclude(decodeError.issue, runtimePayload);
+      assert.notInclude(decodeError.ticket, runtimePayload);
       assert.notInclude(decodeError.message, runtimePayload);
       assert.notInclude(decodeError.message, lastSeenAt);
 

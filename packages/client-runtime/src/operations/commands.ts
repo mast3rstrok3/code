@@ -40,12 +40,12 @@ export type SetThreadRuntimeModeInput = CommandInput<"thread.runtime-mode.set">;
 export type SetThreadInteractionModeInput = CommandInput<"thread.interaction-mode.set">;
 export type StartThreadTurnInput = CommandInput<"thread.turn.start">;
 export type LaunchThreadDevReviewInput = CommandInput<"thread.dev-review.launch">;
-export type CreateThreadPlanningPrdInput = CommandInput<"thread.planning-prd.create">;
+export type CreateThreadPlanningSpecInput = CommandInput<"thread.planning-spec.create">;
 export type StartThreadPlanningStageInput = CommandInput<"thread.planning-stage.start">;
 export type LaunchThreadPlanningWorkflowInput = CommandInput<"thread.planning-workflow.launch">;
-export type LoadThreadPlanningPrdBundleInput = CommandInput<"thread.planning-prd-bundle.load">;
-export type RequestThreadPlanningIssueReviewInput =
-  CommandInput<"thread.planning-issue-review.request">;
+export type LoadThreadPlanningSpecBundleInput = CommandInput<"thread.planning-spec-bundle.load">;
+export type RequestThreadPlanningTicketReviewInput =
+  CommandInput<"thread.planning-ticket-review.request">;
 export type LaunchThreadImplementationRunInput = CommandInput<"thread.implementation-run.launch">;
 export type RetryThreadImplementationChangeRequestInput =
   CommandInput<"thread.implementation-change-request.retry">;
@@ -219,12 +219,12 @@ export const launchThreadDevReview: (input: LaunchThreadDevReviewInput) => Comma
     });
   });
 
-export const createThreadPlanningPrd: (input: CreateThreadPlanningPrdInput) => CommandEffect =
-  Effect.fn("EnvironmentCommands.createThreadPlanningPrd")(function* (input) {
+export const createThreadPlanningSpec: (input: CreateThreadPlanningSpecInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.createThreadPlanningSpec")(function* (input) {
     const metadata = yield* timestampedCommandMetadata(input);
     return yield* dispatch({
       ...input,
-      type: "thread.planning-prd.create",
+      type: "thread.planning-spec.create",
       commandId: metadata.commandId,
       createdAt: metadata.createdAt,
     });
@@ -255,28 +255,28 @@ export const launchThreadPlanningWorkflow: (
   },
 );
 
-export const loadThreadPlanningPrdBundle: (
-  input: LoadThreadPlanningPrdBundleInput,
-) => CommandEffect = Effect.fn("EnvironmentCommands.loadThreadPlanningPrdBundle")(
+export const loadThreadPlanningSpecBundle: (
+  input: LoadThreadPlanningSpecBundleInput,
+) => CommandEffect = Effect.fn("EnvironmentCommands.loadThreadPlanningSpecBundle")(
   function* (input) {
     const metadata = yield* timestampedCommandMetadata(input);
     return yield* dispatch({
       ...input,
-      type: "thread.planning-prd-bundle.load",
+      type: "thread.planning-spec-bundle.load",
       commandId: metadata.commandId,
       createdAt: metadata.createdAt,
     });
   },
 );
 
-export const requestThreadPlanningIssueReview: (
-  input: RequestThreadPlanningIssueReviewInput,
-) => CommandEffect = Effect.fn("EnvironmentCommands.requestThreadPlanningIssueReview")(
+export const requestThreadPlanningTicketReview: (
+  input: RequestThreadPlanningTicketReviewInput,
+) => CommandEffect = Effect.fn("EnvironmentCommands.requestThreadPlanningTicketReview")(
   function* (input) {
     const metadata = yield* timestampedCommandMetadata(input);
     return yield* dispatch({
       ...input,
-      type: "thread.planning-issue-review.request",
+      type: "thread.planning-ticket-review.request",
       commandId: metadata.commandId,
       createdAt: metadata.createdAt,
     });

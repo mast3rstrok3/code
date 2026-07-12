@@ -22,11 +22,11 @@ export function createKeybindingsUpdateToastController(input: {
         return null;
       }
 
-      const issue = event.payload.issues.find((entry) => entry.kind.startsWith("keybindings."));
-      if (issue) {
+      const ticket = event.payload.tickets.find((entry) => entry.kind.startsWith("keybindings."));
+      if (ticket) {
         return {
           _tag: "InvalidConfiguration",
-          message: issue.message,
+          message: ticket.message,
         };
       }
 

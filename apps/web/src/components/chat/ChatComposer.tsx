@@ -178,11 +178,11 @@ const interactionModeConfig: Record<
   },
   "implementation-workflow": {
     label: "Implementation Workflow",
-    description: "Plan and start a durable implementation workflow from a PRD.",
+    description: "Plan and start a durable implementation workflow from a Spec.",
     icon: WorkflowIcon,
   },
   "product-workflow": {
-    label: "Product Grill",
+    label: "Product Workflow",
     description:
       "Ask product-intent questions, then run Planning and Implementation automatically.",
     icon: ZapIcon,

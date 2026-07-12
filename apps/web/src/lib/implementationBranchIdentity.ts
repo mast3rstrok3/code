@@ -5,12 +5,12 @@ function slugifyBranchSegment(value: string): string {
     .replace(/[^a-z0-9._-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 72);
-  return slug.length > 0 ? slug : "prd";
+  return slug.length > 0 ? slug : "spec";
 }
 
 export function resolveImplementationBranchIdentity(input: {
-  readonly prdTitle: string;
-  readonly prdId: string;
+  readonly specTitle: string;
+  readonly specId: string;
   readonly baseBranch: string | null;
   readonly workspaceRoot: string | undefined;
   readonly implementationRuns: ReadonlyArray<{
@@ -24,7 +24,7 @@ export function resolveImplementationBranchIdentity(input: {
 } {
   const baseBranch =
     input.baseBranch && input.baseBranch.trim().length > 0 ? input.baseBranch : "main";
-  const slug = slugifyBranchSegment(input.prdTitle || input.prdId);
+  const slug = slugifyBranchSegment(input.specTitle || input.specId);
   const usedBranches = new Set(input.implementationRuns.map((run) => run.orchestratorBranch));
   const usedWorktrees = new Set(
     input.implementationRuns.map((run) => run.orchestratorWorktreePath),

@@ -9,7 +9,7 @@ import {
   type OrchestrationImplementationRun,
   type OrchestrationImplementationValidationResult,
   type OrchestrationImplementationWorkerResult,
-  type OrchestrationPlanningIssue,
+  type OrchestrationPlanningTicket,
   type OrchestrationReadModel,
   type OrchestrationThread,
   type WorkspaceUserId,
@@ -38,6 +38,7 @@ import {
 } from "../workflowSubagents.ts";
 
 const MAX_BROWSER_REVIEW_ATTEMPTS = 5;
+const MAX_CODE_REVIEW_CYCLES = 5;
 
 type ImplementationWorkflowEvent = Extract<
   OrchestrationEvent,
@@ -71,6 +72,13 @@ type FixDirective = {
   readonly notesMarkdown: string;
 };
 
+type CodeReviewDirective = {
+  readonly type: "implementation-code-review-result";
+  readonly runId: string;
+  readonly status: "clean" | "findings" | "blocked";
+  readonly reportMarkdown: string;
+};
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
 
@@ -86,6 +94,11 @@ const asMergeGateDirective = (value: unknown): MergeGateDirective | null =>
 
 const asFixDirective = (value: unknown): FixDirective | null =>
   isRecord(value) && value["type"] === "implementation-fix-result" ? (value as FixDirective) : null;
+
+const asCodeReviewDirective = (value: unknown): CodeReviewDirective | null =>
+  isRecord(value) && value["type"] === "implementation-code-review-result"
+    ? (value as CodeReviewDirective)
+    : null;
 
 function findRunSourceThreadId(input: {
   readonly readModel: OrchestrationReadModel;
@@ -117,7 +130,7 @@ function findRunByWorkerThreadId(
 ): OrchestrationImplementationRun | null {
   return (
     readModel.implementationRuns.find((run) =>
-      run.issueStates.some((state) => state.workerThreadId === workerThreadId),
+      run.ticketStates.some((state) => state.workerThreadId === workerThreadId),
     ) ?? null
   );
 }
@@ -136,33 +149,35 @@ function findRunByDevReview(
   );
 }
 
-function issuesById(thread: OrchestrationThread): ReadonlyMap<string, OrchestrationPlanningIssue> {
-  const map = new Map<string, OrchestrationPlanningIssue>();
-  for (const issue of thread.planningWorkflow?.issues ?? []) {
-    map.set(issue.id, issue);
+function ticketsById(
+  thread: OrchestrationThread,
+): ReadonlyMap<string, OrchestrationPlanningTicket> {
+  const map = new Map<string, OrchestrationPlanningTicket>();
+  for (const ticket of thread.planningWorkflow?.tickets ?? []) {
+    map.set(ticket.id, ticket);
   }
   return map;
 }
 
-function issueMarkdown(issue: OrchestrationPlanningIssue | undefined): string {
-  if (issue === undefined) {
-    return "Issue details were not available in the current projection.";
+function ticketMarkdown(ticket: OrchestrationPlanningTicket | undefined): string {
+  if (ticket === undefined) {
+    return "Ticket details were not available in the current projection.";
   }
-  return [`#${issue.ordinal} ${issue.title}`, "", issue.bodyMarkdown].join("\n");
+  return [`#${ticket.ordinal} ${ticket.title}`, "", ticket.bodyMarkdown].join("\n");
 }
 
 function markDependentsReady(
   run: OrchestrationImplementationRun,
   updatedAt: string,
 ): OrchestrationImplementationRun {
-  const succeededIssueIds = new Set(
-    run.issueStates.filter((state) => state.status === "succeeded").map((state) => state.issueId),
+  const succeededTicketIds = new Set(
+    run.ticketStates.filter((state) => state.status === "succeeded").map((state) => state.ticketId),
   );
   return {
     ...run,
-    issueStates: run.issueStates.map((state) =>
+    ticketStates: run.ticketStates.map((state) =>
       state.status === "blocked" &&
-      state.dependencyIssueIds.every((issueId) => succeededIssueIds.has(issueId))
+      state.dependencyTicketIds.every((ticketId) => succeededTicketIds.has(ticketId))
         ? { ...state, status: "ready" as const, updatedAt }
         : state,
     ),
@@ -219,14 +234,14 @@ function devReviewMarkdown(document: DevReviewDocument | undefined): string {
 
 function buildWorkerPrompt(input: {
   readonly run: OrchestrationImplementationRun;
-  readonly issue: OrchestrationPlanningIssue | undefined;
-  readonly issueId: string;
+  readonly ticket: OrchestrationPlanningTicket | undefined;
+  readonly ticketId: string;
   readonly workerThreadId: ThreadId;
   readonly branch: string;
   readonly worktreePath: string;
 }): string {
   return [
-    `Implement planning issue ${input.issueId} for implementation run ${input.run.id}.`,
+    `Implement planning ticket ${input.ticketId} for implementation run ${input.run.id}.`,
     "",
     "Do not ask the user questions. Work TDD-style: write or update a focused failing test, implement the smallest behavior, run targeted validation, then report the result.",
     "",
@@ -234,11 +249,11 @@ function buildWorkerPrompt(input: {
     `- branch: ${input.branch}`,
     `- worktree: ${input.worktreePath}`,
     "",
-    "Planning issue:",
-    issueMarkdown(input.issue),
+    "Planning ticket:",
+    ticketMarkdown(input.ticket),
     "",
     "Finish with exactly one fenced JSON directive of type implementation-worker-result. Use these fixed identifiers:",
-    `- issueId: ${input.issueId}`,
+    `- ticketId: ${input.ticketId}`,
     `- workerThreadId: ${input.workerThreadId}`,
     `- branch: ${input.branch}`,
     `- worktreePath: ${input.worktreePath}`,
@@ -246,14 +261,14 @@ function buildWorkerPrompt(input: {
 }
 
 function buildMergeGatePrompt(input: { readonly run: OrchestrationImplementationRun }): string {
-  const workerBranches = input.run.issueStates
+  const workerBranches = input.run.ticketStates
     .filter((state) => state.status === "succeeded" && state.branch !== null)
-    .map((state) => `- ${state.issueId}: ${state.branch}`)
+    .map((state) => `- ${state.ticketId}: ${state.branch}`)
     .join("\n");
   return [
     `Run merge gate for implementation run ${input.run.id}.`,
     "",
-    "Merge all succeeded worker branches into the current orchestrator worktree. Resolve conflicts in favor of the PRD/planning issues, then run the required validations.",
+    "Merge all succeeded worker branches into the current orchestrator worktree. Resolve conflicts in favor of the Spec/planning tickets, then run the required validations.",
     "",
     "Worker branches:",
     workerBranches.length > 0 ? workerBranches : "- None",
@@ -281,7 +296,7 @@ function buildBrowserDevReviewPrompt(input: {
       ? "No frontend URL was resolved. If the app cannot be opened, mark the review blocked with concrete details."
       : `Feature URL: ${input.frontendUrl}`,
     "",
-    "Review against the PRD and planning issues loaded on this implementation thread. Update the dev-review record with passed, failed, or blocked status and a document.",
+    "Review against the Spec and planning tickets loaded on this implementation thread. Update the dev-review record with passed, failed, or blocked status and a document.",
   ].join("\n");
 }
 
@@ -296,6 +311,50 @@ function buildFixPrompt(input: {
     "",
     "Latest browser review:",
     input.reviewMarkdown,
+    "",
+    "Finish with exactly one fenced JSON directive of type implementation-fix-result for this runId.",
+  ].join("\n");
+}
+
+function buildCodeReviewPrompt(input: {
+  readonly run: OrchestrationImplementationRun;
+  readonly specMarkdown: string | null;
+}): string {
+  const changeRequest = input.run.changeRequest;
+  return [
+    `Perform the implementation code review for implementation run ${input.run.id} (cycle ${input.run.codeReviewAttemptCount} of ${MAX_CODE_REVIEW_CYCLES}).`,
+    "",
+    "Do not ask the user questions. Review the change along the Standards and Spec axes as described in your workflow instructions.",
+    "",
+    "Review scope:",
+    `- worktree: ${input.run.orchestratorWorktreePath}`,
+    `- fixed point: ${input.run.baseBranch}`,
+    `- diff command: git diff ${input.run.baseBranch}...HEAD`,
+    changeRequest === null
+      ? "- change request: not available"
+      : `- change request: ${changeRequest.url} (#${changeRequest.number})`,
+    "",
+    "Spec source (review the Spec axis against this document; do not search the issue tracker):",
+    input.specMarkdown ??
+      "No Spec document was available in the projection; review the Spec axis against the planning tickets loaded on the orchestrator thread.",
+    "",
+    'Use status "clean" only when neither axis has findings that require code changes, "findings" when code changes are required, and "blocked" when the review cannot be performed. Put the full two-axis report in reportMarkdown.',
+    "",
+    `Finish with exactly one fenced JSON directive of type implementation-code-review-result for runId ${input.run.id}.`,
+  ].join("\n");
+}
+
+function buildCodeReviewFixPrompt(input: {
+  readonly run: OrchestrationImplementationRun;
+  readonly reportMarkdown: string;
+}): string {
+  return [
+    `Fix code-review findings for implementation run ${input.run.id}.`,
+    "",
+    "Do not ask the user questions. Apply the code-review findings with the smallest reliable changes in the orchestrator worktree, run focused validation, and report the fix result.",
+    "",
+    "Latest code review report:",
+    input.reportMarkdown,
     "",
     "Finish with exactly one fenced JSON directive of type implementation-fix-result for this runId.",
   ].join("\n");
@@ -415,16 +474,16 @@ const make = Effect.gen(function* () {
     readonly sourceThreadId: ThreadId;
     readonly orchestratorThread: OrchestrationThread;
     readonly run: OrchestrationImplementationRun;
-    readonly issueId: string;
+    readonly ticketId: string;
     readonly ownerUserId: WorkspaceUserId;
     readonly createdAt: string;
   }) {
     const plannedWorker = input.run.launchSummary.plannedWorkers.find(
-      (worker) => worker.issueId === input.issueId,
+      (worker) => worker.ticketId === input.ticketId,
     );
     if (plannedWorker === undefined) return input.run;
 
-    const existing = input.run.issueStates.find((state) => state.issueId === input.issueId);
+    const existing = input.run.ticketStates.find((state) => state.ticketId === input.ticketId);
     if (existing === undefined || existing.status !== "ready") return input.run;
 
     yield* gitWorkflow.createWorktree({
@@ -438,7 +497,7 @@ const make = Effect.gen(function* () {
     const workerThreadId = yield* serverThreadId("implementation-worker");
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
     const sourceThread = findThread(readModel, input.sourceThreadId);
-    const issue = issuesById(sourceThread ?? input.orchestratorThread).get(input.issueId);
+    const ticket = ticketsById(sourceThread ?? input.orchestratorThread).get(input.ticketId);
 
     yield* orchestrationEngine.dispatch({
       type: "thread.create",
@@ -448,7 +507,7 @@ const make = Effect.gen(function* () {
       ownerUserId: input.ownerUserId,
       parentThreadId: input.run.orchestratorThreadId,
       workflowRole: "implementation-worker",
-      title: `Implement ${issue?.title ?? input.issueId}`,
+      title: `Implement ${ticket?.title ?? input.ticketId}`,
       modelSelection: input.orchestratorThread.modelSelection,
       runtimeMode: input.orchestratorThread.runtimeMode,
       interactionMode: "implementation-workflow",
@@ -466,8 +525,8 @@ const make = Effect.gen(function* () {
         role: "user",
         text: buildWorkerPrompt({
           run: input.run,
-          issue,
-          issueId: input.issueId,
+          ticket,
+          ticketId: input.ticketId,
           workerThreadId,
           branch: plannedWorker.branch,
           worktreePath: plannedWorker.worktreePath,
@@ -482,8 +541,8 @@ const make = Effect.gen(function* () {
 
     return {
       ...input.run,
-      issueStates: input.run.issueStates.map((state) =>
-        state.issueId === input.issueId
+      ticketStates: input.run.ticketStates.map((state) =>
+        state.ticketId === input.ticketId
           ? {
               ...state,
               status: "running" as const,
@@ -508,17 +567,17 @@ const make = Effect.gen(function* () {
       const orchestratorThread = findThread(readModel, input.run.orchestratorThreadId);
       if (orchestratorThread === null) return input.run;
 
-      const readyIssueIds = input.run.issueStates
-        .filter((issueState) => issueState.status === "ready")
-        .map((issueState) => issueState.issueId);
+      const readyTicketIds = input.run.ticketStates
+        .filter((ticketState) => ticketState.status === "ready")
+        .map((ticketState) => ticketState.ticketId);
       const startedRuns = yield* Effect.forEach(
-        readyIssueIds,
-        (issueId) =>
+        readyTicketIds,
+        (ticketId) =>
           createWorker({
             sourceThreadId: input.sourceThreadId,
             orchestratorThread,
             run: input.run,
-            issueId,
+            ticketId,
             ownerUserId: orchestratorThread.ownerUserId,
             createdAt: input.createdAt,
           }),
@@ -526,9 +585,11 @@ const make = Effect.gen(function* () {
       );
       const startedStates = new Map(
         startedRuns.flatMap((run) =>
-          run.issueStates
-            .filter((state) => state.status === "running" && readyIssueIds.includes(state.issueId))
-            .map((state) => [state.issueId, state] as const),
+          run.ticketStates
+            .filter(
+              (state) => state.status === "running" && readyTicketIds.includes(state.ticketId),
+            )
+            .map((state) => [state.ticketId, state] as const),
         ),
       );
       const nextRun =
@@ -536,8 +597,8 @@ const make = Effect.gen(function* () {
           ? input.run
           : ({
               ...input.run,
-              issueStates: input.run.issueStates.map(
-                (state) => startedStates.get(state.issueId) ?? state,
+              ticketStates: input.run.ticketStates.map(
+                (state) => startedStates.get(state.ticketId) ?? state,
               ),
               updatedAt: input.createdAt,
             } satisfies OrchestrationImplementationRun);
@@ -746,6 +807,70 @@ const make = Effect.gen(function* () {
     },
   );
 
+  const startCodeReview = Effect.fn("ImplementationWorkflowReactor.startCodeReview")(
+    function* (input: {
+      readonly sourceThreadId: ThreadId;
+      readonly run: OrchestrationImplementationRun;
+      readonly createdAt: string;
+    }) {
+      const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+      const orchestratorThread = findThread(readModel, input.run.orchestratorThreadId);
+      if (orchestratorThread === null) return;
+
+      const sourceThread = findThread(readModel, input.sourceThreadId);
+      const spec =
+        orchestratorThread.planningWorkflow?.spec ?? sourceThread?.planningWorkflow?.spec ?? null;
+      const specMarkdown =
+        spec === null ? null : [`# ${spec.title}`, "", spec.summaryMarkdown].join("\n");
+
+      const reviewerThreadId = yield* serverThreadId("implementation-code-reviewer");
+      const reviewingRun: OrchestrationImplementationRun = {
+        ...input.run,
+        status: "code-reviewing",
+        codeReviewAttemptCount: input.run.codeReviewAttemptCount + 1,
+        updatedAt: input.createdAt,
+      };
+      yield* updateRun({
+        sourceThreadId: input.sourceThreadId,
+        run: reviewingRun,
+        createdAt: input.createdAt,
+      });
+
+      yield* orchestrationEngine.dispatch({
+        type: "thread.create",
+        commandId: yield* serverCommandId("implementation-code-reviewer-create"),
+        threadId: reviewerThreadId,
+        projectId: orchestratorThread.projectId,
+        ownerUserId: orchestratorThread.ownerUserId,
+        parentThreadId: input.run.orchestratorThreadId,
+        workflowRole: "implementation-code-reviewer",
+        title: "Implementation code review",
+        modelSelection: orchestratorThread.modelSelection,
+        runtimeMode: orchestratorThread.runtimeMode,
+        interactionMode: "implementation-workflow",
+        branch: input.run.orchestratorBranch,
+        worktreePath: input.run.orchestratorWorktreePath,
+        createdAt: input.createdAt,
+      });
+
+      yield* orchestrationEngine.dispatch({
+        type: "thread.turn.start",
+        commandId: yield* serverCommandId("implementation-code-reviewer-turn"),
+        threadId: reviewerThreadId,
+        message: {
+          messageId: yield* serverMessageId("implementation-code-reviewer"),
+          role: "user",
+          text: buildCodeReviewPrompt({ run: reviewingRun, specMarkdown }),
+          attachments: [],
+        },
+        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+        runtimeMode: orchestratorThread.runtimeMode,
+        interactionMode: "implementation-workflow",
+        createdAt: input.createdAt,
+      });
+    },
+  );
+
   const fileChangeRequest = Effect.fn("ImplementationWorkflowReactor.fileChangeRequest")(
     function* (input: {
       readonly sourceThreadId: ThreadId;
@@ -757,7 +882,7 @@ const make = Effect.gen(function* () {
           cwd: input.run.orchestratorWorktreePath,
           actionId: input.run.id,
           threadId: input.run.orchestratorThreadId,
-          commitMessage: `Implement ${input.run.prdId}`,
+          commitMessage: `Implement ${input.run.specId}`,
         })
         .pipe(Effect.result);
 
@@ -778,11 +903,10 @@ const make = Effect.gen(function* () {
         return;
       }
 
-      yield* updateRun({
+      yield* startCodeReview({
         sourceThreadId: input.sourceThreadId,
         run: {
           ...input.run,
-          status: "completed",
           changeRequest: result.success,
           changeRequestFailure: null,
           updatedAt: input.createdAt,
@@ -853,8 +977,8 @@ const make = Effect.gen(function* () {
         const failedRun: OrchestrationImplementationRun = {
           ...run,
           status: "needs-human-attention",
-          issueStates: run.issueStates.map((state) =>
-            state.workerThreadId === event.payload.threadId || state.issueId === directive.issueId
+          ticketStates: run.ticketStates.map((state) =>
+            state.workerThreadId === event.payload.threadId || state.ticketId === directive.ticketId
               ? {
                   ...state,
                   status: "failed" as const,
@@ -873,8 +997,8 @@ const make = Effect.gen(function* () {
       const succeededRun = markDependentsReady(
         {
           ...run,
-          issueStates: run.issueStates.map((state) =>
-            state.workerThreadId === event.payload.threadId || state.issueId === directive.issueId
+          ticketStates: run.ticketStates.map((state) =>
+            state.workerThreadId === event.payload.threadId || state.ticketId === directive.ticketId
               ? {
                   ...state,
                   status: "succeeded" as const,
@@ -892,7 +1016,7 @@ const make = Effect.gen(function* () {
       );
 
       yield* updateRun({ sourceThreadId, run: succeededRun, createdAt: directive.reportedAt });
-      if (succeededRun.issueStates.every((state) => state.status === "succeeded")) {
+      if (succeededRun.ticketStates.every((state) => state.status === "succeeded")) {
         yield* startMergeGate({
           sourceThreadId,
           run: succeededRun,
@@ -975,6 +1099,15 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    if (run.status === "code-review-fixing") {
+      yield* fileChangeRequest({
+        sourceThreadId,
+        run: { ...run, updatedAt },
+        createdAt: updatedAt,
+      });
+      return;
+    }
+
     const fixedRun: OrchestrationImplementationRun = {
       ...run,
       status: "validating",
@@ -987,7 +1120,9 @@ const make = Effect.gen(function* () {
   const startFixer = Effect.fn("ImplementationWorkflowReactor.startFixer")(function* (input: {
     readonly sourceThreadId: ThreadId;
     readonly run: OrchestrationImplementationRun;
-    readonly reviewMarkdown: string;
+    readonly status: "fixing" | "code-review-fixing";
+    readonly title: string;
+    readonly promptText: string;
     readonly createdAt: string;
   }) {
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
@@ -996,7 +1131,7 @@ const make = Effect.gen(function* () {
     const fixerThreadId = yield* serverThreadId("implementation-fixer");
     const fixingRun: OrchestrationImplementationRun = {
       ...input.run,
-      status: "fixing",
+      status: input.status,
       updatedAt: input.createdAt,
     };
     yield* updateRun({
@@ -1013,7 +1148,7 @@ const make = Effect.gen(function* () {
       ownerUserId: orchestratorThread.ownerUserId,
       parentThreadId: input.run.orchestratorThreadId,
       workflowRole: "implementation-fixer",
-      title: "Fix browser dev review",
+      title: input.title,
       modelSelection: orchestratorThread.modelSelection,
       runtimeMode: orchestratorThread.runtimeMode,
       interactionMode: "implementation-workflow",
@@ -1029,7 +1164,7 @@ const make = Effect.gen(function* () {
       message: {
         messageId: yield* serverMessageId("implementation-fixer"),
         role: "user",
-        text: buildFixPrompt({ run: input.run, reviewMarkdown: input.reviewMarkdown }),
+        text: input.promptText,
         attachments: [],
       },
       workflowPromptId: WORKFLOW_PROMPT_IDS.implementationFixCodex,
@@ -1038,6 +1173,62 @@ const make = Effect.gen(function* () {
       createdAt: input.createdAt,
     });
   });
+
+  const handleCodeReviewResult = Effect.fn("ImplementationWorkflowReactor.handleCodeReviewResult")(
+    function* (
+      event: Extract<ImplementationWorkflowEvent, { type: "thread.activity-appended" }>,
+      directive: CodeReviewDirective,
+    ) {
+      const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+      const run = findRunById(readModel, directive.runId);
+      if (run === null) return;
+      const sourceThreadId = findRunSourceThreadId({ readModel, run });
+      if (sourceThreadId === null) return;
+      const updatedAt = event.payload.activity.createdAt;
+
+      if (directive.status === "clean") {
+        yield* updateRun({
+          sourceThreadId,
+          run: {
+            ...run,
+            status: "completed",
+            updatedAt,
+          },
+          createdAt: updatedAt,
+        });
+        return;
+      }
+
+      if (directive.status === "blocked") {
+        yield* blockRun({
+          sourceThreadId,
+          run,
+          reasonMarkdown: directive.reportMarkdown,
+          updatedAt,
+        });
+        return;
+      }
+
+      if (run.codeReviewAttemptCount >= MAX_CODE_REVIEW_CYCLES) {
+        yield* blockRun({
+          sourceThreadId,
+          run,
+          reasonMarkdown: `Implementation code review reached ${run.codeReviewAttemptCount} cycles without a clean result. Latest report:\n\n${directive.reportMarkdown}`,
+          updatedAt,
+        });
+        return;
+      }
+
+      yield* startFixer({
+        sourceThreadId,
+        run,
+        status: "code-review-fixing",
+        title: "Fix code review findings",
+        promptText: buildCodeReviewFixPrompt({ run, reportMarkdown: directive.reportMarkdown }),
+        createdAt: updatedAt,
+      });
+    },
+  );
 
   const handleDevReviewUpdated = Effect.fn("ImplementationWorkflowReactor.handleDevReviewUpdated")(
     function* (event: Extract<ImplementationWorkflowEvent, { type: "thread.dev-review-updated" }>) {
@@ -1076,7 +1267,12 @@ const make = Effect.gen(function* () {
       yield* startFixer({
         sourceThreadId,
         run,
-        reviewMarkdown: devReviewMarkdown(event.payload.document),
+        status: "fixing",
+        title: "Fix browser dev review",
+        promptText: buildFixPrompt({
+          run,
+          reviewMarkdown: devReviewMarkdown(event.payload.document),
+        }),
         createdAt: event.payload.updatedAt,
       });
     },
@@ -1123,6 +1319,11 @@ const make = Effect.gen(function* () {
       case "implementation-fix-result": {
         const directive = asFixDirective(event.payload.activity.payload);
         if (directive !== null) yield* handleFixResult(event, directive);
+        return;
+      }
+      case "implementation-code-review-result": {
+        const directive = asCodeReviewDirective(event.payload.activity.payload);
+        if (directive !== null) yield* handleCodeReviewResult(event, directive);
         return;
       }
       default:

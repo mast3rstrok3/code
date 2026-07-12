@@ -42,8 +42,8 @@ it.effect("maps schema errors without copying rejected payloads into diagnostics
 
     assert.equal(error.operation, "ProviderSessionRuntimeRepository.list:decodeRows");
     assert.equal(error.cause, cause);
-    assert.notInclude(error.issue, rejectedPayload);
+    assert.notInclude(error.ticket, rejectedPayload);
     assert.notInclude(error.message, rejectedPayload);
-    assert.include(error.issue, "InvalidType");
+    assert.include(error.ticket, "InvalidType");
   }),
 );

@@ -249,7 +249,7 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
             new ProviderAdapterValidationError({
               provider,
               operation: "crypto/randomUUIDv4",
-              issue: `Failed to generate test runtime identifier for thread '${threadId}'.`,
+              ticket: `Failed to generate test runtime identifier for thread '${threadId}'.`,
               cause,
             }),
         ),
@@ -261,7 +261,7 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
           return yield* new ProviderAdapterValidationError({
             provider,
             operation: "startSession",
-            issue: `Expected provider '${provider}' but received '${input.provider}'.`,
+            ticket: `Expected provider '${provider}' but received '${input.provider}'.`,
           });
         }
 
@@ -313,7 +313,7 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
           return yield* new ProviderAdapterValidationError({
             provider,
             operation: "sendTurn",
-            issue: `No queued turn response for thread ${input.threadId}.`,
+            ticket: `No queued turn response for thread ${input.threadId}.`,
           });
         }
 
@@ -467,7 +467,7 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
           new ProviderAdapterValidationError({
             provider,
             operation: "rollbackThread",
-            issue: "numTurns must be an integer between 0 and current turn count.",
+            ticket: "numTurns must be an integer between 0 and current turn count.",
           }),
         );
       }

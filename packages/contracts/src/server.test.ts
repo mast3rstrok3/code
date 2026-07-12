@@ -7,19 +7,19 @@ const decodeServerProvider = Schema.decodeUnknownSync(ServerProvider);
 const decodeWorkflowPromptContract = Schema.decodeUnknownSync(WorkflowPromptContract);
 
 describe("ServerProvider", () => {
-  it("decodes legacy YOLO workflow prompt contracts as Product Workflow", () => {
-    const parsed = decodeWorkflowPromptContract({
-      id: "product.grill-stage.codex",
-      order: 1,
-      workflow: "yolo",
-      role: "planning-thread",
-      stage: "grill",
-      title: "1. Intent Grill",
-      description: "Legacy workflow discriminator.",
-      promptText: "Prompt text.",
-    });
-
-    expect(parsed.workflow).toBe("product");
+  it("rejects legacy YOLO workflow prompt contracts", () => {
+    expect(() =>
+      decodeWorkflowPromptContract({
+        id: "product.workflow.codex",
+        order: 1,
+        workflow: "yolo",
+        role: "planning-thread",
+        stage: "grill",
+        title: "1. Intent Grill",
+        description: "Legacy workflow discriminator.",
+        promptText: "Prompt text.",
+      }),
+    ).toThrow();
   });
 
   it("defaults capability arrays when decoding provider snapshots", () => {

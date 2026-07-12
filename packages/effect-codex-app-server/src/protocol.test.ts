@@ -302,8 +302,8 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
       assert.equal(event.direction, "incoming");
       const payload = event.payload as Record<string, unknown>;
       assert.equal(payload.operation, "decode-wire-message");
-      assert.isNumber(payload.issueCount);
-      assert.isArray(payload.issueKinds);
+      assert.isNumber(payload.ticketCount);
+      assert.isArray(payload.ticketKinds);
       assert.isNumber(payload.maximumPathDepth);
       assert.equal("cause" in payload, false);
       assert.equal("detail" in payload, false);

@@ -1182,7 +1182,7 @@ export function makeOpenCodeAdapter(
         return yield* new ProviderAdapterValidationError({
           provider: PROVIDER,
           operation: "sendTurn",
-          issue: `OpenCode model selection is bound to instance '${modelSelection?.instanceId}', expected '${boundInstanceId}'.`,
+          ticket: `OpenCode model selection is bound to instance '${modelSelection?.instanceId}', expected '${boundInstanceId}'.`,
         });
       }
       const parsedModel = parseOpenCodeModelSlug(modelSelection?.model);
@@ -1190,7 +1190,7 @@ export function makeOpenCodeAdapter(
         return yield* new ProviderAdapterValidationError({
           provider: PROVIDER,
           operation: "sendTurn",
-          issue: "OpenCode model selection must use the 'provider/model' format.",
+          ticket: "OpenCode model selection must use the 'provider/model' format.",
         });
       }
 
@@ -1207,7 +1207,7 @@ export function makeOpenCodeAdapter(
         return yield* new ProviderAdapterValidationError({
           provider: PROVIDER,
           operation: "sendTurn",
-          issue: "OpenCode turns require text input or at least one attachment.",
+          ticket: "OpenCode turns require text input or at least one attachment.",
         });
       }
 

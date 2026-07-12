@@ -119,8 +119,8 @@ describe("effect-acp errors", () => {
         operation: "decode-extension-request-payload",
         maximumPathDepth: 2,
       });
-      expect(error.issueCount).toBeGreaterThan(0);
-      expect(error.issueKinds).toContain("Pointer");
+      expect(error.ticketCount).toBeGreaterThan(0);
+      expect(error.ticketKinds).toContain("Pointer");
       expect(error.message).toBe("Invalid payload for ACP extension method 'x/private'.");
       expect(error.message).not.toContain(secret);
       expect(encodeUnknownJson(directDiagnostics)).not.toContain(secret);

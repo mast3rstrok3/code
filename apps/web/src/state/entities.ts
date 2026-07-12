@@ -8,7 +8,7 @@ import { mergeEnvironmentThread } from "@t3tools/client-runtime/state/threads";
 import type {
   OrchestrationMessage,
   OrchestrationImplementationRun,
-  OrchestrationPlanningPrdId,
+  OrchestrationPlanningSpecId,
   OrchestrationPlanningWorkflow,
   OrchestrationProposedPlan,
   OrchestrationSession,
@@ -208,14 +208,14 @@ export function useImplementationRuns(
   );
 }
 
-export function useImplementationRunsForPrd(
+export function useImplementationRunsForSpec(
   environmentId: EnvironmentId | null,
-  prdId: OrchestrationPlanningPrdId | null,
+  specId: OrchestrationPlanningSpecId | null,
 ): ReadonlyArray<OrchestrationImplementationRun> {
   return useAtomValue(
-    environmentId === null || prdId === null
+    environmentId === null || specId === null
       ? EMPTY_IMPLEMENTATION_RUNS_ATOM
-      : environmentThreadShells.implementationRunsByPrdAtom({ environmentId, prdId }),
+      : environmentThreadShells.implementationRunsBySpecAtom({ environmentId, specId }),
   );
 }
 
@@ -246,15 +246,15 @@ export function useThreadSession(ref: ScopedThreadRef | null): OrchestrationSess
   );
 }
 
-export function useLoadPlanningPrdBundleCommand() {
-  return useAtomCommand(threadEnvironment.loadPlanningPrdBundle, {
-    label: "planning PRD bundle load",
+export function useLoadPlanningSpecBundleCommand() {
+  return useAtomCommand(threadEnvironment.loadPlanningSpecBundle, {
+    label: "planning Spec bundle load",
   });
 }
 
-export function useRequestPlanningIssueReviewCommand() {
-  return useAtomCommand(threadEnvironment.requestPlanningIssueReview, {
-    label: "planning issue review request",
+export function useRequestPlanningTicketReviewCommand() {
+  return useAtomCommand(threadEnvironment.requestPlanningTicketReview, {
+    label: "planning ticket review request",
   });
 }
 

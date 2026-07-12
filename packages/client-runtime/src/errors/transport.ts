@@ -32,7 +32,7 @@ export function isTransportConnectionErrorMessage(message: string | null | undef
 /**
  * Strip transport connection errors from user-facing error messages.
  * Returns `null` for transport errors so the UI can distinguish between
- * real errors and transient connection issues.
+ * real errors and transient connection tickets.
  */
 export function sanitizeThreadErrorMessage(message: string | null | undefined): string | null {
   return isTransportConnectionErrorMessage(message) ? null : (message ?? null);
