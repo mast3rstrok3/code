@@ -48,7 +48,7 @@ import { AgentBrowserCursor } from "./AgentBrowserCursor";
 import {
   startBrowserRecording,
   stopBrowserRecording,
-  useActiveBrowserRecordingTabId,
+  useIsBrowserRecording,
 } from "~/browser/browserRecording";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 
@@ -68,7 +68,6 @@ const localApi = typeof window === "undefined" ? null : ensureLocalApi();
 export function PreviewView({ threadRef, tabId: requestedTabId, configuredUrls, visible }: Props) {
   const [focusUrlNonce, setFocusUrlNonce] = useState<number | undefined>(undefined);
   const [pickActive, setPickActive] = useState(false);
-  const activeRecordingTabId = useActiveBrowserRecordingTabId();
   const pickActiveRef = useRef(false);
   const isMountedRef = useRef(true);
   const previewState = useThreadPreviewState(threadRef);
@@ -91,6 +90,7 @@ export function PreviewView({ threadRef, tabId: requestedTabId, configuredUrls, 
   }, []);
 
   const tabId = requestedTabId ?? previewState.activeTabId;
+  const recordingThisTab = useIsBrowserRecording(tabId);
   const snapshot = tabId ? (previewState.sessions[tabId] ?? null) : null;
   const desktopOverlay = tabId ? (previewState.desktopByTabId[tabId] ?? null) : null;
   const navStatus = snapshot?.navStatus ?? { _tag: "Idle" as const };
@@ -271,7 +271,6 @@ export function PreviewView({ threadRef, tabId: requestedTabId, configuredUrls, 
         );
         return;
       }
-      const recordingThisTab = activeRecordingTabId === tabId;
       if (recordingThisTab) {
         void stopBrowserRecording(tabId).then(
           (artifact) => {
@@ -365,14 +364,6 @@ export function PreviewView({ threadRef, tabId: requestedTabId, configuredUrls, 
         return;
       }
       if (record) {
-        if (activeRecordingTabId !== null) {
-          toastManager.add({
-            type: "warning",
-            title: "Another preview is recording",
-            description: "Stop the active recording before starting a new one.",
-          });
-          return;
-        }
         void startBrowserRecording(tabId).catch((error) => {
           toastManager.add({
             type: "error",
@@ -521,7 +512,7 @@ export function PreviewView({ threadRef, tabId: requestedTabId, configuredUrls, 
         },
       );
     },
-    [activeRecordingTabId, runtimeBridge, serverConfigs, tabId, threadRef.environmentId],
+    [recordingThisTab, runtimeBridge, serverConfigs, tabId, threadRef.environmentId],
   );
 
   const handlePickElement = useCallback(() => {
@@ -643,7 +634,7 @@ export function PreviewView({ threadRef, tabId: requestedTabId, configuredUrls, 
         onOpenInBrowser={tabId ? handleOpenInBrowser : undefined}
         onCapture={runtimeBridge && tabId ? handleCapture : undefined}
         captureDisabled={!browserSurfaceReady || isUnreachable}
-        recording={tabId !== null && activeRecordingTabId === tabId}
+        recording={recordingThisTab}
         onPickElement={
           runtimeBridge?.supportsElementPicking && previewBridge && tabId
             ? handlePickElement

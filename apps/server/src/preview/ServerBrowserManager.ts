@@ -343,11 +343,13 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
   const artifactDir = path.join(config.stateDir, "preview-artifacts");
   const tabs = new Map<string, ServerBrowserTab>();
   let runtimePromise: Promise<ServerBrowserRuntime> | null = null;
-  let activeRecording: ActiveServerRecording | null = null;
+  const activeRecordings = new Map<string, ActiveServerRecording>();
 
   const abortRecording = (recording: ActiveServerRecording) => {
     recording.stopping = true;
-    if (activeRecording === recording) activeRecording = null;
+    if (activeRecordings.get(recording.tabId) === recording) {
+      activeRecordings.delete(recording.tabId);
+    }
     try {
       recording.process.stdin?.end();
     } catch {
@@ -365,8 +367,8 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
   };
 
   const abortRecordingForTab = (tabId: string) => {
-    const recording = activeRecording;
-    if (recording && recording.tabId === tabId) abortRecording(recording);
+    const recording = activeRecordings.get(tabId);
+    if (recording) abortRecording(recording);
   };
 
   const enabled = config.mode === "web" && config.previewBrowserMode !== "off";
@@ -536,8 +538,8 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
       }
       if (typeof frame.data !== "string") return;
       const now = Date.now();
-      const recording = activeRecording;
-      if (recording && recording.tabId === tab.tabId && !recording.stopping) {
+      const recording = activeRecordings.get(tab.tabId);
+      if (recording && !recording.stopping) {
         try {
           recording.sink.pushFrame(Buffer.from(frame.data, "base64"), now);
         } catch {
@@ -1038,18 +1040,13 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
   const recordingStart: ServerBrowserManager["Service"]["recordingStart"] = Effect.fn(
     "ServerBrowserManager.recordingStart",
   )(function* (input) {
-    const existing = activeRecording;
+    const existing = activeRecordings.get(input.tabId ?? "");
     if (existing && !existing.stopping) {
-      if (existing.tabId === input.tabId) {
-        return {
-          tabId: existing.tabId as PreviewTabId,
-          recording: true,
-          startedAt: existing.startedAt,
-        };
-      }
-      return yield* new PreviewBrowserUnavailableError({
-        message: `Cannot record tab ${input.tabId} while tab ${existing.tabId} is already being recorded.`,
-      });
+      return {
+        tabId: existing.tabId as PreviewTabId,
+        recording: true,
+        startedAt: existing.startedAt,
+      };
     }
 
     const ffmpegPath = yield* BrowserExecutableResolver.resolveFfmpegExecutable(config).pipe(
@@ -1060,7 +1057,8 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
       .makeDirectory(artifactDir, { recursive: true })
       .pipe(Effect.mapError(browserError));
     const [startedAt, millis] = yield* Effect.all([nowIso, Clock.currentTimeMillis]);
-    const id = `browser-recording-${millis.toString(36)}`;
+    const safeTabId = tab.tabId.replace(/[^a-z0-9_-]/gi, "-").slice(-48);
+    const id = `browser-recording-${millis.toString(36)}-${safeTabId}`;
     const outputPath = path.join(artifactDir, `${id}.webm`);
     // Match CDP's screencast downscaling so recorded frames fill the canvas.
     const scale = Math.min(
@@ -1113,7 +1111,7 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
       },
       catch: browserError,
     });
-    activeRecording = recording;
+    activeRecordings.set(recording.tabId, recording);
 
     // Seed one frame so a static page still yields a non-empty video.
     yield* Effect.tryPromise({
@@ -1123,7 +1121,7 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
       Effect.flatMap((seed) =>
         Clock.currentTimeMillis.pipe(
           Effect.map((seededAt) => {
-            if (activeRecording === recording && !recording.stopping) {
+            if (activeRecordings.get(recording.tabId) === recording && !recording.stopping) {
               recording.sink.pushFrame(seed, seededAt);
             }
           }),
@@ -1138,16 +1136,17 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
   const recordingStop: ServerBrowserManager["Service"]["recordingStop"] = Effect.fn(
     "ServerBrowserManager.recordingStop",
   )(function* (input) {
-    const recording = activeRecording;
-    const matchesTarget =
-      recording !== null &&
-      !recording.stopping &&
-      (input.tabId === null || input.tabId === recording.tabId);
-    if (!recording || !matchesTarget) {
+    const recording =
+      input.tabId !== null
+        ? activeRecordings.get(input.tabId)
+        : [...activeRecordings.values()].find(
+            (candidate) => candidate.threadId === input.threadId && !candidate.stopping,
+          );
+    if (!recording || recording.stopping) {
       return yield* new PreviewRecordingNotActiveError({ tabId: input.tabId });
     }
     recording.stopping = true;
-    activeRecording = null;
+    activeRecordings.delete(recording.tabId);
 
     const [createdAt, stoppedAtMillis] = yield* Effect.all([nowIso, Clock.currentTimeMillis]);
     const sizeBytes = yield* Effect.tryPromise({
@@ -1197,8 +1196,8 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
   yield* Effect.addFinalizer(() =>
     Effect.tryPromise({
       try: async () => {
-        const recording = activeRecording;
-        if (recording) abortRecording(recording);
+        for (const recording of activeRecordings.values()) abortRecording(recording);
+        activeRecordings.clear();
         const runtime = runtimePromise ? await runtimePromise.catch(() => null) : null;
         await runtime?.context.close().catch(() => {});
       },

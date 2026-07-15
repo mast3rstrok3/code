@@ -413,7 +413,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   >(new Map());
   const actionSequenceRef = yield* Ref.make(0);
   const pointerSequenceRef = yield* Ref.make(0);
-  const recordingTabIdRef = yield* Ref.make<Option.Option<string>>(Option.none());
+  const recordingTabIdsRef = yield* Ref.make<ReadonlySet<string>>(new Set());
 
   const attempt = <A>(errorContext: PreviewOperationContext, evaluate: () => A) =>
     Effect.try({
@@ -1751,26 +1751,28 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   });
 
   const startRecording = Effect.fn("PreviewManager.startRecording")(function* (tabId: string) {
-    const recordingTabId = yield* Ref.get(recordingTabIdRef);
-    if (Option.isSome(recordingTabId) && recordingTabId.value !== tabId) {
-      return yield* new PreviewRecordingAlreadyActiveError({
-        requestedTabId: tabId,
-        activeTabId: recordingTabId.value,
-      });
-    }
+    const recordingTabIds = yield* Ref.get(recordingTabIdsRef);
+    if (recordingTabIds.has(tabId)) return;
     const wc = yield* requireWebContents(tabId);
     yield* withControlSession(tabId, wc, "recording.start", startScreencast);
-    yield* Ref.set(recordingTabIdRef, Option.some(tabId));
+    yield* Ref.update(recordingTabIdsRef, (current) => new Set([...current, tabId]));
   });
 
   const stopRecording = Effect.fn("PreviewManager.stopRecording")(function* (tabId: string) {
-    const recordingTabId = yield* Ref.get(recordingTabIdRef);
-    if (Option.isNone(recordingTabId) || recordingTabId.value !== tabId) return;
+    const recordingTabIds = yield* Ref.get(recordingTabIdsRef);
+    if (!recordingTabIds.has(tabId)) return;
     const wc = yield* requireWebContents(tabId);
     yield* withControlSession(tabId, wc, "recording.stop", (send) =>
       send("Page.stopScreencast").pipe(Effect.asVoid),
+    ).pipe(
+      Effect.ensuring(
+        Ref.update(recordingTabIdsRef, (current) => {
+          const next = new Set(current);
+          next.delete(tabId);
+          return next;
+        }),
+      ),
     );
-    yield* Ref.set(recordingTabIdRef, Option.none());
   });
 
   const saveRecording = Effect.fn("PreviewManager.saveRecording")(function* (
@@ -1779,7 +1781,9 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     data: Uint8Array,
   ) {
     const [createdAt, millis] = yield* Effect.all([currentIso, currentMillis]);
-    const id = `browser-recording-${millis.toString(36)}`;
+    const sequence = yield* Ref.getAndUpdate(actionSequenceRef, (value) => value + 1);
+    const safeTabId = tabId.replace(/[^a-z0-9_-]/gi, "-").slice(-48);
+    const id = `browser-recording-${millis.toString(36)}-${sequence.toString(36)}-${safeTabId}`;
     const extension = mimeType.includes("mp4") ? "mp4" : "webm";
     const artifactPath = path.join(resolvedArtifactDirectory, `${id}.${extension}`);
     yield* fileSystem.makeDirectory(resolvedArtifactDirectory, { recursive: true }).pipe(
@@ -2485,6 +2489,11 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     ).pipe(Effect.asVoid);
 
   const destroy = Effect.fn("PreviewManager.destroy")(function* () {
+    const recordingTabIds = yield* Ref.get(recordingTabIdsRef);
+    yield* Effect.forEach(recordingTabIds, (tabId) => stopRecording(tabId).pipe(Effect.ignore), {
+      concurrency: "unbounded",
+      discard: true,
+    });
     const tabs = yield* SynchronizedRef.get(tabsRef);
     yield* Effect.forEach(tabs.keys(), closeTab, { discard: true });
     yield* Effect.all(
@@ -2493,6 +2502,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         Ref.set(expectedAgentInputsRef, new Map()),
         Ref.set(pointerEventListenersRef, new Set()),
         Ref.set(recordingFrameListenersRef, new Set()),
+        Ref.set(recordingTabIdsRef, new Set()),
       ],
       { discard: true },
     );

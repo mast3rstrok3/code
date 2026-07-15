@@ -48,7 +48,7 @@ import {
   BROWSER_RECORDING_STARTUP_SETTLE_TIMEOUT_MS,
   BrowserRecordingConflictError,
   BrowserRecordingOperationError,
-  BrowserRecordingRequiresVisibleTabError,
+  isBrowserRecordingActive,
   startBrowserRecording,
   stopBrowserRecording,
 } from "./browserRecording";
@@ -111,12 +111,13 @@ describe("browser recording", () => {
   it("starts recording for a visible tab", async () => {
     await startBrowserRecording("recording-tab");
 
-    expect(events).toEqual(["start-screencast", "publish:recording-tab"]);
+    expect(startScreencast).toHaveBeenCalledOnce();
+    expect(events.at(-1)).toBe('publish:["recording-tab"]');
 
     await stopBrowserRecording("recording-tab");
   });
 
-  it("rejects recording for a hidden tab before starting screencast", async () => {
+  it("continues to support recording for a visually hidden tab", async () => {
     surfaceState.byTabId = {
       "recording-tab": {
         visible: false,
@@ -125,15 +126,12 @@ describe("browser recording", () => {
       },
     };
 
-    await expect(startBrowserRecording("recording-tab")).rejects.toBeInstanceOf(
-      BrowserRecordingRequiresVisibleTabError,
-    );
-
-    expect(startScreencast).not.toHaveBeenCalled();
-    expect(registrySet).not.toHaveBeenCalled();
+    await startBrowserRecording("recording-tab");
+    expect(startScreencast).toHaveBeenCalledOnce();
+    await stopBrowserRecording("recording-tab");
   });
 
-  it("does not report success for a second start while the first is still starting", async () => {
+  it("makes duplicate starts for the same starting tab idempotent", async () => {
     let finishStartingScreencast: (() => void) | undefined;
     startScreencast.mockImplementationOnce(async () => {
       events.push("start-screencast");
@@ -145,13 +143,31 @@ describe("browser recording", () => {
     const firstStart = startBrowserRecording("recording-tab");
     await vi.waitFor(() => expect(startScreencast).toHaveBeenCalledOnce());
 
-    await expect(startBrowserRecording("recording-tab")).rejects.toBeInstanceOf(
-      BrowserRecordingConflictError,
-    );
+    const duplicateStart = startBrowserRecording("recording-tab");
 
     finishStartingScreencast?.();
-    await firstStart;
+    const [firstStartedAt, duplicateStartedAt] = await Promise.all([firstStart, duplicateStart]);
+    expect(duplicateStartedAt).toBe(firstStartedAt);
+    expect(startScreencast).toHaveBeenCalledOnce();
     await stopBrowserRecording("recording-tab");
+  });
+
+  it("records two tabs concurrently and stops them independently", async () => {
+    surfaceState.byTabId["recording-tab-2"] = {
+      visible: false,
+      rect: { x: 0, y: 0, width: 640, height: 480 },
+      content: { x: 0, y: 0, width: 640, height: 480, scale: 1, scrollLeft: 0, scrollTop: 0 },
+    };
+
+    await Promise.all([
+      startBrowserRecording("recording-tab"),
+      startBrowserRecording("recording-tab-2"),
+    ]);
+    expect(startScreencast).toHaveBeenCalledTimes(2);
+    await stopBrowserRecording("recording-tab");
+    expect(isBrowserRecordingActive("recording-tab")).toBe(false);
+    expect(isBrowserRecordingActive("recording-tab-2")).toBe(true);
+    await stopBrowserRecording("recording-tab-2");
   });
 
   it("does not report success for a start while the recording is stopping", async () => {
@@ -219,7 +235,7 @@ describe("browser recording", () => {
     await rejectedStart;
     await stopPromise;
     expect(stopScreencast).toHaveBeenCalledTimes(2);
-    expect(events.at(-1)).toBe("clear");
+    expect(events.at(-1)).toBe("publish:[]");
   });
 
   it("does not release the recording slot until a cancelled start settles", async () => {
@@ -289,6 +305,6 @@ describe("browser recording", () => {
     const cleanupResult = await stopBrowserRecording("recording-tab");
     expect(cleanupResult).toBeNull();
     expect(save).not.toHaveBeenCalled();
-    expect(events.at(-1)).toBe("clear");
+    expect(events.at(-1)).toBe("publish:[]");
   });
 });
