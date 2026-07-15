@@ -209,6 +209,53 @@ function seedProductSpecAndTickets(system: ProductSystem, threadId: ThreadId) {
   });
 }
 
+function lockProductFixIntent(system: ProductSystem, suffix = "") {
+  return Effect.gen(function* () {
+    yield* system.engine.dispatch({
+      type: "thread.activity.append",
+      commandId: commandId(`fix-intent-locked${suffix}`),
+      threadId: productThreadId,
+      activity: {
+        id: eventId(`fix-intent-locked${suffix}`),
+        tone: "info",
+        kind: "product-intent-locked",
+        summary: "Checkout bug",
+        payload: { title: "Checkout bug", summaryMarkdown: "Locked fix.", intentKind: "fix" },
+        turnId: null,
+        createdAt: now,
+      },
+      createdAt: now,
+    });
+    yield* system.reactor.drain;
+  });
+}
+
+function upsertProposedPlan(
+  system: ProductSystem,
+  input: {
+    readonly threadId?: ThreadId;
+    readonly planId: string;
+    readonly implementedAt?: string | null;
+    readonly suffix?: string;
+  },
+) {
+  return system.engine.dispatch({
+    type: "thread.proposed-plan.upsert",
+    commandId: commandId(`fix-plan-upsert-${input.planId}${input.suffix ?? ""}`),
+    threadId: input.threadId ?? productThreadId,
+    proposedPlan: {
+      id: input.planId,
+      turnId: null,
+      planMarkdown: "# Fix checkout\nRepair the checkout flow.",
+      implementedAt: input.implementedAt ?? null,
+      implementationThreadId: null,
+      createdAt: now,
+      updatedAt: now,
+    },
+    createdAt: now,
+  });
+}
+
 describe("ProductWorkflowReactor", () => {
   it.effect("starts one child planning orchestrator after product intent locks", () =>
     withSystem((system) =>
@@ -362,6 +409,125 @@ describe("ProductWorkflowReactor", () => {
           expect(implementationOrchestrator?.parentThreadId).toBe(productThreadId);
         }),
       ),
+  );
+
+  it.effect("switches the product thread to plan mode for fix intents and skips planning", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        yield* seedProjectAndThread(system);
+        yield* lockProductFixIntent(system);
+        yield* lockProductFixIntent(system, "-duplicate");
+
+        const snapshot = yield* system.query.getSnapshot();
+        const root = snapshot.threads.find((thread) => thread.id === productThreadId);
+        const planningChildren = snapshot.threads.filter(
+          (thread) =>
+            thread.parentThreadId === productThreadId &&
+            thread.workflowRole === "planning-orchestrator",
+        );
+        const events = yield* Stream.runCollect(system.engine.readEvents(0)).pipe(
+          Effect.map((chunk) => Array.from(chunk)),
+        );
+        const fixPlanTurnStarts = events.filter(
+          (event) =>
+            event.type === "thread.turn-start-requested" &&
+            event.payload.threadId === productThreadId,
+        );
+        expect(root?.interactionMode).toBe("plan");
+        expect(planningChildren).toHaveLength(0);
+        expect(fixPlanTurnStarts).toHaveLength(1);
+        const turnStart = fixPlanTurnStarts[0];
+        if (turnStart?.type !== "thread.turn-start-requested") throw new Error("Missing turn.");
+        expect(turnStart.payload.interactionMode).toBe("plan");
+        expect(turnStart.payload.workflowPromptId).toBeUndefined();
+        expect(
+          root?.activities.some((activity) => activity.kind === "product-fix-plan-started"),
+        ).toBe(true);
+      }),
+    ),
+  );
+
+  it.effect("launches a build sub-thread once the fix plan is proposed", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        yield* seedProjectAndThread(system);
+        yield* lockProductFixIntent(system);
+
+        yield* upsertProposedPlan(system, { planId: "plan-1" });
+        yield* system.reactor.drain;
+        yield* upsertProposedPlan(system, { planId: "plan-1", suffix: "-again" });
+        yield* upsertProposedPlan(system, {
+          planId: "plan-2",
+          implementedAt: "2026-01-01T00:00:05.000Z",
+        });
+        yield* system.reactor.drain;
+
+        const snapshot = yield* system.query.getSnapshot();
+        const implementers = snapshot.threads.filter(
+          (thread) => thread.workflowRole === "product-fix-implementer",
+        );
+        const events = yield* Stream.runCollect(system.engine.readEvents(0)).pipe(
+          Effect.map((chunk) => Array.from(chunk)),
+        );
+        expect(implementers).toHaveLength(1);
+        const implementer = implementers[0];
+        expect(implementer?.parentThreadId).toBe(productThreadId);
+        expect(implementer?.interactionMode).toBe("default");
+        expect(implementer?.title).toBe("Implement Fix checkout");
+        expect(
+          events.some(
+            (event) =>
+              event.type === "thread.turn-start-requested" &&
+              event.payload.threadId === implementer?.id &&
+              event.payload.sourceProposedPlan?.threadId === productThreadId &&
+              event.payload.sourceProposedPlan?.planId === "plan-1",
+          ),
+        ).toBe(true);
+        expect(
+          implementer?.messages.some((message) =>
+            message.text.startsWith("PLEASE IMPLEMENT THIS PLAN:"),
+          ),
+        ).toBe(true);
+        const root = snapshot.threads.find((thread) => thread.id === productThreadId);
+        expect(
+          root?.activities.some(
+            (activity) => activity.kind === "product-fix-implementation-started",
+          ),
+        ).toBe(true);
+      }),
+    ),
+  );
+
+  it.effect("ignores proposed plans from ordinary plan threads", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        yield* seedProjectAndThread(system);
+        const ordinaryThreadId = ThreadId.make("thread-ordinary-plan");
+        yield* system.engine.dispatch({
+          type: "thread.create",
+          commandId: commandId("ordinary-plan-create"),
+          threadId: ordinaryThreadId,
+          projectId,
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+          parentThreadId: null,
+          workflowRole: null,
+          title: "Ordinary plan",
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
+          runtimeMode: "full-access",
+          interactionMode: "plan",
+          branch: null,
+          worktreePath: null,
+          createdAt: now,
+        });
+        yield* upsertProposedPlan(system, { threadId: ordinaryThreadId, planId: "plan-3" });
+        yield* system.reactor.drain;
+
+        const snapshot = yield* system.query.getSnapshot();
+        expect(
+          snapshot.threads.some((thread) => thread.workflowRole === "product-fix-implementer"),
+        ).toBe(false);
+      }),
+    ),
   );
 
   it.effect("ignores normal planning workflows", () =>

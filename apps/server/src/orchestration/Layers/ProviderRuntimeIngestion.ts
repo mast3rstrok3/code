@@ -1318,6 +1318,7 @@ const make = Effect.gen(function* () {
               payload: {
                 title: input.directive.title,
                 summaryMarkdown: input.directive.summaryMarkdown,
+                intentKind: input.directive.intentKind,
               },
               turnId: null,
               createdAt: input.createdAt,

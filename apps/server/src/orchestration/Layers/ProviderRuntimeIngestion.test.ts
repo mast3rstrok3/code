@@ -3565,6 +3565,57 @@ describe("ProviderRuntimeIngestion", () => {
     ).toBe(false);
   });
 
+  it("appends product intent locks with the directive intent kind", async () => {
+    const harness = await createHarness();
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    const rootThreadId = asThreadId("thread-product-root-intent-kind");
+
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-product-root-intent-kind-create"),
+        threadId: rootThreadId,
+        projectId: asProjectId("project-1"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+        parentThreadId: null,
+        workflowRole: null,
+        title: "Product Workflow",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: "product-workflow",
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-product-root-intent-kind"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt,
+      threadId: rootThreadId,
+      turnId: asTurnId("turn-product-root-intent-kind"),
+      itemId: asItemId("item-product-root-intent-kind"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail:
+          '```json\n{ "type": "product-intent-locked", "intentKind": "fix", "title": "Checkout", "summaryMarkdown": "Locked." }\n```',
+      },
+    });
+
+    await harness.drain();
+    const readModel = await harness.readModel();
+    const rootThread = readModel.threads.find((thread) => thread.id === rootThreadId);
+    const activity = rootThread?.activities.find((entry) => entry.kind === "product-intent-locked");
+    expect(activity).toBeDefined();
+    expect((activity?.payload as { intentKind?: string })?.intentKind).toBe("fix");
+  });
+
   it("continues processing runtime events after a single event handler failure", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

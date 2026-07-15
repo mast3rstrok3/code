@@ -1,7 +1,13 @@
-export function proposedPlanTitle(planMarkdown: string): string | null {
-  const heading = planMarkdown.match(/^\s{0,3}#{1,6}\s+(.+)$/m)?.[1]?.trim();
-  return heading && heading.length > 0 ? heading : null;
-}
+import {
+  buildPlanImplementationPrompt,
+  proposedPlanTitle,
+} from "@t3tools/shared/orchestrationPlanning";
+
+export {
+  buildPlanImplementationPrompt,
+  buildPlanImplementationThreadTitle,
+  proposedPlanTitle,
+} from "@t3tools/shared/orchestrationPlanning";
 
 export function stripDisplayedPlanMarkdown(planMarkdown: string): string {
   const lines = planMarkdown.trimEnd().split(/\r?\n/);
@@ -70,10 +76,6 @@ function sanitizePlanFileSegment(input: string): string {
   return sanitized.length > 0 ? sanitized : "plan";
 }
 
-export function buildPlanImplementationPrompt(planMarkdown: string): string {
-  return `PLEASE IMPLEMENT THIS PLAN:\n${planMarkdown.trim()}`;
-}
-
 export function resolvePlanFollowUpSubmission(input: { draftText: string; planMarkdown: string }): {
   text: string;
   interactionMode: "default" | "plan";
@@ -90,14 +92,6 @@ export function resolvePlanFollowUpSubmission(input: { draftText: string; planMa
     text: buildPlanImplementationPrompt(input.planMarkdown),
     interactionMode: "default",
   };
-}
-
-export function buildPlanImplementationThreadTitle(planMarkdown: string): string {
-  const title = proposedPlanTitle(planMarkdown);
-  if (!title) {
-    return "Implement plan";
-  }
-  return `Implement ${title}`;
 }
 
 export function buildProposedPlanMarkdownFilename(planMarkdown: string): string {

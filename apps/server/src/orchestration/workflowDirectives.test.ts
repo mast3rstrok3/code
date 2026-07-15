@@ -14,6 +14,32 @@ describe("workflowDirectives", () => {
     if (result.kind !== "parsed") return;
     NodeAssert.equal(result.directive.type, "product-intent-locked");
     NodeAssert.equal(result.directive.title, "Checkout");
+    if (result.directive.type !== "product-intent-locked") return;
+    NodeAssert.equal(result.directive.intentKind, "feature");
+  });
+
+  it("parses product intent locked directives with a fix intent kind", () => {
+    const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
+{ "type": "product-intent-locked", "intentKind": "fix", "title": "Checkout", "summaryMarkdown": "Locked intent." }
+\`\`\``);
+
+    NodeAssert.equal(result.kind, "parsed");
+    if (result.kind !== "parsed") return;
+    if (result.directive.type !== "product-intent-locked") return;
+    NodeAssert.equal(result.directive.intentKind, "fix");
+  });
+
+  it("rejects product intent locked directives with an invalid intent kind", () => {
+    const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
+{ "type": "product-intent-locked", "intentKind": "refactor", "title": "Checkout", "summaryMarkdown": "Locked intent." }
+\`\`\``);
+
+    NodeAssert.equal(result.kind, "error");
+    if (result.kind !== "error") return;
+    NodeAssert.equal(
+      result.message,
+      'product-intent-locked.intentKind must be "feature" or "fix" when provided.',
+    );
   });
 
   it("parses canonical Spec, Ticket, and Ticket review directives", () => {

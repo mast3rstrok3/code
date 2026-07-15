@@ -9,6 +9,10 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { resolveImplementationBranchIdentity } from "@t3tools/shared/orchestrationImplementation";
+import {
+  buildPlanImplementationPrompt,
+  buildPlanImplementationThreadTitle,
+} from "@t3tools/shared/orchestrationPlanning";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
@@ -34,7 +38,8 @@ type ProductWorkflowEvent = Extract<
     type:
       | "thread.activity-appended"
       | "thread.planning-tickets-created"
-      | "thread.planning-tickets-revised";
+      | "thread.planning-tickets-revised"
+      | "thread.proposed-plan-upserted";
   }
 >;
 
@@ -52,6 +57,31 @@ const isProductPlanningOrchestratorThread = (thread: {
   thread.workflowRole === "planning-orchestrator" &&
   thread.parentThreadId !== null;
 
+const hasFixIntentLockedActivity = (thread: OrchestrationThread) =>
+  thread.activities.some((activity) => {
+    if (activity.kind !== "product-intent-locked") return false;
+    const payload =
+      activity.payload !== null && typeof activity.payload === "object"
+        ? (activity.payload as Record<string, unknown>)
+        : {};
+    return payload.intentKind === "fix";
+  });
+
+const buildProductFixPlanPrompt = (input: {
+  readonly intentTitle: string;
+  readonly intentSummaryMarkdown: string;
+}) =>
+  [
+    `Create an implementation plan for the locked fix intent "${input.intentTitle}".`,
+    "",
+    "The intent is locked. Do not ask the user questions or reopen the intent.",
+    "",
+    "Locked intent summary:",
+    input.intentSummaryMarkdown,
+    "",
+    "Explore the codebase, find the root cause, and produce a concrete, minimal implementation plan: the exact files to change, the changes to make, and the tests that prove the fix. Finish by exiting plan mode with the final plan — implementation starts automatically from your proposed plan.",
+  ].join("\n");
+
 const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const orchestrationEngine = yield* OrchestrationEngineService;
@@ -63,6 +93,8 @@ const make = Effect.gen(function* () {
   const serverEventId = () => crypto.randomUUIDv4.pipe(Effect.map(EventId.make));
   const serverMessageId = (tag: string) =>
     crypto.randomUUIDv4.pipe(Effect.map((uuid) => MessageId.make(`message-${tag}-${uuid}`)));
+  const serverThreadId = (tag: string) =>
+    crypto.randomUUIDv4.pipe(Effect.map((uuid) => ThreadId.make(`thread-${tag}-${uuid}`)));
 
   const resolveThread = (threadId: ThreadId) =>
     projectionSnapshotQuery.getThreadDetailById(threadId).pipe(Effect.map(Option.getOrUndefined));
@@ -98,6 +130,18 @@ const make = Effect.gen(function* () {
       (thread) =>
         thread.parentThreadId === rootThreadId &&
         thread.workflowRole === "planning-orchestrator" &&
+        thread.deletedAt === null,
+    );
+  });
+
+  const hasActiveFixImplementerChild = Effect.fn(
+    "ProductWorkflowReactor.hasActiveFixImplementerChild",
+  )(function* (rootThreadId: ThreadId) {
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    return readModel.threads.some(
+      (thread) =>
+        thread.parentThreadId === rootThreadId &&
+        thread.workflowRole === "product-fix-implementer" &&
         thread.deletedAt === null,
     );
   });
@@ -303,6 +347,48 @@ const make = Effect.gen(function* () {
     yield* launchImplementation(event);
   });
 
+  const launchFixPlanning = Effect.fn("ProductWorkflowReactor.launchFixPlanning")(
+    function* (input: {
+      readonly thread: OrchestrationThread;
+      readonly intentTitle: string;
+      readonly intentSummaryMarkdown: string;
+      readonly createdAt: string;
+    }) {
+      yield* orchestrationEngine.dispatch({
+        type: "thread.interaction-mode.set",
+        commandId: yield* serverCommandId("product-fix-plan-mode"),
+        threadId: input.thread.id,
+        interactionMode: "plan",
+        createdAt: input.createdAt,
+      });
+      yield* orchestrationEngine.dispatch({
+        type: "thread.turn.start",
+        commandId: yield* serverCommandId("product-fix-plan-turn"),
+        threadId: input.thread.id,
+        message: {
+          messageId: yield* serverMessageId("product-fix-plan"),
+          role: "user",
+          text: buildProductFixPlanPrompt({
+            intentTitle: input.intentTitle,
+            intentSummaryMarkdown: input.intentSummaryMarkdown,
+          }),
+          attachments: [],
+        },
+        runtimeMode: input.thread.runtimeMode,
+        interactionMode: "plan",
+        createdAt: input.createdAt,
+      });
+      yield* appendActivity({
+        threadId: input.thread.id,
+        tone: "info",
+        kind: "product-fix-plan-started",
+        summary: "Fix planning started",
+        payload: { intentTitle: input.intentTitle },
+        createdAt: input.createdAt,
+      });
+    },
+  );
+
   const handleProductIntentLocked = Effect.fn("ProductWorkflowReactor.handleProductIntentLocked")(
     function* (event: Extract<ProductWorkflowEvent, { type: "thread.activity-appended" }>) {
       if (event.payload.activity.kind !== "product-intent-locked") return;
@@ -319,6 +405,17 @@ const make = Effect.gen(function* () {
       const intentTitle = payloadTitle.length > 0 ? payloadTitle : event.payload.activity.summary;
       const intentSummaryMarkdown = payloadSummary.length > 0 ? payloadSummary : intentTitle;
       if (intentTitle.trim().length === 0 || intentSummaryMarkdown.trim().length === 0) return;
+
+      if (payload.intentKind === "fix") {
+        yield* launchFixPlanning({
+          thread,
+          intentTitle,
+          intentSummaryMarkdown,
+          createdAt: event.payload.activity.createdAt,
+        });
+        return;
+      }
+
       if (yield* hasActivePlanningOrchestratorChild(thread.id)) return;
 
       yield* orchestrationEngine.dispatch({
@@ -331,6 +428,61 @@ const make = Effect.gen(function* () {
       });
     },
   );
+
+  const handleFixPlanReady = Effect.fn("ProductWorkflowReactor.handleFixPlanReady")(function* (
+    event: Extract<ProductWorkflowEvent, { type: "thread.proposed-plan-upserted" }>,
+  ) {
+    const plan = event.payload.proposedPlan;
+    if (plan.implementedAt !== null) return;
+    const thread = yield* resolveThread(event.payload.threadId);
+    if (!thread) return;
+    if (thread.workflowRole !== null) return;
+    if (!hasFixIntentLockedActivity(thread)) return;
+    if (yield* hasActiveFixImplementerChild(thread.id)) return;
+
+    const implementationThreadId = yield* serverThreadId("product-fix-implementer");
+    const title = buildPlanImplementationThreadTitle(plan.planMarkdown);
+    yield* orchestrationEngine.dispatch({
+      type: "thread.create",
+      commandId: yield* serverCommandId("product-fix-implementer-create"),
+      threadId: implementationThreadId,
+      projectId: thread.projectId,
+      ownerUserId: thread.ownerUserId,
+      parentThreadId: thread.id,
+      workflowRole: "product-fix-implementer",
+      title,
+      modelSelection: thread.modelSelection,
+      runtimeMode: thread.runtimeMode,
+      interactionMode: "default",
+      branch: thread.branch,
+      worktreePath: thread.worktreePath,
+      createdAt: event.occurredAt,
+    });
+    yield* orchestrationEngine.dispatch({
+      type: "thread.turn.start",
+      commandId: yield* serverCommandId("product-fix-implementer-turn"),
+      threadId: implementationThreadId,
+      message: {
+        messageId: yield* serverMessageId("product-fix-implementer"),
+        role: "user",
+        text: buildPlanImplementationPrompt(plan.planMarkdown),
+        attachments: [],
+      },
+      titleSeed: title,
+      runtimeMode: thread.runtimeMode,
+      interactionMode: "default",
+      sourceProposedPlan: { threadId: thread.id, planId: plan.id },
+      createdAt: event.occurredAt,
+    });
+    yield* appendActivity({
+      threadId: thread.id,
+      tone: "info",
+      kind: "product-fix-implementation-started",
+      summary: "Fix implementation started",
+      payload: { implementationThreadId, planId: plan.id },
+      createdAt: event.occurredAt,
+    });
+  });
 
   const processEvent = Effect.fn("ProductWorkflowReactor.processEvent")(function* (
     event: ProductWorkflowEvent,
@@ -345,6 +497,9 @@ const make = Effect.gen(function* () {
       case "thread.planning-tickets-revised":
         yield* handleReviewCycle(event);
         yield* requestTicketReview(event);
+        return;
+      case "thread.proposed-plan-upserted":
+        yield* handleFixPlanReady(event);
         return;
     }
   });
@@ -370,7 +525,8 @@ const make = Effect.gen(function* () {
         if (
           event.type !== "thread.activity-appended" &&
           event.type !== "thread.planning-tickets-created" &&
-          event.type !== "thread.planning-tickets-revised"
+          event.type !== "thread.planning-tickets-revised" &&
+          event.type !== "thread.proposed-plan-upserted"
         ) {
           return Effect.void;
         }

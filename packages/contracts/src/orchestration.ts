@@ -785,6 +785,7 @@ export const OrchestrationThreadWorkflowRole = Schema.Literals([
   "implementation-qa-reviewer",
   "implementation-fixer",
   "implementation-code-reviewer",
+  "product-fix-implementer",
 ]);
 export type OrchestrationThreadWorkflowRole = typeof OrchestrationThreadWorkflowRole.Type;
 

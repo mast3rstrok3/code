@@ -20,6 +20,7 @@ export type WorkflowAgentMessageTarget =
 export type WorkflowDirective =
   | {
       readonly type: "product-intent-locked";
+      readonly intentKind: "feature" | "fix";
       readonly title: string;
       readonly summaryMarkdown: string;
     }
@@ -281,7 +282,17 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
       const summaryMarkdown = requiredString(record, "summaryMarkdown");
       if (title.startsWith("Directive field")) return title;
       if (summaryMarkdown.startsWith("Directive field")) return summaryMarkdown;
-      return { type: "product-intent-locked", title, summaryMarkdown };
+      const rawIntentKind = record["intentKind"];
+      if (
+        rawIntentKind !== undefined &&
+        rawIntentKind !== null &&
+        rawIntentKind !== "feature" &&
+        rawIntentKind !== "fix"
+      ) {
+        return 'product-intent-locked.intentKind must be "feature" or "fix" when provided.';
+      }
+      const intentKind = rawIntentKind === "fix" ? "fix" : "feature";
+      return { type: "product-intent-locked", intentKind, title, summaryMarkdown };
     }
     case "planning-spec-artifact": {
       const title = requiredString(record, "title");

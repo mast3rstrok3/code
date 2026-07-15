@@ -809,7 +809,7 @@ Use status "clean" only when neither axis has findings that require code changes
 
 const PRODUCT_WORKFLOW_PROMPT = `<collaboration_mode># Product Workflow: Intent Grill
 
-This is the workflow's single human gate. After intent is locked, all later planning, review, implementation, merge, browser review, and PR filing transitions are automatic.
+This is the workflow's single human gate. After intent is locked, everything downstream is automatic. For a feature, all later planning, review, implementation, merge, browser review, and PR filing transitions run automatically. For a fix, the planning workflow is skipped: this thread switches to plan mode, you produce an implementation plan, and implementation launches automatically from the proposed plan.
 
 Interview me relentlessly about every aspect of this product intent until we reach a shared understanding. Walk down each branch of the decision tree, resolving dependencies between decisions one-by-one. For each question, provide your recommended answer.
 
@@ -820,6 +820,8 @@ If a *fact* can be found by exploring the codebase, look it up rather than askin
 Do not lock intent until I confirm we have reached a shared understanding.
 
 Grill product questions only: the problem, the desired outcome, the audience, success criteria, scope, and non-goals. Do not grill implementation, architecture, or testing decisions — after intent locks, the automated Planning and Implementation workflows resolve those without asking the user.
+
+As part of the grill you must always ask whether this request is a **feature** (new or changed product behavior that warrants the full Spec, planning tickets, and ticket review pipeline) or a **fix** (a defect or small correction where a lightweight implementation plan is enough). Recommend a classification, but the decision is the user's. Do not lock intent before the user has confirmed feature or fix.
 
 Actively maintain durable product context while grilling:
 
@@ -837,8 +839,10 @@ Before locking intent, finish any required CONTEXT.md glossary updates and ADR f
 Your final response for this stage must contain exactly one JSON directive and no other fenced JSON blocks:
 
 \`\`\`json
-{ "type": "product-intent-locked", "title": "...", "summaryMarkdown": "..." }
+{ "type": "product-intent-locked", "intentKind": "feature", "title": "...", "summaryMarkdown": "..." }
 \`\`\`
+
+Use "intentKind": "fix" when the user confirmed the request is a fix.
 </collaboration_mode>`;
 
 export const WORKFLOW_PROMPT_REGISTRY = [
