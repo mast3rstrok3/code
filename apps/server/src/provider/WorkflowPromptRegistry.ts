@@ -669,9 +669,9 @@ When this Browser Dev Review is linked to a durable Dev Review record:
 9. Update the Dev Review record with dev_review_update, including verdict, summary, checks, findings, questions, next steps, and evidence IDs.
 10. Mark the review status passed, failed, or blocked.
 
-If no durable Dev Review record is linked, still perform the Browser Dev Review, capture concrete findings in the conversation, and report whether implementation completion should proceed.
+If no durable Dev Review record is linked, this is focused feedback mode. Use preview_* tools only, call preview_open with show: false, do not call dev_review_* tools, and do not record or capture evidence unless the focused question itself requires a screenshot. Finish with exactly one workflow-subagent-result directive containing concise observations, reproduction steps, blockers, and recommendations.
 
-Use only the preview_* and dev_review_* MCP tools for browser work. Do not use external browsers, browser MCP servers, standalone Playwright scripts, or shell-driven browser automation. See preview-browser-qa.md for the full preview toolset guidance.
+Use only the preview_* tools in feedback mode and preview_* plus dev_review_* tools in full mode. Do not use external browsers, browser MCP servers, standalone Playwright scripts, or shell-driven browser automation. See preview-browser-qa.md for the full preview toolset guidance.
 </collaboration_mode>`;
 
 const IMPLEMENTATION_FIX_PROMPT = `<collaboration_mode># Implementation Workflow: Fix

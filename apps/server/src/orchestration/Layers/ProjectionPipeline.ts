@@ -84,6 +84,7 @@ export const ORCHESTRATION_PROJECTOR_NAMES = {
   threadMessages: "projection.thread-messages",
   threadProposedPlans: "projection.thread-proposed-plans",
   threadDevReviews: "projection.thread-dev-reviews",
+  workflowSubagentBatches: "projection.workflow-subagent-batches",
   threadSpecs: "projection.thread-specs",
   threadPlanningTickets: "projection.thread-planning-tickets",
   threadPlanningReviewCycles: "projection.thread-planning-review-cycles",
@@ -638,6 +639,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ownerUserId: event.payload.ownerUserId,
             parentThreadId: event.payload.parentThreadId ?? null,
             workflowRole: event.payload.workflowRole ?? null,
+            workflowSubagentBatchId: event.payload.workflowSubagentBatchProvenance?.batchId ?? null,
+            workflowSubagentChildIndex:
+              event.payload.workflowSubagentBatchProvenance?.childIndex ?? null,
             title: event.payload.title,
             modelSelection: event.payload.modelSelection,
             runtimeMode: event.payload.runtimeMode,
@@ -1125,6 +1129,93 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionThreadDevReviewRepository.deleteByThreadId({
             threadId: event.payload.threadId,
           });
+          return;
+
+        default:
+          return;
+      }
+    });
+
+    const applyWorkflowSubagentBatchesProjection: ProjectorDefinition["apply"] = Effect.fn(
+      "applyWorkflowSubagentBatchesProjection",
+    )(function* (event, _attachmentSideEffects) {
+      switch (event.type) {
+        case "thread.workflow-subagent-batch-created": {
+          const batch = event.payload.batch;
+          yield* sql`
+            INSERT INTO projection_thread_workflow_subagent_batches (
+              batch_id, parent_thread_id, source_assistant_message_id, status, created_at, completed_at
+            ) VALUES (
+              ${batch.id}, ${batch.parentThreadId}, ${batch.sourceAssistantMessageId},
+              ${batch.status}, ${batch.createdAt}, ${batch.completedAt}
+            )
+            ON CONFLICT(batch_id) DO NOTHING
+          `.pipe(Effect.mapError(toPersistenceSqlError("workflowSubagentBatches:create")));
+          yield* Effect.forEach(
+            batch.children,
+            (child) =>
+              sql`
+                INSERT INTO projection_thread_workflow_subagent_batch_children (
+                  batch_id, child_index, workflow_prompt_id, title, expected_result,
+                  dev_review_mode, child_thread_id, dev_review_id, status, result_markdown,
+                  failure_detail, created_at, completed_at
+                ) VALUES (
+                  ${batch.id}, ${child.index}, ${child.workflowPromptId}, ${child.title},
+                  ${child.expectedResult}, ${child.devReviewMode}, ${child.childThreadId},
+                  ${child.devReviewId}, ${child.status}, ${child.resultMarkdown},
+                  ${child.failureDetail}, ${child.createdAt}, ${child.completedAt}
+                )
+                ON CONFLICT(batch_id, child_index) DO NOTHING
+              `.pipe(Effect.mapError(toPersistenceSqlError("workflowSubagentBatches:createChild"))),
+            { concurrency: 1 },
+          );
+          return;
+        }
+
+        case "thread.workflow-subagent-batch-child-updated": {
+          const child = event.payload.child;
+          yield* sql`
+            UPDATE projection_thread_workflow_subagent_batch_children SET
+              workflow_prompt_id = ${child.workflowPromptId},
+              title = ${child.title},
+              expected_result = ${child.expectedResult},
+              dev_review_mode = ${child.devReviewMode},
+              child_thread_id = ${child.childThreadId},
+              dev_review_id = ${child.devReviewId},
+              status = ${child.status},
+              result_markdown = ${child.resultMarkdown},
+              failure_detail = ${child.failureDetail},
+              completed_at = ${child.completedAt}
+            WHERE batch_id = ${event.payload.batchId} AND child_index = ${child.index}
+          `.pipe(Effect.mapError(toPersistenceSqlError("workflowSubagentBatches:updateChild")));
+          yield* sql`
+            UPDATE projection_thread_workflow_subagent_batches
+            SET status = ${event.payload.batchStatus}
+            WHERE batch_id = ${event.payload.batchId}
+          `.pipe(Effect.mapError(toPersistenceSqlError("workflowSubagentBatches:updateBatch")));
+          return;
+        }
+
+        case "thread.workflow-subagent-batch-completed":
+          yield* sql`
+            UPDATE projection_thread_workflow_subagent_batches
+            SET status = 'completed', completed_at = ${event.payload.completedAt}
+            WHERE batch_id = ${event.payload.batchId}
+          `.pipe(Effect.mapError(toPersistenceSqlError("workflowSubagentBatches:complete")));
+          return;
+
+        case "thread.deleted":
+          yield* sql`
+            DELETE FROM projection_thread_workflow_subagent_batch_children
+            WHERE batch_id IN (
+              SELECT batch_id FROM projection_thread_workflow_subagent_batches
+              WHERE parent_thread_id = ${event.payload.threadId}
+            )
+          `.pipe(Effect.mapError(toPersistenceSqlError("workflowSubagentBatches:deleteChildren")));
+          yield* sql`
+            DELETE FROM projection_thread_workflow_subagent_batches
+            WHERE parent_thread_id = ${event.payload.threadId}
+          `.pipe(Effect.mapError(toPersistenceSqlError("workflowSubagentBatches:delete")));
           return;
 
         default:
@@ -1870,6 +1961,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       {
         name: ORCHESTRATION_PROJECTOR_NAMES.threadDevReviews,
         apply: applyThreadDevReviewsProjection,
+      },
+      {
+        name: ORCHESTRATION_PROJECTOR_NAMES.workflowSubagentBatches,
+        apply: applyWorkflowSubagentBatchesProjection,
       },
       {
         name: ORCHESTRATION_PROJECTOR_NAMES.threadSpecs,

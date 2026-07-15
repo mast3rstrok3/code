@@ -16,6 +16,7 @@ import {
   ThreadId,
   OrchestrationPlanningWorkflowStage,
   OrchestrationThreadWorkflowRole,
+  WorkflowSubagentBatchId,
   TurnId,
   WorkspaceUserId,
 } from "@t3tools/contracts";
@@ -32,6 +33,8 @@ export const ProjectionThread = Schema.Struct({
   ownerUserId: WorkspaceUserId,
   parentThreadId: Schema.NullOr(ThreadId),
   workflowRole: Schema.NullOr(OrchestrationThreadWorkflowRole),
+  workflowSubagentBatchId: Schema.optionalKey(Schema.NullOr(WorkflowSubagentBatchId)),
+  workflowSubagentChildIndex: Schema.optionalKey(Schema.NullOr(NonNegativeInt)),
   title: Schema.String,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,

@@ -614,6 +614,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ? { parentThreadId: command.parentThreadId }
             : {}),
           ...(command.workflowRole !== undefined ? { workflowRole: command.workflowRole } : {}),
+          ...(command.workflowSubagentBatchProvenance !== undefined
+            ? { workflowSubagentBatchProvenance: command.workflowSubagentBatchProvenance }
+            : {}),
           title: command.title,
           modelSelection: command.modelSelection,
           runtimeMode: command.runtimeMode,
@@ -1624,6 +1627,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ownerUserId: sourceThread.ownerUserId,
           parentThreadId: sourceThread.id,
           workflowRole: "implementation-qa-reviewer",
+          ...(command.batchProvenance !== undefined
+            ? { workflowSubagentBatchProvenance: command.batchProvenance }
+            : {}),
           title: "Browser Dev Review",
           modelSelection: command.modelSelection,
           runtimeMode: command.runtimeMode,
@@ -1689,7 +1695,302 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           createdAt: command.createdAt,
         },
       };
-      return [threadCreatedEvent, reviewCreatedEvent, userMessageEvent, turnStartRequestedEvent];
+      if (command.batchProvenance === undefined) {
+        return [threadCreatedEvent, reviewCreatedEvent, userMessageEvent, turnStartRequestedEvent];
+      }
+      const batch = sourceThread.workflowSubagentBatches?.find(
+        (entry) => entry.id === command.batchProvenance?.batchId,
+      );
+      const child = batch?.children.find(
+        (entry) => entry.index === command.batchProvenance?.childIndex,
+      );
+      if (!batch || !child || child.status !== "pending") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Browser Dev Review batch child is missing or is not pending.",
+        });
+      }
+      const childUpdatedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: sourceThread.id,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        causationEventId: turnStartRequestedEvent.eventId,
+        type: "thread.workflow-subagent-batch-child-updated",
+        payload: {
+          threadId: sourceThread.id,
+          batchId: batch.id,
+          batchStatus: "running",
+          child: {
+            ...child,
+            status: "running",
+            childThreadId: command.reviewThreadId,
+            devReviewId: command.reviewId,
+          },
+        },
+      };
+      return [
+        threadCreatedEvent,
+        reviewCreatedEvent,
+        userMessageEvent,
+        turnStartRequestedEvent,
+        childUpdatedEvent,
+      ];
+    }
+
+    case "thread.workflow-subagent-batch.create": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      if (command.batch.parentThreadId !== thread.id) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Workflow sub-agent batch parent does not match the target thread.",
+        });
+      }
+      if (command.batch.children.length === 0) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Workflow sub-agent batch must contain at least one child.",
+        });
+      }
+      if (thread.workflowSubagentBatches?.some((batch) => batch.id === command.batch.id)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Workflow sub-agent batch '${command.batch.id}' already exists.`,
+        });
+      }
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: thread.id,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.workflow-subagent-batch-created",
+        payload: { threadId: thread.id, batch: command.batch },
+      };
+    }
+
+    case "thread.workflow-subagent.launch": {
+      const parent = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.parentThreadId,
+      });
+      yield* requireThreadAbsent({ readModel, command, threadId: command.threadId });
+      const batch = parent.workflowSubagentBatches?.find((entry) => entry.id === command.batchId);
+      const child = batch?.children.find((entry) => entry.index === command.childIndex);
+      if (!batch || !child || child.status !== "pending") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Workflow sub-agent batch child is missing or is not pending.",
+        });
+      }
+      const threadCreatedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.created",
+        payload: {
+          threadId: command.threadId,
+          projectId: command.projectId,
+          ownerUserId: command.ownerUserId,
+          parentThreadId: command.parentThreadId,
+          workflowRole: command.workflowRole,
+          workflowSubagentBatchProvenance: {
+            batchId: command.batchId,
+            childIndex: command.childIndex,
+          },
+          title: command.title,
+          modelSelection: command.modelSelection,
+          runtimeMode: command.runtimeMode,
+          interactionMode: command.interactionMode,
+          branch: command.branch,
+          worktreePath: command.worktreePath,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+      const messageEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        causationEventId: threadCreatedEvent.eventId,
+        type: "thread.message-sent",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.message.messageId,
+          role: "user",
+          text: command.message.text,
+          attachments: command.message.attachments,
+          turnId: null,
+          streaming: false,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+      const turnEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        causationEventId: messageEvent.eventId,
+        type: "thread.turn-start-requested",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.message.messageId,
+          modelSelection: command.modelSelection,
+          titleSeed: command.title,
+          runtimeMode: command.runtimeMode,
+          interactionMode: command.interactionMode,
+          workflowPromptId: command.workflowPromptId,
+          createdAt: command.createdAt,
+        },
+      };
+      const childEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: parent.id,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        causationEventId: turnEvent.eventId,
+        type: "thread.workflow-subagent-batch-child-updated",
+        payload: {
+          threadId: parent.id,
+          batchId: batch.id,
+          batchStatus: "running",
+          child: { ...child, status: "running", childThreadId: command.threadId },
+        },
+      };
+      return [threadCreatedEvent, messageEvent, turnEvent, childEvent];
+    }
+
+    case "thread.workflow-subagent-batch.child.reject":
+    case "thread.workflow-subagent-batch.child.fail":
+    case "thread.workflow-subagent-batch.child.complete": {
+      const parent = yield* requireThread({ readModel, command, threadId: command.threadId });
+      const batch = parent.workflowSubagentBatches?.find((entry) => entry.id === command.batchId);
+      const child = batch?.children.find((entry) => entry.index === command.childIndex);
+      if (!batch || !child) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Workflow sub-agent batch child does not exist.",
+        });
+      }
+      if (["completed", "blocked", "rejected", "failed", "canceled"].includes(child.status)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Workflow sub-agent batch child is already terminal.",
+        });
+      }
+      const updatedChild =
+        command.type === "thread.workflow-subagent-batch.child.complete"
+          ? {
+              ...child,
+              status: command.status,
+              resultMarkdown: command.resultMarkdown,
+              completedAt: command.completedAt,
+            }
+          : {
+              ...child,
+              status:
+                command.type === "thread.workflow-subagent-batch.child.reject"
+                  ? ("rejected" as const)
+                  : (command.status ?? "failed"),
+              failureDetail: command.failureDetail,
+              completedAt: command.completedAt,
+            };
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: parent.id,
+          occurredAt: command.completedAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.workflow-subagent-batch-child-updated",
+        payload: {
+          threadId: parent.id,
+          batchId: batch.id,
+          batchStatus: batch.status === "launching" ? "running" : batch.status,
+          child: updatedChild,
+        },
+      };
+    }
+
+    case "thread.workflow-subagent-batch.complete": {
+      const parent = yield* requireThread({ readModel, command, threadId: command.threadId });
+      const batch = parent.workflowSubagentBatches?.find((entry) => entry.id === command.batchId);
+      if (!batch || batch.status === "completed") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Workflow sub-agent batch does not exist or is already completed.",
+        });
+      }
+      if (batch.children.some((child) => ["pending", "running"].includes(child.status))) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Workflow sub-agent batch still has non-terminal children.",
+        });
+      }
+      const completedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: parent.id,
+          occurredAt: command.completedAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.workflow-subagent-batch-completed",
+        payload: { threadId: parent.id, batchId: batch.id, completedAt: command.completedAt },
+      };
+      const messageEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: parent.id,
+          occurredAt: command.completedAt,
+          commandId: command.commandId,
+        })),
+        causationEventId: completedEvent.eventId,
+        type: "thread.message-sent",
+        payload: {
+          threadId: parent.id,
+          messageId: command.message.messageId,
+          role: "user",
+          text: command.message.text,
+          attachments: command.message.attachments,
+          turnId: null,
+          streaming: false,
+          createdAt: command.completedAt,
+          updatedAt: command.completedAt,
+        },
+      };
+      const turnEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: parent.id,
+          occurredAt: command.completedAt,
+          commandId: command.commandId,
+        })),
+        causationEventId: messageEvent.eventId,
+        type: "thread.turn-start-requested",
+        payload: {
+          threadId: parent.id,
+          messageId: command.message.messageId,
+          runtimeMode: command.runtimeMode,
+          interactionMode: command.interactionMode,
+          createdAt: command.completedAt,
+        },
+      };
+      return [completedEvent, messageEvent, turnEvent];
     }
 
     case "thread.turn.start": {

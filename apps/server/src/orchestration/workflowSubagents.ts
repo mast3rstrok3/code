@@ -114,7 +114,7 @@ const WORKFLOW_SUBAGENT_SPAWN_DEFINITIONS: ReadonlyArray<WorkflowSubagentSpawnDe
     threadIdTag: "workflow-implementation-qa-reviewer",
     defaultTitlePrefix: "Browser Dev Review",
     expectedResult: "dev-review-document",
-    allowedParentWorkflowRoles: [null, "implementation-orchestrator"],
+    allowedParentWorkflowRoles: "any",
     modelOverride: {
       driver: ProviderDriverKind.make("codex"),
       model: "gpt-5.5",

@@ -789,6 +789,74 @@ export const OrchestrationThreadWorkflowRole = Schema.Literals([
 ]);
 export type OrchestrationThreadWorkflowRole = typeof OrchestrationThreadWorkflowRole.Type;
 
+export const WorkflowSubagentBatchId = TrimmedNonEmptyString.pipe(
+  Schema.brand("WorkflowSubagentBatchId"),
+);
+export type WorkflowSubagentBatchId = typeof WorkflowSubagentBatchId.Type;
+
+export const WorkflowSubagentDevReviewMode = Schema.Literals(["feedback", "full"]);
+export type WorkflowSubagentDevReviewMode = typeof WorkflowSubagentDevReviewMode.Type;
+
+export const OrchestrationWorkflowSubagentBatchChildStatus = Schema.Literals([
+  "pending",
+  "running",
+  "completed",
+  "blocked",
+  "rejected",
+  "failed",
+  "canceled",
+]);
+export type OrchestrationWorkflowSubagentBatchChildStatus =
+  typeof OrchestrationWorkflowSubagentBatchChildStatus.Type;
+
+export const OrchestrationWorkflowSubagentBatchStatus = Schema.Literals([
+  "launching",
+  "running",
+  "completed",
+]);
+export type OrchestrationWorkflowSubagentBatchStatus =
+  typeof OrchestrationWorkflowSubagentBatchStatus.Type;
+
+export const OrchestrationWorkflowSubagentBatchChild = Schema.Struct({
+  index: NonNegativeInt,
+  workflowPromptId: TrimmedNonEmptyString,
+  title: TrimmedNonEmptyString,
+  expectedResult: TrimmedNonEmptyString,
+  devReviewMode: Schema.NullOr(WorkflowSubagentDevReviewMode).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  childThreadId: Schema.NullOr(ThreadId).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  devReviewId: Schema.NullOr(DevReviewId).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  status: OrchestrationWorkflowSubagentBatchChildStatus,
+  resultMarkdown: Schema.NullOr(Schema.String).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  failureDetail: Schema.NullOr(Schema.String).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  createdAt: IsoDateTime,
+  completedAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+});
+export type OrchestrationWorkflowSubagentBatchChild =
+  typeof OrchestrationWorkflowSubagentBatchChild.Type;
+
+export const OrchestrationWorkflowSubagentBatch = Schema.Struct({
+  id: WorkflowSubagentBatchId,
+  parentThreadId: ThreadId,
+  sourceAssistantMessageId: MessageId,
+  status: OrchestrationWorkflowSubagentBatchStatus,
+  children: Schema.Array(OrchestrationWorkflowSubagentBatchChild),
+  createdAt: IsoDateTime,
+  completedAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+});
+export type OrchestrationWorkflowSubagentBatch = typeof OrchestrationWorkflowSubagentBatch.Type;
+
+export const WorkflowSubagentBatchProvenance = Schema.Struct({
+  batchId: WorkflowSubagentBatchId,
+  childIndex: NonNegativeInt,
+});
+export type WorkflowSubagentBatchProvenance = typeof WorkflowSubagentBatchProvenance.Type;
+
 export const OrchestrationSession = Schema.Struct({
   threadId: ThreadId,
   status: OrchestrationSessionStatus,
@@ -872,6 +940,9 @@ export const OrchestrationThread = Schema.Struct({
   workflowRole: Schema.NullOr(OrchestrationThreadWorkflowRole).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  workflowSubagentBatchProvenance: Schema.optionalKey(
+    Schema.NullOr(WorkflowSubagentBatchProvenance),
+  ),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -893,6 +964,7 @@ export const OrchestrationThread = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   devReviews: Schema.Array(DevReviewRecord).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  workflowSubagentBatches: Schema.optionalKey(Schema.Array(OrchestrationWorkflowSubagentBatch)),
   activities: Schema.Array(OrchestrationThreadActivity),
   checkpoints: Schema.Array(OrchestrationCheckpointSummary),
   session: Schema.NullOr(OrchestrationSession),
@@ -931,6 +1003,9 @@ export const OrchestrationThreadShell = Schema.Struct({
   parentThreadId: Schema.NullOr(ThreadId).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   workflowRole: Schema.NullOr(OrchestrationThreadWorkflowRole).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  workflowSubagentBatchProvenance: Schema.optionalKey(
+    Schema.NullOr(WorkflowSubagentBatchProvenance),
   ),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
@@ -1093,6 +1168,9 @@ const ThreadCreateCommand = Schema.Struct({
   ),
   parentThreadId: Schema.optionalKey(Schema.NullOr(ThreadId)),
   workflowRole: Schema.optionalKey(Schema.NullOr(OrchestrationThreadWorkflowRole)),
+  workflowSubagentBatchProvenance: Schema.optionalKey(
+    Schema.NullOr(WorkflowSubagentBatchProvenance),
+  ),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -1289,6 +1367,9 @@ const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
   ),
   parentThreadId: Schema.optionalKey(Schema.NullOr(ThreadId)),
   workflowRole: Schema.optionalKey(Schema.NullOr(OrchestrationThreadWorkflowRole)),
+  workflowSubagentBatchProvenance: Schema.optionalKey(
+    Schema.NullOr(WorkflowSubagentBatchProvenance),
+  ),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -1350,6 +1431,87 @@ const ThreadDevReviewLaunchCommand = Schema.Struct({
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   workflowPromptId: TrimmedNonEmptyString,
+  batchProvenance: Schema.optionalKey(WorkflowSubagentBatchProvenance),
+  createdAt: IsoDateTime,
+});
+
+const ThreadWorkflowSubagentBatchCreateCommand = Schema.Struct({
+  type: Schema.Literal("thread.workflow-subagent-batch.create"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  batch: OrchestrationWorkflowSubagentBatch,
+  createdAt: IsoDateTime,
+});
+
+const ThreadWorkflowSubagentLaunchCommand = Schema.Struct({
+  type: Schema.Literal("thread.workflow-subagent.launch"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  batchId: WorkflowSubagentBatchId,
+  childIndex: NonNegativeInt,
+  projectId: ProjectId,
+  ownerUserId: WorkspaceUserId,
+  parentThreadId: ThreadId,
+  workflowRole: Schema.NullOr(OrchestrationThreadWorkflowRole),
+  title: TrimmedNonEmptyString,
+  modelSelection: ModelSelection,
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode,
+  branch: Schema.NullOr(TrimmedNonEmptyString),
+  worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  message: Schema.Struct({
+    messageId: MessageId,
+    role: Schema.Literal("user"),
+    text: Schema.String,
+    attachments: Schema.Array(ChatAttachment),
+  }),
+  workflowPromptId: TrimmedNonEmptyString,
+  createdAt: IsoDateTime,
+});
+
+const WorkflowSubagentBatchChildSettleBase = {
+  commandId: CommandId,
+  threadId: ThreadId,
+  batchId: WorkflowSubagentBatchId,
+  childIndex: NonNegativeInt,
+  completedAt: IsoDateTime,
+  createdAt: IsoDateTime,
+} as const;
+
+const ThreadWorkflowSubagentBatchChildRejectCommand = Schema.Struct({
+  type: Schema.Literal("thread.workflow-subagent-batch.child.reject"),
+  ...WorkflowSubagentBatchChildSettleBase,
+  failureDetail: Schema.String,
+});
+
+const ThreadWorkflowSubagentBatchChildFailCommand = Schema.Struct({
+  type: Schema.Literal("thread.workflow-subagent-batch.child.fail"),
+  ...WorkflowSubagentBatchChildSettleBase,
+  failureDetail: Schema.String,
+  status: Schema.optionalKey(Schema.Literals(["failed", "canceled"])),
+});
+
+const ThreadWorkflowSubagentBatchChildCompleteCommand = Schema.Struct({
+  type: Schema.Literal("thread.workflow-subagent-batch.child.complete"),
+  ...WorkflowSubagentBatchChildSettleBase,
+  status: Schema.Literals(["completed", "blocked"]),
+  resultMarkdown: Schema.String,
+});
+
+const ThreadWorkflowSubagentBatchCompleteCommand = Schema.Struct({
+  type: Schema.Literal("thread.workflow-subagent-batch.complete"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  batchId: WorkflowSubagentBatchId,
+  message: Schema.Struct({
+    messageId: MessageId,
+    role: Schema.Literal("user"),
+    text: Schema.String,
+    attachments: Schema.Array(ChatAttachment),
+  }),
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode,
+  completedAt: IsoDateTime,
   createdAt: IsoDateTime,
 });
 
@@ -1571,6 +1733,12 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadActivityAppendCommand,
   ThreadDevReviewUpdateCommand,
   ThreadDevReviewEvidenceUpdateCommand,
+  ThreadWorkflowSubagentBatchCreateCommand,
+  ThreadWorkflowSubagentLaunchCommand,
+  ThreadWorkflowSubagentBatchChildRejectCommand,
+  ThreadWorkflowSubagentBatchChildFailCommand,
+  ThreadWorkflowSubagentBatchChildCompleteCommand,
+  ThreadWorkflowSubagentBatchCompleteCommand,
   ThreadRevertCompleteCommand,
 ]);
 export type InternalOrchestrationCommand = typeof InternalOrchestrationCommand.Type;
@@ -1615,6 +1783,9 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.dev-review-created",
   "thread.dev-review-updated",
   "thread.dev-review-evidence-updated",
+  "thread.workflow-subagent-batch-created",
+  "thread.workflow-subagent-batch-child-updated",
+  "thread.workflow-subagent-batch-completed",
   "thread.turn-diff-completed",
   "thread.activity-appended",
 ]);
@@ -1658,6 +1829,9 @@ export const ThreadCreatedPayload = Schema.Struct({
   ),
   parentThreadId: Schema.optionalKey(Schema.NullOr(ThreadId)),
   workflowRole: Schema.optionalKey(Schema.NullOr(OrchestrationThreadWorkflowRole)),
+  workflowSubagentBatchProvenance: Schema.optionalKey(
+    Schema.NullOr(WorkflowSubagentBatchProvenance),
+  ),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
@@ -1873,6 +2047,24 @@ export const ThreadDevReviewEvidenceUpdatedPayload = Schema.Struct({
   updatedAt: IsoDateTime,
 });
 
+export const ThreadWorkflowSubagentBatchCreatedPayload = Schema.Struct({
+  threadId: ThreadId,
+  batch: OrchestrationWorkflowSubagentBatch,
+});
+
+export const ThreadWorkflowSubagentBatchChildUpdatedPayload = Schema.Struct({
+  threadId: ThreadId,
+  batchId: WorkflowSubagentBatchId,
+  child: OrchestrationWorkflowSubagentBatchChild,
+  batchStatus: OrchestrationWorkflowSubagentBatchStatus,
+});
+
+export const ThreadWorkflowSubagentBatchCompletedPayload = Schema.Struct({
+  threadId: ThreadId,
+  batchId: WorkflowSubagentBatchId,
+  completedAt: IsoDateTime,
+});
+
 export const ThreadTurnDiffCompletedPayload = Schema.Struct({
   threadId: ThreadId,
   turnId: TurnId,
@@ -2075,6 +2267,21 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.dev-review-evidence-updated"),
     payload: ThreadDevReviewEvidenceUpdatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.workflow-subagent-batch-created"),
+    payload: ThreadWorkflowSubagentBatchCreatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.workflow-subagent-batch-child-updated"),
+    payload: ThreadWorkflowSubagentBatchChildUpdatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.workflow-subagent-batch-completed"),
+    payload: ThreadWorkflowSubagentBatchCompletedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

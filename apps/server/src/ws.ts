@@ -362,6 +362,9 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
       | "thread.dev-review-created"
       | "thread.dev-review-updated"
       | "thread.dev-review-evidence-updated"
+      | "thread.workflow-subagent-batch-created"
+      | "thread.workflow-subagent-batch-child-updated"
+      | "thread.workflow-subagent-batch-completed"
       | "thread.planning-stage-started"
       | "thread.planning-spec-created"
       | "thread.planning-tickets-created"
@@ -382,6 +385,9 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
     event.type === "thread.dev-review-created" ||
     event.type === "thread.dev-review-updated" ||
     event.type === "thread.dev-review-evidence-updated" ||
+    event.type === "thread.workflow-subagent-batch-created" ||
+    event.type === "thread.workflow-subagent-batch-child-updated" ||
+    event.type === "thread.workflow-subagent-batch-completed" ||
     event.type === "thread.planning-stage-started" ||
     event.type === "thread.planning-spec-created" ||
     event.type === "thread.planning-tickets-created" ||

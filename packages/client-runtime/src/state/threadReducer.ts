@@ -77,6 +77,7 @@ export function applyThreadDetailEvent(
           ownerUserId: event.payload.ownerUserId,
           parentThreadId: event.payload.parentThreadId ?? null,
           workflowRole: event.payload.workflowRole ?? null,
+          workflowSubagentBatchProvenance: event.payload.workflowSubagentBatchProvenance ?? null,
           title: event.payload.title,
           modelSelection: event.payload.modelSelection,
           runtimeMode: event.payload.runtimeMode,
@@ -92,6 +93,7 @@ export function applyThreadDetailEvent(
           proposedPlans: [],
           planningWorkflow: null,
           devReviews: [],
+          workflowSubagentBatches: [],
           activities: [],
           checkpoints: [],
           session: null,
@@ -578,6 +580,58 @@ export function applyThreadDetailEvent(
         thread: { ...thread, devReviews, updatedAt: event.occurredAt },
       };
     }
+
+    case "thread.workflow-subagent-batch-created":
+      if (event.payload.threadId !== thread.id) return { kind: "unchanged" };
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          workflowSubagentBatches: [
+            ...(thread.workflowSubagentBatches ?? []).filter(
+              (batch) => batch.id !== event.payload.batch.id,
+            ),
+            event.payload.batch,
+          ],
+          updatedAt: event.occurredAt,
+        },
+      };
+
+    case "thread.workflow-subagent-batch-child-updated":
+      if (event.payload.threadId !== thread.id) return { kind: "unchanged" };
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          workflowSubagentBatches: (thread.workflowSubagentBatches ?? []).map((batch) =>
+            batch.id !== event.payload.batchId
+              ? batch
+              : {
+                  ...batch,
+                  status: event.payload.batchStatus,
+                  children: batch.children.map((child) =>
+                    child.index === event.payload.child.index ? event.payload.child : child,
+                  ),
+                },
+          ),
+          updatedAt: event.occurredAt,
+        },
+      };
+
+    case "thread.workflow-subagent-batch-completed":
+      if (event.payload.threadId !== thread.id) return { kind: "unchanged" };
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          workflowSubagentBatches: (thread.workflowSubagentBatches ?? []).map((batch) =>
+            batch.id === event.payload.batchId
+              ? { ...batch, status: "completed", completedAt: event.payload.completedAt }
+              : batch,
+          ),
+          updatedAt: event.occurredAt,
+        },
+      };
 
     case "thread.implementation-run-launched":
     case "thread.implementation-run-updated":

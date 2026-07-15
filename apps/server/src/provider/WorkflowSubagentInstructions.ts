@@ -8,11 +8,11 @@ If the user explicitly asks to run or launch a Browser DevReview for the current
   "workflowPromptId": "implementation.browser-dev-review.codex",
   "title": "Browser Dev Review",
   "promptMarkdown": "Review the current thread in the browser. Include any concrete focus from the user's request.",
-  "expectedResult": "dev-review-document"
+  "devReviewMode": "feedback"
 }
 \`\`\`
 
-The server turns this directive into a durable Dev Review record and a Browser Dev Review thread. Do not perform browser automation in the parent thread.`;
+The default \`feedback\` mode creates an ordinary Browser Dev Review child without a durable Dev Review record or evidence requirement. Use \`"devReviewMode": "full"\` only when a structured durable review with recording, screenshots, checks, findings, and verdict is explicitly required. Do not perform browser automation in the parent thread.`;
 
 export const WORKFLOW_SUBAGENT_INSTRUCTIONS_PROMPT = `## T3 Workflow Sub-Agent System
 
@@ -49,6 +49,8 @@ To create a child sub-agent, emit exactly one fenced JSON block:
 
 The server uses the current thread as the parent, validates \`workflowPromptId\`, maps it to the correct \`interactionMode\` and \`workflowRole\`, creates the child thread, and starts the first turn with \`promptMarkdown\`.
 
+To launch any number of children concurrently, use one \`workflow-subagents-create\` directive with a non-empty \`children\` array. There is no application child-count or nesting-depth limit. Children settle independently and the parent receives one ordered aggregate after all children are terminal.
+
 ${BROWSER_DEV_REVIEW_LAUNCH_DIRECTIVE_INSTRUCTIONS}
 
 To message an existing parent or child agent, emit exactly one fenced JSON block:
@@ -82,4 +84,5 @@ Use existing final-result directives for durable handoffs:
 - \`implementation-merge-gate-result\`
 - \`dev-review-document\`
 - \`implementation-fix-result\`
-- \`implementation-code-review-result\``;
+- \`implementation-code-review-result\`
+- \`workflow-subagent-result\` for focused feedback children.`;

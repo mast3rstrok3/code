@@ -18,8 +18,8 @@ import {
   type OrchestrationThread,
   type OrchestrationThreadActivity,
   type ProviderRuntimeEvent,
-  isPlanningWorkflowInteractionMode,
   DevReviewId,
+  WorkflowSubagentBatchId,
 } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
@@ -73,9 +73,14 @@ const PROCESSED_WORKFLOW_DIRECTIVE_TTL = Duration.minutes(120);
 const MAX_BUFFERED_ASSISTANT_CHARS = 24_000;
 const STRICT_PROVIDER_LIFECYCLE_GUARD = process.env.T3CODE_STRICT_PROVIDER_LIFECYCLE_GUARD !== "0";
 
-type TurnStartRequestedDomainEvent = Extract<
+type IngestionDomainEvent = Extract<
   OrchestrationEvent,
-  { type: "thread.turn-start-requested" }
+  {
+    type:
+      | "thread.turn-start-requested"
+      | "thread.workflow-subagent-batch-child-updated"
+      | "thread.dev-review-updated";
+  }
 >;
 
 type RuntimeIngestionInput =
@@ -85,7 +90,7 @@ type RuntimeIngestionInput =
     }
   | {
       source: "domain";
-      event: TurnStartRequestedDomainEvent;
+      event: IngestionDomainEvent;
     };
 
 function toTurnId(value: TurnId | string | undefined): TurnId | undefined {
@@ -677,10 +682,16 @@ const make = Effect.gen(function* () {
     );
   const serverMessageId = (tag: string) =>
     crypto.randomUUIDv4.pipe(Effect.map((uuid) => MessageId.make(`message-${tag}-${uuid}`)));
-  const serverThreadId = (tag: string) =>
-    crypto.randomUUIDv4.pipe(Effect.map((uuid) => ThreadId.make(`thread-${tag}-${uuid}`)));
-  const serverDevReviewId = (tag: string) =>
-    crypto.randomUUIDv4.pipe(Effect.map((uuid) => DevReviewId.make(`dev-review-${tag}-${uuid}`)));
+  const workflowBatchId = (threadId: ThreadId, messageId: MessageId) =>
+    WorkflowSubagentBatchId.make(`workflow-batch:${threadId}:${messageId}`);
+  const workflowChildThreadId = (batchId: WorkflowSubagentBatchId, childIndex: number) =>
+    ThreadId.make(`workflow-child:${batchId}:${childIndex}`);
+  const workflowChildMessageId = (batchId: WorkflowSubagentBatchId, childIndex: number) =>
+    MessageId.make(`workflow-child-message:${batchId}:${childIndex}`);
+  const workflowChildReviewId = (batchId: WorkflowSubagentBatchId, childIndex: number) =>
+    DevReviewId.make(`workflow-child-review:${batchId}:${childIndex}`);
+  const workflowCommandId = (batchId: WorkflowSubagentBatchId, tag: string, childIndex?: number) =>
+    CommandId.make(`workflow:${batchId}:${tag}${childIndex === undefined ? "" : `:${childIndex}`}`);
 
   const turnMessageIdsByTurnKey = yield* Cache.make<string, Set<MessageId>>({
     capacity: TURN_MESSAGE_IDS_BY_TURN_CACHE_CAPACITY,
@@ -725,6 +736,175 @@ const make = Effect.gen(function* () {
     return yield* projectionSnapshotQuery
       .getThreadShellById(threadId)
       .pipe(Effect.map(Option.getOrUndefined));
+  });
+
+  const terminalWorkflowSubagentStatuses = new Set([
+    "completed",
+    "blocked",
+    "rejected",
+    "failed",
+    "canceled",
+  ]);
+
+  const maybeCompleteWorkflowSubagentBatch = Effect.fn(
+    "ProviderRuntimeIngestion.maybeCompleteWorkflowSubagentBatch",
+  )(function* (parentThreadId: ThreadId, batchId: WorkflowSubagentBatchId, completedAt: string) {
+    const parent = yield* resolveThreadDetail(parentThreadId);
+    const batch = parent?.workflowSubagentBatches?.find((entry) => entry.id === batchId);
+    if (
+      !parent ||
+      !batch ||
+      batch.status === "completed" ||
+      batch.children.some((child) => !terminalWorkflowSubagentStatuses.has(child.status))
+    ) {
+      return;
+    }
+
+    const aggregateMarkdown = [
+      `Workflow sub-agent batch '${batch.id}' finished.`,
+      "",
+      ...batch.children
+        .toSorted((left, right) => left.index - right.index)
+        .flatMap((child) => [
+          `## ${child.index + 1}. ${child.title}`,
+          `- Status: ${child.status}`,
+          `- Source thread: ${child.childThreadId ?? "not created"}`,
+          ...(child.devReviewId === null ? [] : [`- Dev Review: ${child.devReviewId}`]),
+          "",
+          child.resultMarkdown ?? child.failureDetail ?? "No result detail was provided.",
+          "",
+        ]),
+    ].join("\n");
+
+    yield* orchestrationEngine
+      .dispatch({
+        type: "thread.workflow-subagent-batch.complete",
+        commandId: workflowCommandId(batch.id, "complete"),
+        threadId: parent.id,
+        batchId: batch.id,
+        message: {
+          messageId: MessageId.make(`workflow-batch-result:${batch.id}`),
+          role: "user",
+          text: aggregateMarkdown,
+          attachments: [],
+        },
+        runtimeMode: parent.runtimeMode,
+        interactionMode: parent.interactionMode,
+        completedAt,
+        createdAt: completedAt,
+      })
+      .pipe(
+        Effect.catchCause((cause) =>
+          Effect.logDebug("workflow sub-agent batch completion was already handled", {
+            batchId,
+            cause: Cause.pretty(cause),
+          }),
+        ),
+      );
+  });
+
+  const completeFullDevReviewBatchChild = Effect.fn(
+    "ProviderRuntimeIngestion.completeFullDevReviewBatchChild",
+  )(function* (reviewId: DevReviewId, completedAt: string) {
+    const snapshot = yield* projectionSnapshotQuery.getCommandReadModel();
+    const parent = snapshot.threads.find((thread) =>
+      thread.workflowSubagentBatches?.some((batch) =>
+        batch.children.some((child) => child.devReviewId === reviewId),
+      ),
+    );
+    const batch = parent?.workflowSubagentBatches?.find((entry) =>
+      entry.children.some((child) => child.devReviewId === reviewId),
+    );
+    const child = batch?.children.find((entry) => entry.devReviewId === reviewId);
+    const review = parent?.devReviews.find((entry) => entry.id === reviewId);
+    if (
+      !parent ||
+      !batch ||
+      !child ||
+      child.status !== "running" ||
+      !review ||
+      !["passed", "failed", "blocked"].includes(review.status)
+    ) {
+      return;
+    }
+    const document = review.document;
+    const resultMarkdown = [
+      `Verdict: ${document.verdict}`,
+      document.summary,
+      document.checks.length === 0
+        ? ""
+        : `Checks:\n${document.checks.map((check) => `- ${check.label}: ${check.status} — ${check.notes}`).join("\n")}`,
+      document.findings.length === 0
+        ? ""
+        : `Findings:\n${document.findings.map((finding) => `- [${finding.severity}] ${finding.title}: ${finding.details}`).join("\n")}`,
+    ]
+      .filter((entry) => entry.length > 0)
+      .join("\n\n");
+    yield* orchestrationEngine.dispatch({
+      type: "thread.workflow-subagent-batch.child.complete",
+      commandId: workflowCommandId(batch.id, `dev-review:${review.id}`, child.index),
+      threadId: parent.id,
+      batchId: batch.id,
+      childIndex: child.index,
+      status: review.status === "blocked" ? "blocked" : "completed",
+      resultMarkdown,
+      completedAt,
+      createdAt: completedAt,
+    });
+  });
+
+  const settleRunningBatchChildAfterTermination = Effect.fn(
+    "ProviderRuntimeIngestion.settleRunningBatchChildAfterTermination",
+  )(function* (
+    thread: OrchestrationThreadShell,
+    completedAt: string,
+    status: "failed" | "canceled",
+    detail: string,
+  ) {
+    const provenance = thread.workflowSubagentBatchProvenance;
+    if (provenance == null || thread.parentThreadId === null) return;
+    const parent = yield* resolveThreadDetail(thread.parentThreadId);
+    const batch = parent?.workflowSubagentBatches?.find((entry) => entry.id === provenance.batchId);
+    const child = batch?.children.find((entry) => entry.index === provenance.childIndex);
+    if (!parent || !batch || !child || child.status !== "running") return;
+
+    if (child.devReviewMode === "full" && child.devReviewId !== null) {
+      const review = parent.devReviews.find((entry) => entry.id === child.devReviewId);
+      if (review && ["passed", "failed", "blocked"].includes(review.status)) {
+        yield* completeFullDevReviewBatchChild(review.id, completedAt);
+        return;
+      }
+      if (review) {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.dev-review.update",
+          commandId: workflowCommandId(batch.id, "dev-review-missing-evidence", child.index),
+          threadId: parent.id,
+          reviewId: review.id,
+          status: "blocked",
+          document: {
+            ...review.document,
+            verdict: "blocked",
+            summary:
+              review.document.summary ||
+              "Full Browser Dev Review ended without the required terminal evidence.",
+          },
+          updatedAt: completedAt,
+          createdAt: completedAt,
+        });
+        return;
+      }
+    }
+    yield* orchestrationEngine.dispatch({
+      type: "thread.workflow-subagent-batch.child.fail",
+      commandId: workflowCommandId(batch.id, `terminated:${status}`, child.index),
+      threadId: parent.id,
+      batchId: batch.id,
+      childIndex: child.index,
+      status,
+      failureDetail: detail,
+      completedAt,
+      createdAt: completedAt,
+    });
   });
 
   const appendWorkflowDirectiveRejectedActivity = Effect.fn(
@@ -1072,132 +1252,194 @@ const make = Effect.gen(function* () {
   const clearAssistantMessageState = (messageId: MessageId) =>
     clearBufferedAssistantText(messageId);
 
-  const dispatchWorkflowSubagentCreateDirective = Effect.fn(
-    "ProviderRuntimeIngestion.dispatchWorkflowSubagentCreateDirective",
+  const dispatchWorkflowSubagentBatchDirective = Effect.fn(
+    "ProviderRuntimeIngestion.dispatchWorkflowSubagentBatchDirective",
   )(function* (input: {
     readonly event: ProviderRuntimeEvent;
     readonly thread: OrchestrationThreadShell;
-    readonly directive: Extract<WorkflowDirective, { type: "workflow-subagent-create" }>;
+    readonly sourceMessageId: MessageId;
+    readonly children: ReadonlyArray<
+      Extract<WorkflowDirective, { type: "workflow-subagent-create" }>
+    >;
     readonly createdAt: string;
   }) {
-    const spawnDefinition = resolveWorkflowSubagentSpawnDefinition(
-      input.directive.workflowPromptId,
-    );
-    if (spawnDefinition === undefined) {
-      yield* appendWorkflowDirectiveRejectedActivity({
-        event: input.event,
-        threadId: input.thread.id,
-        directiveType: input.directive.type,
-        summary: "Workflow sub-agent request rejected",
-        detail: `Workflow prompt '${input.directive.workflowPromptId}' is not spawnable.`,
+    const batchId = workflowBatchId(input.thread.id, input.sourceMessageId);
+    const persistedChildren = input.children.map((child, index) => {
+      const definition = resolveWorkflowSubagentSpawnDefinition(child.workflowPromptId);
+      const isBrowser =
+        child.workflowPromptId === WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex;
+      const devReviewMode = isBrowser ? (child.devReviewMode ?? "feedback") : null;
+      const expectedResult =
+        isBrowser && devReviewMode === "feedback"
+          ? "workflow-subagent-result"
+          : (child.expectedResult ?? definition?.expectedResult ?? "workflow-subagent-result");
+      return {
+        index,
+        workflowPromptId: child.workflowPromptId,
+        title: child.title,
+        expectedResult,
+        devReviewMode,
+        childThreadId: null,
+        devReviewId: null,
+        status: "pending" as const,
+        resultMarkdown: null,
+        failureDetail: null,
         createdAt: input.createdAt,
-      });
-      return;
-    }
-    if (!isWorkflowSubagentParentRoleAllowed(spawnDefinition, input.thread.workflowRole)) {
-      yield* appendWorkflowDirectiveRejectedActivity({
-        event: input.event,
-        threadId: input.thread.id,
-        directiveType: input.directive.type,
-        summary: "Workflow sub-agent request rejected",
-        detail: `Thread role '${input.thread.workflowRole ?? "root"}' cannot spawn '${spawnDefinition.workflowPromptId}'.`,
+        completedAt: null,
+      };
+    });
+
+    yield* orchestrationEngine.dispatch({
+      type: "thread.workflow-subagent-batch.create",
+      commandId: workflowCommandId(batchId, "create"),
+      threadId: input.thread.id,
+      batch: {
+        id: batchId,
+        parentThreadId: input.thread.id,
+        sourceAssistantMessageId: input.sourceMessageId,
+        status: "launching",
+        children: persistedChildren,
         createdAt: input.createdAt,
-      });
-      return;
-    }
+        completedAt: null,
+      },
+      createdAt: input.createdAt,
+    });
 
     const settings = yield* serverSettingsService.getSettings.pipe(
       Effect.orElseSucceed(() => undefined),
     );
-    const resolvedModel = resolveWorkflowSubagentModelSelection({
-      definition: spawnDefinition,
-      parentModelSelection: input.thread.modelSelection,
-      settings,
-    });
-    if (resolvedModel.fallbackDetail !== null) {
-      yield* appendWorkflowSubagentModelFallbackActivity({
-        event: input.event,
-        threadId: input.thread.id,
-        workflowPromptId: spawnDefinition.workflowPromptId,
-        detail: resolvedModel.fallbackDetail,
-        requestedDriver: spawnDefinition.modelOverride?.driver ?? null,
-        requestedModel: spawnDefinition.modelOverride?.model ?? null,
-        createdAt: input.createdAt,
-      });
-    }
+    yield* Effect.forEach(
+      input.children,
+      (child, index) =>
+        Effect.gen(function* () {
+          const definition = resolveWorkflowSubagentSpawnDefinition(child.workflowPromptId);
+          const reject = (detail: string) =>
+            orchestrationEngine.dispatch({
+              type: "thread.workflow-subagent-batch.child.reject",
+              commandId: workflowCommandId(batchId, "reject", index),
+              threadId: input.thread.id,
+              batchId,
+              childIndex: index,
+              failureDetail: detail.slice(0, 4_000),
+              completedAt: input.createdAt,
+              createdAt: input.createdAt,
+            });
+          if (child.validationError !== undefined) {
+            yield* reject(child.validationError);
+            return;
+          }
+          if (definition === undefined) {
+            yield* reject(`Workflow prompt '${child.workflowPromptId}' is not spawnable.`);
+            return;
+          }
+          if (!isWorkflowSubagentParentRoleAllowed(definition, input.thread.workflowRole)) {
+            yield* reject(
+              `Thread role '${input.thread.workflowRole ?? "root"}' cannot spawn '${definition.workflowPromptId}'.`,
+            );
+            return;
+          }
 
-    const childThreadId = yield* serverThreadId(spawnDefinition.threadIdTag);
-    const childMessageId = yield* serverMessageId(spawnDefinition.threadIdTag);
-    const expectedResult = input.directive.expectedResult ?? spawnDefinition.expectedResult;
-    const childPrompt = [
-      `Workflow sub-agent request from parent thread '${input.thread.id}'.`,
-      `Target workflowPromptId: '${spawnDefinition.workflowPromptId}'.`,
-      `Expected result directive: '${expectedResult}'.`,
-      input.directive.promptMarkdown,
-    ].join("\n\n");
+          const resolvedModel = resolveWorkflowSubagentModelSelection({
+            definition,
+            parentModelSelection: input.thread.modelSelection,
+            settings,
+          });
+          if (resolvedModel.fallbackDetail !== null) {
+            yield* appendWorkflowSubagentModelFallbackActivity({
+              event: input.event,
+              threadId: input.thread.id,
+              workflowPromptId: definition.workflowPromptId,
+              detail: resolvedModel.fallbackDetail,
+              requestedDriver: definition.modelOverride?.driver ?? null,
+              requestedModel: definition.modelOverride?.model ?? null,
+              createdAt: input.createdAt,
+            });
+          }
 
-    if (
-      spawnDefinition.workflowPromptId === WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex
-    ) {
-      const reviewPrompt = [
-        `Run Browser Dev Review for source thread ${input.thread.id}.`,
-        `Source title: ${input.thread.title}`,
-        `Launch mode: Agent request`,
-        `Review request:\n${input.directive.promptMarkdown}`,
-      ].join("\n\n");
-      yield* orchestrationEngine.dispatch({
-        type: "thread.dev-review.launch",
-        commandId: yield* providerCommandId(input.event, "workflow-browser-dev-review-launch"),
-        sourceThreadId: input.thread.id,
-        reviewThreadId: childThreadId,
-        reviewId: yield* serverDevReviewId("workflow-browser-dev-review"),
-        message: {
-          messageId: childMessageId,
-          role: "user",
-          text: reviewPrompt,
-          attachments: [],
-        },
-        modelSelection: resolvedModel.modelSelection,
-        runtimeMode: input.thread.runtimeMode,
-        workflowPromptId: spawnDefinition.workflowPromptId,
-        createdAt: input.createdAt,
-      });
-      return;
-    }
+          const childThreadId = workflowChildThreadId(batchId, index);
+          const childMessageId = workflowChildMessageId(batchId, index);
+          const persistedChild = persistedChildren[index]!;
+          const childPrompt = [
+            `Workflow sub-agent request from parent thread '${input.thread.id}'.`,
+            `Target workflowPromptId: '${definition.workflowPromptId}'.`,
+            `Expected result directive: '${persistedChild.expectedResult}'.`,
+            child.promptMarkdown,
+          ].join("\n\n");
 
-    yield* orchestrationEngine.dispatch({
-      type: "thread.create",
-      commandId: yield* providerCommandId(input.event, "workflow-subagent-create-thread"),
-      threadId: childThreadId,
-      projectId: input.thread.projectId,
-      ownerUserId: input.thread.ownerUserId,
-      parentThreadId: input.thread.id,
-      workflowRole: spawnDefinition.workflowRole,
-      title: input.directive.title || spawnDefinition.defaultTitlePrefix,
-      modelSelection: resolvedModel.modelSelection,
-      runtimeMode: input.thread.runtimeMode,
-      interactionMode: spawnDefinition.interactionMode,
-      branch: input.thread.branch,
-      worktreePath: input.thread.worktreePath,
-      createdAt: input.createdAt,
-    });
+          if (
+            definition.workflowPromptId ===
+              WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex &&
+            persistedChild.devReviewMode === "full"
+          ) {
+            yield* orchestrationEngine.dispatch({
+              type: "thread.dev-review.launch",
+              commandId: workflowCommandId(batchId, "full-review-launch", index),
+              sourceThreadId: input.thread.id,
+              reviewThreadId: childThreadId,
+              reviewId: workflowChildReviewId(batchId, index),
+              message: {
+                messageId: childMessageId,
+                role: "user",
+                text: [
+                  `Run Browser Dev Review (full durable mode) for source thread ${input.thread.id}.`,
+                  `Source title: ${input.thread.title}`,
+                  `Review request:\n${child.promptMarkdown}`,
+                ].join("\n\n"),
+                attachments: [],
+              },
+              modelSelection: resolvedModel.modelSelection,
+              runtimeMode: input.thread.runtimeMode,
+              workflowPromptId: definition.workflowPromptId,
+              batchProvenance: { batchId, childIndex: index },
+              createdAt: input.createdAt,
+            });
+            return;
+          }
 
-    yield* orchestrationEngine.dispatch({
-      type: "thread.turn.start",
-      commandId: yield* providerCommandId(input.event, "workflow-subagent-start-turn"),
-      threadId: childThreadId,
-      message: {
-        messageId: childMessageId,
-        role: "user",
-        text: childPrompt,
-        attachments: [],
-      },
-      titleSeed: input.directive.title,
-      runtimeMode: input.thread.runtimeMode,
-      interactionMode: spawnDefinition.interactionMode,
-      workflowPromptId: spawnDefinition.workflowPromptId,
-      createdAt: input.createdAt,
-    });
+          yield* orchestrationEngine.dispatch({
+            type: "thread.workflow-subagent.launch",
+            commandId: workflowCommandId(batchId, "launch", index),
+            threadId: childThreadId,
+            batchId,
+            childIndex: index,
+            projectId: input.thread.projectId,
+            ownerUserId: input.thread.ownerUserId,
+            parentThreadId: input.thread.id,
+            workflowRole: definition.workflowRole,
+            title: child.title || definition.defaultTitlePrefix,
+            modelSelection: resolvedModel.modelSelection,
+            runtimeMode: input.thread.runtimeMode,
+            interactionMode: definition.interactionMode,
+            branch: input.thread.branch,
+            worktreePath: input.thread.worktreePath,
+            message: {
+              messageId: childMessageId,
+              role: "user",
+              text:
+                persistedChild.devReviewMode === "feedback"
+                  ? `${childPrompt}\n\nThis is focused feedback mode. Use preview_* tools only, open previews with show: false, do not call dev_review_* tools, and finish with workflow-subagent-result. Recording and screenshots are not required.`
+                  : childPrompt,
+              attachments: [],
+            },
+            workflowPromptId: definition.workflowPromptId,
+            createdAt: input.createdAt,
+          });
+        }).pipe(
+          Effect.catchCause((cause) =>
+            orchestrationEngine.dispatch({
+              type: "thread.workflow-subagent-batch.child.fail",
+              commandId: workflowCommandId(batchId, "fail", index),
+              threadId: input.thread.id,
+              batchId,
+              childIndex: index,
+              failureDetail: workflowDispatchErrorDetail(cause).slice(0, 4_000),
+              completedAt: input.createdAt,
+              createdAt: input.createdAt,
+            }),
+          ),
+        ),
+      { concurrency: "unbounded" },
+    );
   });
 
   const dispatchWorkflowAgentMessageDirective = Effect.fn(
@@ -1273,14 +1515,32 @@ const make = Effect.gen(function* () {
 
       switch (input.directive.type) {
         case "workflow-subagent-create": {
-          yield* dispatchWorkflowSubagentCreateDirective({
+          yield* dispatchWorkflowSubagentBatchDirective({
             event: input.event,
             thread,
-            directive: input.directive,
+            sourceMessageId: input.messageId,
+            children: [input.directive],
             createdAt: input.createdAt,
           });
           return;
         }
+
+        case "workflow-subagents-create": {
+          yield* dispatchWorkflowSubagentBatchDirective({
+            event: input.event,
+            thread,
+            sourceMessageId: input.messageId,
+            children: input.directive.children.map((child) => ({
+              type: "workflow-subagent-create" as const,
+              ...child,
+            })),
+            createdAt: input.createdAt,
+          });
+          return;
+        }
+
+        case "workflow-subagent-result":
+          return;
 
         case "workflow-agent-message": {
           yield* dispatchWorkflowAgentMessageDirective({
@@ -1571,11 +1831,7 @@ const make = Effect.gen(function* () {
   }) =>
     Effect.gen(function* () {
       const thread = yield* resolveThreadShell(input.threadId);
-      if (
-        !thread ||
-        (!isPlanningWorkflowInteractionMode(thread.interactionMode) &&
-          thread.interactionMode !== "implementation-workflow")
-      ) {
+      if (!thread) {
         return;
       }
 
@@ -1616,6 +1872,48 @@ const make = Effect.gen(function* () {
           }),
         ),
       );
+
+      const provenance = thread.workflowSubagentBatchProvenance;
+      if (provenance == null) {
+        return;
+      }
+      const parent = thread.parentThreadId
+        ? yield* resolveThreadDetail(thread.parentThreadId)
+        : undefined;
+      const batch = parent?.workflowSubagentBatches?.find(
+        (entry) => entry.id === provenance.batchId,
+      );
+      const child = batch?.children.find((entry) => entry.index === provenance.childIndex);
+      if (!parent || !batch || !child || child.status !== "running") {
+        return;
+      }
+      if (child.devReviewMode === "full") {
+        return;
+      }
+      if (parseResult.directive.type !== child.expectedResult) {
+        return;
+      }
+      const blocked =
+        parseResult.directive.type === "workflow-subagent-result"
+          ? parseResult.directive.status === "blocked"
+          : parseResult.directive.type === "implementation-fix-result" ||
+              parseResult.directive.type === "implementation-code-review-result"
+            ? parseResult.directive.status === "blocked"
+            : false;
+      yield* orchestrationEngine.dispatch({
+        type: "thread.workflow-subagent-batch.child.complete",
+        commandId: workflowCommandId(batch.id, `result:${input.messageId}`, child.index),
+        threadId: parent.id,
+        batchId: batch.id,
+        childIndex: child.index,
+        status: blocked ? "blocked" : "completed",
+        resultMarkdown:
+          parseResult.directive.type === "workflow-subagent-result"
+            ? parseResult.directive.resultMarkdown
+            : input.markdown,
+        completedAt: input.createdAt,
+        createdAt: input.createdAt,
+      });
     });
 
   const flushBufferedAssistantMessage = (input: {
@@ -2437,6 +2735,31 @@ const make = Effect.gen(function* () {
         }
       }
 
+      if (event.type === "turn.completed") {
+        yield* settleRunningBatchChildAfterTermination(
+          thread,
+          now,
+          "failed",
+          normalizeRuntimeTurnState(event.payload.state) === "failed"
+            ? (event.payload.errorMessage ?? "Workflow sub-agent turn failed.")
+            : "Workflow sub-agent turn completed without its required result directive.",
+        );
+      } else if (event.type === "session.exited") {
+        yield* settleRunningBatchChildAfterTermination(
+          thread,
+          now,
+          "canceled",
+          "Workflow sub-agent session exited before producing its required result.",
+        );
+      } else if (event.type === "runtime.error") {
+        yield* settleRunningBatchChildAfterTermination(
+          thread,
+          now,
+          "failed",
+          event.payload.message,
+        );
+      }
+
       const activities = runtimeEventToActivities(event);
       yield* Effect.forEach(activities, (activity) =>
         providerCommandId(event, "thread-activity-append").pipe(
@@ -2453,7 +2776,27 @@ const make = Effect.gen(function* () {
       ).pipe(Effect.asVoid);
     });
 
-  const processDomainEvent = (_event: TurnStartRequestedDomainEvent) => Effect.void;
+  const processDomainEvent = (event: IngestionDomainEvent) =>
+    Effect.gen(function* () {
+      if (event.type === "thread.workflow-subagent-batch-child-updated") {
+        yield* maybeCompleteWorkflowSubagentBatch(
+          event.payload.threadId,
+          event.payload.batchId,
+          event.occurredAt,
+        );
+        return;
+      }
+      if (event.type === "thread.dev-review-updated") {
+        if (
+          event.payload.status !== "passed" &&
+          event.payload.status !== "failed" &&
+          event.payload.status !== "blocked"
+        ) {
+          return;
+        }
+        yield* completeFullDevReviewBatchChild(event.payload.reviewId, event.occurredAt);
+      }
+    });
 
   const processInput = (input: RuntimeIngestionInput) =>
     input.source === "runtime" ? processRuntimeEvent(input.event) : processDomainEvent(input.event);
@@ -2484,7 +2827,11 @@ const make = Effect.gen(function* () {
       );
       yield* Effect.forkScoped(
         Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
-          if (event.type !== "thread.turn-start-requested") {
+          if (
+            event.type !== "thread.turn-start-requested" &&
+            event.type !== "thread.workflow-subagent-batch-child-updated" &&
+            event.type !== "thread.dev-review-updated"
+          ) {
             return Effect.void;
           }
           return worker.enqueue({ source: "domain", event });

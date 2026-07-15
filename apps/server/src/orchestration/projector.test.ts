@@ -98,6 +98,7 @@ describe("orchestration projector", () => {
         proposedPlans: [],
         planningWorkflow: null,
         devReviews: [],
+        workflowSubagentBatches: [],
         activities: [],
         checkpoints: [],
         session: null,

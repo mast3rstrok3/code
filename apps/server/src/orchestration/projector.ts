@@ -24,6 +24,9 @@ import {
   ThreadDevReviewCreatedPayload,
   ThreadDevReviewEvidenceUpdatedPayload,
   ThreadDevReviewUpdatedPayload,
+  ThreadWorkflowSubagentBatchCreatedPayload,
+  ThreadWorkflowSubagentBatchChildUpdatedPayload,
+  ThreadWorkflowSubagentBatchCompletedPayload,
   ThreadInteractionModeSetPayload,
   ThreadMetaUpdatedPayload,
   ThreadImplementationChangeRequestRetryRequestedPayload,
@@ -333,6 +336,9 @@ export function projectEvent(
             ownerUserId: payload.ownerUserId,
             parentThreadId: payload.parentThreadId ?? null,
             workflowRole: payload.workflowRole ?? null,
+            ...(payload.workflowSubagentBatchProvenance === undefined
+              ? {}
+              : { workflowSubagentBatchProvenance: payload.workflowSubagentBatchProvenance }),
             title: payload.title,
             modelSelection: payload.modelSelection,
             runtimeMode: payload.runtimeMode,
@@ -348,6 +354,7 @@ export function projectEvent(
             proposedPlans: [],
             planningWorkflow: null,
             devReviews: [],
+            workflowSubagentBatches: [],
             activities: [],
             checkpoints: [],
             session: null,
@@ -908,6 +915,85 @@ export function projectEvent(
               devReviews: upsertDevReview(thread.devReviews, updated),
               updatedAt: event.occurredAt,
             };
+          }),
+        };
+      });
+
+    case "thread.workflow-subagent-batch-created":
+      return Effect.gen(function* () {
+        const payload = yield* decodeForEvent(
+          ThreadWorkflowSubagentBatchCreatedPayload,
+          event.payload,
+          event.type,
+          "payload",
+        );
+        const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+        if (!thread) return nextBase;
+        return {
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            workflowSubagentBatches: [
+              ...(thread.workflowSubagentBatches ?? []).filter(
+                (batch) => batch.id !== payload.batch.id,
+              ),
+              payload.batch,
+            ].toSorted(
+              (left, right) =>
+                left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+            ),
+            updatedAt: event.occurredAt,
+          }),
+        };
+      });
+
+    case "thread.workflow-subagent-batch-child-updated":
+      return Effect.gen(function* () {
+        const payload = yield* decodeForEvent(
+          ThreadWorkflowSubagentBatchChildUpdatedPayload,
+          event.payload,
+          event.type,
+          "payload",
+        );
+        const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+        if (!thread) return nextBase;
+        return {
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            workflowSubagentBatches: (thread.workflowSubagentBatches ?? []).map((batch) =>
+              batch.id !== payload.batchId
+                ? batch
+                : {
+                    ...batch,
+                    status: payload.batchStatus,
+                    children: batch.children.map((child) =>
+                      child.index === payload.child.index ? payload.child : child,
+                    ),
+                  },
+            ),
+            updatedAt: event.occurredAt,
+          }),
+        };
+      });
+
+    case "thread.workflow-subagent-batch-completed":
+      return Effect.gen(function* () {
+        const payload = yield* decodeForEvent(
+          ThreadWorkflowSubagentBatchCompletedPayload,
+          event.payload,
+          event.type,
+          "payload",
+        );
+        const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+        if (!thread) return nextBase;
+        return {
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            workflowSubagentBatches: (thread.workflowSubagentBatches ?? []).map((batch) =>
+              batch.id === payload.batchId
+                ? { ...batch, status: "completed", completedAt: payload.completedAt }
+                : batch,
+            ),
+            updatedAt: event.occurredAt,
           }),
         };
       });

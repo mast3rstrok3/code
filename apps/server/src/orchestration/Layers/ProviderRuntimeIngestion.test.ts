@@ -3199,6 +3199,66 @@ describe("ProviderRuntimeIngestion", () => {
     });
   });
 
+  it("launches all 50 focused browser reviewers in one durable batch", async () => {
+    const harness = await createHarness();
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    const parentThreadId = asThreadId("thread-fifty-reviewers-parent");
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-fifty-reviewers-parent-create"),
+        threadId: parentThreadId,
+        projectId: asProjectId("project-1"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+        parentThreadId: null,
+        workflowRole: null,
+        title: "Default parent",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: "default",
+        runtimeMode: "full-access",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+    const children = Array.from({ length: 50 }, (_, index) => ({
+      workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
+      title: `Focused browser reviewer ${index}`,
+      promptMarkdown: `Review concern ${index}.`,
+    }));
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-fifty-reviewers"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt,
+      threadId: parentThreadId,
+      turnId: asTurnId("turn-fifty-reviewers"),
+      itemId: asItemId("item-fifty-reviewers"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail: `\`\`\`json\n${JSON.stringify({ type: "workflow-subagents-create", children })}\n\`\`\``,
+      },
+    });
+
+    const snapshot = await waitForReadModel(
+      harness.readModel,
+      (readModel) =>
+        readModel.threads.filter((thread) => thread.parentThreadId === parentThreadId).length ===
+        50,
+      10_000,
+    );
+    const parent = snapshot.threads.find((thread) => thread.id === parentThreadId);
+    const batch = parent?.workflowSubagentBatches?.[0];
+    expect(batch?.children).toHaveLength(50);
+    expect(batch?.children.every((child) => child.status === "running")).toBe(true);
+    expect(new Set(batch?.children.map((child) => child.childThreadId)).size).toBe(50);
+    expect(parent?.devReviews).toHaveLength(0);
+  });
+
   it("creates durable browser dev reviews from sub-agent directives with the codex hardlock", async () => {
     const harness = await createHarness();
     const createdAt = "2026-01-01T00:00:00.000Z";
@@ -3242,7 +3302,8 @@ describe("ProviderRuntimeIngestion", () => {
   "type": "workflow-subagent-create",
   "workflowPromptId": "${WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex}",
   "title": "Review checkout in the browser",
-  "promptMarkdown": "Exercise the checkout flow in the browser."
+  "promptMarkdown": "Exercise the checkout flow in the browser.",
+  "devReviewMode": "full"
 }
 \`\`\``,
       },
@@ -3321,7 +3382,8 @@ describe("ProviderRuntimeIngestion", () => {
   "type": "workflow-subagent-create",
   "workflowPromptId": "${WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex}",
   "title": "Review checkout in the browser",
-  "promptMarkdown": "Exercise the checkout flow in the browser."
+  "promptMarkdown": "Exercise the checkout flow in the browser.",
+  "devReviewMode": "full"
 }
 \`\`\``,
       },

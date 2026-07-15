@@ -81,6 +81,17 @@ export type WorkflowDirective =
       readonly title: string;
       readonly promptMarkdown: string;
       readonly expectedResult?: string;
+      readonly devReviewMode?: "feedback" | "full";
+      readonly validationError?: string;
+    }
+  | {
+      readonly type: "workflow-subagents-create";
+      readonly children: ReadonlyArray<WorkflowSubagentCreateChild>;
+    }
+  | {
+      readonly type: "workflow-subagent-result";
+      readonly status: "completed" | "blocked";
+      readonly resultMarkdown: string;
     }
   | {
       readonly type: "workflow-agent-message";
@@ -88,6 +99,16 @@ export type WorkflowDirective =
       readonly purpose: string;
       readonly messageMarkdown: string;
     };
+
+export interface WorkflowSubagentCreateChild {
+  readonly workflowPromptId: string;
+  readonly title: string;
+  readonly promptMarkdown: string;
+  readonly expectedResult?: string;
+  readonly devReviewMode?: "feedback" | "full";
+  /** Child-local validation failures are persisted as rejected batch entries. */
+  readonly validationError?: string;
+}
 
 export type WorkflowDirectiveParseResult =
   | { readonly kind: "none" }
@@ -129,6 +150,67 @@ function optionalString(record: Record<string, unknown>, key: string): string | 
   return typeof value === "string" && value.trim().length > 0
     ? value.trim()
     : `Directive field '${key}' must be a non-empty string when provided.`;
+}
+
+function parseWorkflowSubagentChild(value: unknown, index?: number): WorkflowSubagentCreateChild {
+  const prefix =
+    index === undefined
+      ? "workflow-subagent-create"
+      : `workflow-subagents-create.children[${index}]`;
+  const record = asRecord(value);
+  if (record === null) {
+    return {
+      workflowPromptId: "invalid",
+      title: `Rejected workflow sub-agent ${index ?? 0}`,
+      promptMarkdown: "",
+      validationError: `${prefix} must be an object.`,
+    };
+  }
+
+  const errors: string[] = [];
+  const requiredChildString = (key: string, fallback: string): string => {
+    const raw = record[key];
+    if (typeof raw !== "string" || raw.trim().length === 0) {
+      errors.push(`${prefix}.${key} must be a non-empty string.`);
+      return fallback;
+    }
+    return raw.trim();
+  };
+  const workflowPromptId = requiredChildString("workflowPromptId", "invalid");
+  const title = requiredChildString("title", `Rejected workflow sub-agent ${index ?? 0}`);
+  const promptMarkdown = requiredChildString("promptMarkdown", "");
+  const expectedResultValue = record["expectedResult"];
+  const expectedResult =
+    expectedResultValue === undefined || expectedResultValue === null
+      ? undefined
+      : typeof expectedResultValue === "string" && expectedResultValue.trim().length > 0
+        ? expectedResultValue.trim()
+        : undefined;
+  if (
+    expectedResultValue !== undefined &&
+    expectedResultValue !== null &&
+    expectedResult === undefined
+  ) {
+    errors.push(`${prefix}.expectedResult must be a non-empty string when provided.`);
+  }
+
+  const modeValue = record["devReviewMode"];
+  const devReviewMode = modeValue === "feedback" || modeValue === "full" ? modeValue : undefined;
+  if (modeValue !== undefined && devReviewMode === undefined) {
+    errors.push(`${prefix}.devReviewMode must be feedback or full when provided.`);
+  }
+  if (modeValue !== undefined && workflowPromptId !== "implementation.browser-dev-review.codex") {
+    errors.push(`${prefix}.devReviewMode is only valid for Browser Dev Review children.`);
+  }
+
+  return {
+    workflowPromptId,
+    title,
+    promptMarkdown,
+    ...(expectedResult !== undefined ? { expectedResult } : {}),
+    ...(devReviewMode !== undefined ? { devReviewMode } : {}),
+    ...(errors.length > 0 ? { validationError: errors.join(" ") } : {}),
+  };
 }
 
 const WORKFLOW_AGENT_MESSAGE_WORKFLOW_ROLES: ReadonlySet<OrchestrationThreadWorkflowRole> =
@@ -455,23 +537,31 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
       };
     }
     case "workflow-subagent-create": {
-      const workflowPromptId = requiredString(record, "workflowPromptId");
-      const title = requiredString(record, "title");
-      const promptMarkdown = requiredString(record, "promptMarkdown");
-      const expectedResult = optionalString(record, "expectedResult");
-      if (workflowPromptId.startsWith("Directive field")) return workflowPromptId;
-      if (title.startsWith("Directive field")) return title;
-      if (promptMarkdown.startsWith("Directive field")) return promptMarkdown;
-      if (typeof expectedResult === "string" && expectedResult.startsWith("Directive field")) {
-        return expectedResult;
-      }
+      const child = parseWorkflowSubagentChild(record);
       return {
         type: "workflow-subagent-create",
-        workflowPromptId,
-        title,
-        promptMarkdown,
-        ...(expectedResult !== undefined ? { expectedResult } : {}),
+        ...child,
       };
+    }
+    case "workflow-subagents-create": {
+      if (!Array.isArray(record["children"]) || record["children"].length === 0) {
+        return "workflow-subagents-create.children must be a non-empty array.";
+      }
+      return {
+        type: "workflow-subagents-create",
+        children: record["children"].map((child, index) =>
+          parseWorkflowSubagentChild(child, index),
+        ),
+      };
+    }
+    case "workflow-subagent-result": {
+      const status = record["status"];
+      const resultMarkdown = requiredString(record, "resultMarkdown");
+      if (status !== "completed" && status !== "blocked") {
+        return "workflow-subagent-result.status must be completed or blocked.";
+      }
+      if (resultMarkdown.startsWith("Directive field")) return resultMarkdown;
+      return { type: "workflow-subagent-result", status, resultMarkdown };
     }
     case "workflow-agent-message": {
       const target = parseWorkflowAgentMessageTarget(record["target"]);

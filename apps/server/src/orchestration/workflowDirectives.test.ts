@@ -243,6 +243,41 @@ describe("workflowDirectives", () => {
     NodeAssert.equal(result.directive.expectedResult, "planning-reviewer-verdict");
   });
 
+  it("parses an unbounded workflow sub-agent batch without truncating invalid siblings", () => {
+    const children = Array.from({ length: 50 }, (_, index) =>
+      index === 17
+        ? { title: "Invalid child", promptMarkdown: "Missing a workflow prompt." }
+        : {
+            workflowPromptId: "implementation.browser-dev-review.codex",
+            title: `Browser reviewer ${index}`,
+            promptMarkdown: `Review browser concern ${index}.`,
+            devReviewMode: index % 2 === 0 ? "feedback" : "full",
+          },
+    );
+    const result = parseWorkflowDirectiveFromMarkdown(
+      `\`\`\`json\n${JSON.stringify({ type: "workflow-subagents-create", children })}\n\`\`\``,
+    );
+
+    NodeAssert.equal(result.kind, "parsed");
+    if (result.kind !== "parsed" || result.directive.type !== "workflow-subagents-create") return;
+    NodeAssert.equal(result.directive.children.length, 50);
+    NodeAssert.match(result.directive.children[17]?.validationError ?? "", /workflowPromptId/);
+    NodeAssert.equal(result.directive.children[49]?.devReviewMode, "full");
+  });
+
+  it("parses focused workflow sub-agent results", () => {
+    const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
+{
+  "type": "workflow-subagent-result",
+  "status": "blocked",
+  "resultMarkdown": "The preview server is unavailable."
+}
+\`\`\``);
+    NodeAssert.equal(result.kind, "parsed");
+    if (result.kind !== "parsed" || result.directive.type !== "workflow-subagent-result") return;
+    NodeAssert.equal(result.directive.status, "blocked");
+  });
+
   it("parses workflow agent message directives", () => {
     const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
 {

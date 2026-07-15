@@ -288,6 +288,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           parentThreadId: null,
           workflowRole: null,
+          workflowSubagentBatchProvenance: null,
           title: "Thread 1",
           modelSelection: {
             instanceId: ProviderInstanceId.make("codex"),
@@ -337,6 +338,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           ],
           planningWorkflow: null,
           devReviews: [],
+          workflowSubagentBatches: [],
           activities: [
             {
               id: asEventId("activity-1"),
@@ -403,6 +405,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           parentThreadId: null,
           workflowRole: null,
+          workflowSubagentBatchProvenance: null,
           title: "Thread 1",
           modelSelection: {
             instanceId: ProviderInstanceId.make("codex"),

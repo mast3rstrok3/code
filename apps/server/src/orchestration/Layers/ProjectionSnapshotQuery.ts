@@ -20,6 +20,8 @@ import {
   OrchestrationReadModel,
   OrchestrationShellSnapshot,
   OrchestrationThread,
+  OrchestrationWorkflowSubagentBatch,
+  OrchestrationWorkflowSubagentBatchChild,
   OrchestrationThreadDetailSnapshot,
   ProjectScript,
   TurnId,
@@ -36,6 +38,8 @@ import {
   ModelSelection,
   ProjectId,
   ThreadId,
+  WorkflowSubagentBatchId,
+  DevReviewId,
   type WorkspaceUserView,
 } from "@t3tools/contracts";
 import * as Arr from "effect/Array";
@@ -135,6 +139,29 @@ const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
     modelSelection: Schema.fromJsonString(ModelSelection),
   }),
 );
+const ProjectionWorkflowSubagentBatchDbRowSchema = Schema.Struct({
+  batchId: WorkflowSubagentBatchId,
+  parentThreadId: ThreadId,
+  sourceAssistantMessageId: MessageId,
+  status: OrchestrationWorkflowSubagentBatch.fields.status,
+  createdAt: IsoDateTime,
+  completedAt: Schema.NullOr(IsoDateTime),
+});
+const ProjectionWorkflowSubagentBatchChildDbRowSchema = Schema.Struct({
+  batchId: WorkflowSubagentBatchId,
+  childIndex: NonNegativeInt,
+  workflowPromptId: OrchestrationWorkflowSubagentBatchChild.fields.workflowPromptId,
+  title: OrchestrationWorkflowSubagentBatchChild.fields.title,
+  expectedResult: OrchestrationWorkflowSubagentBatchChild.fields.expectedResult,
+  devReviewMode: OrchestrationWorkflowSubagentBatchChild.fields.devReviewMode,
+  childThreadId: Schema.NullOr(ThreadId),
+  devReviewId: Schema.NullOr(DevReviewId),
+  status: OrchestrationWorkflowSubagentBatchChild.fields.status,
+  resultMarkdown: Schema.NullOr(Schema.String),
+  failureDetail: Schema.NullOr(Schema.String),
+  createdAt: IsoDateTime,
+  completedAt: Schema.NullOr(IsoDateTime),
+});
 const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
   Struct.assign({
     payload: Schema.fromJsonString(Schema.Unknown),
@@ -201,6 +228,7 @@ const REQUIRED_SNAPSHOT_PROJECTORS = [
   ORCHESTRATION_PROJECTOR_NAMES.threadMessages,
   ORCHESTRATION_PROJECTOR_NAMES.threadProposedPlans,
   ORCHESTRATION_PROJECTOR_NAMES.threadDevReviews,
+  ORCHESTRATION_PROJECTOR_NAMES.workflowSubagentBatches,
   ORCHESTRATION_PROJECTOR_NAMES.threadSpecs,
   ORCHESTRATION_PROJECTOR_NAMES.threadPlanningTickets,
   ORCHESTRATION_PROJECTOR_NAMES.threadPlanningReviewCycles,
@@ -331,6 +359,50 @@ function mapDevReviewRow(
   };
 }
 
+function buildWorkflowSubagentBatches(
+  batchRows: ReadonlyArray<Schema.Schema.Type<typeof ProjectionWorkflowSubagentBatchDbRowSchema>>,
+  childRows: ReadonlyArray<
+    Schema.Schema.Type<typeof ProjectionWorkflowSubagentBatchChildDbRowSchema>
+  >,
+): Map<string, Array<OrchestrationWorkflowSubagentBatch>> {
+  const childrenByBatch = new Map<string, Array<OrchestrationWorkflowSubagentBatchChild>>();
+  for (const row of childRows) {
+    const children = childrenByBatch.get(row.batchId) ?? [];
+    children.push({
+      index: row.childIndex,
+      workflowPromptId: row.workflowPromptId,
+      title: row.title,
+      expectedResult: row.expectedResult,
+      devReviewMode: row.devReviewMode,
+      childThreadId: row.childThreadId,
+      devReviewId: row.devReviewId,
+      status: row.status,
+      resultMarkdown: row.resultMarkdown,
+      failureDetail: row.failureDetail,
+      createdAt: row.createdAt,
+      completedAt: row.completedAt,
+    });
+    childrenByBatch.set(row.batchId, children);
+  }
+  const batchesByThread = new Map<string, Array<OrchestrationWorkflowSubagentBatch>>();
+  for (const row of batchRows) {
+    const batches = batchesByThread.get(row.parentThreadId) ?? [];
+    batches.push({
+      id: row.batchId,
+      parentThreadId: row.parentThreadId,
+      sourceAssistantMessageId: row.sourceAssistantMessageId,
+      status: row.status,
+      children: (childrenByBatch.get(row.batchId) ?? []).toSorted(
+        (left, right) => left.index - right.index,
+      ),
+      createdAt: row.createdAt,
+      completedAt: row.completedAt,
+    });
+    batchesByThread.set(row.parentThreadId, batches);
+  }
+  return batchesByThread;
+}
+
 function mapSpecRow(
   row: Schema.Schema.Type<typeof ProjectionThreadSpecDbRowSchema>,
 ): OrchestrationPlanningSpec {
@@ -442,6 +514,14 @@ function mapThreadShellRow(input: {
     ownerUserId: input.thread.ownerUserId,
     parentThreadId: input.thread.parentThreadId,
     workflowRole: input.thread.workflowRole,
+    workflowSubagentBatchProvenance:
+      input.thread.workflowSubagentBatchId == null ||
+      input.thread.workflowSubagentChildIndex == null
+        ? null
+        : {
+            batchId: input.thread.workflowSubagentBatchId,
+            childIndex: input.thread.workflowSubagentChildIndex,
+          },
     title: input.thread.title,
     modelSelection: input.thread.modelSelection,
     runtimeMode: input.thread.runtimeMode,
@@ -551,6 +631,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           COALESCE(NULLIF(trim(owner_user_id), ''), ${DEFAULT_WORKSPACE_USER_ID}) AS "ownerUserId",
           parent_thread_id AS "parentThreadId",
           workflow_role AS "workflowRole",
+          workflow_subagent_batch_id AS "workflowSubagentBatchId",
+          workflow_subagent_child_index AS "workflowSubagentChildIndex",
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
@@ -583,6 +665,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           COALESCE(NULLIF(trim(owner_user_id), ''), ${DEFAULT_WORKSPACE_USER_ID}) AS "ownerUserId",
           parent_thread_id AS "parentThreadId",
           workflow_role AS "workflowRole",
+          workflow_subagent_batch_id AS "workflowSubagentBatchId",
+          workflow_subagent_child_index AS "workflowSubagentChildIndex",
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
@@ -617,6 +701,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           COALESCE(NULLIF(trim(owner_user_id), ''), ${DEFAULT_WORKSPACE_USER_ID}) AS "ownerUserId",
           parent_thread_id AS "parentThreadId",
           workflow_role AS "workflowRole",
+          workflow_subagent_batch_id AS "workflowSubagentBatchId",
+          workflow_subagent_child_index AS "workflowSubagentChildIndex",
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
@@ -696,6 +782,34 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           updated_at AS "updatedAt"
         FROM projection_thread_dev_reviews
         ORDER BY created_at ASC, review_id ASC
+      `,
+  });
+
+  const listWorkflowSubagentBatchRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionWorkflowSubagentBatchDbRowSchema,
+    execute: () =>
+      sql`
+        SELECT batch_id AS "batchId", parent_thread_id AS "parentThreadId",
+          source_assistant_message_id AS "sourceAssistantMessageId", status,
+          created_at AS "createdAt", completed_at AS "completedAt"
+        FROM projection_thread_workflow_subagent_batches
+        ORDER BY parent_thread_id ASC, created_at ASC, batch_id ASC
+      `,
+  });
+
+  const listWorkflowSubagentBatchChildRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionWorkflowSubagentBatchChildDbRowSchema,
+    execute: () =>
+      sql`
+        SELECT batch_id AS "batchId", child_index AS "childIndex",
+          workflow_prompt_id AS "workflowPromptId", title, expected_result AS "expectedResult",
+          dev_review_mode AS "devReviewMode", child_thread_id AS "childThreadId",
+          dev_review_id AS "devReviewId", status, result_markdown AS "resultMarkdown",
+          failure_detail AS "failureDetail", created_at AS "createdAt", completed_at AS "completedAt"
+        FROM projection_thread_workflow_subagent_batch_children
+        ORDER BY batch_id ASC, child_index ASC
       `,
   });
 
@@ -1084,6 +1198,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           COALESCE(NULLIF(trim(owner_user_id), ''), ${DEFAULT_WORKSPACE_USER_ID}) AS "ownerUserId",
           parent_thread_id AS "parentThreadId",
           workflow_role AS "workflowRole",
+          workflow_subagent_batch_id AS "workflowSubagentBatchId",
+          workflow_subagent_child_index AS "workflowSubagentChildIndex",
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
@@ -1168,6 +1284,40 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         WHERE source_thread_id = ${threadId}
            OR review_thread_id = ${threadId}
         ORDER BY created_at ASC, review_id ASC
+      `,
+  });
+
+  const listWorkflowSubagentBatchRowsByThread = SqlSchema.findAll({
+    Request: ThreadIdLookupInput,
+    Result: ProjectionWorkflowSubagentBatchDbRowSchema,
+    execute: ({ threadId }) =>
+      sql`
+        SELECT batch_id AS "batchId", parent_thread_id AS "parentThreadId",
+          source_assistant_message_id AS "sourceAssistantMessageId", status,
+          created_at AS "createdAt", completed_at AS "completedAt"
+        FROM projection_thread_workflow_subagent_batches
+        WHERE parent_thread_id = ${threadId}
+        ORDER BY created_at ASC, batch_id ASC
+      `,
+  });
+
+  const listWorkflowSubagentBatchChildRowsByThread = SqlSchema.findAll({
+    Request: ThreadIdLookupInput,
+    Result: ProjectionWorkflowSubagentBatchChildDbRowSchema,
+    execute: ({ threadId }) =>
+      sql`
+        SELECT child.batch_id AS "batchId", child.child_index AS "childIndex",
+          child.workflow_prompt_id AS "workflowPromptId", child.title,
+          child.expected_result AS "expectedResult", child.dev_review_mode AS "devReviewMode",
+          child.child_thread_id AS "childThreadId", child.dev_review_id AS "devReviewId",
+          child.status, child.result_markdown AS "resultMarkdown",
+          child.failure_detail AS "failureDetail", child.created_at AS "createdAt",
+          child.completed_at AS "completedAt"
+        FROM projection_thread_workflow_subagent_batch_children child
+        INNER JOIN projection_thread_workflow_subagent_batches batch
+          ON batch.batch_id = child.batch_id
+        WHERE batch.parent_thread_id = ${threadId}
+        ORDER BY child.batch_id ASC, child.child_index ASC
       `,
   });
 
@@ -1408,6 +1558,22 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               ),
             ),
           ),
+          listWorkflowSubagentBatchRows(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getSnapshot:listWorkflowSubagentBatches:query",
+                "ProjectionSnapshotQuery.getSnapshot:listWorkflowSubagentBatches:decodeRows",
+              ),
+            ),
+          ),
+          listWorkflowSubagentBatchChildRows(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getSnapshot:listWorkflowSubagentBatchChildren:query",
+                "ProjectionSnapshotQuery.getSnapshot:listWorkflowSubagentBatchChildren:decodeRows",
+              ),
+            ),
+          ),
           listThreadSpecRows(undefined).pipe(
             Effect.mapError(
               toPersistenceSqlOrDecodeError(
@@ -1490,6 +1656,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             messageRows,
             proposedPlanRows,
             devReviewRows,
+            workflowSubagentBatchRows,
+            workflowSubagentBatchChildRows,
             specRows,
             planningTicketRows,
             planningReviewCycleRows,
@@ -1504,6 +1672,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               const messagesByThread = new Map<string, Array<OrchestrationMessage>>();
               const proposedPlansByThread = new Map<string, Array<OrchestrationProposedPlan>>();
               const devReviewsByThread = new Map<string, Array<DevReviewRecord>>();
+              const workflowSubagentBatchesByThread = buildWorkflowSubagentBatches(
+                workflowSubagentBatchRows,
+                workflowSubagentBatchChildRows,
+              );
               const specByThread = new Map<string, OrchestrationPlanningSpec>();
               const ticketsByThread = new Map<string, Array<OrchestrationPlanningTicket>>();
               const reviewCyclesByThread = new Map<
@@ -1696,6 +1868,13 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 ownerUserId: row.ownerUserId,
                 parentThreadId: row.parentThreadId,
                 workflowRole: row.workflowRole,
+                workflowSubagentBatchProvenance:
+                  row.workflowSubagentBatchId == null || row.workflowSubagentChildIndex == null
+                    ? null
+                    : {
+                        batchId: row.workflowSubagentBatchId,
+                        childIndex: row.workflowSubagentChildIndex,
+                      },
                 title: row.title,
                 modelSelection: row.modelSelection,
                 runtimeMode: row.runtimeMode,
@@ -1716,6 +1895,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   reviewCycles: reviewCyclesByThread.get(row.threadId) ?? [],
                 }),
                 devReviews: devReviewsByThread.get(row.threadId) ?? [],
+                workflowSubagentBatches: workflowSubagentBatchesByThread.get(row.threadId) ?? [],
                 activities: activitiesByThread.get(row.threadId) ?? [],
                 checkpoints: checkpointsByThread.get(row.threadId) ?? [],
                 session: sessionsByThread.get(row.threadId) ?? null,
@@ -1777,6 +1957,22 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               toPersistenceSqlOrDecodeError(
                 "ProjectionSnapshotQuery.getCommandReadModel:listThreadDevReviews:query",
                 "ProjectionSnapshotQuery.getCommandReadModel:listThreadDevReviews:decodeRows",
+              ),
+            ),
+          ),
+          listWorkflowSubagentBatchRows(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getCommandReadModel:listWorkflowSubagentBatches:query",
+                "ProjectionSnapshotQuery.getCommandReadModel:listWorkflowSubagentBatches:decodeRows",
+              ),
+            ),
+          ),
+          listWorkflowSubagentBatchChildRows(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getCommandReadModel:listWorkflowSubagentBatchChildren:query",
+                "ProjectionSnapshotQuery.getCommandReadModel:listWorkflowSubagentBatchChildren:decodeRows",
               ),
             ),
           ),
@@ -1845,6 +2041,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             threadRows,
             proposedPlanRows,
             devReviewRows,
+            workflowSubagentBatchRows,
+            workflowSubagentBatchChildRows,
             specRows,
             planningTicketRows,
             planningReviewCycleRows,
@@ -1962,6 +2160,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               }
               const proposedPlansByThread = new Map<string, Array<OrchestrationProposedPlan>>();
               const devReviewsByThread = new Map<string, Array<DevReviewRecord>>();
+              const workflowSubagentBatchesByThread = buildWorkflowSubagentBatches(
+                workflowSubagentBatchRows,
+                workflowSubagentBatchChildRows,
+              );
               const specByThread = new Map<string, OrchestrationPlanningSpec>();
               const ticketsByThread = new Map<string, Array<OrchestrationPlanningTicket>>();
               const reviewCyclesByThread = new Map<
@@ -2043,6 +2245,13 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   ownerUserId: row.ownerUserId,
                   parentThreadId: row.parentThreadId,
                   workflowRole: row.workflowRole,
+                  workflowSubagentBatchProvenance:
+                    row.workflowSubagentBatchId == null || row.workflowSubagentChildIndex == null
+                      ? null
+                      : {
+                          batchId: row.workflowSubagentBatchId,
+                          childIndex: row.workflowSubagentChildIndex,
+                        },
                   title: row.title,
                   modelSelection: row.modelSelection,
                   runtimeMode: row.runtimeMode,
@@ -2063,6 +2272,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                     reviewCycles: reviewCyclesByThread.get(row.threadId) ?? [],
                   }),
                   devReviews: devReviewsByThread.get(row.threadId) ?? [],
+                  workflowSubagentBatches: workflowSubagentBatchesByThread.get(row.threadId) ?? [],
                   activities: [],
                   checkpoints: [],
                   session: sessionByThread.get(row.threadId) ?? null,
@@ -2656,6 +2866,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         messageRows,
         proposedPlanRows,
         devReviewRows,
+        workflowSubagentBatchRows,
+        workflowSubagentBatchChildRows,
         specRows,
         planningTicketRows,
         planningReviewCycleRows,
@@ -2695,6 +2907,22 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               toPersistenceSqlOrDecodeError(
                 "ProjectionSnapshotQuery.getThreadDetailSnapshotById:listDevReviews:query",
                 "ProjectionSnapshotQuery.getThreadDetailSnapshotById:listDevReviews:decodeRows",
+              ),
+            ),
+          ),
+          listWorkflowSubagentBatchRowsByThread({ threadId }).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getThreadDetailSnapshotById:listWorkflowSubagentBatches:query",
+                "ProjectionSnapshotQuery.getThreadDetailSnapshotById:listWorkflowSubagentBatches:decodeRows",
+              ),
+            ),
+          ),
+          listWorkflowSubagentBatchChildRowsByThread({ threadId }).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getThreadDetailSnapshotById:listWorkflowSubagentBatchChildren:query",
+                "ProjectionSnapshotQuery.getThreadDetailSnapshotById:listWorkflowSubagentBatchChildren:decodeRows",
               ),
             ),
           ),
@@ -2777,6 +3005,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         ownerUserId: threadRow.value.ownerUserId,
         parentThreadId: threadRow.value.parentThreadId,
         workflowRole: threadRow.value.workflowRole,
+        workflowSubagentBatchProvenance:
+          threadRow.value.workflowSubagentBatchId == null ||
+          threadRow.value.workflowSubagentChildIndex == null
+            ? null
+            : {
+                batchId: threadRow.value.workflowSubagentBatchId,
+                childIndex: threadRow.value.workflowSubagentChildIndex,
+              },
         title: threadRow.value.title,
         modelSelection: threadRow.value.modelSelection,
         runtimeMode: threadRow.value.runtimeMode,
@@ -2811,6 +3047,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           reviewCycles: planningReviewCycleRows.map(projectionReviewCycleToContract),
         }),
         devReviews: devReviewRows.map(mapDevReviewRow),
+        workflowSubagentBatches:
+          buildWorkflowSubagentBatches(
+            workflowSubagentBatchRows,
+            workflowSubagentBatchChildRows,
+          ).get(threadId) ?? [],
         activities: activityRows.map((row) => {
           const activity = {
             id: row.activityId,
