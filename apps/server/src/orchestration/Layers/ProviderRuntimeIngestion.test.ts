@@ -45,7 +45,10 @@ import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityRes
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
-import { ProviderRuntimeIngestionLive } from "./ProviderRuntimeIngestion.ts";
+import {
+  MAX_PRODUCT_INTENT_LOCK_REJECTION_BOUNCES,
+  ProviderRuntimeIngestionLive,
+} from "./ProviderRuntimeIngestion.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
@@ -3193,6 +3196,9 @@ describe("ProviderRuntimeIngestion", () => {
     expect(childThread?.branch).toBe("feature/planning");
     expect(childThread?.worktreePath).toBe("/tmp/planning-worktree");
     expect(childThread?.messages[0]?.text).toContain("Expected result directive");
+    expect(childThread?.messages[0]?.text).toContain(
+      `<workflow-skill id="${WORKFLOW_PROMPT_IDS.planningTicketReviewerCodex}"`,
+    );
     expect(childThread?.modelSelection).toEqual({
       instanceId: ProviderInstanceId.make("codex"),
       model: "gpt-5-codex",
@@ -3627,15 +3633,17 @@ describe("ProviderRuntimeIngestion", () => {
     ).toBe(false);
   });
 
-  it("appends product intent locks with the directive intent kind", async () => {
-    const harness = await createHarness();
-    const createdAt = "2026-01-01T00:00:00.000Z";
-    const rootThreadId = asThreadId("thread-product-root-intent-kind");
+  type ProductIntentHarness = Awaited<ReturnType<typeof createHarness>>;
 
+  async function createProductRootThread(
+    harness: ProductIntentHarness,
+    rootThreadId: ThreadId,
+    createdAt: string,
+  ) {
     await runtime!.runPromise(
       harness.engine.dispatch({
         type: "thread.create",
-        commandId: CommandId.make("cmd-product-root-intent-kind-create"),
+        commandId: CommandId.make(`cmd-create:${rootThreadId}`),
         threadId: rootThreadId,
         projectId: asProjectId("project-1"),
         ownerUserId: DEFAULT_WORKSPACE_USER_ID,
@@ -3653,29 +3661,271 @@ describe("ProviderRuntimeIngestion", () => {
         createdAt,
       }),
     );
+  }
 
+  function emitProductDirective(
+    harness: ProductIntentHarness,
+    rootThreadId: ThreadId,
+    tag: string,
+    createdAt: string,
+    directiveJson: string,
+  ) {
     harness.emit({
       type: "item.completed",
-      eventId: asEventId("evt-product-root-intent-kind"),
+      eventId: asEventId(`evt-${tag}`),
       provider: ProviderDriverKind.make("codex"),
       createdAt,
       threadId: rootThreadId,
-      turnId: asTurnId("turn-product-root-intent-kind"),
-      itemId: asItemId("item-product-root-intent-kind"),
+      turnId: asTurnId(`turn-${tag}`),
+      itemId: asItemId(`item-${tag}`),
       payload: {
         itemType: "assistant_message",
         status: "completed",
-        detail:
-          '```json\n{ "type": "product-intent-locked", "intentKind": "fix", "title": "Checkout", "summaryMarkdown": "Locked." }\n```',
+        detail: `\`\`\`json\n${directiveJson}\n\`\`\``,
       },
     });
+  }
+
+  const CLASSIFICATION_ASK_JSON =
+    '{ "type": "product-intent-classification-asked", "recommendedIntentKind": "fix", "questionMarkdown": "Is this a feature or a fix? I recommend fix." }';
+
+  async function dispatchHumanReply(
+    harness: ProductIntentHarness,
+    rootThreadId: ThreadId,
+    tag: string,
+    createdAt: string,
+  ) {
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make(`cmd-human-reply-${tag}`),
+        threadId: rootThreadId,
+        message: {
+          // Bare (non `message-` prefixed) id: the convention human clients use.
+          messageId: asMessageId(`4f6b9c3a-${tag}`),
+          role: "user",
+          text: "It is a fix.",
+          attachments: [],
+        },
+        interactionMode: "product-workflow",
+        runtimeMode: "approval-required",
+        createdAt,
+      }),
+    );
+  }
+
+  const intentGateMessages = (thread: ProviderRuntimeTestThread | undefined) =>
+    (thread?.messages ?? []).filter(
+      (message: ProviderRuntimeTestMessage) =>
+        message.role === "user" && message.id.startsWith("message-product-intent-gate-"),
+    );
+
+  const intentLockRejections = (thread: ProviderRuntimeTestThread | undefined) =>
+    (thread?.activities ?? []).filter(
+      (activity: ProviderRuntimeTestActivity) =>
+        activity.kind === "workflow.directive.rejected" &&
+        (activity.payload as { directiveType?: string })?.directiveType === "product-intent-locked",
+    );
+
+  it("appends product intent classification asked activities on root product threads", async () => {
+    const harness = await createHarness();
+    const rootThreadId = asThreadId("thread-product-classification-ask");
+    await createProductRootThread(harness, rootThreadId, "2026-01-01T00:00:00.000Z");
+
+    emitProductDirective(
+      harness,
+      rootThreadId,
+      "classification-ask",
+      "2026-01-01T00:00:01.000Z",
+      CLASSIFICATION_ASK_JSON,
+    );
 
     await harness.drain();
     const readModel = await harness.readModel();
     const rootThread = readModel.threads.find((thread) => thread.id === rootThreadId);
-    const activity = rootThread?.activities.find((entry) => entry.kind === "product-intent-locked");
+    const activity = rootThread?.activities.find(
+      (entry) => entry.kind === "product-intent-classification-asked",
+    );
     expect(activity).toBeDefined();
-    expect((activity?.payload as { intentKind?: string })?.intentKind).toBe("fix");
+    expect(activity?.payload).toMatchObject({
+      recommendedIntentKind: "fix",
+      questionMarkdown: "Is this a feature or a fix? I recommend fix.",
+    });
+  });
+
+  it("rejects product intent locks before the classification question was asked", async () => {
+    const harness = await createHarness();
+    const rootThreadId = asThreadId("thread-product-lock-without-ask");
+    await createProductRootThread(harness, rootThreadId, "2026-01-01T00:00:00.000Z");
+
+    emitProductDirective(
+      harness,
+      rootThreadId,
+      "lock-without-ask",
+      "2026-01-01T00:00:01.000Z",
+      '{ "type": "product-intent-locked", "intentKind": "fix", "title": "Checkout", "summaryMarkdown": "Locked." }',
+    );
+
+    await harness.drain();
+    const readModel = await harness.readModel();
+    const rootThread = readModel.threads.find((thread) => thread.id === rootThreadId);
+    expect(rootThread?.activities.some((entry) => entry.kind === "product-intent-locked")).toBe(
+      false,
+    );
+    const rejections = intentLockRejections(rootThread);
+    expect(rejections).toHaveLength(1);
+    expect((rejections[0]?.payload as { detail?: string })?.detail).toMatch(
+      /classification question was never asked/,
+    );
+    const bounces = intentGateMessages(rootThread);
+    expect(bounces).toHaveLength(1);
+    expect(bounces[0]?.text).toContain("product-intent-classification-asked");
+  });
+
+  it("rejects product intent locks until the user replied after the classification question", async () => {
+    const harness = await createHarness();
+    const rootThreadId = asThreadId("thread-product-lock-without-reply");
+    await createProductRootThread(harness, rootThreadId, "2026-01-01T00:00:00.000Z");
+
+    emitProductDirective(
+      harness,
+      rootThreadId,
+      "ask-no-reply",
+      "2026-01-01T00:00:01.000Z",
+      CLASSIFICATION_ASK_JSON,
+    );
+    await harness.drain();
+
+    emitProductDirective(
+      harness,
+      rootThreadId,
+      "lock-no-reply",
+      "2026-01-01T00:00:02.000Z",
+      '{ "type": "product-intent-locked", "intentKind": "fix", "title": "Checkout", "summaryMarkdown": "Locked." }',
+    );
+    await harness.drain();
+
+    // The corrective bounce's own server-synthesized user message must not satisfy the gate.
+    emitProductDirective(
+      harness,
+      rootThreadId,
+      "lock-after-bounce",
+      "2026-01-01T00:00:03.000Z",
+      '{ "type": "product-intent-locked", "intentKind": "fix", "title": "Checkout", "summaryMarkdown": "Locked." }',
+    );
+    await harness.drain();
+
+    const readModel = await harness.readModel();
+    const rootThread = readModel.threads.find((thread) => thread.id === rootThreadId);
+    expect(rootThread?.activities.some((entry) => entry.kind === "product-intent-locked")).toBe(
+      false,
+    );
+    const rejections = intentLockRejections(rootThread);
+    expect(rejections).toHaveLength(2);
+    expect((rejections[0]?.payload as { detail?: string })?.detail).toMatch(/user has not replied/);
+    expect(intentGateMessages(rootThread)).toHaveLength(2);
+  });
+
+  it("appends product intent locks after the classification question was asked and answered", async () => {
+    const harness = await createHarness();
+    for (const intentKind of ["fix", "feature"] as const) {
+      const rootThreadId = asThreadId(`thread-product-lock-${intentKind}`);
+      await createProductRootThread(harness, rootThreadId, "2026-01-01T00:00:00.000Z");
+
+      emitProductDirective(
+        harness,
+        rootThreadId,
+        `ask-${intentKind}`,
+        "2026-01-01T00:00:01.000Z",
+        CLASSIFICATION_ASK_JSON,
+      );
+      await harness.drain();
+      await dispatchHumanReply(harness, rootThreadId, intentKind, "2026-01-01T00:00:02.000Z");
+
+      emitProductDirective(
+        harness,
+        rootThreadId,
+        `lock-${intentKind}`,
+        "2026-01-01T00:00:03.000Z",
+        `{ "type": "product-intent-locked", "intentKind": "${intentKind}", "title": "Checkout", "summaryMarkdown": "Locked." }`,
+      );
+      await harness.drain();
+
+      const readModel = await harness.readModel();
+      const rootThread = readModel.threads.find((thread) => thread.id === rootThreadId);
+      const activity = rootThread?.activities.find(
+        (entry) => entry.kind === "product-intent-locked",
+      );
+      expect(activity).toBeDefined();
+      expect((activity?.payload as { intentKind?: string })?.intentKind).toBe(intentKind);
+      expect(intentLockRejections(rootThread)).toHaveLength(0);
+    }
+  });
+
+  it("rejects product intent locks without an explicit intent kind even after ask and reply", async () => {
+    const harness = await createHarness();
+    const rootThreadId = asThreadId("thread-product-lock-missing-kind");
+    await createProductRootThread(harness, rootThreadId, "2026-01-01T00:00:00.000Z");
+
+    emitProductDirective(
+      harness,
+      rootThreadId,
+      "ask-missing-kind",
+      "2026-01-01T00:00:01.000Z",
+      CLASSIFICATION_ASK_JSON,
+    );
+    await harness.drain();
+    await dispatchHumanReply(harness, rootThreadId, "missing-kind", "2026-01-01T00:00:02.000Z");
+
+    emitProductDirective(
+      harness,
+      rootThreadId,
+      "lock-missing-kind",
+      "2026-01-01T00:00:03.000Z",
+      '{ "type": "product-intent-locked", "title": "Checkout", "summaryMarkdown": "Locked." }',
+    );
+    await harness.drain();
+
+    const readModel = await harness.readModel();
+    const rootThread = readModel.threads.find((thread) => thread.id === rootThreadId);
+    expect(rootThread?.activities.some((entry) => entry.kind === "product-intent-locked")).toBe(
+      false,
+    );
+    const rejections = intentLockRejections(rootThread);
+    expect(rejections).toHaveLength(1);
+    expect((rejections[0]?.payload as { detail?: string })?.detail).toMatch(/intentKind/);
+  });
+
+  it("escalates to needs-human-attention after repeated product intent lock rejections", async () => {
+    const harness = await createHarness();
+    const rootThreadId = asThreadId("thread-product-lock-loop-guard");
+    await createProductRootThread(harness, rootThreadId, "2026-01-01T00:00:00.000Z");
+
+    for (let attempt = 1; attempt <= MAX_PRODUCT_INTENT_LOCK_REJECTION_BOUNCES + 1; attempt += 1) {
+      emitProductDirective(
+        harness,
+        rootThreadId,
+        `lock-loop-${attempt}`,
+        `2026-01-01T00:00:0${attempt}.000Z`,
+        '{ "type": "product-intent-locked", "intentKind": "fix", "title": "Checkout", "summaryMarkdown": "Locked." }',
+      );
+      await harness.drain();
+    }
+
+    const readModel = await harness.readModel();
+    const rootThread = readModel.threads.find((thread) => thread.id === rootThreadId);
+    expect(rootThread?.activities.some((entry) => entry.kind === "product-intent-locked")).toBe(
+      false,
+    );
+    expect(intentLockRejections(rootThread)).toHaveLength(
+      MAX_PRODUCT_INTENT_LOCK_REJECTION_BOUNCES + 1,
+    );
+    expect(intentGateMessages(rootThread)).toHaveLength(MAX_PRODUCT_INTENT_LOCK_REJECTION_BOUNCES);
+    expect(
+      rootThread?.activities.filter(
+        (entry) => entry.kind === "product-workflow.needs-human-attention",
+      ),
+    ).toHaveLength(1);
   });
 
   it("continues processing runtime events after a single event handler failure", async () => {

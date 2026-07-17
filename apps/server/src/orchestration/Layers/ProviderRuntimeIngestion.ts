@@ -42,7 +42,10 @@ import {
   type ProviderRuntimeIngestionShape,
 } from "../Services/ProviderRuntimeIngestion.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
-import { WORKFLOW_PROMPT_IDS } from "../../provider/WorkflowPromptRegistry.ts";
+import {
+  appendWorkflowSkillCommandSection,
+  WORKFLOW_PROMPT_IDS,
+} from "../../provider/WorkflowPromptRegistry.ts";
 import {
   parseWorkflowDirectiveFromMarkdown,
   type WorkflowDirective,
@@ -71,6 +74,15 @@ const BUFFERED_PROPOSED_PLAN_BY_ID_TTL = Duration.minutes(120);
 const PROCESSED_WORKFLOW_DIRECTIVE_CACHE_CAPACITY = 10_000;
 const PROCESSED_WORKFLOW_DIRECTIVE_TTL = Duration.minutes(120);
 const MAX_BUFFERED_ASSISTANT_CHARS = 24_000;
+export const MAX_PRODUCT_INTENT_LOCK_REJECTION_BOUNCES = 3;
+
+/**
+ * Server-synthesized user messages carry the `message-` prefix (see `serverMessageId` and the
+ * hardcoded `message-*` ids in the workflow reactors/decider), while human clients generate bare
+ * UUIDs (web `newMessageId`, mobile `commandMetadata`). The product intent gate relies on this
+ * convention to tell a real human reply apart from server-authored prompts.
+ */
+const isServerSynthesizedMessageId = (messageId: string) => messageId.startsWith("message-");
 const STRICT_PROVIDER_LIFECYCLE_GUARD = process.env.T3CODE_STRICT_PROVIDER_LIFECYCLE_GUARD !== "0";
 
 type IngestionDomainEvent = Extract<
@@ -1359,12 +1371,15 @@ const make = Effect.gen(function* () {
           const childThreadId = workflowChildThreadId(batchId, index);
           const childMessageId = workflowChildMessageId(batchId, index);
           const persistedChild = persistedChildren[index]!;
-          const childPrompt = [
-            `Workflow sub-agent request from parent thread '${input.thread.id}'.`,
-            `Target workflowPromptId: '${definition.workflowPromptId}'.`,
-            `Expected result directive: '${persistedChild.expectedResult}'.`,
-            child.promptMarkdown,
-          ].join("\n\n");
+          const childPrompt = appendWorkflowSkillCommandSection(
+            [
+              `Workflow sub-agent request from parent thread '${input.thread.id}'.`,
+              `Target workflowPromptId: '${definition.workflowPromptId}'.`,
+              `Expected result directive: '${persistedChild.expectedResult}'.`,
+              child.promptMarkdown,
+            ].join("\n\n"),
+            definition.workflowPromptId,
+          );
 
           if (
             definition.workflowPromptId ===
@@ -1380,11 +1395,14 @@ const make = Effect.gen(function* () {
               message: {
                 messageId: childMessageId,
                 role: "user",
-                text: [
-                  `Run Browser Dev Review (full durable mode) for source thread ${input.thread.id}.`,
-                  `Source title: ${input.thread.title}`,
-                  `Review request:\n${child.promptMarkdown}`,
-                ].join("\n\n"),
+                text: appendWorkflowSkillCommandSection(
+                  [
+                    `Run Browser Dev Review (full durable mode) for source thread ${input.thread.id}.`,
+                    `Source title: ${input.thread.title}`,
+                    `Review request:\n${child.promptMarkdown}`,
+                  ].join("\n\n"),
+                  definition.workflowPromptId,
+                ),
                 attachments: [],
               },
               modelSelection: resolvedModel.modelSelection,
@@ -1552,6 +1570,44 @@ const make = Effect.gen(function* () {
           return;
         }
 
+        case "product-intent-classification-asked": {
+          if (thread.interactionMode !== "product-workflow" || thread.workflowRole !== null) {
+            yield* Effect.logWarning(
+              "provider workflow product intent directive ignored for non-product root thread",
+              {
+                directiveType: input.directive.type,
+                threadId: thread.id,
+                interactionMode: thread.interactionMode,
+                workflowRole: thread.workflowRole,
+              },
+            );
+            return;
+          }
+
+          yield* orchestrationEngine.dispatch({
+            type: "thread.activity.append",
+            commandId: yield* providerCommandId(
+              input.event,
+              "workflow-product-intent-classification-asked",
+            ),
+            threadId: thread.id,
+            activity: {
+              id: EventId.make(yield* crypto.randomUUIDv4),
+              tone: "info",
+              kind: "product-intent-classification-asked",
+              summary: "Fix-or-feature classification question asked",
+              payload: {
+                recommendedIntentKind: input.directive.recommendedIntentKind,
+                questionMarkdown: input.directive.questionMarkdown,
+              },
+              turnId: null,
+              createdAt: input.createdAt,
+            },
+            createdAt: input.createdAt,
+          });
+          return;
+        }
+
         case "product-intent-locked": {
           if (thread.interactionMode !== "product-workflow" || thread.workflowRole !== null) {
             yield* Effect.logWarning(
@@ -1563,6 +1619,87 @@ const make = Effect.gen(function* () {
                 workflowRole: thread.workflowRole,
               },
             );
+            return;
+          }
+
+          const intentKind = input.directive.intentKind;
+          const detail = yield* resolveThreadDetail(thread.id);
+          const askActivity = detail?.activities.findLast(
+            (activity) => activity.kind === "product-intent-classification-asked",
+          );
+          const hasHumanReplyAfterAsk =
+            askActivity !== undefined &&
+            (detail?.messages.some(
+              (message) =>
+                message.role === "user" &&
+                !isServerSynthesizedMessageId(message.id) &&
+                message.createdAt > askActivity.createdAt,
+            ) ??
+              false);
+
+          const gateFailureDetail =
+            intentKind === null
+              ? 'product-intent-locked requires an explicit "intentKind" of "feature" or "fix" — the user\'s confirmed answer.'
+              : askActivity === undefined
+                ? "The fix-or-feature classification question was never asked (no product-intent-classification-asked directive was emitted)."
+                : !hasHumanReplyAfterAsk
+                  ? "The user has not replied since the fix-or-feature classification question was asked."
+                  : null;
+
+          if (gateFailureDetail !== null) {
+            yield* appendWorkflowDirectiveRejectedActivity({
+              event: input.event,
+              threadId: thread.id,
+              directiveType: input.directive.type,
+              summary: "Product intent lock rejected",
+              detail: gateFailureDetail,
+              createdAt: input.createdAt,
+            });
+            const priorRejections =
+              detail?.activities.filter(
+                (activity) =>
+                  activity.kind === "workflow.directive.rejected" &&
+                  (activity.payload as { directiveType?: string } | null)?.directiveType ===
+                    "product-intent-locked",
+              ).length ?? 0;
+            if (priorRejections >= MAX_PRODUCT_INTENT_LOCK_REJECTION_BOUNCES) {
+              yield* orchestrationEngine.dispatch({
+                type: "thread.activity.append",
+                commandId: yield* providerCommandId(input.event, "product-intent-gate-blocked"),
+                threadId: thread.id,
+                activity: {
+                  id: EventId.make(yield* crypto.randomUUIDv4),
+                  tone: "error",
+                  kind: "product-workflow.needs-human-attention",
+                  summary: "Product Workflow needs human attention",
+                  payload: {
+                    reasonMarkdown: `Product intent lock was rejected ${priorRejections + 1} times without a confirmed fix-or-feature answer. Reply in this thread to answer the classification question.`,
+                  },
+                  turnId: null,
+                  createdAt: input.createdAt,
+                },
+                createdAt: input.createdAt,
+              });
+              return;
+            }
+            yield* orchestrationEngine.dispatch({
+              type: "thread.turn.start",
+              commandId: yield* providerCommandId(input.event, "product-intent-gate-turn"),
+              threadId: thread.id,
+              message: {
+                messageId: yield* serverMessageId("product-intent-gate"),
+                role: "user",
+                text: [
+                  `Your product-intent-locked directive was rejected: ${gateFailureDetail}`,
+                  "Before locking intent you must (1) ask the user, in its own dedicated message, whether this request is a **feature** or a **fix**, recommending one, and end that message with exactly one `product-intent-classification-asked` JSON directive, then (2) stop and wait for the user's reply.",
+                  'Only after the user answers may you emit product-intent-locked with the user\'s confirmed "intentKind". Ask the classification question now.',
+                ].join("\n\n"),
+                attachments: [],
+              },
+              runtimeMode: thread.runtimeMode,
+              interactionMode: thread.interactionMode,
+              createdAt: input.createdAt,
+            });
             return;
           }
 

@@ -821,7 +821,17 @@ Do not lock intent until I confirm we have reached a shared understanding.
 
 Grill product questions only: the problem, the desired outcome, the audience, success criteria, scope, and non-goals. Do not grill implementation, architecture, or testing decisions — after intent locks, the automated Planning and Implementation workflows resolve those without asking the user.
 
-As part of the grill you must always ask whether this request is a **feature** (new or changed product behavior that warrants the full Spec, planning tickets, and ticket review pipeline) or a **fix** (a defect or small correction where a lightweight implementation plan is enough). Recommend a classification, but the decision is the user's. Do not lock intent before the user has confirmed feature or fix.
+## Fix-or-feature classification (hard gate)
+
+Once your product understanding is sufficient, you must ask — in its own dedicated message — whether this request is a **feature** (new or changed product behavior that warrants the full Spec, planning tickets, and ticket review pipeline) or a **fix** (a defect or small correction where a lightweight implementation plan is enough). State your recommended classification and why, then ask the user to confirm feature or fix. The decision is the user's, never inferred.
+
+That classification message must end with exactly one fenced JSON directive (and no other fenced JSON blocks):
+
+\`\`\`json
+{ "type": "product-intent-classification-asked", "recommendedIntentKind": "feature", "questionMarkdown": "Is this a feature or a fix? I recommend ..." }
+\`\`\`
+
+After emitting it, stop and wait for the user's reply. The server rejects any product-intent-locked directive unless this classification question was asked and the user replied afterwards, and rejects locks without an explicit "intentKind".
 
 Actively maintain durable product context while grilling:
 
@@ -836,13 +846,15 @@ Do not make implementation changes during the grill.
 
 Before locking intent, finish any required CONTEXT.md glossary updates and ADR files. Finish only when the product intent is locked enough that the Planning Workflow sub-agent can create the Spec, planning tickets, and ticket review, and the Implementation Workflow sub-agent can proceed without further user questions.
 
+This stage uses two JSON directives: the classification ask (mid-grill, see above) and the intent lock (your final response). Each message may contain at most one fenced JSON block.
+
 Your final response for this stage must contain exactly one JSON directive and no other fenced JSON blocks:
 
 \`\`\`json
 { "type": "product-intent-locked", "intentKind": "feature", "title": "...", "summaryMarkdown": "..." }
 \`\`\`
 
-Use "intentKind": "fix" when the user confirmed the request is a fix.
+"intentKind" is required and must be "feature" or "fix" — the user's confirmed answer to the classification question, never inferred. The server rejects the lock otherwise.
 </collaboration_mode>`;
 
 export const WORKFLOW_PROMPT_REGISTRY = [
@@ -1088,6 +1100,31 @@ export function resolveWorkflowPromptText(id: string): string {
 
   const docs = contract.associatedDocs.map(renderAssociatedDoc).join("\n\n");
   return `${contract.promptText}\n\n${docs}`;
+}
+
+/**
+ * Renders the resolved workflow prompt as a delimited block for embedding into the persisted user
+ * message of a workflow sub-step turn. The body is byte-identical to the text injected via the
+ * system channel (`resolveWorkflowSystemInstructions`), so a stale prompt is visible in the thread.
+ */
+export function buildWorkflowSkillCommandSection(
+  workflowPromptId: string | null | undefined,
+): string | null {
+  if (workflowPromptId == null || !isRegisteredWorkflowPromptId(workflowPromptId)) {
+    return null;
+  }
+  const contract = resolveWorkflowPromptContract(workflowPromptId);
+  return `<workflow-skill id="${contract.id}" title="${contract.title}">
+${resolveWorkflowPromptText(workflowPromptId)}
+</workflow-skill>`;
+}
+
+export function appendWorkflowSkillCommandSection(
+  promptText: string,
+  workflowPromptId: string | null | undefined,
+): string {
+  const section = buildWorkflowSkillCommandSection(workflowPromptId);
+  return section === null ? promptText : `${promptText}\n\n${section}`;
 }
 
 export function resolveWorkflowPromptId(input: {

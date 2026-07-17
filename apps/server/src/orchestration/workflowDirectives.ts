@@ -20,9 +20,15 @@ export type WorkflowAgentMessageTarget =
 export type WorkflowDirective =
   | {
       readonly type: "product-intent-locked";
-      readonly intentKind: "feature" | "fix";
+      /** `null` means the directive omitted intentKind — ingestion rejects the lock (fail closed). */
+      readonly intentKind: "feature" | "fix" | null;
       readonly title: string;
       readonly summaryMarkdown: string;
+    }
+  | {
+      readonly type: "product-intent-classification-asked";
+      readonly recommendedIntentKind: "feature" | "fix" | null;
+      readonly questionMarkdown: string;
     }
   | {
       readonly type: "planning-spec-artifact";
@@ -373,8 +379,31 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
       ) {
         return 'product-intent-locked.intentKind must be "feature" or "fix" when provided.';
       }
-      const intentKind = rawIntentKind === "fix" ? "fix" : "feature";
+      const intentKind =
+        rawIntentKind === "fix" || rawIntentKind === "feature" ? rawIntentKind : null;
       return { type: "product-intent-locked", intentKind, title, summaryMarkdown };
+    }
+    case "product-intent-classification-asked": {
+      const questionMarkdown = requiredString(record, "questionMarkdown");
+      if (questionMarkdown.startsWith("Directive field")) return questionMarkdown;
+      const rawRecommendedIntentKind = record["recommendedIntentKind"];
+      if (
+        rawRecommendedIntentKind !== undefined &&
+        rawRecommendedIntentKind !== null &&
+        rawRecommendedIntentKind !== "feature" &&
+        rawRecommendedIntentKind !== "fix"
+      ) {
+        return 'product-intent-classification-asked.recommendedIntentKind must be "feature" or "fix" when provided.';
+      }
+      const recommendedIntentKind =
+        rawRecommendedIntentKind === "fix" || rawRecommendedIntentKind === "feature"
+          ? rawRecommendedIntentKind
+          : null;
+      return {
+        type: "product-intent-classification-asked",
+        recommendedIntentKind,
+        questionMarkdown,
+      };
     }
     case "planning-spec-artifact": {
       const title = requiredString(record, "title");

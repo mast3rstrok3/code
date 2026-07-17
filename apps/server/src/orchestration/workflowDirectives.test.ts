@@ -5,7 +5,7 @@ import { describe, it } from "vite-plus/test";
 import { parseWorkflowDirectiveFromMarkdown } from "./workflowDirectives.ts";
 
 describe("workflowDirectives", () => {
-  it("parses product intent locked directives", () => {
+  it("parses product intent locked directives without an intent kind as null (fail closed)", () => {
     const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
 { "type": "product-intent-locked", "title": "Checkout", "summaryMarkdown": "Locked intent." }
 \`\`\``);
@@ -14,6 +14,17 @@ describe("workflowDirectives", () => {
     if (result.kind !== "parsed") return;
     NodeAssert.equal(result.directive.type, "product-intent-locked");
     NodeAssert.equal(result.directive.title, "Checkout");
+    if (result.directive.type !== "product-intent-locked") return;
+    NodeAssert.equal(result.directive.intentKind, null);
+  });
+
+  it("parses product intent locked directives with a feature intent kind", () => {
+    const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
+{ "type": "product-intent-locked", "intentKind": "feature", "title": "Checkout", "summaryMarkdown": "Locked intent." }
+\`\`\``);
+
+    NodeAssert.equal(result.kind, "parsed");
+    if (result.kind !== "parsed") return;
     if (result.directive.type !== "product-intent-locked") return;
     NodeAssert.equal(result.directive.intentKind, "feature");
   });
@@ -40,6 +51,55 @@ describe("workflowDirectives", () => {
       result.message,
       'product-intent-locked.intentKind must be "feature" or "fix" when provided.',
     );
+  });
+
+  it("parses product intent classification asked directives", () => {
+    const withRecommendation = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
+{ "type": "product-intent-classification-asked", "recommendedIntentKind": "fix", "questionMarkdown": "Is this a feature or a fix? I recommend fix." }
+\`\`\``);
+    const withoutRecommendation = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
+{ "type": "product-intent-classification-asked", "questionMarkdown": "Is this a feature or a fix?" }
+\`\`\``);
+
+    NodeAssert.equal(withRecommendation.kind, "parsed");
+    if (
+      withRecommendation.kind === "parsed" &&
+      withRecommendation.directive.type === "product-intent-classification-asked"
+    ) {
+      NodeAssert.equal(withRecommendation.directive.recommendedIntentKind, "fix");
+      NodeAssert.equal(
+        withRecommendation.directive.questionMarkdown,
+        "Is this a feature or a fix? I recommend fix.",
+      );
+    }
+    NodeAssert.equal(withoutRecommendation.kind, "parsed");
+    if (
+      withoutRecommendation.kind === "parsed" &&
+      withoutRecommendation.directive.type === "product-intent-classification-asked"
+    ) {
+      NodeAssert.equal(withoutRecommendation.directive.recommendedIntentKind, null);
+    }
+  });
+
+  it("rejects product intent classification asked directives with invalid fields", () => {
+    const invalidKind = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
+{ "type": "product-intent-classification-asked", "recommendedIntentKind": "refactor", "questionMarkdown": "Feature or fix?" }
+\`\`\``);
+    const missingQuestion = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
+{ "type": "product-intent-classification-asked", "recommendedIntentKind": "fix" }
+\`\`\``);
+
+    NodeAssert.equal(invalidKind.kind, "error");
+    if (invalidKind.kind === "error") {
+      NodeAssert.equal(
+        invalidKind.message,
+        'product-intent-classification-asked.recommendedIntentKind must be "feature" or "fix" when provided.',
+      );
+    }
+    NodeAssert.equal(missingQuestion.kind, "error");
+    if (missingQuestion.kind === "error") {
+      NodeAssert.match(missingQuestion.message, /questionMarkdown/);
+    }
   });
 
   it("parses canonical Spec, Ticket, and Ticket review directives", () => {

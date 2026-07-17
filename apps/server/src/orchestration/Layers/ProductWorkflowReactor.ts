@@ -22,7 +22,10 @@ import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
-import { WORKFLOW_PROMPT_IDS } from "../../provider/WorkflowPromptRegistry.ts";
+import {
+  appendWorkflowSkillCommandSection,
+  WORKFLOW_PROMPT_IDS,
+} from "../../provider/WorkflowPromptRegistry.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   ProductWorkflowReactor,
@@ -235,7 +238,7 @@ const make = Effect.gen(function* () {
       message: {
         messageId,
         role: "user",
-        text: feedback,
+        text: appendWorkflowSkillCommandSection(feedback, WORKFLOW_PROMPT_IDS.planningTicketsCodex),
         attachments: [],
       },
       workflowPromptId: WORKFLOW_PROMPT_IDS.planningTicketsCodex,

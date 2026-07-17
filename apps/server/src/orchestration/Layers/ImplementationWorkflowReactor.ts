@@ -24,7 +24,10 @@ import * as Stream from "effect/Stream";
 
 import { AppDevStackManager } from "../../appDevStack/AppDevStackManager.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
-import { WORKFLOW_PROMPT_IDS } from "../../provider/WorkflowPromptRegistry.ts";
+import {
+  appendWorkflowSkillCommandSection,
+  WORKFLOW_PROMPT_IDS,
+} from "../../provider/WorkflowPromptRegistry.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   ImplementationWorkflowReactor,
@@ -523,14 +526,17 @@ const make = Effect.gen(function* () {
       message: {
         messageId: yield* serverMessageId("implementation-worker"),
         role: "user",
-        text: buildWorkerPrompt({
-          run: input.run,
-          ticket,
-          ticketId: input.ticketId,
-          workerThreadId,
-          branch: plannedWorker.branch,
-          worktreePath: plannedWorker.worktreePath,
-        }),
+        text: appendWorkflowSkillCommandSection(
+          buildWorkerPrompt({
+            run: input.run,
+            ticket,
+            ticketId: input.ticketId,
+            workerThreadId,
+            branch: plannedWorker.branch,
+            worktreePath: plannedWorker.worktreePath,
+          }),
+          WORKFLOW_PROMPT_IDS.implementationTddCodex,
+        ),
         attachments: [],
       },
       workflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
@@ -667,7 +673,10 @@ const make = Effect.gen(function* () {
         message: {
           messageId: yield* serverMessageId("implementation-validator"),
           role: "user",
-          text: buildMergeGatePrompt({ run: input.run }),
+          text: appendWorkflowSkillCommandSection(
+            buildMergeGatePrompt({ run: input.run }),
+            WORKFLOW_PROMPT_IDS.implementationMergeGateCodex,
+          ),
           attachments: [],
         },
         workflowPromptId: WORKFLOW_PROMPT_IDS.implementationMergeGateCodex,
@@ -796,7 +805,10 @@ const make = Effect.gen(function* () {
         message: {
           messageId: yield* serverMessageId("implementation-browser-review"),
           role: "user",
-          text: buildBrowserDevReviewPrompt({ run: input.run, frontendUrl: stack.frontendUrl }),
+          text: appendWorkflowSkillCommandSection(
+            buildBrowserDevReviewPrompt({ run: input.run, frontendUrl: stack.frontendUrl }),
+            WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
+          ),
           attachments: [],
         },
         modelSelection: resolved.modelSelection,
@@ -860,7 +872,10 @@ const make = Effect.gen(function* () {
         message: {
           messageId: yield* serverMessageId("implementation-code-reviewer"),
           role: "user",
-          text: buildCodeReviewPrompt({ run: reviewingRun, specMarkdown }),
+          text: appendWorkflowSkillCommandSection(
+            buildCodeReviewPrompt({ run: reviewingRun, specMarkdown }),
+            WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+          ),
           attachments: [],
         },
         workflowPromptId: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
@@ -1164,7 +1179,10 @@ const make = Effect.gen(function* () {
       message: {
         messageId: yield* serverMessageId("implementation-fixer"),
         role: "user",
-        text: input.promptText,
+        text: appendWorkflowSkillCommandSection(
+          input.promptText,
+          WORKFLOW_PROMPT_IDS.implementationFixCodex,
+        ),
         attachments: [],
       },
       workflowPromptId: WORKFLOW_PROMPT_IDS.implementationFixCodex,
