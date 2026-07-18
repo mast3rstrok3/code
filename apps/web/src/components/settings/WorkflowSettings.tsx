@@ -269,9 +269,7 @@ export function WorkflowSettings() {
       {state.status === "loaded" ? (
         <>
           <WorkflowPromptSection title={workflowTitle("shared")} contracts={grouped.shared} />
-          <ProductWorkflowPromptSection
-            contracts={grouped.product.filter((contract) => contract.stage === "grill")}
-          />
+          <ProductWorkflowPromptSection contracts={grouped.product} />
           <WorkflowPromptSection title={workflowTitle("planning")} contracts={grouped.planning} />
           <WorkflowPromptSection
             title={workflowTitle("implementation")}
