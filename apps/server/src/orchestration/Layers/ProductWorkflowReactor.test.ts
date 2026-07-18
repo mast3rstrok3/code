@@ -144,7 +144,7 @@ function seedProjectAndThread(
   });
 }
 
-function lockProductIntent(system: ProductSystem) {
+function lockProductFeatureIntent(system: ProductSystem) {
   return Effect.gen(function* () {
     yield* system.engine.dispatch({
       type: "thread.activity.append",
@@ -155,7 +155,7 @@ function lockProductIntent(system: ProductSystem) {
         tone: "info",
         kind: "product-intent-locked",
         summary: "Checkout",
-        payload: { title: "Checkout", summaryMarkdown: "Locked." },
+        payload: { title: "Checkout", summaryMarkdown: "Locked.", intentKind: "feature" },
         turnId: null,
         createdAt: now,
       },
@@ -257,11 +257,11 @@ function upsertProposedPlan(
 }
 
 describe("ProductWorkflowReactor", () => {
-  it.effect("starts one child planning orchestrator after product intent locks", () =>
+  it.effect("starts the planning workflow for an explicit feature intent", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         yield* seedProjectAndThread(system);
-        const planningThread = yield* lockProductIntent(system);
+        const planningThread = yield* lockProductFeatureIntent(system);
 
         yield* system.engine.dispatch({
           type: "thread.activity.append",
@@ -272,7 +272,11 @@ describe("ProductWorkflowReactor", () => {
             tone: "info",
             kind: "product-intent-locked",
             summary: "Checkout",
-            payload: { title: "Checkout", summaryMarkdown: "Locked again." },
+            payload: {
+              title: "Checkout",
+              summaryMarkdown: "Locked again.",
+              intentKind: "feature",
+            },
             turnId: null,
             createdAt: now,
           },
@@ -309,7 +313,7 @@ describe("ProductWorkflowReactor", () => {
     withSystem((system) =>
       Effect.gen(function* () {
         yield* seedProjectAndThread(system);
-        const planningThread = yield* lockProductIntent(system);
+        const planningThread = yield* lockProductFeatureIntent(system);
         yield* seedProductSpecAndTickets(system, planningThread.id);
 
         const snapshot = yield* system.query.getSnapshot();
@@ -339,7 +343,7 @@ describe("ProductWorkflowReactor", () => {
     withSystem((system) =>
       Effect.gen(function* () {
         yield* seedProjectAndThread(system);
-        const planningThread = yield* lockProductIntent(system);
+        const planningThread = yield* lockProductFeatureIntent(system);
         const spec = yield* seedProductSpecAndTickets(system, planningThread.id);
 
         for (let index = 1; index <= 5; index += 1) {
@@ -387,7 +391,7 @@ describe("ProductWorkflowReactor", () => {
       withSystem((system) =>
         Effect.gen(function* () {
           yield* seedProjectAndThread(system);
-          const planningThread = yield* lockProductIntent(system);
+          const planningThread = yield* lockProductFeatureIntent(system);
           const spec = yield* seedProductSpecAndTickets(system, planningThread.id);
           yield* system.engine.dispatch({
             type: "thread.planning-reviewer-verdict.apply",
