@@ -324,7 +324,7 @@ function buildImplementationRun(input: {
   const plannedWorkers = input.tickets.map((ticket) => ({
     ticketId: ticket.id,
     dependencyTicketIds: ticket.dependencies.map((dependency) => dependency.ticketId),
-    branch: `${input.command.orchestratorBranch}/ticket-${ticket.ordinal}`,
+    branch: `${input.command.orchestratorBranch}-ticket-${ticket.ordinal}`,
     worktreePath: `${input.command.orchestratorWorktreePath}-ticket-${ticket.ordinal}`,
   }));
   return {

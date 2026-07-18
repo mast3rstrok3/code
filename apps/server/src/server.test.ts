@@ -5760,6 +5760,72 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("replaces shell and thread caches whose resume cursor is ahead of the server", () =>
+    Effect.gen(function* () {
+      const snapshotSequence = 7;
+      const readModel = makeDefaultOrchestrationReadModel();
+      const shellSnapshot = {
+        snapshotSequence,
+        projects: readModel.projects.map(({ deletedAt: _, ...project }) => project),
+        threads: [makeDefaultOrchestrationThreadShell()],
+        updatedAt: readModel.updatedAt,
+      };
+
+      yield* buildAppUnderTest({
+        layers: {
+          projectionSnapshotQuery: {
+            getSnapshotSequence: () => Effect.succeed({ snapshotSequence }),
+            getShellSnapshot: () => Effect.succeed(shellSnapshot),
+            getThreadDetailSnapshot: (threadId) =>
+              Effect.succeed(
+                threadId === defaultThreadId
+                  ? Option.some({
+                      snapshotSequence,
+                      thread: readModel.threads[0]!,
+                    })
+                  : Option.none(),
+              ),
+          },
+          orchestrationEngine: {
+            readEvents: () => Stream.empty,
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const shellItems = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeShell]({
+            userView: { kind: "all" },
+            afterSequence: 99,
+          }).pipe(Stream.take(1), Stream.runCollect),
+        ),
+      );
+      const threadItems = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeThread]({
+            threadId: defaultThreadId,
+            afterSequence: 99,
+          }).pipe(Stream.take(1), Stream.runCollect),
+        ),
+      );
+
+      const [shellItem] = Array.from(shellItems);
+      assert.equal(shellItem?.kind, "snapshot");
+      if (shellItem?.kind === "snapshot") {
+        assert.equal(shellItem.snapshot.snapshotSequence, snapshotSequence);
+        assert.equal(shellItem.snapshot.projects[0]?.id, defaultProjectId);
+      }
+
+      const [threadItem] = Array.from(threadItems);
+      assert.equal(threadItem?.kind, "snapshot");
+      if (threadItem?.kind === "snapshot") {
+        assert.equal(threadItem.snapshot.snapshotSequence, snapshotSequence);
+        assert.equal(threadItem.snapshot.thread.id, defaultThreadId);
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("enriches replayed project events with repository identity metadata", () =>
     Effect.gen(function* () {
       const repositoryIdentity = {

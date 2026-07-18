@@ -2,6 +2,7 @@
 
 ## Small things
 
+- [x] Product workflow fix variant smoke test
 - [ ] Submitting new messages should scroll to bottom
 - [ ] Only show last 10 threads for a given project
 - [ ] Thread archiving

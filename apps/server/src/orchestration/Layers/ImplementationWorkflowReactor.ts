@@ -944,37 +944,58 @@ const make = Effect.gen(function* () {
       .pipe(Effect.map(Option.getOrUndefined));
     if (project === undefined) return;
 
-    yield* gitWorkflow.createWorktree({
-      cwd: project.workspaceRoot,
-      refName: event.payload.run.pinnedCommit,
-      newRefName: event.payload.run.orchestratorBranch,
-      baseRefName: event.payload.run.baseBranch,
-      path: event.payload.run.orchestratorWorktreePath,
-    });
-
-    yield* orchestrationEngine.dispatch({
-      type: "thread.meta.update",
-      commandId: yield* serverCommandId("implementation-orchestrator-meta"),
-      threadId: event.payload.run.orchestratorThreadId,
-      branch: event.payload.run.orchestratorBranch,
-      worktreePath: event.payload.run.orchestratorWorktreePath,
-    });
-
     const runningRun: OrchestrationImplementationRun = {
       ...event.payload.run,
       status: "running",
       updatedAt: event.occurredAt,
     };
-    yield* updateRun({
-      sourceThreadId: event.payload.sourceThreadId,
-      run: runningRun,
-      createdAt: event.occurredAt,
-    });
-    yield* startReadyWorkers({
-      sourceThreadId: event.payload.sourceThreadId,
-      run: runningRun,
-      createdAt: event.occurredAt,
-    });
+    yield* Effect.gen(function* () {
+      yield* gitWorkflow.createWorktree({
+        cwd: project.workspaceRoot,
+        refName: event.payload.run.pinnedCommit,
+        newRefName: event.payload.run.orchestratorBranch,
+        baseRefName: event.payload.run.baseBranch,
+        path: event.payload.run.orchestratorWorktreePath,
+      });
+
+      yield* orchestrationEngine.dispatch({
+        type: "thread.meta.update",
+        commandId: yield* serverCommandId("implementation-orchestrator-meta"),
+        threadId: event.payload.run.orchestratorThreadId,
+        branch: event.payload.run.orchestratorBranch,
+        worktreePath: event.payload.run.orchestratorWorktreePath,
+      });
+
+      yield* updateRun({
+        sourceThreadId: event.payload.sourceThreadId,
+        run: runningRun,
+        createdAt: event.occurredAt,
+      });
+      yield* startReadyWorkers({
+        sourceThreadId: event.payload.sourceThreadId,
+        run: runningRun,
+        createdAt: event.occurredAt,
+      });
+    }).pipe(
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) {
+          return Effect.failCause(cause);
+        }
+        return Effect.logWarning("implementation run launch failed; blocking run", {
+          runId: event.payload.run.id,
+          cause: Cause.pretty(cause),
+        }).pipe(
+          Effect.andThen(
+            blockRun({
+              sourceThreadId: event.payload.sourceThreadId,
+              run: runningRun,
+              reasonMarkdown: `Implementation run launch failed before workers could start.\n\n\`\`\`\n${Cause.pretty(cause)}\n\`\`\``,
+              updatedAt: event.occurredAt,
+            }),
+          ),
+        );
+      }),
+    );
   });
 
   const handleWorkerResult = Effect.fn("ImplementationWorkflowReactor.handleWorkerResult")(

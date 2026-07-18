@@ -5,6 +5,7 @@ import {
   DEFAULT_WORKSPACE_USER_ID,
   DevReviewId,
   EventId,
+  GitCommandError,
   MessageId,
   ProviderInstanceId,
   ProjectId,
@@ -79,6 +80,7 @@ function eventId(value: string) {
 function makeTestLayer(
   calls: ImplementationCalls,
   serverSettings: DeepPartial<ServerSettings> = {},
+  failCreateWorktreeAfter?: number,
 ) {
   const coreLayer = Layer.mergeAll(
     OrchestrationEngineLive.pipe(
@@ -105,13 +107,24 @@ function makeTestLayer(
       Layer.provide(
         Layer.mock(GitWorkflowService)({
           createWorktree: (input) =>
-            Ref.update(calls.createWorktreeInputs, (inputs) => [...inputs, input]).pipe(
-              Effect.as({
-                worktree: {
-                  path: input.path ?? "/tmp/generated-worktree",
-                  refName: input.newRefName ?? "HEAD",
-                },
-              }),
+            Ref.updateAndGet(calls.createWorktreeInputs, (inputs) => [...inputs, input]).pipe(
+              Effect.flatMap((inputs) =>
+                failCreateWorktreeAfter !== undefined && inputs.length > failCreateWorktreeAfter
+                  ? Effect.fail(
+                      new GitCommandError({
+                        operation: "GitVcsDriver.createWorktree",
+                        command: "git",
+                        cwd: input.cwd,
+                        detail: "git worktree add failed",
+                      }),
+                    )
+                  : Effect.succeed({
+                      worktree: {
+                        path: input.path ?? "/tmp/generated-worktree",
+                        refName: input.newRefName ?? "HEAD",
+                      },
+                    }),
+              ),
             ),
           createOrOpenChangeRequest: () =>
             Ref.update(calls.createOrOpenChangeRequestCount, (count) => count + 1).pipe(
@@ -162,7 +175,10 @@ function makeTestLayer(
 
 function withSystem<A, E>(
   use: (system: ImplementationSystem) => Effect.Effect<A, E>,
-  options?: { readonly serverSettings?: DeepPartial<ServerSettings> },
+  options?: {
+    readonly serverSettings?: DeepPartial<ServerSettings>;
+    readonly failCreateWorktreeAfter?: number;
+  },
 ) {
   return Effect.gen(function* () {
     const autoCreateInputs = yield* Ref.make<
@@ -189,7 +205,11 @@ function withSystem<A, E>(
           reactor,
         });
       }),
-    ).pipe(Effect.provide(makeTestLayer(calls, options?.serverSettings)));
+    ).pipe(
+      Effect.provide(
+        makeTestLayer(calls, options?.serverSettings, options?.failCreateWorktreeAfter),
+      ),
+    );
   });
 }
 
@@ -489,8 +509,41 @@ describe("ImplementationWorkflowReactor", () => {
           path: run.launchSummary.plannedWorkers[0]?.worktreePath,
           newRefName: run.launchSummary.plannedWorkers[0]?.branch,
         });
+        // Worker branches must not nest under the orchestrator branch ref: git cannot
+        // create `X/ticket-N` once branch `X` exists.
+        expect(run.launchSummary.plannedWorkers[0]?.branch).toBe(
+          "implementation/checkout-ticket-1",
+        );
+        expect(run.launchSummary.plannedWorkers[0]?.worktreePath).toBe(
+          "/tmp/implementation-reactor.worktrees/checkout-ticket-1",
+        );
         expect(workerThread?.parentThreadId).toBe(run.orchestratorThreadId);
       }),
+    ),
+  );
+
+  it.effect("blocks the run when worker worktree creation fails at launch", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          const snapshot = yield* system.query.getSnapshot();
+          const workerThread = snapshot.threads.find(
+            (thread) => thread.workflowRole === "implementation-worker",
+          );
+
+          expect(run.status).toBe("needs-human-attention");
+          expect(workerThread).toBeUndefined();
+          const orchestratorThread = snapshot.threads.find(
+            (thread) => thread.id === run.orchestratorThreadId,
+          );
+          expect(
+            orchestratorThread?.activities.some(
+              (activity) => activity.kind === "implementation-workflow.needs-human-attention",
+            ),
+          ).toBe(true);
+        }),
+      { failCreateWorktreeAfter: 1 },
     ),
   );
 

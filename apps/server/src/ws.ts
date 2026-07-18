@@ -1340,6 +1340,34 @@ const makeWsRpcLayer = (
                     yield* Effect.forkScoped(
                       liveStream.pipe(Stream.runForEach((item) => Queue.offer(liveBuffer, item))),
                     );
+                    const { snapshotSequence } = yield* projectionSnapshotQuery
+                      .getSnapshotSequence()
+                      .pipe(
+                        Effect.mapError(
+                          (cause) =>
+                            new OrchestrationGetSnapshotError({
+                              message: "Failed to read orchestration shell sequence",
+                              cause,
+                            }),
+                        ),
+                      );
+                    if (afterSequence > snapshotSequence) {
+                      const snapshot = yield* projectionSnapshotQuery
+                        .getShellSnapshot({ userView })
+                        .pipe(
+                          Effect.mapError(
+                            (cause) =>
+                              new OrchestrationGetSnapshotError({
+                                message: "Failed to reload orchestration shell snapshot",
+                                cause,
+                              }),
+                          ),
+                        );
+                      return Stream.concat(
+                        Stream.make({ kind: "snapshot" as const, snapshot }),
+                        Stream.fromQueue(liveBuffer),
+                      );
+                    }
                     const catchUpStream = orchestrationEngine
                       .readEvents(afterSequence, Number.MAX_SAFE_INTEGER)
                       .pipe(
@@ -1442,6 +1470,40 @@ const makeWsRpcLayer = (
                     yield* Effect.forkScoped(
                       liveStream.pipe(Stream.runForEach((item) => Queue.offer(liveBuffer, item))),
                     );
+                    const { snapshotSequence } = yield* projectionSnapshotQuery
+                      .getSnapshotSequence()
+                      .pipe(
+                        Effect.mapError(
+                          (cause) =>
+                            new OrchestrationGetSnapshotError({
+                              message: `Failed to read thread ${input.threadId} snapshot sequence`,
+                              cause,
+                            }),
+                        ),
+                      );
+                    if (afterSequence > snapshotSequence) {
+                      const snapshot = yield* projectionSnapshotQuery
+                        .getThreadDetailSnapshot(input.threadId)
+                        .pipe(
+                          Effect.mapError(
+                            (cause) =>
+                              new OrchestrationGetSnapshotError({
+                                message: `Failed to reload thread ${input.threadId}`,
+                                cause,
+                              }),
+                          ),
+                        );
+                      if (Option.isNone(snapshot)) {
+                        return yield* new OrchestrationGetSnapshotError({
+                          message: `Thread ${input.threadId} was not found`,
+                          cause: input.threadId,
+                        });
+                      }
+                      return Stream.concat(
+                        Stream.make({ kind: "snapshot" as const, snapshot: snapshot.value }),
+                        Stream.fromQueue(liveBuffer),
+                      );
+                    }
                     const catchUpStream = orchestrationEngine
                       .readEvents(afterSequence, Number.MAX_SAFE_INTEGER)
                       .pipe(

@@ -137,13 +137,18 @@ describe("environment shell synchronization", () => {
     }),
   );
 
-  it.effect("resumes a warm shell cache via afterSequence without an HTTP fetch", () =>
+  it.effect("reconciles a warm shell cache before resuming", () =>
     Effect.gen(function* () {
       const cachedSnapshot: OrchestrationShellSnapshot = {
         snapshotSequence: 5,
         projects: [],
         threads: [],
         updatedAt: "2026-06-06T00:00:00.000Z",
+      };
+      const authoritativeSnapshot: OrchestrationShellSnapshot = {
+        ...cachedSnapshot,
+        snapshotSequence: 8,
+        updatedAt: "2026-06-06T01:00:00.000Z",
       };
       const events = yield* Queue.unbounded<OrchestrationShellStreamItem>();
       const capturedAfterSequence = yield* SubscriptionRef.make<number | undefined>(undefined);
@@ -183,7 +188,9 @@ describe("environment shell synchronization", () => {
       });
       const snapshotLoader = ShellSnapshotLoader.of({
         load: () =>
-          SubscriptionRef.update(loaderCalls, (count) => count + 1).pipe(Effect.as(Option.none())),
+          SubscriptionRef.update(loaderCalls, (count) => count + 1).pipe(
+            Effect.as(Option.some(authoritativeSnapshot)),
+          ),
       });
       yield* makeEnvironmentShellState().pipe(
         Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
@@ -191,14 +198,15 @@ describe("environment shell synchronization", () => {
         Effect.provideService(ShellSnapshotLoader, snapshotLoader),
       );
 
-      // Wait until the subscription is established from the warm cache.
+      // The cache renders immediately, but the subscription resumes from the
+      // freshly loaded snapshot rather than trusting the cached history.
       yield* SubscriptionRef.changes(capturedAfterSequence).pipe(
         Stream.filter((value) => value !== undefined),
         Stream.runHead,
       );
 
-      expect(yield* SubscriptionRef.get(capturedAfterSequence)).toBe(5);
-      expect(yield* SubscriptionRef.get(loaderCalls)).toBe(0);
+      expect(yield* SubscriptionRef.get(capturedAfterSequence)).toBe(8);
+      expect(yield* SubscriptionRef.get(loaderCalls)).toBe(1);
     }),
   );
 });

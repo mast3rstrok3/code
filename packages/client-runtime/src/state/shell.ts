@@ -156,19 +156,14 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
 
   yield* Effect.forkScoped(
     Effect.gen(function* () {
-      // Establish the base shell snapshot to resume from, minimizing bytes over
-      // the wire:
-      // - Warm cache: reuse the cached snapshot (zero network) and resume via
-      //   `afterSequence` so we only receive shell events since the cached
-      //   sequence.
-      // - Cold cache: load the full shell snapshot over HTTP (gzip-compressible,
-      //   and off the socket), then resume via `afterSequence`.
-      // If no base can be established we fall back to the socket-embedded
-      // snapshot so the shell still synchronizes. Overlapping/replayed events are
-      // deduped by sequence in applyItem.
-      const base = Option.isSome(cachedSnapshot)
-        ? cachedSnapshot
-        : userView.kind === "all"
+      // Cached state is display-only until it has been reconciled with the
+      // connected backend. Sequence numbers are local to one event history, so
+      // a cache from a reset or replaced backend cannot safely be used as a
+      // resume cursor even when its sequence is lower than the new history.
+      // Prefer a fresh HTTP snapshot for the all-users shell; if that is not
+      // available (or the view is filtered), request a socket-embedded snapshot.
+      const base =
+        userView.kind === "all"
           ? yield* Effect.gen(function* () {
               const prepared = yield* SubscriptionRef.changes(supervisor.prepared).pipe(
                 Stream.filter(Option.isSome),
