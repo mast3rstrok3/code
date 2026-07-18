@@ -193,6 +193,8 @@ function buildProductPlanningSpecStagePrompt(
     "",
     "Use this locked product intent as the authoritative source. Do not ask the user questions or reopen product intent.",
     "",
+    "The Planning Workflow owns the project's domain model: while authoring the Spec, capture resolved terminology in the CONTEXT.md glossary and record warranted ADRs (formats in CONTEXT-FORMAT.md and ADR-FORMAT.md) without asking the user.",
+    "",
     `Intent title: ${command.intentTitle}`,
     "",
     "Intent summary:",

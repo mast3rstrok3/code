@@ -188,6 +188,12 @@ A description of the things that are out of scope for this spec.
 Any further notes about the feature.
 
 </spec-template>
+
+## Domain model maintenance
+
+Maintain the project's domain model as part of Spec authoring. When the Spec resolves terminology, capture it in the CONTEXT.md glossary (format in CONTEXT-FORMAT.md): tight definitions, rejected synonyms under _Avoid_, project-specific domain concepts only, no implementation details. Record an ADR in docs/adr/ (format in ADR-FORMAT.md) only when a decision is hard to reverse, surprising without context, and the result of a real trade-off. Create these files lazily — only when you have something to write.
+
+When this stage runs from a locked Product Workflow intent, there is no user to ask: resolve glossary and ADR updates yourself from the locked intent and the codebase.
 </collaboration_mode>`;
 
 const PLANNING_TICKETS_PROMPT = `<collaboration_mode># Planning Workflow: Tickets
@@ -819,7 +825,7 @@ If a *fact* can be found by exploring the codebase, look it up rather than askin
 
 Do not lock intent until I confirm we have reached a shared understanding.
 
-Grill product questions only: the problem, the desired outcome, the audience, success criteria, scope, and non-goals. Do not grill implementation, architecture, or testing decisions — after intent locks, the automated Planning and Implementation workflows resolve those without asking the user.
+Grill product questions only: the problem, the desired outcome, the audience, how the product should feel and behave for the user, success criteria, scope, and non-goals. Do not grill implementation, architecture, or testing decisions — after intent locks, the automated Planning and Implementation workflows resolve those without asking the user.
 
 ## Fix-or-feature classification (hard gate)
 
@@ -833,18 +839,13 @@ That classification message must end with exactly one fenced JSON directive (and
 
 After emitting it, stop and wait for the user's reply. The server rejects any product-intent-locked directive unless this classification question was asked and the user replied afterwards, and rejects locks without an explicit "intentKind".
 
-Actively maintain durable product context while grilling:
-
-1. Resolve the context structure before relying on domain terms. If a root CONTEXT-MAP.md exists, read it to find the right bounded context. If only a root CONTEXT.md exists, use it as the single context.
-2. Create or update CONTEXT.md lazily only when the first domain term is resolved. CONTEXT.md is a glossary only: no implementation details, planning notes, TODOs, API specs, or architecture decisions. Use tight definitions, list rejected synonyms under _Avoid_, and include only project-specific domain concepts. Use the format in CONTEXT-FORMAT.md.
-3. Create docs/adr/000N-slug.md lazily only when an ADR is warranted: the decision is hard to reverse, surprising without context, and the result of a real trade-off. Use the format in ADR-FORMAT.md.
-4. When multiple contexts exist, infer the target context from the topic; if unclear, ask. If existing context conflicts with the user's intent, ask which should become authoritative before locking intent.
+Do not create or edit CONTEXT.md glossaries, CONTEXT-MAP.md, or ADR files during the grill. Domain terminology and architecture decision records are owned by the automated Planning Workflow, which captures them after intent locks. Read existing project context freely; if an existing glossary term or ADR conflicts with the user's intent, surface the conflict and ask which should become authoritative before locking intent.
 
 ## Workflow stage constraints
 
-Do not make implementation changes during the grill.
+Do not make implementation changes or planning artifact writes during the grill.
 
-Before locking intent, finish any required CONTEXT.md glossary updates and ADR files. Finish only when the product intent is locked enough that the Planning Workflow sub-agent can create the Spec, planning tickets, and ticket review, and the Implementation Workflow sub-agent can proceed without further user questions.
+Finish only when the product intent is locked enough that the Planning Workflow sub-agent can create the Spec, planning tickets, and ticket review, and the Implementation Workflow sub-agent can proceed without further user questions.
 
 This stage uses two JSON directives: the classification ask (mid-grill, see above) and the intent lock (your final response). Each message may contain at most one fenced JSON block.
 
@@ -902,6 +903,20 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     title: "2. Spec",
     description: "Creates the durable Spec artifact from planning context and locked decisions.",
     promptText: PLANNING_SPEC_PROMPT,
+    associatedDocs: [
+      {
+        id: "planning.spec.context-format",
+        title: "CONTEXT.md Format",
+        path: "CONTEXT-FORMAT.md",
+        content: CONTEXT_FORMAT_ASSOCIATED_DOC_CONTENT,
+      },
+      {
+        id: "planning.spec.adr-format",
+        title: "ADR Format",
+        path: "ADR-FORMAT.md",
+        content: PLANNING_ADR_FORMAT_ASSOCIATED_DOC_CONTENT,
+      },
+    ],
   },
   {
     id: WORKFLOW_PROMPT_IDS.planningTicketsCodex,
@@ -1026,20 +1041,6 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     description:
       "Gathers and locks product intent before automatically running Planning and Implementation.",
     promptText: PRODUCT_WORKFLOW_PROMPT,
-    associatedDocs: [
-      {
-        id: "product.workflow.context-format",
-        title: "CONTEXT.md Format",
-        path: "CONTEXT-FORMAT.md",
-        content: CONTEXT_FORMAT_ASSOCIATED_DOC_CONTENT,
-      },
-      {
-        id: "product.workflow.adr-format",
-        title: "ADR Format",
-        path: "ADR-FORMAT.md",
-        content: PLANNING_ADR_FORMAT_ASSOCIATED_DOC_CONTENT,
-      },
-    ],
   },
 ] as const satisfies ReadonlyArray<WorkflowPromptContract>;
 

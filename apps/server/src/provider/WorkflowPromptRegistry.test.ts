@@ -339,19 +339,31 @@ describe("WorkflowPromptRegistry", () => {
         .map((contract) => contract.stage),
       ["intent"],
     );
-    const contextDoc = product.associatedDocs?.find(
-      (doc) => doc.id === "product.workflow.context-format",
-    );
-    NodeAssert.ok(contextDoc);
-    NodeAssert.equal(contextDoc.path, "CONTEXT-FORMAT.md");
-    NodeAssert.match(contextDoc.content, /# CONTEXT\.md Format/);
-    NodeAssert.match(contextDoc.content, /CONTEXT-MAP\.md/);
-    NodeAssert.match(contextDoc.content, /If neither exists, create a root `CONTEXT\.md` lazily/);
+    // Domain-model maintenance (CONTEXT.md/ADR) is owned by the Planning
+    // Workflow: the product grill stays product-only and carries no format docs.
+    NodeAssert.equal(product.associatedDocs, undefined);
 
-    const adrDoc = product.associatedDocs?.find((doc) => doc.id === "product.workflow.adr-format");
-    NodeAssert.ok(adrDoc);
-    NodeAssert.equal(adrDoc.path, "ADR-FORMAT.md");
-    NodeAssert.match(adrDoc.content, /# ADR Format/);
+    const planningSpec = contracts.find(
+      (contract) => contract.id === WORKFLOW_PROMPT_IDS.planningSpecCodex,
+    );
+    NodeAssert.ok(planningSpec);
+    const specContextDoc = planningSpec.associatedDocs?.find(
+      (doc) => doc.id === "planning.spec.context-format",
+    );
+    NodeAssert.ok(specContextDoc);
+    NodeAssert.equal(specContextDoc.path, "CONTEXT-FORMAT.md");
+    NodeAssert.match(specContextDoc.content, /# CONTEXT\.md Format/);
+
+    const specAdrDoc = planningSpec.associatedDocs?.find(
+      (doc) => doc.id === "planning.spec.adr-format",
+    );
+    NodeAssert.ok(specAdrDoc);
+    NodeAssert.equal(specAdrDoc.path, "ADR-FORMAT.md");
+    NodeAssert.match(specAdrDoc.content, /# ADR Format/);
+
+    const renderedSpec = resolveWorkflowPromptText(WORKFLOW_PROMPT_IDS.planningSpecCodex);
+    NodeAssert.match(renderedSpec, /Domain model maintenance/);
+    NodeAssert.match(renderedSpec, /locked Product Workflow intent, there is no user to ask/);
 
     const renderedProduct = resolveWorkflowPromptText(WORKFLOW_PROMPT_IDS.productWorkflowCodex);
     NodeAssert.match(renderedProduct, /single human gate/);
@@ -368,8 +380,12 @@ describe("WorkflowPromptRegistry", () => {
       renderedProduct,
       /Do not grill implementation, architecture, or testing decisions/,
     );
-    NodeAssert.match(renderedProduct, /Create or update CONTEXT\.md lazily/);
-    NodeAssert.match(renderedProduct, /docs\/adr\/000N-slug\.md lazily/);
+    NodeAssert.doesNotMatch(renderedProduct, /Create or update CONTEXT\.md lazily/);
+    NodeAssert.doesNotMatch(renderedProduct, /docs\/adr\/000N-slug\.md lazily/);
+    NodeAssert.match(
+      renderedProduct,
+      /Do not create or edit CONTEXT\.md glossaries, CONTEXT-MAP\.md, or ADR files during the grill/,
+    );
     NodeAssert.match(renderedProduct, /"type": "product-intent-locked"/);
 
     NodeAssert.equal(resolveWorkflowPromptId({ interactionMode: "product-workflow" }), product.id);
