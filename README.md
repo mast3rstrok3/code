@@ -55,6 +55,7 @@ There's no public docs site yet, checkout the miscellaneous markdown files in [d
 
 - [Getting started](./docs/getting-started/quick-start.md)
 - [Architecture overview](./docs/architecture/overview.md)
+- [Remote access](./docs/user/remote-access.md)
 - [App Dev stack integration](./docs/integrations/app-dev-stacks.md)
 - [Copy/paste App Dev stack agent prompt](./docs/integrations/app-dev-stack-agent-prompt.md)
 - [Provider guides](./docs/providers/codex.md)
