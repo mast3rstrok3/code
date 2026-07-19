@@ -1,5 +1,6 @@
-import { ProviderInteractionMode, RuntimeMode } from "@t3tools/contracts";
-import { memo, type ReactNode } from "react";
+import { ProviderInteractionMode, RuntimeMode, WorkflowPreset } from "@t3tools/contracts";
+import { interactionModeForWorkflowPreset } from "@t3tools/shared/workflowPresets";
+import { memo, type ReactNode, useState } from "react";
 import { EllipsisIcon, ListTodoIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import {
@@ -11,22 +12,42 @@ import {
   MenuSeparator as MenuDivider,
   MenuTrigger,
 } from "../ui/menu";
+import {
+  ComposerModePickerContent,
+  resolveComposerPrimaryMode,
+  resolveWorkflowPresetForPicker,
+  type ComposerModePickerView,
+} from "./ComposerModePicker";
 
 export const CompactComposerControlsMenu = memo(function CompactComposerControlsMenu(props: {
   activePlan: boolean;
   interactionMode: ProviderInteractionMode;
+  workflowPreset: WorkflowPreset | null;
+  lastWorkflowPreset: WorkflowPreset | null;
   planSidebarLabel: string;
   planSidebarOpen: boolean;
   planningWorkflowAvailable: boolean;
   runtimeMode: RuntimeMode;
   showInteractionModeToggle: boolean;
   traitsMenuContent?: ReactNode;
-  onInteractionModeChange: (mode: ProviderInteractionMode) => void;
+  onInteractionModeChange: (mode: ProviderInteractionMode, preset: WorkflowPreset | null) => void;
   onTogglePlanSidebar: () => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
 }) {
+  const activeMode = resolveComposerPrimaryMode(props);
+  const displayedPreset = resolveWorkflowPresetForPicker(props);
+  const [open, setOpen] = useState(false);
+  const [modeView, setModeView] = useState<ComposerModePickerView>(
+    activeMode === "workflow" ? "workflow" : "primary",
+  );
   return (
-    <Menu>
+    <Menu
+      open={open}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (nextOpen) setModeView(activeMode === "workflow" ? "workflow" : "primary");
+      }}
+    >
       <MenuTrigger
         render={
           <Button
@@ -49,28 +70,22 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
         {props.showInteractionModeToggle ? (
           <>
             <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Mode</div>
-            <MenuRadioGroup
-              value={props.interactionMode}
-              onValueChange={(value) => {
-                if (!value || value === props.interactionMode) return;
-                props.onInteractionModeChange(value as ProviderInteractionMode);
+            <ComposerModePickerContent
+              activeMode={activeMode}
+              activePreset={activeMode === "workflow" ? displayedPreset : null}
+              onBack={() => setModeView("primary")}
+              onOpenWorkflow={() => setModeView("workflow")}
+              onSelectPrimary={(mode) => {
+                props.onInteractionModeChange(mode === "build" ? "default" : "plan", null);
+                setOpen(false);
               }}
-            >
-              <MenuRadioItem value="default">Build</MenuRadioItem>
-              <MenuRadioItem value="plan">Plan</MenuRadioItem>
-              <MenuRadioItem value="planning-workflow" disabled={!props.planningWorkflowAvailable}>
-                Planning Workflow
-              </MenuRadioItem>
-              <MenuRadioItem
-                value="implementation-workflow"
-                disabled={!props.planningWorkflowAvailable}
-              >
-                Implementation Workflow
-              </MenuRadioItem>
-              <MenuRadioItem value="product-workflow" disabled={!props.planningWorkflowAvailable}>
-                Product Workflow
-              </MenuRadioItem>
-            </MenuRadioGroup>
+              onSelectPreset={(preset) => {
+                props.onInteractionModeChange(interactionModeForWorkflowPreset(preset), preset);
+                setOpen(false);
+              }}
+              view={modeView}
+              workflowAvailable={props.planningWorkflowAvailable}
+            />
             <MenuDivider />
           </>
         ) : null}

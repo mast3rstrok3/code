@@ -1,7 +1,7 @@
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId, ThreadId, WorkflowId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { shouldShowOpenInPicker } from "./ChatHeader";
+import { shouldShowOpenInPicker, workflowProgressLabel } from "./ChatHeader";
 
 describe("shouldShowOpenInPicker", () => {
   const primaryEnvironmentId = EnvironmentId.make("environment-primary");
@@ -44,5 +44,77 @@ describe("shouldShowOpenInPicker", () => {
         primaryEnvironmentId,
       }),
     ).toBe(false);
+  });
+});
+
+describe("workflowProgressLabel", () => {
+  const workflowContext = {
+    workflowId: WorkflowId.make("workflow-1"),
+    rootThreadId: ThreadId.make("thread-root"),
+    ticketScope: [],
+  };
+
+  it("labels Product intent and every implementation child role", () => {
+    expect(
+      workflowProgressLabel({
+        interactionMode: "product-workflow",
+        workflowRole: null,
+        workflowContext,
+        planningWorkflow: null,
+        implementationRuns: [],
+      }),
+    ).toBe("Product · Intent");
+
+    const labels = [
+      ["implementation-worker", "Implementation · TDD"],
+      ["implementation-validator", "Implementation · Merge gate"],
+      ["implementation-qa-reviewer", "Implementation · Browser Dev Review"],
+      ["implementation-fixer", "Implementation · Fix"],
+      ["implementation-code-reviewer", "Implementation · Code review"],
+    ] as const;
+    for (const [workflowRole, expected] of labels) {
+      expect(
+        workflowProgressLabel({
+          interactionMode: "implementation-workflow",
+          workflowRole,
+          workflowContext,
+          planningWorkflow: null,
+          implementationRuns: [],
+        }),
+      ).toBe(expected);
+    }
+  });
+
+  it("shows full and targeted review progress out of ten", () => {
+    const baseWorkflow = {
+      stage: "ticket-review" as const,
+      createTicketsAvailable: false,
+      spec: null,
+      tickets: [],
+      reviewCycles: [],
+    };
+    for (const [mode, expected] of [
+      ["full", "Planning · Full ticket review · 3/10"],
+      ["targeted", "Planning · Ticket fixes · 3/10"],
+    ] as const) {
+      expect(
+        workflowProgressLabel({
+          interactionMode: "planning-workflow",
+          workflowRole: "planning-reviewer",
+          workflowContext,
+          planningWorkflow: {
+            ...baseWorkflow,
+            activeReview: {
+              cycleNumber: 3,
+              mode,
+              reviewerThreadId: ThreadId.make("thread-reviewer"),
+              targetPlanningTicketIds: [],
+              requestedAt: "2026-01-01T00:00:00.000Z",
+            },
+          },
+          implementationRuns: [],
+        }),
+      ).toBe(expected);
+    }
   });
 });

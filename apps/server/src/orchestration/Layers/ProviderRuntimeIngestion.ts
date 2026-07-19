@@ -30,6 +30,10 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import {
+  expectedIntentKindForWorkflowPreset,
+  isProductWorkflowRoot,
+} from "@t3tools/shared/workflowPresets";
 
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
@@ -1571,7 +1575,7 @@ const make = Effect.gen(function* () {
         }
 
         case "product-intent-classification-asked": {
-          if (thread.interactionMode !== "product-workflow" || thread.workflowRole !== null) {
+          if (!isProductWorkflowRoot(thread)) {
             yield* Effect.logWarning(
               "provider workflow product intent directive ignored for non-product root thread",
               {
@@ -1581,6 +1585,18 @@ const make = Effect.gen(function* () {
                 workflowRole: thread.workflowRole,
               },
             );
+            return;
+          }
+          if (expectedIntentKindForWorkflowPreset(thread.workflowPreset) !== null) {
+            yield* appendWorkflowDirectiveRejectedActivity({
+              event: input.event,
+              threadId: thread.id,
+              directiveType: input.directive.type,
+              summary: "Preset classification question rejected",
+              detail:
+                "The selected workflow preset already fixes the feature-or-fix classification.",
+              createdAt: input.createdAt,
+            });
             return;
           }
 
@@ -1609,7 +1625,7 @@ const make = Effect.gen(function* () {
         }
 
         case "product-intent-locked": {
-          if (thread.interactionMode !== "product-workflow" || thread.workflowRole !== null) {
+          if (!isProductWorkflowRoot(thread)) {
             yield* Effect.logWarning(
               "provider workflow product intent directive ignored for non-product root thread",
               {
@@ -1623,6 +1639,7 @@ const make = Effect.gen(function* () {
           }
 
           const intentKind = input.directive.intentKind;
+          const presetIntentKind = expectedIntentKindForWorkflowPreset(thread.workflowPreset);
           const detail = yield* resolveThreadDetail(thread.id);
           const askActivity = detail?.activities.findLast(
             (activity) => activity.kind === "product-intent-classification-asked",
@@ -1638,13 +1655,19 @@ const make = Effect.gen(function* () {
               false);
 
           const gateFailureDetail =
-            intentKind === null
-              ? 'product-intent-locked requires an explicit "intentKind" of "feature" or "fix" — the user\'s confirmed answer.'
-              : askActivity === undefined
-                ? "The fix-or-feature classification question was never asked (no product-intent-classification-asked directive was emitted)."
-                : !hasHumanReplyAfterAsk
-                  ? "The user has not replied since the fix-or-feature classification question was asked."
-                  : null;
+            presetIntentKind !== null
+              ? intentKind === null
+                ? `product-intent-locked requires intentKind "${presetIntentKind}" for the selected workflow preset.`
+                : intentKind !== presetIntentKind
+                  ? `product-intent-locked intentKind "${intentKind}" conflicts with the selected workflow preset, which requires "${presetIntentKind}".`
+                  : null
+              : intentKind === null
+                ? 'product-intent-locked requires an explicit "intentKind" of "feature" or "fix" — the user\'s confirmed answer.'
+                : askActivity === undefined
+                  ? "The fix-or-feature classification question was never asked (no product-intent-classification-asked directive was emitted)."
+                  : !hasHumanReplyAfterAsk
+                    ? "The user has not replied since the fix-or-feature classification question was asked."
+                    : null;
 
           if (gateFailureDetail !== null) {
             yield* appendWorkflowDirectiveRejectedActivity({
@@ -1673,7 +1696,10 @@ const make = Effect.gen(function* () {
                   kind: "product-workflow.needs-human-attention",
                   summary: "Product Workflow needs human attention",
                   payload: {
-                    reasonMarkdown: `Product intent lock was rejected ${priorRejections + 1} times without a confirmed fix-or-feature answer. Reply in this thread to answer the classification question.`,
+                    reasonMarkdown:
+                      presetIntentKind === null
+                        ? `Product intent lock was rejected ${priorRejections + 1} times without a confirmed fix-or-feature answer. Reply in this thread to answer the classification question.`
+                        : `Product intent lock was rejected ${priorRejections + 1} times because it did not match the authoritative ${thread.workflowPreset} preset.`,
                   },
                   turnId: null,
                   createdAt: input.createdAt,
@@ -1689,11 +1715,13 @@ const make = Effect.gen(function* () {
               message: {
                 messageId: yield* serverMessageId("product-intent-gate"),
                 role: "user",
-                text: [
-                  `Your product-intent-locked directive was rejected: ${gateFailureDetail}`,
-                  "Before locking intent you must (1) ask the user, in its own dedicated message, whether this request is a **feature** or a **fix**, recommending one, and end that message with exactly one `product-intent-classification-asked` JSON directive, then (2) stop and wait for the user's reply.",
-                  'Only after the user answers may you emit product-intent-locked with the user\'s confirmed "intentKind". Ask the classification question now.',
-                ].join("\n\n"),
+                text:
+                  presetIntentKind === null
+                    ? [
+                        `Your product-intent-locked directive was rejected: ${gateFailureDetail}`,
+                        "Before locking intent you must ask whether this is a feature or fix, emit product-intent-classification-asked, and wait for the user's reply.",
+                      ].join("\n\n")
+                    : `Your product-intent-locked directive was rejected: ${gateFailureDetail}\n\nDo not ask for classification. Emit the lock again with intentKind "${presetIntentKind}" after the user confirms the product intent is sufficiently locked.`,
                 attachments: [],
               },
               runtimeMode: thread.runtimeMode,
@@ -1773,6 +1801,7 @@ const make = Effect.gen(function* () {
               key: ticket.key,
               title: ticket.title,
               bodyMarkdown: ticket.bodyMarkdown,
+              plannedFileChanges: ticket.plannedFileChanges.map((change) => ({ ...change })),
               dependencyKeys: [...ticket.dependencyKeys],
             })),
             createdAt: input.createdAt,
@@ -1822,6 +1851,41 @@ const make = Effect.gen(function* () {
             threadId: thread.parentThreadId,
             reviewerThreadId: thread.id,
             reviewerMessageId: input.messageId,
+            cycleNumber: input.directive.cycleNumber,
+            mode: input.directive.mode,
+            targetPlanningTicketIds: [...input.directive.targetPlanningTicketIds],
+            ticketEdits: input.directive.ticketEdits.map((edit) => {
+              switch (edit.type) {
+                case "update":
+                  return {
+                    type: edit.type,
+                    ticketId: edit.ticketId,
+                    ...(edit.title === undefined ? {} : { title: edit.title }),
+                    ...(edit.bodyMarkdown === undefined ? {} : { bodyMarkdown: edit.bodyMarkdown }),
+                    ...(edit.plannedFileChanges === undefined
+                      ? {}
+                      : {
+                          plannedFileChanges: edit.plannedFileChanges.map((change) => ({
+                            ...change,
+                          })),
+                        }),
+                    ...(edit.dependencyKeys === undefined
+                      ? {}
+                      : { dependencyKeys: [...edit.dependencyKeys] }),
+                  };
+                case "create":
+                  return {
+                    ...edit,
+                    plannedFileChanges: edit.plannedFileChanges.map((change) => ({ ...change })),
+                    dependencyKeys: [...edit.dependencyKeys],
+                    replacesPlanningTicketIds: [...edit.replacesPlanningTicketIds],
+                  };
+                case "update-dependencies":
+                  return { ...edit, dependencyKeys: [...edit.dependencyKeys] };
+                case "delete":
+                  return edit;
+              }
+            }),
             verdictMarkdown,
             passed: input.directive.passed,
             failingPlanningTicketIds: [...input.directive.failingPlanningTicketIds],
@@ -1926,6 +1990,32 @@ const make = Effect.gen(function* () {
           return;
         }
 
+        case "implementation-fast-build-result": {
+          if (thread.workflowRole !== "fast-feature-implementer") {
+            yield* Effect.logWarning(
+              "provider workflow fast build result ignored for non-fast-feature thread",
+              { threadId: thread.id, workflowRole: thread.workflowRole },
+            );
+            return;
+          }
+          yield* orchestrationEngine.dispatch({
+            type: "thread.activity.append",
+            commandId: yield* providerCommandId(input.event, "workflow-fast-build-result"),
+            threadId: thread.id,
+            activity: {
+              id: EventId.make(yield* crypto.randomUUIDv4),
+              tone: input.directive.status === "succeeded" ? "info" : "error",
+              kind: "implementation-fast-build-result",
+              summary: `Fast feature build ${input.directive.status}`,
+              payload: input.directive,
+              turnId: null,
+              createdAt: input.createdAt,
+            },
+            createdAt: input.createdAt,
+          });
+          return;
+        }
+
         case "implementation-code-review-result": {
           if (thread.workflowRole !== "implementation-code-reviewer") {
             yield* Effect.logWarning(
@@ -1959,6 +2049,91 @@ const make = Effect.gen(function* () {
       }
     });
 
+  const consumePlanningReviewerFailure = Effect.fn(
+    "ProviderRuntimeIngestion.consumePlanningReviewerFailure",
+  )(function* (input: {
+    readonly event: ProviderRuntimeEvent;
+    readonly threadId: ThreadId;
+    readonly messageId: MessageId;
+    readonly detail: string;
+    readonly createdAt: string;
+  }) {
+    const thread = yield* resolveThreadDetail(input.threadId);
+    if (thread?.workflowRole !== "planning-reviewer" || thread.parentThreadId === null) return;
+    const parent = yield* resolveThreadDetail(thread.parentThreadId);
+    const activeReview = parent?.planningWorkflow?.activeReview;
+    if (activeReview === null || activeReview === undefined) return;
+    if (activeReview.reviewerThreadId !== thread.id) return;
+    const failureKey = `${input.threadId}:${activeReview.cycleNumber}:planning-review-runtime-failure`;
+    const existing = yield* Cache.getOption(processedWorkflowDirectiveKeys, failureKey);
+    if (Option.getOrElse(existing, () => false)) return;
+    yield* Cache.set(processedWorkflowDirectiveKeys, failureKey, true);
+    yield* orchestrationEngine.dispatch({
+      type: "thread.planning-reviewer-verdict.apply",
+      commandId: yield* providerCommandId(input.event, "workflow-planning-review-failure"),
+      threadId: thread.parentThreadId,
+      reviewerThreadId: thread.id,
+      reviewerMessageId: input.messageId,
+      cycleNumber: activeReview.cycleNumber,
+      mode: activeReview.mode,
+      targetPlanningTicketIds: [...activeReview.targetPlanningTicketIds],
+      ticketEdits: [],
+      runtimeFailure: true,
+      verdictMarkdown: input.detail,
+      passed: false,
+      failingPlanningTicketIds: [...activeReview.targetPlanningTicketIds],
+      dependencyFeedback: [],
+      perTicketFeedback: [],
+      createdAt: input.createdAt,
+    });
+  });
+
+  const consumeFastFeatureBuildFailure = Effect.fn(
+    "ProviderRuntimeIngestion.consumeFastFeatureBuildFailure",
+  )(function* (input: {
+    readonly event: ProviderRuntimeEvent;
+    readonly threadId: ThreadId;
+    readonly messageId: MessageId;
+    readonly detail: string;
+    readonly createdAt: string;
+  }) {
+    const thread = yield* resolveThreadDetail(input.threadId);
+    if (thread?.workflowRole !== "fast-feature-implementer") return;
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    const run = readModel.implementationRuns.find(
+      (candidate) =>
+        candidate.artifactSource === "proposed-plan" &&
+        candidate.orchestratorThreadId === thread.id &&
+        candidate.status !== "canceled",
+    );
+    if (!run || run.fastBuildResult?.status === "succeeded") return;
+    const failureKey = `${input.threadId}:${input.messageId}:fast-feature-build-failure`;
+    const existing = yield* Cache.getOption(processedWorkflowDirectiveKeys, failureKey);
+    if (Option.getOrElse(existing, () => false)) return;
+    yield* Cache.set(processedWorkflowDirectiveKeys, failureKey, true);
+    yield* orchestrationEngine.dispatch({
+      type: "thread.activity.append",
+      commandId: yield* providerCommandId(input.event, "workflow-fast-build-failure"),
+      threadId: thread.id,
+      activity: {
+        id: EventId.make(yield* crypto.randomUUIDv4),
+        tone: "error",
+        kind: "implementation-fast-build-result",
+        summary: "Fast feature Build result was missing or malformed",
+        payload: {
+          type: "implementation-fast-build-result",
+          runId: run.id,
+          status: "blocked",
+          validations: [],
+          notesMarkdown: input.detail,
+        },
+        turnId: null,
+        createdAt: input.createdAt,
+      },
+      createdAt: input.createdAt,
+    });
+  });
+
   const maybeProcessWorkflowDirective = (input: {
     event: ProviderRuntimeEvent;
     threadId: ThreadId;
@@ -1974,6 +2149,15 @@ const make = Effect.gen(function* () {
 
       const parseResult = parseWorkflowDirectiveFromMarkdown(input.markdown);
       if (parseResult.kind === "none") {
+        yield* consumePlanningReviewerFailure({
+          ...input,
+          detail: "Reviewer completed without the required planning-reviewer-verdict directive.",
+        });
+        yield* consumeFastFeatureBuildFailure({
+          ...input,
+          detail:
+            "Fast feature Build completed without the required implementation-fast-build-result directive.",
+        });
         return;
       }
       if (parseResult.kind === "error") {
@@ -1982,7 +2166,37 @@ const make = Effect.gen(function* () {
           messageId: input.messageId,
           detail: parseResult.message,
         });
+        yield* consumePlanningReviewerFailure({
+          ...input,
+          detail: `Reviewer directive was rejected: ${parseResult.message}`,
+        });
+        yield* consumeFastFeatureBuildFailure({
+          ...input,
+          detail: `Fast feature Build directive was rejected: ${parseResult.message}`,
+        });
         return;
+      }
+
+      if (thread.workflowRole === "fast-feature-implementer") {
+        const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+        const run = readModel.implementationRuns.find(
+          (candidate) =>
+            candidate.artifactSource === "proposed-plan" &&
+            candidate.orchestratorThreadId === thread.id &&
+            candidate.status !== "canceled",
+        );
+        if (
+          parseResult.directive.type !== "implementation-fast-build-result" ||
+          run === undefined ||
+          parseResult.directive.runId !== run.id
+        ) {
+          yield* consumeFastFeatureBuildFailure({
+            ...input,
+            detail:
+              "Fast feature Build completed with a directive for the wrong workflow stage or run.",
+          });
+          return;
+        }
       }
 
       const directiveKey = `${input.threadId}:${input.messageId}:${parseResult.directive.type}`;
@@ -1992,23 +2206,30 @@ const make = Effect.gen(function* () {
       }
       yield* Cache.set(processedWorkflowDirectiveKeys, directiveKey, true);
 
-      yield* dispatchWorkflowDirective({
-        event: input.event,
-        threadId: input.threadId,
-        messageId: input.messageId,
-        directive: parseResult.directive,
-        createdAt: input.createdAt,
-      }).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("provider workflow directive dispatch failed", {
-            threadId: input.threadId,
-            messageId: input.messageId,
-            directiveType: parseResult.directive.type,
-            detail: workflowDispatchErrorDetail(cause),
-            cause: Cause.pretty(cause),
-          }),
-        ),
+      const dispatchExit = yield* Effect.exit(
+        dispatchWorkflowDirective({
+          event: input.event,
+          threadId: input.threadId,
+          messageId: input.messageId,
+          directive: parseResult.directive,
+          createdAt: input.createdAt,
+        }),
       );
+      if (dispatchExit._tag === "Failure") {
+        const detail = workflowDispatchErrorDetail(dispatchExit.cause);
+        yield* Effect.logWarning("provider workflow directive dispatch failed", {
+          threadId: input.threadId,
+          messageId: input.messageId,
+          directiveType: parseResult.directive.type,
+          detail,
+          cause: Cause.pretty(dispatchExit.cause),
+        });
+        yield* consumePlanningReviewerFailure({
+          ...input,
+          detail: `Reviewer directive was rejected: ${detail}`,
+        });
+        return;
+      }
 
       const provenance = thread.workflowSubagentBatchProvenance;
       if (provenance == null) {

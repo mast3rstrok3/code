@@ -14,11 +14,20 @@ import {
   ProjectionThreadRepository,
   type ProjectionThreadRepositoryShape,
 } from "../Services/ProjectionThreads.ts";
-import { DEFAULT_WORKSPACE_USER_ID, ModelSelection } from "@t3tools/contracts";
+import {
+  DEFAULT_WORKSPACE_USER_ID,
+  ModelSelection,
+  ThreadWorkflowContext,
+  OrchestrationPlanningActiveReviewRequest,
+} from "@t3tools/contracts";
 
 const ProjectionThreadDbRow = ProjectionThread.mapFields(
   Struct.assign({
     modelSelection: Schema.fromJsonString(ModelSelection),
+    workflowContext: Schema.NullOr(Schema.fromJsonString(ThreadWorkflowContext)),
+    planningActiveReview: Schema.NullOr(
+      Schema.fromJsonString(OrchestrationPlanningActiveReviewRequest),
+    ),
   }),
 );
 type ProjectionThreadDbRow = typeof ProjectionThreadDbRow.Type;
@@ -36,12 +45,16 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           owner_user_id,
           parent_thread_id,
           workflow_role,
+          workflow_id,
+          workflow_root_thread_id,
+          workflow_ticket_scope_json,
           workflow_subagent_batch_id,
           workflow_subagent_child_index,
           title,
           model_selection_json,
           runtime_mode,
           interaction_mode,
+          workflow_preset,
           branch,
           worktree_path,
           latest_turn_id,
@@ -53,6 +66,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           pending_user_input_count,
           has_actionable_proposed_plan,
           planning_workflow_stage,
+          planning_active_review_json,
           deleted_at
         )
         VALUES (
@@ -61,12 +75,16 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.ownerUserId},
           ${row.parentThreadId},
           ${row.workflowRole},
+          ${row.workflowContext?.workflowId ?? null},
+          ${row.workflowContext?.rootThreadId ?? null},
+          ${JSON.stringify(row.workflowContext?.ticketScope ?? [])},
           ${row.workflowSubagentBatchId ?? null},
           ${row.workflowSubagentChildIndex ?? null},
           ${row.title},
           ${JSON.stringify(row.modelSelection)},
           ${row.runtimeMode},
           ${row.interactionMode},
+          ${row.workflowPreset ?? null},
           ${row.branch},
           ${row.worktreePath},
           ${row.latestTurnId},
@@ -78,6 +96,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.pendingUserInputCount},
           ${row.hasActionableProposedPlan},
           ${row.planningWorkflowStage},
+          ${row.planningActiveReview == null ? null : JSON.stringify(row.planningActiveReview)},
           ${row.deletedAt}
         )
         ON CONFLICT (thread_id)
@@ -86,12 +105,16 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           owner_user_id = excluded.owner_user_id,
           parent_thread_id = excluded.parent_thread_id,
           workflow_role = excluded.workflow_role,
+          workflow_id = excluded.workflow_id,
+          workflow_root_thread_id = excluded.workflow_root_thread_id,
+          workflow_ticket_scope_json = excluded.workflow_ticket_scope_json,
           workflow_subagent_batch_id = excluded.workflow_subagent_batch_id,
           workflow_subagent_child_index = excluded.workflow_subagent_child_index,
           title = excluded.title,
           model_selection_json = excluded.model_selection_json,
           runtime_mode = excluded.runtime_mode,
           interaction_mode = excluded.interaction_mode,
+          workflow_preset = excluded.workflow_preset,
           branch = excluded.branch,
           worktree_path = excluded.worktree_path,
           latest_turn_id = excluded.latest_turn_id,
@@ -103,6 +126,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           pending_user_input_count = excluded.pending_user_input_count,
           has_actionable_proposed_plan = excluded.has_actionable_proposed_plan,
           planning_workflow_stage = excluded.planning_workflow_stage,
+          planning_active_review_json = excluded.planning_active_review_json,
           deleted_at = excluded.deleted_at
       `,
   });
@@ -118,12 +142,21 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           COALESCE(NULLIF(trim(owner_user_id), ''), ${DEFAULT_WORKSPACE_USER_ID}) AS "ownerUserId",
           parent_thread_id AS "parentThreadId",
           workflow_role AS "workflowRole",
+          CASE
+            WHEN workflow_id IS NULL OR workflow_root_thread_id IS NULL THEN NULL
+            ELSE json_object(
+              'workflowId', workflow_id,
+              'rootThreadId', workflow_root_thread_id,
+              'ticketScope', json(workflow_ticket_scope_json)
+            )
+          END AS "workflowContext",
           workflow_subagent_batch_id AS "workflowSubagentBatchId",
           workflow_subagent_child_index AS "workflowSubagentChildIndex",
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
+          workflow_preset AS "workflowPreset",
           branch,
           worktree_path AS "worktreePath",
           latest_turn_id AS "latestTurnId",
@@ -135,6 +168,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
           planning_workflow_stage AS "planningWorkflowStage",
+          planning_active_review_json AS "planningActiveReview",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE thread_id = ${threadId}
@@ -152,12 +186,21 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           COALESCE(NULLIF(trim(owner_user_id), ''), ${DEFAULT_WORKSPACE_USER_ID}) AS "ownerUserId",
           parent_thread_id AS "parentThreadId",
           workflow_role AS "workflowRole",
+          CASE
+            WHEN workflow_id IS NULL OR workflow_root_thread_id IS NULL THEN NULL
+            ELSE json_object(
+              'workflowId', workflow_id,
+              'rootThreadId', workflow_root_thread_id,
+              'ticketScope', json(workflow_ticket_scope_json)
+            )
+          END AS "workflowContext",
           workflow_subagent_batch_id AS "workflowSubagentBatchId",
           workflow_subagent_child_index AS "workflowSubagentChildIndex",
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
+          workflow_preset AS "workflowPreset",
           branch,
           worktree_path AS "worktreePath",
           latest_turn_id AS "latestTurnId",
@@ -169,6 +212,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
           planning_workflow_stage AS "planningWorkflowStage",
+          planning_active_review_json AS "planningActiveReview",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE project_id = ${projectId}
@@ -185,10 +229,39 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
       `,
   });
 
-  const upsert: ProjectionThreadRepositoryShape["upsert"] = (row) =>
-    upsertProjectionThreadRow(row).pipe(
+  const upsert: ProjectionThreadRepositoryShape["upsert"] = Effect.fn(
+    "ProjectionThreadRepository.upsert",
+  )(function* (row) {
+    yield* upsertProjectionThreadRow(row).pipe(
       Effect.mapError(toPersistenceSqlError("ProjectionThreadRepository.upsert:query")),
     );
+    yield* sql`DELETE FROM projection_thread_workflow_membership WHERE thread_id = ${row.threadId}`.pipe(
+      Effect.mapError(toPersistenceSqlError("ProjectionThreadRepository.upsert:deleteMembership")),
+    );
+    yield* sql`DELETE FROM projection_thread_ticket_scope WHERE thread_id = ${row.threadId}`.pipe(
+      Effect.mapError(toPersistenceSqlError("ProjectionThreadRepository.upsert:deleteTicketScope")),
+    );
+    if (row.workflowContext == null) return;
+    yield* sql`
+      INSERT INTO projection_thread_workflow_membership (
+        thread_id, project_id, workflow_id, root_thread_id, created_at, updated_at
+      ) VALUES (
+        ${row.threadId}, ${row.projectId}, ${row.workflowContext.workflowId},
+        ${row.workflowContext.rootThreadId}, ${row.createdAt}, ${row.updatedAt}
+      )
+    `.pipe(Effect.mapError(toPersistenceSqlError("ProjectionThreadRepository.upsert:membership")));
+    yield* Effect.forEach(
+      row.workflowContext.ticketScope,
+      (ticketId) =>
+        sql`
+          INSERT OR IGNORE INTO projection_thread_ticket_scope(thread_id, ticket_id)
+          VALUES (${row.threadId}, ${ticketId})
+        `.pipe(
+          Effect.mapError(toPersistenceSqlError("ProjectionThreadRepository.upsert:ticketScope")),
+        ),
+      { concurrency: 1, discard: true },
+    );
+  });
 
   const getById: ProjectionThreadRepositoryShape["getById"] = (input) =>
     getProjectionThreadRow(input).pipe(
@@ -200,10 +273,19 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
       Effect.mapError(toPersistenceSqlError("ProjectionThreadRepository.listByProjectId:query")),
     );
 
-  const deleteById: ProjectionThreadRepositoryShape["deleteById"] = (input) =>
-    deleteProjectionThreadRow(input).pipe(
+  const deleteById: ProjectionThreadRepositoryShape["deleteById"] = Effect.fn(
+    "ProjectionThreadRepository.deleteById",
+  )(function* (input) {
+    yield* sql`DELETE FROM projection_thread_ticket_scope WHERE thread_id = ${input.threadId}`.pipe(
+      Effect.mapError(toPersistenceSqlError("ProjectionThreadRepository.deleteById:ticketScope")),
+    );
+    yield* sql`DELETE FROM projection_thread_workflow_membership WHERE thread_id = ${input.threadId}`.pipe(
+      Effect.mapError(toPersistenceSqlError("ProjectionThreadRepository.deleteById:membership")),
+    );
+    yield* deleteProjectionThreadRow(input).pipe(
       Effect.mapError(toPersistenceSqlError("ProjectionThreadRepository.deleteById:query")),
     );
+  });
 
   return {
     upsert,

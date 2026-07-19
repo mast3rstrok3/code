@@ -288,6 +288,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           parentThreadId: null,
           workflowRole: null,
+          workflowContext: null,
           workflowSubagentBatchProvenance: null,
           title: "Thread 1",
           modelSelection: {
@@ -296,6 +297,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           },
           interactionMode: "default",
           runtimeMode: "full-access",
+          workflowPreset: null,
           branch: null,
           worktreePath: null,
           latestTurn: {
@@ -405,6 +407,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           ownerUserId: DEFAULT_WORKSPACE_USER_ID,
           parentThreadId: null,
           workflowRole: null,
+          workflowContext: null,
           workflowSubagentBatchProvenance: null,
           title: "Thread 1",
           modelSelection: {
@@ -413,6 +416,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           },
           interactionMode: "default",
           runtimeMode: "full-access",
+          workflowPreset: null,
           branch: null,
           worktreePath: null,
           latestTurn: {

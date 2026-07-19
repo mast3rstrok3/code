@@ -22,6 +22,7 @@ import {
   ProviderDriverKind,
   RuntimeMode,
   TerminalOpenInput,
+  type WorkflowPreset,
 } from "@t3tools/contracts";
 import {
   connectionStatusText,
@@ -43,6 +44,7 @@ import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/proje
 import { truncate } from "@t3tools/shared/String";
 import { nextTerminalId, resolveTerminalSessionLabel } from "@t3tools/shared/terminalLabels";
 import { resolveImplementationBranchIdentity } from "@t3tools/shared/orchestrationImplementation";
+import { isProductWorkflowRoot, workflowPromptIdForPreset } from "@t3tools/shared/workflowPresets";
 import { Debouncer } from "@tanstack/react-pacer";
 import { useAtomValue } from "@effect/atom-react";
 import {
@@ -207,6 +209,7 @@ import {
   useProjects,
   useRequestPlanningTicketReviewCommand,
   useRetryImplementationChangeRequestCommand,
+  useRetryImplementationRunCommand,
   useThread,
   useThreadPlanningWorkflow,
   useThreadProposedPlans,
@@ -257,6 +260,7 @@ import { useComposerHandleContext } from "../composerHandleContext";
 import { sanitizeThreadErrorMessage } from "~/rpc/transportError";
 import { RightPanelSheet } from "./RightPanelSheet";
 import { previewEnvironment } from "../state/preview";
+import { reviewEnvironment } from "../state/review";
 import { useAtomCommand } from "../state/use-atom-command";
 import { Button } from "./ui/button";
 import {
@@ -1029,7 +1033,7 @@ function ChatViewContent(props: ChatViewProps) {
   const setThreadRuntimeMode = useAtomCommand(threadEnvironment.setRuntimeMode, {
     reportFailure: false,
   });
-  const setThreadInteractionMode = useAtomCommand(threadEnvironment.setInteractionMode, {
+  const setThreadComposerMode = useAtomCommand(threadEnvironment.setComposerMode, {
     reportFailure: false,
   });
   const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
@@ -1040,6 +1044,7 @@ function ChatViewContent(props: ChatViewProps) {
   const requestPlanningTicketReview = useRequestPlanningTicketReviewCommand();
   const launchImplementationRun = useLaunchImplementationRunCommand();
   const retryImplementationChangeRequest = useRetryImplementationChangeRequestCommand();
+  const retryImplementationRun = useRetryImplementationRunCommand();
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, {
     reportFailure: false,
   });
@@ -1089,6 +1094,12 @@ function ChatViewContent(props: ChatViewProps) {
   const composerInteractionMode = useComposerDraftStore(
     (store) => store.getComposerDraft(composerDraftTarget)?.interactionMode ?? null,
   );
+  const composerWorkflowPreset = useComposerDraftStore(
+    (store) => store.getComposerDraft(composerDraftTarget)?.workflowPreset ?? null,
+  );
+  const composerLastWorkflowPreset = useComposerDraftStore(
+    (store) => store.getComposerDraft(composerDraftTarget)?.lastWorkflowPreset ?? null,
+  );
   const composerActiveProvider = useComposerDraftStore(
     (store) => store.getComposerDraft(composerDraftTarget)?.activeProvider ?? null,
   );
@@ -1109,6 +1120,7 @@ function ChatViewContent(props: ChatViewProps) {
   const setComposerDraftInteractionMode = useComposerDraftStore(
     (store) => store.setInteractionMode,
   );
+  const setComposerDraftComposerMode = useComposerDraftStore((store) => store.setComposerMode);
   const clearComposerDraftContent = useComposerDraftStore((store) => store.clearComposerContent);
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
   const getDraftSessionByLogicalProjectKey = useComposerDraftStore(
@@ -1280,6 +1292,34 @@ function ChatViewContent(props: ChatViewProps) {
   const runtimeMode = composerRuntimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
   const interactionMode =
     composerInteractionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE;
+  const workflowPreset =
+    composerInteractionMode !== null
+      ? composerWorkflowPreset
+      : (activeThread?.workflowPreset ?? null);
+  useEffect(() => {
+    if (
+      !isServerThread ||
+      !activeThread ||
+      activeThread.workflowPreset === null ||
+      activeThread.workflowPreset === undefined ||
+      composerInteractionMode === null ||
+      composerWorkflowPreset !== activeThread.workflowPreset ||
+      composerInteractionMode === activeThread.interactionMode
+    ) {
+      return;
+    }
+    // Product workflows intentionally change the provider-facing mode while
+    // keeping their Workflow selection. Follow that internal transition
+    // without clearing or replacing the authoritative preset.
+    setComposerDraftInteractionMode(composerDraftTarget, activeThread.interactionMode);
+  }, [
+    activeThread,
+    composerDraftTarget,
+    composerInteractionMode,
+    composerWorkflowPreset,
+    isServerThread,
+    setComposerDraftInteractionMode,
+  ]);
   const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
   const canCheckoutPullRequestIntoThread = isLocalDraftThread;
   const activeThreadId = activeThread?.id ?? null;
@@ -1402,6 +1442,22 @@ function ChatViewContent(props: ChatViewProps) {
   }, [activePreviewState.sessions, activeThreadRef]);
 
   const planSidebarOpen = activeRightPanelKind === "plan";
+  const [focusedPlanningTicketTarget, setFocusedPlanningTicketTarget] = useState<{
+    readonly threadKey: string;
+    readonly ticketId: string | null;
+  } | null>(null);
+  const focusedPlanningTicketId =
+    focusedPlanningTicketTarget?.threadKey === activeThreadKey
+      ? focusedPlanningTicketTarget.ticketId
+      : null;
+  const openPlanArtifact = useCallback(
+    (ticketId: string | null) => {
+      if (!activeThreadRef || activeThreadKey === null) return;
+      setFocusedPlanningTicketTarget({ threadKey: activeThreadKey, ticketId });
+      useRightPanelStore.getState().open(activeThreadRef, "plan");
+    },
+    [activeThreadKey, activeThreadRef],
+  );
 
   const existingOpenTerminalThreadKeys = useMemo(() => {
     const existingThreadKeys = new Set<string>([...serverThreadKeys, ...draftThreadKeys]);
@@ -1476,9 +1532,68 @@ function ChatViewContent(props: ChatViewProps) {
     productWorkflowPlanningThreadRef,
   );
   const displayedPlanningWorkflow =
-    activeThread?.interactionMode === "product-workflow" && activeThread.workflowRole === null
+    activeThread && isProductWorkflowRoot(activeThread)
       ? productWorkflowPlanningWorkflow
       : activePlanningWorkflow;
+  const workflowArtifactsQuery = useEnvironmentQuery(
+    isServerThread &&
+      activeThread?.workflowContext != null &&
+      activeProject !== null &&
+      (activeRightPanelKind === "plan" || activeRightPanelKind === "review")
+      ? reviewEnvironment.workflowArtifacts({
+          environmentId: activeThread.environmentId,
+          input: { projectId: activeProject.id, threadId: activeThread.id },
+        })
+      : null,
+  );
+  const displayedWorkflowArtifacts = workflowArtifactsQuery.data;
+  const displayedPlanningWorkflowWithCanonicalArtifacts = useMemo(
+    () =>
+      displayedPlanningWorkflow === null || displayedPlanningWorkflow === undefined
+        ? displayedPlanningWorkflow
+        : displayedWorkflowArtifacts === null
+          ? displayedPlanningWorkflow
+          : {
+              ...displayedPlanningWorkflow,
+              spec: displayedWorkflowArtifacts.spec,
+              tickets: displayedWorkflowArtifacts.tickets,
+              reviewCycles: displayedWorkflowArtifacts.reviewCycles,
+            },
+    [displayedPlanningWorkflow, displayedWorkflowArtifacts],
+  );
+  const displayedImplementationRuns = useMemo(() => {
+    const specId =
+      displayedWorkflowArtifacts?.spec?.id ?? displayedPlanningWorkflow?.spec?.id ?? null;
+    return activeImplementationRuns.filter(
+      (run) =>
+        (specId !== null && run.specId === specId) ||
+        run.sourceProposedPlan?.threadId === activeThread?.id,
+    );
+  }, [
+    activeImplementationRuns,
+    activeThread?.id,
+    displayedPlanningWorkflow?.spec?.id,
+    displayedWorkflowArtifacts,
+  ]);
+  const workflowArtifactProjectionVersion = useMemo(
+    () =>
+      [
+        displayedPlanningWorkflow?.stage,
+        displayedPlanningWorkflow?.spec?.updatedAt,
+        ...(displayedPlanningWorkflow?.tickets.map((ticket) => ticket.updatedAt) ?? []),
+        ...(displayedPlanningWorkflow?.reviewCycles.map((cycle) => cycle.createdAt) ?? []),
+        ...activeImplementationRuns.map((run) => `${run.updatedAt}:${run.devReviewIds.join(",")}`),
+        ...(activeThread?.devReviews.map((review) => review.updatedAt) ?? []),
+      ].join("|"),
+    [activeImplementationRuns, activeThread?.devReviews, displayedPlanningWorkflow],
+  );
+  useEffect(() => {
+    if (workflowArtifactsQuery.data === null) return;
+    workflowArtifactsQuery.refresh();
+    // The version is intentionally the invalidation trigger; refresh is a
+    // stable query action and does not belong in this dependency list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workflowArtifactProjectionVersion]);
   const activeEnvironmentShell = useEnvironmentQuery(
     activeThread ? environmentShell.stateAtom(activeThread.environmentId) : null,
   );
@@ -1660,6 +1775,7 @@ function ChatViewContent(props: ChatViewProps) {
           ownerUserId: defaultNewThreadOwnerUserId,
           runtimeMode: activeDraftSession.runtimeMode,
           interactionMode: activeDraftSession.interactionMode,
+          workflowPreset: activeDraftSession.workflowPreset,
           ...input,
         });
         return activeDraftSession.threadId;
@@ -1673,6 +1789,7 @@ function ChatViewContent(props: ChatViewProps) {
         ownerUserId: defaultNewThreadOwnerUserId,
         runtimeMode: DEFAULT_RUNTIME_MODE,
         interactionMode: DEFAULT_INTERACTION_MODE,
+        workflowPreset: null,
         ...input,
       });
       await navigate({
@@ -2337,6 +2454,19 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [activeThread, retryImplementationChangeRequest],
   );
+  const handleRetryImplementationRun = useCallback(
+    (runId: string) => {
+      if (!activeThread) return;
+      void retryImplementationRun({
+        environmentId: activeThread.environmentId,
+        input: {
+          threadId: activeThread.id,
+          runId,
+        },
+      });
+    },
+    [activeThread, retryImplementationRun],
+  );
   const activeTerminalLaunchContext =
     terminalUiLaunchContext?.threadId === activeThreadId ? terminalUiLaunchContext : null;
   // Default true while loading to avoid toolbar flicker.
@@ -2915,27 +3045,31 @@ function ChatViewContent(props: ChatViewProps) {
     ],
   );
 
-  const handleInteractionModeChange = useCallback(
-    (mode: ProviderInteractionMode) => {
-      if (mode === interactionMode) return;
-      setComposerDraftInteractionMode(composerDraftTarget, mode);
+  const handleComposerModeChange = useCallback(
+    (mode: ProviderInteractionMode, preset: WorkflowPreset | null) => {
+      if (mode === interactionMode && preset === workflowPreset) return;
+      setComposerDraftComposerMode(composerDraftTarget, mode, preset);
       if (isLocalDraftThread) {
-        setDraftThreadContext(composerDraftTarget, { interactionMode: mode });
+        setDraftThreadContext(composerDraftTarget, {
+          interactionMode: mode,
+          workflowPreset: preset,
+        });
       }
       scheduleComposerFocus();
     },
     [
+      composerDraftTarget,
       interactionMode,
       isLocalDraftThread,
       scheduleComposerFocus,
-      composerDraftTarget,
-      setComposerDraftInteractionMode,
+      setComposerDraftComposerMode,
       setDraftThreadContext,
+      workflowPreset,
     ],
   );
   const toggleInteractionMode = useCallback(() => {
-    handleInteractionModeChange(interactionMode === "plan" ? "default" : "plan");
-  }, [handleInteractionModeChange, interactionMode]);
+    handleComposerModeChange(interactionMode === "plan" ? "default" : "plan", null);
+  }, [handleComposerModeChange, interactionMode]);
   const dismissPlanSidebarForCurrentTurn = useCallback(() => {
     planSidebarDismissedForTurnRef.current =
       activePlan?.turnId ?? sidebarProposedPlan?.turnId ?? "__dismissed__";
@@ -3435,6 +3569,7 @@ function ChatViewContent(props: ChatViewProps) {
       modelSelection?: ModelSelection;
       runtimeMode: RuntimeMode;
       interactionMode: ProviderInteractionMode;
+      workflowPreset: WorkflowPreset | null;
     }): Promise<AtomCommandResult<void, unknown>> => {
       if (!serverThread) {
         return AsyncResult.success(undefined);
@@ -3480,13 +3615,17 @@ function ChatViewContent(props: ChatViewProps) {
         }
       }
 
-      if (input.interactionMode !== serverThread.interactionMode) {
+      if (
+        input.interactionMode !== serverThread.interactionMode ||
+        input.workflowPreset !== (serverThread.workflowPreset ?? null)
+      ) {
         result = mapAtomCommandResult(
-          await setThreadInteractionMode({
+          await setThreadComposerMode({
             environmentId,
             input: {
               threadId: input.threadId,
               interactionMode: input.interactionMode,
+              workflowPreset: input.workflowPreset,
               createdAt: input.createdAt,
             },
           }),
@@ -3498,7 +3637,7 @@ function ChatViewContent(props: ChatViewProps) {
     [
       environmentId,
       serverThread,
-      setThreadInteractionMode,
+      setThreadComposerMode,
       setThreadRuntimeMode,
       updateThreadMetadata,
     ],
@@ -4296,7 +4435,7 @@ function ChatViewContent(props: ChatViewProps) {
         ? parseStandaloneComposerSlashCommand(trimmed)
         : null;
     if (standaloneSlashCommand) {
-      handleInteractionModeChange(standaloneSlashCommand);
+      handleComposerModeChange(standaloneSlashCommand, null);
       promptRef.current = "";
       clearComposerDraftContent(composerDraftTarget);
       composerRef.current?.resetCursorState();
@@ -4474,6 +4613,7 @@ function ChatViewContent(props: ChatViewProps) {
         ...(ctxSelectedModel ? { modelSelection: ctxSelectedModelSelection } : {}),
         runtimeMode,
         interactionMode,
+        workflowPreset,
       });
       if (settingsResult._tag === "Failure") {
         failure = settingsResult;
@@ -4499,6 +4639,7 @@ function ChatViewContent(props: ChatViewProps) {
                       modelSelection: threadCreateModelSelection,
                       runtimeMode,
                       interactionMode,
+                      workflowPreset,
                       branch: activeThreadBranch,
                       worktreePath: activeThread.worktreePath,
                       createdAt: activeThread.createdAt,
@@ -4533,6 +4674,9 @@ function ChatViewContent(props: ChatViewProps) {
           titleSeed: title,
           runtimeMode,
           interactionMode,
+          ...(interactionMode === "product-workflow" && workflowPromptIdForPreset(workflowPreset)
+            ? { workflowPromptId: workflowPromptIdForPreset(workflowPreset) }
+            : {}),
           ...(bootstrap ? { bootstrap } : {}),
           createdAt: messageCreatedAt,
         },
@@ -4853,6 +4997,7 @@ function ChatViewContent(props: ChatViewProps) {
         modelSelection: ctxSelectedModelSelection,
         runtimeMode,
         interactionMode: nextInteractionMode,
+        workflowPreset,
       });
       let failure: AtomCommandResult<unknown, unknown> | null =
         settingsResult._tag === "Failure" ? settingsResult : null;
@@ -5335,13 +5480,16 @@ function ChatViewContent(props: ChatViewProps) {
           launchInFlight={devReviewLaunchInFlight}
           autoContext={browserDevReviewAutoContext}
           onLaunch={launchBrowserDevReview}
+          onOpenPlanArtifact={openPlanArtifact}
+          workflowArtifacts={displayedWorkflowArtifacts}
         />
       </Suspense>
     ) : activeRightPanelSurface?.kind === "plan" ? (
       <PlanSidebar
+        key={activeThreadKey}
         activePlan={activePlan}
         activeProposedPlan={sidebarProposedPlan}
-        planningWorkflow={displayedPlanningWorkflow}
+        planningWorkflow={displayedPlanningWorkflowWithCanonicalArtifacts}
         workflowThreadShells={activeWorkflowThreadShells}
         implementationRuns={activeImplementationRuns}
         label={planSidebarLabel}
@@ -5353,10 +5501,12 @@ function ChatViewContent(props: ChatViewProps) {
         mode="embedded"
         onOpenThread={openWorkflowThread}
         onLoadSpecBundle={handleLoadPlanningSpecBundle}
-        automationOwned={activeThread?.interactionMode === "product-workflow"}
+        automationOwned={activeThread ? isProductWorkflowRoot(activeThread) : false}
         onRequestTicketReview={handleRequestPlanningTicketReview}
         onLaunchImplementationRun={handleLaunchImplementationRun}
         onRetryImplementationChangeRequest={handleRetryImplementationChangeRequest}
+        onRetryImplementationRun={handleRetryImplementationRun}
+        focusedTicketId={focusedPlanningTicketId}
       />
     ) : activeRightPanelSurface?.kind === "app-dev-stack" &&
       activeProject &&
@@ -5436,6 +5586,14 @@ function ChatViewContent(props: ChatViewProps) {
             activeThreadId={activeThread.id}
             {...(routeKind === "draft" && draftId ? { draftId } : {})}
             activeThreadTitle={activeThread.title}
+            workflowProgress={{
+              interactionMode: activeThread.interactionMode,
+              workflowPreset: activeThread.workflowPreset ?? null,
+              workflowRole: activeThread.workflowRole,
+              workflowContext: activeThread.workflowContext ?? null,
+              planningWorkflow: displayedPlanningWorkflow,
+              implementationRuns: displayedImplementationRuns,
+            }}
             activeThreadOwnerUserId={activeThread.ownerUserId}
             workspaceUsers={settings.workspaceUsers}
             activeProjectName={activeProject?.title}
@@ -5575,6 +5733,8 @@ function ChatViewContent(props: ChatViewProps) {
                       planSidebarOpen={planSidebarOpen}
                       runtimeMode={runtimeMode}
                       interactionMode={interactionMode}
+                      workflowPreset={workflowPreset}
+                      lastWorkflowPreset={composerLastWorkflowPreset}
                       lockedProvider={lockedProvider}
                       providerStatuses={providerStatuses as ServerProvider[]}
                       activeProjectDefaultModelSelection={activeProject?.defaultModelSelection}
@@ -5605,7 +5765,7 @@ function ChatViewContent(props: ChatViewProps) {
                       getModelDisabledReason={getModelDisabledReason}
                       toggleInteractionMode={toggleInteractionMode}
                       handleRuntimeModeChange={handleRuntimeModeChange}
-                      handleInteractionModeChange={handleInteractionModeChange}
+                      handleInteractionModeChange={handleComposerModeChange}
                       togglePlanSidebar={togglePlanSidebar}
                       focusComposer={focusComposer}
                       scheduleComposerFocus={scheduleComposerFocus}

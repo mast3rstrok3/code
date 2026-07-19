@@ -639,6 +639,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ownerUserId: event.payload.ownerUserId,
             parentThreadId: event.payload.parentThreadId ?? null,
             workflowRole: event.payload.workflowRole ?? null,
+            workflowContext: event.payload.workflowContext ?? null,
             workflowSubagentBatchId: event.payload.workflowSubagentBatchProvenance?.batchId ?? null,
             workflowSubagentChildIndex:
               event.payload.workflowSubagentBatchProvenance?.childIndex ?? null,
@@ -646,6 +647,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             modelSelection: event.payload.modelSelection,
             runtimeMode: event.payload.runtimeMode,
             interactionMode: event.payload.interactionMode,
+            workflowPreset: event.payload.workflowPreset ?? null,
             branch: event.payload.branch,
             worktreePath: event.payload.worktreePath,
             latestTurnId: null,
@@ -657,6 +659,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             pendingUserInputCount: 0,
             hasActionableProposedPlan: 0,
             planningWorkflowStage: null,
+            planningActiveReview: null,
             deletedAt: null,
           });
           return;
@@ -746,6 +749,20 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
         }
 
+        case "thread.composer-mode-set": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) return;
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            interactionMode: event.payload.interactionMode,
+            workflowPreset: event.payload.workflowPreset,
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
         case "thread.planning-stage-started": {
           const existingRow = yield* projectionThreadRepository.getById({
             threadId: event.payload.threadId,
@@ -787,6 +804,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             planningWorkflowStage: event.payload.stage ?? existingRow.value.planningWorkflowStage,
+            planningActiveReview:
+              event.type === "thread.planning-tickets-revised"
+                ? null
+                : (existingRow.value.planningActiveReview ?? null),
             updatedAt:
               event.type === "thread.planning-tickets-revised"
                 ? event.payload.revisedAt
@@ -805,6 +826,13 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             planningWorkflowStage: event.payload.stage,
+            planningActiveReview: {
+              cycleNumber: event.payload.cycleNumber,
+              mode: event.payload.mode,
+              reviewerThreadId: event.payload.reviewerThreadId,
+              targetPlanningTicketIds: event.payload.targetPlanningTicketIds,
+              requestedAt: event.payload.requestedAt,
+            },
             updatedAt: event.payload.requestedAt,
           });
           return;
@@ -835,6 +863,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             planningWorkflowStage: event.payload.stage,
+            planningActiveReview: null,
             updatedAt: event.payload.updatedAt,
           });
           return;
@@ -1246,24 +1275,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
 
         case "thread.planning-spec-bundle-loaded":
-          if (event.payload.bundle === undefined) {
-            return;
-          }
-          yield* projectionThreadSpecRepository.upsert({
-            specId: event.payload.bundle.spec.id,
-            threadId: event.payload.threadId,
-            title: event.payload.bundle.spec.title,
-            summaryMarkdown: event.payload.bundle.spec.summaryMarkdown,
-            tenantId: event.payload.bundle.spec.tenantId,
-            teamId: event.payload.bundle.spec.teamId,
-            sourceThreadId: event.payload.bundle.spec.sourceThreadId,
-            sourceMessageIds: event.payload.bundle.spec.sourceMessageIds,
-            createdBy: event.payload.bundle.spec.createdBy,
-            workflowId: event.payload.bundle.spec.workflowId,
-            ticketCount: event.payload.bundle.tickets.length,
-            createdAt: event.payload.bundle.spec.createdAt,
-            updatedAt: event.payload.bundle.spec.updatedAt,
-          });
+          // Loaded bundles are relationship markers. Canonical Specs remain
+          // owned by their source workflow thread.
           return;
 
         case "thread.deleted":
@@ -1297,20 +1310,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
 
         case "thread.planning-spec-bundle-loaded":
-          if (event.payload.bundle === undefined) {
-            return;
-          }
-          yield* projectionThreadPlanningTicketRepository.deleteByThreadId({
-            threadId: event.payload.threadId,
-          });
-          yield* Effect.forEach(
-            event.payload.bundle.tickets,
-            (ticket) =>
-              projectionThreadPlanningTicketRepository.upsert(
-                projectionTicketFromContract(event.payload.threadId, ticket),
-              ),
-            { concurrency: 1 },
-          ).pipe(Effect.asVoid);
+          // Tickets are canonical Spec children and are not copied on load.
           return;
 
         case "thread.deleted":
@@ -1342,24 +1342,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
 
         case "thread.planning-spec-bundle-loaded":
-          if (event.payload.bundle === undefined) {
-            return;
-          }
-          yield* projectionThreadPlanningReviewCycleRepository.deleteByThreadId({
-            threadId: event.payload.threadId,
-          });
-          yield* Effect.forEach(
-            event.payload.bundle.reviewCycles,
-            (reviewCycle) =>
-              projectionThreadPlanningReviewCycleRepository.upsert(
-                projectionReviewCycleFromContract(
-                  event.payload.threadId,
-                  event.payload.specId,
-                  reviewCycle,
-                ),
-              ),
-            { concurrency: 1 },
-          ).pipe(Effect.asVoid);
+          // Review cycles remain attached to the canonical planning workflow.
           return;
 
         case "thread.deleted":

@@ -270,6 +270,12 @@ export function useRetryImplementationChangeRequestCommand() {
   });
 }
 
+export function useRetryImplementationRunCommand() {
+  return useAtomCommand(threadEnvironment.retryImplementationRun, {
+    label: "implementation run retry",
+  });
+}
+
 export function readProject(ref: ScopedProjectRef): EnvironmentProject | null {
   return appAtomRegistry.get(environmentProjects.projectAtom(ref));
 }

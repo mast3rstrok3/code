@@ -60,7 +60,11 @@ const makeHarness = (input: {
   readonly brokerFailure?: PreviewAutomationExecutionError;
 }) => {
   const dispatched: OrchestrationCommand[] = [];
-  const brokerInvocations: Array<{ operation: string; tabId: string | undefined }> = [];
+  const brokerInvocations: Array<{
+    operation: string;
+    tabId: string | undefined;
+    timeoutMs: number | undefined;
+  }> = [];
 
   const layer = Layer.mergeAll(
     Layer.succeed(McpInvocationContext.McpInvocationContext, {
@@ -83,7 +87,11 @@ const makeHarness = (input: {
     }),
     Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({
       invoke: (request) => {
-        brokerInvocations.push({ operation: request.operation, tabId: request.tabId });
+        brokerInvocations.push({
+          operation: request.operation,
+          tabId: request.tabId,
+          timeoutMs: request.timeoutMs,
+        });
         if (input.brokerFailure) return Effect.fail(input.brokerFailure);
         return Effect.succeed(input.brokerResults?.[request.operation] as never);
       },
@@ -140,7 +148,7 @@ describe("dev-review toolkit handlers", () => {
       assert.strictEqual(recording.status, "recording");
       assert.strictEqual(recording.startedAt, "2026-01-01T00:00:10.000Z");
       assert.deepStrictEqual(harness.brokerInvocations, [
-        { operation: "recordingStart", tabId: undefined },
+        { operation: "recordingStart", tabId: undefined, timeoutMs: undefined },
       ]);
       assert.strictEqual(harness.dispatched.length, 1);
       const command = harness.dispatched[0];
@@ -180,7 +188,7 @@ describe("dev-review toolkit handlers", () => {
       assert.strictEqual(recording.sizeBytes, 2048);
       assert.strictEqual(recording.startedAt, "2026-01-01T00:00:10.000Z");
       assert.deepStrictEqual(harness.brokerInvocations, [
-        { operation: "recordingStop", tabId: undefined },
+        { operation: "recordingStop", tabId: undefined, timeoutMs: 60_000 },
       ]);
       const command = harness.dispatched[0];
       assert.strictEqual(command?.type, "thread.dev-review.evidence.update");
@@ -243,7 +251,7 @@ describe("dev-review toolkit handlers", () => {
       assert.strictEqual(result.id, "shot-1");
       assert.strictEqual(result.caption, "Initial load");
       assert.deepStrictEqual(harness.brokerInvocations, [
-        { operation: "snapshot", tabId: undefined },
+        { operation: "snapshot", tabId: undefined, timeoutMs: undefined },
       ]);
 
       const command = harness.dispatched[0];

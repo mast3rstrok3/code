@@ -26,6 +26,8 @@ import { OrchestrationEngineService } from "../../../orchestration/Services/Orch
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { DevReviewToolkit } from "./tools.ts";
 
+const RECORDING_STOP_TIMEOUT_MS = 60_000;
+
 const reviewError = (reviewId: DevReviewId | undefined, message: string, cause?: unknown) =>
   new DevReviewError({
     ...(reviewId === undefined ? {} : { reviewId }),
@@ -120,6 +122,7 @@ const invokeBrowser = Effect.fn("DevReviewToolkit.invokeBrowser")(function* <A>(
     operation,
     input: {},
     ...(tabId === undefined ? {} : { tabId }),
+    ...(operation === "recordingStop" ? { timeoutMs: RECORDING_STOP_TIMEOUT_MS } : {}),
   })) as A;
 });
 

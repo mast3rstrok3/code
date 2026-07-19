@@ -80,6 +80,7 @@ describe("orchestration projector", () => {
         ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         parentThreadId: null,
         workflowRole: null,
+        workflowContext: null,
         title: "demo",
         modelSelection: {
           instanceId: "codex",
@@ -87,6 +88,7 @@ describe("orchestration projector", () => {
         },
         runtimeMode: "full-access",
         interactionMode: "default",
+        workflowPreset: null,
         branch: null,
         worktreePath: null,
         latestTurn: null,

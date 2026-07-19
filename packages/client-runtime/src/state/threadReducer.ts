@@ -82,6 +82,7 @@ export function applyThreadDetailEvent(
           modelSelection: event.payload.modelSelection,
           runtimeMode: event.payload.runtimeMode,
           interactionMode: event.payload.interactionMode,
+          workflowPreset: event.payload.workflowPreset ?? null,
           branch: event.payload.branch,
           worktreePath: event.payload.worktreePath,
           latestTurn: null,
@@ -156,6 +157,17 @@ export function applyThreadDetailEvent(
         thread: {
           ...thread,
           interactionMode: event.payload.interactionMode,
+          updatedAt: event.payload.updatedAt,
+        },
+      };
+
+    case "thread.composer-mode-set":
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          interactionMode: event.payload.interactionMode,
+          workflowPreset: event.payload.workflowPreset,
           updatedAt: event.payload.updatedAt,
         },
       };

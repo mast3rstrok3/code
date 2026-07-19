@@ -7,6 +7,7 @@ import {
   ThreadMetaUpdatedPayload as ContractsThreadMetaUpdatedPayloadSchema,
   ThreadRuntimeModeSetPayload as ContractsThreadRuntimeModeSetPayloadSchema,
   ThreadInteractionModeSetPayload as ContractsThreadInteractionModeSetPayloadSchema,
+  ThreadComposerModeSetPayload as ContractsThreadComposerModeSetPayloadSchema,
   ThreadPlanningStageStartedPayload as ContractsThreadPlanningStageStartedPayloadSchema,
   ThreadPlanningSpecCreatedPayload as ContractsThreadPlanningSpecCreatedPayloadSchema,
   ThreadPlanningTicketsCreatedPayload as ContractsThreadPlanningTicketsCreatedPayloadSchema,
@@ -48,6 +49,7 @@ export const ThreadArchivedPayload = ContractsThreadArchivedPayloadSchema;
 export const ThreadMetaUpdatedPayload = ContractsThreadMetaUpdatedPayloadSchema;
 export const ThreadRuntimeModeSetPayload = ContractsThreadRuntimeModeSetPayloadSchema;
 export const ThreadInteractionModeSetPayload = ContractsThreadInteractionModeSetPayloadSchema;
+export const ThreadComposerModeSetPayload = ContractsThreadComposerModeSetPayloadSchema;
 export const ThreadPlanningStageStartedPayload = ContractsThreadPlanningStageStartedPayloadSchema;
 export const ThreadPlanningSpecCreatedPayload = ContractsThreadPlanningSpecCreatedPayloadSchema;
 export const ThreadPlanningTicketsCreatedPayload =

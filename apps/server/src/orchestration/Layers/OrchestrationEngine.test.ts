@@ -343,7 +343,6 @@ describe("OrchestrationEngine", () => {
         createdAt,
       }),
     );
-
     await system.run(
       engine.dispatch({
         type: "thread.dev-review.launch",
@@ -576,6 +575,31 @@ describe("OrchestrationEngine", () => {
         createdAt,
       }),
     );
+    for (const [threadId, parentThreadId] of [
+      ["thread-archive-child", "thread-archive"],
+      ["thread-archive-grandchild", "thread-archive-child"],
+    ] as const) {
+      await system.run(
+        engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make(`cmd-${threadId}-create`),
+          threadId: ThreadId.make(threadId),
+          projectId: asProjectId("project-archive"),
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+          parentThreadId: ThreadId.make(parentThreadId),
+          title: threadId,
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+        }),
+      );
+    }
 
     await system.run(
       engine.dispatch({
@@ -585,9 +609,10 @@ describe("OrchestrationEngine", () => {
       }),
     );
     expect(
-      (await system.readModel()).threads.find((thread) => thread.id === "thread-archive")
-        ?.archivedAt,
-    ).not.toBeNull();
+      (await system.readModel()).threads
+        .filter((thread) => thread.id.startsWith("thread-archive"))
+        .every((thread) => thread.archivedAt !== null),
+    ).toBe(true);
 
     await system.run(
       engine.dispatch({
@@ -597,9 +622,47 @@ describe("OrchestrationEngine", () => {
       }),
     );
     expect(
-      (await system.readModel()).threads.find((thread) => thread.id === "thread-archive")
-        ?.archivedAt,
-    ).toBeNull();
+      (await system.readModel()).threads
+        .filter((thread) => thread.id.startsWith("thread-archive"))
+        .every((thread) => thread.archivedAt === null),
+    ).toBe(true);
+
+    await system.run(
+      engine.dispatch({
+        type: "thread.delete",
+        commandId: CommandId.make("cmd-thread-delete-cascade"),
+        threadId: ThreadId.make("thread-archive"),
+      }),
+    );
+    expect(
+      (await system.readModel()).threads
+        .filter((thread) => thread.id.startsWith("thread-archive"))
+        .every((thread) => thread.deletedAt !== null),
+    ).toBe(true);
+
+    const lifecycleEvents = (
+      await system.run(
+        Stream.runCollect(engine.readEvents(0)).pipe(
+          Effect.map((chunk): OrchestrationEvent[] => Array.from(chunk)),
+        ),
+      )
+    ).filter(
+      (event) =>
+        event.type === "thread.archived" ||
+        event.type === "thread.unarchived" ||
+        event.type === "thread.deleted",
+    );
+    expect(lifecycleEvents.map((event) => event.aggregateId)).toEqual([
+      "thread-archive-grandchild",
+      "thread-archive-child",
+      "thread-archive",
+      "thread-archive-grandchild",
+      "thread-archive-child",
+      "thread-archive",
+      "thread-archive-grandchild",
+      "thread-archive-child",
+      "thread-archive",
+    ]);
 
     await system.dispose();
   });

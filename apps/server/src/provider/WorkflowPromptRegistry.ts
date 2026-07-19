@@ -17,6 +17,9 @@ export const WORKFLOW_PROMPT_IDS = {
   implementationFixCodex: "implementation.fix.codex",
   implementationCodeReviewCodex: "implementation.code-review.codex",
   productWorkflowCodex: "product.workflow.codex",
+  productFixCodex: "product.fix.codex",
+  productFastFeatureCodex: "product.fast-feature.codex",
+  productFullFeatureCodex: "product.full-feature.codex",
 } as const;
 
 const WORKFLOW_AGENT_COMMUNICATIONS_PROMPT = WORKFLOW_SUBAGENT_INSTRUCTIONS_PROMPT;
@@ -256,10 +259,11 @@ Review the Spec, conversation context, durable project context, and drafted plan
 
 ## Review cycle
 
-1. Read the Spec and all available context before judging the tickets.
-2. Review the proposed ticket set against the Spec and context.
+1. In cycle 1, read the Spec and all available context, call \`workflow_tickets_list\`, retrieve every ticket with \`workflow_ticket_get\`, and review the complete ticket set before judging it.
+2. Return feedback for every targeted ticket and identify every ticket that needs rework in \`failingPlanningTicketIds\`.
 3. If anything is missing, too broad, too narrow, horizontally sliced, incorrectly blocked, or vague, return concrete corrections. Do not quiz the user while the ticket set still needs review corrections.
-4. Repeat review after ticket adjustments until the ticket set is complete and the vertical slices are correct.
+4. In later cycles, retrieve and review only the failed, reworked, or replacement tickets named in the target scope. Previously passed tickets stay out of scope.
+5. Repeat targeted review until those tickets pass. A clean targeted pass completes ticket review; do not request another full-review cycle.
 
 ## User quiz
 
@@ -634,7 +638,7 @@ When this prompt is run by an automatic implementation-worker thread, do not ask
 
 const IMPLEMENTATION_MERGE_GATE_PROMPT = `<collaboration_mode># Implementation Workflow: Merge Gate
 
-Merge completed implementation work into the orchestrator worktree, resolve conflicts deliberately, run required validation, and report the concrete result.
+Routine implementation branches are merged programmatically before this stage. Do not merge branches again unless the launch message says programmatic integration stopped on a real conflict. Resolve any reported conflict deliberately, merge only the explicitly listed remaining branches, run required validation, and report the concrete result.
 
 Do not ask the user questions. If you cannot merge or validate, report a failed merge-gate result with the blocker.
 
@@ -682,7 +686,7 @@ Use only the preview_* tools in feedback mode and preview_* plus dev_review_* to
 
 const IMPLEMENTATION_FIX_PROMPT = `<collaboration_mode># Implementation Workflow: Fix
 
-Fix the Browser Dev Review, merge-gate, or code-review failures in the orchestrator worktree. Do not ask the user questions. Make the smallest reliable change, run relevant validation, and report whether the run can continue.
+Fix the Browser Dev Review, merge-gate, or code-review failures in the orchestrator worktree. Do not ask the user questions. Make the smallest reliable change, run every validation command listed in the launch message, and report whether the run can continue. Fixes remain on the orchestrator branch; the merge gate does not run again.
 
 When ready, finish with exactly one fenced JSON block using this shape:
 
@@ -857,6 +861,50 @@ Your final response for this stage must contain exactly one JSON directive and n
 
 "intentKind" is required and must be "feature" or "fix" — the user's confirmed answer to the classification question, never inferred. The server rejects the lock otherwise.
 </collaboration_mode>`;
+
+const buildPresetProductWorkflowPrompt = (input: {
+  readonly title: string;
+  readonly intentKind: "feature" | "fix";
+  readonly downstream: string;
+}) => `<collaboration_mode># ${input.title}: Product Direction Grill
+
+This is the workflow's single human gate. The workflow classification is already authoritative: this is a **${input.intentKind}**. Never ask whether the request is a feature or a fix, and never emit a product-intent-classification-asked directive.
+
+${input.downstream}
+
+Interview the user relentlessly about every aspect of the product intent until you reach a shared understanding. Walk down each branch of the decision tree and resolve dependent decisions one at a time. For every question, provide your recommended answer. Ask exactly one question per message and wait for the answer before continuing.
+
+Look up facts in the codebase instead of asking. Product decisions belong to the user: cover the problem, desired outcome, audience, user-visible behavior and feel, success criteria, scope, and non-goals. Do not grill implementation, architecture, or testing decisions.
+
+Do not lock intent until the user confirms the intent is sufficiently locked. Do not create or edit product context, Specs, tickets, or implementation files during this grill.
+
+Your final response must contain exactly one fenced JSON directive and no other fenced JSON blocks:
+
+\`\`\`json
+{ "type": "product-intent-locked", "intentKind": "${input.intentKind}", "title": "...", "summaryMarkdown": "..." }
+\`\`\`
+
+The intentKind is fixed by this workflow preset and must be "${input.intentKind}".
+</collaboration_mode>`;
+
+const PRODUCT_FIX_WORKFLOW_PROMPT = buildPresetProductWorkflowPrompt({
+  title: "Fix workflow",
+  intentKind: "fix",
+  downstream:
+    "After intent locks, this same thread switches automatically to CLI Plan mode. Its proposed plan launches one CLI Build child thread. No dedicated worktree, app dev stack, Dev Review, or Code Review is added.",
+});
+const PRODUCT_FAST_FEATURE_WORKFLOW_PROMPT = buildPresetProductWorkflowPrompt({
+  title: "Fast feature workflow",
+  intentKind: "feature",
+  downstream:
+    "After intent locks, this same thread switches automatically to CLI Plan mode. Its proposed plan launches a dedicated worktree, app dev stack, and Build child, followed by Dev Review and Code Review with automatic fix loops and change-request publication.",
+});
+const PRODUCT_FULL_FEATURE_WORKFLOW_PROMPT = buildPresetProductWorkflowPrompt({
+  title: "Full feature workflow",
+  intentKind: "feature",
+  downstream:
+    "After intent locks, the complete Planning workflow runs in its own thread and then launches the complete Implementation workflow in its own thread.",
+});
 
 export const WORKFLOW_PROMPT_REGISTRY = [
   {
@@ -1037,10 +1085,40 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     workflow: "product",
     role: "planning-thread",
     stage: "intent",
-    title: "Product Workflow",
+    title: "Full feature workflow (legacy)",
     description:
       "Gathers and locks product intent before automatically running Planning and Implementation.",
     promptText: PRODUCT_WORKFLOW_PROMPT,
+  },
+  {
+    id: WORKFLOW_PROMPT_IDS.productFixCodex,
+    order: 1,
+    workflow: "product",
+    role: "planning-thread",
+    stage: "intent",
+    title: "Fix workflow",
+    description: "Locks a fix intent before same-thread planning and one Build child.",
+    promptText: PRODUCT_FIX_WORKFLOW_PROMPT,
+  },
+  {
+    id: WORKFLOW_PROMPT_IDS.productFastFeatureCodex,
+    order: 1,
+    workflow: "product",
+    role: "planning-thread",
+    stage: "intent",
+    title: "Fast feature workflow",
+    description: "Locks feature intent before lightweight Plan, Build, and review orchestration.",
+    promptText: PRODUCT_FAST_FEATURE_WORKFLOW_PROMPT,
+  },
+  {
+    id: WORKFLOW_PROMPT_IDS.productFullFeatureCodex,
+    order: 1,
+    workflow: "product",
+    role: "planning-thread",
+    stage: "intent",
+    title: "Full feature workflow",
+    description: "Locks feature intent before complete Planning and Implementation workflows.",
+    promptText: PRODUCT_FULL_FEATURE_WORKFLOW_PROMPT,
   },
 ] as const satisfies ReadonlyArray<WorkflowPromptContract>;
 

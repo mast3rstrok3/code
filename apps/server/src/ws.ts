@@ -77,6 +77,7 @@ import * as ExternalLauncher from "./process/externalLauncher.ts";
 import { normalizeDispatchCommand } from "./orchestration/Normalizer.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import { getWorkflowArtifactsForThread } from "./orchestration/workflowArtifacts.ts";
 import {
   observeRpcEffect as instrumentRpcEffect,
   observeRpcStream as instrumentRpcStream,
@@ -124,6 +125,7 @@ import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
+import { collectHierarchyPostOrder } from "@t3tools/shared/threadHierarchy";
 
 type WebSocketLifecycleLogAttributes = Record<
   string,
@@ -478,6 +480,7 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.vcsSwitchRef, AuthOrchestrationOperateScope],
   [WS_METHODS.vcsInit, AuthOrchestrationOperateScope],
   [WS_METHODS.reviewGetDiffPreview, AuthReviewWriteScope],
+  [WS_METHODS.workflowArtifactsGet, AuthOrchestrationReadScope],
   [WS_METHODS.terminalOpen, AuthTerminalOperateScope],
   [WS_METHODS.terminalAttach, AuthTerminalOperateScope],
   [WS_METHODS.terminalWrite, AuthTerminalOperateScope],
@@ -1043,6 +1046,7 @@ const makeWsRpcLayer = (
                 modelSelection: bootstrap.createThread.modelSelection,
                 runtimeMode: bootstrap.createThread.runtimeMode,
                 interactionMode: bootstrap.createThread.interactionMode,
+                workflowPreset: bootstrap.createThread.workflowPreset ?? null,
                 branch: bootstrap.createThread.branch,
                 worktreePath: bootstrap.createThread.worktreePath,
                 createdAt: bootstrap.createThread.createdAt,
@@ -1121,6 +1125,87 @@ const makeWsRpcLayer = (
           );
       };
 
+      type ArchiveCleanupTarget = Pick<OrchestrationThreadShell, "id" | "session">;
+
+      const resolveArchiveCleanupFallback = (threadId: ThreadId) =>
+        projectionSnapshotQuery.getThreadShellById(threadId).pipe(
+          Effect.map(
+            Option.match({
+              onNone: (): ReadonlyArray<ArchiveCleanupTarget> => [{ id: threadId, session: null }],
+              onSome: (thread): ReadonlyArray<ArchiveCleanupTarget> => [thread],
+            }),
+          ),
+          Effect.catchCause((cause) =>
+            Effect.logWarning("failed to load archive cleanup fallback thread", {
+              threadId,
+              cause,
+            }).pipe(
+              Effect.as<ReadonlyArray<ArchiveCleanupTarget>>([{ id: threadId, session: null }]),
+            ),
+          ),
+        );
+
+      const resolveArchiveCleanupTargets = (
+        command: Extract<OrchestrationCommand, { type: "thread.archive" }>,
+      ) =>
+        projectionSnapshotQuery.getCommandReadModel().pipe(
+          Effect.map((snapshot) =>
+            collectHierarchyPostOrder(snapshot.threads, command.threadId, {
+              getId: (thread) => thread.id,
+              getParentId: (thread) => thread.parentThreadId,
+            })
+              .filter((thread) => thread.deletedAt === null && thread.archivedAt === null)
+              .map((thread): ArchiveCleanupTarget => ({ id: thread.id, session: thread.session })),
+          ),
+          Effect.flatMap((targets) =>
+            targets.length > 0
+              ? Effect.succeed(targets)
+              : resolveArchiveCleanupFallback(command.threadId),
+          ),
+          Effect.catchCause((cause) =>
+            Effect.logWarning("failed to load archive cleanup hierarchy", {
+              threadId: command.threadId,
+              cause,
+            }).pipe(Effect.andThen(resolveArchiveCleanupFallback(command.threadId))),
+          ),
+        );
+
+      const cleanupThreadBeforeArchive = (
+        command: Extract<OrchestrationCommand, { type: "thread.archive" }>,
+        target: ArchiveCleanupTarget,
+      ) =>
+        Effect.gen(function* () {
+          if (target.session !== null && target.session.status !== "stopped") {
+            yield* Effect.gen(function* () {
+              const stopCommand = yield* normalizeDispatchCommand({
+                type: "thread.session.stop",
+                commandId: CommandId.make(
+                  `session-stop-for-archive:${command.commandId}:${target.id}`,
+                ),
+                threadId: target.id,
+                createdAt: yield* nowIso,
+              });
+              yield* dispatchNormalizedCommand(stopCommand);
+            }).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logWarning("failed to stop provider session during archive", {
+                  threadId: target.id,
+                  cause,
+                }),
+              ),
+            );
+          }
+
+          yield* terminalManager.close({ threadId: target.id }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("failed to close thread terminals during archive", {
+                threadId: target.id,
+                cause,
+              }),
+            ),
+          );
+        });
+
       const loadServerConfig = Effect.gen(function* () {
         const keybindingsConfig = yield* keybindings.loadConfigState;
         const providers = yield* providerRegistry.getProviders;
@@ -1191,55 +1276,15 @@ const makeWsRpcLayer = (
             ORCHESTRATION_WS_METHODS.dispatchCommand,
             Effect.gen(function* () {
               const normalizedCommand = yield* normalizeDispatchCommand(command);
-              const shouldStopSessionAfterArchive =
-                normalizedCommand.type === "thread.archive"
-                  ? yield* projectionSnapshotQuery
-                      .getThreadShellById(normalizedCommand.threadId)
-                      .pipe(
-                        Effect.map(
-                          Option.match({
-                            onNone: () => false,
-                            onSome: (thread) =>
-                              thread.session !== null && thread.session.status !== "stopped",
-                          }),
-                        ),
-                        Effect.orElseSucceed(() => false),
-                      )
-                  : false;
-              const result = yield* dispatchNormalizedCommand(normalizedCommand);
               if (normalizedCommand.type === "thread.archive") {
-                if (shouldStopSessionAfterArchive) {
-                  yield* Effect.gen(function* () {
-                    const stopCommand = yield* normalizeDispatchCommand({
-                      type: "thread.session.stop",
-                      commandId: CommandId.make(
-                        `session-stop-for-archive:${normalizedCommand.commandId}`,
-                      ),
-                      threadId: normalizedCommand.threadId,
-                      createdAt: yield* nowIso,
-                    });
-
-                    yield* dispatchNormalizedCommand(stopCommand);
-                  }).pipe(
-                    Effect.catchCause((cause) =>
-                      Effect.logWarning("failed to stop provider session during archive", {
-                        threadId: normalizedCommand.threadId,
-                        cause,
-                      }),
-                    ),
-                  );
-                }
-
-                yield* terminalManager.close({ threadId: normalizedCommand.threadId }).pipe(
-                  Effect.catch((error) =>
-                    Effect.logWarning("failed to close thread terminals after archive", {
-                      threadId: normalizedCommand.threadId,
-                      error: error.message,
-                    }),
-                  ),
+                const targets = yield* resolveArchiveCleanupTargets(normalizedCommand);
+                yield* Effect.forEach(
+                  targets,
+                  (target) => cleanupThreadBeforeArchive(normalizedCommand, target),
+                  { discard: true },
                 );
               }
-              return result;
+              return yield* dispatchNormalizedCommand(normalizedCommand);
             }).pipe(
               Effect.mapError((cause) =>
                 isOrchestrationDispatchCommandError(cause)
@@ -1950,6 +1995,10 @@ const makeWsRpcLayer = (
         [WS_METHODS.reviewGetDiffPreview]: (input) =>
           observeRpcEffect(WS_METHODS.reviewGetDiffPreview, review.getDiffPreview(input), {
             "rpc.aggregate": "review",
+          }),
+        [WS_METHODS.workflowArtifactsGet]: (input) =>
+          observeRpcEffect(WS_METHODS.workflowArtifactsGet, getWorkflowArtifactsForThread(input), {
+            "rpc.aggregate": "orchestration",
           }),
         [WS_METHODS.terminalOpen]: (input) =>
           observeRpcEffect(WS_METHODS.terminalOpen, terminalManager.open(input), {

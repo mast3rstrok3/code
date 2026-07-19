@@ -8,6 +8,7 @@ import {
   type DeleteThreadInput,
   type InterruptThreadTurnInput,
   type LaunchThreadImplementationRunInput,
+  type LaunchThreadFastFeatureRunInput,
   type LaunchThreadDevReviewInput,
   type LoadThreadPlanningSpecBundleInput,
   type CreateThreadPlanningSpecInput,
@@ -16,7 +17,9 @@ import {
   type RespondToThreadUserInputInput,
   type RevertThreadCheckpointInput,
   type RetryThreadImplementationChangeRequestInput,
+  type RetryThreadImplementationRunInput,
   type SetThreadInteractionModeInput,
+  type SetThreadComposerModeInput,
   type SetThreadRuntimeModeInput,
   type StartThreadPlanningStageInput,
   type StartThreadTurnInput,
@@ -29,6 +32,7 @@ import {
   deleteThread,
   interruptThreadTurn,
   launchThreadImplementationRun,
+  launchThreadFastFeatureRun,
   launchThreadDevReview,
   loadThreadPlanningSpecBundle,
   requestThreadPlanningTicketReview,
@@ -36,7 +40,9 @@ import {
   respondToThreadUserInput,
   revertThreadCheckpoint,
   retryThreadImplementationChangeRequest,
+  retryThreadImplementationRun,
   setThreadInteractionMode,
+  setThreadComposerMode,
   setThreadRuntimeMode,
   startThreadPlanningStage,
   startThreadTurn,
@@ -52,6 +58,7 @@ export type {
   DeleteThreadInput,
   InterruptThreadTurnInput,
   LaunchThreadImplementationRunInput,
+  LaunchThreadFastFeatureRunInput,
   LaunchThreadDevReviewInput,
   LoadThreadPlanningSpecBundleInput,
   CreateThreadPlanningSpecInput,
@@ -60,7 +67,9 @@ export type {
   RespondToThreadUserInputInput,
   RevertThreadCheckpointInput,
   RetryThreadImplementationChangeRequestInput,
+  RetryThreadImplementationRunInput,
   SetThreadInteractionModeInput,
+  SetThreadComposerModeInput,
   SetThreadRuntimeModeInput,
   StartThreadPlanningStageInput,
   StartThreadTurnInput,
@@ -118,6 +127,12 @@ export function createThreadEnvironmentAtoms<R, E>(
     setInteractionMode: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:set-interaction-mode",
       execute: (input: SetThreadInteractionModeInput) => setThreadInteractionMode(input),
+      scheduler,
+      concurrency,
+    }),
+    setComposerMode: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:set-composer-mode",
+      execute: (input: SetThreadComposerModeInput) => setThreadComposerMode(input),
       scheduler,
       concurrency,
     }),
@@ -191,6 +206,21 @@ export function createThreadEnvironmentAtoms<R, E>(
         }) => JSON.stringify([environmentId, input.threadId, input.specId]),
       },
     }),
+    launchFastFeatureRun: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:fast-feature-run:launch",
+      execute: (input: LaunchThreadFastFeatureRunInput) => launchThreadFastFeatureRun(input),
+      scheduler,
+      concurrency: {
+        mode: "serial" as const,
+        key: ({
+          environmentId,
+          input,
+        }: {
+          environmentId: string;
+          input: LaunchThreadFastFeatureRunInput;
+        }) => JSON.stringify([environmentId, input.threadId, input.proposedPlanId]),
+      },
+    }),
     retryImplementationChangeRequest: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:implementation-change-request:retry",
       execute: (input: RetryThreadImplementationChangeRequestInput) =>
@@ -204,6 +234,21 @@ export function createThreadEnvironmentAtoms<R, E>(
         }: {
           environmentId: string;
           input: RetryThreadImplementationChangeRequestInput;
+        }) => JSON.stringify([environmentId, input.threadId, input.runId]),
+      },
+    }),
+    retryImplementationRun: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:implementation-run:retry",
+      execute: (input: RetryThreadImplementationRunInput) => retryThreadImplementationRun(input),
+      scheduler,
+      concurrency: {
+        mode: "serial" as const,
+        key: ({
+          environmentId,
+          input,
+        }: {
+          environmentId: string;
+          input: RetryThreadImplementationRunInput;
         }) => JSON.stringify([environmentId, input.threadId, input.runId]),
       },
     }),

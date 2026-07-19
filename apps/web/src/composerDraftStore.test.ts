@@ -1654,6 +1654,32 @@ describe("composerDraftStore runtime and interaction settings", () => {
     expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.interactionMode).toBe("plan");
   });
 
+  it("remembers the last workflow preset after Build or Plan clears the active preset", () => {
+    const store = useComposerDraftStore.getState();
+
+    store.setComposerMode(threadRef, "product-workflow", "fast-feature");
+    store.setComposerMode(threadRef, "default", null);
+
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)).toMatchObject({
+      interactionMode: "default",
+      workflowPreset: null,
+      lastWorkflowPreset: "fast-feature",
+    });
+  });
+
+  it("preserves the preset when an internal provider-mode transition is recorded", () => {
+    const store = useComposerDraftStore.getState();
+
+    store.setComposerMode(threadRef, "product-workflow", "fix");
+    store.setInteractionMode(threadRef, "plan");
+
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)).toMatchObject({
+      interactionMode: "plan",
+      workflowPreset: "fix",
+      lastWorkflowPreset: "fix",
+    });
+  });
+
   it("removes empty settings-only drafts when overrides are cleared", () => {
     const store = useComposerDraftStore.getState();
 

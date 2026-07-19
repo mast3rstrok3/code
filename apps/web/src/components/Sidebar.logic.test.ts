@@ -2,6 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import {
   buildSidebarThreadTreeRows,
   createThreadJumpHintVisibilityController,
+  expandHierarchySelectionIds,
+  getArchiveConfirmationCopy,
+  getMultiThreadDeleteConfirmationText,
+  getSelectedHierarchyRootIds,
+  getThreadDeleteConfirmationText,
   getSidebarThreadIdsToPrewarm,
   getVisibleSidebarThreadIds,
   resolveAdjacentThreadId,
@@ -1188,6 +1193,76 @@ describe("getFallbackThreadIdAfterDelete", () => {
     });
 
     expect(fallbackThreadId).toBe(ThreadId.make("thread-next"));
+  });
+
+  it("skips every descendant included by a cascading delete", () => {
+    const parent = makeThread({ id: ThreadId.make("thread-parent") });
+    const child = makeThread({
+      id: ThreadId.make("thread-child"),
+      parentThreadId: parent.id,
+      createdAt: "2026-03-09T10:20:00.000Z",
+    });
+    const grandchild = makeThread({
+      id: ThreadId.make("thread-grandchild"),
+      parentThreadId: child.id,
+      createdAt: "2026-03-09T10:30:00.000Z",
+    });
+    const survivor = makeThread({
+      id: ThreadId.make("thread-survivor"),
+      createdAt: "2026-03-09T10:10:00.000Z",
+    });
+    const threads = [parent, child, grandchild, survivor];
+    const deletedThreadIds = expandHierarchySelectionIds({
+      nodes: threads,
+      selectedIds: new Set([parent.id]),
+      accessors: {
+        getId: (thread) => thread.id,
+        getParentId: (thread) => thread.parentThreadId,
+      },
+    });
+
+    expect(
+      getFallbackThreadIdAfterDelete({
+        threads,
+        deletedThreadId: parent.id,
+        deletedThreadIds,
+        sortOrder: "created_at",
+      }),
+    ).toBe(survivor.id);
+  });
+});
+
+describe("thread lifecycle hierarchy actions", () => {
+  const nodes = [
+    { id: "parent", parentId: null },
+    { id: "child", parentId: "parent" },
+    { id: "grandchild", parentId: "child" },
+    { id: "sibling", parentId: null },
+  ] as const;
+  const accessors = {
+    getId: (node: (typeof nodes)[number]) => node.id,
+    getParentId: (node: (typeof nodes)[number]) => node.parentId,
+  };
+
+  it("dispatches only selected hierarchy roots", () => {
+    expect(
+      getSelectedHierarchyRootIds({
+        nodes,
+        selectedIds: new Set(["child", "parent", "sibling"]),
+        accessors,
+      }),
+    ).toEqual(["parent", "sibling"]);
+  });
+
+  it("uses explicit subtree warning and archive copy", () => {
+    expect(getThreadDeleteConfirmationText("Parent")).toContain("all sub-threads");
+    expect(getMultiThreadDeleteConfirmationText(2)).toContain("all their descendants");
+    expect(getArchiveConfirmationCopy(true)).toEqual({
+      label: "Archive all",
+      accessibleLabel: "Archive this thread and all sub-threads",
+      tooltip: "Includes all sub-threads",
+    });
+    expect(getArchiveConfirmationCopy(false).label).toBe("Confirm");
   });
 });
 describe("sortProjectsForSidebar", () => {

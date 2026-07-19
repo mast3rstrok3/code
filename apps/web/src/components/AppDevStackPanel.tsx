@@ -755,7 +755,6 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
 
   const renderStackRow = (stack: AppDevStack) => {
     const preview = primaryPreviewForStack(stack);
-    const isTransitioning = TRANSITIONING_STATUSES.has(stack.status);
     const startKey = `start:${stack.id}`;
     const stopKey = `stop:${stack.id}`;
     const restartKey = `restart:${stack.id}`;
@@ -817,7 +816,7 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
               size="icon-xs"
               variant="ghost"
               onClick={() => void runStart(stack.worktreePath, stack)}
-              disabled={isTransitioning || pendingKey !== null}
+              disabled={pendingKey !== null}
               aria-label="Start stack"
             >
               {startPending ? <LoaderIcon className="size-3.5 animate-spin" /> : <PlayIcon />}
@@ -826,7 +825,7 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
               size="icon-xs"
               variant="ghost"
               onClick={() => void runStop(stack)}
-              disabled={stack.status === "stopped" || isTransitioning || pendingKey !== null}
+              disabled={stack.status === "stopped" || pendingKey !== null}
               aria-label="Stop stack"
             >
               {stopPending ? <LoaderIcon className="size-3.5 animate-spin" /> : <PowerIcon />}
@@ -835,7 +834,7 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
               size="icon-xs"
               variant="ghost"
               onClick={() => void runRestart(stack)}
-              disabled={isTransitioning || pendingKey !== null}
+              disabled={pendingKey !== null}
               aria-label="Restart stack"
             >
               {restartPending ? (
@@ -848,7 +847,7 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
               size="icon-xs"
               variant="ghost"
               onClick={() => void runDelete(stack)}
-              disabled={isTransitioning || pendingKey !== null}
+              disabled={pendingKey !== null}
               aria-label="Delete stack"
             >
               {deletePending ? <LoaderIcon className="size-3.5 animate-spin" /> : <Trash2Icon />}

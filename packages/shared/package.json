@@ -121,6 +121,14 @@
       "import": "./src/orchestrationImplementation.ts",
       "default": "./src/orchestrationImplementation.ts"
     },
+    "./workflowPresets": {
+      "types": "./src/workflowPresets.ts",
+      "module": "./src/workflowPresets.ts",
+      "browser": "./src/workflowPresets.ts",
+      "development": "./src/workflowPresets.ts",
+      "import": "./src/workflowPresets.ts",
+      "default": "./src/workflowPresets.ts"
+    },
     "./remote": {
       "types": "./src/remote.ts",
       "import": "./src/remote.ts"
@@ -212,6 +220,13 @@
     "./chatList": {
       "types": "./src/chatList.ts",
       "import": "./src/chatList.ts"
+    },
+    "./threadHierarchy": {
+      "types": "./src/threadHierarchy.ts",
+      "module": "./src/threadHierarchy.ts",
+      "browser": "./src/threadHierarchy.ts",
+      "import": "./src/threadHierarchy.ts",
+      "default": "./src/threadHierarchy.ts"
     },
     "./hostProcess": {
       "types": "./src/hostProcess.ts",

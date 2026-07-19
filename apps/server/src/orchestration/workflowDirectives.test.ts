@@ -114,6 +114,11 @@ describe("workflowDirectives", () => {
     "key": "ticket-1",
     "title": "Implement checkout",
     "bodyMarkdown": "Build checkout.",
+    "plannedFileChanges": [
+      { "path": "src/checkout.ts", "action": "create" },
+      { "path": "src/cart.ts", "action": "update" },
+      { "path": "src/legacy.ts", "action": "delete" }
+    ],
     "dependencyKeys": []
   }]
 }
@@ -136,6 +141,71 @@ describe("workflowDirectives", () => {
     NodeAssert.equal(spec.kind, "parsed");
     NodeAssert.equal(tickets.kind, "parsed");
     NodeAssert.equal(review.kind, "parsed");
+  });
+
+  it("rejects missing, empty, duplicate, and non-relative planned ticket files", () => {
+    for (const plannedFileChanges of [
+      undefined,
+      [],
+      [
+        { path: "src/file.ts", action: "update" },
+        { path: "src/file.ts", action: "delete" },
+      ],
+      [{ path: "/src/file.ts", action: "update" }],
+      [{ path: "src/../file.ts", action: "update" }],
+      [{ path: "src\\file.ts", action: "update" }],
+      [{ path: "src/", action: "update" }],
+      [{ path: "src/*.ts", action: "update" }],
+    ]) {
+      const ticket = {
+        key: "ticket-1",
+        title: "Implement checkout",
+        bodyMarkdown: "Build checkout.",
+        dependencyKeys: [],
+        ...(plannedFileChanges === undefined ? {} : { plannedFileChanges }),
+      };
+      const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
+${JSON.stringify({ type: "planning-tickets-artifact", specId: "spec-1", tickets: [ticket] })}
+\`\`\``);
+      NodeAssert.equal(result.kind, "error");
+    }
+  });
+
+  it("requires planned files for reviewer-created tickets and accepts replacement updates", () => {
+    const missing = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
+${JSON.stringify({
+  type: "planning-reviewer-verdict",
+  cycleNumber: 1,
+  passed: false,
+  ticketEdits: [
+    {
+      type: "create",
+      key: "TICKET-2",
+      title: "Add tests",
+      bodyMarkdown: "Add coverage.",
+      dependencyKeys: [],
+      replacesPlanningTicketIds: [],
+    },
+  ],
+})}
+\`\`\``);
+    NodeAssert.equal(missing.kind, "error");
+
+    const update = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
+${JSON.stringify({
+  type: "planning-reviewer-verdict",
+  cycleNumber: 1,
+  passed: false,
+  ticketEdits: [
+    {
+      type: "update",
+      ticketId: "planning-ticket-1",
+      plannedFileChanges: [{ path: "src/checkout.test.ts", action: "update" }],
+    },
+  ],
+})}
+\`\`\``);
+    NodeAssert.equal(update.kind, "parsed");
   });
 
   it("rejects legacy planning artifact directives and Ticket fields", () => {

@@ -57,7 +57,10 @@ import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import type { McpCapability } from "../../mcp/McpInvocationContext.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
-import { isDevReviewMcpWorkflowPromptId } from "../WorkflowPromptRegistry.ts";
+import {
+  isDevReviewMcpWorkflowPromptId,
+  isRegisteredWorkflowPromptId,
+} from "../WorkflowPromptRegistry.ts";
 const isModelSelection = Schema.is(ModelSelection);
 const WORKFLOW_PROVIDERS: ReadonlySet<ProviderDriverKind> = new Set([
   ProviderDriverKind.make("codex"),
@@ -192,7 +195,10 @@ function mcpCapabilitiesForWorkflowPromptId(
   if (isDevReviewMcpWorkflowPromptId(workflowPromptId)) {
     // Dev review drives the app through the upstream preview_* browser tools
     // and attaches evidence via the dev_review_* tools.
-    return new Set<McpCapability>(["preview", "dev-review"]);
+    return new Set<McpCapability>(["preview", "dev-review", "workflow-artifacts"]);
+  }
+  if (workflowPromptId !== undefined && isRegisteredWorkflowPromptId(workflowPromptId)) {
+    return new Set<McpCapability>(["workflow-artifacts"]);
   }
   return undefined;
 }

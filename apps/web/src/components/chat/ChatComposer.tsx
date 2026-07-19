@@ -11,9 +11,9 @@ import type {
   ServerProvider,
   ThreadId,
   TurnId,
+  WorkflowPreset,
 } from "@t3tools/contracts";
 import {
-  isPlanningWorkflowInteractionMode,
   ProviderDriverKind,
   ProviderInstanceId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
@@ -72,6 +72,7 @@ import { ProviderModelPicker } from "./ProviderModelPicker";
 import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommandMenu";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
+import { ComposerModePicker } from "./ComposerModePicker";
 import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
 import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
@@ -94,17 +95,13 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
 import {
-  BotIcon,
   CircleAlertIcon,
   ListTodoIcon,
-  PencilRulerIcon,
   type LucideIcon,
   LockIcon,
   LockOpenIcon,
   PenLineIcon,
-  WorkflowIcon,
   XIcon,
-  ZapIcon,
 } from "lucide-react";
 import { proposedPlanTitle } from "../../proposedPlan";
 import { getProviderDisplayName, getProviderInteractionModeToggle } from "../../providerModels";
@@ -157,38 +154,6 @@ const runtimeModeConfig: Record<
 };
 
 const runtimeModeOptions = Object.keys(runtimeModeConfig) as RuntimeMode[];
-const interactionModeConfig: Record<
-  ProviderInteractionMode,
-  { label: string; description: string; icon: LucideIcon }
-> = {
-  default: {
-    label: "Build",
-    description: "Work normally and make implementation changes.",
-    icon: BotIcon,
-  },
-  plan: {
-    label: "Plan",
-    description: "Plan the work without applying implementation changes.",
-    icon: PencilRulerIcon,
-  },
-  "planning-workflow": {
-    label: "Planning Workflow",
-    description: "Run the Planning Workflow grill stage with first-party workflow instructions.",
-    icon: WorkflowIcon,
-  },
-  "implementation-workflow": {
-    label: "Implementation Workflow",
-    description: "Plan and start a durable implementation workflow from a Spec.",
-    icon: WorkflowIcon,
-  },
-  "product-workflow": {
-    label: "Product Workflow",
-    description:
-      "Ask product-intent questions, then run Planning and Implementation automatically.",
-    icon: ZapIcon,
-  },
-};
-const interactionModeOptions = Object.keys(interactionModeConfig) as ProviderInteractionMode[];
 const COMPOSER_FLOATING_LAYER_SELECTOR = [
   '[data-slot="popover-popup"]',
   '[data-slot="menu-popup"]',
@@ -232,17 +197,17 @@ function isInsideComposerFloatingLayer(element: Element): boolean {
 const ComposerFooterModeControls = memo(function ComposerFooterModeControls(props: {
   showInteractionModeToggle: boolean;
   interactionMode: ProviderInteractionMode;
+  workflowPreset: WorkflowPreset | null;
+  lastWorkflowPreset: WorkflowPreset | null;
   planningWorkflowAvailable: boolean;
   runtimeMode: RuntimeMode;
   showPlanToggle: boolean;
   planSidebarLabel: string;
   planSidebarOpen: boolean;
-  onInteractionModeChange: (mode: ProviderInteractionMode) => void;
+  onInteractionModeChange: (mode: ProviderInteractionMode, preset: WorkflowPreset | null) => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
   onTogglePlanSidebar: () => void;
 }) {
-  const interactionModeOption = interactionModeConfig[props.interactionMode];
-  const InteractionModeIcon = interactionModeOption.icon;
   const runtimeModeOption = runtimeModeConfig[props.runtimeMode];
   const RuntimeModeIcon = runtimeModeOption.icon;
   const planSidebarTooltip = props.planSidebarOpen
@@ -255,48 +220,13 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
 
       {props.showInteractionModeToggle ? (
         <>
-          <Select
-            value={props.interactionMode}
-            onValueChange={(value) => {
-              if (!value || value === props.interactionMode) return;
-              props.onInteractionModeChange(value as ProviderInteractionMode);
-            }}
-          >
-            <SelectTrigger
-              variant="ghost"
-              size="sm"
-              className="font-medium"
-              aria-label="Composer mode"
-              title={interactionModeOption.description}
-            >
-              <InteractionModeIcon className="size-4" />
-              <SelectValue>{interactionModeOption.label}</SelectValue>
-            </SelectTrigger>
-            <SelectPopup alignItemWithTrigger={false} matchTriggerWidth={false}>
-              {interactionModeOptions.map((mode) => {
-                const option = interactionModeConfig[mode];
-                const OptionIcon = option.icon;
-                const disabled =
-                  (isPlanningWorkflowInteractionMode(mode) || mode === "implementation-workflow") &&
-                  !props.planningWorkflowAvailable;
-                return (
-                  <SelectItem key={mode} value={mode} disabled={disabled} className="min-w-64 py-2">
-                    <div className="grid min-w-0 gap-0.5">
-                      <span className="inline-flex items-center gap-1.5 font-medium text-foreground">
-                        <OptionIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                        {option.label}
-                      </span>
-                      <span className="text-muted-foreground text-xs leading-4">
-                        {disabled
-                          ? "Available for Codex and Claude providers in v1."
-                          : option.description}
-                      </span>
-                    </div>
-                  </SelectItem>
-                );
-              })}
-            </SelectPopup>
-          </Select>
+          <ComposerModePicker
+            interactionMode={props.interactionMode}
+            workflowPreset={props.workflowPreset}
+            lastWorkflowPreset={props.lastWorkflowPreset}
+            workflowAvailable={props.planningWorkflowAvailable}
+            onChange={props.onInteractionModeChange}
+          />
 
           <Separator orientation="vertical" className="mx-0.5 hidden h-4 sm:block" />
         </>
@@ -530,6 +460,8 @@ export interface ChatComposerProps {
   // Mode
   runtimeMode: RuntimeMode;
   interactionMode: ProviderInteractionMode;
+  workflowPreset: WorkflowPreset | null;
+  lastWorkflowPreset: WorkflowPreset | null;
 
   // Provider / model
   lockedProvider: ProviderDriverKind | null;
@@ -577,7 +509,10 @@ export interface ChatComposerProps {
   getModelDisabledReason: (instanceId: ProviderInstanceId, model: string) => string | null;
   toggleInteractionMode: () => void;
   handleRuntimeModeChange: (mode: RuntimeMode) => void;
-  handleInteractionModeChange: (mode: ProviderInteractionMode) => void;
+  handleInteractionModeChange: (
+    mode: ProviderInteractionMode,
+    preset: WorkflowPreset | null,
+  ) => void;
   togglePlanSidebar: () => void;
 
   focusComposer: () => void;
@@ -624,6 +559,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     planSidebarOpen,
     runtimeMode,
     interactionMode,
+    workflowPreset,
+    lastWorkflowPreset,
     lockedProvider,
     providerStatuses,
     activeProjectDefaultModelSelection,
@@ -876,14 +813,24 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   );
 
   useEffect(() => {
+    if (workflowPreset !== null && !planningWorkflowAvailable) {
+      handleInteractionModeChange(interactionMode === "plan" ? "plan" : "default", null);
+      return;
+    }
     const resolvedInteractionMode = resolveComposerInteractionModeForProvider({
       interactionMode,
       provider: selectedProvider,
     });
     if (resolvedInteractionMode !== interactionMode) {
-      handleInteractionModeChange(resolvedInteractionMode);
+      handleInteractionModeChange(resolvedInteractionMode, null);
     }
-  }, [handleInteractionModeChange, interactionMode, selectedProvider]);
+  }, [
+    handleInteractionModeChange,
+    interactionMode,
+    planningWorkflowAvailable,
+    selectedProvider,
+    workflowPreset,
+  ]);
 
   const selectedModelSelection = useMemo<ModelSelection>(
     () => createModelSelection(selectedInstanceId, selectedModel, selectedModelOptionsForDispatch),
@@ -1649,7 +1596,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           }
           return;
         }
-        void handleInteractionModeChange(item.command === "plan" ? "plan" : "default");
+        void handleInteractionModeChange(item.command === "plan" ? "plan" : "default", null);
         const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
           expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
         });
@@ -2562,6 +2509,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   <CompactComposerControlsMenu
                     activePlan={showPlanSidebarToggle}
                     interactionMode={interactionMode}
+                    workflowPreset={workflowPreset}
+                    lastWorkflowPreset={lastWorkflowPreset}
                     planSidebarLabel={planSidebarLabel}
                     planSidebarOpen={planSidebarOpen}
                     planningWorkflowAvailable={planningWorkflowAvailable}
@@ -2583,6 +2532,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     <ComposerFooterModeControls
                       showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
                       interactionMode={interactionMode}
+                      workflowPreset={workflowPreset}
+                      lastWorkflowPreset={lastWorkflowPreset}
                       runtimeMode={runtimeMode}
                       showPlanToggle={showPlanSidebarToggle}
                       planSidebarLabel={planSidebarLabel}

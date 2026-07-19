@@ -38,6 +38,7 @@ export type UnarchiveThreadInput = CommandInput<"thread.unarchive">;
 export type UpdateThreadMetadataInput = CommandInput<"thread.meta.update">;
 export type SetThreadRuntimeModeInput = CommandInput<"thread.runtime-mode.set">;
 export type SetThreadInteractionModeInput = CommandInput<"thread.interaction-mode.set">;
+export type SetThreadComposerModeInput = CommandInput<"thread.composer-mode.set">;
 export type StartThreadTurnInput = CommandInput<"thread.turn.start">;
 export type LaunchThreadDevReviewInput = CommandInput<"thread.dev-review.launch">;
 export type CreateThreadPlanningSpecInput = CommandInput<"thread.planning-spec.create">;
@@ -47,8 +48,10 @@ export type LoadThreadPlanningSpecBundleInput = CommandInput<"thread.planning-sp
 export type RequestThreadPlanningTicketReviewInput =
   CommandInput<"thread.planning-ticket-review.request">;
 export type LaunchThreadImplementationRunInput = CommandInput<"thread.implementation-run.launch">;
+export type LaunchThreadFastFeatureRunInput = CommandInput<"thread.fast-feature-run.launch">;
 export type RetryThreadImplementationChangeRequestInput =
   CommandInput<"thread.implementation-change-request.retry">;
+export type RetryThreadImplementationRunInput = CommandInput<"thread.implementation-run.retry">;
 export type InterruptThreadTurnInput = CommandInput<"thread.turn.interrupt">;
 export type RespondToThreadApprovalInput = CommandInput<"thread.approval.respond">;
 export type RespondToThreadUserInputInput = CommandInput<"thread.user-input.respond">;
@@ -196,6 +199,17 @@ export const setThreadInteractionMode: (input: SetThreadInteractionModeInput) =>
     });
   });
 
+export const setThreadComposerMode: (input: SetThreadComposerModeInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.setThreadComposerMode")(function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "thread.composer-mode.set",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  });
+
 export const startThreadTurn: (input: StartThreadTurnInput) => CommandEffect = Effect.fn(
   "EnvironmentCommands.startThreadTurn",
 )(function* (input) {
@@ -297,6 +311,17 @@ export const launchThreadImplementationRun: (
   },
 );
 
+export const launchThreadFastFeatureRun: (input: LaunchThreadFastFeatureRunInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.launchThreadFastFeatureRun")(function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "thread.fast-feature-run.launch",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  });
+
 export const retryThreadImplementationChangeRequest: (
   input: RetryThreadImplementationChangeRequestInput,
 ) => CommandEffect = Effect.fn("EnvironmentCommands.retryThreadImplementationChangeRequest")(
@@ -305,6 +330,20 @@ export const retryThreadImplementationChangeRequest: (
     return yield* dispatch({
       ...input,
       type: "thread.implementation-change-request.retry",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  },
+);
+
+export const retryThreadImplementationRun: (
+  input: RetryThreadImplementationRunInput,
+) => CommandEffect = Effect.fn("EnvironmentCommands.retryThreadImplementationRun")(
+  function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "thread.implementation-run.retry",
       commandId: metadata.commandId,
       createdAt: metadata.createdAt,
     });

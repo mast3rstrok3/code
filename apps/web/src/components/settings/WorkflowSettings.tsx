@@ -30,7 +30,7 @@ function workflowTitle(workflow: WorkflowPromptContract["workflow"]): string {
     case "implementation":
       return "Implementation Workflow";
     case "product":
-      return "Product Workflow";
+      return "Full feature workflow";
   }
 }
 
@@ -138,7 +138,7 @@ function ProductWorkflowPromptSection({
   contracts: readonly WorkflowPromptContract[];
 }) {
   return (
-    <SettingsSection title="Product Workflow" icon={<WorkflowIcon className="size-3.5" />}>
+    <SettingsSection title="Full feature workflow" icon={<WorkflowIcon className="size-3.5" />}>
       {contracts.length === 0 ? (
         <SettingsRow
           title="No prompt contracts"

@@ -20,6 +20,7 @@ const ProjectionThreadDevReviewDbRow = ProjectionThreadDevReview.mapFields(
   Struct.assign({
     document: Schema.fromJsonString(DevReviewDocument),
     evidence: Schema.fromJsonString(DevReviewEvidence),
+    planningTicketIds: Schema.fromJsonString(Schema.Array(Schema.String)),
   }),
 );
 
@@ -33,6 +34,7 @@ const makeProjectionThreadDevReviewRepository = Effect.gen(function* () {
         review_id,
         source_thread_id,
         review_thread_id,
+        planning_ticket_ids_json,
         source_turn_id,
         status,
         document_json,
@@ -44,6 +46,7 @@ const makeProjectionThreadDevReviewRepository = Effect.gen(function* () {
         ${row.reviewId},
         ${row.sourceThreadId},
         ${row.reviewThreadId},
+        ${JSON.stringify(row.planningTicketIds ?? [])},
         ${row.sourceTurnId},
         ${row.status},
         ${JSON.stringify(row.document)},
@@ -55,6 +58,7 @@ const makeProjectionThreadDevReviewRepository = Effect.gen(function* () {
       DO UPDATE SET
         source_thread_id = excluded.source_thread_id,
         review_thread_id = excluded.review_thread_id,
+        planning_ticket_ids_json = excluded.planning_ticket_ids_json,
         source_turn_id = excluded.source_turn_id,
         status = excluded.status,
         document_json = excluded.document_json,
@@ -72,6 +76,7 @@ const makeProjectionThreadDevReviewRepository = Effect.gen(function* () {
         review_id AS "reviewId",
         source_thread_id AS "sourceThreadId",
         review_thread_id AS "reviewThreadId",
+        planning_ticket_ids_json AS "planningTicketIds",
         source_turn_id AS "sourceTurnId",
         status,
         document_json AS "document",
@@ -92,6 +97,7 @@ const makeProjectionThreadDevReviewRepository = Effect.gen(function* () {
         review_id AS "reviewId",
         source_thread_id AS "sourceThreadId",
         review_thread_id AS "reviewThreadId",
+        planning_ticket_ids_json AS "planningTicketIds",
         source_turn_id AS "sourceTurnId",
         status,
         document_json AS "document",
@@ -113,6 +119,7 @@ const makeProjectionThreadDevReviewRepository = Effect.gen(function* () {
         review_id AS "reviewId",
         source_thread_id AS "sourceThreadId",
         review_thread_id AS "reviewThreadId",
+        planning_ticket_ids_json AS "planningTicketIds",
         source_turn_id AS "sourceTurnId",
         status,
         document_json AS "document",
@@ -133,10 +140,31 @@ const makeProjectionThreadDevReviewRepository = Effect.gen(function* () {
     `,
   });
 
-  const upsert: ProjectionThreadDevReviewRepositoryShape["upsert"] = (row) =>
-    upsertProjectionThreadDevReviewRow(row).pipe(
+  const upsert: ProjectionThreadDevReviewRepositoryShape["upsert"] = Effect.fn(
+    "ProjectionThreadDevReviewRepository.upsert",
+  )(function* (row) {
+    yield* upsertProjectionThreadDevReviewRow(row).pipe(
       Effect.mapError(toPersistenceSqlError("ProjectionThreadDevReviewRepository.upsert:query")),
     );
+    yield* sql`DELETE FROM projection_dev_review_tickets WHERE review_id = ${row.reviewId}`.pipe(
+      Effect.mapError(
+        toPersistenceSqlError("ProjectionThreadDevReviewRepository.upsert:deleteTickets"),
+      ),
+    );
+    yield* Effect.forEach(
+      row.planningTicketIds ?? [],
+      (ticketId) =>
+        sql`
+          INSERT OR IGNORE INTO projection_dev_review_tickets(review_id, ticket_id)
+          VALUES (${row.reviewId}, ${ticketId})
+        `.pipe(
+          Effect.mapError(
+            toPersistenceSqlError("ProjectionThreadDevReviewRepository.upsert:ticket"),
+          ),
+        ),
+      { concurrency: 1 },
+    ).pipe(Effect.asVoid);
+  });
 
   const getById: ProjectionThreadDevReviewRepositoryShape["getById"] = (input) =>
     getProjectionThreadDevReviewRow(input).pipe(
@@ -155,12 +183,26 @@ const makeProjectionThreadDevReviewRepository = Effect.gen(function* () {
       Effect.mapError(toPersistenceSqlError("ProjectionThreadDevReviewRepository.listAll:query")),
     );
 
-  const deleteByThreadId: ProjectionThreadDevReviewRepositoryShape["deleteByThreadId"] = (input) =>
-    deleteProjectionThreadDevReviewRowsByThread(input).pipe(
+  const deleteByThreadId: ProjectionThreadDevReviewRepositoryShape["deleteByThreadId"] = Effect.fn(
+    "ProjectionThreadDevReviewRepository.deleteByThreadId",
+  )(function* (input) {
+    yield* sql`
+      DELETE FROM projection_dev_review_tickets
+      WHERE review_id IN (
+        SELECT review_id FROM projection_thread_dev_reviews
+        WHERE source_thread_id = ${input.threadId} OR review_thread_id = ${input.threadId}
+      )
+    `.pipe(
+      Effect.mapError(
+        toPersistenceSqlError("ProjectionThreadDevReviewRepository.deleteByThreadId:links"),
+      ),
+    );
+    yield* deleteProjectionThreadDevReviewRowsByThread(input).pipe(
       Effect.mapError(
         toPersistenceSqlError("ProjectionThreadDevReviewRepository.deleteByThreadId:query"),
       ),
     );
+  });
 
   return {
     upsert,

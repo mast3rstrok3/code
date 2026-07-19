@@ -173,6 +173,11 @@ import {
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
+import {
+  WorkflowArtifactAccessError,
+  WorkflowArtifactsGetInput,
+  WorkflowArtifactsSnapshot,
+} from "./workflowArtifacts.ts";
 
 export const WS_METHODS = {
   // Project registry methods
@@ -208,6 +213,7 @@ export const WS_METHODS = {
 
   // Review methods
   reviewGetDiffPreview: "review.getDiffPreview",
+  workflowArtifactsGet: "workflow.artifacts.get",
 
   // Terminal methods
   terminalOpen: "terminal.open",
@@ -535,6 +541,16 @@ export const WsReviewGetDiffPreviewRpc = Rpc.make(WS_METHODS.reviewGetDiffPrevie
   payload: ReviewDiffPreviewInput,
   success: ReviewDiffPreviewResult,
   error: Schema.Union([ReviewDiffPreviewError, EnvironmentAuthorizationError]),
+});
+
+export const WsWorkflowArtifactsGetRpc = Rpc.make(WS_METHODS.workflowArtifactsGet, {
+  payload: WorkflowArtifactsGetInput,
+  success: WorkflowArtifactsSnapshot,
+  error: Schema.Union([
+    WorkflowArtifactAccessError,
+    OrchestrationGetSnapshotError,
+    EnvironmentAuthorizationError,
+  ]),
 });
 
 export const WsTerminalOpenRpc = Rpc.make(WS_METHODS.terminalOpen, {
@@ -898,6 +914,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsVcsSwitchRefRpc,
   WsVcsInitRpc,
   WsReviewGetDiffPreviewRpc,
+  WsWorkflowArtifactsGetRpc,
   WsTerminalOpenRpc,
   WsTerminalAttachRpc,
   WsTerminalWriteRpc,

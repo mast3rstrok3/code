@@ -23,7 +23,11 @@ export const evenDimension = (value: number): number => {
 
 /**
  * Playwright's screencast-to-webm argument list: an MJPEG stream on stdin,
- * padded/cropped to a fixed canvas, encoded as realtime vp8.
+ * scaled and letterboxed into a fixed canvas, encoded as realtime vp8.
+ *
+ * A recording may contain desktop and mobile viewport sizes. Scaling before
+ * padding keeps those dimension changes valid while preserving their aspect
+ * ratios inside the recording canvas.
  */
 export const buildFfmpegArgs = (input: BuildFfmpegArgsInput): string[] => {
   const width = evenDimension(input.width);
@@ -64,7 +68,7 @@ export const buildFfmpegArgs = (input: BuildFfmpegArgsInput): string[] => {
     "-b:v",
     "1M",
     "-vf",
-    `pad=${width}:${height}:0:0:gray,crop=${width}:${height}:0:0`,
+    `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:gray`,
     input.outputPath,
   ];
 };

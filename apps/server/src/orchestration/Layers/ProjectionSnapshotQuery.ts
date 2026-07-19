@@ -10,6 +10,7 @@ import {
   NonNegativeInt,
   OrchestrationCheckpointFile,
   OrchestrationImplementationRun,
+  OrchestrationPlanningFileChange,
   OrchestrationPlanningTicket,
   OrchestrationPlanningTicketDependency,
   OrchestrationPlanningTicketId,
@@ -39,6 +40,8 @@ import {
   ProjectId,
   ThreadId,
   WorkflowSubagentBatchId,
+  ThreadWorkflowContext,
+  OrchestrationPlanningActiveReviewRequest,
   DevReviewId,
   type WorkspaceUserView,
 } from "@t3tools/contracts";
@@ -107,6 +110,7 @@ const ProjectionThreadDevReviewDbRowSchema = ProjectionThreadDevReview.mapFields
   Struct.assign({
     document: Schema.fromJsonString(DevReviewDocument),
     evidence: Schema.fromJsonString(DevReviewEvidence),
+    planningTicketIds: Schema.fromJsonString(Schema.Array(Schema.String)),
   }),
 );
 const ProjectionThreadSpecDbRowSchema = ProjectionThreadSpec.mapFields(
@@ -116,6 +120,7 @@ const ProjectionThreadSpecDbRowSchema = ProjectionThreadSpec.mapFields(
 );
 const ProjectionThreadPlanningTicketDbRowSchema = ProjectionThreadPlanningTicket.mapFields(
   Struct.assign({
+    plannedFileChanges: Schema.fromJsonString(Schema.Array(OrchestrationPlanningFileChange)),
     dependencies: Schema.fromJsonString(Schema.Array(OrchestrationPlanningTicketDependency)),
   }),
 );
@@ -123,6 +128,8 @@ const ProjectionThreadPlanningReviewCycleDbRowSchema =
   ProjectionThreadPlanningReviewCycle.mapFields(
     Struct.assign({
       failingPlanningTicketIds: Schema.fromJsonString(Schema.Array(OrchestrationPlanningTicketId)),
+      targetPlanningTicketIds: Schema.fromJsonString(Schema.Array(OrchestrationPlanningTicketId)),
+      editedPlanningTicketIds: Schema.fromJsonString(Schema.Array(OrchestrationPlanningTicketId)),
       dependencyFeedback: Schema.fromJsonString(Schema.Array(Schema.String)),
       perTicketFeedback: Schema.fromJsonString(
         Schema.Array(OrchestrationPlanningReviewTicketFeedback),
@@ -137,6 +144,10 @@ const ProjectionImplementationRunDbRowSchema = ProjectionImplementationRun.mapFi
 const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
   Struct.assign({
     modelSelection: Schema.fromJsonString(ModelSelection),
+    workflowContext: Schema.NullOr(Schema.fromJsonString(ThreadWorkflowContext)),
+    planningActiveReview: Schema.NullOr(
+      Schema.fromJsonString(OrchestrationPlanningActiveReviewRequest),
+    ),
   }),
 );
 const ProjectionWorkflowSubagentBatchDbRowSchema = Schema.Struct({
@@ -350,6 +361,7 @@ function mapDevReviewRow(
     id: row.reviewId,
     sourceThreadId: row.sourceThreadId,
     reviewThreadId: row.reviewThreadId,
+    planningTicketIds: row.planningTicketIds,
     sourceTurnId: row.sourceTurnId,
     status: row.status,
     document: row.document,
@@ -470,6 +482,7 @@ function buildPlanningWorkflow(input: {
     spec: input.spec,
     tickets: [...input.tickets],
     reviewCycles: [...input.reviewCycles],
+    activeReview: input.thread.planningActiveReview,
   };
 }
 
@@ -514,6 +527,7 @@ function mapThreadShellRow(input: {
     ownerUserId: input.thread.ownerUserId,
     parentThreadId: input.thread.parentThreadId,
     workflowRole: input.thread.workflowRole,
+    workflowContext: input.thread.workflowContext,
     workflowSubagentBatchProvenance:
       input.thread.workflowSubagentBatchId == null ||
       input.thread.workflowSubagentChildIndex == null
@@ -526,6 +540,7 @@ function mapThreadShellRow(input: {
     modelSelection: input.thread.modelSelection,
     runtimeMode: input.thread.runtimeMode,
     interactionMode: input.thread.interactionMode,
+    workflowPreset: input.thread.workflowPreset ?? null,
     branch: input.thread.branch,
     worktreePath: input.thread.worktreePath,
     latestTurn: input.latestTurn,
@@ -631,12 +646,16 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           COALESCE(NULLIF(trim(owner_user_id), ''), ${DEFAULT_WORKSPACE_USER_ID}) AS "ownerUserId",
           parent_thread_id AS "parentThreadId",
           workflow_role AS "workflowRole",
+          CASE WHEN workflow_id IS NULL OR workflow_root_thread_id IS NULL THEN NULL
+            ELSE json_object('workflowId', workflow_id, 'rootThreadId', workflow_root_thread_id,
+              'ticketScope', json(workflow_ticket_scope_json)) END AS "workflowContext",
           workflow_subagent_batch_id AS "workflowSubagentBatchId",
           workflow_subagent_child_index AS "workflowSubagentChildIndex",
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
+          workflow_preset AS "workflowPreset",
           branch,
           worktree_path AS "worktreePath",
           latest_turn_id AS "latestTurnId",
@@ -648,6 +667,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
           planning_workflow_stage AS "planningWorkflowStage",
+          planning_active_review_json AS "planningActiveReview",
           deleted_at AS "deletedAt"
         FROM projection_threads
         ORDER BY created_at ASC, thread_id ASC
@@ -665,12 +685,16 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           COALESCE(NULLIF(trim(owner_user_id), ''), ${DEFAULT_WORKSPACE_USER_ID}) AS "ownerUserId",
           parent_thread_id AS "parentThreadId",
           workflow_role AS "workflowRole",
+          CASE WHEN workflow_id IS NULL OR workflow_root_thread_id IS NULL THEN NULL
+            ELSE json_object('workflowId', workflow_id, 'rootThreadId', workflow_root_thread_id,
+              'ticketScope', json(workflow_ticket_scope_json)) END AS "workflowContext",
           workflow_subagent_batch_id AS "workflowSubagentBatchId",
           workflow_subagent_child_index AS "workflowSubagentChildIndex",
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
+          workflow_preset AS "workflowPreset",
           branch,
           worktree_path AS "worktreePath",
           latest_turn_id AS "latestTurnId",
@@ -682,6 +706,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
           planning_workflow_stage AS "planningWorkflowStage",
+          planning_active_review_json AS "planningActiveReview",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE deleted_at IS NULL
@@ -701,12 +726,16 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           COALESCE(NULLIF(trim(owner_user_id), ''), ${DEFAULT_WORKSPACE_USER_ID}) AS "ownerUserId",
           parent_thread_id AS "parentThreadId",
           workflow_role AS "workflowRole",
+          CASE WHEN workflow_id IS NULL OR workflow_root_thread_id IS NULL THEN NULL
+            ELSE json_object('workflowId', workflow_id, 'rootThreadId', workflow_root_thread_id,
+              'ticketScope', json(workflow_ticket_scope_json)) END AS "workflowContext",
           workflow_subagent_batch_id AS "workflowSubagentBatchId",
           workflow_subagent_child_index AS "workflowSubagentChildIndex",
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
+          workflow_preset AS "workflowPreset",
           branch,
           worktree_path AS "worktreePath",
           latest_turn_id AS "latestTurnId",
@@ -718,6 +747,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
           planning_workflow_stage AS "planningWorkflowStage",
+          planning_active_review_json AS "planningActiveReview",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE deleted_at IS NULL
@@ -774,6 +804,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           review_id AS "reviewId",
           source_thread_id AS "sourceThreadId",
           review_thread_id AS "reviewThreadId",
+          planning_ticket_ids_json AS "planningTicketIds",
           source_turn_id AS "sourceTurnId",
           status,
           document_json AS "document",
@@ -844,11 +875,13 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       sql`
         SELECT
           ticket_id AS "ticketId",
+          ticket_key AS "ticketKey",
           spec_id AS "specId",
           thread_id AS "threadId",
           ordinal,
           title,
           body_markdown AS "bodyMarkdown",
+          planned_file_changes_json AS "plannedFileChanges",
           dependencies_json AS "dependencies",
           status,
           created_at AS "createdAt",
@@ -867,11 +900,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           thread_id AS "threadId",
           spec_id AS "specId",
           cycle_number AS "cycleNumber",
+          review_mode AS "mode",
           status,
           reviewer_thread_id AS "reviewerThreadId",
           reviewer_message_id AS "reviewerMessageId",
           verdict_markdown AS "verdictMarkdown",
           failing_planning_ticket_ids_json AS "failingPlanningTicketIds",
+          target_planning_ticket_ids_json AS "targetPlanningTicketIds",
+          edited_planning_ticket_ids_json AS "editedPlanningTicketIds",
           dependency_feedback_json AS "dependencyFeedback",
           per_ticket_feedback_json AS "perTicketFeedback",
           created_at AS "createdAt"
@@ -1198,12 +1234,16 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           COALESCE(NULLIF(trim(owner_user_id), ''), ${DEFAULT_WORKSPACE_USER_ID}) AS "ownerUserId",
           parent_thread_id AS "parentThreadId",
           workflow_role AS "workflowRole",
+          CASE WHEN workflow_id IS NULL OR workflow_root_thread_id IS NULL THEN NULL
+            ELSE json_object('workflowId', workflow_id, 'rootThreadId', workflow_root_thread_id,
+              'ticketScope', json(workflow_ticket_scope_json)) END AS "workflowContext",
           workflow_subagent_batch_id AS "workflowSubagentBatchId",
           workflow_subagent_child_index AS "workflowSubagentChildIndex",
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
+          workflow_preset AS "workflowPreset",
           branch,
           worktree_path AS "worktreePath",
           latest_turn_id AS "latestTurnId",
@@ -1215,6 +1255,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
           planning_workflow_stage AS "planningWorkflowStage",
+          planning_active_review_json AS "planningActiveReview",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE thread_id = ${threadId}
@@ -1274,6 +1315,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           review_id AS "reviewId",
           source_thread_id AS "sourceThreadId",
           review_thread_id AS "reviewThreadId",
+          planning_ticket_ids_json AS "planningTicketIds",
           source_turn_id AS "sourceTurnId",
           status,
           document_json AS "document",
@@ -1341,7 +1383,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           created_at AS "createdAt",
           updated_at AS "updatedAt"
         FROM projection_thread_specs
-        WHERE thread_id = ${threadId}
+        WHERE workflow_id = (
+          SELECT workflow_id FROM projection_threads WHERE thread_id = ${threadId}
+        ) OR thread_id = ${threadId}
         ORDER BY created_at ASC, spec_id ASC
       `,
   });
@@ -1353,17 +1397,24 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       sql`
         SELECT
           ticket_id AS "ticketId",
+          ticket_key AS "ticketKey",
           spec_id AS "specId",
           thread_id AS "threadId",
           ordinal,
           title,
           body_markdown AS "bodyMarkdown",
+          planned_file_changes_json AS "plannedFileChanges",
           dependencies_json AS "dependencies",
           status,
           created_at AS "createdAt",
           updated_at AS "updatedAt"
         FROM projection_thread_planning_tickets
-        WHERE thread_id = ${threadId}
+        WHERE spec_id IN (
+          SELECT spec_id FROM projection_thread_specs
+          WHERE workflow_id = (
+            SELECT workflow_id FROM projection_threads WHERE thread_id = ${threadId}
+          ) OR thread_id = ${threadId}
+        )
         ORDER BY ordinal ASC, created_at ASC, ticket_id ASC
       `,
   });
@@ -1377,16 +1428,24 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           thread_id AS "threadId",
           spec_id AS "specId",
           cycle_number AS "cycleNumber",
+          review_mode AS "mode",
           status,
           reviewer_thread_id AS "reviewerThreadId",
           reviewer_message_id AS "reviewerMessageId",
           verdict_markdown AS "verdictMarkdown",
           failing_planning_ticket_ids_json AS "failingPlanningTicketIds",
+          target_planning_ticket_ids_json AS "targetPlanningTicketIds",
+          edited_planning_ticket_ids_json AS "editedPlanningTicketIds",
           dependency_feedback_json AS "dependencyFeedback",
           per_ticket_feedback_json AS "perTicketFeedback",
           created_at AS "createdAt"
         FROM projection_thread_planning_review_cycles
-        WHERE thread_id = ${threadId}
+        WHERE spec_id IN (
+          SELECT spec_id FROM projection_thread_specs
+          WHERE workflow_id = (
+            SELECT workflow_id FROM projection_threads WHERE thread_id = ${threadId}
+          ) OR thread_id = ${threadId}
+        )
         ORDER BY cycle_number ASC, created_at ASC
       `,
   });
@@ -1677,11 +1736,15 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 workflowSubagentBatchChildRows,
               );
               const specByThread = new Map<string, OrchestrationPlanningSpec>();
+              const specByWorkflowId = new Map<string, OrchestrationPlanningSpec>();
               const ticketsByThread = new Map<string, Array<OrchestrationPlanningTicket>>();
+              const ticketsBySpec = new Map<string, Array<OrchestrationPlanningTicket>>();
               const reviewCyclesByThread = new Map<
                 string,
                 Array<OrchestrationPlanningReviewCycle>
               >();
+              const reviewCyclesBySpec = new Map<string, Array<OrchestrationPlanningReviewCycle>>();
+              const threadById = new Map(threadRows.map((row) => [row.threadId, row] as const));
               const activitiesByThread = new Map<string, Array<OrchestrationThreadActivity>>();
               const checkpointsByThread = new Map<string, Array<OrchestrationCheckpointSummary>>();
               const sessionsByThread = new Map<string, OrchestrationSession>();
@@ -1745,7 +1808,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
 
               for (const row of specRows) {
                 updatedAt = maxIso(updatedAt, row.updatedAt);
-                specByThread.set(row.threadId, mapSpecRow(row));
+                const spec = mapSpecRow(row);
+                specByThread.set(row.threadId, spec);
+                specByWorkflowId.set(spec.workflowId, spec);
               }
 
               for (const row of planningTicketRows) {
@@ -1753,6 +1818,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 const tickets = ticketsByThread.get(row.threadId) ?? [];
                 tickets.push(projectionTicketToContract(row));
                 ticketsByThread.set(row.threadId, tickets);
+                const specTickets = ticketsBySpec.get(row.specId) ?? [];
+                specTickets.push(projectionTicketToContract(row));
+                ticketsBySpec.set(row.specId, specTickets);
               }
 
               for (const row of planningReviewCycleRows) {
@@ -1760,6 +1828,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 const reviewCycles = reviewCyclesByThread.get(row.threadId) ?? [];
                 reviewCycles.push(projectionReviewCycleToContract(row));
                 reviewCyclesByThread.set(row.threadId, reviewCycles);
+                const specReviewCycles = reviewCyclesBySpec.get(row.specId) ?? [];
+                specReviewCycles.push(projectionReviewCycleToContract(row));
+                reviewCyclesBySpec.set(row.specId, specReviewCycles);
               }
 
               for (const row of activityRows) {
@@ -1868,6 +1939,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 ownerUserId: row.ownerUserId,
                 parentThreadId: row.parentThreadId,
                 workflowRole: row.workflowRole,
+                workflowContext: row.workflowContext,
                 workflowSubagentBatchProvenance:
                   row.workflowSubagentBatchId == null || row.workflowSubagentChildIndex == null
                     ? null
@@ -1879,6 +1951,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 modelSelection: row.modelSelection,
                 runtimeMode: row.runtimeMode,
                 interactionMode: row.interactionMode,
+                workflowPreset: row.workflowPreset ?? null,
                 branch: row.branch,
                 worktreePath: row.worktreePath,
                 latestTurn: latestTurnByThread.get(row.threadId) ?? null,
@@ -1888,12 +1961,28 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 deletedAt: row.deletedAt,
                 messages: messagesByThread.get(row.threadId) ?? [],
                 proposedPlans: proposedPlansByThread.get(row.threadId) ?? [],
-                planningWorkflow: buildPlanningWorkflow({
-                  thread: row,
-                  spec: specByThread.get(row.threadId) ?? null,
-                  tickets: ticketsByThread.get(row.threadId) ?? [],
-                  reviewCycles: reviewCyclesByThread.get(row.threadId) ?? [],
-                }),
+                planningWorkflow: (() => {
+                  const spec =
+                    (row.workflowContext === null
+                      ? undefined
+                      : specByWorkflowId.get(row.workflowContext.workflowId)) ??
+                    specByThread.get(row.threadId) ??
+                    null;
+                  const artifactThread =
+                    spec === null ? row : (threadById.get(spec.sourceThreadId) ?? row);
+                  return buildPlanningWorkflow({
+                    thread: artifactThread,
+                    spec,
+                    tickets:
+                      spec === null
+                        ? (ticketsByThread.get(row.threadId) ?? [])
+                        : (ticketsBySpec.get(spec.id) ?? []),
+                    reviewCycles:
+                      spec === null
+                        ? (reviewCyclesByThread.get(row.threadId) ?? [])
+                        : (reviewCyclesBySpec.get(spec.id) ?? []),
+                  });
+                })(),
                 devReviews: devReviewsByThread.get(row.threadId) ?? [],
                 workflowSubagentBatches: workflowSubagentBatchesByThread.get(row.threadId) ?? [],
                 activities: activitiesByThread.get(row.threadId) ?? [],
@@ -2165,11 +2254,15 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 workflowSubagentBatchChildRows,
               );
               const specByThread = new Map<string, OrchestrationPlanningSpec>();
+              const specByWorkflowId = new Map<string, OrchestrationPlanningSpec>();
               const ticketsByThread = new Map<string, Array<OrchestrationPlanningTicket>>();
+              const ticketsBySpec = new Map<string, Array<OrchestrationPlanningTicket>>();
               const reviewCyclesByThread = new Map<
                 string,
                 Array<OrchestrationPlanningReviewCycle>
               >();
+              const reviewCyclesBySpec = new Map<string, Array<OrchestrationPlanningReviewCycle>>();
+              const threadById = new Map(threadRows.map((row) => [row.threadId, row] as const));
               const sessionByThread = new Map<string, OrchestrationSession>();
 
               for (let index = 0; index < sessionRows.length; index += 1) {
@@ -2211,7 +2304,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 if (!row) {
                   continue;
                 }
-                specByThread.set(row.threadId, mapSpecRow(row));
+                const spec = mapSpecRow(row);
+                specByThread.set(row.threadId, spec);
+                specByWorkflowId.set(spec.workflowId, spec);
               }
 
               for (let index = 0; index < planningTicketRows.length; index += 1) {
@@ -2222,6 +2317,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 const tickets = ticketsByThread.get(row.threadId) ?? [];
                 tickets.push(projectionTicketToContract(row));
                 ticketsByThread.set(row.threadId, tickets);
+                const specTickets = ticketsBySpec.get(row.specId) ?? [];
+                specTickets.push(projectionTicketToContract(row));
+                ticketsBySpec.set(row.specId, specTickets);
               }
 
               for (let index = 0; index < planningReviewCycleRows.length; index += 1) {
@@ -2232,6 +2330,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 const reviewCycles = reviewCyclesByThread.get(row.threadId) ?? [];
                 reviewCycles.push(projectionReviewCycleToContract(row));
                 reviewCyclesByThread.set(row.threadId, reviewCycles);
+                const specReviewCycles = reviewCyclesBySpec.get(row.specId) ?? [];
+                specReviewCycles.push(projectionReviewCycleToContract(row));
+                reviewCyclesBySpec.set(row.specId, specReviewCycles);
               }
 
               for (let index = 0; index < threadRows.length; index += 1) {
@@ -2245,6 +2346,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   ownerUserId: row.ownerUserId,
                   parentThreadId: row.parentThreadId,
                   workflowRole: row.workflowRole,
+                  workflowContext: row.workflowContext,
                   workflowSubagentBatchProvenance:
                     row.workflowSubagentBatchId == null || row.workflowSubagentChildIndex == null
                       ? null
@@ -2256,6 +2358,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   modelSelection: row.modelSelection,
                   runtimeMode: row.runtimeMode,
                   interactionMode: row.interactionMode,
+                  workflowPreset: row.workflowPreset ?? null,
                   branch: row.branch,
                   worktreePath: row.worktreePath,
                   latestTurn: latestTurnByThread.get(row.threadId) ?? null,
@@ -2265,12 +2368,28 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   deletedAt: row.deletedAt,
                   messages: [],
                   proposedPlans: proposedPlansByThread.get(row.threadId) ?? [],
-                  planningWorkflow: buildPlanningWorkflow({
-                    thread: row,
-                    spec: specByThread.get(row.threadId) ?? null,
-                    tickets: ticketsByThread.get(row.threadId) ?? [],
-                    reviewCycles: reviewCyclesByThread.get(row.threadId) ?? [],
-                  }),
+                  planningWorkflow: (() => {
+                    const spec =
+                      (row.workflowContext === null
+                        ? undefined
+                        : specByWorkflowId.get(row.workflowContext.workflowId)) ??
+                      specByThread.get(row.threadId) ??
+                      null;
+                    const artifactThread =
+                      spec === null ? row : (threadById.get(spec.sourceThreadId) ?? row);
+                    return buildPlanningWorkflow({
+                      thread: artifactThread,
+                      spec,
+                      tickets:
+                        spec === null
+                          ? (ticketsByThread.get(row.threadId) ?? [])
+                          : (ticketsBySpec.get(spec.id) ?? []),
+                      reviewCycles:
+                        spec === null
+                          ? (reviewCyclesByThread.get(row.threadId) ?? [])
+                          : (reviewCyclesBySpec.get(spec.id) ?? []),
+                    });
+                  })(),
                   devReviews: devReviewsByThread.get(row.threadId) ?? [],
                   workflowSubagentBatches: workflowSubagentBatchesByThread.get(row.threadId) ?? [],
                   activities: [],
@@ -2846,11 +2965,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       }
 
       const latestSpec = latestSpecByThread(specRows).get(threadRow.value.threadId);
+      const canonicalSpec = latestSpec ?? specRows.map(mapSpecRow).at(-1);
 
       return Option.some(
         mapThreadShellRow({
           thread: threadRow.value,
-          spec: latestSpec ?? null,
+          spec: canonicalSpec ?? null,
           latestTurn: Option.isSome(latestTurnRow) ? mapLatestTurn(latestTurnRow.value) : null,
           session: Option.isSome(sessionRow) ? mapSessionRow(sessionRow.value) : null,
         }),
@@ -2998,6 +3118,18 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       }
 
       const latestSpec = latestSpecByThread(specRows).get(threadRow.value.threadId);
+      const canonicalSpec = latestSpec ?? specRows.map(mapSpecRow).at(-1);
+      const artifactThreadRow =
+        canonicalSpec === undefined || canonicalSpec.sourceThreadId === threadRow.value.threadId
+          ? threadRow
+          : yield* getActiveThreadRowById({ threadId: canonicalSpec.sourceThreadId }).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getThreadDetailSnapshotById:getArtifactThread:query",
+                  "ProjectionSnapshotQuery.getThreadDetailSnapshotById:getArtifactThread:decodeRow",
+                ),
+              ),
+            );
 
       const thread = {
         id: threadRow.value.threadId,
@@ -3005,6 +3137,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         ownerUserId: threadRow.value.ownerUserId,
         parentThreadId: threadRow.value.parentThreadId,
         workflowRole: threadRow.value.workflowRole,
+        workflowContext: threadRow.value.workflowContext,
         workflowSubagentBatchProvenance:
           threadRow.value.workflowSubagentBatchId == null ||
           threadRow.value.workflowSubagentChildIndex == null
@@ -3017,6 +3150,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         modelSelection: threadRow.value.modelSelection,
         runtimeMode: threadRow.value.runtimeMode,
         interactionMode: threadRow.value.interactionMode,
+        workflowPreset: threadRow.value.workflowPreset ?? null,
         branch: threadRow.value.branch,
         worktreePath: threadRow.value.worktreePath,
         latestTurn: Option.isSome(latestTurnRow) ? mapLatestTurn(latestTurnRow.value) : null,
@@ -3041,8 +3175,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         }),
         proposedPlans: proposedPlanRows.map(mapProposedPlanRow),
         planningWorkflow: buildPlanningWorkflow({
-          thread: threadRow.value,
-          spec: latestSpec ?? null,
+          thread: Option.getOrElse(artifactThreadRow, () => threadRow.value),
+          spec: canonicalSpec ?? null,
           tickets: planningTicketRows.map(projectionTicketToContract),
           reviewCycles: planningReviewCycleRows.map(projectionReviewCycleToContract),
         }),

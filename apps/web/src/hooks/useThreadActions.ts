@@ -11,7 +11,11 @@ import { AsyncResult } from "effect/unstable/reactivity";
 import { useRouter } from "@tanstack/react-router";
 import { useCallback, useMemo, useRef } from "react";
 
-import { getFallbackThreadIdAfterDelete } from "../components/Sidebar.logic";
+import {
+  expandHierarchySelectionIds,
+  getFallbackThreadIdAfterDelete,
+  getThreadDeleteConfirmationText,
+} from "../components/Sidebar.logic";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { terminalEnvironment } from "../state/terminal";
 import { threadEnvironment } from "../state/threads";
@@ -170,7 +174,7 @@ export function useThreadActions() {
         environmentId: threadRef.environmentId,
         projectId: thread.projectId,
       });
-      const deletedIds =
+      const explicitlyDeletedIds =
         opts.deletedThreadKeys && opts.deletedThreadKeys.size > 0
           ? new Set<ThreadId>(
               [...opts.deletedThreadKeys].flatMap((threadKey) => {
@@ -178,11 +182,19 @@ export function useThreadActions() {
                 return ref && ref.environmentId === threadRef.environmentId ? [ref.threadId] : [];
               }),
             )
-          : undefined;
-      const survivingThreads =
-        deletedIds && deletedIds.size > 0
-          ? threads.filter((entry) => entry.id === threadRef.threadId || !deletedIds.has(entry.id))
-          : threads;
+          : new Set<ThreadId>();
+      explicitlyDeletedIds.add(threadRef.threadId);
+      const deletedIds = expandHierarchySelectionIds({
+        nodes: threads,
+        selectedIds: explicitlyDeletedIds,
+        accessors: {
+          getId: (entry) => entry.id,
+          getParentId: (entry) => entry.parentThreadId,
+        },
+      });
+      const survivingThreads = threads.filter(
+        (entry) => entry.id === threadRef.threadId || !deletedIds.has(entry.id),
+      );
       const orphanedWorktreePath = getOrphanedWorktreePathForThread(
         survivingThreads,
         threadRef.threadId,
@@ -222,15 +234,14 @@ export function useThreadActions() {
         input: { threadId: threadRef.threadId, deleteHistory: true },
       });
 
-      const deletedThreadIds = deletedIds ?? new Set<ThreadId>();
       const currentRouteThreadRef = getCurrentRouteThreadRef();
       const shouldNavigateToFallback =
-        currentRouteThreadRef?.threadId === threadRef.threadId &&
-        currentRouteThreadRef.environmentId === threadRef.environmentId;
+        currentRouteThreadRef?.environmentId === threadRef.environmentId &&
+        deletedIds.has(currentRouteThreadRef.threadId);
       const fallbackThreadId = getFallbackThreadIdAfterDelete({
         threads,
         deletedThreadId: threadRef.threadId,
-        deletedThreadIds,
+        deletedThreadIds: deletedIds,
         sortOrder: sidebarThreadSortOrder,
       });
       const deleteResult = await deleteThreadMutation({
@@ -353,12 +364,7 @@ export function useThreadActions() {
       if (confirmThreadDelete && localApi) {
         const title = resolved?.thread.title ?? "this thread";
         const confirmationResult = await settlePromise(() =>
-          localApi.dialogs.confirm(
-            [
-              `Delete thread "${title}"?`,
-              "This permanently clears conversation history for this thread.",
-            ].join("\n"),
-          ),
+          localApi.dialogs.confirm(getThreadDeleteConfirmationText(title)),
         );
         if (confirmationResult._tag === "Failure") {
           return confirmationResult;

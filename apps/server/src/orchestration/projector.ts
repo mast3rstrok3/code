@@ -28,6 +28,7 @@ import {
   ThreadWorkflowSubagentBatchChildUpdatedPayload,
   ThreadWorkflowSubagentBatchCompletedPayload,
   ThreadInteractionModeSetPayload,
+  ThreadComposerModeSetPayload,
   ThreadMetaUpdatedPayload,
   ThreadImplementationChangeRequestRetryRequestedPayload,
   ThreadImplementationRunLaunchedPayload,
@@ -231,6 +232,7 @@ function emptyPlanningWorkflow(): OrchestrationPlanningWorkflow {
     spec: null,
     tickets: [],
     reviewCycles: [],
+    activeReview: null,
   };
 }
 
@@ -336,6 +338,7 @@ export function projectEvent(
             ownerUserId: payload.ownerUserId,
             parentThreadId: payload.parentThreadId ?? null,
             workflowRole: payload.workflowRole ?? null,
+            workflowContext: payload.workflowContext ?? null,
             ...(payload.workflowSubagentBatchProvenance === undefined
               ? {}
               : { workflowSubagentBatchProvenance: payload.workflowSubagentBatchProvenance }),
@@ -343,6 +346,7 @@ export function projectEvent(
             modelSelection: payload.modelSelection,
             runtimeMode: payload.runtimeMode,
             interactionMode: payload.interactionMode,
+            workflowPreset: payload.workflowPreset ?? null,
             branch: payload.branch,
             worktreePath: payload.worktreePath,
             latestTurn: null,
@@ -443,6 +447,23 @@ export function projectEvent(
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             interactionMode: payload.interactionMode,
+            updatedAt: payload.updatedAt,
+          }),
+        })),
+      );
+
+    case "thread.composer-mode-set":
+      return decodeForEvent(
+        ThreadComposerModeSetPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            interactionMode: payload.interactionMode,
+            workflowPreset: payload.workflowPreset,
             updatedAt: payload.updatedAt,
           }),
         })),
@@ -557,6 +578,7 @@ export function projectEvent(
                 createTicketsAvailable: stage === "tickets-authoring",
                 tickets: payload.tickets,
                 reviewCycles,
+                activeReview: null,
               },
               updatedAt: payload.revisedAt,
             }),
@@ -582,6 +604,13 @@ export function projectEvent(
                 ...workflow,
                 stage: payload.stage,
                 createTicketsAvailable: false,
+                activeReview: {
+                  cycleNumber: payload.cycleNumber,
+                  mode: payload.mode,
+                  reviewerThreadId: payload.reviewerThreadId,
+                  targetPlanningTicketIds: payload.targetPlanningTicketIds,
+                  requestedAt: payload.requestedAt,
+                },
               },
               updatedAt: payload.requestedAt,
             }),
@@ -608,6 +637,7 @@ export function projectEvent(
                 spec: payload.bundle.spec,
                 tickets: payload.bundle.tickets,
                 reviewCycles: payload.bundle.reviewCycles,
+                activeReview: null,
               },
               updatedAt: payload.loadedAt,
             }),

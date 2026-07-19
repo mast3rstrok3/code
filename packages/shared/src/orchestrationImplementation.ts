@@ -17,6 +17,7 @@ export function resolveImplementationBranchIdentity(input: {
     readonly orchestratorBranch: string;
     readonly orchestratorWorktreePath: string;
   }>;
+  readonly branchPrefix?: string;
 }): {
   readonly baseBranch: string;
   readonly orchestratorBranch: string;
@@ -33,7 +34,7 @@ export function resolveImplementationBranchIdentity(input: {
   let suffix = 0;
   while (true) {
     const disambiguator = suffix === 0 ? "" : `-${suffix + 1}`;
-    const orchestratorBranch = `implementation/${slug}${disambiguator}`;
+    const orchestratorBranch = `${input.branchPrefix ?? "implementation"}/${slug}${disambiguator}`;
     const worktreeBase = input.workspaceRoot?.replace(/[/\\]+$/, "") ?? "";
     const orchestratorWorktreePath =
       worktreeBase.length > 0

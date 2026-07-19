@@ -13,5 +13,10 @@ export function createReviewEnvironmentAtoms<R, E>(
       tag: WS_METHODS.reviewGetDiffPreview,
       staleTimeMs: 5_000,
     }),
+    workflowArtifacts: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:workflow:artifacts",
+      tag: WS_METHODS.workflowArtifactsGet,
+      staleTimeMs: 0,
+    }),
   };
 }

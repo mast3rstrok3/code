@@ -32,6 +32,7 @@ interface NativeProvisionConfig {
   readonly backendUrl: string | undefined;
   readonly keycloakUrl: string | undefined;
   readonly minioUrl: string | undefined;
+  readonly preferStackScopedUrls: boolean;
 }
 
 interface PortMapping {
@@ -341,6 +342,16 @@ const configuredPreviewUrl = (
   config: NativeProvisionConfig,
   service: ParsedComposeService,
 ): string | undefined => {
+  const stackScopedUrl = appDevStackPreviewUrlForService({
+    namespace: config.namespace,
+    serviceName: service.name,
+    frontendUrl: config.frontendUrl,
+    backendUrl: config.backendUrl,
+    keycloakUrl: config.keycloakUrl,
+    minioUrl: config.minioUrl,
+  });
+  if (config.preferStackScopedUrls && stackScopedUrl !== null) return stackScopedUrl;
+
   const explicitUrl = firstAppLabel(service.labels, ["previewUrl", "preview_url", "url"]);
   if (explicitUrl !== undefined)
     return explicitUrl.includes("://") ? explicitUrl : `https://${explicitUrl}`;
@@ -350,16 +361,7 @@ const configuredPreviewUrl = (
     return host.length > 0 ? `https://${host}` : undefined;
   }
 
-  return (
-    appDevStackPreviewUrlForService({
-      namespace: config.namespace,
-      serviceName: service.name,
-      frontendUrl: config.frontendUrl,
-      backendUrl: config.backendUrl,
-      keycloakUrl: config.keycloakUrl,
-      minioUrl: config.minioUrl,
-    }) ?? undefined
-  );
+  return stackScopedUrl ?? undefined;
 };
 
 const servicePortDocuments = (
@@ -401,6 +403,35 @@ const resolveVolumeSource = (source: string, composeDir: string): string =>
 const resolveComposeRelativePath = (value: string, composeDir: string): string => {
   const expanded = expandEnv(value);
   return NodePath.isAbsolute(expanded) ? expanded : NodePath.resolve(composeDir, expanded);
+};
+
+const splitComposeVolumeSpec = (value: string): ReadonlyArray<string> => {
+  const parts: string[] = [];
+  let current = "";
+  let interpolationDepth = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    const next = value[index + 1];
+    if (character === "$" && next === "{") {
+      interpolationDepth += 1;
+      current += "${";
+      index += 1;
+      continue;
+    }
+    if (character === "}" && interpolationDepth > 0) {
+      interpolationDepth -= 1;
+      current += character;
+      continue;
+    }
+    if (character === ":" && interpolationDepth === 0) {
+      parts.push(current);
+      current = "";
+      continue;
+    }
+    current += character;
+  }
+  parts.push(current);
+  return parts;
 };
 
 const normalizeRegistry = (registry: string | undefined): string | undefined => {
@@ -821,7 +852,7 @@ const volumeMountDocuments = (
 
   for (const rawVolume of service.volumes) {
     if (typeof rawVolume === "string") {
-      const parts = rawVolume.split(":");
+      const parts = splitComposeVolumeSpec(rawVolume);
       if (parts.length === 1) {
         const mountPath = parts[0]?.trim();
         if (mountPath?.startsWith("/")) addEmptyDir(mountPath, mountPath);
@@ -861,9 +892,53 @@ const volumeMountDocuments = (
   return { volumeMounts, volumes };
 };
 
+const splitComposeCommand = (value: string): Array<string> => {
+  const args: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  const flush = () => {
+    if (current.length === 0) return;
+    args.push(current);
+    current = "";
+  };
+
+  for (const character of value) {
+    if (escaped) {
+      current += character;
+      escaped = false;
+      continue;
+    }
+    if (character === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote !== null) {
+      if (character === quote) quote = null;
+      else current += character;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      continue;
+    }
+    if (/\s/u.test(character)) {
+      flush();
+      continue;
+    }
+    current += character;
+  }
+  if (escaped) current += "\\";
+  flush();
+  return args;
+};
+
 const commandArray = (value: unknown): Array<string> | undefined => {
-  if (Array.isArray(value)) return value.map((item) => String(item));
-  if (typeof value === "string" && value.trim().length > 0) return ["/bin/sh", "-lc", value];
+  if (Array.isArray(value)) return value.map((item) => expandEnv(String(item)));
+  if (typeof value === "string" && value.trim().length > 0) {
+    const args = splitComposeCommand(expandEnv(value));
+    return args.length > 0 ? args : undefined;
+  }
   return undefined;
 };
 

@@ -10,6 +10,7 @@ import {
   type TurnId,
 } from "@t3tools/contracts";
 import { truncate } from "@t3tools/shared/String";
+import { isProductWorkflowRoot } from "@t3tools/shared/workflowPresets";
 import { type ChatMessage, type SessionPhase, type Thread, type ThreadShell } from "../types";
 import { type ComposerImageAttachment, type DraftThreadState } from "../composerDraftStore";
 import * as Schema from "effect/Schema";
@@ -44,6 +45,7 @@ export function buildLocalDraftThread(
     modelSelection: fallbackModelSelection,
     runtimeMode: draftThread.runtimeMode,
     interactionMode: draftThread.interactionMode,
+    workflowPreset: draftThread.workflowPreset,
     session: null,
     messages: [],
     createdAt: draftThread.createdAt,
@@ -92,15 +94,14 @@ export function buildThreadTurnInterruptInput(thread: Pick<Thread, "id" | "sessi
 }
 
 export function resolveProductWorkflowPlanningThreadId(input: {
-  activeThread: Pick<Thread, "id" | "interactionMode" | "workflowRole"> | null | undefined;
+  activeThread:
+    | Pick<Thread, "id" | "interactionMode" | "workflowPreset" | "workflowRole">
+    | null
+    | undefined;
   workflowThreadShells: ReadonlyArray<Pick<ThreadShell, "id" | "parentThreadId" | "workflowRole">>;
 }): ThreadId | null {
   const activeThread = input.activeThread;
-  if (
-    !activeThread ||
-    activeThread.interactionMode !== "product-workflow" ||
-    activeThread.workflowRole !== null
-  ) {
+  if (!activeThread || !isProductWorkflowRoot(activeThread)) {
     return null;
   }
   return (

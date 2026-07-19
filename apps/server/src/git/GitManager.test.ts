@@ -608,6 +608,7 @@ function runStackedAction(
     commitMessage?: string;
     featureBranch?: boolean;
     filePaths?: readonly string[];
+    pullRequestBaseBranch?: string;
   },
   options?: Parameters<GitManager.GitManager["Service"]["runStackedAction"]>[1],
 ) {
@@ -1617,6 +1618,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       Effect.gen(function* () {
         const repoDir = yield* makeTempDir("t3code-git-manager-");
         yield* initRepo(repoDir);
+        yield* runGit(repoDir, ["branch", "release"]);
         yield* runGit(repoDir, ["checkout", "-b", "feature/no-upstream-pr"]);
         const remoteDir = yield* createBareRemote();
         yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
@@ -1632,7 +1634,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
                   number: 77,
                   title: "Add no-upstream PR flow",
                   url: "https://github.com/pingdotgg/codething-mvp/pull/77",
-                  baseRefName: "main",
+                  baseRefName: "release",
                   headRefName: "feature/no-upstream-pr",
                 },
               ]),
@@ -1643,6 +1645,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         const result = yield* runStackedAction(manager, {
           cwd: repoDir,
           action: "commit_push_pr",
+          pullRequestBaseBranch: "release",
         });
 
         expect(result.branch.status).toBe("skipped_not_requested");
@@ -1657,7 +1660,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         ).toBe("origin/feature/no-upstream-pr");
         expect(
           ghCalls.some((call) =>
-            call.includes("pr create --base main --head feature/no-upstream-pr"),
+            call.includes("pr create --base release --head feature/no-upstream-pr"),
           ),
         ).toBe(true);
       }),

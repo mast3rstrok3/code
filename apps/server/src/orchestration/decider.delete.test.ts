@@ -6,7 +6,6 @@ import {
   ProjectId,
   ThreadId,
   type OrchestrationCommand,
-  type OrchestrationEvent,
   ProviderInstanceId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -105,41 +104,129 @@ const seedReadModel = Effect.gen(function* () {
   });
 });
 
-type PlannedEvent = Omit<OrchestrationEvent, "sequence">;
-
-function normalizeDeleteEvent(event: PlannedEvent | ReadonlyArray<PlannedEvent>) {
-  const events = Array.isArray(event) ? event : [event];
-  return events.map((entry) => {
-    switch (entry.type) {
-      case "thread.deleted":
-        return {
-          type: entry.type,
-          aggregateKind: entry.aggregateKind,
-          aggregateId: entry.aggregateId,
-          commandId: entry.commandId,
-          correlationId: entry.correlationId,
-          payload: {
-            threadId: entry.payload.threadId,
-          },
-        };
-      case "project.deleted":
-        return {
-          type: entry.type,
-          aggregateKind: entry.aggregateKind,
-          aggregateId: entry.aggregateId,
-          commandId: entry.commandId,
-          correlationId: entry.correlationId,
-          payload: {
-            projectId: entry.payload.projectId,
-          },
-        };
-      default:
-        return entry;
-    }
-  });
-}
+const seedHierarchyReadModel = Effect.map(seedReadModel, (readModel) => {
+  const template = readModel.threads[0];
+  if (!template) return readModel;
+  const archivedAt = "2026-01-02T00:00:00.000Z";
+  const deletedAt = "2026-01-03T00:00:00.000Z";
+  const root = { ...template, id: asThreadId("thread-root"), parentThreadId: null };
+  const archivedChild = {
+    ...template,
+    id: asThreadId("thread-archived-child"),
+    parentThreadId: root.id,
+    archivedAt,
+  };
+  const activeGrandchild = {
+    ...template,
+    id: asThreadId("thread-active-grandchild"),
+    parentThreadId: archivedChild.id,
+  };
+  const deletedChild = {
+    ...template,
+    id: asThreadId("thread-deleted-child"),
+    parentThreadId: root.id,
+    deletedAt,
+  };
+  const sibling = { ...template, id: asThreadId("thread-sibling"), parentThreadId: null };
+  return {
+    ...readModel,
+    threads: [root, archivedChild, activeGrandchild, deletedChild, sibling],
+  };
+});
 
 it.layer(NodeServices.layer)("decider deletion flows", (it) => {
+  it.effect("deletes active and archived descendants child-first without touching siblings", () =>
+    Effect.gen(function* () {
+      const readModel = yield* seedHierarchyReadModel;
+      const commandId = asCommandId("cmd-delete-cascade");
+      const result = yield* decideOrchestrationCommand({
+        command: { type: "thread.delete", commandId, threadId: asThreadId("thread-root") },
+        readModel,
+      });
+      const events = Array.isArray(result) ? result : [result];
+
+      expect(events.map((event) => event.aggregateId)).toEqual([
+        asThreadId("thread-active-grandchild"),
+        asThreadId("thread-archived-child"),
+        asThreadId("thread-root"),
+      ]);
+      expect(events.every((event) => event.type === "thread.deleted")).toBe(true);
+      expect(events.every((event) => event.commandId === commandId)).toBe(true);
+      expect(new Set(events.map((event) => event.occurredAt)).size).toBe(1);
+    }),
+  );
+
+  it.effect(
+    "archives active grandchildren beneath archived descendants and skips deleted nodes",
+    () =>
+      Effect.gen(function* () {
+        const readModel = yield* seedHierarchyReadModel;
+        const result = yield* decideOrchestrationCommand({
+          command: {
+            type: "thread.archive",
+            commandId: asCommandId("cmd-archive-cascade"),
+            threadId: asThreadId("thread-root"),
+          },
+          readModel,
+        });
+        const events = Array.isArray(result) ? result : [result];
+
+        expect(events.map((event) => event.aggregateId)).toEqual([
+          asThreadId("thread-active-grandchild"),
+          asThreadId("thread-root"),
+        ]);
+        expect(events.every((event) => event.type === "thread.archived")).toBe(true);
+        expect(new Set(events.map((event) => event.occurredAt)).size).toBe(1);
+      }),
+  );
+
+  it.effect(
+    "unarchives independently archived descendants while skipping active and deleted nodes",
+    () =>
+      Effect.gen(function* () {
+        const seeded = yield* seedHierarchyReadModel;
+        const readModel = {
+          ...seeded,
+          threads: seeded.threads.map((thread) =>
+            thread.id === asThreadId("thread-root")
+              ? { ...thread, archivedAt: "2026-01-04T00:00:00.000Z" }
+              : thread,
+          ),
+        };
+        const result = yield* decideOrchestrationCommand({
+          command: {
+            type: "thread.unarchive",
+            commandId: asCommandId("cmd-unarchive-cascade"),
+            threadId: asThreadId("thread-root"),
+          },
+          readModel,
+        });
+        const events = Array.isArray(result) ? result : [result];
+
+        expect(events.map((event) => event.aggregateId)).toEqual([
+          asThreadId("thread-archived-child"),
+          asThreadId("thread-root"),
+        ]);
+        expect(events.every((event) => event.type === "thread.unarchived")).toBe(true);
+        expect(new Set(events.map((event) => event.occurredAt)).size).toBe(1);
+      }),
+  );
+
+  it.effect("keeps leaf thread lifecycle operations to one event", () =>
+    Effect.gen(function* () {
+      const readModel = yield* seedHierarchyReadModel;
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.delete",
+          commandId: asCommandId("cmd-delete-leaf"),
+          threadId: asThreadId("thread-sibling"),
+        },
+        readModel,
+      });
+      expect(Array.isArray(result) ? result : [result]).toHaveLength(1);
+    }),
+  );
+
   it.effect("rejects deleting a non-empty project without force", () =>
     Effect.gen(function* () {
       const readModel = yield* seedReadModel;
@@ -157,9 +244,16 @@ it.layer(NodeServices.layer)("decider deletion flows", (it) => {
     }),
   );
 
-  it.effect("reuses thread.delete semantics when force-deleting a non-empty project", () =>
+  it.effect("force-deletes each active thread once in hierarchy post-order", () =>
     Effect.gen(function* () {
-      const readModel = yield* seedReadModel;
+      const seeded = yield* seedReadModel;
+      const parent = seeded.threads[0];
+      const child = seeded.threads[1];
+      if (!parent || !child) return;
+      const readModel = {
+        ...seeded,
+        threads: [parent, { ...child, parentThreadId: parent.id }],
+      };
       const projectDeleteCommand: Extract<OrchestrationCommand, { type: "project.delete" }> = {
         type: "project.delete",
         commandId: asCommandId("cmd-project-delete-force"),
@@ -178,43 +272,13 @@ it.layer(NodeServices.layer)("decider deletion flows", (it) => {
         "thread.deleted",
         "project.deleted",
       ]);
-
-      let sequentialReadModel = readModel;
-      let nextSequence = readModel.snapshotSequence;
-      const sequentialEvents: PlannedEvent[] = [];
-      for (const nextCommand of [
-        {
-          type: "thread.delete",
-          commandId: projectDeleteCommand.commandId,
-          threadId: asThreadId("thread-delete-1"),
-        },
-        {
-          type: "thread.delete",
-          commandId: projectDeleteCommand.commandId,
-          threadId: asThreadId("thread-delete-2"),
-        },
-        {
-          type: "project.delete",
-          commandId: projectDeleteCommand.commandId,
-          projectId: asProjectId("project-delete"),
-        },
-      ] satisfies ReadonlyArray<OrchestrationCommand>) {
-        const decided = yield* decideOrchestrationCommand({
-          command: nextCommand,
-          readModel: sequentialReadModel,
-        });
-        const nextEvents = Array.isArray(decided) ? decided : [decided];
-        sequentialEvents.push(...nextEvents);
-        for (const nextEvent of nextEvents) {
-          nextSequence += 1;
-          sequentialReadModel = yield* projectEvent(sequentialReadModel, {
-            ...nextEvent,
-            sequence: nextSequence,
-          });
-        }
-      }
-
-      expect(normalizeDeleteEvent(forcedResult)).toEqual(normalizeDeleteEvent(sequentialEvents));
+      expect(
+        forcedEvents.map((event) =>
+          event.type === "thread.deleted" ? event.payload.threadId : event.payload.projectId,
+        ),
+      ).toEqual([child.id, parent.id, asProjectId("project-delete")]);
+      expect(new Set(forcedEvents.map((event) => event.aggregateId)).size).toBe(3);
+      expect(new Set(forcedEvents.map((event) => event.occurredAt).values()).size).toBe(1);
     }),
   );
 });

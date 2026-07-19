@@ -15,6 +15,8 @@ import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
 import { DevReviewToolkitHandlersLive } from "./toolkits/dev-review/handlers.ts";
 import { DevReviewToolkit } from "./toolkits/dev-review/tools.ts";
+import { WorkflowArtifactsToolkitHandlersLive } from "./toolkits/workflow-artifacts/handlers.ts";
+import { WorkflowArtifactsToolkit } from "./toolkits/workflow-artifacts/tools.ts";
 import {
   PreviewSnapshotToolkitHandlersLive,
   PreviewStandardToolkitHandlersLive,
@@ -209,6 +211,10 @@ const DevReviewToolkitRegistrationLive = McpServer.toolkit(DevReviewToolkit).pip
   Layer.provide(DevReviewToolkitHandlersLive),
 );
 
+const WorkflowArtifactsToolkitRegistrationLive = McpServer.toolkit(WorkflowArtifactsToolkit).pipe(
+  Layer.provide(WorkflowArtifactsToolkitHandlersLive),
+);
+
 export const PreviewToolkitRegistrationLive = Layer.mergeAll(
   PreviewStandardToolkitRegistrationLive,
   PreviewSnapshotRegistrationLive,
@@ -217,6 +223,7 @@ export const PreviewToolkitRegistrationLive = Layer.mergeAll(
 const McpToolkitRegistrationLive = Layer.mergeAll(
   PreviewToolkitRegistrationLive,
   DevReviewToolkitRegistrationLive,
+  WorkflowArtifactsToolkitRegistrationLive,
 );
 
 const McpTransportLive = McpServer.layerHttp({

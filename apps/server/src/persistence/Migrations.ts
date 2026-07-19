@@ -58,6 +58,9 @@ import Migration0053 from "./Migrations/053_ScopePlanningReviewCycleMessageIndex
 import Migration0054 from "./Migrations/054_ProjectionThreadDevReviewEvidenceColumn.ts";
 import Migration0055 from "./Migrations/055_RejectLegacyWorkflowDatabase.ts";
 import Migration0056 from "./Migrations/056_ProjectionWorkflowSubagentBatches.ts";
+import Migration0057 from "./Migrations/057_WorkflowArtifactLineage.ts";
+import Migration0058 from "./Migrations/058_PlanningTicketPlannedFileChanges.ts";
+import Migration0059 from "./Migrations/059_WorkflowPresetsAndFastFeatureRuns.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -115,6 +118,9 @@ export const migrationEntries = [
   [54, "ProjectionThreadDevReviewEvidenceColumn", Migration0054],
   [55, "RejectLegacyWorkflowDatabase", Migration0055],
   [56, "ProjectionWorkflowSubagentBatches", Migration0056],
+  [57, "WorkflowArtifactLineage", Migration0057],
+  [58, "PlanningTicketPlannedFileChanges", Migration0058],
+  [59, "WorkflowPresetsAndFastFeatureRuns", Migration0059],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

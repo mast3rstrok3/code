@@ -1,9 +1,12 @@
 import type {
   OrchestrationImplementationValidationResult,
   OrchestrationImplementationWorkerResult,
+  OrchestrationPlanningFileChange,
   OrchestrationThreadWorkflowRole,
 } from "@t3tools/contracts";
 import { ThreadId } from "@t3tools/contracts";
+
+import { validatePlanningTicketFileChanges } from "./planningTicketFiles.ts";
 
 export type WorkflowAgentMessageTarget =
   | {
@@ -42,12 +45,15 @@ export type WorkflowDirective =
         readonly key: string;
         readonly title: string;
         readonly bodyMarkdown: string;
+        readonly plannedFileChanges: ReadonlyArray<OrchestrationPlanningFileChange>;
         readonly dependencyKeys: ReadonlyArray<string>;
       }>;
     }
   | {
       readonly type: "planning-reviewer-verdict";
       readonly cycleNumber: number;
+      readonly mode: "full" | "targeted";
+      readonly targetPlanningTicketIds: ReadonlyArray<string>;
       readonly passed: boolean;
       readonly failingPlanningTicketIds: ReadonlyArray<string>;
       readonly dependencyFeedback: ReadonlyArray<string>;
@@ -56,6 +62,31 @@ export type WorkflowDirective =
         readonly passed: boolean;
         readonly feedbackMarkdown: string;
       }>;
+      readonly ticketEdits: ReadonlyArray<
+        | {
+            readonly type: "update";
+            readonly ticketId: string;
+            readonly title?: string;
+            readonly bodyMarkdown?: string;
+            readonly plannedFileChanges?: ReadonlyArray<OrchestrationPlanningFileChange>;
+            readonly dependencyKeys?: ReadonlyArray<string>;
+          }
+        | {
+            readonly type: "create";
+            readonly key: string;
+            readonly title: string;
+            readonly bodyMarkdown: string;
+            readonly plannedFileChanges: ReadonlyArray<OrchestrationPlanningFileChange>;
+            readonly dependencyKeys: ReadonlyArray<string>;
+            readonly replacesPlanningTicketIds: ReadonlyArray<string>;
+          }
+        | { readonly type: "delete"; readonly ticketId: string }
+        | {
+            readonly type: "update-dependencies";
+            readonly ticketId: string;
+            readonly dependencyKeys: ReadonlyArray<string>;
+          }
+      >;
     }
   | (OrchestrationImplementationWorkerResult & {
       readonly type: "implementation-worker-result";
@@ -69,6 +100,14 @@ export type WorkflowDirective =
     }
   | {
       readonly type: "implementation-fix-result";
+      readonly runId: string;
+      readonly status: "succeeded" | "failed" | "blocked";
+      readonly commitSha?: string;
+      readonly validations: ReadonlyArray<OrchestrationImplementationValidationResult>;
+      readonly notesMarkdown: string;
+    }
+  | {
+      readonly type: "implementation-fast-build-result";
       readonly runId: string;
       readonly status: "succeeded" | "failed" | "blocked";
       readonly commitSha?: string;
@@ -300,11 +339,35 @@ function parseValidationResults(
   return validations;
 }
 
+function parsePlanningFileChanges(
+  value: unknown,
+): ReadonlyArray<OrchestrationPlanningFileChange> | string {
+  if (!Array.isArray(value)) {
+    return "plannedFileChanges must be a non-empty array.";
+  }
+
+  const changes: OrchestrationPlanningFileChange[] = [];
+  for (const entry of value) {
+    const record = asRecord(entry);
+    if (record === null) return "plannedFileChanges entries must be objects.";
+    const filePath = requiredString(record, "path");
+    const action = record["action"];
+    if (filePath.startsWith("Directive field")) return filePath;
+    if (action !== "create" && action !== "update" && action !== "delete") {
+      return "plannedFileChanges action must be create, update, or delete.";
+    }
+    changes.push({ path: filePath, action });
+  }
+
+  return validatePlanningTicketFileChanges(changes) ?? changes;
+}
+
 function parsePlanningTickets(value: unknown):
   | ReadonlyArray<{
       readonly key: string;
       readonly title: string;
       readonly bodyMarkdown: string;
+      readonly plannedFileChanges: ReadonlyArray<OrchestrationPlanningFileChange>;
       readonly dependencyKeys: ReadonlyArray<string>;
     }>
   | string {
@@ -320,12 +383,14 @@ function parsePlanningTickets(value: unknown):
     const key = requiredString(record, "key");
     const title = requiredString(record, "title");
     const bodyMarkdown = requiredString(record, "bodyMarkdown");
+    const plannedFileChanges = parsePlanningFileChanges(record["plannedFileChanges"]);
     const dependencyKeys = stringArray(record["dependencyKeys"] ?? []);
     if (key.startsWith("Directive field")) return key;
     if (title.startsWith("Directive field")) return title;
     if (bodyMarkdown.startsWith("Directive field")) return bodyMarkdown;
+    if (typeof plannedFileChanges === "string") return plannedFileChanges;
     if (typeof dependencyKeys === "string") return dependencyKeys;
-    tickets.push({ key, title, bodyMarkdown, dependencyKeys });
+    tickets.push({ key, title, bodyMarkdown, plannedFileChanges, dependencyKeys });
   }
   return tickets;
 }
@@ -361,6 +426,88 @@ function parsePerTicketFeedback(value: unknown):
     });
   }
   return feedbackEntries;
+}
+
+function parsePlanningTicketEdits(
+  value: unknown,
+): Extract<WorkflowDirective, { type: "planning-reviewer-verdict" }>["ticketEdits"] | string {
+  if (!Array.isArray(value)) return "planning-reviewer-verdict.ticketEdits must be an array.";
+  const edits: Array<Record<string, unknown>> = [];
+  for (const entry of value) {
+    const record = asRecord(entry);
+    if (record === null) return "planning-reviewer-verdict ticket edits must be objects.";
+    const type = record["type"];
+    if (type === "delete") {
+      const ticketId = requiredString(record, "ticketId");
+      if (ticketId.startsWith("Directive field")) return ticketId;
+      edits.push({ type, ticketId });
+      continue;
+    }
+    if (type === "update-dependencies") {
+      const ticketId = requiredString(record, "ticketId");
+      const dependencyKeys = stringArray(record["dependencyKeys"] ?? []);
+      if (ticketId.startsWith("Directive field")) return ticketId;
+      if (typeof dependencyKeys === "string") return dependencyKeys;
+      edits.push({ type, ticketId, dependencyKeys });
+      continue;
+    }
+    if (type === "create") {
+      const key = requiredString(record, "key");
+      const title = requiredString(record, "title");
+      const bodyMarkdown = requiredString(record, "bodyMarkdown");
+      const plannedFileChanges = parsePlanningFileChanges(record["plannedFileChanges"]);
+      const dependencyKeys = stringArray(record["dependencyKeys"] ?? []);
+      const replacesPlanningTicketIds = stringArray(record["replacesPlanningTicketIds"] ?? []);
+      for (const required of [key, title, bodyMarkdown]) {
+        if (required.startsWith("Directive field")) return required;
+      }
+      if (typeof plannedFileChanges === "string") return plannedFileChanges;
+      if (typeof dependencyKeys === "string") return dependencyKeys;
+      if (typeof replacesPlanningTicketIds === "string") return replacesPlanningTicketIds;
+      edits.push({
+        type,
+        key,
+        title,
+        bodyMarkdown,
+        plannedFileChanges,
+        dependencyKeys,
+        replacesPlanningTicketIds,
+      });
+      continue;
+    }
+    if (type === "update") {
+      const ticketId = requiredString(record, "ticketId");
+      const title = optionalString(record, "title");
+      const bodyMarkdown = optionalString(record, "bodyMarkdown");
+      const plannedFileChanges =
+        record["plannedFileChanges"] === undefined
+          ? undefined
+          : parsePlanningFileChanges(record["plannedFileChanges"]);
+      const dependencyKeys =
+        record["dependencyKeys"] === undefined ? undefined : stringArray(record["dependencyKeys"]);
+      if (ticketId.startsWith("Directive field")) return ticketId;
+      if (typeof title === "string" && title.startsWith("Directive field")) return title;
+      if (typeof bodyMarkdown === "string" && bodyMarkdown.startsWith("Directive field")) {
+        return bodyMarkdown;
+      }
+      if (typeof plannedFileChanges === "string") return plannedFileChanges;
+      if (typeof dependencyKeys === "string") return dependencyKeys;
+      edits.push({
+        type,
+        ticketId,
+        ...(title === undefined ? {} : { title }),
+        ...(bodyMarkdown === undefined ? {} : { bodyMarkdown }),
+        ...(plannedFileChanges === undefined ? {} : { plannedFileChanges }),
+        ...(dependencyKeys === undefined ? {} : { dependencyKeys }),
+      });
+      continue;
+    }
+    return "planning-reviewer-verdict ticket edit type is invalid.";
+  }
+  return edits as unknown as Extract<
+    WorkflowDirective,
+    { type: "planning-reviewer-verdict" }
+  >["ticketEdits"];
 }
 
 function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirective | string {
@@ -428,25 +575,36 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
       }
       const cycleNumber = record["cycleNumber"];
       const passed = record["passed"];
+      const mode = record["mode"] ?? "full";
       if (typeof cycleNumber !== "number" || !Number.isInteger(cycleNumber) || cycleNumber < 1) {
         return "planning-reviewer-verdict.cycleNumber must be a positive integer.";
       }
       if (typeof passed !== "boolean") {
         return "planning-reviewer-verdict.passed must be boolean.";
       }
+      if (mode !== "full" && mode !== "targeted") {
+        return "planning-reviewer-verdict.mode must be full or targeted.";
+      }
       const failingPlanningTicketIds = stringArray(record["failingPlanningTicketIds"] ?? []);
+      const targetPlanningTicketIds = stringArray(record["targetPlanningTicketIds"] ?? []);
       const dependencyFeedback = stringArray(record["dependencyFeedback"] ?? []);
       const perTicketFeedback = parsePerTicketFeedback(record["perTicketFeedback"] ?? []);
+      const ticketEdits = parsePlanningTicketEdits(record["ticketEdits"] ?? []);
       if (typeof failingPlanningTicketIds === "string") return failingPlanningTicketIds;
       if (typeof dependencyFeedback === "string") return dependencyFeedback;
       if (typeof perTicketFeedback === "string") return perTicketFeedback;
+      if (typeof targetPlanningTicketIds === "string") return targetPlanningTicketIds;
+      if (typeof ticketEdits === "string") return ticketEdits;
       return {
         type: "planning-reviewer-verdict",
         cycleNumber,
+        mode,
+        targetPlanningTicketIds,
         passed,
         failingPlanningTicketIds,
         dependencyFeedback,
         perTicketFeedback,
+        ticketEdits,
       };
     }
     case "implementation-worker-result": {
@@ -545,6 +703,32 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
         runId,
         status,
         ...(commitSha !== undefined ? { commitSha } : {}),
+        validations,
+        notesMarkdown,
+      };
+    }
+    case "implementation-fast-build-result": {
+      const runId = requiredString(record, "runId");
+      const notesMarkdown = requiredString(record, "notesMarkdown");
+      const status = record["status"];
+      const validations = parseValidationResults(record["validations"] ?? []);
+      const commitSha = optionalString(record, "commitSha");
+      if (runId.startsWith("Directive field")) return runId;
+      if (notesMarkdown.startsWith("Directive field")) return notesMarkdown;
+      if (status !== "succeeded" && status !== "failed" && status !== "blocked") {
+        return "implementation-fast-build-result.status must be succeeded, failed, or blocked.";
+      }
+      if (typeof validations === "string") return validations;
+      if (typeof commitSha === "string" && commitSha.startsWith("Directive field"))
+        return commitSha;
+      if (status === "succeeded" && commitSha === undefined) {
+        return "implementation-fast-build-result.commitSha is required when status is succeeded.";
+      }
+      return {
+        type: "implementation-fast-build-result",
+        runId,
+        status,
+        ...(commitSha === undefined ? {} : { commitSha }),
         validations,
         notesMarkdown,
       };

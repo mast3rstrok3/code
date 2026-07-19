@@ -1,9 +1,11 @@
 import {
   IsoDateTime,
   NonNegativeInt,
+  OrchestrationPlanningFileChange,
   OrchestrationPlanningTicket,
   OrchestrationPlanningTicketDependency,
   OrchestrationPlanningTicketId,
+  OrchestrationPlanningTicketKey,
   OrchestrationPlanningSpecId,
   ThreadId,
   TrimmedNonEmptyString,
@@ -16,11 +18,13 @@ import type { ProjectionRepositoryError } from "../Errors.ts";
 
 export const ProjectionThreadPlanningTicket = Schema.Struct({
   ticketId: OrchestrationPlanningTicketId,
+  ticketKey: OrchestrationPlanningTicketKey,
   specId: OrchestrationPlanningSpecId,
   threadId: ThreadId,
   ordinal: NonNegativeInt,
   title: TrimmedNonEmptyString,
   bodyMarkdown: TrimmedNonEmptyString,
+  plannedFileChanges: Schema.Array(OrchestrationPlanningFileChange),
   dependencies: Schema.Array(OrchestrationPlanningTicketDependency),
   status: TrimmedNonEmptyString,
   createdAt: IsoDateTime,
@@ -34,11 +38,13 @@ export function projectionTicketFromContract(
 ): ProjectionThreadPlanningTicket {
   return {
     ticketId: ticket.id,
+    ticketKey: ticket.key ?? `LEGACY-${ticket.id}`,
     specId: ticket.specId,
     threadId,
     ordinal: ticket.ordinal,
     title: ticket.title,
     bodyMarkdown: ticket.bodyMarkdown,
+    plannedFileChanges: ticket.plannedFileChanges,
     dependencies: ticket.dependencies,
     status: ticket.status,
     createdAt: ticket.createdAt,
@@ -51,10 +57,12 @@ export function projectionTicketToContract(
 ): OrchestrationPlanningTicket {
   return {
     id: ticket.ticketId,
+    key: ticket.ticketKey,
     specId: ticket.specId,
     ordinal: ticket.ordinal,
     title: ticket.title,
     bodyMarkdown: ticket.bodyMarkdown,
+    plannedFileChanges: ticket.plannedFileChanges,
     dependencies: ticket.dependencies,
     status: ticket.status,
     createdAt: ticket.createdAt,

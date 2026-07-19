@@ -1407,6 +1407,7 @@ export const make = Effect.gen(function* () {
     cwd: string,
     fallbackBranch: string | null,
     emit: GitActionProgressEmitter,
+    explicitBaseBranch?: string,
     credentials?: SourceControlProvider.SourceControlCredentialContext,
   ) {
     const provider = yield* sourceControlProvider(cwd);
@@ -1435,6 +1436,13 @@ export const make = Effect.gen(function* () {
 
     const existing = yield* findOpenPr(cwd, headContext, credentials);
     if (existing) {
+      if (explicitBaseBranch !== undefined && existing.baseRefName !== explicitBaseBranch) {
+        return yield* new GitManagerError({
+          operation: "runPrStep",
+          cwd,
+          detail: `Existing change request targets '${existing.baseRefName}', but '${explicitBaseBranch}' is required.`,
+        });
+      }
       return {
         status: "opened_existing" as const,
         url: existing.url,
@@ -1445,13 +1453,9 @@ export const make = Effect.gen(function* () {
       };
     }
 
-    const baseBranch = yield* resolveBaseBranch(
-      cwd,
-      branch,
-      details.upstreamRef,
-      headContext,
-      credentials,
-    );
+    const baseBranch =
+      explicitBaseBranch ??
+      (yield* resolveBaseBranch(cwd, branch, details.upstreamRef, headContext, credentials));
     yield* emit({
       kind: "phase_started",
       phase: "pr",
@@ -1509,6 +1513,13 @@ export const make = Effect.gen(function* () {
         headBranch: headContext.headBranch,
         title: generated.title,
       };
+    }
+    if (explicitBaseBranch !== undefined && created.baseRefName !== explicitBaseBranch) {
+      return yield* new GitManagerError({
+        operation: "runPrStep",
+        cwd,
+        detail: `Created change request targets '${created.baseRefName}', but '${explicitBaseBranch}' is required.`,
+      });
     }
 
     return {
@@ -1936,6 +1947,7 @@ export const make = Effect.gen(function* () {
                     input.cwd,
                     currentBranch,
                     progress.emit,
+                    input.pullRequestBaseBranch,
                     options?.credentials,
                   ),
                 ),

@@ -84,6 +84,17 @@ describe("GitRunStackedActionInput", () => {
     expect(parsed.actionId).toBe("action-1");
     expect(parsed.action).toBe("create_pr");
   });
+
+  it("accepts an explicit pull request base branch", () => {
+    const parsed = decodeRunStackedActionInput({
+      actionId: "action-1",
+      cwd: "/repo",
+      action: "create_pr",
+      pullRequestBaseBranch: "release/next",
+    });
+
+    expect(parsed.pullRequestBaseBranch).toBe("release/next");
+  });
 });
 
 describe("GitRunStackedActionResult", () => {

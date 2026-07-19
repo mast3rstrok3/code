@@ -15,10 +15,13 @@ import {
   RuntimeMode,
   ThreadId,
   OrchestrationPlanningWorkflowStage,
+  OrchestrationPlanningActiveReviewRequest,
   OrchestrationThreadWorkflowRole,
+  ThreadWorkflowContext,
   WorkflowSubagentBatchId,
   TurnId,
   WorkspaceUserId,
+  WorkflowPreset,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -33,12 +36,14 @@ export const ProjectionThread = Schema.Struct({
   ownerUserId: WorkspaceUserId,
   parentThreadId: Schema.NullOr(ThreadId),
   workflowRole: Schema.NullOr(OrchestrationThreadWorkflowRole),
+  workflowContext: Schema.optionalKey(Schema.NullOr(ThreadWorkflowContext)),
   workflowSubagentBatchId: Schema.optionalKey(Schema.NullOr(WorkflowSubagentBatchId)),
   workflowSubagentChildIndex: Schema.optionalKey(Schema.NullOr(NonNegativeInt)),
   title: Schema.String,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
+  workflowPreset: Schema.optionalKey(Schema.NullOr(WorkflowPreset)),
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
   latestTurnId: Schema.NullOr(TurnId),
@@ -50,6 +55,7 @@ export const ProjectionThread = Schema.Struct({
   pendingUserInputCount: NonNegativeInt,
   hasActionableProposedPlan: NonNegativeInt,
   planningWorkflowStage: Schema.NullOr(OrchestrationPlanningWorkflowStage),
+  planningActiveReview: Schema.optionalKey(Schema.NullOr(OrchestrationPlanningActiveReviewRequest)),
   deletedAt: Schema.NullOr(IsoDateTime),
 });
 export type ProjectionThread = typeof ProjectionThread.Type;

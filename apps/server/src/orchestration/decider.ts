@@ -10,12 +10,19 @@ import {
   type OrchestrationPlanningSpec,
   type OrchestrationPlanningSpecBundle,
   type OrchestrationReadModel,
+  PLANNING_REVIEW_MAX_CYCLES,
+  type PlanningReviewerTicketEdit,
   ThreadId,
+  WorkflowId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import type * as PlatformError from "effect/PlatformError";
+import {
+  collectHierarchyPostOrder,
+  orderHierarchyPostOrder,
+} from "@t3tools/shared/threadHierarchy";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import {
@@ -28,8 +35,10 @@ import {
   requireThreadAbsent,
   requireThreadNotArchived,
 } from "./commandInvariants.ts";
-import { projectEvent } from "./projector.ts";
 import { WORKFLOW_PROMPT_IDS } from "../provider/WorkflowPromptRegistry.ts";
+import { validatePlanningTicketFileChanges } from "./planningTicketFiles.ts";
+import { buildPlanImplementationThreadTitle } from "@t3tools/shared/orchestrationPlanning";
+import { isProductWorkflowPreset, isProductWorkflowRoot } from "@t3tools/shared/workflowPresets";
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
@@ -80,7 +89,13 @@ function validatePlanningTicketGraph(
   tickets: ReadonlyArray<OrchestrationPlanningTicket>,
 ): string | null {
   const ticketIds = new Set(tickets.map((ticket) => ticket.id));
+  const ticketKeys = new Set<string>();
   for (const ticket of tickets) {
+    const ticketKey = ticket.key ?? `LEGACY-${ticket.id}`;
+    if (ticketKeys.has(ticketKey)) {
+      return `Planning Ticket key '${ticketKey}' is duplicated.`;
+    }
+    ticketKeys.add(ticketKey);
     if (ticket.specId !== specId) {
       return `Planning Ticket '${ticket.id}' belongs to Spec '${ticket.specId}', expected '${specId}'.`;
     }
@@ -95,6 +110,22 @@ function validatePlanningTicketGraph(
         return `Planning Ticket '${ticket.id}' cannot depend on itself.`;
       }
     }
+  }
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const byId = new Map(tickets.map((ticket) => [ticket.id, ticket] as const));
+  const visit = (ticketId: string): boolean => {
+    if (visiting.has(ticketId)) return true;
+    if (visited.has(ticketId)) return false;
+    visiting.add(ticketId);
+    const ticket = byId.get(ticketId);
+    if (ticket?.dependencies.some((dependency) => visit(dependency.ticketId))) return true;
+    visiting.delete(ticketId);
+    visited.add(ticketId);
+    return false;
+  };
+  if (tickets.some((ticket) => visit(ticket.id))) {
+    return "Planning Ticket dependency graph contains a cycle.";
   }
   return null;
 }
@@ -113,7 +144,7 @@ function buildPlanningSpecFromArtifact(input: {
     sourceThreadId: input.threadId,
     sourceMessageIds: [input.command.sourceMessageId],
     createdBy: input.command.createdBy ?? null,
-    workflowId: `workflow-${input.specId}`,
+    workflowId: WorkflowId.make(`workflow-${input.specId}`),
     ticketCount: 0,
     createdAt: input.command.createdAt,
     updatedAt: input.command.createdAt,
@@ -130,6 +161,10 @@ function buildPlanningTicketsFromArtifact(input: {
     const ticket = input.command.tickets[index];
     const id = input.generatedTicketIds[index];
     if (!ticket || !id) continue;
+    const fileChangesError = validatePlanningTicketFileChanges(ticket.plannedFileChanges);
+    if (fileChangesError !== null) {
+      return `Planning Ticket '${ticket.key}' is invalid: ${fileChangesError}`;
+    }
     if (idByKey.has(ticket.key)) {
       return `Planning Ticket key '${ticket.key}' is duplicated.`;
     }
@@ -153,15 +188,155 @@ function buildPlanningTicketsFromArtifact(input: {
     });
     return {
       id: ticketId,
+      key: ticket.key,
       specId: input.specId,
       ordinal: index + 1,
       title: ticket.title,
       bodyMarkdown: ticket.bodyMarkdown,
+      plannedFileChanges: [...ticket.plannedFileChanges],
       dependencies,
       status: "open",
       createdAt: input.command.createdAt,
       updatedAt: input.command.createdAt,
     };
+  });
+}
+
+function nextPlanningReviewRequest(
+  workflow: NonNullable<OrchestrationReadModel["threads"][number]["planningWorkflow"]>,
+) {
+  const cycleNumber = workflow.reviewCycles.length + 1;
+  const allTicketIds = workflow.tickets.map((ticket) => ticket.id);
+  const previous = workflow.reviewCycles.at(-1);
+  if (previous === undefined || workflow.stage !== "ticket-review") {
+    return { cycleNumber, mode: "full" as const, targetPlanningTicketIds: allTicketIds };
+  }
+  const targetPlanningTicketIds = Array.from(
+    new Set([...previous.failingPlanningTicketIds, ...previous.editedPlanningTicketIds]),
+  ).filter((ticketId) => allTicketIds.includes(ticketId));
+  return {
+    cycleNumber,
+    mode: "targeted" as const,
+    targetPlanningTicketIds,
+  };
+}
+
+function hasSameUniqueValues(left: ReadonlyArray<string>, right: ReadonlyArray<string>): boolean {
+  const leftValues = new Set(left);
+  const rightValues = new Set(right);
+  return (
+    leftValues.size === left.length &&
+    rightValues.size === right.length &&
+    leftValues.size === rightValues.size &&
+    Array.from(leftValues).every((value) => rightValues.has(value))
+  );
+}
+
+function applyPlanningReviewerEdits(input: {
+  readonly specId: string;
+  readonly tickets: ReadonlyArray<OrchestrationPlanningTicket>;
+  readonly edits: ReadonlyArray<PlanningReviewerTicketEdit>;
+  readonly targetPlanningTicketIds: ReadonlyArray<string>;
+  readonly mode: "full" | "targeted";
+  readonly generatedTicketIds: ReadonlyArray<string>;
+  readonly updatedAt: string;
+}): OrchestrationPlanningTicket[] | string {
+  const targetIds = new Set(input.targetPlanningTicketIds);
+  const tickets = new Map(input.tickets.map((ticket) => [ticket.id, { ...ticket }] as const));
+  const dependencyKeysByTicketId = new Map<string, ReadonlyArray<string>>();
+
+  for (let index = 0; index < input.edits.length; index += 1) {
+    const edit = input.edits[index]!;
+    if (edit.type === "create") {
+      const fileChangesError = validatePlanningTicketFileChanges(edit.plannedFileChanges);
+      if (fileChangesError !== null) {
+        return `Reviewer-created Planning Ticket '${edit.key}' is invalid: ${fileChangesError}`;
+      }
+      if (
+        input.mode === "targeted" &&
+        (edit.replacesPlanningTicketIds.length === 0 ||
+          edit.replacesPlanningTicketIds.some((ticketId) => !targetIds.has(ticketId)))
+      ) {
+        return "Targeted reviewer-created tickets must identify only targeted tickets they replace.";
+      }
+      const id = input.generatedTicketIds[index];
+      if (id === undefined) return "Failed to allocate a stable Planning Ticket id.";
+      tickets.set(id, {
+        id,
+        key: edit.key,
+        specId: input.specId,
+        ordinal: tickets.size + 1,
+        title: edit.title,
+        bodyMarkdown: edit.bodyMarkdown,
+        plannedFileChanges: [...edit.plannedFileChanges],
+        dependencies: [],
+        status: "open",
+        createdAt: input.updatedAt,
+        updatedAt: input.updatedAt,
+      });
+      dependencyKeysByTicketId.set(id, edit.dependencyKeys);
+      continue;
+    }
+
+    const ticket = tickets.get(edit.ticketId);
+    if (ticket === undefined) return `Reviewer edit targets unknown ticket '${edit.ticketId}'.`;
+    if (input.mode === "targeted" && !targetIds.has(edit.ticketId)) {
+      return `Targeted reviewer cannot edit unrelated ticket '${edit.ticketId}'.`;
+    }
+    if (edit.type === "delete") {
+      tickets.delete(edit.ticketId);
+      continue;
+    }
+    if (edit.type === "update-dependencies") {
+      dependencyKeysByTicketId.set(edit.ticketId, edit.dependencyKeys);
+      tickets.set(edit.ticketId, { ...ticket, updatedAt: input.updatedAt });
+      continue;
+    }
+    if (edit.plannedFileChanges !== undefined) {
+      const fileChangesError = validatePlanningTicketFileChanges(edit.plannedFileChanges);
+      if (fileChangesError !== null) {
+        return `Reviewer update for Planning Ticket '${edit.ticketId}' is invalid: ${fileChangesError}`;
+      }
+    }
+    dependencyKeysByTicketId.set(
+      edit.ticketId,
+      edit.dependencyKeys ??
+        ticket.dependencies.map((dependency) => {
+          const dependencyTicket = tickets.get(dependency.ticketId);
+          return (
+            dependencyTicket?.key ??
+            (dependencyTicket === undefined ? dependency.ticketId : `LEGACY-${dependencyTicket.id}`)
+          );
+        }),
+    );
+    tickets.set(edit.ticketId, {
+      ...ticket,
+      ...(edit.title === undefined ? {} : { title: edit.title }),
+      ...(edit.bodyMarkdown === undefined ? {} : { bodyMarkdown: edit.bodyMarkdown }),
+      ...(edit.plannedFileChanges === undefined
+        ? {}
+        : { plannedFileChanges: [...edit.plannedFileChanges] }),
+      updatedAt: input.updatedAt,
+    });
+  }
+
+  const finalTickets = Array.from(tickets.values());
+  const ticketIdByKey = new Map<string, string>();
+  for (const ticket of finalTickets) {
+    const ticketKey = ticket.key ?? `LEGACY-${ticket.id}`;
+    if (ticketIdByKey.has(ticketKey)) return `Planning Ticket key '${ticketKey}' is duplicated.`;
+    ticketIdByKey.set(ticketKey, ticket.id);
+  }
+  return finalTickets.map((ticket, index) => {
+    const dependencyKeys = dependencyKeysByTicketId.get(ticket.id);
+    const dependencies =
+      dependencyKeys === undefined
+        ? ticket.dependencies
+        : dependencyKeys.map((key) => ({
+            specId: input.specId,
+            ticketId: ticketIdByKey.get(key) ?? key,
+          }));
+    return { ...ticket, ordinal: index + 1, dependencies };
   });
 }
 
@@ -221,6 +396,11 @@ function buildPlanningTicketsStagePrompt(spec: OrchestrationPlanningSpec): strin
     "Decompose this Spec into implementation-ready planning tickets.",
     "",
     `Spec id: ${spec.id}`,
+    `Workflow id: ${spec.workflowId}`,
+    "",
+    "Use workflow_spec_get to retrieve the Spec body when needed. Do not rely on prompt-embedded artifact content.",
+    "",
+    "Inspect the repository before naming planned files. Every ticket must include at least one exact repository-relative POSIX file path with action create, update, or delete. Do not use absolute paths, directories, guesses, or glob patterns. Represent renames as delete plus create.",
     "",
     "When ready, finish with exactly one fenced JSON block using this shape. Dependencies must reference ticket keys from the same JSON payload.",
     "```json",
@@ -233,6 +413,7 @@ function buildPlanningTicketsStagePrompt(spec: OrchestrationPlanningSpec): strin
             key: "TICKET-1",
             title: "Narrow implementation ticket",
             bodyMarkdown: "Outcome, touched surfaces, acceptance criteria, and expected tests.",
+            plannedFileChanges: [{ path: "apps/example/src/feature.ts", action: "update" }],
             dependencyKeys: [],
           },
         ],
@@ -241,10 +422,6 @@ function buildPlanningTicketsStagePrompt(spec: OrchestrationPlanningSpec): strin
       2,
     ),
     "```",
-    "",
-    `# ${spec.title}`,
-    "",
-    spec.summaryMarkdown,
   ].join("\n");
 }
 
@@ -252,13 +429,31 @@ function buildPlanningReviewerPrompt(input: {
   readonly spec: OrchestrationPlanningSpec;
   readonly tickets: ReadonlyArray<OrchestrationPlanningTicket>;
   readonly cycleNumber: number;
+  readonly mode: "full" | "targeted";
+  readonly targetPlanningTicketIds: ReadonlyArray<string>;
 }): string {
+  const reviewScopeInstructions =
+    input.mode === "full"
+      ? [
+          "This is a full review. Call workflow_tickets_list, retrieve every listed ticket with workflow_ticket_get, and inspect every ticket before deciding the verdict.",
+          "Return exactly one perTicketFeedback entry for every target ticket, and put every ticket marked failed in failingPlanningTicketIds.",
+        ]
+      : [
+          "This is a targeted re-review. Retrieve and inspect only the target tickets listed above; previously passed tickets are out of scope.",
+          "Return exactly one perTicketFeedback entry for every target ticket, and put every ticket still marked failed in failingPlanningTicketIds.",
+          "A clean targeted pass completes ticket review; there is no additional full-review cycle.",
+        ];
   return [
-    `Review planning ticket cycle ${input.cycleNumber} for Spec "${input.spec.title}".`,
+    `Review planning ticket cycle ${input.cycleNumber} (${input.mode}) for Spec '${input.spec.id}'.`,
+    `Workflow id: ${input.spec.workflowId}`,
+    `Target ticket ids: ${input.targetPlanningTicketIds.join(", ")}`,
     "",
+    "Retrieve the canonical Spec with workflow_spec_get. The artifact bodies are intentionally not embedded in this prompt.",
+    ...reviewScopeInstructions,
     "Decide whether the ticket set is complete against the Spec and available context, and whether the proposed tickets are correct tracer-bullet vertical slices.",
     "",
     "Review for missing Spec coverage, incorrect horizontal slicing, oversized or undersized slices, incorrect dependency ordering, hidden prefactoring/migration/contract work, vague acceptance criteria, and missing expected tests.",
+    "Also verify every ticket has a complete, plausible plannedFileChanges list with exact repository-relative paths and correct create/update/delete actions. Missing lists on legacy tickets are findings and should be repaired with a ticket update. Reviewer-created tickets require a non-empty list; update edits may replace the list with plannedFileChanges.",
     "",
     "When ready, finish with exactly one fenced JSON block using this shape. Use the planning ticket ids shown below.",
     "```json",
@@ -266,6 +461,8 @@ function buildPlanningReviewerPrompt(input: {
       {
         type: "planning-reviewer-verdict",
         cycleNumber: input.cycleNumber,
+        mode: input.mode,
+        targetPlanningTicketIds: input.targetPlanningTicketIds,
         passed: false,
         failingPlanningTicketIds: ["planning-ticket-id"],
         dependencyFeedback: ["Dependency graph correction or empty array."],
@@ -276,23 +473,12 @@ function buildPlanningReviewerPrompt(input: {
             feedbackMarkdown: "Concrete correction or approval note.",
           },
         ],
+        ticketEdits: [],
       },
       null,
       2,
     ),
     "```",
-    "",
-    "## Spec",
-    "",
-    input.spec.summaryMarkdown,
-    "",
-    "## Planning Tickets",
-    "",
-    input.tickets
-      .map(
-        (ticket) => `#${ticket.ordinal} ${ticket.title}\nID: ${ticket.id}\n${ticket.bodyMarkdown}`,
-      )
-      .join("\n\n"),
   ].join("\n");
 }
 
@@ -316,6 +502,7 @@ function buildImplementationRun(input: {
       branch: null,
       worktreePath: null,
       workerResult: null,
+      attemptCount: 0,
       updatedAt: input.command.createdAt,
     };
   });
@@ -329,9 +516,17 @@ function buildImplementationRun(input: {
     branch: `${input.command.orchestratorBranch}-ticket-${ticket.ordinal}`,
     worktreePath: `${input.command.orchestratorWorktreePath}-ticket-${ticket.ordinal}`,
   }));
+  const dependencyTicketIds = new Set(
+    input.tickets.flatMap((ticket) => ticket.dependencies.map((dependency) => dependency.ticketId)),
+  );
+  const terminalLineageTicketIds = input.tickets
+    .filter((ticket) => !dependencyTicketIds.has(ticket.id))
+    .map((ticket) => ticket.id);
   return {
     id: input.runId,
+    artifactSource: "planning-spec",
     specId: input.command.specId,
+    sourceProposedPlan: null,
     planningTicketIds: ticketIds,
     orchestratorThreadId: input.orchestratorThreadId,
     status: "launch-pending",
@@ -369,8 +564,14 @@ function buildImplementationRun(input: {
     },
     ticketStates,
     workerResults: [],
-    terminalLineageTicketIds: [],
+    terminalLineageTicketIds,
+    integrationHeadSha: null,
     finalValidation: null,
+    finalValidationResults: [],
+    validatedHeadSha: null,
+    activeValidationHeadSha: null,
+    activeValidatorThreadId: null,
+    mergeGateAttemptCount: 0,
     appDevStack: {
       status: "not-requested",
       stackId: null,
@@ -390,13 +591,24 @@ function buildImplementationRun(input: {
     },
     devReviewIds: [],
     devReviews: [],
+    devReviewedHeadSha: null,
+    activeDevReviewHeadSha: null,
+    activeDevReviewThreadId: null,
     qaAttemptCount: 0,
+    codeReviewedHeadSha: null,
+    activeCodeReviewHeadSha: null,
+    activeCodeReviewThreadId: null,
     codeReviewAttemptCount: 0,
+    activeFixerThreadId: null,
+    fixOrigin: null,
+    latestCodeReviewReportMarkdown: null,
     handoffTarget: "orchestrator-worktree",
     baseBranchMergePolicy: "never-auto-merge",
     changeRequest: null,
     changeRequestFailure: null,
     changeRequestPublisherUserId: input.publisherUserId,
+    fastBuildResult: null,
+    retryableFailure: null,
     createdAt: input.command.createdAt,
     updatedAt: input.command.createdAt,
   };
@@ -437,40 +649,6 @@ type PlannedOrchestrationEvent = Omit<OrchestrationEvent, "sequence">;
 type DecideOrchestrationCommandResult =
   | PlannedOrchestrationEvent
   | ReadonlyArray<PlannedOrchestrationEvent>;
-
-const decideCommandSequence = Effect.fn("decideCommandSequence")(function* ({
-  commands,
-  readModel,
-}: {
-  readonly commands: ReadonlyArray<OrchestrationCommand>;
-  readonly readModel: OrchestrationReadModel;
-}): Effect.fn.Return<
-  ReadonlyArray<PlannedOrchestrationEvent>,
-  OrchestrationCommandInvariantError | PlatformError.PlatformError,
-  Crypto.Crypto
-> {
-  let nextReadModel = readModel;
-  let nextSequence = readModel.snapshotSequence;
-  const plannedEvents: PlannedOrchestrationEvent[] = [];
-
-  for (const nextCommand of commands) {
-    const decided = yield* decideOrchestrationCommand({
-      command: nextCommand,
-      readModel: nextReadModel,
-    });
-    const nextEvents = Array.isArray(decided) ? decided : [decided];
-    for (const nextEvent of nextEvents) {
-      plannedEvents.push(nextEvent);
-      nextSequence += 1;
-      nextReadModel = yield* projectEvent(nextReadModel, {
-        ...nextEvent,
-        sequence: nextSequence,
-      }).pipe(Effect.orDie);
-    }
-  }
-
-  return plannedEvents;
-});
 
 export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand")(function* ({
   command,
@@ -569,23 +747,40 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
       if (activeThreads.length > 0) {
-        return yield* decideCommandSequence({
-          readModel,
-          commands: [
-            ...activeThreads.map(
-              (thread): Extract<OrchestrationCommand, { type: "thread.delete" }> => ({
-                type: "thread.delete",
-                commandId: command.commandId,
-                threadId: thread.id,
-              }),
-            ),
-            {
-              type: "project.delete",
+        const occurredAt = yield* nowIso;
+        const events: PlannedOrchestrationEvent[] = [];
+        for (const thread of orderHierarchyPostOrder(activeThreads, {
+          getId: (entry) => entry.id,
+          getParentId: (entry) => entry.parentThreadId,
+        })) {
+          events.push({
+            ...(yield* withEventBase({
+              aggregateKind: "thread",
+              aggregateId: thread.id,
+              occurredAt,
               commandId: command.commandId,
-              projectId: command.projectId,
+            })),
+            type: "thread.deleted",
+            payload: {
+              threadId: thread.id,
+              deletedAt: occurredAt,
             },
-          ],
+          });
+        }
+        events.push({
+          ...(yield* withEventBase({
+            aggregateKind: "project",
+            aggregateId: command.projectId,
+            occurredAt,
+            commandId: command.commandId,
+          })),
+          type: "project.deleted",
+          payload: {
+            projectId: command.projectId,
+            deletedAt: occurredAt,
+          },
         });
+        return events;
       }
 
       const occurredAt = yield* nowIso;
@@ -615,6 +810,24 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      const parentThread =
+        command.parentThreadId == null
+          ? undefined
+          : readModel.threads.find((thread) => thread.id === command.parentThreadId);
+      const workflowContext =
+        command.workflowContext !== undefined
+          ? command.workflowContext
+          : (parentThread?.workflowContext ??
+            (command.interactionMode === "product-workflow" ||
+            isProductWorkflowPreset(command.workflowPreset) ||
+            command.interactionMode === "planning-workflow" ||
+            command.interactionMode === "implementation-workflow"
+              ? {
+                  workflowId: WorkflowId.make(`workflow-${command.threadId}`),
+                  rootThreadId: command.threadId,
+                  ticketScope: [],
+                }
+              : null));
       return {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -631,6 +844,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ? { parentThreadId: command.parentThreadId }
             : {}),
           ...(command.workflowRole !== undefined ? { workflowRole: command.workflowRole } : {}),
+          workflowContext,
           ...(command.workflowSubagentBatchProvenance !== undefined
             ? { workflowSubagentBatchProvenance: command.workflowSubagentBatchProvenance }
             : {}),
@@ -638,6 +852,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           modelSelection: command.modelSelection,
           runtimeMode: command.runtimeMode,
           interactionMode: command.interactionMode,
+          ...(command.workflowPreset !== undefined
+            ? { workflowPreset: command.workflowPreset }
+            : {}),
           branch: command.branch,
           worktreePath: command.worktreePath,
           createdAt: command.createdAt,
@@ -653,19 +870,27 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadId: command.threadId,
       });
       const occurredAt = yield* nowIso;
-      return {
-        ...(yield* withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt,
-          commandId: command.commandId,
-        })),
-        type: "thread.deleted",
-        payload: {
-          threadId: command.threadId,
-          deletedAt: occurredAt,
-        },
-      };
+      const events: PlannedOrchestrationEvent[] = [];
+      const targets = collectHierarchyPostOrder(readModel.threads, command.threadId, {
+        getId: (thread) => thread.id,
+        getParentId: (thread) => thread.parentThreadId,
+      }).filter((thread) => thread.id === command.threadId || thread.deletedAt === null);
+      for (const thread of targets) {
+        events.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: thread.id,
+            occurredAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.deleted",
+          payload: {
+            threadId: thread.id,
+            deletedAt: occurredAt,
+          },
+        });
+      }
+      return events;
     }
 
     case "thread.archive": {
@@ -675,20 +900,32 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadId: command.threadId,
       });
       const occurredAt = yield* nowIso;
-      return {
-        ...(yield* withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt,
-          commandId: command.commandId,
-        })),
-        type: "thread.archived",
-        payload: {
-          threadId: command.threadId,
-          archivedAt: occurredAt,
-          updatedAt: occurredAt,
-        },
-      };
+      const events: PlannedOrchestrationEvent[] = [];
+      const targets = collectHierarchyPostOrder(readModel.threads, command.threadId, {
+        getId: (thread) => thread.id,
+        getParentId: (thread) => thread.parentThreadId,
+      }).filter(
+        (thread) =>
+          thread.id === command.threadId ||
+          (thread.deletedAt === null && thread.archivedAt === null),
+      );
+      for (const thread of targets) {
+        events.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: thread.id,
+            occurredAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.archived",
+          payload: {
+            threadId: thread.id,
+            archivedAt: occurredAt,
+            updatedAt: occurredAt,
+          },
+        });
+      }
+      return events;
     }
 
     case "thread.unarchive": {
@@ -698,19 +935,31 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadId: command.threadId,
       });
       const occurredAt = yield* nowIso;
-      return {
-        ...(yield* withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt,
-          commandId: command.commandId,
-        })),
-        type: "thread.unarchived",
-        payload: {
-          threadId: command.threadId,
-          updatedAt: occurredAt,
-        },
-      };
+      const events: PlannedOrchestrationEvent[] = [];
+      const targets = collectHierarchyPostOrder(readModel.threads, command.threadId, {
+        getId: (thread) => thread.id,
+        getParentId: (thread) => thread.parentThreadId,
+      }).filter(
+        (thread) =>
+          thread.id === command.threadId ||
+          (thread.deletedAt === null && thread.archivedAt !== null),
+      );
+      for (const thread of targets) {
+        events.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: thread.id,
+            occurredAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.unarchived",
+          payload: {
+            threadId: thread.id,
+            updatedAt: occurredAt,
+          },
+        });
+      }
+      return events;
     }
 
     case "thread.meta.update": {
@@ -794,6 +1043,26 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.composer-mode.set": {
+      yield* requireThread({ readModel, command, threadId: command.threadId });
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.composer-mode-set",
+        payload: {
+          threadId: command.threadId,
+          interactionMode: command.interactionMode,
+          workflowPreset: command.workflowPreset,
+          updatedAt: occurredAt,
+        },
+      };
+    }
+
     case "thread.planning-spec.create":
       return yield* decideOrchestrationCommand({
         readModel,
@@ -812,10 +1081,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
-      if (
-        productRootThread.interactionMode !== "product-workflow" ||
-        productRootThread.workflowRole !== null
-      ) {
+      if (!isProductWorkflowRoot(productRootThread)) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: `Thread '${command.threadId}' is not a Product Workflow root thread.`,
@@ -841,6 +1107,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ownerUserId: productRootThread.ownerUserId,
           parentThreadId: productRootThread.id,
           workflowRole: "planning-orchestrator",
+          workflowContext: productRootThread.workflowContext ?? {
+            workflowId: WorkflowId.make(`workflow-${productRootThread.id}`),
+            rootThreadId: productRootThread.id,
+            ticketScope: [],
+          },
           title: `Plan ${command.intentTitle}`,
           modelSelection: productRootThread.modelSelection,
           runtimeMode: productRootThread.runtimeMode,
@@ -1211,12 +1482,31 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: validationError,
         });
       }
+      if (workflow.activeReview != null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Planning review cycle ${workflow.activeReview.cycleNumber} is already active.`,
+        });
+      }
+      const reviewRequest = nextPlanningReviewRequest(workflow);
+      if (reviewRequest.cycleNumber > PLANNING_REVIEW_MAX_CYCLES) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Planning ticket review is limited to ${PLANNING_REVIEW_MAX_CYCLES} cycles.`,
+        });
+      }
       const crypto = yield* Crypto.Crypto;
       const reviewerThreadUuid = yield* crypto.randomUUIDv4;
       const reviewerMessageUuid = yield* crypto.randomUUIDv4;
       const reviewerThreadId = ThreadId.make(`thread-planning-reviewer-${reviewerThreadUuid}`);
       const reviewerMessageId = MessageId.make(`message-planning-reviewer-${reviewerMessageUuid}`);
-      const cycleNumber = workflow.reviewCycles.length + 1;
+      const { cycleNumber, mode, targetPlanningTicketIds } = reviewRequest;
+      if (targetPlanningTicketIds.length === 0) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Planning ticket review has no remaining tickets that require review.",
+        });
+      }
       const requestEvent: PlannedOrchestrationEvent = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -1229,6 +1519,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: planningThread.id,
           specId: spec.id,
           cycleNumber,
+          mode,
+          targetPlanningTicketIds,
           reviewerThreadId,
           reviewerMessageId,
           stage: "ticket-review",
@@ -1250,6 +1542,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ownerUserId: planningThread.ownerUserId,
           parentThreadId: planningThread.id,
           workflowRole: "planning-reviewer",
+          workflowContext: {
+            ...(planningThread.workflowContext ?? {
+              workflowId: spec.workflowId,
+              rootThreadId: planningThread.id,
+              ticketScope: [],
+            }),
+            ticketScope: targetPlanningTicketIds,
+          },
           title: `Review ${spec.title}`,
           modelSelection: planningThread.modelSelection,
           runtimeMode: planningThread.runtimeMode,
@@ -1273,7 +1573,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: reviewerThreadId,
           messageId: reviewerMessageId,
           role: "user",
-          text: buildPlanningReviewerPrompt({ spec, tickets, cycleNumber }),
+          text: buildPlanningReviewerPrompt({
+            spec,
+            tickets,
+            cycleNumber,
+            mode,
+            targetPlanningTicketIds,
+          }),
           turnId: null,
           streaming: false,
           createdAt: command.createdAt,
@@ -1321,10 +1627,136 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Planning Thread '${planningThread.id}' does not have a Spec to review.`,
         });
       }
-      const passed =
+      const activeReview = workflow.activeReview;
+      if (activeReview == null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Planning reviewer verdict does not match an active review request.",
+        });
+      }
+      if (activeReview.reviewerThreadId !== command.reviewerThreadId) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Reviewer thread '${command.reviewerThreadId}' is not assigned to cycle ${activeReview.cycleNumber}.`,
+        });
+      }
+      if (command.cycleNumber !== undefined && command.cycleNumber !== activeReview.cycleNumber) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Reviewer verdict cycle ${command.cycleNumber} does not match active cycle ${activeReview.cycleNumber}.`,
+        });
+      }
+      if (command.mode !== undefined && command.mode !== activeReview.mode) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Reviewer verdict mode '${command.mode}' does not match active mode '${activeReview.mode}'.`,
+        });
+      }
+      if (
+        command.targetPlanningTicketIds !== undefined &&
+        !hasSameUniqueValues(command.targetPlanningTicketIds, activeReview.targetPlanningTicketIds)
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Reviewer verdict targets do not match the active review target set.",
+        });
+      }
+      const edits = command.ticketEdits ?? [];
+      const failingPlanningTicketIds = command.failingPlanningTicketIds ?? [];
+      const activeTargetIds = new Set(activeReview.targetPlanningTicketIds);
+      if (new Set(failingPlanningTicketIds).size !== failingPlanningTicketIds.length) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Reviewer verdict contains duplicate failing Planning Ticket ids.",
+        });
+      }
+      const outOfScopeFailingTicketId = failingPlanningTicketIds.find(
+        (ticketId) => !activeTargetIds.has(ticketId),
+      );
+      if (outOfScopeFailingTicketId !== undefined) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Reviewer verdict marks non-target Planning Ticket '${outOfScopeFailingTicketId}' as failing.`,
+        });
+      }
+      const inferredPassed =
         command.passed ??
         !/\b(fail|failed|failing|blocker|blocked)\b/i.test(command.verdictMarkdown);
-      const cycleNumber = workflow.reviewCycles.length + 1;
+      if (
+        command.runtimeFailure !== true &&
+        !inferredPassed &&
+        failingPlanningTicketIds.length === 0 &&
+        edits.length === 0
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "A failed reviewer verdict must identify a failing or reworked Planning Ticket.",
+        });
+      }
+      if (
+        command.runtimeFailure !== true &&
+        inferredPassed &&
+        failingPlanningTicketIds.length > 0
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "A passing reviewer verdict cannot contain failing Planning Ticket ids.",
+        });
+      }
+      const crypto = yield* Crypto.Crypto;
+      const generatedTicketIds = yield* Effect.forEach(edits, (edit) =>
+        edit.type === "create"
+          ? crypto.randomUUIDv4.pipe(Effect.map((uuid) => `planning-ticket-${uuid}`))
+          : Effect.succeed(""),
+      );
+      const editedTickets = applyPlanningReviewerEdits({
+        specId: spec.id,
+        tickets: workflow.tickets,
+        edits,
+        targetPlanningTicketIds: activeReview.targetPlanningTicketIds,
+        mode: activeReview.mode,
+        generatedTicketIds,
+        updatedAt: command.createdAt,
+      });
+      if (typeof editedTickets === "string") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: editedTickets,
+        });
+      }
+      const graphError = validatePlanningTicketGraph(spec.id, editedTickets);
+      if (graphError !== null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: graphError,
+        });
+      }
+      const editedPlanningTicketIds = edits.flatMap((edit, index) => {
+        if (edit.type === "create") {
+          const generatedId = generatedTicketIds[index];
+          return generatedId === undefined || generatedId.length === 0
+            ? [...edit.replacesPlanningTicketIds]
+            : [generatedId, ...edit.replacesPlanningTicketIds];
+        }
+        return [edit.ticketId];
+      });
+      const passed = inferredPassed && edits.length === 0;
+      const cycleNumber = activeReview.cycleNumber;
+      const status = command.runtimeFailure
+        ? ("runtime-failed" as const)
+        : edits.length > 0
+          ? ("revised" as const)
+          : passed
+            ? ("passed" as const)
+            : ("failed" as const);
+      const remainingTargetPlanningTicketIds = Array.from(
+        new Set([...failingPlanningTicketIds, ...editedPlanningTicketIds]),
+      ).filter((ticketId) => editedTickets.some((ticket) => ticket.id === ticketId));
+      const reviewCompleted =
+        passed ||
+        (command.runtimeFailure !== true &&
+          status === "revised" &&
+          remainingTargetPlanningTicketIds.length === 0);
       return {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -1338,17 +1770,20 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           specId: spec.id,
           reviewCycle: {
             cycleNumber,
-            status: passed ? "passed" : "failed",
+            mode: activeReview.mode,
+            status,
             reviewerThreadId: command.reviewerThreadId,
             reviewerMessageId: command.reviewerMessageId,
             verdictMarkdown: command.verdictMarkdown,
-            failingPlanningTicketIds: command.failingPlanningTicketIds ?? [],
+            failingPlanningTicketIds,
+            targetPlanningTicketIds: activeReview.targetPlanningTicketIds,
+            editedPlanningTicketIds,
             dependencyFeedback: command.dependencyFeedback ?? [],
             perTicketFeedback: command.perTicketFeedback ?? [],
             createdAt: command.createdAt,
           },
-          tickets: workflow.tickets,
-          stage: passed ? "completed" : "ticket-revision",
+          tickets: editedTickets,
+          stage: reviewCompleted ? "completed" : "ticket-review",
           revisedAt: command.createdAt,
         },
       };
@@ -1424,6 +1859,185 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.fast-feature-run.launch": {
+      const sourceThread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      if (sourceThread.workflowPreset !== "fast-feature") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${sourceThread.id}' does not have the fast-feature workflow preset.`,
+        });
+      }
+      if (sourceThread.branch === null || sourceThread.branch.trim().length === 0) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Fast feature launch requires a named source branch.",
+        });
+      }
+      const plan = sourceThread.proposedPlans.find(
+        (candidate) => candidate.id === command.proposedPlanId,
+      );
+      if (!plan || plan.implementedAt !== null || plan.planMarkdown.trim().length === 0) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Proposed Plan '${command.proposedPlanId}' is not actionable.`,
+        });
+      }
+      const duplicate = readModel.implementationRuns.find(
+        (run) =>
+          run.artifactSource === "proposed-plan" &&
+          run.sourceProposedPlan?.threadId === sourceThread.id &&
+          run.sourceProposedPlan.planId === plan.id &&
+          run.status !== "canceled",
+      );
+      if (duplicate) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Fast feature run '${duplicate.id}' already launched this proposed plan.`,
+        });
+      }
+      if (
+        !command.baseBranch ||
+        !command.pinnedCommit ||
+        !command.orchestratorBranch ||
+        !command.orchestratorWorktreePath
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail:
+            "Fast feature launch requires server-resolved branch, commit, and worktree identity.",
+        });
+      }
+      const crypto = yield* Crypto.Crypto;
+      const runUuid = yield* crypto.randomUUIDv4;
+      const threadUuid = yield* crypto.randomUUIDv4;
+      const orchestratorThreadId = ThreadId.make(`thread-fast-feature-implementer-${threadUuid}`);
+      const validationCommands =
+        command.validationCommands && command.validationCommands.length > 0
+          ? command.validationCommands
+          : [...DEFAULT_IMPLEMENTATION_VALIDATION_COMMANDS];
+      const run: OrchestrationImplementationRun = {
+        id: `implementation-run-${runUuid}`,
+        artifactSource: "proposed-plan",
+        specId: null,
+        sourceProposedPlan: { threadId: sourceThread.id, planId: plan.id },
+        planningTicketIds: [],
+        orchestratorThreadId,
+        status: "launch-pending",
+        baseBranch: command.baseBranch,
+        pinnedCommit: command.pinnedCommit,
+        orchestratorBranch: command.orchestratorBranch,
+        orchestratorWorktreePath: command.orchestratorWorktreePath,
+        launchSummary: {
+          specId: null,
+          planningTicketIds: [],
+          baseBranch: command.baseBranch,
+          pinnedCommit: command.pinnedCommit,
+          orchestratorBranch: command.orchestratorBranch,
+          orchestratorWorktreePath: command.orchestratorWorktreePath,
+          dependencyEdges: [],
+          initialReadyTicketIds: [],
+          plannedWorkers: [],
+          validationCommands,
+          finalDevReview: {
+            required: true,
+            completionBlocking: true,
+            appDevStackSource: "orchestrator-worktree",
+            autoStartAppDevStack: true,
+            browserMcpProfile: "agent-browser",
+            maxAttempts: 5,
+          },
+          createdAt: command.createdAt,
+        },
+        ticketStates: [],
+        workerResults: [],
+        terminalLineageTicketIds: [],
+        integrationHeadSha: null,
+        finalValidation: null,
+        finalValidationResults: [],
+        validatedHeadSha: null,
+        activeValidationHeadSha: null,
+        activeValidatorThreadId: null,
+        mergeGateAttemptCount: 0,
+        appDevStack: {
+          status: "not-requested",
+          stackId: null,
+          stackStatus: null,
+          frontendUrl: null,
+          frontendServiceName: null,
+          displayName: null,
+          lastErrorMarkdown: null,
+          requestedAt: "",
+          updatedAt: "",
+        },
+        qaTooling: {
+          status: "unknown",
+          agentBrowserPackage: "agent-browser@0.31.1",
+          lastErrorMarkdown: null,
+          checkedAt: "",
+        },
+        devReviewIds: [],
+        devReviews: [],
+        devReviewedHeadSha: null,
+        activeDevReviewHeadSha: null,
+        activeDevReviewThreadId: null,
+        qaAttemptCount: 0,
+        codeReviewedHeadSha: null,
+        activeCodeReviewHeadSha: null,
+        activeCodeReviewThreadId: null,
+        codeReviewAttemptCount: 0,
+        activeFixerThreadId: null,
+        fixOrigin: null,
+        latestCodeReviewReportMarkdown: null,
+        handoffTarget: "orchestrator-worktree",
+        baseBranchMergePolicy: "never-auto-merge",
+        changeRequest: null,
+        changeRequestFailure: null,
+        changeRequestPublisherUserId: sourceThread.ownerUserId,
+        fastBuildResult: null,
+        retryableFailure: null,
+        createdAt: command.createdAt,
+        updatedAt: command.createdAt,
+      };
+      const threadCreated: PlannedOrchestrationEvent = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: orchestratorThreadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.created",
+        payload: {
+          threadId: orchestratorThreadId,
+          projectId: sourceThread.projectId,
+          ownerUserId: sourceThread.ownerUserId,
+          parentThreadId: sourceThread.id,
+          workflowRole: "fast-feature-implementer",
+          workflowPreset: "fast-feature",
+          workflowContext: sourceThread.workflowContext ?? null,
+          title: buildPlanImplementationThreadTitle(plan.planMarkdown),
+          modelSelection: sourceThread.modelSelection,
+          runtimeMode: sourceThread.runtimeMode,
+          interactionMode: "default",
+          branch: command.orchestratorBranch,
+          worktreePath: command.orchestratorWorktreePath,
+          createdAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      };
+      const launched: PlannedOrchestrationEvent = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: orchestratorThreadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        causationEventId: threadCreated.eventId,
+        type: "thread.implementation-run-launched",
+        payload: { sourceThreadId: sourceThread.id, run },
+      };
+      return [threadCreated, launched];
+    }
+
     case "thread.implementation-run.launch": {
       const launcherThread = yield* requireThread({
         readModel,
@@ -1491,6 +2105,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ownerUserId: launcherThread.ownerUserId,
           parentThreadId: launcherThread.id,
           workflowRole: "implementation-orchestrator",
+          workflowContext: {
+            workflowId: bundle.spec.workflowId,
+            rootThreadId: launcherThread.workflowContext?.rootThreadId ?? launcherThread.id,
+            ticketScope: bundle.tickets.map((ticket) => ticket.id),
+          },
           title: `Implement ${bundle.spec.title}`,
           modelSelection: launcherThread.modelSelection,
           runtimeMode: launcherThread.runtimeMode,
@@ -1552,6 +2171,18 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Implementation Run '${command.run.id}' does not exist.`,
         });
       }
+      if (
+        (command.run.artifactSource === "planning-spec" &&
+          (command.run.specId === null || command.run.sourceProposedPlan !== null)) ||
+        (command.run.artifactSource === "proposed-plan" &&
+          (command.run.specId !== null || command.run.sourceProposedPlan === null))
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail:
+            "Implementation Run artifact source must reference exactly one Planning Spec or proposed plan.",
+        });
+      }
       return {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -1598,6 +2229,27 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.implementation-run.retry": {
+      yield* requireThread({ readModel, command, threadId: command.threadId });
+      const existingRun = readModel.implementationRuns.find((run) => run.id === command.runId);
+      if (!existingRun || existingRun.retryableFailure === null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Implementation Run '${command.runId}' does not have a retryable failure.`,
+        });
+      }
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.implementation-run-retry-requested",
+        payload: { run: existingRun },
+      };
+    }
+
     case "thread.dev-review.launch": {
       const sourceThread = yield* requireThread({
         readModel,
@@ -1619,10 +2271,32 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
 
+      const inheritedTicketScope = sourceThread.workflowContext?.ticketScope ?? [];
+      const workflowTicketScope =
+        sourceThread.workflowContext == null
+          ? []
+          : Array.from(
+              new Set(
+                readModel.threads
+                  .filter(
+                    (thread) =>
+                      thread.projectId === sourceThread.projectId &&
+                      thread.workflowContext?.workflowId ===
+                        sourceThread.workflowContext?.workflowId,
+                  )
+                  .flatMap((thread) =>
+                    (thread.planningWorkflow?.tickets ?? []).map((ticket) => ticket.id),
+                  ),
+              ),
+            );
+      const planningTicketIds =
+        command.planningTicketIds ??
+        (inheritedTicketScope.length > 0 ? inheritedTicketScope : workflowTicketScope);
       const reviewRecord = {
         id: command.reviewId,
         sourceThreadId: command.sourceThreadId,
         reviewThreadId: command.reviewThreadId,
+        planningTicketIds,
         sourceTurnId: sourceThread.latestTurn?.turnId ?? null,
         status: "running" as const,
         document: EMPTY_DEV_REVIEW_DOCUMENT,
@@ -1644,6 +2318,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ownerUserId: sourceThread.ownerUserId,
           parentThreadId: sourceThread.id,
           workflowRole: "implementation-qa-reviewer",
+          workflowContext:
+            sourceThread.workflowContext == null
+              ? null
+              : { ...sourceThread.workflowContext, ticketScope: planningTicketIds },
           ...(command.batchProvenance !== undefined
             ? { workflowSubagentBatchProvenance: command.batchProvenance }
             : {}),
@@ -1818,6 +2496,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ownerUserId: command.ownerUserId,
           parentThreadId: command.parentThreadId,
           workflowRole: command.workflowRole,
+          workflowContext: parent.workflowContext,
           workflowSubagentBatchProvenance: {
             batchId: command.batchId,
             childIndex: command.childIndex,

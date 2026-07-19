@@ -21,6 +21,8 @@ import {
 const ProjectionThreadPlanningReviewCycleDbRow = ProjectionThreadPlanningReviewCycle.mapFields(
   Struct.assign({
     failingPlanningTicketIds: Schema.fromJsonString(Schema.Array(OrchestrationPlanningTicketId)),
+    targetPlanningTicketIds: Schema.fromJsonString(Schema.Array(OrchestrationPlanningTicketId)),
+    editedPlanningTicketIds: Schema.fromJsonString(Schema.Array(OrchestrationPlanningTicketId)),
     dependencyFeedback: Schema.fromJsonString(Schema.Array(Schema.String)),
     perTicketFeedback: Schema.fromJsonString(
       Schema.Array(OrchestrationPlanningReviewTicketFeedback),
@@ -35,24 +37,30 @@ const makeProjectionThreadPlanningReviewCycleRepository = Effect.gen(function* (
     Request: ProjectionThreadPlanningReviewCycle,
     execute: (row) => sql`
       INSERT INTO projection_thread_planning_review_cycles (
-        thread_id, spec_id, cycle_number, status, reviewer_thread_id,
+        thread_id, spec_id, cycle_number, review_mode, status, reviewer_thread_id,
         reviewer_message_id, verdict_markdown, failing_planning_ticket_ids_json,
+        target_planning_ticket_ids_json, edited_planning_ticket_ids_json,
         dependency_feedback_json, per_ticket_feedback_json, created_at
       )
       VALUES (
-        ${row.threadId}, ${row.specId}, ${row.cycleNumber}, ${row.status},
+        ${row.threadId}, ${row.specId}, ${row.cycleNumber}, ${row.mode}, ${row.status},
         ${row.reviewerThreadId}, ${row.reviewerMessageId}, ${row.verdictMarkdown},
-        ${JSON.stringify(row.failingPlanningTicketIds)}, ${JSON.stringify(row.dependencyFeedback)},
+        ${JSON.stringify(row.failingPlanningTicketIds)},
+        ${JSON.stringify(row.targetPlanningTicketIds)}, ${JSON.stringify(row.editedPlanningTicketIds)},
+        ${JSON.stringify(row.dependencyFeedback)},
         ${JSON.stringify(row.perTicketFeedback)}, ${row.createdAt}
       )
       ON CONFLICT (thread_id, cycle_number)
       DO UPDATE SET
         spec_id = excluded.spec_id,
         status = excluded.status,
+        review_mode = excluded.review_mode,
         reviewer_thread_id = excluded.reviewer_thread_id,
         reviewer_message_id = excluded.reviewer_message_id,
         verdict_markdown = excluded.verdict_markdown,
         failing_planning_ticket_ids_json = excluded.failing_planning_ticket_ids_json,
+        target_planning_ticket_ids_json = excluded.target_planning_ticket_ids_json,
+        edited_planning_ticket_ids_json = excluded.edited_planning_ticket_ids_json,
         dependency_feedback_json = excluded.dependency_feedback_json,
         per_ticket_feedback_json = excluded.per_ticket_feedback_json,
         created_at = excluded.created_at
@@ -67,11 +75,14 @@ const makeProjectionThreadPlanningReviewCycleRepository = Effect.gen(function* (
         thread_id AS "threadId",
         spec_id AS "specId",
         cycle_number AS "cycleNumber",
+        review_mode AS "mode",
         status,
         reviewer_thread_id AS "reviewerThreadId",
         reviewer_message_id AS "reviewerMessageId",
         verdict_markdown AS "verdictMarkdown",
         failing_planning_ticket_ids_json AS "failingPlanningTicketIds",
+        target_planning_ticket_ids_json AS "targetPlanningTicketIds",
+        edited_planning_ticket_ids_json AS "editedPlanningTicketIds",
         dependency_feedback_json AS "dependencyFeedback",
         per_ticket_feedback_json AS "perTicketFeedback",
         created_at AS "createdAt"

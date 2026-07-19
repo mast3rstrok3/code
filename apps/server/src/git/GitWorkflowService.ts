@@ -35,6 +35,16 @@ import * as GitManager from "./GitManager.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 
+export interface GitMergeRefInput {
+  readonly cwd: string;
+  readonly refName: string;
+}
+
+export type GitMergeRefResult =
+  | { readonly status: "already-integrated" }
+  | { readonly status: "merged" }
+  | { readonly status: "conflicted"; readonly conflictedFiles: ReadonlyArray<string> };
+
 export class GitWorkflowService extends Context.Service<
   GitWorkflowService,
   {
@@ -84,9 +94,25 @@ export class GitWorkflowService extends Context.Service<
       readonly cwd: string;
       readonly ref: string;
     }) => Effect.Effect<{ readonly commitSha: string }, GitCommandError>;
+    readonly isAncestor: (input: {
+      readonly cwd: string;
+      readonly ancestorRef: string;
+      readonly descendantRef: string;
+    }) => Effect.Effect<boolean, GitCommandError>;
+    readonly listChangedFiles: (input: {
+      readonly cwd: string;
+      readonly baseRef: string;
+      readonly headRef: string;
+    }) => Effect.Effect<ReadonlyArray<string>, GitCommandError>;
+    readonly mergeRef: (
+      input: GitMergeRefInput,
+    ) => Effect.Effect<GitMergeRefResult, GitCommandError>;
     readonly createOrOpenChangeRequest: (input: {
       readonly cwd: string;
       readonly actionId: string;
+      readonly baseRefName: string;
+      readonly headRefName: string;
+      readonly expectedHeadSha: string;
       readonly threadId?: ThreadId;
       readonly commitMessage?: string;
     }) => Effect.Effect<ChangeRequest, GitManagerServiceError>;
@@ -262,6 +288,72 @@ export const make = Effect.gen(function* () {
     (input: Input) =>
       ensureGit(operation, input.cwd).pipe(Effect.andThen(run(input)));
 
+  const mergeRef = Effect.fn("GitWorkflowService.mergeRef")(function* (input: GitMergeRefInput) {
+    yield* ensureGitCommand("GitWorkflowService.mergeRef", input.cwd);
+
+    const ancestor = yield* git.execute({
+      operation: "GitWorkflowService.mergeRef.isAncestor",
+      cwd: input.cwd,
+      args: ["merge-base", "--is-ancestor", input.refName, "HEAD"],
+      allowNonZeroExit: true,
+      maxOutputBytes: 4_096,
+    });
+    if (ancestor.exitCode === 0) {
+      return { status: "already-integrated" as const };
+    }
+    if (ancestor.exitCode !== 1) {
+      return yield* new GitCommandError({
+        operation: "GitWorkflowService.mergeRef",
+        command: "git merge-base --is-ancestor",
+        cwd: input.cwd,
+        detail:
+          ancestor.stderr.trim() ||
+          `Failed to inspect whether '${input.refName}' is already integrated.`,
+      });
+    }
+
+    const merged = yield* git.execute({
+      operation: "GitWorkflowService.mergeRef.merge",
+      cwd: input.cwd,
+      args: ["merge", "--no-ff", "--no-edit", input.refName],
+      allowNonZeroExit: true,
+      maxOutputBytes: 64 * 1_024,
+      appendTruncationMarker: true,
+    });
+    yield* gitManager.invalidateStatus(input.cwd);
+    if (merged.exitCode === 0) {
+      return { status: "merged" as const };
+    }
+
+    const unmerged = yield* git.execute({
+      operation: "GitWorkflowService.mergeRef.listConflicts",
+      cwd: input.cwd,
+      args: ["diff", "--name-only", "--diff-filter=U", "-z"],
+      maxOutputBytes: 64 * 1_024,
+    });
+    const conflictedFiles = unmerged.stdout.split("\0").filter((file) => file.length > 0);
+    if (conflictedFiles.length > 0) {
+      return { status: "conflicted" as const, conflictedFiles };
+    }
+
+    yield* git
+      .execute({
+        operation: "GitWorkflowService.mergeRef.abort",
+        cwd: input.cwd,
+        args: ["merge", "--abort"],
+        allowNonZeroExit: true,
+        maxOutputBytes: 4_096,
+      })
+      .pipe(Effect.ignore);
+    yield* gitManager.invalidateStatus(input.cwd);
+    return yield* new GitCommandError({
+      operation: "GitWorkflowService.mergeRef",
+      command: "git merge --no-ff --no-edit",
+      cwd: input.cwd,
+      detail: merged.stderr.trim() || `Failed to merge '${input.refName}'.`,
+    });
+  });
+
   return GitWorkflowService.of({
     status: (input) =>
       detectGitRepositoryForStatus("GitWorkflowService.status", input.cwd).pipe(
@@ -332,15 +424,87 @@ export const make = Effect.gen(function* () {
         ),
         Effect.map((result) => ({ commitSha: result.stdout.trim() })),
       ),
+    isAncestor: (input) =>
+      ensureGitCommand("GitWorkflowService.isAncestor", input.cwd).pipe(
+        Effect.andThen(
+          git.execute({
+            operation: "GitWorkflowService.isAncestor",
+            cwd: input.cwd,
+            args: ["merge-base", "--is-ancestor", input.ancestorRef, input.descendantRef],
+            allowNonZeroExit: true,
+            maxOutputBytes: 4_096,
+          }),
+        ),
+        Effect.flatMap((result) => {
+          if (result.exitCode === 0) return Effect.succeed(true);
+          if (result.exitCode === 1) return Effect.succeed(false);
+          return Effect.fail(
+            new GitCommandError({
+              operation: "GitWorkflowService.isAncestor",
+              command: "git merge-base --is-ancestor",
+              cwd: input.cwd,
+              detail: result.stderr.trim() || "Failed to inspect commit ancestry.",
+            }),
+          );
+        }),
+      ),
+    listChangedFiles: (input) =>
+      ensureGitCommand("GitWorkflowService.listChangedFiles", input.cwd).pipe(
+        Effect.andThen(
+          git.execute({
+            operation: "GitWorkflowService.listChangedFiles",
+            cwd: input.cwd,
+            args: ["diff", "--name-only", "-z", input.baseRef, input.headRef],
+            maxOutputBytes: 256 * 1_024,
+          }),
+        ),
+        Effect.map((result) => result.stdout.split("\0").filter((path) => path.length > 0)),
+      ),
+    mergeRef,
     createOrOpenChangeRequest: (input) =>
       ensureGit("GitWorkflowService.createOrOpenChangeRequest", input.cwd).pipe(
         Effect.andThen(
-          gitManager.runStackedAction({
-            actionId: input.actionId,
-            cwd: input.cwd,
-            action: "commit_push_pr",
-            ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
-            ...(input.commitMessage !== undefined ? { commitMessage: input.commitMessage } : {}),
+          Effect.gen(function* () {
+            yield* gitManager.invalidateStatus(input.cwd);
+            const [status, head] = yield* Effect.all([
+              gitManager.localStatus({ cwd: input.cwd }),
+              git.execute({
+                operation: "GitWorkflowService.createOrOpenChangeRequest.resolveHead",
+                cwd: input.cwd,
+                args: ["rev-parse", "--verify", "HEAD^{commit}"],
+                maxOutputBytes: 1_024,
+              }),
+            ]);
+            const headSha = head.stdout.trim();
+            if (status.hasWorkingTreeChanges) {
+              return yield* new GitManagerError({
+                operation: "GitWorkflowService.createOrOpenChangeRequest",
+                cwd: input.cwd,
+                detail: "Cannot publish a reviewed change request from a dirty worktree.",
+              });
+            }
+            if (!status.isRepo || status.refName !== input.headRefName) {
+              return yield* new GitManagerError({
+                operation: "GitWorkflowService.createOrOpenChangeRequest",
+                cwd: input.cwd,
+                detail: `Expected reviewed branch '${input.headRefName}', but Git reports '${status.refName ?? "detached HEAD"}'.`,
+              });
+            }
+            if (headSha !== input.expectedHeadSha) {
+              return yield* new GitManagerError({
+                operation: "GitWorkflowService.createOrOpenChangeRequest",
+                cwd: input.cwd,
+                detail: `Reviewed HEAD '${input.expectedHeadSha}' moved to '${headSha}' before publication.`,
+              });
+            }
+            return yield* gitManager.runStackedAction({
+              actionId: input.actionId,
+              cwd: input.cwd,
+              action: "commit_push_pr",
+              pullRequestBaseBranch: input.baseRefName,
+              ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+              ...(input.commitMessage !== undefined ? { commitMessage: input.commitMessage } : {}),
+            });
           }),
         ),
         Effect.flatMap((result) =>
@@ -365,6 +529,24 @@ export const make = Effect.gen(function* () {
                     operation: "GitWorkflowService.createOrOpenChangeRequest",
                     cwd: input.cwd,
                     detail: "Git action completed but no change request could be resolved.",
+                  }),
+                );
+              }
+              if (baseRefName !== input.baseRefName) {
+                return Effect.fail(
+                  new GitManagerError({
+                    operation: "GitWorkflowService.createOrOpenChangeRequest",
+                    cwd: input.cwd,
+                    detail: `Published change request targets '${baseRefName}', but '${input.baseRefName}' is required.`,
+                  }),
+                );
+              }
+              if (headRefName !== input.headRefName) {
+                return Effect.fail(
+                  new GitManagerError({
+                    operation: "GitWorkflowService.createOrOpenChangeRequest",
+                    cwd: input.cwd,
+                    detail: `Published change request uses head '${headRefName}', but '${input.headRefName}' is required.`,
                   }),
                 );
               }

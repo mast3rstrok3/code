@@ -7,7 +7,10 @@ import * as Effect from "effect/Effect";
 
 import type { NativeAppDevStackConfig } from "../config.ts";
 import { makeNativeAppDevStackService, type KubectlRunner } from "./NativeAppDevStackManager.ts";
-import type { NativeCommandRunner } from "./nativeAppDevStackProvisioning.ts";
+import {
+  generateNativeAppDevStackManifests,
+  type NativeCommandRunner,
+} from "./nativeAppDevStackProvisioning.ts";
 
 const nativeConfig = {
   id: "rudi-dev",
@@ -108,6 +111,66 @@ const makeTempHeroComposeWorktree = (
   return tempDir;
 };
 
+it.effect("translates interpolated bind mounts and string commands for Kubernetes", () => {
+  const tempDir = makeTempHeroComposeWorktree([
+    "    image: quay.io/minio/minio:latest",
+    '    command: server /data --console-address ":9001"',
+    "    volumes:",
+    "      - ${T3_TEST_APP_DATA_PATH:-/tmp/t3-app-data}:/data:rw",
+    "    ports:",
+    "      - '9000:9000'",
+  ]);
+
+  return Effect.gen(function* () {
+    const documents = yield* Effect.promise(() =>
+      generateNativeAppDevStackManifests({
+        id: "hero-dev",
+        namespace: "hero-dev",
+        worktreePath: tempDir,
+        composePath: "infra/compose/compose.app-dev.yml",
+        displayName: "hero",
+        displaySlug: undefined,
+        repoName: "hero",
+        branchName: "main",
+        dockerPath: "docker",
+        buildctlPath: "buildctl",
+        imageBuilder: "docker",
+        imageRegistry: undefined,
+        imagePushRegistry: undefined,
+        imageProject: undefined,
+        buildkitAddr: undefined,
+        buildkitDockerConfig: undefined,
+        buildkitDockerConfigsDir: undefined,
+        buildkitHarborCaCert: undefined,
+        frontendUrl: undefined,
+        backendUrl: undefined,
+        keycloakUrl: undefined,
+        minioUrl: undefined,
+        preferStackScopedUrls: true,
+      }),
+    );
+    const deployment = documents.find((document) => document.kind === "Deployment");
+    const spec = deployment?.spec as
+      | {
+          readonly template: {
+            readonly spec: {
+              readonly containers: ReadonlyArray<{ readonly args?: unknown }>;
+              readonly volumes: ReadonlyArray<{
+                readonly hostPath?: { readonly path?: unknown };
+              }>;
+            };
+          };
+        }
+      | undefined;
+    const container = spec?.template.spec.containers[0];
+
+    assert.deepEqual(container?.args, ["server", "/data", "--console-address", ":9001"]);
+    assert.equal(spec?.template.spec.volumes[0]?.hostPath?.path, "/tmp/t3-app-data");
+  }).pipe(
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { force: true, recursive: true }))),
+  );
+});
+
 it.effect("reports the configured Rudi stack from Kubernetes deployments", () => {
   const calls: Array<ReadonlyArray<string>> = [];
   const runKubectl: KubectlRunner = async (args) => {
@@ -188,6 +251,8 @@ it.effect(
       assert.equal(urls.get("api"), "https://api-hero-dev.nightingale-ai.com");
       assert.equal(urls.get("keycloak"), "https://hero-dev-keycloak.nightingale-ai.com");
       assert.equal(urls.get("minio"), "https://minio-hero-dev.nightingale-ai.com");
+      assert.equal(result.frontendUrl, "https://hero-dev.nightingale-ai.com");
+      assert.equal(result.frontendServiceName, "web");
       assert.deepEqual(result.stack?.previewUrls, {
         web: "https://hero-dev.nightingale-ai.com",
         api: "https://api-hero-dev.nightingale-ai.com",
@@ -198,7 +263,7 @@ it.effect(
   },
 );
 
-it.effect("uses Traefik IngressRoute hosts ahead of conventional preview URLs", () => {
+it.effect("keeps derived worktree preview URLs scoped to their namespace", () => {
   const deployments = JSON.stringify({
     items: [
       {
@@ -235,9 +300,10 @@ it.effect("uses Traefik IngressRoute hosts ahead of conventional preview URLs", 
   return Effect.gen(function* () {
     const result = yield* service.getByWorktree({ worktreePath: "/home/nils/repos/nils/hero" });
 
-    assert.equal(result.stack?.services?.[0]?.previewUrl, "https://hero-preview.example.test");
+    assert.equal(result.stack?.services?.[0]?.previewUrl, "https://hero-dev.nightingale-ai.com");
+    assert.equal(result.frontendUrl, "https://hero-dev.nightingale-ai.com");
     assert.deepEqual(result.stack?.previewUrls, {
-      web: "https://hero-preview.example.test",
+      web: "https://hero-dev.nightingale-ai.com",
     });
   });
 });
@@ -798,6 +864,8 @@ it.effect("derives a native namespace for a different worktree instead of reject
     assert.equal(result.stack.worktreePath, tempDir);
     assert.equal(result.stack.repoName, "hero");
     assert.equal(result.stack.branchName, "main");
+    assert.equal(result.frontendUrl, "https://hero-dev.nightingale-ai.com");
+    assert.equal(result.frontendServiceName, "frontend");
     assert.deepEqual(calls, [
       ["get", "namespace", "hero-dev", "-o", "json"],
       ["-n", "hero-dev", "get", "deployments", "-o", "json"],
@@ -869,7 +937,15 @@ it.effect("uses an explicit native namespace for a new worktree when provided", 
 });
 
 it.effect("provisions Kubernetes resources when auto-creating a missing native namespace", () => {
-  const tempDir = makeTempHeroComposeWorktree();
+  const tempDir = makeTempHeroComposeWorktree([
+    "    image: hero-web:latest",
+    "    labels:",
+    "      rudi.appDevStack.hostname: rudi-dev.nightingale-ai.com",
+    "    environment:",
+    "      PORT: '3000'",
+    "    ports:",
+    "      - '3000:3000'",
+  ]);
   const calls: Array<ReadonlyArray<string>> = [];
   let appliedManifest = "";
   const runKubectl: KubectlRunner = async (args) => {
@@ -919,6 +995,8 @@ it.effect("provisions Kubernetes resources when auto-creating a missing native n
     assert.include(appliedManifest, "image: hero-web:latest");
     assert.include(appliedManifest, "imagePullPolicy: Always");
     assert.include(appliedManifest, "kind: IngressRoute");
+    assert.include(appliedManifest, "Host(`hero-dev.nightingale-ai.com`)");
+    assert.notInclude(appliedManifest, "Host(`rudi-dev.nightingale-ai.com`)");
     assert.deepEqual(
       calls.map((args) => args.slice(0, 2)),
       [

@@ -190,6 +190,10 @@ import { useThreadSelectionStore } from "../threadSelectionStore";
 import { useOpenAddProjectCommandPalette } from "../commandPaletteContext";
 import {
   getSidebarThreadIdsToPrewarm,
+  getArchiveConfirmationCopy,
+  getMultiThreadDeleteConfirmationText,
+  getSelectedHierarchyRootIds,
+  getThreadDeleteConfirmationText,
   resolveAdjacentThreadId,
   isContextMenuPointerDown,
   isTrailingDoubleClick,
@@ -712,6 +716,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     [attemptArchiveThread, threadRef],
   );
   const rowButtonRender = useMemo(() => <div role="button" tabIndex={0} />, []);
+  const archiveConfirmationCopy = getArchiveConfirmationCopy(hasChildren);
 
   return (
     <SidebarMenuSubItem
@@ -865,12 +870,13 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                 type="button"
                 data-thread-selection-safe
                 data-testid={`thread-archive-confirm-${thread.id}`}
-                aria-label={`Confirm archive ${thread.title}`}
+                aria-label={`${archiveConfirmationCopy.accessibleLabel}: ${thread.title}`}
+                title={archiveConfirmationCopy.tooltip ?? undefined}
                 className="absolute top-1/2 right-1 inline-flex h-5 -translate-y-1/2 cursor-pointer items-center rounded-md bg-destructive/12 px-2 text-[10px] font-medium text-destructive transition-colors hover:bg-destructive/18 focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-destructive/40"
                 onPointerDown={stopPropagationOnPointerDown}
                 onClick={handleConfirmArchiveClick}
               >
-                Confirm
+                {archiveConfirmationCopy.label}
               </button>
             ) : !isThreadRunning ? (
               appSettingsConfirmThreadArchive ? (
@@ -1877,17 +1883,23 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       if (clicked !== "delete") return;
 
       if (appSettingsConfirmThreadDelete) {
-        const confirmed = await api.dialogs.confirm(
-          [
-            `Delete ${count} thread${count === 1 ? "" : "s"}?`,
-            "This permanently clears conversation history for these threads.",
-          ].join("\n"),
-        );
+        const confirmed = await api.dialogs.confirm(getMultiThreadDeleteConfirmationText(count));
         if (!confirmed) return;
       }
 
       const deletedThreadKeys = new Set(threadKeys);
-      for (const threadKey of threadKeys) {
+      const rootThreadKeys = getSelectedHierarchyRootIds({
+        nodes: [...sidebarThreadByKeyRef.current.values()],
+        selectedIds: deletedThreadKeys,
+        accessors: {
+          getId: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+          getParentId: (thread) =>
+            thread.parentThreadId === null
+              ? null
+              : scopedThreadKey(scopeThreadRef(thread.environmentId, thread.parentThreadId)),
+        },
+      });
+      for (const threadKey of rootThreadKeys) {
         const thread = sidebarThreadByKeyRef.current.get(threadKey);
         if (!thread) continue;
         const result = await deleteThread(scopeThreadRef(thread.environmentId, thread.id), {
@@ -2244,12 +2256,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       }
       if (clicked !== "delete") return;
       if (appSettingsConfirmThreadDelete) {
-        const confirmed = await api.dialogs.confirm(
-          [
-            `Delete thread "${thread.title}"?`,
-            "This permanently clears conversation history for this thread.",
-          ].join("\n"),
-        );
+        const confirmed = await api.dialogs.confirm(getThreadDeleteConfirmationText(thread.title));
         if (!confirmed) {
           return;
         }

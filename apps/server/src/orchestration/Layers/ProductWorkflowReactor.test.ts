@@ -8,6 +8,7 @@ import {
   ProviderInstanceId,
   ProjectId,
   ThreadId,
+  type WorkflowPreset,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -109,6 +110,8 @@ function seedProjectAndThread(
     readonly interactionMode?: "product-workflow" | "planning-workflow";
     readonly parentThreadId?: ThreadId | null;
     readonly workflowRole?: "planning-orchestrator" | null;
+    readonly workflowPreset?: WorkflowPreset | null;
+    readonly branch?: string | null;
     readonly createProject?: boolean;
   } = {},
 ) {
@@ -136,7 +139,8 @@ function seedProjectAndThread(
       modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
       runtimeMode: "full-access",
       interactionMode: input.interactionMode ?? "product-workflow",
-      branch: null,
+      workflowPreset: input.workflowPreset ?? null,
+      branch: input.branch ?? null,
       worktreePath: null,
       createdAt: now,
     });
@@ -173,7 +177,7 @@ function lockProductIntent(system: ProductSystem) {
   });
 }
 
-function seedProductSpecAndTickets(system: ProductSystem, threadId: ThreadId) {
+function seedProductSpecAndTickets(system: ProductSystem, threadId: ThreadId, ticketCount = 1) {
   return Effect.gen(function* () {
     yield* system.engine.dispatch({
       type: "thread.planning-spec.apply",
@@ -194,14 +198,18 @@ function seedProductSpecAndTickets(system: ProductSystem, threadId: ThreadId) {
       threadId,
       sourceMessageId: messageId("tickets-source"),
       specId: spec.id,
-      tickets: [
-        {
-          key: "TICKET-1",
-          title: "Checkout tracer",
-          bodyMarkdown: "Add a vertical checkout slice.",
-          dependencyKeys: [],
-        },
-      ],
+      tickets: Array.from({ length: ticketCount }, (_, index) => ({
+        key: `TICKET-${index + 1}`,
+        title: `Checkout tracer ${index + 1}`,
+        bodyMarkdown: `Add vertical checkout slice ${index + 1}.`,
+        plannedFileChanges: [
+          {
+            path: index === 0 ? "src/checkout.ts" : `src/checkout-${index + 1}.ts`,
+            action: "update" as const,
+          },
+        ],
+        dependencyKeys: [],
+      })),
       createdAt: now,
     });
     yield* system.reactor.drain;
@@ -321,7 +329,20 @@ describe("ProductWorkflowReactor", () => {
           Effect.map((chunk) => Array.from(chunk)),
         );
         expect(child?.planningWorkflow?.stage).toBe("ticket-review");
+        expect(child?.planningWorkflow?.tickets[0]?.plannedFileChanges).toEqual([
+          { path: "src/checkout.ts", action: "update" },
+        ]);
+        expect(
+          child?.messages.some((message) =>
+            message.text.includes(
+              "Every ticket must include at least one exact repository-relative",
+            ),
+          ),
+        ).toBe(true);
         expect(reviewer?.parentThreadId).toBe(planningThread.id);
+        expect(reviewer?.messages.at(-1)?.text).toContain(
+          "verify every ticket has a complete, plausible plannedFileChanges list",
+        );
         expect(reviewer?.interactionMode).toBe("planning-workflow");
         expect(
           events.some(
@@ -335,24 +356,36 @@ describe("ProductWorkflowReactor", () => {
     ),
   );
 
-  it.effect("revises product tickets after failed review and blocks at max failed reviews", () =>
+  it.effect("continues product implementation with warnings after ten failed review cycles", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         yield* seedProjectAndThread(system);
         const planningThread = yield* lockProductIntent(system);
         const spec = yield* seedProductSpecAndTickets(system, planningThread.id);
 
-        for (let index = 1; index <= 5; index += 1) {
+        for (let index = 1; index <= 10; index += 1) {
+          const beforeVerdict = yield* system.query.getSnapshot();
+          const workflow = beforeVerdict.threads.find(
+            (entry) => entry.id === planningThread.id,
+          )?.planningWorkflow;
+          const activeReview = workflow?.activeReview;
+          const ticketId = workflow?.tickets[0]?.id;
+          if (activeReview == null || ticketId === undefined) {
+            throw new Error(`Review cycle ${index} was not active.`);
+          }
           yield* system.engine.dispatch({
             type: "thread.planning-reviewer-verdict.apply",
             commandId: commandId(`verdict-${index}`),
             threadId: planningThread.id,
-            reviewerThreadId: ThreadId.make(`thread-reviewer-${index}`),
+            reviewerThreadId: activeReview.reviewerThreadId,
             reviewerMessageId: messageId(`reviewer-${index}`),
+            cycleNumber: activeReview.cycleNumber,
+            mode: activeReview.mode,
+            targetPlanningTicketIds: [...activeReview.targetPlanningTicketIds],
             verdictMarkdown: "failed: missing acceptance detail",
             passed: false,
-            failingPlanningTicketIds: [spec.id],
-            createdAt: `2026-01-01T00:00:0${index}.000Z`,
+            failingPlanningTicketIds: [ticketId],
+            createdAt: `2026-01-01T00:00:${String(index).padStart(2, "0")}.000Z`,
           });
           yield* system.reactor.drain;
         }
@@ -363,20 +396,14 @@ describe("ProductWorkflowReactor", () => {
         const events = yield* Stream.runCollect(system.engine.readEvents(0)).pipe(
           Effect.map((chunk) => Array.from(chunk)),
         );
-        expect(child?.planningWorkflow?.stage).toBe("needs-human-attention");
+        expect(child?.planningWorkflow?.stage).toBe("completed-with-warnings");
         expect(
           root?.activities.some(
-            (activity) => activity.kind === "product-workflow.needs-human-attention",
+            (activity) => activity.kind === "planning-workflow.completed-with-warnings",
           ),
         ).toBe(true);
-        expect(
-          events.some(
-            (event) =>
-              event.type === "thread.turn-start-requested" &&
-              event.payload.threadId === planningThread.id &&
-              event.payload.workflowPromptId === WORKFLOW_PROMPT_IDS.planningTicketsCodex,
-          ),
-        ).toBe(true);
+        expect(snapshot.implementationRuns.some((run) => run.specId === spec.id)).toBe(true);
+        expect(events).toBeDefined();
       }),
     ),
   );
@@ -389,12 +416,20 @@ describe("ProductWorkflowReactor", () => {
           yield* seedProjectAndThread(system);
           const planningThread = yield* lockProductIntent(system);
           const spec = yield* seedProductSpecAndTickets(system, planningThread.id);
+          const beforeVerdict = yield* system.query.getSnapshot();
+          const activeReview = beforeVerdict.threads.find(
+            (thread) => thread.id === planningThread.id,
+          )?.planningWorkflow?.activeReview;
+          if (activeReview == null) throw new Error("Review was not active.");
           yield* system.engine.dispatch({
             type: "thread.planning-reviewer-verdict.apply",
             commandId: commandId("passed-verdict"),
             threadId: planningThread.id,
-            reviewerThreadId: ThreadId.make("thread-reviewer-pass"),
+            reviewerThreadId: activeReview.reviewerThreadId,
             reviewerMessageId: messageId("reviewer-pass"),
+            cycleNumber: activeReview.cycleNumber,
+            mode: activeReview.mode,
+            targetPlanningTicketIds: [...activeReview.targetPlanningTicketIds],
             verdictMarkdown: "passed",
             passed: true,
             createdAt: "2026-01-01T00:00:10.000Z",
@@ -409,6 +444,155 @@ describe("ProductWorkflowReactor", () => {
           expect(implementationOrchestrator?.parentThreadId).toBe(productThreadId);
         }),
       ),
+  );
+
+  it.effect("moves from full review to targeted review and completes after the targeted pass", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        yield* seedProjectAndThread(system);
+        const planningThread = yield* lockProductIntent(system);
+        yield* seedProductSpecAndTickets(system, planningThread.id);
+
+        let snapshot = yield* system.query.getSnapshot();
+        let workflow = snapshot.threads.find(
+          (thread) => thread.id === planningThread.id,
+        )?.planningWorkflow;
+        let activeReview = workflow?.activeReview;
+        const ticketId = workflow?.tickets[0]?.id;
+        if (activeReview == null || ticketId === undefined) throw new Error("Cycle 1 missing.");
+        expect(activeReview.mode).toBe("full");
+
+        yield* system.engine.dispatch({
+          type: "thread.planning-reviewer-verdict.apply",
+          commandId: commandId("review-edit-cycle-1"),
+          threadId: planningThread.id,
+          reviewerThreadId: activeReview.reviewerThreadId,
+          reviewerMessageId: messageId("review-edit-cycle-1"),
+          cycleNumber: 1,
+          mode: "full",
+          targetPlanningTicketIds: [...activeReview.targetPlanningTicketIds],
+          ticketEdits: [
+            {
+              type: "update",
+              ticketId,
+              bodyMarkdown: "Add a vertical checkout slice with explicit acceptance criteria.",
+            },
+          ],
+          passed: true,
+          verdictMarkdown: "Edited; requires another review.",
+          createdAt: "2026-01-01T00:00:01.000Z",
+        });
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        workflow = snapshot.threads.find(
+          (thread) => thread.id === planningThread.id,
+        )?.planningWorkflow;
+        activeReview = workflow?.activeReview;
+        expect(workflow?.reviewCycles[0]?.status).toBe("revised");
+        expect(workflow?.tickets[0]?.plannedFileChanges).toEqual([
+          { path: "src/checkout.ts", action: "update" },
+        ]);
+        expect(activeReview?.cycleNumber).toBe(2);
+        expect(activeReview?.mode).toBe("targeted");
+        expect(activeReview?.targetPlanningTicketIds).toEqual([ticketId]);
+        if (activeReview == null) throw new Error("Cycle 2 missing.");
+
+        yield* system.engine.dispatch({
+          type: "thread.planning-reviewer-verdict.apply",
+          commandId: commandId("review-targeted-pass-cycle-2"),
+          threadId: planningThread.id,
+          reviewerThreadId: activeReview.reviewerThreadId,
+          reviewerMessageId: messageId("review-targeted-pass-cycle-2"),
+          cycleNumber: 2,
+          mode: "targeted",
+          targetPlanningTicketIds: [ticketId],
+          ticketEdits: [],
+          passed: true,
+          verdictMarkdown: "Targeted ticket passes.",
+          createdAt: "2026-01-01T00:00:02.000Z",
+        });
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        workflow = snapshot.threads.find(
+          (thread) => thread.id === planningThread.id,
+        )?.planningWorkflow;
+        activeReview = workflow?.activeReview;
+        expect(workflow?.stage).toBe("completed");
+        expect(activeReview).toBeNull();
+        expect(workflow?.reviewCycles.map((cycle) => cycle.mode)).toEqual(["full", "targeted"]);
+        expect(snapshot.implementationRuns).toHaveLength(1);
+      }),
+    ),
+  );
+
+  it.effect("narrows each later review cycle to only the tickets that still fail", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        yield* seedProjectAndThread(system);
+        const planningThread = yield* lockProductIntent(system);
+        yield* seedProductSpecAndTickets(system, planningThread.id, 3);
+
+        let snapshot = yield* system.query.getSnapshot();
+        let workflow = snapshot.threads.find(
+          (thread) => thread.id === planningThread.id,
+        )?.planningWorkflow;
+        let activeReview = workflow?.activeReview;
+        const ticketIds = workflow?.tickets.map((ticket) => ticket.id) ?? [];
+        if (activeReview == null || ticketIds.length !== 3) throw new Error("Cycle 1 missing.");
+        expect(activeReview.mode).toBe("full");
+        expect(activeReview.targetPlanningTicketIds).toEqual(ticketIds);
+
+        yield* system.engine.dispatch({
+          type: "thread.planning-reviewer-verdict.apply",
+          commandId: commandId("review-multiple-failures-cycle-1"),
+          threadId: planningThread.id,
+          reviewerThreadId: activeReview.reviewerThreadId,
+          reviewerMessageId: messageId("review-multiple-failures-cycle-1"),
+          cycleNumber: 1,
+          mode: "full",
+          targetPlanningTicketIds: [...ticketIds],
+          passed: false,
+          failingPlanningTicketIds: [ticketIds[0]!, ticketIds[2]!],
+          verdictMarkdown: "Two tickets failed.",
+          createdAt: "2026-01-01T00:00:01.000Z",
+        });
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        workflow = snapshot.threads.find(
+          (thread) => thread.id === planningThread.id,
+        )?.planningWorkflow;
+        activeReview = workflow?.activeReview;
+        if (activeReview == null) throw new Error("Cycle 2 missing.");
+        expect(activeReview.mode).toBe("targeted");
+        expect(activeReview.targetPlanningTicketIds).toEqual([ticketIds[0], ticketIds[2]]);
+
+        yield* system.engine.dispatch({
+          type: "thread.planning-reviewer-verdict.apply",
+          commandId: commandId("review-one-failure-cycle-2"),
+          threadId: planningThread.id,
+          reviewerThreadId: activeReview.reviewerThreadId,
+          reviewerMessageId: messageId("review-one-failure-cycle-2"),
+          cycleNumber: 2,
+          mode: "targeted",
+          targetPlanningTicketIds: [...activeReview.targetPlanningTicketIds],
+          passed: false,
+          failingPlanningTicketIds: [ticketIds[2]!],
+          verdictMarkdown: "One ticket still failed.",
+          createdAt: "2026-01-01T00:00:02.000Z",
+        });
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        activeReview = snapshot.threads.find((thread) => thread.id === planningThread.id)
+          ?.planningWorkflow?.activeReview;
+        expect(activeReview?.cycleNumber).toBe(3);
+        expect(activeReview?.mode).toBe("targeted");
+        expect(activeReview?.targetPlanningTicketIds).toEqual([ticketIds[2]]);
+      }),
+    ),
   );
 
   it.effect("switches the product thread to plan mode for fix intents and skips planning", () =>
@@ -498,6 +682,64 @@ describe("ProductWorkflowReactor", () => {
     ),
   );
 
+  it.effect("launches one proposed-plan Fast feature run on a dedicated branch", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        yield* seedProjectAndThread(system, {
+          workflowPreset: "fast-feature",
+          branch: "main",
+        });
+        yield* system.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: commandId("fast-intent-locked"),
+          threadId: productThreadId,
+          activity: {
+            id: eventId("fast-intent-locked"),
+            tone: "info",
+            kind: "product-intent-locked",
+            summary: "Fast checkout",
+            payload: {
+              title: "Fast checkout",
+              summaryMarkdown: "Locked Fast feature.",
+              intentKind: "feature",
+            },
+            turnId: null,
+            createdAt: now,
+          },
+          createdAt: now,
+        });
+        yield* system.reactor.drain;
+        yield* upsertProposedPlan(system, { planId: "plan-fast" });
+        yield* system.reactor.drain;
+        yield* upsertProposedPlan(system, { planId: "plan-fast", suffix: "-again" });
+        yield* system.reactor.drain;
+
+        const snapshot = yield* system.query.getSnapshot();
+        const root = snapshot.threads.find((thread) => thread.id === productThreadId);
+        const runs = snapshot.implementationRuns.filter(
+          (run) => run.artifactSource === "proposed-plan",
+        );
+        expect(root?.interactionMode).toBe("plan");
+        expect(root?.workflowPreset).toBe("fast-feature");
+        expect(runs).toHaveLength(1);
+        expect(runs[0]).toMatchObject({
+          specId: null,
+          pinnedCommit: "abc123",
+          baseBranch: "main",
+          sourceProposedPlan: { threadId: productThreadId, planId: "plan-fast" },
+        });
+        expect(runs[0]?.orchestratorBranch.startsWith("fast-feature/")).toBe(true);
+        const implementers = snapshot.threads.filter(
+          (thread) => thread.workflowRole === "fast-feature-implementer",
+        );
+        expect(implementers).toHaveLength(1);
+        expect(implementers[0]?.parentThreadId).toBe(productThreadId);
+        expect(implementers[0]?.interactionMode).toBe("default");
+        expect(implementers[0]?.workflowPreset).toBe("fast-feature");
+      }),
+    ),
+  );
+
   it.effect("ignores proposed plans from ordinary plan threads", () =>
     withSystem((system) =>
       Effect.gen(function* () {
@@ -553,11 +795,36 @@ describe("ProductWorkflowReactor", () => {
           ?.planningWorkflow?.spec;
         if (!normalSpec) throw new Error("Normal Spec missing.");
         yield* system.engine.dispatch({
+          type: "thread.planning-tickets.apply",
+          commandId: commandId("normal-tickets-apply"),
+          threadId: planningThreadId,
+          sourceMessageId: messageId("normal-tickets-source"),
+          specId: normalSpec.id,
+          tickets: [
+            {
+              key: "NORMAL-1",
+              title: "Normal ticket",
+              bodyMarkdown: "Keep this workflow standalone.",
+              plannedFileChanges: [{ path: "src/normal.ts", action: "update" }],
+              dependencyKeys: [],
+            },
+          ],
+          createdAt: now,
+        });
+        yield* system.reactor.drain;
+        snapshot = yield* system.query.getSnapshot();
+        const activeReview = snapshot.threads.find((thread) => thread.id === planningThreadId)
+          ?.planningWorkflow?.activeReview;
+        if (activeReview == null) throw new Error("Normal review missing.");
+        yield* system.engine.dispatch({
           type: "thread.planning-reviewer-verdict.apply",
           commandId: commandId("normal-passed-verdict"),
           threadId: planningThreadId,
-          reviewerThreadId: ThreadId.make("thread-normal-reviewer-pass"),
+          reviewerThreadId: activeReview.reviewerThreadId,
           reviewerMessageId: messageId("normal-reviewer-pass"),
+          cycleNumber: activeReview.cycleNumber,
+          mode: activeReview.mode,
+          targetPlanningTicketIds: [...activeReview.targetPlanningTicketIds],
           verdictMarkdown: "passed",
           passed: true,
           createdAt: "2026-01-01T00:00:11.000Z",

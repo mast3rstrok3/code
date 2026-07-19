@@ -85,6 +85,8 @@ const MAX_VISIBLE_TEXT_LENGTH = 20_000;
 const MAX_INTERACTIVE_ELEMENTS = 80;
 const MAX_EVALUATION_BYTES = 2 * 1024 * 1024;
 const RECORDING_FPS = 25;
+const RECORDING_DESKTOP_WIDTH = 1280;
+const RECORDING_DESKTOP_HEIGHT = 720;
 const RECORDING_FFMPEG_EXIT_TIMEOUT_MS = 10_000;
 const PAGE_CRASHED_FAILURE = {
   code: -1,
@@ -1060,15 +1062,17 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
     const safeTabId = tab.tabId.replace(/[^a-z0-9_-]/gi, "-").slice(-48);
     const id = `browser-recording-${millis.toString(36)}-${safeTabId}`;
     const outputPath = path.join(artifactDir, `${id}.webm`);
-    // Match CDP's screencast downscaling so recorded frames fill the canvas.
+    // Record to a stable 16:9 desktop canvas. Individual desktop and mobile
+    // frames are scaled and letterboxed by ffmpeg, so viewport changes during
+    // a review cannot invalidate the recording stream.
     const scale = Math.min(
       1,
-      config.previewBrowserMaxFrameWidth / tab.renderedViewport.width,
-      config.previewBrowserMaxFrameHeight / tab.renderedViewport.height,
+      config.previewBrowserMaxFrameWidth / RECORDING_DESKTOP_WIDTH,
+      config.previewBrowserMaxFrameHeight / RECORDING_DESKTOP_HEIGHT,
     );
     const args = VideoFrameSink.buildFfmpegArgs({
-      width: tab.renderedViewport.width * scale,
-      height: tab.renderedViewport.height * scale,
+      width: RECORDING_DESKTOP_WIDTH * scale,
+      height: RECORDING_DESKTOP_HEIGHT * scale,
       fps: RECORDING_FPS,
       outputPath,
     });

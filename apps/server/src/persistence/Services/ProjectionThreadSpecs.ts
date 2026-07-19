@@ -5,6 +5,7 @@ import {
   OrchestrationPlanningSpecId,
   ThreadId,
   TrimmedNonEmptyString,
+  WorkflowId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
@@ -22,7 +23,7 @@ export const ProjectionThreadSpec = Schema.Struct({
   sourceThreadId: ThreadId,
   sourceMessageIds: Schema.Array(MessageId),
   createdBy: Schema.NullOr(TrimmedNonEmptyString),
-  workflowId: TrimmedNonEmptyString,
+  workflowId: WorkflowId,
   ticketCount: NonNegativeInt,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,

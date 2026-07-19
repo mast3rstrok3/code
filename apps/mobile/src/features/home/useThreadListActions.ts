@@ -8,6 +8,7 @@ import { showConfirmDialog } from "../../components/ConfirmDialogHost";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { getThreadDeleteConfirmationMessage } from "./threadDeleteConfirmation";
 
 type ThreadListAction = "archive" | "unarchive" | "delete";
 
@@ -80,7 +81,7 @@ function useConfirmDeleteThread(
   return useCallback(
     (thread: EnvironmentThreadShell) => {
       const title = "Delete thread?";
-      const message = `“${thread.title}” will be permanently deleted, including its terminal history.`;
+      const message = getThreadDeleteConfirmationMessage(thread.title);
       if (process.env.EXPO_OS === "ios") {
         Alert.alert(title, message, [
           { text: "Cancel", style: "cancel" },

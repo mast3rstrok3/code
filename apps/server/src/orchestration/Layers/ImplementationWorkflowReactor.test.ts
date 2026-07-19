@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
+  AppDevStackError,
   CommandId,
   DEFAULT_WORKSPACE_USER_ID,
   DevReviewId,
@@ -24,7 +25,7 @@ import { describe } from "vite-plus/test";
 
 import { AppDevStackManager } from "../../appDevStack/AppDevStackManager.ts";
 import { ServerConfig } from "../../config.ts";
-import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
+import { GitWorkflowService, type GitMergeRefInput } from "../../git/GitWorkflowService.ts";
 import { layerTest as serverSettingsLayerTest } from "../../serverSettings.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
@@ -56,7 +57,17 @@ interface ImplementationCalls {
     ReadonlyArray<{ readonly worktreePath: string; readonly displayName: string }>
   >;
   readonly createOrOpenChangeRequestCount: Ref.Ref<number>;
+  readonly createOrOpenChangeRequestInputs: Ref.Ref<
+    ReadonlyArray<{
+      readonly cwd: string;
+      readonly baseRefName: string;
+      readonly headRefName: string;
+      readonly expectedHeadSha: string;
+    }>
+  >;
   readonly createWorktreeInputs: Ref.Ref<ReadonlyArray<VcsCreateWorktreeInput>>;
+  readonly mergeRefInputs: Ref.Ref<ReadonlyArray<GitMergeRefInput>>;
+  readonly localStatusCount: Ref.Ref<number>;
 }
 
 interface ImplementationSystem extends ImplementationCalls {
@@ -77,10 +88,35 @@ function eventId(value: string) {
   return EventId.make(`event-${value}`);
 }
 
+function requiredValidations(completedAt = "2026-01-01T00:00:02.000Z") {
+  return ["vp check", "vp run typecheck"].map((command) => ({
+    command,
+    status: "passed" as const,
+    outputMarkdown: "ok",
+    completedAt,
+  }));
+}
+
+function planningTicket(key: string, dependencyKeys: ReadonlyArray<string> = []) {
+  return {
+    key,
+    title: key,
+    bodyMarkdown: `Implement ${key}.`,
+    plannedFileChanges: [{ path: `src/${key.toLowerCase()}.ts`, action: "update" as const }],
+    dependencyKeys,
+  };
+}
+
 function makeTestLayer(
   calls: ImplementationCalls,
   serverSettings: DeepPartial<ServerSettings> = {},
   failCreateWorktreeAfter?: number,
+  failAutoCreate = false,
+  conflictMergeRefName?: string,
+  failMergeRefName?: string,
+  resolvedCommitSha = "def456",
+  dirtySourceStatusChecks = 0,
+  autoCreateFrontendUrls?: ReadonlyArray<string | null>,
 ) {
   const coreLayer = Layer.mergeAll(
     OrchestrationEngineLive.pipe(
@@ -126,8 +162,94 @@ function makeTestLayer(
                     }),
               ),
             ),
-          createOrOpenChangeRequest: () =>
-            Ref.update(calls.createOrOpenChangeRequestCount, (count) => count + 1).pipe(
+          resolveCommit: (input) =>
+            Effect.gen(function* () {
+              if (input.ref === "HEAD" && input.cwd.includes(".worktrees/")) {
+                const created = yield* Ref.get(calls.createWorktreeInputs);
+                if (!created.some((candidate) => candidate.path === input.cwd)) {
+                  return yield* new GitCommandError({
+                    operation: "GitWorkflowService.resolveCommit",
+                    command: "git rev-parse",
+                    cwd: input.cwd,
+                    detail: "worktree does not exist",
+                  });
+                }
+              }
+              if (input.ref.endsWith("@commit")) {
+                return { commitSha: input.ref };
+              }
+              if (input.ref.includes("-ticket-")) {
+                return {
+                  commitSha:
+                    resolvedCommitSha === "def456" ? `${input.ref}@commit` : resolvedCommitSha,
+                };
+              }
+              if (input.ref === "HEAD" && input.cwd.includes("-ticket-")) {
+                const created = yield* Ref.get(calls.createWorktreeInputs);
+                const branch = created.find(
+                  (candidate) => candidate.path === input.cwd,
+                )?.newRefName;
+                return {
+                  commitSha:
+                    resolvedCommitSha === "def456" && branch
+                      ? `${branch}@commit`
+                      : resolvedCommitSha,
+                };
+              }
+              return { commitSha: resolvedCommitSha };
+            }),
+          localStatus: (input) =>
+            Effect.all([
+              Ref.get(calls.createWorktreeInputs),
+              Ref.updateAndGet(calls.localStatusCount, (count) => count + 1),
+            ]).pipe(
+              Effect.map(([created, statusCheck]) => ({
+                isRepo: true,
+                hasPrimaryRemote: true,
+                isDefaultRef: input.cwd === "/tmp/implementation-reactor",
+                refName:
+                  created.find((candidate) => candidate.path === input.cwd)?.newRefName ?? "main",
+                hasWorkingTreeChanges:
+                  input.cwd === "/tmp/implementation-reactor" &&
+                  statusCheck <= dirtySourceStatusChecks,
+                workingTree: { files: [], insertions: 0, deletions: 0 },
+              })),
+            ),
+          listChangedFiles: () => Effect.succeed([]),
+          isAncestor: () => Effect.succeed(true),
+          mergeRef: (input) =>
+            Ref.update(calls.mergeRefInputs, (inputs) => [...inputs, input]).pipe(
+              Effect.flatMap(() =>
+                input.refName ===
+                (failMergeRefName?.includes("-ticket-")
+                  ? `${failMergeRefName}@commit`
+                  : failMergeRefName)
+                  ? Effect.fail(
+                      new GitCommandError({
+                        operation: "GitWorkflowService.mergeRef",
+                        command: "git merge",
+                        cwd: input.cwd,
+                        detail: "programmatic merge failed",
+                      }),
+                    )
+                  : Effect.succeed(
+                      input.refName ===
+                        (conflictMergeRefName?.includes("-ticket-")
+                          ? `${conflictMergeRefName}@commit`
+                          : conflictMergeRefName)
+                        ? {
+                            status: "conflicted" as const,
+                            conflictedFiles: ["conflicted.ts"],
+                          }
+                        : { status: "merged" as const },
+                    ),
+              ),
+            ),
+          createOrOpenChangeRequest: (input) =>
+            Ref.update(calls.createOrOpenChangeRequestInputs, (inputs) => [...inputs, input]).pipe(
+              Effect.andThen(
+                Ref.update(calls.createOrOpenChangeRequestCount, (count) => count + 1),
+              ),
               Effect.as({
                 provider: "github" as const,
                 number: 1,
@@ -144,27 +266,42 @@ function makeTestLayer(
       Layer.provide(
         Layer.mock(AppDevStackManager)({
           autoCreate: (input) =>
-            Ref.update(calls.autoCreateInputs, (inputs) => [...inputs, input]).pipe(
-              Effect.as({
-                created: true,
-                frontendUrl: "http://127.0.0.1:5173",
-                frontendServiceName: "frontend",
-                stack: {
-                  id: "stack-1",
-                  uuid: "stack-uuid-1",
-                  userId: "user-1",
-                  worktreePath: input.worktreePath,
-                  composePath: "/tmp/compose.yml",
-                  displayName: input.displayName,
-                  description: null,
-                  status: "running" as const,
-                  services: null,
-                  serviceCount: 0,
-                  lastError: null,
-                  errorCount: 0,
-                  createdAt: now,
-                  updatedAt: now,
-                },
+            Ref.updateAndGet(calls.autoCreateInputs, (inputs) => [...inputs, input]).pipe(
+              Effect.flatMap((inputs) => {
+                const configuredFrontendUrl = autoCreateFrontendUrls?.[inputs.length - 1];
+                const frontendUrl =
+                  configuredFrontendUrl === undefined
+                    ? "http://127.0.0.1:5173"
+                    : configuredFrontendUrl;
+                return failAutoCreate
+                  ? Effect.fail(
+                      new AppDevStackError({
+                        operation: "autoCreate",
+                        reason: "request_failed",
+                        message: "compose file missing",
+                      }),
+                    )
+                  : Effect.succeed({
+                      created: true,
+                      frontendUrl,
+                      frontendServiceName: frontendUrl === null ? null : "frontend",
+                      stack: {
+                        id: "stack-1",
+                        uuid: "stack-uuid-1",
+                        userId: "user-1",
+                        worktreePath: input.worktreePath,
+                        composePath: "/tmp/compose.yml",
+                        displayName: input.displayName,
+                        description: null,
+                        status: "running" as const,
+                        services: null,
+                        serviceCount: 0,
+                        lastError: null,
+                        errorCount: 0,
+                        createdAt: now,
+                        updatedAt: now,
+                      },
+                    });
               }),
             ),
         }),
@@ -178,6 +315,12 @@ function withSystem<A, E>(
   options?: {
     readonly serverSettings?: DeepPartial<ServerSettings>;
     readonly failCreateWorktreeAfter?: number;
+    readonly failAutoCreate?: boolean;
+    readonly conflictMergeRefName?: string;
+    readonly failMergeRefName?: string;
+    readonly resolvedCommitSha?: string;
+    readonly dirtySourceStatusChecks?: number;
+    readonly autoCreateFrontendUrls?: ReadonlyArray<string | null>;
   },
 ) {
   return Effect.gen(function* () {
@@ -185,11 +328,24 @@ function withSystem<A, E>(
       ReadonlyArray<{ readonly worktreePath: string; readonly displayName: string }>
     >([]);
     const createOrOpenChangeRequestCount = yield* Ref.make(0);
+    const createOrOpenChangeRequestInputs = yield* Ref.make<
+      ReadonlyArray<{
+        readonly cwd: string;
+        readonly baseRefName: string;
+        readonly headRefName: string;
+        readonly expectedHeadSha: string;
+      }>
+    >([]);
     const createWorktreeInputs = yield* Ref.make<ReadonlyArray<VcsCreateWorktreeInput>>([]);
+    const mergeRefInputs = yield* Ref.make<ReadonlyArray<GitMergeRefInput>>([]);
+    const localStatusCount = yield* Ref.make(0);
     const calls = {
       autoCreateInputs,
       createOrOpenChangeRequestCount,
+      createOrOpenChangeRequestInputs,
       createWorktreeInputs,
+      mergeRefInputs,
+      localStatusCount,
     } satisfies ImplementationCalls;
 
     return yield* Effect.scoped(
@@ -207,7 +363,17 @@ function withSystem<A, E>(
       }),
     ).pipe(
       Effect.provide(
-        makeTestLayer(calls, options?.serverSettings, options?.failCreateWorktreeAfter),
+        makeTestLayer(
+          calls,
+          options?.serverSettings,
+          options?.failCreateWorktreeAfter,
+          options?.failAutoCreate,
+          options?.conflictMergeRefName,
+          options?.failMergeRefName,
+          options?.resolvedCommitSha,
+          options?.dirtySourceStatusChecks,
+          options?.autoCreateFrontendUrls,
+        ),
       ),
     );
   });
@@ -215,7 +381,19 @@ function withSystem<A, E>(
 
 function seedPlanning(
   system: ImplementationSystem,
-  options?: { readonly modelSelection?: ModelSelection },
+  options?: {
+    readonly modelSelection?: ModelSelection;
+    readonly tickets?: ReadonlyArray<{
+      readonly key: string;
+      readonly title: string;
+      readonly bodyMarkdown: string;
+      readonly plannedFileChanges: ReadonlyArray<{
+        readonly path: string;
+        readonly action: "create" | "update" | "delete";
+      }>;
+      readonly dependencyKeys: ReadonlyArray<string>;
+    }>;
+  },
 ) {
   return Effect.gen(function* () {
     yield* system.engine.dispatch({
@@ -264,30 +442,22 @@ function seedPlanning(
       threadId: sourceThreadId,
       sourceMessageId: messageId("tickets-source"),
       specId: spec.id,
-      tickets: [
-        {
-          key: "TICKET-1",
-          title: "Checkout tracer",
-          bodyMarkdown: "Implement checkout tracer.",
-          dependencyKeys: [],
-        },
-      ],
+      tickets: options?.tickets ?? [planningTicket("TICKET-1")],
       createdAt: now,
     });
     const snapshot = yield* system.query.getSnapshot();
-    const ticket = snapshot.threads.find((thread) => thread.id === sourceThreadId)?.planningWorkflow
-      ?.tickets[0];
+    const tickets =
+      snapshot.threads.find((thread) => thread.id === sourceThreadId)?.planningWorkflow?.tickets ??
+      [];
+    const ticket = tickets[0];
     if (!ticket) throw new Error("Ticket missing.");
-    return { spec, ticket };
+    return { spec, ticket, tickets };
   });
 }
 
-function launchRun(
-  system: ImplementationSystem,
-  options?: { readonly modelSelection?: ModelSelection },
-) {
+function launchRun(system: ImplementationSystem, options?: Parameters<typeof seedPlanning>[1]) {
   return Effect.gen(function* () {
-    const { ticket, spec } = yield* seedPlanning(system, options);
+    const { ticket, tickets, spec } = yield* seedPlanning(system, options);
     yield* system.engine.dispatch({
       type: "thread.implementation-run.launch",
       commandId: commandId("implementation-launch"),
@@ -304,7 +474,7 @@ function launchRun(
     const snapshot = yield* system.query.getSnapshot();
     const run = snapshot.implementationRuns[0];
     if (!run) throw new Error("Run missing.");
-    return { ticket, run };
+    return { ticket, tickets, run };
   });
 }
 
@@ -313,19 +483,28 @@ function appendWorkerResult(
   input: {
     readonly run: OrchestrationImplementationRun;
     readonly status: "succeeded" | "failed";
+    readonly ticketId?: string | undefined;
+    readonly tag?: string;
+    readonly commitSha?: string;
   },
 ) {
   return Effect.gen(function* () {
-    const state = input.run.ticketStates[0];
+    const snapshot = yield* system.query.getSnapshot();
+    const currentRun = snapshot.implementationRuns.find(
+      (candidate) => candidate.id === input.run.id,
+    );
+    const state = input.ticketId
+      ? currentRun?.ticketStates.find((candidate) => candidate.ticketId === input.ticketId)
+      : currentRun?.ticketStates[0];
     if (!state?.workerThreadId || !state.branch || !state.worktreePath) {
       throw new Error("Worker was not started.");
     }
     yield* system.engine.dispatch({
       type: "thread.activity.append",
-      commandId: commandId(`worker-${input.status}`),
+      commandId: commandId(`worker-${state.ticketId}-${input.status}-${input.tag ?? "initial"}`),
       threadId: state.workerThreadId,
       activity: {
-        id: eventId(`worker-${input.status}`),
+        id: eventId(`worker-${state.ticketId}-${input.status}-${input.tag ?? "initial"}`),
         tone: input.status === "succeeded" ? "info" : "error",
         kind: "implementation-worker-result",
         summary: `Worker ${input.status}`,
@@ -336,8 +515,9 @@ function appendWorkerResult(
           branch: state.branch,
           worktreePath: state.worktreePath,
           status: input.status,
-          commitSha: input.status === "succeeded" ? "def456" : null,
-          validations: [],
+          commitSha:
+            input.status === "succeeded" ? (input.commitSha ?? `${state.branch}@commit`) : null,
+          validations: requiredValidations(),
           notesMarkdown: input.status,
           reportedAt: "2026-01-01T00:00:01.000Z",
         },
@@ -353,16 +533,17 @@ function appendWorkerResult(
 function passMergeGate(system: ImplementationSystem, run: OrchestrationImplementationRun) {
   return Effect.gen(function* () {
     const snapshot = yield* system.query.getSnapshot();
-    const validator = snapshot.threads.find(
-      (thread) => thread.workflowRole === "implementation-validator",
-    );
+    const activeValidatorThreadId = snapshot.implementationRuns.find(
+      (candidate) => candidate.id === run.id,
+    )?.activeValidatorThreadId;
+    const validator = snapshot.threads.find((thread) => thread.id === activeValidatorThreadId);
     if (!validator) throw new Error("Validator missing.");
     yield* system.engine.dispatch({
       type: "thread.activity.append",
-      commandId: commandId("merge-gate-pass"),
+      commandId: commandId(`merge-gate-pass-${validator.id}`),
       threadId: validator.id,
       activity: {
-        id: eventId("merge-gate-pass"),
+        id: eventId(`merge-gate-pass-${validator.id}`),
         tone: "info",
         kind: "implementation-merge-gate-result",
         summary: "Merge gate passed",
@@ -370,7 +551,7 @@ function passMergeGate(system: ImplementationSystem, run: OrchestrationImplement
           type: "implementation-merge-gate-result",
           runId: run.id,
           status: "passed",
-          validations: [],
+          validations: requiredValidations("2026-01-01T00:00:05.000Z"),
           summaryMarkdown: "ok",
         },
         turnId: null,
@@ -386,16 +567,71 @@ function passDevReview(system: ImplementationSystem, run: OrchestrationImplement
   return Effect.gen(function* () {
     const snapshot = yield* system.query.getSnapshot();
     const reviewingRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
-    const reviewId = reviewingRun?.devReviewIds[0];
+    const reviewId = reviewingRun?.devReviewIds.at(-1);
     if (reviewId === undefined) throw new Error("Dev review missing.");
     yield* system.engine.dispatch({
       type: "thread.dev-review.update",
-      commandId: commandId("dev-review-pass"),
+      commandId: commandId(`dev-review-pass-${reviewId}`),
       threadId: run.orchestratorThreadId,
       reviewId: DevReviewId.make(reviewId),
       status: "passed",
       updatedAt: "2026-01-01T00:00:03.000Z",
       createdAt: "2026-01-01T00:00:03.000Z",
+    });
+    yield* system.reactor.drain;
+  });
+}
+
+function failDevReview(system: ImplementationSystem, run: OrchestrationImplementationRun) {
+  return Effect.gen(function* () {
+    const snapshot = yield* system.query.getSnapshot();
+    const reviewingRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+    const reviewId = reviewingRun?.devReviewIds.at(-1);
+    if (reviewId === undefined) throw new Error("Dev review missing.");
+    yield* system.engine.dispatch({
+      type: "thread.dev-review.update",
+      commandId: commandId(`dev-review-fail-${reviewId}`),
+      threadId: run.orchestratorThreadId,
+      reviewId: DevReviewId.make(reviewId),
+      status: "failed",
+      updatedAt: "2026-01-01T00:00:03.000Z",
+      createdAt: "2026-01-01T00:00:03.000Z",
+    });
+    yield* system.reactor.drain;
+  });
+}
+
+function appendBrowserFixResult(
+  system: ImplementationSystem,
+  input: {
+    readonly run: OrchestrationImplementationRun;
+    readonly validations: ReadonlyArray<ReturnType<typeof requiredValidations>[number]>;
+  },
+) {
+  return Effect.gen(function* () {
+    const snapshot = yield* system.query.getSnapshot();
+    const fixer = snapshot.threads.find((thread) => thread.workflowRole === "implementation-fixer");
+    if (fixer === undefined) throw new Error("Fixer missing.");
+    yield* system.engine.dispatch({
+      type: "thread.activity.append",
+      commandId: commandId(`browser-fix-${input.validations.length}`),
+      threadId: fixer.id,
+      activity: {
+        id: eventId(`browser-fix-${input.validations.length}`),
+        tone: "info",
+        kind: "implementation-fix-result",
+        summary: "Browser fix succeeded",
+        payload: {
+          type: "implementation-fix-result",
+          runId: input.run.id,
+          status: "succeeded",
+          validations: input.validations,
+          notesMarkdown: "Applied Browser Dev Review findings.",
+        },
+        turnId: null,
+        createdAt: "2026-01-01T00:00:04.000Z",
+      },
+      createdAt: "2026-01-01T00:00:04.000Z",
     });
     yield* system.reactor.drain;
   });
@@ -457,7 +693,7 @@ function appendCodeReviewFixResult(
           type: "implementation-fix-result",
           runId: input.run.id,
           status: "succeeded",
-          validations: [],
+          validations: requiredValidations("2026-01-01T00:00:05.000Z"),
           notesMarkdown: "Applied code review findings.",
         },
         turnId: null,
@@ -490,7 +726,279 @@ const claudeParentSelection: ModelSelection = {
   model: "claude-opus-4-8",
 };
 
+function launchFastFeatureRun(system: ImplementationSystem) {
+  return Effect.gen(function* () {
+    yield* system.engine.dispatch({
+      type: "project.create",
+      commandId: commandId("fast-project-create"),
+      projectId,
+      title: "Fast feature reactor",
+      workspaceRoot: "/tmp/implementation-reactor",
+      createdAt: now,
+    });
+    yield* system.engine.dispatch({
+      type: "thread.create",
+      commandId: commandId("fast-source-create"),
+      threadId: sourceThreadId,
+      projectId,
+      ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+      parentThreadId: null,
+      workflowRole: null,
+      title: "Fast checkout",
+      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
+      runtimeMode: "full-access",
+      interactionMode: "plan",
+      workflowPreset: "fast-feature",
+      branch: "main",
+      worktreePath: "/tmp/implementation-reactor",
+      createdAt: now,
+    });
+    yield* system.engine.dispatch({
+      type: "thread.activity.append",
+      commandId: commandId("fast-intent"),
+      threadId: sourceThreadId,
+      activity: {
+        id: eventId("fast-intent"),
+        tone: "info",
+        kind: "product-intent-locked",
+        summary: "Fast checkout",
+        payload: {
+          intentKind: "feature",
+          title: "Fast checkout",
+          summaryMarkdown: "Add a fast checkout path.",
+        },
+        turnId: null,
+        createdAt: now,
+      },
+      createdAt: now,
+    });
+    yield* system.engine.dispatch({
+      type: "thread.proposed-plan.upsert",
+      commandId: commandId("fast-plan"),
+      threadId: sourceThreadId,
+      proposedPlan: {
+        id: "plan-fast",
+        turnId: null,
+        planMarkdown: "# Fast checkout\nImplement the focused checkout change.",
+        implementedAt: null,
+        implementationThreadId: null,
+        createdAt: now,
+        updatedAt: now,
+      },
+      createdAt: now,
+    });
+    yield* system.engine.dispatch({
+      type: "thread.fast-feature-run.launch",
+      commandId: commandId("fast-launch"),
+      threadId: sourceThreadId,
+      proposedPlanId: "plan-fast",
+      baseBranch: "main",
+      pinnedCommit: "abc123",
+      orchestratorBranch: "fast-feature/fast-checkout",
+      orchestratorWorktreePath: "/tmp/implementation-reactor.worktrees/fast-checkout",
+      validationCommands: ["vp check", "vp run typecheck"],
+      createdAt: now,
+    });
+    yield* system.reactor.drain;
+    const snapshot = yield* system.query.getSnapshot();
+    const run = snapshot.implementationRuns[0];
+    if (!run) throw new Error("Fast feature run missing.");
+    return run;
+  });
+}
+
 describe("ImplementationWorkflowReactor", () => {
+  it.effect("sets up Fast feature Build and starts Dev Review only after a verified result", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const run = yield* launchFastFeatureRun(system);
+        let snapshot = yield* system.query.getSnapshot();
+        const implementer = snapshot.threads.find(
+          (thread) => thread.workflowRole === "fast-feature-implementer",
+        );
+        if (!implementer) throw new Error("Fast feature implementer missing.");
+        expect(run.status).toBe("running");
+        expect(run.specId).toBeNull();
+        expect(implementer.messages.at(-1)?.text).toContain("# Fast checkout");
+        expect(
+          snapshot.threads.filter((thread) => thread.workflowRole === "implementation-qa-reviewer"),
+        ).toHaveLength(0);
+        expect(yield* Ref.get(system.createWorktreeInputs)).toHaveLength(1);
+        expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(1);
+
+        yield* system.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: commandId("fast-build-result"),
+          threadId: implementer.id,
+          activity: {
+            id: eventId("fast-build-result"),
+            tone: "info",
+            kind: "implementation-fast-build-result",
+            summary: "Fast Build succeeded",
+            payload: {
+              type: "implementation-fast-build-result",
+              runId: run.id,
+              status: "succeeded",
+              commitSha: "def456",
+              validations: requiredValidations(),
+              notesMarkdown: "Implemented and committed.",
+            },
+            turnId: null,
+            createdAt: "2026-01-01T00:00:02.000Z",
+          },
+          createdAt: "2026-01-01T00:00:02.000Z",
+        });
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        const reviewingRun = snapshot.implementationRuns[0];
+        expect(reviewingRun?.status).toBe("qa-reviewing");
+        expect(reviewingRun?.fastBuildResult?.commitSha).toBe("def456");
+        expect(
+          snapshot.threads.filter((thread) => thread.workflowRole === "implementation-qa-reviewer"),
+        ).toHaveLength(1);
+        expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(1);
+      }),
+    ),
+  );
+
+  it.effect("refreshes a ready stack with no URL before starting Browser Dev Review", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const run = yield* launchFastFeatureRun(system);
+          let snapshot = yield* system.query.getSnapshot();
+          expect(snapshot.implementationRuns[0]?.appDevStack).toMatchObject({
+            status: "ready",
+            frontendUrl: null,
+          });
+
+          const implementer = snapshot.threads.find(
+            (thread) => thread.workflowRole === "fast-feature-implementer",
+          );
+          if (!implementer) throw new Error("Fast feature implementer missing.");
+          yield* system.engine.dispatch({
+            type: "thread.activity.append",
+            commandId: commandId("fast-build-refresh-stack-url"),
+            threadId: implementer.id,
+            activity: {
+              id: eventId("fast-build-refresh-stack-url"),
+              tone: "info",
+              kind: "implementation-fast-build-result",
+              summary: "Fast Build succeeded",
+              payload: {
+                type: "implementation-fast-build-result",
+                runId: run.id,
+                status: "succeeded",
+                commitSha: "def456",
+                validations: requiredValidations(),
+                notesMarkdown: "Implemented and committed.",
+              },
+              turnId: null,
+              createdAt: "2026-01-01T00:00:02.000Z",
+            },
+            createdAt: "2026-01-01T00:00:02.000Z",
+          });
+          yield* system.reactor.drain;
+
+          snapshot = yield* system.query.getSnapshot();
+          const reviewThread = snapshot.threads.find(
+            (thread) => thread.workflowRole === "implementation-qa-reviewer",
+          );
+          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(2);
+          expect(snapshot.implementationRuns[0]?.appDevStack.frontendUrl).toBe(
+            "https://fast-checkout-dev.nightingale-ai.com",
+          );
+          expect(reviewThread?.messages.at(-1)?.text).toContain(
+            "Feature URL: https://fast-checkout-dev.nightingale-ai.com",
+          );
+        }),
+      {
+        autoCreateFrontendUrls: [null, "https://fast-checkout-dev.nightingale-ai.com"],
+      },
+    ),
+  );
+
+  it.effect("blocks Fast feature before Dev Review when both dev-stack attempts fail", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const run = yield* launchFastFeatureRun(system);
+          const snapshot = yield* system.query.getSnapshot();
+          const implementer = snapshot.threads.find(
+            (thread) => thread.workflowRole === "fast-feature-implementer",
+          );
+          if (!implementer) throw new Error("Fast feature implementer missing.");
+          expect(snapshot.implementationRuns[0]?.status).toBe("running");
+
+          yield* system.engine.dispatch({
+            type: "thread.activity.append",
+            commandId: commandId("fast-build-stack-failure"),
+            threadId: implementer.id,
+            activity: {
+              id: eventId("fast-build-stack-failure"),
+              tone: "info",
+              kind: "implementation-fast-build-result",
+              summary: "Fast Build succeeded",
+              payload: {
+                type: "implementation-fast-build-result",
+                runId: run.id,
+                status: "succeeded",
+                commitSha: "def456",
+                validations: requiredValidations(),
+                notesMarkdown: "Implemented and committed.",
+              },
+              turnId: null,
+              createdAt: "2026-01-01T00:00:02.000Z",
+            },
+            createdAt: "2026-01-01T00:00:02.000Z",
+          });
+          yield* system.reactor.drain;
+
+          const blocked = (yield* system.query.getSnapshot()).implementationRuns[0];
+          expect(blocked?.status).toBe("needs-human-attention");
+          expect(blocked?.retryableFailure?.stage).toBe("app-dev-stack");
+          expect(blocked?.devReviewIds).toHaveLength(0);
+          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(2);
+        }),
+      { failAutoCreate: true },
+    ),
+  );
+
+  it.effect("retries a dirty Fast feature source without creating duplicate Build threads", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const run = yield* launchFastFeatureRun(system);
+          let snapshot = yield* system.query.getSnapshot();
+          expect(snapshot.implementationRuns[0]?.retryableFailure?.stage).toBe("source-dirty");
+          expect(yield* Ref.get(system.createWorktreeInputs)).toHaveLength(0);
+          expect(
+            snapshot.threads.filter((thread) => thread.workflowRole === "fast-feature-implementer"),
+          ).toHaveLength(1);
+
+          yield* system.engine.dispatch({
+            type: "thread.implementation-run.retry",
+            commandId: commandId("fast-source-retry"),
+            threadId: sourceThreadId,
+            runId: run.id,
+            createdAt: "2026-01-01T00:00:03.000Z",
+          });
+          yield* system.reactor.drain;
+
+          snapshot = yield* system.query.getSnapshot();
+          expect(snapshot.implementationRuns[0]?.status).toBe("running");
+          expect(snapshot.implementationRuns[0]?.retryableFailure).toBeNull();
+          expect(snapshot.implementationRuns[0]?.pinnedCommit).toBe("def456");
+          expect(yield* Ref.get(system.createWorktreeInputs)).toHaveLength(1);
+          expect(
+            snapshot.threads.filter((thread) => thread.workflowRole === "fast-feature-implementer"),
+          ).toHaveLength(1);
+        }),
+      { dirtySourceStatusChecks: 1 },
+    ),
+  );
+
   it.effect("creates the orchestrator worktree before starting ready workers", () =>
     withSystem((system) =>
       Effect.gen(function* () {
@@ -519,6 +1027,269 @@ describe("ImplementationWorkflowReactor", () => {
         );
         expect(workerThread?.parentThreadId).toBe(run.orchestratorThreadId);
       }),
+    ),
+  );
+
+  it.effect("inherits a five-ticket chain and integrates only its terminal branch", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, tickets } = yield* launchRun(system, {
+          tickets: [
+            planningTicket("TICKET-1"),
+            planningTicket("TICKET-2", ["TICKET-1"]),
+            planningTicket("TICKET-3", ["TICKET-2"]),
+            planningTicket("TICKET-4", ["TICKET-3"]),
+            planningTicket("TICKET-5", ["TICKET-4"]),
+          ],
+        });
+        const ticketIds = new Map(tickets.map((ticket) => [ticket.key, ticket.id] as const));
+        expect(run.terminalLineageTicketIds).toEqual([ticketIds.get("TICKET-5")]);
+
+        for (const key of ["TICKET-1", "TICKET-2", "TICKET-3", "TICKET-4"]) {
+          yield* appendWorkerResult(system, {
+            run,
+            status: "succeeded",
+            ticketId: ticketIds.get(key),
+          });
+          const snapshot = yield* system.query.getSnapshot();
+          expect(
+            snapshot.threads.filter((thread) => thread.workflowRole === "implementation-validator"),
+          ).toHaveLength(0);
+        }
+
+        yield* appendWorkerResult(system, {
+          run,
+          status: "succeeded",
+          ticketId: ticketIds.get("TICKET-5"),
+        });
+        const snapshot = yield* system.query.getSnapshot();
+        expect(
+          snapshot.threads.filter((thread) => thread.workflowRole === "implementation-validator"),
+        ).toHaveLength(1);
+
+        const worktrees = yield* Ref.get(system.createWorktreeInputs);
+        expect(worktrees).toHaveLength(6);
+        expect(worktrees[1]?.refName).toBe(run.orchestratorBranch);
+        expect(
+          worktrees
+            .slice(2)
+            .every((worktree, index) =>
+              worktree.refName.endsWith(`-ticket-${String(index + 1)}@commit`),
+            ),
+        ).toBe(true);
+
+        const merges = yield* Ref.get(system.mergeRefInputs);
+        expect(merges).toEqual([
+          {
+            cwd: run.orchestratorWorktreePath,
+            refName: `${run.launchSummary.plannedWorkers[4]?.branch}@commit`,
+          },
+        ]);
+      }),
+    ),
+  );
+
+  it.effect(
+    "hands fan-in conflicts and remaining dependency branches to the dependent worker",
+    () =>
+      withSystem(
+        (system) =>
+          Effect.gen(function* () {
+            const { run, tickets } = yield* launchRun(system, {
+              tickets: [
+                planningTicket("TICKET-1"),
+                planningTicket("TICKET-2"),
+                planningTicket("TICKET-3"),
+                planningTicket("TICKET-4", ["TICKET-1", "TICKET-2", "TICKET-3"]),
+              ],
+            });
+            const ticketIds = new Map(tickets.map((ticket) => [ticket.key, ticket.id] as const));
+            for (const key of ["TICKET-1", "TICKET-2", "TICKET-3"]) {
+              yield* appendWorkerResult(system, {
+                run,
+                status: "succeeded",
+                ticketId: ticketIds.get(key),
+              });
+            }
+
+            const snapshot = yield* system.query.getSnapshot();
+            const dependent = snapshot.threads.find(
+              (thread) =>
+                thread.workflowRole === "implementation-worker" &&
+                thread.workflowContext?.ticketScope.includes(ticketIds.get("TICKET-4") ?? ""),
+            );
+            expect(dependent).toBeDefined();
+            expect(dependent?.messages.at(-1)?.text).toContain("conflicted dependency");
+            expect(dependent?.messages.at(-1)?.text).toContain("conflicted.ts");
+            expect(dependent?.messages.at(-1)?.text).toContain("implementation/checkout-ticket-3");
+            expect(dependent?.messages.at(-1)?.text).toContain(
+              "plannedFileChanges as the expected file scope",
+            );
+            expect(
+              snapshot.threads.filter((thread) => thread.workflowRole === "implementation-worker"),
+            ).toHaveLength(4);
+            expect(
+              snapshot.threads.filter(
+                (thread) => thread.workflowRole === "implementation-validator",
+              ),
+            ).toHaveLength(0);
+
+            const merges = yield* Ref.get(system.mergeRefInputs);
+            expect(merges).toEqual([
+              {
+                cwd: run.launchSummary.plannedWorkers[3]?.worktreePath,
+                refName: `${run.launchSummary.plannedWorkers[1]?.branch}@commit`,
+              },
+            ]);
+          }),
+        { conflictMergeRefName: "implementation/checkout-ticket-2" },
+      ),
+  );
+
+  it.effect("integrates only terminal branches for a fan-out graph", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, tickets } = yield* launchRun(system, {
+          tickets: [
+            planningTicket("TICKET-1"),
+            planningTicket("TICKET-2", ["TICKET-1"]),
+            planningTicket("TICKET-3", ["TICKET-1"]),
+          ],
+        });
+        const ticketIds = new Map(tickets.map((ticket) => [ticket.key, ticket.id] as const));
+        expect(run.terminalLineageTicketIds).toEqual([
+          ticketIds.get("TICKET-2"),
+          ticketIds.get("TICKET-3"),
+        ]);
+
+        yield* appendWorkerResult(system, {
+          run,
+          status: "succeeded",
+          ticketId: ticketIds.get("TICKET-1"),
+        });
+        yield* appendWorkerResult(system, {
+          run,
+          status: "succeeded",
+          ticketId: ticketIds.get("TICKET-2"),
+        });
+        yield* appendWorkerResult(system, {
+          run,
+          status: "succeeded",
+          ticketId: ticketIds.get("TICKET-3"),
+        });
+
+        expect(yield* Ref.get(system.mergeRefInputs)).toEqual([
+          {
+            cwd: run.orchestratorWorktreePath,
+            refName: `${run.launchSummary.plannedWorkers[1]?.branch}@commit`,
+          },
+          {
+            cwd: run.orchestratorWorktreePath,
+            refName: `${run.launchSummary.plannedWorkers[2]?.branch}@commit`,
+          },
+        ]);
+      }),
+    ),
+  );
+
+  it.effect("derives terminal lineage for legacy runs where it was not persisted", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("clear-terminal-lineage"),
+          threadId: sourceThreadId,
+          run: { ...run, terminalLineageTicketIds: [] },
+          createdAt: now,
+        });
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+
+        expect(yield* Ref.get(system.mergeRefInputs)).toEqual([
+          {
+            cwd: run.orchestratorWorktreePath,
+            refName: `${run.launchSummary.plannedWorkers[0]?.branch}@commit`,
+          },
+        ]);
+      }),
+    ),
+  );
+
+  it.effect("hands a final programmatic merge conflict to the one validator", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          yield* appendWorkerResult(system, { run, status: "succeeded" });
+
+          const snapshot = yield* system.query.getSnapshot();
+          const validators = snapshot.threads.filter(
+            (thread) => thread.workflowRole === "implementation-validator",
+          );
+          expect(validators).toHaveLength(1);
+          expect(validators[0]?.messages.at(-1)?.text).toContain("conflicted.ts");
+          expect(validators[0]?.messages.at(-1)?.text).toContain(
+            "Programmatic integration stopped",
+          );
+
+          yield* appendWorkerResult(system, {
+            run,
+            status: "succeeded",
+            tag: "duplicate",
+          });
+          const afterDuplicate = yield* system.query.getSnapshot();
+          expect(
+            afterDuplicate.threads.filter(
+              (thread) => thread.workflowRole === "implementation-validator",
+            ),
+          ).toHaveLength(1);
+          expect(yield* Ref.get(system.mergeRefInputs)).toHaveLength(1);
+        }),
+      { conflictMergeRefName: "implementation/checkout-ticket-1" },
+    ),
+  );
+
+  it.effect("blocks a dependent ticket when its successful branch moved", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run, tickets } = yield* launchRun(system, {
+            tickets: [planningTicket("TICKET-1"), planningTicket("TICKET-2", ["TICKET-1"])],
+          });
+          yield* appendWorkerResult(system, {
+            run,
+            status: "succeeded",
+            ticketId: tickets[0]?.id,
+          });
+
+          const snapshot = yield* system.query.getSnapshot();
+          const updated = snapshot.implementationRuns.find((candidate) => candidate.id === run.id);
+          expect(updated?.status).toBe("needs-human-attention");
+          expect(updated?.ticketStates[1]?.status).toBe("blocked");
+          expect(
+            snapshot.threads.filter((thread) => thread.workflowRole === "implementation-worker"),
+          ).toHaveLength(1);
+        }),
+      { resolvedCommitSha: "moved-commit" },
+    ),
+  );
+
+  it.effect("blocks the run when final integration fails without conflicts", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          yield* appendWorkerResult(system, { run, status: "succeeded" });
+
+          const snapshot = yield* system.query.getSnapshot();
+          expect(
+            snapshot.implementationRuns.find((candidate) => candidate.id === run.id)?.status,
+          ).toBe("needs-human-attention");
+          expect(
+            snapshot.threads.filter((thread) => thread.workflowRole === "implementation-validator"),
+          ).toHaveLength(0);
+        }),
+      { failMergeRefName: "implementation/checkout-ticket-1" },
     ),
   );
 
@@ -571,6 +1342,9 @@ describe("ImplementationWorkflowReactor", () => {
           (thread) => thread.workflowRole === "implementation-validator",
         );
         expect(validator).toBeDefined();
+        expect(validator?.messages.at(-1)?.text).toContain(
+          "Missing worktree-local dependencies are setup work, not a validation failure.",
+        );
 
         yield* system.engine.dispatch({
           type: "thread.activity.append",
@@ -585,14 +1359,7 @@ describe("ImplementationWorkflowReactor", () => {
               type: "implementation-merge-gate-result",
               runId: run.id,
               status: "passed",
-              validations: [
-                {
-                  command: "vp check",
-                  status: "passed",
-                  outputMarkdown: "ok",
-                  completedAt: "2026-01-01T00:00:02.000Z",
-                },
-              ],
+              validations: requiredValidations(),
               summaryMarkdown: "ok",
             },
             turnId: null,
@@ -607,6 +1374,10 @@ describe("ImplementationWorkflowReactor", () => {
         expect(autoCreateInputs).toHaveLength(1);
         expect(reviewingRun?.status).toBe("qa-reviewing");
         expect(reviewingRun?.devReviewIds).toHaveLength(1);
+        const reviewThread = snapshot.threads.find(
+          (thread) => thread.workflowRole === "implementation-qa-reviewer",
+        );
+        expect(reviewThread?.messages.at(-1)?.text).toContain("Feature URL: http://127.0.0.1:5173");
 
         yield* system.engine.dispatch({
           type: "thread.dev-review.update",
@@ -624,16 +1395,19 @@ describe("ImplementationWorkflowReactor", () => {
         const createOrOpenChangeRequestCount = yield* Ref.get(
           system.createOrOpenChangeRequestCount,
         );
-        expect(createOrOpenChangeRequestCount).toBe(1);
+        expect(createOrOpenChangeRequestCount).toBe(0);
         expect(codeReviewingRun?.status).toBe("code-reviewing");
         expect(codeReviewingRun?.codeReviewAttemptCount).toBe(1);
-        expect(codeReviewingRun?.changeRequest?.url).toBe("https://example.test/pr/1");
+        expect(codeReviewingRun?.changeRequest).toBeNull();
 
         const reviewerThread = snapshot.threads.find(
           (thread) => thread.workflowRole === "implementation-code-reviewer",
         );
         expect(reviewerThread).toBeDefined();
         expect(reviewerThread?.parentThreadId).toBe(run.orchestratorThreadId);
+        expect(reviewerThread?.messages.at(-1)?.text).toContain(
+          "Compare the actual diff with each ticket's plannedFileChanges",
+        );
 
         yield* appendCodeReviewResult(system, {
           run,
@@ -646,6 +1420,171 @@ describe("ImplementationWorkflowReactor", () => {
         const completedRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
         expect(completedRun?.status).toBe("completed");
         expect(completedRun?.changeRequest?.url).toBe("https://example.test/pr/1");
+        expect(yield* Ref.get(system.createOrOpenChangeRequestCount)).toBe(1);
+        expect(yield* Ref.get(system.createOrOpenChangeRequestInputs)).toEqual([
+          expect.objectContaining({
+            cwd: run.orchestratorWorktreePath,
+            baseRefName: "main",
+            headRefName: run.orchestratorBranch,
+            expectedHeadSha: "def456",
+          }),
+        ]);
+
+        // The orchestrator thread narrates the run through lifecycle
+        // activities (other activity kinds, e.g. hardlock fallbacks, may
+        // interleave and are ignored here).
+        const lifecycleKinds = new Set([
+          "implementation-run-launched",
+          "implementation-worker-started",
+          "implementation-worker-finished",
+          "implementation-merge-gate-started",
+          "implementation-merge-gate-finished",
+          "implementation-browser-review-started",
+          "implementation-browser-review-finished",
+          "implementation-change-request-filed",
+          "implementation-code-review-started",
+          "implementation-code-review-finished",
+          "implementation-run-completed",
+        ]);
+        const orchestratorThread = snapshot.threads.find(
+          (thread) => thread.id === run.orchestratorThreadId,
+        );
+        // Same-timestamp activities are not ordered deterministically in the
+        // snapshot, so assert the exact multiset of kinds instead of the order.
+        const lifecycleTrail = (orchestratorThread?.activities ?? [])
+          .filter((activity) => lifecycleKinds.has(activity.kind))
+          .map((activity) => activity.kind)
+          .sort();
+        expect(lifecycleTrail).toEqual([...lifecycleKinds].sort());
+      }),
+    ),
+  );
+
+  it.effect("blocks browser review for retry when app stack creation fails", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          yield* appendWorkerResult(system, { run, status: "succeeded" });
+          let snapshot = yield* system.query.getSnapshot();
+          const validator = snapshot.threads.find(
+            (thread) => thread.workflowRole === "implementation-validator",
+          );
+
+          yield* system.engine.dispatch({
+            type: "thread.activity.append",
+            commandId: commandId("merge-gate-pass-stack-fallback"),
+            threadId: validator!.id,
+            activity: {
+              id: eventId("merge-gate-pass-stack-fallback"),
+              tone: "info",
+              kind: "implementation-merge-gate-result",
+              summary: "Merge gate passed",
+              payload: {
+                type: "implementation-merge-gate-result",
+                runId: run.id,
+                status: "passed",
+                validations: requiredValidations(),
+                summaryMarkdown: "ok",
+              },
+              turnId: null,
+              createdAt: "2026-01-01T00:00:02.000Z",
+            },
+            createdAt: "2026-01-01T00:00:02.000Z",
+          });
+          yield* system.reactor.drain;
+
+          snapshot = yield* system.query.getSnapshot();
+          const reviewingRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+          expect(reviewingRun?.status).toBe("needs-human-attention");
+          expect(reviewingRun?.retryableFailure?.stage).toBe("app-dev-stack");
+          expect(reviewingRun?.devReviewIds).toHaveLength(0);
+          const orchestrator = snapshot.threads.find(
+            (thread) => thread.id === run.orchestratorThreadId,
+          );
+          expect(
+            orchestrator?.activities.some(
+              (activity) => activity.kind === "implementation-workflow.needs-human-attention",
+            ),
+          ).toBe(true);
+          expect(
+            snapshot.threads.some((thread) => thread.workflowRole === "implementation-qa-reviewer"),
+          ).toBe(false);
+
+          for (let attempt = 2; attempt <= 4; attempt += 1) {
+            yield* system.engine.dispatch({
+              type: "thread.implementation-run.retry",
+              commandId: commandId(`app-stack-retry-${attempt}`),
+              threadId: sourceThreadId,
+              runId: run.id,
+              createdAt: `2026-01-01T00:00:0${attempt}.000Z`,
+            });
+            yield* system.reactor.drain;
+          }
+          snapshot = yield* system.query.getSnapshot();
+          expect(
+            snapshot.implementationRuns.find((entry) => entry.id === run.id)?.retryableFailure
+              ?.attemptCount,
+          ).toBe(4);
+          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(4);
+
+          yield* system.engine.dispatch({
+            type: "thread.implementation-run.retry",
+            commandId: commandId("app-stack-retry-exhausted"),
+            threadId: sourceThreadId,
+            runId: run.id,
+            createdAt: "2026-01-01T00:00:06.000Z",
+          });
+          yield* system.reactor.drain;
+          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(4);
+        }),
+      { failAutoCreate: true },
+    ),
+  );
+
+  it.effect("reruns the merge gate and downstream reviews after browser fixes", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+        yield* passMergeGate(system, run);
+        yield* failDevReview(system, run);
+        yield* appendBrowserFixResult(system, { run, validations: requiredValidations() });
+
+        let snapshot = yield* system.query.getSnapshot();
+        const updated = snapshot.implementationRuns.find((candidate) => candidate.id === run.id);
+        expect(updated?.status).toBe("validating");
+        expect(updated?.devReviewIds).toHaveLength(1);
+        expect(
+          snapshot.threads.filter((thread) => thread.workflowRole === "implementation-validator"),
+        ).toHaveLength(2);
+        expect(yield* Ref.get(system.mergeRefInputs)).toHaveLength(1);
+
+        yield* passMergeGate(system, run);
+        snapshot = yield* system.query.getSnapshot();
+        expect(
+          snapshot.implementationRuns.find((candidate) => candidate.id === run.id)?.status,
+        ).toBe("qa-reviewing");
+      }),
+    ),
+  );
+
+  it.effect("blocks browser fixes that omit required validation results", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+        yield* passMergeGate(system, run);
+        yield* failDevReview(system, run);
+        yield* appendBrowserFixResult(system, { run, validations: [] });
+
+        const snapshot = yield* system.query.getSnapshot();
+        const updated = snapshot.implementationRuns.find((candidate) => candidate.id === run.id);
+        expect(updated?.status).toBe("needs-human-attention");
+        expect(updated?.devReviewIds).toHaveLength(1);
+        expect(
+          snapshot.threads.filter((thread) => thread.workflowRole === "implementation-validator"),
+        ).toHaveLength(1);
       }),
     ),
   );
@@ -680,13 +1619,15 @@ describe("ImplementationWorkflowReactor", () => {
         const fixer = yield* nextThreadForRole(system, "implementation-fixer", seenFixers);
         expect(fixer.title).toBe("Fix code review findings");
         yield* appendCodeReviewFixResult(system, { run, threadId: fixer.id, tag: "cycle-1" });
+        yield* passMergeGate(system, run);
+        yield* passDevReview(system, run);
 
         snapshot = yield* system.query.getSnapshot();
         const reReviewingRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
         const createOrOpenChangeRequestCount = yield* Ref.get(
           system.createOrOpenChangeRequestCount,
         );
-        expect(createOrOpenChangeRequestCount).toBe(2);
+        expect(createOrOpenChangeRequestCount).toBe(0);
         expect(reReviewingRun?.status).toBe("code-reviewing");
         expect(reReviewingRun?.codeReviewAttemptCount).toBe(2);
 
@@ -705,6 +1646,7 @@ describe("ImplementationWorkflowReactor", () => {
         snapshot = yield* system.query.getSnapshot();
         const completedRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
         expect(completedRun?.status).toBe("completed");
+        expect(yield* Ref.get(system.createOrOpenChangeRequestCount)).toBe(1);
       }),
     ),
   );
@@ -739,6 +1681,8 @@ describe("ImplementationWorkflowReactor", () => {
               threadId: fixer.id,
               tag: `max-cycle-${cycle}`,
             });
+            yield* passMergeGate(system, run);
+            yield* passDevReview(system, run);
           }
         }
 

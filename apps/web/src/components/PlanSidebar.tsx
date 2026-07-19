@@ -6,6 +6,8 @@ import {
 import type {
   EnvironmentId,
   OrchestrationImplementationRun,
+  OrchestrationPlanningFileChange,
+  OrchestrationPlanningFileChangeAction,
   OrchestrationPlanningSpecId,
   OrchestrationPlanningWorkflow,
   OrchestrationThreadShell,
@@ -15,11 +17,12 @@ import type {
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
+import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "./ui/collapsible";
 import { ScrollArea } from "./ui/scroll-area";
 import ChatMarkdown from "./ChatMarkdown";
 import {
   CheckIcon,
-  ChevronDownIcon,
+  ArrowDownIcon,
   ChevronRightIcon,
   ExternalLinkIcon,
   FileTextIcon,
@@ -47,6 +50,15 @@ import { projectEnvironment } from "~/state/projects";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { useAtomCommand } from "~/state/use-atom-command";
+import {
+  addExpandedId,
+  buildImplementationDependencyLanes,
+  buildPlanningTicketPresentation,
+  planningTicketLabel,
+  toggleExpandedId,
+  type PlanningTicketPresentation,
+  type PlanSidebarSectionId,
+} from "./PlanSidebar.logic";
 
 function stepStatusIcon(status: string): React.ReactNode {
   if (status === "completed") {
@@ -72,6 +84,9 @@ function stepStatusIcon(status: string): React.ReactNode {
 
 function statusVariant(status: string): "success" | "warning" | "error" | "info" | "outline" {
   const normalized = status.toLowerCase();
+  if (normalized.includes("warning")) {
+    return "warning";
+  }
   if (
     normalized.includes("passed") ||
     normalized.includes("completed") ||
@@ -101,29 +116,90 @@ function statusVariant(status: string): "success" | "warning" | "error" | "info"
   return "outline";
 }
 
-function SectionHeader({
+function DisclosureSection({
   title,
   count,
+  open,
+  onOpenChange,
+  actions,
   children,
 }: {
   title: string;
   count?: number | undefined;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  actions?: React.ReactNode;
   children?: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between gap-2 border-t border-border/50 pt-3">
-      <div className="flex min-w-0 items-center gap-2">
-        <p className="text-[10px] font-semibold tracking-widest text-muted-foreground/40 uppercase">
-          {title}
-        </p>
-        {count !== undefined ? (
-          <Badge variant="outline" size="sm" className="h-4 px-1 text-[10px]">
-            {count}
-          </Badge>
-        ) : null}
+    <Collapsible open={open} onOpenChange={onOpenChange}>
+      <div className="flex items-center justify-between gap-2 border-t border-border/50 pt-3">
+        <CollapsibleTrigger
+          className="group flex min-w-0 flex-1 items-center gap-1.5 text-left"
+          aria-label={`${open ? "Collapse" : "Expand"} ${title}`}
+        >
+          <ChevronRightIcon
+            className={cn(
+              "size-3 shrink-0 text-muted-foreground/40 transition-transform",
+              open && "rotate-90",
+            )}
+            aria-hidden
+          />
+          <span className="min-w-0 truncate text-[10px] font-semibold tracking-widest text-muted-foreground/40 uppercase group-hover:text-muted-foreground/60">
+            {title}
+          </span>
+          {count !== undefined ? (
+            <Badge variant="outline" size="sm" className="h-4 px-1 text-[10px]">
+              {count}
+            </Badge>
+          ) : null}
+        </CollapsibleTrigger>
+        {actions ? <div className="flex shrink-0 items-center gap-1">{actions}</div> : null}
       </div>
-      {children ? <div className="flex shrink-0 items-center gap-1">{children}</div> : null}
-    </div>
+      <CollapsiblePanel>
+        {children ? <div className="pt-2">{children}</div> : null}
+      </CollapsiblePanel>
+    </Collapsible>
+  );
+}
+
+function ItemDisclosure({
+  label,
+  open,
+  onOpenChange,
+  summary,
+  actions,
+  children,
+}: {
+  label: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  summary: React.ReactNode;
+  actions?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <Collapsible open={open} onOpenChange={onOpenChange}>
+      <div className="flex min-w-0 items-start gap-1">
+        <CollapsibleTrigger
+          className="group flex min-w-0 flex-1 items-start gap-2 text-left"
+          aria-label={`${open ? "Collapse" : "Expand"} ${label}`}
+        >
+          <ChevronRightIcon
+            className={cn(
+              "mt-0.5 size-3.5 shrink-0 text-muted-foreground/45 transition-transform",
+              open && "rotate-90",
+            )}
+            aria-hidden
+          />
+          {summary}
+        </CollapsibleTrigger>
+        {actions ? <div className="flex shrink-0 items-center gap-1">{actions}</div> : null}
+      </div>
+      <CollapsiblePanel>
+        <div className="pt-2">{children}</div>
+      </CollapsiblePanel>
+    </Collapsible>
   );
 }
 
@@ -159,10 +235,205 @@ interface PlanSidebarProps {
   onRequestTicketReview?: (specId: OrchestrationPlanningSpecId) => void;
   onLaunchImplementationRun?: (specId: OrchestrationPlanningSpecId) => void;
   onRetryImplementationChangeRequest?: (runId: OrchestrationImplementationRun["id"]) => void;
+  onRetryImplementationRun?: (runId: OrchestrationImplementationRun["id"]) => void;
+  focusedTicketId?: string | null;
 }
 
 const EMPTY_WORKFLOW_THREAD_SHELLS: ReadonlyArray<OrchestrationThreadShell> = [];
 const EMPTY_IMPLEMENTATION_RUNS: ReadonlyArray<OrchestrationImplementationRun> = [];
+const PLANNED_FILE_ACTIONS: ReadonlyArray<{
+  readonly action: OrchestrationPlanningFileChangeAction;
+  readonly label: string;
+}> = [
+  { action: "create", label: "Create" },
+  { action: "update", label: "Update" },
+  { action: "delete", label: "Delete" },
+];
+
+export function PlannedFileChanges({
+  changes,
+}: {
+  readonly changes: ReadonlyArray<OrchestrationPlanningFileChange>;
+}) {
+  return (
+    <div className="rounded-md border border-border/50 bg-background/45 p-2">
+      <div className="mb-1.5 text-[11px] font-medium text-foreground/75">Planned files</div>
+      {changes.length > 0 ? (
+        <div className="space-y-1.5">
+          {PLANNED_FILE_ACTIONS.map(({ action, label }) => {
+            const actionChanges = changes.filter((change) => change.action === action);
+            return actionChanges.length > 0 ? (
+              <div key={action} className="space-y-1">
+                {actionChanges.map((change) => (
+                  <div key={change.path} className="flex min-w-0 items-center gap-1.5">
+                    <Badge variant="outline" size="sm" className="shrink-0">
+                      {label}
+                    </Badge>
+                    <code className="min-w-0 break-all text-[11px] text-foreground/80">
+                      {change.path}
+                    </code>
+                  </div>
+                ))}
+              </div>
+            ) : null;
+          })}
+        </div>
+      ) : (
+        <p className="text-[11px] text-muted-foreground/55">No planned file changes recorded.</p>
+      )}
+    </div>
+  );
+}
+
+function formatPlanningTicketLabels(
+  ticketIds: ReadonlyArray<string>,
+  presentationById: ReadonlyMap<string, PlanningTicketPresentation>,
+): string {
+  return ticketIds.map((ticketId) => planningTicketLabel(ticketId, presentationById)).join(", ");
+}
+
+export function ImplementationTicketFlow({
+  run,
+  presentationById,
+  onOpenThread,
+}: {
+  readonly run: OrchestrationImplementationRun;
+  readonly presentationById: ReadonlyMap<string, PlanningTicketPresentation>;
+  readonly onOpenThread?: ((threadId: ThreadId) => void) | undefined;
+}) {
+  const runPresentationById = useMemo(() => {
+    const next = new Map(presentationById);
+    run.ticketStates.forEach((ticketState, index) => {
+      if (!next.has(ticketState.ticketId)) {
+        const number = index + 1;
+        next.set(ticketState.ticketId, {
+          number,
+          title: "Ticket details unavailable",
+          label: planningTicketLabel(ticketState.ticketId, presentationById, number),
+        });
+      }
+    });
+    return next;
+  }, [presentationById, run.ticketStates]);
+  const layout = useMemo(
+    () => buildImplementationDependencyLanes(run.ticketStates),
+    [run.ticketStates],
+  );
+  const ticketStatesById = useMemo(
+    () => new Map(run.ticketStates.map((ticketState) => [ticketState.ticketId, ticketState])),
+    [run.ticketStates],
+  );
+  const runningTicketIds = run.ticketStates
+    .filter((ticketState) => ticketState.status === "running")
+    .map((ticketState) => ticketState.ticketId);
+  const readyTicketIds = run.ticketStates
+    .filter((ticketState) => ticketState.status === "ready")
+    .map((ticketState) => ticketState.ticketId);
+
+  if (run.ticketStates.length === 0) {
+    return (
+      <p className="text-[11px] text-muted-foreground/55">
+        No ticket dependency flow is recorded for this run.
+      </p>
+    );
+  }
+
+  const renderTicketCard = (ticketId: string) => {
+    const ticketState = ticketStatesById.get(ticketId);
+    if (ticketState === undefined) return null;
+    const presentation = runPresentationById.get(ticketId);
+    const workerThreadId = ticketState.workerThreadId;
+    return (
+      <div
+        key={ticketId}
+        className="min-w-0 rounded-md border border-border/55 bg-background/55 p-2"
+      >
+        <div className="flex min-w-0 items-start gap-1.5">
+          <span className="min-w-0 flex-1 text-[11px] leading-4 font-medium text-foreground/85">
+            {presentation?.label ?? "Ticket details unavailable"}
+          </span>
+          <Badge
+            variant={statusVariant(ticketState.status)}
+            size="sm"
+            className="h-4 shrink-0 px-1 text-[9px]"
+          >
+            {ticketState.status}
+          </Badge>
+        </div>
+        {ticketState.dependencyTicketIds.length > 0 ? (
+          <p className="mt-1 text-[10px] leading-4 text-muted-foreground/55">
+            After {formatPlanningTicketLabels(ticketState.dependencyTicketIds, runPresentationById)}
+          </p>
+        ) : (
+          <p className="mt-1 text-[10px] leading-4 text-muted-foreground/45">No blockers</p>
+        )}
+        {workerThreadId !== null ? (
+          <Button
+            size="xs"
+            variant="ghost"
+            className="mt-1 h-5 px-1 text-[10px]"
+            onClick={() => onOpenThread?.(workerThreadId)}
+            disabled={!onOpenThread}
+          >
+            <ExternalLinkIcon className="size-3" />
+            Open worker
+          </Button>
+        ) : null}
+      </div>
+    );
+  };
+
+  return (
+    <div className="space-y-2 rounded-md border border-border/50 bg-muted/10 p-2">
+      <div>
+        <div className="text-[11px] font-medium text-foreground/75">Ticket dependency flow</div>
+        {runningTicketIds.length > 0 ? (
+          <p className="mt-0.5 text-[10px] leading-4 text-muted-foreground/60">
+            {runningTicketIds.length > 1 ? "Running in parallel: " : "Running: "}
+            {formatPlanningTicketLabels(runningTicketIds, runPresentationById)}
+          </p>
+        ) : readyTicketIds.length > 0 ? (
+          <p className="mt-0.5 text-[10px] leading-4 text-muted-foreground/60">
+            Ready: {formatPlanningTicketLabels(readyTicketIds, runPresentationById)}
+          </p>
+        ) : null}
+      </div>
+      {layout.levels.map((ticketIds, levelIndex) => (
+        <div key={`level-${ticketIds.join(":")}`}>
+          {levelIndex > 0 ? (
+            <div className="flex h-5 items-center justify-center text-muted-foreground/35">
+              <ArrowDownIcon className="size-3" aria-hidden />
+            </div>
+          ) : null}
+          <div className="mb-1 flex items-center justify-between gap-2 text-[9px] tracking-wide text-muted-foreground/45 uppercase">
+            <span>Dependency level {levelIndex + 1}</span>
+            {ticketIds.length > 1 ? <span>Parallel-capable</span> : null}
+          </div>
+          <div className={cn("grid gap-1.5", ticketIds.length > 1 && "grid-cols-2")}>
+            {ticketIds.map(renderTicketCard)}
+          </div>
+        </div>
+      ))}
+      {layout.unresolvedTicketIds.length > 0 ? (
+        <div>
+          {layout.levels.length > 0 ? (
+            <div className="flex h-5 items-center justify-center text-muted-foreground/35">
+              <ArrowDownIcon className="size-3" aria-hidden />
+            </div>
+          ) : null}
+          <div className="mb-1 text-[9px] tracking-wide text-destructive/70 uppercase">
+            Unresolved dependencies
+          </div>
+          <div
+            className={cn("grid gap-1.5", layout.unresolvedTicketIds.length > 1 && "grid-cols-2")}
+          >
+            {layout.unresolvedTicketIds.map(renderTicketCard)}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 const PlanSidebar = memo(function PlanSidebar({
   activePlan,
@@ -183,10 +454,19 @@ const PlanSidebar = memo(function PlanSidebar({
   onRequestTicketReview,
   onLaunchImplementationRun,
   onRetryImplementationChangeRequest,
+  onRetryImplementationRun,
+  focusedTicketId = null,
 }: PlanSidebarProps) {
-  const [proposedPlanExpanded, setProposedPlanExpanded] = useState(false);
-  const [ticketsSectionExpanded, setTicketsSectionExpanded] = useState(true);
+  const [expandedSectionIds, setExpandedSectionIds] = useState<ReadonlySet<PlanSidebarSectionId>>(
+    () => new Set(),
+  );
   const [expandedTicketIds, setExpandedTicketIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [expandedReviewCycleIds, setExpandedReviewCycleIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const [expandedImplementationRunIds, setExpandedImplementationRunIds] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
   const [isSavingToWorkspace, setIsSavingToWorkspace] = useState(false);
   const writeProjectFile = useAtomCommand(projectEnvironment.writeFile, {
     reportFailure: false,
@@ -202,6 +482,7 @@ const PlanSidebar = memo(function PlanSidebar({
       [...(planningWorkflow?.tickets ?? [])].sort((left, right) => left.ordinal - right.ordinal),
     [planningWorkflow?.tickets],
   );
+  const ticketPresentationById = useMemo(() => buildPlanningTicketPresentation(tickets), [tickets]);
   const reviewCycles = useMemo(
     () =>
       [...(planningWorkflow?.reviewCycles ?? [])].sort(
@@ -210,8 +491,13 @@ const PlanSidebar = memo(function PlanSidebar({
     [planningWorkflow?.reviewCycles],
   );
   const activeSpecImplementationRuns = useMemo(
-    () => (spec ? implementationRuns.filter((run) => run.specId === spec.id) : []),
-    [implementationRuns, spec],
+    () =>
+      implementationRuns.filter(
+        (run) =>
+          (spec !== null && run.specId === spec.id) ||
+          run.sourceProposedPlan?.threadId === threadRef?.threadId,
+      ),
+    [implementationRuns, spec, threadRef?.threadId],
   );
   const workflowThreadsById = useMemo(
     () => new Map(workflowThreadShells.map((thread) => [thread.id, thread] as const)),
@@ -220,8 +506,32 @@ const PlanSidebar = memo(function PlanSidebar({
 
   useEffect(() => {
     setExpandedTicketIds(new Set());
-    setTicketsSectionExpanded(true);
+    setExpandedReviewCycleIds(new Set());
+    setExpandedImplementationRunIds(new Set());
   }, [spec?.id]);
+
+  useEffect(() => {
+    if (focusedTicketId === null) return;
+    setExpandedSectionIds((current) => addExpandedId(current, "tickets"));
+    setExpandedTicketIds((current) => addExpandedId(current, focusedTicketId));
+    requestAnimationFrame(() => {
+      document
+        .querySelector(`[data-planning-ticket-id="${CSS.escape(focusedTicketId)}"]`)
+        ?.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
+  }, [focusedTicketId]);
+
+  const sectionExpanded = useCallback(
+    (sectionId: PlanSidebarSectionId) => expandedSectionIds.has(sectionId),
+    [expandedSectionIds],
+  );
+
+  const setSectionExpanded = useCallback((sectionId: PlanSidebarSectionId, open: boolean) => {
+    setExpandedSectionIds((current) => {
+      const isOpen = current.has(sectionId);
+      return isOpen === open ? current : toggleExpandedId(current, sectionId);
+    });
+  }, []);
 
   const handleCopyPlan = useCallback(() => {
     if (!planMarkdown) return;
@@ -270,24 +580,23 @@ const PlanSidebar = memo(function PlanSidebar({
   }, [environmentId, planMarkdown, workspaceRoot, writeProjectFile]);
 
   const toggleTicket = useCallback((ticketId: string) => {
-    setExpandedTicketIds((current) => {
-      const next = new Set(current);
-      if (next.has(ticketId)) {
-        next.delete(ticketId);
-      } else {
-        next.add(ticketId);
-      }
-      return next;
-    });
+    setExpandedTicketIds((current) => toggleExpandedId(current, ticketId));
   }, []);
 
   const expandAllTickets = useCallback(() => {
-    setTicketsSectionExpanded(true);
     setExpandedTicketIds(new Set(tickets.map((ticket) => ticket.id)));
   }, [tickets]);
 
   const collapseAllTickets = useCallback(() => {
     setExpandedTicketIds(new Set());
+  }, []);
+
+  const toggleReviewCycle = useCallback((cycleId: string) => {
+    setExpandedReviewCycleIds((current) => toggleExpandedId(current, cycleId));
+  }, []);
+
+  const toggleImplementationRun = useCallback((runId: string) => {
+    setExpandedImplementationRunIds((current) => toggleExpandedId(current, runId));
   }, []);
 
   const handleOpenThread = useCallback(
@@ -357,79 +666,76 @@ const PlanSidebar = memo(function PlanSidebar({
       {/* Content */}
       <ScrollArea className="min-h-0 flex-1">
         <div className="p-3 space-y-4">
-          {/* Explanation */}
-          {activePlan?.explanation ? (
-            <p className="text-[13px] leading-relaxed text-muted-foreground/80">
-              {activePlan.explanation}
-            </p>
-          ) : null}
-
-          {/* Plan Steps */}
-          {activePlan && activePlan.steps.length > 0 ? (
-            <div className="space-y-1">
-              <p className="mb-2 text-[10px] font-semibold tracking-widest text-muted-foreground/40 uppercase">
-                Steps
-              </p>
-              {activePlan.steps.map((step) => (
-                <div
-                  key={`${step.status}:${step.step}`}
-                  className={cn(
-                    "flex items-center gap-2.5 rounded-lg px-2.5 py-2 transition-colors duration-200",
-                    step.status === "inProgress" && "bg-blue-500/5",
-                    step.status === "completed" && "bg-emerald-500/5",
-                  )}
-                >
-                  {stepStatusIcon(step.status)}
-                  <p
-                    className={cn(
-                      "text-[13px] leading-snug",
-                      step.status === "completed"
-                        ? "text-muted-foreground/50 line-through decoration-muted-foreground/20"
-                        : step.status === "inProgress"
-                          ? "text-foreground/90"
-                          : "text-muted-foreground/70",
-                    )}
-                  >
-                    {step.step}
+          {/* Explanation and Plan Steps */}
+          {activePlan && (activePlan.explanation || activePlan.steps.length > 0) ? (
+            <DisclosureSection
+              title="Steps"
+              count={activePlan.steps.length}
+              open={sectionExpanded("steps")}
+              onOpenChange={(open) => setSectionExpanded("steps", open)}
+            >
+              <div className="space-y-2">
+                {activePlan.explanation ? (
+                  <p className="text-[13px] leading-relaxed text-muted-foreground/80">
+                    {activePlan.explanation}
                   </p>
-                </div>
-              ))}
-            </div>
+                ) : null}
+                {activePlan.steps.length > 0 ? (
+                  <div className="space-y-1">
+                    {activePlan.steps.map((step) => (
+                      <div
+                        key={`${step.status}:${step.step}`}
+                        className={cn(
+                          "flex items-center gap-2.5 rounded-lg px-2.5 py-2 transition-colors duration-200",
+                          step.status === "inProgress" && "bg-blue-500/5",
+                          step.status === "completed" && "bg-emerald-500/5",
+                        )}
+                      >
+                        {stepStatusIcon(step.status)}
+                        <p
+                          className={cn(
+                            "text-[13px] leading-snug",
+                            step.status === "completed"
+                              ? "text-muted-foreground/50 line-through decoration-muted-foreground/20"
+                              : step.status === "inProgress"
+                                ? "text-foreground/90"
+                                : "text-muted-foreground/70",
+                          )}
+                        >
+                          {step.step}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </DisclosureSection>
           ) : null}
 
           {/* Proposed Plan Markdown */}
           {planMarkdown ? (
-            <div className="space-y-2">
-              <button
-                type="button"
-                className="group flex w-full items-center gap-1.5 text-left"
-                onClick={() => setProposedPlanExpanded((v) => !v)}
-              >
-                {proposedPlanExpanded ? (
-                  <ChevronDownIcon className="size-3 shrink-0 text-muted-foreground/40 transition-transform" />
-                ) : (
-                  <ChevronRightIcon className="size-3 shrink-0 text-muted-foreground/40 transition-transform" />
-                )}
-                <span className="text-[10px] font-semibold tracking-widest text-muted-foreground/40 uppercase group-hover:text-muted-foreground/60">
-                  {planTitle ?? "Full Plan"}
-                </span>
-              </button>
-              {proposedPlanExpanded ? (
-                <div className="rounded-lg border border-border/50 bg-background/50 p-3">
-                  <ChatMarkdown
-                    text={displayedPlanMarkdown ?? ""}
-                    cwd={markdownCwd}
-                    threadRef={threadRef}
-                    isStreaming={false}
-                  />
-                </div>
-              ) : null}
-            </div>
+            <DisclosureSection
+              title={planTitle ?? "Full Plan"}
+              open={sectionExpanded("proposed-plan")}
+              onOpenChange={(open) => setSectionExpanded("proposed-plan", open)}
+            >
+              <div className="rounded-lg border border-border/50 bg-background/50 p-3">
+                <ChatMarkdown
+                  text={displayedPlanMarkdown ?? ""}
+                  cwd={markdownCwd}
+                  threadRef={threadRef}
+                  isStreaming={false}
+                />
+              </div>
+            </DisclosureSection>
           ) : null}
 
-          <div className="space-y-2">
-            <SectionHeader title="Spec">
-              {spec && onLoadSpecBundle ? (
+          <DisclosureSection
+            title="Spec"
+            open={sectionExpanded("spec")}
+            onOpenChange={(open) => setSectionExpanded("spec", open)}
+            actions={
+              spec && onLoadSpecBundle ? (
                 <Button
                   size="xs"
                   variant="ghost"
@@ -439,8 +745,9 @@ const PlanSidebar = memo(function PlanSidebar({
                   <RefreshCwIcon className="size-3" />
                   Refresh
                 </Button>
-              ) : null}
-            </SectionHeader>
+              ) : null
+            }
+          >
             {spec ? (
               <div className="space-y-2">
                 <div className="space-y-1">
@@ -513,292 +820,344 @@ const PlanSidebar = memo(function PlanSidebar({
                 No projected Spec is available for this thread.
               </p>
             )}
-          </div>
+          </DisclosureSection>
 
-          <div className="space-y-2">
-            <SectionHeader title="Tickets" count={tickets.length}>
-              <Button
-                size="icon-xs"
-                variant="ghost"
-                aria-label={
-                  ticketsSectionExpanded ? "Collapse tickets section" : "Expand tickets section"
-                }
-                onClick={() => setTicketsSectionExpanded((value) => !value)}
-              >
-                {ticketsSectionExpanded ? (
-                  <ChevronDownIcon className="size-3.5" />
-                ) : (
-                  <ChevronRightIcon className="size-3.5" />
-                )}
-              </Button>
-              <Button
-                size="xs"
-                variant="ghost"
-                className="h-6 px-1.5 text-[11px]"
-                onClick={expandAllTickets}
-                disabled={tickets.length === 0}
-              >
-                Expand
-              </Button>
-              <Button
-                size="xs"
-                variant="ghost"
-                className="h-6 px-1.5 text-[11px]"
-                onClick={collapseAllTickets}
-                disabled={tickets.length === 0}
-              >
-                Collapse
-              </Button>
-            </SectionHeader>
-            {ticketsSectionExpanded ? (
-              tickets.length > 0 ? (
+          <DisclosureSection
+            title="Tickets"
+            count={tickets.length}
+            open={sectionExpanded("tickets")}
+            onOpenChange={(open) => setSectionExpanded("tickets", open)}
+          >
+            {tickets.length > 0 ? (
+              <div className="space-y-2">
+                <div className="flex justify-end gap-1">
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    className="h-6 px-1.5 text-[11px]"
+                    onClick={expandAllTickets}
+                  >
+                    Expand all
+                  </Button>
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    className="h-6 px-1.5 text-[11px]"
+                    onClick={collapseAllTickets}
+                  >
+                    Collapse all
+                  </Button>
+                </div>
                 <div className="divide-y divide-border/45">
                   {tickets.map((ticket) => {
                     const expanded = expandedTicketIds.has(ticket.id);
+                    const presentation = ticketPresentationById.get(ticket.id);
                     return (
-                      <div key={ticket.id} className="py-2 first:pt-0 last:pb-0">
-                        <button
-                          type="button"
-                          className="flex w-full min-w-0 items-start gap-2 text-left"
-                          onClick={() => toggleTicket(ticket.id)}
-                        >
-                          {expanded ? (
-                            <ChevronDownIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground/45" />
-                          ) : (
-                            <ChevronRightIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground/45" />
-                          )}
-                          <span className="mt-px min-w-6 shrink-0 text-[11px] tabular-nums text-muted-foreground/45">
-                            #{ticket.ordinal + 1}
-                          </span>
-                          <span className="min-w-0 flex-1 text-[13px] leading-5 text-foreground/90">
-                            {ticket.title}
-                          </span>
-                          <Badge variant={statusVariant(ticket.status)} size="sm">
-                            {ticket.status}
-                          </Badge>
-                        </button>
-                        {ticket.dependencies.length > 0 ? (
-                          <div className="mt-1 flex flex-wrap gap-1 pl-12">
-                            {ticket.dependencies.map((dependency) => (
-                              <Badge
-                                key={`${ticket.id}:${dependency.ticketId}`}
-                                variant="outline"
-                                size="sm"
-                                className="h-4 px-1 text-[10px]"
-                              >
-                                dep {dependency.ticketId}
+                      <div
+                        key={ticket.id}
+                        data-planning-ticket-id={ticket.id}
+                        className="py-2 first:pt-0 last:pb-0"
+                      >
+                        <ItemDisclosure
+                          label={`ticket ${presentation?.label ?? ticket.title}`}
+                          open={expanded}
+                          onOpenChange={() => toggleTicket(ticket.id)}
+                          summary={
+                            <>
+                              <span className="mt-px min-w-6 shrink-0 text-[11px] tabular-nums text-muted-foreground/45">
+                                #{presentation?.number ?? 1}
+                              </span>
+                              <span className="min-w-0 flex-1 text-[13px] leading-5 text-foreground/90">
+                                {ticket.title}
+                              </span>
+                              <Badge variant={statusVariant(ticket.status)} size="sm">
+                                {ticket.status}
                               </Badge>
-                            ))}
+                            </>
+                          }
+                        >
+                          <div className="space-y-2 pl-5">
+                            {ticket.dependencies.length > 0 ? (
+                              <div className="flex flex-wrap gap-1">
+                                {ticket.dependencies.map((dependency) => (
+                                  <Badge
+                                    key={`${ticket.id}:${dependency.ticketId}`}
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-4 px-1 text-[10px]"
+                                  >
+                                    Depends on{" "}
+                                    {planningTicketLabel(
+                                      dependency.ticketId,
+                                      ticketPresentationById,
+                                    )}
+                                  </Badge>
+                                ))}
+                              </div>
+                            ) : null}
+                            <PlannedFileChanges changes={ticket.plannedFileChanges} />
+                            <div className="rounded-md border border-border/50 bg-background/45 p-2">
+                              <ChatMarkdown
+                                text={ticket.bodyMarkdown}
+                                cwd={markdownCwd}
+                                threadRef={threadRef}
+                                isStreaming={false}
+                              />
+                            </div>
                           </div>
-                        ) : null}
-                        {expanded ? (
-                          <div className="mt-2 rounded-md border border-border/50 bg-background/45 p-2">
-                            <ChatMarkdown
-                              text={ticket.bodyMarkdown}
-                              cwd={markdownCwd}
-                              threadRef={threadRef}
-                              isStreaming={false}
-                            />
-                          </div>
-                        ) : null}
+                        </ItemDisclosure>
                       </div>
                     );
                   })}
                 </div>
-              ) : (
-                <p className="text-[12px] text-muted-foreground/45">
-                  No projected tickets are available for this Spec.
-                </p>
-              )
-            ) : null}
-          </div>
+              </div>
+            ) : (
+              <p className="text-[12px] text-muted-foreground/45">
+                No projected tickets are available for this Spec.
+              </p>
+            )}
+          </DisclosureSection>
 
-          <div className="space-y-2">
-            <SectionHeader title="Ticket Review Cycles" count={reviewCycles.length} />
+          <DisclosureSection
+            title="Ticket Review Cycles"
+            count={reviewCycles.length}
+            open={sectionExpanded("review-cycles")}
+            onOpenChange={(open) => setSectionExpanded("review-cycles", open)}
+          >
             {reviewCycles.length > 0 ? (
               <div className="space-y-2">
-                {reviewCycles.map((cycle) => (
-                  <div
-                    key={`${cycle.reviewerThreadId}:${cycle.cycleNumber}`}
-                    className="space-y-1 border-t border-border/45 pt-2 first:border-t-0 first:pt-0"
-                  >
-                    <div className="flex items-center gap-2">
-                      <Badge variant={statusVariant(cycle.status)} size="sm">
-                        Cycle {cycle.cycleNumber}
-                      </Badge>
-                      <span className="text-[11px] text-muted-foreground/60">
-                        {formatCompactTimestamp(cycle.createdAt, timestampFormat)}
-                      </span>
-                      {onOpenThread ? (
-                        <Button
-                          size="icon-xs"
-                          variant="ghost"
-                          aria-label="Open reviewer thread"
-                          onClick={() => handleOpenThread(cycle.reviewerThreadId)}
-                        >
-                          <ExternalLinkIcon className="size-3.5" />
-                        </Button>
-                      ) : null}
+                {reviewCycles.map((cycle) => {
+                  const cycleId = `${cycle.reviewerThreadId}:${cycle.cycleNumber}`;
+                  const expanded = expandedReviewCycleIds.has(cycleId);
+                  return (
+                    <div
+                      key={cycleId}
+                      className="border-t border-border/45 pt-2 first:border-t-0 first:pt-0"
+                    >
+                      <ItemDisclosure
+                        label={`review cycle ${cycle.cycleNumber}`}
+                        open={expanded}
+                        onOpenChange={() => toggleReviewCycle(cycleId)}
+                        summary={
+                          <>
+                            <Badge variant={statusVariant(cycle.status)} size="sm">
+                              {cycle.mode} · {cycle.cycleNumber}/10
+                            </Badge>
+                            <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground/60">
+                              {formatCompactTimestamp(cycle.createdAt, timestampFormat)}
+                            </span>
+                            <span className="shrink-0 text-[10px] text-muted-foreground/50">
+                              {cycle.status}
+                            </span>
+                          </>
+                        }
+                        actions={
+                          onOpenThread ? (
+                            <Button
+                              size="icon-xs"
+                              variant="ghost"
+                              aria-label="Open reviewer thread"
+                              onClick={() => handleOpenThread(cycle.reviewerThreadId)}
+                            >
+                              <ExternalLinkIcon className="size-3.5" />
+                            </Button>
+                          ) : null
+                        }
+                      >
+                        <div className="space-y-1 pl-5">
+                          <MetadataLine label="Reviewer" value={cycle.reviewerThreadId} />
+                          <MetadataLine
+                            label="Targets"
+                            value={
+                              formatPlanningTicketLabels(
+                                cycle.targetPlanningTicketIds,
+                                ticketPresentationById,
+                              ) || "All tickets"
+                            }
+                          />
+                          {cycle.failingPlanningTicketIds.length > 0 ? (
+                            <MetadataLine
+                              label="Failing"
+                              value={formatPlanningTicketLabels(
+                                cycle.failingPlanningTicketIds,
+                                ticketPresentationById,
+                              )}
+                            />
+                          ) : null}
+                          {cycle.editedPlanningTicketIds.length > 0 ? (
+                            <MetadataLine
+                              label="Edited"
+                              value={formatPlanningTicketLabels(
+                                cycle.editedPlanningTicketIds,
+                                ticketPresentationById,
+                              )}
+                            />
+                          ) : null}
+                          {cycle.verdictMarkdown.trim().length > 0 ? (
+                            <div className="rounded-md border border-border/50 bg-background/45 p-2">
+                              <ChatMarkdown
+                                text={cycle.verdictMarkdown}
+                                cwd={markdownCwd}
+                                threadRef={threadRef}
+                                isStreaming={false}
+                              />
+                            </div>
+                          ) : null}
+                        </div>
+                      </ItemDisclosure>
                     </div>
-                    <MetadataLine label="Reviewer" value={cycle.reviewerThreadId} />
-                    {cycle.failingPlanningTicketIds.length > 0 ? (
-                      <MetadataLine
-                        label="Failing"
-                        value={cycle.failingPlanningTicketIds.join(", ")}
-                      />
-                    ) : null}
-                    {cycle.verdictMarkdown.trim().length > 0 ? (
-                      <div className="rounded-md border border-border/50 bg-background/45 p-2">
-                        <ChatMarkdown
-                          text={cycle.verdictMarkdown}
-                          cwd={markdownCwd}
-                          threadRef={threadRef}
-                          isStreaming={false}
-                        />
-                      </div>
-                    ) : null}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ) : (
               <p className="text-[12px] text-muted-foreground/45">
                 No review cycles have been projected yet.
               </p>
             )}
-          </div>
+          </DisclosureSection>
 
-          <div className="space-y-2">
-            <SectionHeader
-              title="Implementation Runs"
-              count={activeSpecImplementationRuns.length}
-            />
+          <DisclosureSection
+            title="Implementation Runs"
+            count={activeSpecImplementationRuns.length}
+            open={sectionExpanded("implementation-runs")}
+            onOpenChange={(open) => setSectionExpanded("implementation-runs", open)}
+          >
             {activeSpecImplementationRuns.length > 0 ? (
               <div className="space-y-3">
                 {activeSpecImplementationRuns.map((run) => {
                   const orchestratorThread = workflowThreadsById.get(run.orchestratorThreadId);
+                  const expanded = expandedImplementationRunIds.has(run.id);
                   return (
                     <div
                       key={run.id}
-                      className="space-y-2 border-t border-border/45 pt-2 first:border-t-0 first:pt-0"
+                      className="border-t border-border/45 pt-2 first:border-t-0 first:pt-0"
                     >
-                      <div className="flex min-w-0 items-center gap-2">
-                        <Badge variant={statusVariant(run.status)} size="sm">
-                          {run.status}
-                        </Badge>
-                        <span className="min-w-0 flex-1 truncate text-[12px] text-muted-foreground/70">
-                          {run.id}
-                        </span>
-                        {onOpenThread ? (
-                          <Button
-                            size="icon-xs"
-                            variant="ghost"
-                            aria-label="Open implementation thread"
-                            onClick={() => handleOpenThread(run.orchestratorThreadId)}
-                          >
-                            <ExternalLinkIcon className="size-3.5" />
-                          </Button>
-                        ) : null}
-                      </div>
-                      <div className="space-y-1">
-                        <MetadataLine
-                          label="Branch"
-                          value={
-                            <span className="inline-flex min-w-0 items-center gap-1">
-                              <GitBranchIcon className="size-3 shrink-0" />
-                              <span className="truncate">{run.orchestratorBranch}</span>
+                      <ItemDisclosure
+                        label={`implementation run ${run.id}`}
+                        open={expanded}
+                        onOpenChange={() => toggleImplementationRun(run.id)}
+                        summary={
+                          <>
+                            <Badge variant={statusVariant(run.status)} size="sm">
+                              {run.status}
+                            </Badge>
+                            <span className="min-w-0 flex-1 truncate text-[12px] text-muted-foreground/70">
+                              {run.id}
                             </span>
-                          }
-                        />
-                        <MetadataLine label="Base" value={run.baseBranch} />
-                        <MetadataLine label="Pinned" value={run.pinnedCommit} />
-                        <MetadataLine label="Worktree" value={run.orchestratorWorktreePath} />
-                        {orchestratorThread ? (
-                          <MetadataLine label="Thread" value={orchestratorThread.title} />
-                        ) : null}
-                      </div>
-                      <div className="flex flex-wrap gap-1">
-                        {run.ticketStates.map((ticketState) => (
-                          <Badge
-                            key={`${run.id}:${ticketState.ticketId}`}
-                            variant={statusVariant(ticketState.status)}
-                            size="sm"
-                            className="h-4 px-1 text-[10px]"
-                          >
-                            {ticketState.ticketId}: {ticketState.status}
-                          </Badge>
-                        ))}
-                      </div>
-                      <div className="grid gap-1 text-[11px] text-muted-foreground/70">
-                        <div className="flex items-center gap-1.5">
-                          <GitMergeIcon className="size-3 text-muted-foreground/45" />
-                          <span>Merge gate: {run.baseBranchMergePolicy}</span>
-                        </div>
-                        <div>
-                          Validation:{" "}
-                          {run.finalValidation
-                            ? `${run.finalValidation.command} (${run.finalValidation.status})`
-                            : run.launchSummary.validationCommands.join(", ")}
-                        </div>
-                        <div>
-                          App dev: {run.appDevStack.status}
-                          {run.appDevStack.frontendUrl ? ` · ${run.appDevStack.frontendUrl}` : ""}
-                        </div>
-                        <div>
-                          Browser review: {run.qaTooling.status}; QA attempts {run.qaAttemptCount}
-                        </div>
-                        <div>
-                          Change request:{" "}
-                          {run.changeRequest
-                            ? `#${run.changeRequest.number} ${run.changeRequest.state}`
-                            : run.changeRequestFailure
-                              ? `failed: ${run.changeRequestFailure.reason}`
-                              : "not published"}
-                        </div>
-                      </div>
-                      <div className="flex flex-wrap gap-1.5">
-                        {run.ticketStates
-                          .filter((ticketState) => ticketState.workerThreadId !== null)
-                          .map((ticketState) => (
+                          </>
+                        }
+                        actions={
+                          onOpenThread ? (
                             <Button
-                              key={`${run.id}:worker:${ticketState.ticketId}`}
-                              size="xs"
-                              variant="outline"
-                              className="h-6 text-[11px]"
-                              onClick={() =>
-                                ticketState.workerThreadId
-                                  ? handleOpenThread(ticketState.workerThreadId)
-                                  : undefined
-                              }
-                              disabled={!onOpenThread}
+                              size="icon-xs"
+                              variant="ghost"
+                              aria-label="Open implementation thread"
+                              onClick={() => handleOpenThread(run.orchestratorThreadId)}
                             >
-                              Worker {ticketState.ticketId}
+                              <ExternalLinkIcon className="size-3.5" />
                             </Button>
-                          ))}
-                        {run.changeRequest?.url ? (
-                          <Button
-                            size="xs"
-                            variant="outline"
-                            className="h-6 text-[11px]"
-                            onClick={() =>
-                              window.open(run.changeRequest?.url, "_blank", "noopener")
-                            }
-                          >
-                            <ExternalLinkIcon className="size-3" />
-                            PR
-                          </Button>
-                        ) : null}
-                        {run.changeRequestFailure && onRetryImplementationChangeRequest ? (
-                          <Button
-                            size="xs"
-                            variant="outline"
-                            className="h-6 text-[11px]"
-                            onClick={() => onRetryImplementationChangeRequest(run.id)}
-                          >
-                            <RotateCcwIcon className="size-3" />
-                            Retry PR
-                          </Button>
-                        ) : null}
-                      </div>
+                          ) : null
+                        }
+                      >
+                        <div className="space-y-2 pl-5">
+                          <div className="space-y-1">
+                            <MetadataLine
+                              label="Branch"
+                              value={
+                                <span className="inline-flex min-w-0 items-center gap-1">
+                                  <GitBranchIcon className="size-3 shrink-0" />
+                                  <span className="truncate">{run.orchestratorBranch}</span>
+                                </span>
+                              }
+                            />
+                            <MetadataLine label="Base" value={run.baseBranch} />
+                            <MetadataLine label="Pinned" value={run.pinnedCommit} />
+                            <MetadataLine label="Worktree" value={run.orchestratorWorktreePath} />
+                            {orchestratorThread ? (
+                              <MetadataLine label="Thread" value={orchestratorThread.title} />
+                            ) : null}
+                          </div>
+                          <ImplementationTicketFlow
+                            run={run}
+                            presentationById={ticketPresentationById}
+                            onOpenThread={onOpenThread}
+                          />
+                          <div className="grid gap-1 text-[11px] text-muted-foreground/70">
+                            <div className="flex items-center gap-1.5">
+                              <GitMergeIcon className="size-3 text-muted-foreground/45" />
+                              <span>Merge gate: {run.baseBranchMergePolicy}</span>
+                            </div>
+                            <div>
+                              Validation:{" "}
+                              {run.finalValidation
+                                ? `${run.finalValidation.command} (${run.finalValidation.status})`
+                                : run.launchSummary.validationCommands.join(", ")}
+                            </div>
+                            <div>
+                              App dev: {run.appDevStack.status}
+                              {run.appDevStack.frontendUrl
+                                ? ` · ${run.appDevStack.frontendUrl}`
+                                : ""}
+                            </div>
+                            <div>
+                              Browser review: {run.qaTooling.status}; QA attempts{" "}
+                              {run.qaAttemptCount}
+                            </div>
+                            <div>
+                              Change request:{" "}
+                              {run.changeRequest
+                                ? `#${run.changeRequest.number} ${run.changeRequest.state}`
+                                : run.changeRequestFailure
+                                  ? `failed: ${run.changeRequestFailure.reason}`
+                                  : "not published"}
+                            </div>
+                            {run.retryableFailure ? (
+                              <div className="text-destructive">
+                                {run.retryableFailure.stage}: {run.retryableFailure.detail}
+                              </div>
+                            ) : null}
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {run.changeRequest?.url ? (
+                              <Button
+                                size="xs"
+                                variant="outline"
+                                className="h-6 text-[11px]"
+                                onClick={() =>
+                                  window.open(run.changeRequest?.url, "_blank", "noopener")
+                                }
+                              >
+                                <ExternalLinkIcon className="size-3" />
+                                PR
+                              </Button>
+                            ) : null}
+                            {run.changeRequestFailure &&
+                            run.retryableFailure === null &&
+                            onRetryImplementationChangeRequest ? (
+                              <Button
+                                size="xs"
+                                variant="outline"
+                                className="h-6 text-[11px]"
+                                onClick={() => onRetryImplementationChangeRequest(run.id)}
+                              >
+                                <RotateCcwIcon className="size-3" />
+                                Retry PR
+                              </Button>
+                            ) : null}
+                            {run.retryableFailure && onRetryImplementationRun ? (
+                              <Button
+                                size="xs"
+                                variant="outline"
+                                className="h-6 text-[11px]"
+                                onClick={() => onRetryImplementationRun(run.id)}
+                              >
+                                <RotateCcwIcon className="size-3" />
+                                Retry {run.retryableFailure.stage}
+                              </Button>
+                            ) : null}
+                          </div>
+                        </div>
+                      </ItemDisclosure>
                     </div>
                   );
                 })}
@@ -808,7 +1167,7 @@ const PlanSidebar = memo(function PlanSidebar({
                 No implementation runs have been projected for this Spec.
               </p>
             )}
-          </div>
+          </DisclosureSection>
 
           {/* Empty state */}
           {!activePlan && !planMarkdown && !spec && activeSpecImplementationRuns.length === 0 ? (

@@ -1,4 +1,7 @@
-import { OrchestrationPlanningTicketDependency } from "@t3tools/contracts";
+import {
+  OrchestrationPlanningFileChange,
+  OrchestrationPlanningTicketDependency,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -17,6 +20,7 @@ import {
 
 const ProjectionThreadPlanningTicketDbRow = ProjectionThreadPlanningTicket.mapFields(
   Struct.assign({
+    plannedFileChanges: Schema.fromJsonString(Schema.Array(OrchestrationPlanningFileChange)),
     dependencies: Schema.fromJsonString(Schema.Array(OrchestrationPlanningTicketDependency)),
   }),
 );
@@ -28,21 +32,24 @@ const makeProjectionThreadPlanningTicketRepository = Effect.gen(function* () {
     Request: ProjectionThreadPlanningTicket,
     execute: (row) => sql`
       INSERT INTO projection_thread_planning_tickets (
-        ticket_id, spec_id, thread_id, ordinal, title, body_markdown,
-        dependencies_json, status, created_at, updated_at
+        ticket_id, ticket_key, spec_id, thread_id, ordinal, title, body_markdown,
+        planned_file_changes_json, dependencies_json, status, created_at, updated_at
       )
       VALUES (
-        ${row.ticketId}, ${row.specId}, ${row.threadId}, ${row.ordinal},
-        ${row.title}, ${row.bodyMarkdown}, ${JSON.stringify(row.dependencies)},
+        ${row.ticketId}, ${row.ticketKey}, ${row.specId}, ${row.threadId}, ${row.ordinal},
+        ${row.title}, ${row.bodyMarkdown}, ${JSON.stringify(row.plannedFileChanges)},
+        ${JSON.stringify(row.dependencies)},
         ${row.status}, ${row.createdAt}, ${row.updatedAt}
       )
       ON CONFLICT (ticket_id)
       DO UPDATE SET
         spec_id = excluded.spec_id,
+        ticket_key = excluded.ticket_key,
         thread_id = excluded.thread_id,
         ordinal = excluded.ordinal,
         title = excluded.title,
         body_markdown = excluded.body_markdown,
+        planned_file_changes_json = excluded.planned_file_changes_json,
         dependencies_json = excluded.dependencies_json,
         status = excluded.status,
         created_at = excluded.created_at,
@@ -56,11 +63,13 @@ const makeProjectionThreadPlanningTicketRepository = Effect.gen(function* () {
     execute: ({ threadId }) => sql`
       SELECT
         ticket_id AS "ticketId",
+        ticket_key AS "ticketKey",
         spec_id AS "specId",
         thread_id AS "threadId",
         ordinal,
         title,
         body_markdown AS "bodyMarkdown",
+        planned_file_changes_json AS "plannedFileChanges",
         dependencies_json AS "dependencies",
         status,
         created_at AS "createdAt",

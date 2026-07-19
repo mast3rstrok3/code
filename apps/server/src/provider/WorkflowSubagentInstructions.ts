@@ -35,6 +35,8 @@ Built-in workflow stages:
 
 Workflow thread relationships use \`parentThreadId\`, \`workflowRole\`, \`interactionMode\`, and \`workflowPromptId\`. Parent agents start child agents with a focused first message. Child agents send durable results back to parents with final-result workflow directives, not informal prose.
 
+Workflow prompts carry artifact identifiers and ticket scope, not copied artifact bodies. Use the read-only \`workflow_context_get\`, \`workflow_spec_get\`, \`workflow_tickets_list\`, \`workflow_ticket_get\`, \`workflow_dev_reviews_list\`, and \`workflow_dev_review_get\` tools to retrieve canonical workflow artifacts on demand. Never treat prompt text as a writable artifact copy.
+
 To create a child sub-agent, emit exactly one fenced JSON block:
 
 \`\`\`json

@@ -182,6 +182,7 @@ interface ResolvedNativeAppDevStackConfig {
   readonly backendUrl: string | undefined;
   readonly keycloakUrl: string | undefined;
   readonly minioUrl: string | undefined;
+  readonly preferStackScopedUrls: boolean;
 }
 
 export interface NativeAppDevStackService {
@@ -388,6 +389,9 @@ const resolveNativeConfigForNamespace = (
     buildkitDockerConfig: config.buildkitDockerConfig,
     buildkitDockerConfigsDir: config.buildkitDockerConfigsDir,
     buildkitHarborCaCert: config.buildkitHarborCaCert,
+    preferStackScopedUrls:
+      config.namespace === undefined ||
+      normalizeKubernetesNamespace(config.namespace) !== normalizedNamespace,
     ...optionalConfiguredUrls(config, normalizedNamespace),
   };
 };
@@ -439,6 +443,7 @@ const resolveNativeConfigForWorktree = (
     buildkitDockerConfig: config.buildkitDockerConfig,
     buildkitDockerConfigsDir: config.buildkitDockerConfigsDir,
     buildkitHarborCaCert: config.buildkitHarborCaCert,
+    preferStackScopedUrls: !useConfiguredMetadata,
     ...optionalConfiguredUrls(config, namespace),
   };
 };
@@ -475,17 +480,20 @@ const previewUrlForService = (
   config: ResolvedNativeAppDevStackConfig,
   discoveredPreviewUrls: ReadonlyMap<string, string>,
   name: string,
-): string | undefined =>
-  discoveredPreviewUrls.get(serviceLookupKey(name)) ??
-  appDevStackPreviewUrlForService({
+): string | undefined => {
+  const stackScopedUrl = appDevStackPreviewUrlForService({
     namespace: config.namespace,
     serviceName: name,
     frontendUrl: config.frontendUrl,
     backendUrl: config.backendUrl,
     keycloakUrl: config.keycloakUrl,
     minioUrl: config.minioUrl,
-  }) ??
-  undefined;
+  });
+  const discoveredUrl = discoveredPreviewUrls.get(serviceLookupKey(name));
+  return config.preferStackScopedUrls
+    ? (stackScopedUrl ?? discoveredUrl)
+    : (discoveredUrl ?? stackScopedUrl ?? undefined);
+};
 
 const previewUrlFromHost = (host: string | null | undefined): string | null => {
   const trimmed = host?.trim();
@@ -971,6 +979,26 @@ const buildStack = async (
   };
 };
 
+const frontendPreviewForStack = (
+  stack: AppDevStack,
+  configuredFrontendUrl: string | undefined,
+): { readonly frontendUrl: string | null; readonly frontendServiceName: string | null } => {
+  if (configuredFrontendUrl !== undefined) {
+    return { frontendUrl: configuredFrontendUrl, frontendServiceName: "frontend" };
+  }
+
+  for (const candidate of ["frontend", "web", "app"]) {
+    const service = stack.services?.find(
+      (entry) => serviceLookupKey(entry.name) === candidate && nonEmptyString(entry.previewUrl),
+    );
+    if (service?.previewUrl) {
+      return { frontendUrl: service.previewUrl, frontendServiceName: service.name };
+    }
+  }
+
+  return { frontendUrl: null, frontendServiceName: null };
+};
+
 const isAppDevStackError = Schema.is(AppDevStackError);
 
 const appDevStackError = (operation: string, cause: unknown) =>
@@ -1143,10 +1171,10 @@ export const makeNativeAppDevStackService = (
           rememberStack(resolved);
         }
         const stack = await buildStack(resolved, runKubectl);
+        const frontend = frontendPreviewForStack(stack, resolved.frontendUrl);
         return {
           stack,
-          frontendUrl: resolved.frontendUrl ?? null,
-          frontendServiceName: resolved.frontendUrl ? "frontend" : null,
+          ...frontend,
         };
       }),
     get: (input) =>
@@ -1176,11 +1204,11 @@ export const makeNativeAppDevStackService = (
           "--replicas=1",
         ]);
         const stack = await buildStack(resolved, runKubectl);
+        const frontend = frontendPreviewForStack(stack, resolved.frontendUrl);
         return {
           stack,
           created: shouldProvision,
-          frontendUrl: resolved.frontendUrl ?? null,
-          frontendServiceName: resolved.frontendUrl ? "frontend" : null,
+          ...frontend,
         };
       }),
     stop: (input) =>

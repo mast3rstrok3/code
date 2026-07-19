@@ -113,12 +113,58 @@ it.effect("decodes canonical Spec and Ticket commands and rejects legacy wire sh
           key: "ticket-1",
           title: "Implement checkout",
           bodyMarkdown: "Build checkout.",
+          plannedFileChanges: [
+            { path: "src/checkout.ts", action: "create" },
+            { path: "src/cart.ts", action: "update" },
+            { path: "src/legacy.ts", action: "delete" },
+          ],
           dependencyKeys: [],
         },
       ],
       createdAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(tickets.type, "thread.planning-tickets.apply");
+
+    yield* decodeOrchestrationCommand({
+      type: "thread.planning-tickets.apply",
+      commandId: "cmd-tickets-empty-files",
+      threadId: "thread-planning",
+      sourceMessageId: "message-tickets",
+      specId: "spec-1",
+      tickets: [
+        {
+          key: "ticket-1",
+          title: "Implement checkout",
+          bodyMarkdown: "Build checkout.",
+          plannedFileChanges: [],
+          dependencyKeys: [],
+        },
+      ],
+      createdAt: "2026-01-01T00:00:00.000Z",
+    }).pipe(Effect.flip);
+
+    for (const plannedFileChanges of [
+      [{ path: "", action: "update" }],
+      [{ path: "src/checkout.ts", action: "move" }],
+    ]) {
+      yield* decodeOrchestrationCommand({
+        type: "thread.planning-tickets.apply",
+        commandId: "cmd-tickets-invalid-files",
+        threadId: "thread-planning",
+        sourceMessageId: "message-tickets",
+        specId: "spec-1",
+        tickets: [
+          {
+            key: "ticket-1",
+            title: "Implement checkout",
+            bodyMarkdown: "Build checkout.",
+            plannedFileChanges,
+            dependencyKeys: [],
+          },
+        ],
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }).pipe(Effect.flip);
+    }
 
     for (const type of [
       "thread.planning-prd.create",
@@ -206,6 +252,9 @@ it.effect("decodes canonical Spec and Ticket events and rejects legacy event dis
       },
     });
     assert.strictEqual(ticketEvent.type, "thread.planning-tickets-created");
+    if (ticketEvent.type === "thread.planning-tickets-created") {
+      assert.deepStrictEqual(ticketEvent.payload.tickets[0]?.plannedFileChanges, []);
+    }
 
     for (const type of [
       "thread.planning-prd-created",

@@ -5950,13 +5950,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ),
       );
 
-      assert.equal(dispatchResult.sequence, 1);
+      assert.equal(dispatchResult.sequence, 2);
       assert.deepEqual(effects, [
-        "dispatch:thread.archive",
         "dispatch:thread.session.stop",
         `terminal.close:${threadId}`,
+        "dispatch:thread.archive",
       ]);
-      const sessionStopCommand = dispatchedCommands[1];
+      const sessionStopCommand = dispatchedCommands[0];
       assert.equal(sessionStopCommand?.type, "thread.session.stop");
       if (sessionStopCommand?.type === "thread.session.stop") {
         assert.equal(sessionStopCommand.threadId, threadId);
@@ -6028,16 +6028,126 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ),
       );
 
-      assert.equal(dispatchResult.sequence, 1);
+      assert.equal(dispatchResult.sequence, 2);
       assert.deepEqual(effects, [
         "query:thread-shell:active",
-        "dispatch:thread.archive",
         "dispatch:thread.session.stop",
         `terminal.close:${threadId}`,
+        "dispatch:thread.archive",
       ]);
       assert.deepEqual(
         dispatchedCommands.map((command) => command.type),
-        ["thread.archive", "thread.session.stop"],
+        ["thread.session.stop", "thread.archive"],
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("cleans an archive subtree child-first and continues after target failures", () =>
+    Effect.gen(function* () {
+      const rootId = ThreadId.make("thread-archive-tree-root");
+      const archivedIntermediateId = ThreadId.make("thread-archive-tree-intermediate");
+      const grandchildId = ThreadId.make("thread-archive-tree-grandchild");
+      const childId = ThreadId.make("thread-archive-tree-child");
+      const effects: string[] = [];
+      const dispatchedCommands: Array<OrchestrationCommand> = [];
+      const now = "2026-01-01T00:00:00.000Z";
+      const base = makeDefaultOrchestrationReadModel();
+      const template = base.threads[0];
+      if (!template) return;
+      const session = (threadId: ThreadId, status: "ready" | "stopped") => ({
+        threadId,
+        status,
+        providerName: "claudeAgent" as const,
+        runtimeMode: "full-access" as const,
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: now,
+      });
+      const readModel = {
+        ...base,
+        threads: [
+          { ...template, id: rootId, parentThreadId: null, session: session(rootId, "ready") },
+          {
+            ...template,
+            id: archivedIntermediateId,
+            parentThreadId: rootId,
+            archivedAt: now,
+            session: session(archivedIntermediateId, "ready"),
+          },
+          {
+            ...template,
+            id: grandchildId,
+            parentThreadId: archivedIntermediateId,
+            session: session(grandchildId, "stopped"),
+          },
+          {
+            ...template,
+            id: childId,
+            parentThreadId: rootId,
+            session: session(childId, "ready"),
+          },
+        ],
+      };
+
+      yield* buildAppUnderTest({
+        layers: {
+          projectionSnapshotQuery: {
+            getCommandReadModel: () => Effect.succeed(readModel),
+          },
+          terminalManager: {
+            close: ({ threadId }) => {
+              effects.push(`terminal.close:${threadId}`);
+              return threadId === grandchildId
+                ? Effect.die(new Error("simulated grandchild terminal failure"))
+                : Effect.void;
+            },
+          },
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.sync(() => {
+                dispatchedCommands.push(command);
+                effects.push(
+                  `dispatch:${command.type}:${"threadId" in command ? command.threadId : ""}`,
+                );
+                return { sequence: dispatchedCommands.length };
+              }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "thread.archive",
+            commandId: CommandId.make("cmd-thread-archive-tree"),
+            threadId: rootId,
+          }),
+        ),
+      );
+
+      assert.deepEqual(effects, [
+        `terminal.close:${grandchildId}`,
+        `dispatch:thread.session.stop:${childId}`,
+        `terminal.close:${childId}`,
+        `dispatch:thread.session.stop:${rootId}`,
+        `terminal.close:${rootId}`,
+        `dispatch:thread.archive:${rootId}`,
+      ]);
+      const stopCommands = dispatchedCommands.filter(
+        (command): command is Extract<OrchestrationCommand, { type: "thread.session.stop" }> =>
+          command.type === "thread.session.stop",
+      );
+      assert.deepEqual(
+        stopCommands.map((command) => command.threadId),
+        [childId, rootId],
+      );
+      assert.equal(new Set(stopCommands.map((command) => command.commandId)).size, 2);
+      assertTrue(
+        dispatchedCommands.every(
+          (command) =>
+            command.type !== "thread.session.stop" || command.threadId !== archivedIntermediateId,
+        ),
       );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
@@ -6085,7 +6195,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       );
 
       assert.equal(dispatchResult.sequence, 1);
-      assert.deepEqual(effects, ["dispatch:thread.archive", `terminal.close:${threadId}`]);
+      assert.deepEqual(effects, [`terminal.close:${threadId}`, "dispatch:thread.archive"]);
       assert.deepEqual(
         dispatchedCommands.map((command) => command.type),
         ["thread.archive"],
@@ -6153,7 +6263,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         );
 
         assert.equal(dispatchResult.sequence, 1);
-        assert.deepEqual(effects, ["dispatch:thread.archive", `terminal.close:${threadId}`]);
+        assert.deepEqual(effects, [`terminal.close:${threadId}`, "dispatch:thread.archive"]);
         assert.deepEqual(
           dispatchedCommands.map((command) => command.type),
           ["thread.archive"],
@@ -6225,15 +6335,15 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ),
       );
 
-      assert.equal(dispatchResult.sequence, 1);
+      assert.equal(dispatchResult.sequence, 2);
       assert.deepEqual(effects, [
-        "dispatch:thread.archive",
         "dispatch:thread.session.stop",
         `terminal.close:${threadId}`,
+        "dispatch:thread.archive",
       ]);
       assert.deepEqual(
         dispatchedCommands.map((command) => command.type),
-        ["thread.archive", "thread.session.stop"],
+        ["thread.session.stop", "thread.archive"],
       );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
@@ -6297,15 +6407,15 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ),
       );
 
-      assert.equal(dispatchResult.sequence, 1);
+      assert.equal(dispatchResult.sequence, 2);
       assert.deepEqual(effects, [
-        "dispatch:thread.archive",
         "dispatch:thread.session.stop",
         `terminal.close:${threadId}`,
+        "dispatch:thread.archive",
       ]);
       assert.deepEqual(
         dispatchedCommands.map((command) => command.type),
-        ["thread.archive", "thread.session.stop"],
+        ["thread.session.stop", "thread.archive"],
       );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );

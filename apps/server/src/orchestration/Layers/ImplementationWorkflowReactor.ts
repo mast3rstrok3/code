@@ -2,9 +2,9 @@ import {
   CommandId,
   DevReviewId,
   EventId,
+  GitCommandError,
   MessageId,
   ThreadId,
-  type DevReviewDocument,
   type OrchestrationEvent,
   type OrchestrationImplementationRun,
   type OrchestrationImplementationValidationResult,
@@ -15,11 +15,15 @@ import {
   type WorkspaceUserId,
 } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import { proposedPlanTitle } from "@t3tools/shared/orchestrationPlanning";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 
 import { AppDevStackManager } from "../../appDevStack/AppDevStackManager.ts";
@@ -50,7 +54,8 @@ type ImplementationWorkflowEvent = Extract<
       | "thread.implementation-run-launched"
       | "thread.activity-appended"
       | "thread.dev-review-updated"
-      | "thread.implementation-change-request-retry-requested";
+      | "thread.implementation-change-request-retry-requested"
+      | "thread.implementation-run-retry-requested";
   }
 >;
 
@@ -82,6 +87,26 @@ type CodeReviewDirective = {
   readonly reportMarkdown: string;
 };
 
+type FastBuildDirective = {
+  readonly type: "implementation-fast-build-result";
+  readonly runId: string;
+  readonly status: "succeeded" | "failed" | "blocked";
+  readonly commitSha?: string;
+  readonly validations: ReadonlyArray<OrchestrationImplementationValidationResult>;
+  readonly notesMarkdown: string;
+};
+
+type BranchIntegration = {
+  readonly baseTicketId: string | null;
+  readonly baseRefName: string;
+  readonly mergedTicketIds: ReadonlyArray<string>;
+  readonly conflictedTicketId: string | null;
+  readonly conflictedRefName: string | null;
+  readonly conflictedFiles: ReadonlyArray<string>;
+  readonly remainingTicketIds: ReadonlyArray<string>;
+  readonly remainingRefNames: ReadonlyArray<string>;
+};
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
 
@@ -101,6 +126,11 @@ const asFixDirective = (value: unknown): FixDirective | null =>
 const asCodeReviewDirective = (value: unknown): CodeReviewDirective | null =>
   isRecord(value) && value["type"] === "implementation-code-review-result"
     ? (value as CodeReviewDirective)
+    : null;
+
+const asFastBuildDirective = (value: unknown): FastBuildDirective | null =>
+  isRecord(value) && value["type"] === "implementation-fast-build-result"
+    ? (value as FastBuildDirective)
     : null;
 
 function findRunSourceThreadId(input: {
@@ -162,13 +192,6 @@ function ticketsById(
   return map;
 }
 
-function ticketMarkdown(ticket: OrchestrationPlanningTicket | undefined): string {
-  if (ticket === undefined) {
-    return "Ticket details were not available in the current projection.";
-  }
-  return [`#${ticket.ordinal} ${ticket.title}`, "", ticket.bodyMarkdown].join("\n");
-}
-
 function markDependentsReady(
   run: OrchestrationImplementationRun,
   updatedAt: string,
@@ -188,6 +211,28 @@ function markDependentsReady(
   };
 }
 
+function terminalLineageTicketIds(run: OrchestrationImplementationRun): ReadonlyArray<string> {
+  if (run.terminalLineageTicketIds.length > 0) {
+    return run.terminalLineageTicketIds;
+  }
+  const dependencyIds = new Set(run.ticketStates.flatMap((state) => state.dependencyTicketIds));
+  return run.ticketStates
+    .filter((state) => !dependencyIds.has(state.ticketId))
+    .map((state) => state.ticketId);
+}
+
+function requiredValidationsPassed(input: {
+  readonly requiredCommands: ReadonlyArray<string>;
+  readonly validations: ReadonlyArray<OrchestrationImplementationValidationResult>;
+}): boolean {
+  return input.requiredCommands.every((requiredCommand) =>
+    input.validations.some(
+      (validation) =>
+        validation.command.trim() === requiredCommand.trim() && validation.status === "passed",
+    ),
+  );
+}
+
 function validationSummary(
   validations: ReadonlyArray<OrchestrationImplementationValidationResult>,
   fallbackCommand: string,
@@ -204,45 +249,27 @@ function validationSummary(
   );
 }
 
-function devReviewMarkdown(document: DevReviewDocument | undefined): string {
-  if (document === undefined) {
-    return "No dev-review document was attached to this update.";
-  }
-  const checks = document.checks
-    .map((check) => `- ${check.label}: ${check.status}\n  ${check.notes}`)
-    .join("\n");
-  const findings = document.findings
-    .map(
-      (finding) =>
-        `- ${finding.severity}: ${finding.title}\n  ${finding.details}\n  Repro: ${finding.reproduction}`,
-    )
-    .join("\n");
-  return [
-    `Verdict: ${document.verdict}`,
-    "",
-    document.summary,
-    "",
-    "Checks:",
-    checks.length > 0 ? checks : "- None reported",
-    "",
-    "Findings:",
-    findings.length > 0 ? findings : "- None reported",
-    "",
-    "Next steps:",
-    document.nextSteps.length > 0
-      ? document.nextSteps.map((step) => `- ${step}`).join("\n")
-      : "- None",
-  ].join("\n");
-}
-
 function buildWorkerPrompt(input: {
   readonly run: OrchestrationImplementationRun;
-  readonly ticket: OrchestrationPlanningTicket | undefined;
   readonly ticketId: string;
   readonly workerThreadId: ThreadId;
   readonly branch: string;
   readonly worktreePath: string;
+  readonly integration: BranchIntegration;
 }): string {
+  const integrationLines = [
+    `- base ref: ${input.integration.baseRefName}`,
+    `- base ticket: ${input.integration.baseTicketId ?? "orchestrator"}`,
+    `- programmatically merged dependencies: ${input.integration.mergedTicketIds.join(", ") || "none"}`,
+  ];
+  if (input.integration.conflictedTicketId !== null) {
+    integrationLines.push(
+      `- conflicted dependency: ${input.integration.conflictedTicketId} (${input.integration.conflictedRefName})`,
+      `- conflicted files: ${input.integration.conflictedFiles.join(", ") || "unknown"}`,
+      `- remaining dependency branches: ${input.integration.remainingRefNames.join(", ") || "none"}`,
+      "Resolve and commit the current dependency merge, merge any remaining dependency branches in order, then implement the planning ticket.",
+    );
+  }
   return [
     `Implement planning ticket ${input.ticketId} for implementation run ${input.run.id}.`,
     "",
@@ -251,9 +278,10 @@ function buildWorkerPrompt(input: {
     "Branch/worktree:",
     `- branch: ${input.branch}`,
     `- worktree: ${input.worktreePath}`,
+    ...integrationLines,
     "",
-    "Planning ticket:",
-    ticketMarkdown(input.ticket),
+    `Retrieve ticket ${input.ticketId} with workflow_ticket_get before implementing it. Use workflow_spec_get when the Spec is needed; artifact bodies are intentionally not embedded in this prompt.`,
+    "Treat the ticket's plannedFileChanges as the expected file scope. Make any additional supporting changes required for correctness, and explain material deviations from the planned paths or actions in notesMarkdown.",
     "",
     "Finish with exactly one fenced JSON directive of type implementation-worker-result. Use these fixed identifiers:",
     `- ticketId: ${input.ticketId}`,
@@ -263,18 +291,26 @@ function buildWorkerPrompt(input: {
   ].join("\n");
 }
 
-function buildMergeGatePrompt(input: { readonly run: OrchestrationImplementationRun }): string {
-  const workerBranches = input.run.ticketStates
-    .filter((state) => state.status === "succeeded" && state.branch !== null)
-    .map((state) => `- ${state.ticketId}: ${state.branch}`)
-    .join("\n");
+function buildMergeGatePrompt(input: {
+  readonly run: OrchestrationImplementationRun;
+  readonly integration: BranchIntegration;
+}): string {
+  const integrationInstructions =
+    input.integration.conflictedTicketId === null
+      ? [
+          "All terminal worker branches were integrated programmatically. Do not merge worker branches again; run the required validations against the current orchestrator worktree.",
+        ]
+      : [
+          `Programmatic integration stopped while merging ${input.integration.conflictedTicketId} (${input.integration.conflictedRefName}).`,
+          `Conflicted files: ${input.integration.conflictedFiles.join(", ") || "unknown"}.`,
+          `After resolving and committing that merge, merge these remaining terminal branches in order: ${input.integration.remainingRefNames.join(", ") || "none"}.`,
+          "Then run the required validations.",
+        ];
   return [
     `Run merge gate for implementation run ${input.run.id}.`,
     "",
-    "Merge all succeeded worker branches into the current orchestrator worktree. Resolve conflicts in favor of the Spec/planning tickets, then run the required validations.",
-    "",
-    "Worker branches:",
-    workerBranches.length > 0 ? workerBranches : "- None",
+    ...integrationInstructions,
+    "If this fresh worktree has no installed dependencies, install them with the repository's declared package manager and lockfile before running validation. Missing worktree-local dependencies are setup work, not a validation failure.",
     "",
     "Required validation commands:",
     ...input.run.launchSummary.validationCommands.map((command) => `- ${command}`),
@@ -289,6 +325,7 @@ function buildMergeGatePrompt(input: { readonly run: OrchestrationImplementation
 function buildBrowserDevReviewPrompt(input: {
   readonly run: OrchestrationImplementationRun;
   readonly frontendUrl: string | null;
+  readonly artifactMarkdown?: string;
 }): string {
   return [
     `Perform browser dev review for implementation run ${input.run.id}.`,
@@ -298,22 +335,32 @@ function buildBrowserDevReviewPrompt(input: {
     input.frontendUrl === null
       ? "No frontend URL was resolved. If the app cannot be opened, mark the review blocked with concrete details."
       : `Feature URL: ${input.frontendUrl}`,
+    `Worktree: ${input.run.orchestratorWorktreePath}`,
+    `Diff command: git diff ${input.run.pinnedCommit}...HEAD`,
     "",
-    "Review against the Spec and planning tickets loaded on this implementation thread. Update the dev-review record with passed, failed, or blocked status and a document.",
+    input.run.artifactSource === "proposed-plan"
+      ? `Review against the locked product intent and proposed plan below, as well as the actual diff and app behavior.\n\n${input.artifactMarkdown ?? "Proposed-plan context unavailable."}`
+      : "Review against the Spec and planning tickets loaded on this implementation thread.",
+    "Update the dev-review record with passed, failed, or blocked status and a document.",
   ].join("\n");
 }
 
 function buildFixPrompt(input: {
   readonly run: OrchestrationImplementationRun;
-  readonly reviewMarkdown: string;
+  readonly reviewId: DevReviewId;
 }): string {
   return [
     `Fix browser dev-review failures for implementation run ${input.run.id}.`,
     "",
     "Do not ask the user questions. Make the smallest implementation changes needed in the orchestrator worktree, run focused validation, and report the fix result.",
     "",
-    "Latest browser review:",
-    input.reviewMarkdown,
+    input.run.artifactSource === "proposed-plan"
+      ? `Retrieve Dev Review ${input.reviewId} with workflow_dev_review_get before applying its findings. Review against the proposed-plan context already provided to this Fast feature run; do not load a missing Spec or tickets.`
+      : `Retrieve Dev Review ${input.reviewId} with workflow_dev_review_get before applying its findings. Use workflow_tickets_list and workflow_ticket_get for the linked tickets.`,
+    "",
+    "Before reporting success, run every required validation command:",
+    ...input.run.launchSummary.validationCommands.map((command) => `- ${command}`),
+    "If native mobile files changed, also run vp run lint:mobile.",
     "",
     "Finish with exactly one fenced JSON directive of type implementation-fix-result for this runId.",
   ].join("\n");
@@ -321,9 +368,10 @@ function buildFixPrompt(input: {
 
 function buildCodeReviewPrompt(input: {
   readonly run: OrchestrationImplementationRun;
-  readonly specMarkdown: string | null;
+  readonly artifactMarkdown?: string;
 }): string {
   const changeRequest = input.run.changeRequest;
+  const fixedPoint = input.run.pinnedCommit;
   return [
     `Perform the implementation code review for implementation run ${input.run.id} (cycle ${input.run.codeReviewAttemptCount} of ${MAX_CODE_REVIEW_CYCLES}).`,
     "",
@@ -331,15 +379,16 @@ function buildCodeReviewPrompt(input: {
     "",
     "Review scope:",
     `- worktree: ${input.run.orchestratorWorktreePath}`,
-    `- fixed point: ${input.run.baseBranch}`,
-    `- diff command: git diff ${input.run.baseBranch}...HEAD`,
+    `- fixed point: ${fixedPoint}`,
+    `- diff command: git diff ${fixedPoint}...HEAD`,
     changeRequest === null
       ? "- change request: not available"
       : `- change request: ${changeRequest.url} (#${changeRequest.number})`,
     "",
-    "Spec source (review the Spec axis against this document; do not search the issue tracker):",
-    input.specMarkdown ??
-      "No Spec document was available in the projection; review the Spec axis against the planning tickets loaded on the orchestrator thread.",
+    input.run.artifactSource === "proposed-plan"
+      ? `Review against the locked product intent and proposed plan below; do not attempt to load a missing Spec or planning tickets.\n\n${input.artifactMarkdown ?? "Proposed-plan context unavailable."}`
+      : "Retrieve the canonical Spec with workflow_spec_get and the run tickets with workflow_tickets_list/workflow_ticket_get. Artifact bodies are intentionally not embedded in this prompt.",
+    "Compare the actual diff with each ticket's plannedFileChanges. Report planned changes missing from the diff, unexplained changed files, and create/update/delete action mismatches. File-plan drift is review evidence rather than an automatic failure when supporting changes are justified and the implementation is correct.",
     "",
     'Use status "clean" only when neither axis has findings that require code changes, "findings" when code changes are required, and "blocked" when the review cannot be performed. Put the full two-axis report in reportMarkdown.',
     "",
@@ -359,7 +408,101 @@ function buildCodeReviewFixPrompt(input: {
     "Latest code review report:",
     input.reportMarkdown,
     "",
+    "Before reporting success, run every required validation command:",
+    ...input.run.launchSummary.validationCommands.map((command) => `- ${command}`),
+    "If native mobile files changed, also run vp run lint:mobile.",
+    "",
     "Finish with exactly one fenced JSON directive of type implementation-fix-result for this runId.",
+  ].join("\n");
+}
+
+function buildMergeGateFixPrompt(input: {
+  readonly run: OrchestrationImplementationRun;
+  readonly reportMarkdown: string;
+}): string {
+  return [
+    `Fix merge-gate failures for implementation run ${input.run.id}.`,
+    "",
+    "Do not ask the user questions. Resolve integration conflicts or validation failures in the orchestrator worktree, commit the result, and report the fix.",
+    "",
+    "Latest merge-gate report:",
+    input.reportMarkdown,
+    "",
+    "Before reporting success, run every required validation command:",
+    ...input.run.launchSummary.validationCommands.map((command) => `- ${command}`),
+    "If native mobile files changed, also run vp run lint:mobile.",
+    "",
+    "Finish with exactly one fenced JSON directive of type implementation-fix-result for this runId.",
+  ].join("\n");
+}
+
+function productIntentMarkdown(thread: OrchestrationThread): string {
+  const activity = thread.activities.findLast(
+    (candidate) => candidate.kind === "product-intent-locked",
+  );
+  if (!activity || !isRecord(activity.payload)) return "Locked product intent unavailable.";
+  const summary = activity.payload["summaryMarkdown"];
+  return typeof summary === "string" && summary.trim().length > 0 ? summary : activity.summary;
+}
+
+function fastFeatureArtifactMarkdown(input: {
+  readonly run: OrchestrationImplementationRun;
+  readonly sourceThread: OrchestrationThread;
+}): string {
+  const plan = input.sourceThread.proposedPlans.find(
+    (candidate) => candidate.id === input.run.sourceProposedPlan?.planId,
+  );
+  return [
+    "## Locked product intent",
+    productIntentMarkdown(input.sourceThread),
+    "",
+    "## Canonical proposed plan",
+    plan?.planMarkdown ?? "Proposed plan unavailable.",
+  ].join("\n");
+}
+
+function buildFastFeaturePrompt(input: {
+  readonly run: OrchestrationImplementationRun;
+  readonly sourceThread: OrchestrationThread;
+}): string {
+  return [
+    `Implement Fast feature run ${input.run.id}.`,
+    "",
+    "Do not ask the user questions. Implement the canonical plan in the exact branch and worktree below, validate it, and commit all completed changes.",
+    "",
+    fastFeatureArtifactMarkdown(input),
+    "",
+    "## Execution identity",
+    `- branch: ${input.run.orchestratorBranch}`,
+    `- worktree: ${input.run.orchestratorWorktreePath}`,
+    `- fixed source commit: ${input.run.pinnedCommit}`,
+    "",
+    "## Required validation",
+    ...input.run.launchSummary.validationCommands.map((command) => `- ${command}`),
+    "- vp run lint:mobile when native mobile files changed",
+    "",
+    "Finish with exactly one fenced JSON directive:",
+    "```json",
+    JSON.stringify(
+      {
+        type: "implementation-fast-build-result",
+        runId: input.run.id,
+        status: "succeeded",
+        commitSha: "HEAD commit SHA",
+        validations: [
+          {
+            command: "vp check",
+            status: "passed",
+            outputMarkdown: "summary",
+            completedAt: "ISO timestamp",
+          },
+        ],
+        notesMarkdown: "Implementation notes",
+      },
+      null,
+      2,
+    ),
+    "```",
   ].join("\n");
 }
 
@@ -445,10 +588,37 @@ const make = Effect.gen(function* () {
     readonly run: OrchestrationImplementationRun;
     readonly reasonMarkdown: string;
     readonly updatedAt: string;
+    readonly retryableStage?:
+      | "source-dirty"
+      | "worktree-setup"
+      | "worker-setup"
+      | "worker-execution"
+      | "integration"
+      | "merge-gate"
+      | "app-dev-stack"
+      | "dev-review"
+      | "code-review"
+      | "build"
+      | "change-request";
   }) {
+    const previousAttempts =
+      input.retryableStage !== undefined &&
+      input.run.retryableFailure?.stage === input.retryableStage
+        ? input.run.retryableFailure.attemptCount
+        : 0;
     const blockedRun: OrchestrationImplementationRun = {
       ...input.run,
       status: "needs-human-attention",
+      retryableFailure:
+        input.retryableStage === undefined
+          ? input.run.retryableFailure
+          : {
+              stage: input.retryableStage,
+              detail: input.reasonMarkdown,
+              failedAt: input.updatedAt,
+              attemptCount: previousAttempts + 1,
+              maxAttempts: 3,
+            },
       updatedAt: input.updatedAt,
     };
     yield* updateRun({
@@ -464,6 +634,7 @@ const make = Effect.gen(function* () {
       payload: { runId: input.run.id, reasonMarkdown: input.reasonMarkdown },
       createdAt: input.updatedAt,
     });
+    return blockedRun;
   });
 
   const sourceThreadIdForRun = Effect.fn("ImplementationWorkflowReactor.sourceThreadIdForRun")(
@@ -472,6 +643,172 @@ const make = Effect.gen(function* () {
       return findRunSourceThreadId({ readModel, run });
     },
   );
+
+  const verifiedDependency = Effect.fn("ImplementationWorkflowReactor.verifiedDependency")(
+    function* (input: { readonly run: OrchestrationImplementationRun; readonly ticketId: string }) {
+      const state = input.run.ticketStates.find(
+        (candidate) => candidate.ticketId === input.ticketId,
+      );
+      if (
+        state?.status !== "succeeded" ||
+        state.branch === null ||
+        state.workerResult?.status !== "succeeded"
+      ) {
+        return yield* new GitCommandError({
+          operation: "ImplementationWorkflowReactor.verifiedDependency",
+          command: "git rev-parse",
+          cwd: input.run.orchestratorWorktreePath,
+          detail: `Dependency ticket '${input.ticketId}' does not have a successful committed branch.`,
+        });
+      }
+      const [resolved, reported] = yield* Effect.all([
+        gitWorkflow.resolveCommit({
+          cwd: input.run.orchestratorWorktreePath,
+          ref: state.branch,
+        }),
+        gitWorkflow.resolveCommit({
+          cwd: input.run.orchestratorWorktreePath,
+          ref: state.workerResult.commitSha,
+        }),
+      ]);
+      if (resolved.commitSha !== reported.commitSha) {
+        return yield* new GitCommandError({
+          operation: "ImplementationWorkflowReactor.verifiedDependency",
+          command: "git rev-parse",
+          cwd: input.run.orchestratorWorktreePath,
+          detail: `Dependency ticket '${input.ticketId}' branch '${state.branch}' moved from reported commit '${reported.commitSha}' to '${resolved.commitSha}'.`,
+        });
+      }
+      return {
+        ticketId: input.ticketId,
+        branch: state.branch,
+        commitSha: reported.commitSha,
+      };
+    },
+  );
+
+  const verifySuccessfulWorkerResult = Effect.fn(
+    "ImplementationWorkflowReactor.verifySuccessfulWorkerResult",
+  )(function* (input: {
+    readonly run: OrchestrationImplementationRun;
+    readonly threadId: ThreadId;
+    readonly directive: Extract<WorkerDirective, { readonly status: "succeeded" }>;
+  }) {
+    const state = input.run.ticketStates.find(
+      (candidate) => candidate.workerThreadId === input.threadId,
+    );
+    if (
+      state === undefined ||
+      state.ticketId !== input.directive.ticketId ||
+      state.branch === null ||
+      state.branch !== input.directive.branch ||
+      state.worktreePath === null ||
+      state.worktreePath !== input.directive.worktreePath
+    ) {
+      return yield* new GitCommandError({
+        operation: "ImplementationWorkflowReactor.verifySuccessfulWorkerResult",
+        command: "verify worker identity",
+        cwd: input.run.orchestratorWorktreePath,
+        detail: `Worker result identity does not match the active assignment for thread '${input.threadId}'.`,
+      });
+    }
+
+    const [reported, branchHead, worktreeHead, worktreeStatus] = yield* Effect.all([
+      gitWorkflow.resolveCommit({
+        cwd: input.run.orchestratorWorktreePath,
+        ref: input.directive.commitSha,
+      }),
+      gitWorkflow.resolveCommit({
+        cwd: input.run.orchestratorWorktreePath,
+        ref: state.branch,
+      }),
+      gitWorkflow.resolveCommit({ cwd: state.worktreePath, ref: "HEAD" }),
+      gitWorkflow.localStatus({ cwd: state.worktreePath }),
+    ]);
+    if (
+      reported.commitSha !== branchHead.commitSha ||
+      reported.commitSha !== worktreeHead.commitSha
+    ) {
+      return yield* new GitCommandError({
+        operation: "ImplementationWorkflowReactor.verifySuccessfulWorkerResult",
+        command: "git rev-parse",
+        cwd: state.worktreePath,
+        detail: `Worker '${state.ticketId}' reported '${reported.commitSha}', branch HEAD is '${branchHead.commitSha}', and worktree HEAD is '${worktreeHead.commitSha}'.`,
+      });
+    }
+    if (
+      !worktreeStatus.isRepo ||
+      worktreeStatus.refName !== state.branch ||
+      worktreeStatus.hasWorkingTreeChanges
+    ) {
+      return yield* new GitCommandError({
+        operation: "ImplementationWorkflowReactor.verifySuccessfulWorkerResult",
+        command: "git status",
+        cwd: state.worktreePath,
+        detail: `Worker '${state.ticketId}' must finish on branch '${state.branch}' with a clean worktree.`,
+      });
+    }
+
+    for (const dependencyTicketId of state.dependencyTicketIds) {
+      const dependency = yield* verifiedDependency({
+        run: input.run,
+        ticketId: dependencyTicketId,
+      });
+      const included = yield* gitWorkflow.isAncestor({
+        cwd: state.worktreePath,
+        ancestorRef: dependency.commitSha,
+        descendantRef: reported.commitSha,
+      });
+      if (!included) {
+        return yield* new GitCommandError({
+          operation: "ImplementationWorkflowReactor.verifySuccessfulWorkerResult",
+          command: "git merge-base --is-ancestor",
+          cwd: state.worktreePath,
+          detail: `Worker '${state.ticketId}' does not contain dependency '${dependencyTicketId}' at '${dependency.commitSha}'.`,
+        });
+      }
+    }
+
+    return { ...input.directive, commitSha: reported.commitSha };
+  });
+
+  const integrateRefs = Effect.fn("ImplementationWorkflowReactor.integrateRefs")(function* (input: {
+    readonly cwd: string;
+    readonly baseTicketId: string | null;
+    readonly baseRefName: string;
+    readonly refs: ReadonlyArray<{ readonly ticketId: string; readonly refName: string }>;
+  }) {
+    const mergedTicketIds: string[] = [];
+    for (let index = 0; index < input.refs.length; index += 1) {
+      const ref = input.refs[index];
+      if (ref === undefined) continue;
+      const result = yield* gitWorkflow.mergeRef({ cwd: input.cwd, refName: ref.refName });
+      if (result.status === "conflicted") {
+        const remaining = input.refs.slice(index + 1);
+        return {
+          baseTicketId: input.baseTicketId,
+          baseRefName: input.baseRefName,
+          mergedTicketIds,
+          conflictedTicketId: ref.ticketId,
+          conflictedRefName: ref.refName,
+          conflictedFiles: result.conflictedFiles,
+          remainingTicketIds: remaining.map((candidate) => candidate.ticketId),
+          remainingRefNames: remaining.map((candidate) => candidate.refName),
+        } satisfies BranchIntegration;
+      }
+      mergedTicketIds.push(ref.ticketId);
+    }
+    return {
+      baseTicketId: input.baseTicketId,
+      baseRefName: input.baseRefName,
+      mergedTicketIds,
+      conflictedTicketId: null,
+      conflictedRefName: null,
+      conflictedFiles: [],
+      remainingTicketIds: [],
+      remainingRefNames: [],
+    } satisfies BranchIntegration;
+  });
 
   const createWorker = Effect.fn("ImplementationWorkflowReactor.createWorker")(function* (input: {
     readonly sourceThreadId: ThreadId;
@@ -489,12 +826,56 @@ const make = Effect.gen(function* () {
     const existing = input.run.ticketStates.find((state) => state.ticketId === input.ticketId);
     if (existing === undefined || existing.status !== "ready") return input.run;
 
-    yield* gitWorkflow.createWorktree({
-      cwd: input.run.orchestratorWorktreePath,
-      refName: input.run.orchestratorBranch,
-      newRefName: plannedWorker.branch,
-      baseRefName: input.run.baseBranch,
-      path: plannedWorker.worktreePath,
+    const dependencies = yield* Effect.forEach(existing.dependencyTicketIds, (ticketId) =>
+      verifiedDependency({ run: input.run, ticketId }),
+    );
+    const baseDependency = dependencies[0];
+    const baseRefName = baseDependency?.branch ?? input.run.orchestratorBranch;
+    const worktreeStartRef = baseDependency?.commitSha ?? input.run.orchestratorBranch;
+
+    const existingWorktreeHead = yield* gitWorkflow
+      .resolveCommit({ cwd: plannedWorker.worktreePath, ref: "HEAD" })
+      .pipe(Effect.option);
+    if (Option.isSome(existingWorktreeHead)) {
+      const status = yield* gitWorkflow.localStatus({ cwd: plannedWorker.worktreePath });
+      if (!status.isRepo || status.refName !== plannedWorker.branch) {
+        return yield* new GitCommandError({
+          operation: "ImplementationWorkflowReactor.createWorker",
+          command: "git status",
+          cwd: plannedWorker.worktreePath,
+          detail: `Existing worker worktree is not on expected branch '${plannedWorker.branch}'.`,
+        });
+      }
+    } else {
+      yield* gitWorkflow.createWorktree({
+        cwd: input.run.orchestratorWorktreePath,
+        refName: worktreeStartRef,
+        newRefName: plannedWorker.branch,
+        baseRefName: input.run.baseBranch,
+        path: plannedWorker.worktreePath,
+      });
+    }
+
+    const integration = yield* integrateRefs({
+      cwd: plannedWorker.worktreePath,
+      baseTicketId: baseDependency?.ticketId ?? null,
+      baseRefName,
+      refs: dependencies.slice(1).map((dependency) => ({
+        ticketId: dependency.ticketId,
+        refName: dependency.commitSha,
+      })),
+    });
+
+    yield* appendActivity({
+      threadId: input.run.orchestratorThreadId,
+      tone: integration.conflictedTicketId === null ? "info" : "error",
+      kind: "implementation-ticket-branches-integrated",
+      summary:
+        integration.conflictedTicketId === null
+          ? `Dependencies integrated for ${input.ticketId}`
+          : `Dependency merge needs resolution for ${input.ticketId}`,
+      payload: { runId: input.run.id, ticketId: input.ticketId, ...integration },
+      createdAt: input.createdAt,
     });
 
     const workerThreadId = yield* serverThreadId("implementation-worker");
@@ -510,6 +891,14 @@ const make = Effect.gen(function* () {
       ownerUserId: input.ownerUserId,
       parentThreadId: input.run.orchestratorThreadId,
       workflowRole: "implementation-worker",
+      ...(input.orchestratorThread.workflowContext == null
+        ? {}
+        : {
+            workflowContext: {
+              ...input.orchestratorThread.workflowContext,
+              ticketScope: [input.ticketId],
+            },
+          }),
       title: `Implement ${ticket?.title ?? input.ticketId}`,
       modelSelection: input.orchestratorThread.modelSelection,
       runtimeMode: input.orchestratorThread.runtimeMode,
@@ -529,11 +918,11 @@ const make = Effect.gen(function* () {
         text: appendWorkflowSkillCommandSection(
           buildWorkerPrompt({
             run: input.run,
-            ticket,
             ticketId: input.ticketId,
             workerThreadId,
             branch: plannedWorker.branch,
             worktreePath: plannedWorker.worktreePath,
+            integration,
           }),
           WORKFLOW_PROMPT_IDS.implementationTddCodex,
         ),
@@ -542,6 +931,21 @@ const make = Effect.gen(function* () {
       workflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
       runtimeMode: input.orchestratorThread.runtimeMode,
       interactionMode: "implementation-workflow",
+      createdAt: input.createdAt,
+    });
+
+    yield* appendActivity({
+      threadId: input.run.orchestratorThreadId,
+      tone: "info",
+      kind: "implementation-worker-started",
+      summary: `Worker started for ${input.ticketId}`,
+      payload: {
+        runId: input.run.id,
+        ticketId: input.ticketId,
+        workerThreadId,
+        branch: plannedWorker.branch,
+        worktreePath: plannedWorker.worktreePath,
+      },
       createdAt: input.createdAt,
     });
 
@@ -555,6 +959,7 @@ const make = Effect.gen(function* () {
               workerThreadId,
               branch: plannedWorker.branch,
               worktreePath: plannedWorker.worktreePath,
+              attemptCount: state.attemptCount + 1,
               updatedAt: input.createdAt,
             }
           : state,
@@ -576,18 +981,23 @@ const make = Effect.gen(function* () {
       const readyTicketIds = input.run.ticketStates
         .filter((ticketState) => ticketState.status === "ready")
         .map((ticketState) => ticketState.ticketId);
-      const startedRuns = yield* Effect.forEach(
+      const startResults = yield* Effect.forEach(
         readyTicketIds,
         (ticketId) =>
-          createWorker({
-            sourceThreadId: input.sourceThreadId,
-            orchestratorThread,
-            run: input.run,
-            ticketId,
-            ownerUserId: orchestratorThread.ownerUserId,
-            createdAt: input.createdAt,
-          }),
-        { concurrency: "unbounded" },
+          Effect.result(
+            createWorker({
+              sourceThreadId: input.sourceThreadId,
+              orchestratorThread,
+              run: input.run,
+              ticketId,
+              ownerUserId: orchestratorThread.ownerUserId,
+              createdAt: input.createdAt,
+            }),
+          ).pipe(Effect.map((result) => ({ ticketId, result }))),
+        { concurrency: 4 },
+      );
+      const startedRuns = startResults.flatMap(({ result }) =>
+        result._tag === "Success" ? [result.success] : [],
       );
       const startedStates = new Map(
         startedRuns.flatMap((run) =>
@@ -606,6 +1016,7 @@ const make = Effect.gen(function* () {
               ticketStates: input.run.ticketStates.map(
                 (state) => startedStates.get(state.ticketId) ?? state,
               ),
+              retryableFailure: null,
               updatedAt: input.createdAt,
             } satisfies OrchestrationImplementationRun);
       if (nextRun !== input.run) {
@@ -613,6 +1024,24 @@ const make = Effect.gen(function* () {
           sourceThreadId: input.sourceThreadId,
           run: nextRun,
           createdAt: input.createdAt,
+        });
+      }
+      const failedStarts = startResults.filter(({ result }) => result._tag === "Failure");
+      if (failedStarts.length > 0) {
+        return yield* blockRun({
+          sourceThreadId: input.sourceThreadId,
+          run: nextRun,
+          retryableStage: "worker-setup",
+          reasonMarkdown: [
+            "Ticket worker setup failed.",
+            "",
+            ...failedStarts.map(({ ticketId, result }) =>
+              result._tag === "Failure"
+                ? `- ${ticketId}: ${errorDetail(result.failure)}`
+                : `- ${ticketId}: unknown setup failure`,
+            ),
+          ].join("\n"),
+          updatedAt: input.createdAt,
         });
       }
       return nextRun;
@@ -623,24 +1052,42 @@ const make = Effect.gen(function* () {
     function* (input: {
       readonly sourceThreadId: ThreadId;
       readonly run: OrchestrationImplementationRun;
+      readonly integration: BranchIntegration;
       readonly createdAt: string;
     }) {
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
       const orchestratorThread = findThread(readModel, input.run.orchestratorThreadId);
       if (orchestratorThread === null) return;
+      const activeValidator =
+        input.run.activeValidatorThreadId === null
+          ? undefined
+          : readModel.threads.find(
+              (thread) =>
+                thread.id === input.run.activeValidatorThreadId && thread.deletedAt === null,
+            );
+      if (activeValidator !== undefined) return;
 
-      const existingValidator = readModel.threads.find(
-        (thread) =>
-          thread.parentThreadId === input.run.orchestratorThreadId &&
-          thread.workflowRole === "implementation-validator" &&
-          thread.deletedAt === null,
-      );
-      if (existingValidator?.latestTurn?.state === "running") return;
-
-      const validatorThreadId = yield* serverThreadId("implementation-validator");
+      const validatorThreadId =
+        input.run.activeValidatorThreadId ?? (yield* serverThreadId("implementation-validator"));
+      const validationHead = yield* gitWorkflow.resolveCommit({
+        cwd: input.run.orchestratorWorktreePath,
+        ref: "HEAD",
+      });
       const validatingRun: OrchestrationImplementationRun = {
         ...input.run,
         status: "validating",
+        activeValidationHeadSha: validationHead.commitSha,
+        activeValidatorThreadId: validatorThreadId,
+        mergeGateAttemptCount: input.run.mergeGateAttemptCount + 1,
+        validatedHeadSha: null,
+        devReviewedHeadSha: null,
+        activeDevReviewHeadSha: null,
+        activeDevReviewThreadId: null,
+        codeReviewedHeadSha: null,
+        activeCodeReviewHeadSha: null,
+        activeCodeReviewThreadId: null,
+        changeRequest: null,
+        changeRequestFailure: null,
         updatedAt: input.createdAt,
       };
       yield* updateRun({
@@ -674,7 +1121,7 @@ const make = Effect.gen(function* () {
           messageId: yield* serverMessageId("implementation-validator"),
           role: "user",
           text: appendWorkflowSkillCommandSection(
-            buildMergeGatePrompt({ run: input.run }),
+            buildMergeGatePrompt({ run: input.run, integration: input.integration }),
             WORKFLOW_PROMPT_IDS.implementationMergeGateCodex,
           ),
           attachments: [],
@@ -682,6 +1129,117 @@ const make = Effect.gen(function* () {
         workflowPromptId: WORKFLOW_PROMPT_IDS.implementationMergeGateCodex,
         runtimeMode: orchestratorThread.runtimeMode,
         interactionMode: "implementation-workflow",
+        createdAt: input.createdAt,
+      });
+
+      yield* appendActivity({
+        threadId: input.run.orchestratorThreadId,
+        tone: "info",
+        kind: "implementation-merge-gate-started",
+        summary: "Merge gate started",
+        payload: { runId: input.run.id, validatorThreadId },
+        createdAt: input.createdAt,
+      });
+    },
+  );
+
+  const verifyIntegratedWorkerCommits = Effect.fn(
+    "ImplementationWorkflowReactor.verifyIntegratedWorkerCommits",
+  )(function* (run: OrchestrationImplementationRun) {
+    const head = yield* gitWorkflow.resolveCommit({
+      cwd: run.orchestratorWorktreePath,
+      ref: "HEAD",
+    });
+    for (const state of run.ticketStates) {
+      if (state.status !== "succeeded" || state.workerResult?.status !== "succeeded") {
+        return yield* new GitCommandError({
+          operation: "ImplementationWorkflowReactor.verifyIntegratedWorkerCommits",
+          command: "git merge-base --is-ancestor",
+          cwd: run.orchestratorWorktreePath,
+          detail: `Ticket '${state.ticketId}' has no accepted worker commit.`,
+        });
+      }
+      const accepted = yield* verifiedDependency({ run, ticketId: state.ticketId });
+      const integrated = yield* gitWorkflow.isAncestor({
+        cwd: run.orchestratorWorktreePath,
+        ancestorRef: accepted.commitSha,
+        descendantRef: head.commitSha,
+      });
+      if (!integrated) {
+        return yield* new GitCommandError({
+          operation: "ImplementationWorkflowReactor.verifyIntegratedWorkerCommits",
+          command: "git merge-base --is-ancestor",
+          cwd: run.orchestratorWorktreePath,
+          detail: `Integrated HEAD '${head.commitSha}' does not contain ticket '${state.ticketId}' at '${accepted.commitSha}'.`,
+        });
+      }
+    }
+    return head.commitSha;
+  });
+
+  const integrateCompletedRun = Effect.fn("ImplementationWorkflowReactor.integrateCompletedRun")(
+    function* (input: {
+      readonly sourceThreadId: ThreadId;
+      readonly run: OrchestrationImplementationRun;
+      readonly createdAt: string;
+    }) {
+      const integratingRun: OrchestrationImplementationRun = {
+        ...input.run,
+        status: "integrating",
+        updatedAt: input.createdAt,
+      };
+      yield* updateRun({
+        sourceThreadId: input.sourceThreadId,
+        run: integratingRun,
+        createdAt: input.createdAt,
+      });
+
+      const terminalIds = terminalLineageTicketIds(integratingRun);
+      const terminalBranches = yield* Effect.forEach(terminalIds, (ticketId) =>
+        verifiedDependency({ run: integratingRun, ticketId }),
+      );
+      const integration = yield* integrateRefs({
+        cwd: integratingRun.orchestratorWorktreePath,
+        baseTicketId: null,
+        baseRefName: integratingRun.orchestratorBranch,
+        refs: terminalBranches.map((terminal) => ({
+          ticketId: terminal.ticketId,
+          refName: terminal.commitSha,
+        })),
+      });
+
+      yield* appendActivity({
+        threadId: integratingRun.orchestratorThreadId,
+        tone: integration.conflictedTicketId === null ? "info" : "error",
+        kind: "implementation-terminal-branches-integrated",
+        summary:
+          integration.conflictedTicketId === null
+            ? "Terminal worker branches integrated"
+            : "Terminal branch merge needs resolution",
+        payload: { runId: integratingRun.id, terminalTicketIds: terminalIds, ...integration },
+        createdAt: input.createdAt,
+      });
+
+      const integrationHeadSha =
+        integration.conflictedTicketId === null
+          ? yield* verifyIntegratedWorkerCommits(integratingRun)
+          : null;
+      const integratedRun: OrchestrationImplementationRun = {
+        ...integratingRun,
+        integrationHeadSha,
+        retryableFailure: null,
+        updatedAt: input.createdAt,
+      };
+      yield* updateRun({
+        sourceThreadId: input.sourceThreadId,
+        run: integratedRun,
+        createdAt: input.createdAt,
+      });
+
+      yield* startMergeGate({
+        sourceThreadId: input.sourceThreadId,
+        run: integratedRun,
+        integration,
         createdAt: input.createdAt,
       });
     },
@@ -696,6 +1254,11 @@ const make = Effect.gen(function* () {
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
       const orchestratorThread = findThread(readModel, input.run.orchestratorThreadId);
       if (orchestratorThread === null) return;
+      const artifactSourceThread = findThread(readModel, input.sourceThreadId);
+      const artifactMarkdown =
+        input.run.artifactSource === "proposed-plan" && artifactSourceThread !== null
+          ? fastFeatureArtifactMarkdown({ run: input.run, sourceThread: artifactSourceThread })
+          : undefined;
 
       const ensuringRun: OrchestrationImplementationRun = {
         ...input.run,
@@ -708,58 +1271,88 @@ const make = Effect.gen(function* () {
         },
         updatedAt: input.createdAt,
       };
-      yield* updateRun({
-        sourceThreadId: input.sourceThreadId,
-        run: ensuringRun,
-        createdAt: input.createdAt,
-      });
 
-      const stackResult = yield* appDevStackManager
-        .autoCreate({
-          worktreePath: input.run.orchestratorWorktreePath,
-          displayName: `Implementation ${input.run.id}`,
-          gitBranch: input.run.orchestratorBranch,
-        })
-        .pipe(Effect.result);
+      const hasResolvedFrontend =
+        input.run.appDevStack.status === "ready" && input.run.appDevStack.frontendUrl !== null;
+      const stackResult = hasResolvedFrontend
+        ? null
+        : yield* appDevStackManager
+            .autoCreate({
+              worktreePath: input.run.orchestratorWorktreePath,
+              displayName:
+                input.run.artifactSource === "proposed-plan"
+                  ? `Fast feature ${input.run.id}`
+                  : `Implementation ${input.run.id}`,
+              gitBranch: input.run.orchestratorBranch,
+            })
+            .pipe(Effect.result);
 
-      if (stackResult._tag === "Failure") {
-        const failedRun: OrchestrationImplementationRun = {
-          ...ensuringRun,
-          status: "needs-human-attention",
-          appDevStack: {
-            ...ensuringRun.appDevStack,
-            status: "failed",
-            lastErrorMarkdown: errorDetail(stackResult.failure),
-            updatedAt: input.createdAt,
-          },
-          updatedAt: input.createdAt,
-        };
-        yield* updateRun({
+      const stackFailureDetail =
+        stackResult?._tag === "Failure" ? errorDetail(stackResult.failure) : null;
+      const stack = stackResult?._tag === "Success" ? stackResult.success : null;
+      if (stackFailureDetail !== null) {
+        yield* blockRun({
           sourceThreadId: input.sourceThreadId,
-          run: failedRun,
-          createdAt: input.createdAt,
+          run: {
+            ...ensuringRun,
+            appDevStack: {
+              ...ensuringRun.appDevStack,
+              status: "failed",
+              lastErrorMarkdown: stackFailureDetail,
+              updatedAt: input.createdAt,
+            },
+          },
+          retryableStage: "app-dev-stack",
+          reasonMarkdown: `App dev stack failed before browser Dev Review: ${stackFailureDetail}`,
+          updatedAt: input.createdAt,
+        });
+        return;
+      }
+      const frontendUrl = hasResolvedFrontend
+        ? input.run.appDevStack.frontendUrl
+        : (stack?.frontendUrl ?? null);
+      const reviewHead = yield* gitWorkflow.resolveCommit({
+        cwd: input.run.orchestratorWorktreePath,
+        ref: "HEAD",
+      });
+      if (
+        input.run.validatedHeadSha === null ||
+        input.run.validatedHeadSha !== reviewHead.commitSha
+      ) {
+        yield* blockRun({
+          sourceThreadId: input.sourceThreadId,
+          run: input.run,
+          retryableStage: "dev-review",
+          reasonMarkdown: `Dev Review requires a merge-gate pass for current HEAD '${reviewHead.commitSha}', but the validated HEAD is '${input.run.validatedHeadSha ?? "missing"}'.`,
+          updatedAt: input.createdAt,
         });
         return;
       }
 
       const reviewId = yield* serverDevReviewId();
       const reviewThreadId = yield* serverThreadId("implementation-qa-reviewer");
-      const stack = stackResult.success;
       const reviewRun: OrchestrationImplementationRun = {
         ...ensuringRun,
-        appDevStack: {
-          status: "ready",
-          stackId: stack.stack.id,
-          stackStatus: stack.stack.status,
-          frontendUrl: stack.frontendUrl,
-          frontendServiceName: stack.frontendServiceName,
-          displayName: stack.stack.displayName,
-          lastErrorMarkdown: null,
-          requestedAt: ensuringRun.appDevStack.requestedAt || input.createdAt,
-          updatedAt: input.createdAt,
-        },
+        appDevStack: hasResolvedFrontend
+          ? input.run.appDevStack
+          : stack === null
+            ? ensuringRun.appDevStack
+            : {
+                status: "ready",
+                stackId: stack.stack.id,
+                stackStatus: stack.stack.status,
+                frontendUrl,
+                frontendServiceName: stack.frontendServiceName,
+                displayName: stack.stack.displayName,
+                lastErrorMarkdown: null,
+                requestedAt: ensuringRun.appDevStack.requestedAt || input.createdAt,
+                updatedAt: input.createdAt,
+              },
         devReviewIds: [...ensuringRun.devReviewIds, reviewId],
+        activeDevReviewHeadSha: reviewHead.commitSha,
+        activeDevReviewThreadId: reviewThreadId,
         qaAttemptCount: ensuringRun.qaAttemptCount + 1,
+        retryableFailure: null,
         updatedAt: input.createdAt,
       };
 
@@ -802,11 +1395,16 @@ const make = Effect.gen(function* () {
         sourceThreadId: input.run.orchestratorThreadId,
         reviewThreadId,
         reviewId,
+        planningTicketIds: [...input.run.planningTicketIds],
         message: {
           messageId: yield* serverMessageId("implementation-browser-review"),
           role: "user",
           text: appendWorkflowSkillCommandSection(
-            buildBrowserDevReviewPrompt({ run: input.run, frontendUrl: stack.frontendUrl }),
+            buildBrowserDevReviewPrompt({
+              run: input.run,
+              frontendUrl,
+              ...(artifactMarkdown === undefined ? {} : { artifactMarkdown }),
+            }),
             WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
           ),
           attachments: [],
@@ -814,6 +1412,21 @@ const make = Effect.gen(function* () {
         modelSelection: resolved.modelSelection,
         runtimeMode: orchestratorThread.runtimeMode,
         workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
+        createdAt: input.createdAt,
+      });
+
+      yield* appendActivity({
+        threadId: input.run.orchestratorThreadId,
+        tone: "info",
+        kind: "implementation-browser-review-started",
+        summary: `Browser dev review started (attempt ${reviewRun.qaAttemptCount})`,
+        payload: {
+          runId: input.run.id,
+          reviewId,
+          reviewThreadId,
+          attempt: reviewRun.qaAttemptCount,
+          frontendUrl,
+        },
         createdAt: input.createdAt,
       });
     },
@@ -828,17 +1441,49 @@ const make = Effect.gen(function* () {
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
       const orchestratorThread = findThread(readModel, input.run.orchestratorThreadId);
       if (orchestratorThread === null) return;
-
-      const sourceThread = findThread(readModel, input.sourceThreadId);
-      const spec =
-        orchestratorThread.planningWorkflow?.spec ?? sourceThread?.planningWorkflow?.spec ?? null;
-      const specMarkdown =
-        spec === null ? null : [`# ${spec.title}`, "", spec.summaryMarkdown].join("\n");
+      const activeReviewer =
+        input.run.activeCodeReviewThreadId === null
+          ? undefined
+          : readModel.threads.find(
+              (thread) =>
+                thread.id === input.run.activeCodeReviewThreadId && thread.deletedAt === null,
+            );
+      if (
+        activeReviewer?.session?.status === "starting" ||
+        activeReviewer?.session?.status === "running"
+      ) {
+        return;
+      }
+      const reviewHead = yield* gitWorkflow.resolveCommit({
+        cwd: input.run.orchestratorWorktreePath,
+        ref: "HEAD",
+      });
+      if (
+        input.run.devReviewedHeadSha === null ||
+        input.run.devReviewedHeadSha !== reviewHead.commitSha
+      ) {
+        yield* blockRun({
+          sourceThreadId: input.sourceThreadId,
+          run: input.run,
+          retryableStage: "dev-review",
+          reasonMarkdown: `Code Review requires a passing Dev Review for current HEAD '${reviewHead.commitSha}', but the dev-reviewed HEAD is '${input.run.devReviewedHeadSha ?? "missing"}'.`,
+          updatedAt: input.createdAt,
+        });
+        return;
+      }
+      const artifactSourceThread = findThread(readModel, input.sourceThreadId);
+      const artifactMarkdown =
+        input.run.artifactSource === "proposed-plan" && artifactSourceThread !== null
+          ? fastFeatureArtifactMarkdown({ run: input.run, sourceThread: artifactSourceThread })
+          : undefined;
 
       const reviewerThreadId = yield* serverThreadId("implementation-code-reviewer");
       const reviewingRun: OrchestrationImplementationRun = {
         ...input.run,
         status: "code-reviewing",
+        activeCodeReviewHeadSha: reviewHead.commitSha,
+        activeCodeReviewThreadId: reviewerThreadId,
+        codeReviewedHeadSha: null,
         codeReviewAttemptCount: input.run.codeReviewAttemptCount + 1,
         updatedAt: input.createdAt,
       };
@@ -873,7 +1518,10 @@ const make = Effect.gen(function* () {
           messageId: yield* serverMessageId("implementation-code-reviewer"),
           role: "user",
           text: appendWorkflowSkillCommandSection(
-            buildCodeReviewPrompt({ run: reviewingRun, specMarkdown }),
+            buildCodeReviewPrompt({
+              run: reviewingRun,
+              ...(artifactMarkdown === undefined ? {} : { artifactMarkdown }),
+            }),
             WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
           ),
           attachments: [],
@@ -881,6 +1529,19 @@ const make = Effect.gen(function* () {
         workflowPromptId: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
         runtimeMode: orchestratorThread.runtimeMode,
         interactionMode: "implementation-workflow",
+        createdAt: input.createdAt,
+      });
+
+      yield* appendActivity({
+        threadId: input.run.orchestratorThreadId,
+        tone: "info",
+        kind: "implementation-code-review-started",
+        summary: `Code review started (cycle ${reviewingRun.codeReviewAttemptCount})`,
+        payload: {
+          runId: input.run.id,
+          reviewerThreadId,
+          cycle: reviewingRun.codeReviewAttemptCount,
+        },
         createdAt: input.createdAt,
       });
     },
@@ -892,12 +1553,59 @@ const make = Effect.gen(function* () {
       readonly run: OrchestrationImplementationRun;
       readonly createdAt: string;
     }) {
+      const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+      const sourceThread = findThread(readModel, input.sourceThreadId);
+      const sourcePlan = sourceThread?.proposedPlans.find(
+        (plan) => plan.id === input.run.sourceProposedPlan?.planId,
+      );
+      const commitTitle =
+        input.run.artifactSource === "proposed-plan"
+          ? (proposedPlanTitle(sourcePlan?.planMarkdown ?? "") ?? "Fast feature")
+          : `Implement ${input.run.specId}`;
+      const expectedHeadSha = input.run.codeReviewedHeadSha;
+      if (expectedHeadSha === null) {
+        yield* blockRun({
+          sourceThreadId: input.sourceThreadId,
+          run: input.run,
+          retryableStage: "code-review",
+          reasonMarkdown:
+            "Cannot publish a change request before Code Review accepts an exact HEAD.",
+          updatedAt: input.createdAt,
+        });
+        return;
+      }
+      if (
+        input.run.validatedHeadSha !== expectedHeadSha ||
+        input.run.devReviewedHeadSha !== expectedHeadSha
+      ) {
+        yield* blockRun({
+          sourceThreadId: input.sourceThreadId,
+          run: input.run,
+          retryableStage: "code-review",
+          reasonMarkdown: `Cannot publish HEAD '${expectedHeadSha}' because merge-gate and Dev Review evidence do not both target that commit.`,
+          updatedAt: input.createdAt,
+        });
+        return;
+      }
+      const publishingRun: OrchestrationImplementationRun = {
+        ...input.run,
+        status: "publishing-change-request",
+        updatedAt: input.createdAt,
+      };
+      yield* updateRun({
+        sourceThreadId: input.sourceThreadId,
+        run: publishingRun,
+        createdAt: input.createdAt,
+      });
       const result = yield* gitWorkflow
         .createOrOpenChangeRequest({
-          cwd: input.run.orchestratorWorktreePath,
-          actionId: input.run.id,
-          threadId: input.run.orchestratorThreadId,
-          commitMessage: `Implement ${input.run.specId}`,
+          cwd: publishingRun.orchestratorWorktreePath,
+          actionId: publishingRun.id,
+          baseRefName: publishingRun.baseBranch,
+          headRefName: publishingRun.orchestratorBranch,
+          expectedHeadSha,
+          threadId: publishingRun.orchestratorThreadId,
+          commitMessage: commitTitle,
         })
         .pipe(Effect.result);
 
@@ -905,27 +1613,231 @@ const make = Effect.gen(function* () {
         yield* updateRun({
           sourceThreadId: input.sourceThreadId,
           run: {
-            ...input.run,
+            ...publishingRun,
             status: "needs-human-attention",
             changeRequestFailure: changeRequestFailure({
               detail: errorDetail(result.failure),
               failedAt: input.createdAt,
             }),
+            retryableFailure: {
+              stage: "change-request",
+              detail: errorDetail(result.failure),
+              failedAt: input.createdAt,
+              attemptCount:
+                publishingRun.retryableFailure?.stage === "change-request"
+                  ? publishingRun.retryableFailure.attemptCount + 1
+                  : 1,
+              maxAttempts: 3,
+            },
             updatedAt: input.createdAt,
+          },
+          createdAt: input.createdAt,
+        });
+        yield* appendActivity({
+          threadId: publishingRun.orchestratorThreadId,
+          tone: "error",
+          kind: "implementation-change-request-filed",
+          summary: "Change request publication failed",
+          payload: {
+            runId: publishingRun.id,
+            status: "failed",
+            detail: errorDetail(result.failure),
           },
           createdAt: input.createdAt,
         });
         return;
       }
 
-      yield* startCodeReview({
-        sourceThreadId: input.sourceThreadId,
-        run: {
-          ...input.run,
-          changeRequest: result.success,
-          changeRequestFailure: null,
-          updatedAt: input.createdAt,
+      yield* appendActivity({
+        threadId: publishingRun.orchestratorThreadId,
+        tone: "info",
+        kind: "implementation-change-request-filed",
+        summary: `Change request filed (#${result.success.number})`,
+        payload: {
+          runId: publishingRun.id,
+          status: "filed",
+          url: result.success.url,
+          number: result.success.number,
         },
+        createdAt: input.createdAt,
+      });
+
+      const completedRun: OrchestrationImplementationRun = {
+        ...publishingRun,
+        status: "completed",
+        changeRequest: result.success,
+        changeRequestFailure: null,
+        retryableFailure: null,
+        updatedAt: input.createdAt,
+      };
+      yield* updateRun({
+        sourceThreadId: input.sourceThreadId,
+        run: completedRun,
+        createdAt: input.createdAt,
+      });
+      yield* appendActivity({
+        threadId: publishingRun.orchestratorThreadId,
+        tone: "info",
+        kind: "implementation-run-completed",
+        summary: "Implementation run completed",
+        payload: { runId: publishingRun.id },
+        createdAt: input.createdAt,
+      });
+    },
+  );
+
+  const ensureFastFeatureRun = Effect.fn("ImplementationWorkflowReactor.ensureFastFeatureRun")(
+    function* (input: {
+      readonly sourceThreadId: ThreadId;
+      readonly run: OrchestrationImplementationRun;
+      readonly createdAt: string;
+    }) {
+      const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+      const sourceThread = findThread(readModel, input.sourceThreadId);
+      const implementerThread = findThread(readModel, input.run.orchestratorThreadId);
+      if (sourceThread === null || implementerThread === null) return;
+      const project = yield* projectionSnapshotQuery
+        .getProjectShellById(sourceThread.projectId)
+        .pipe(Effect.map(Option.getOrUndefined));
+      if (!project) return;
+      const sourceCwd = sourceThread.worktreePath ?? project.workspaceRoot;
+      const sourceStatus = yield* gitWorkflow.localStatus({ cwd: sourceCwd });
+      if (!sourceStatus.isRepo || sourceStatus.refName !== input.run.baseBranch) {
+        yield* blockRun({
+          sourceThreadId: input.sourceThreadId,
+          run: input.run,
+          retryableStage: "source-dirty",
+          reasonMarkdown: `The source worktree must be on the captured branch '${input.run.baseBranch}', but Git reports '${sourceStatus.refName ?? "detached HEAD"}'. Switch back to the captured branch, then retry.`,
+          updatedAt: input.createdAt,
+        });
+        return;
+      }
+      if (sourceStatus.hasWorkingTreeChanges) {
+        yield* blockRun({
+          sourceThreadId: input.sourceThreadId,
+          run: input.run,
+          retryableStage: "source-dirty",
+          reasonMarkdown:
+            "The source worktree has modified, staged, or untracked files. Commit or stash them, then retry the Fast feature run.",
+          updatedAt: input.createdAt,
+        });
+        return;
+      }
+
+      const setupRun =
+        input.run.retryableFailure?.stage === "source-dirty"
+          ? yield* gitWorkflow.resolveCommit({ cwd: sourceCwd, ref: "HEAD" }).pipe(
+              Effect.map(({ commitSha }) => ({
+                ...input.run,
+                pinnedCommit: commitSha,
+                launchSummary: { ...input.run.launchSummary, pinnedCommit: commitSha },
+              })),
+            )
+          : input.run;
+
+      const existingWorktreeHead = yield* gitWorkflow
+        .resolveCommit({ cwd: setupRun.orchestratorWorktreePath, ref: "HEAD" })
+        .pipe(Effect.option);
+      if (Option.isSome(existingWorktreeHead)) {
+        const worktreeStatus = yield* gitWorkflow.localStatus({
+          cwd: setupRun.orchestratorWorktreePath,
+        });
+        if (!worktreeStatus.isRepo || worktreeStatus.refName !== setupRun.orchestratorBranch) {
+          yield* blockRun({
+            sourceThreadId: input.sourceThreadId,
+            run: setupRun,
+            retryableStage: "worktree-setup",
+            reasonMarkdown: `The existing Fast feature worktree is not on the expected branch '${setupRun.orchestratorBranch}'. Resolve or remove the conflicting worktree, then retry.`,
+            updatedAt: input.createdAt,
+          });
+          return;
+        }
+      } else {
+        yield* gitWorkflow.createWorktree({
+          cwd: sourceCwd,
+          refName: setupRun.pinnedCommit,
+          newRefName: setupRun.orchestratorBranch,
+          baseRefName: setupRun.baseBranch,
+          path: setupRun.orchestratorWorktreePath,
+        });
+      }
+
+      yield* orchestrationEngine.dispatch({
+        type: "thread.meta.update",
+        commandId: yield* serverCommandId("fast-feature-implementer-meta"),
+        threadId: setupRun.orchestratorThreadId,
+        branch: setupRun.orchestratorBranch,
+        worktreePath: setupRun.orchestratorWorktreePath,
+      });
+
+      let resumedRun: OrchestrationImplementationRun = {
+        ...setupRun,
+        status: "running",
+        retryableFailure: null,
+        updatedAt: input.createdAt,
+      };
+      if (setupRun.appDevStack.status !== "ready") {
+        const stackResult = yield* appDevStackManager
+          .autoCreate({
+            worktreePath: setupRun.orchestratorWorktreePath,
+            displayName: `Fast feature ${setupRun.id}`,
+            gitBranch: setupRun.orchestratorBranch,
+          })
+          .pipe(Effect.result);
+        resumedRun = {
+          ...resumedRun,
+          appDevStack:
+            stackResult._tag === "Success"
+              ? {
+                  status: "ready",
+                  stackId: stackResult.success.stack.id,
+                  stackStatus: stackResult.success.stack.status,
+                  frontendUrl: stackResult.success.frontendUrl,
+                  frontendServiceName: stackResult.success.frontendServiceName,
+                  displayName: stackResult.success.stack.displayName,
+                  lastErrorMarkdown: null,
+                  requestedAt: setupRun.appDevStack.requestedAt || input.createdAt,
+                  updatedAt: input.createdAt,
+                }
+              : {
+                  ...setupRun.appDevStack,
+                  status: "failed",
+                  lastErrorMarkdown: errorDetail(stackResult.failure),
+                  requestedAt: setupRun.appDevStack.requestedAt || input.createdAt,
+                  updatedAt: input.createdAt,
+                },
+        };
+      }
+      yield* updateRun({
+        sourceThreadId: input.sourceThreadId,
+        run: resumedRun,
+        createdAt: input.createdAt,
+      });
+
+      const refreshed = yield* projectionSnapshotQuery.getCommandReadModel();
+      const currentImplementer = findThread(refreshed, setupRun.orchestratorThreadId);
+      if (currentImplementer?.latestTurn?.state === "running") return;
+      const shouldStart =
+        currentImplementer?.latestTurn === null ||
+        resumedRun.fastBuildResult?.status === "failed" ||
+        resumedRun.fastBuildResult?.status === "blocked";
+      if (!shouldStart) return;
+      yield* orchestrationEngine.dispatch({
+        type: "thread.turn.start",
+        commandId: yield* serverCommandId("fast-feature-build-turn"),
+        threadId: setupRun.orchestratorThreadId,
+        message: {
+          messageId: yield* serverMessageId("fast-feature-build"),
+          role: "user",
+          text: buildFastFeaturePrompt({ run: resumedRun, sourceThread }),
+          attachments: [],
+        },
+        titleSeed: implementerThread.title,
+        runtimeMode: implementerThread.runtimeMode,
+        interactionMode: "default",
+        ...(resumedRun.sourceProposedPlan === null
+          ? {}
+          : { sourceProposedPlan: resumedRun.sourceProposedPlan }),
         createdAt: input.createdAt,
       });
     },
@@ -934,6 +1846,26 @@ const make = Effect.gen(function* () {
   const handleRunLaunched = Effect.fn("ImplementationWorkflowReactor.handleRunLaunched")(function* (
     event: Extract<ImplementationWorkflowEvent, { type: "thread.implementation-run-launched" }>,
   ) {
+    if (event.payload.run.artifactSource === "proposed-plan") {
+      yield* ensureFastFeatureRun({
+        sourceThreadId: event.payload.sourceThreadId,
+        run: event.payload.run,
+        createdAt: event.occurredAt,
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause)
+            : blockRun({
+                sourceThreadId: event.payload.sourceThreadId,
+                run: event.payload.run,
+                retryableStage: "worktree-setup",
+                reasonMarkdown: `Fast feature worktree setup failed.\n\n\`\`\`\n${Cause.pretty(cause)}\n\`\`\``,
+                updatedAt: event.occurredAt,
+              }),
+        ),
+      );
+      return;
+    }
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
     const sourceThread = findThread(readModel, event.payload.sourceThreadId);
     const orchestratorThread = findThread(readModel, event.payload.run.orchestratorThreadId);
@@ -976,6 +1908,24 @@ const make = Effect.gen(function* () {
         run: runningRun,
         createdAt: event.occurredAt,
       });
+      const ticketTitles = ticketsById(sourceThread);
+      yield* appendActivity({
+        threadId: runningRun.orchestratorThreadId,
+        tone: "info",
+        kind: "implementation-run-launched",
+        summary: `Implementation run launched with ${runningRun.ticketStates.length} ticket(s)`,
+        payload: {
+          runId: runningRun.id,
+          ticketCount: runningRun.ticketStates.length,
+          tickets: runningRun.ticketStates.map((state) => ({
+            ticketId: state.ticketId,
+            ...(ticketTitles.get(state.ticketId)?.title !== undefined
+              ? { title: ticketTitles.get(state.ticketId)?.title }
+              : {}),
+          })),
+        },
+        createdAt: event.occurredAt,
+      });
     }).pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
@@ -1008,13 +1958,50 @@ const make = Effect.gen(function* () {
       if (run === null) return;
       const sourceThreadId = findRunSourceThreadId({ readModel, run });
       if (sourceThreadId === null) return;
+      const currentState = run.ticketStates.find(
+        (state) => state.workerThreadId === event.payload.threadId,
+      );
+      if (
+        currentState === undefined ||
+        currentState.status === "succeeded" ||
+        currentState.status === "failed"
+      ) {
+        return;
+      }
+      if (
+        currentState.ticketId !== directive.ticketId ||
+        currentState.branch !== directive.branch ||
+        currentState.worktreePath !== directive.worktreePath
+      ) {
+        yield* blockRun({
+          sourceThreadId,
+          run,
+          retryableStage: "worker-execution",
+          reasonMarkdown: `Worker result identity does not match the active assignment for thread '${event.payload.threadId}'.`,
+          updatedAt: directive.reportedAt,
+        });
+        return;
+      }
+
+      yield* appendActivity({
+        threadId: run.orchestratorThreadId,
+        tone: directive.status === "failed" ? "error" : "info",
+        kind: "implementation-worker-finished",
+        summary: `Worker ${directive.ticketId} ${directive.status}`,
+        payload: {
+          runId: run.id,
+          ticketId: directive.ticketId,
+          status: directive.status,
+        },
+        createdAt: directive.reportedAt,
+      });
 
       if (directive.status === "failed") {
         const failedRun: OrchestrationImplementationRun = {
           ...run,
           status: "needs-human-attention",
           ticketStates: run.ticketStates.map((state) =>
-            state.workerThreadId === event.payload.threadId || state.ticketId === directive.ticketId
+            state.workerThreadId === event.payload.threadId
               ? {
                   ...state,
                   status: "failed" as const,
@@ -1024,28 +2011,65 @@ const make = Effect.gen(function* () {
               : state,
           ),
           workerResults: [...run.workerResults, directive],
+          retryableFailure: {
+            stage: "worker-execution",
+            detail: directive.notesMarkdown || `Worker '${directive.ticketId}' failed.`,
+            failedAt: directive.reportedAt,
+            attemptCount: (run.retryableFailure?.attemptCount ?? 0) + 1,
+            maxAttempts: 3,
+          },
           updatedAt: directive.reportedAt,
         };
         yield* updateRun({ sourceThreadId, run: failedRun, createdAt: directive.reportedAt });
         return;
       }
 
+      const acceptedDirective = yield* verifySuccessfulWorkerResult({
+        run,
+        threadId: event.payload.threadId,
+        directive,
+      }).pipe(
+        Effect.catch((error) =>
+          blockRun({
+            sourceThreadId,
+            run: {
+              ...run,
+              ticketStates: run.ticketStates.map((state) =>
+                state.workerThreadId === event.payload.threadId
+                  ? {
+                      ...state,
+                      status: "failed" as const,
+                      workerResult: directive,
+                      updatedAt: directive.reportedAt,
+                    }
+                  : state,
+              ),
+            },
+            retryableStage: "worker-execution",
+            reasonMarkdown: errorDetail(error),
+            updatedAt: directive.reportedAt,
+          }).pipe(Effect.as(null)),
+        ),
+      );
+      if (acceptedDirective === null) return;
+
       const succeededRun = markDependentsReady(
         {
           ...run,
           ticketStates: run.ticketStates.map((state) =>
-            state.workerThreadId === event.payload.threadId || state.ticketId === directive.ticketId
+            state.workerThreadId === event.payload.threadId
               ? {
                   ...state,
                   status: "succeeded" as const,
                   branch: directive.branch,
                   worktreePath: directive.worktreePath,
-                  workerResult: directive,
+                  workerResult: acceptedDirective,
                   updatedAt: directive.reportedAt,
                 }
               : state,
           ),
-          workerResults: [...run.workerResults, directive],
+          workerResults: [...run.workerResults, acceptedDirective],
+          retryableFailure: null,
           updatedAt: directive.reportedAt,
         },
         directive.reportedAt,
@@ -1053,11 +2077,22 @@ const make = Effect.gen(function* () {
 
       yield* updateRun({ sourceThreadId, run: succeededRun, createdAt: directive.reportedAt });
       if (succeededRun.ticketStates.every((state) => state.status === "succeeded")) {
-        yield* startMergeGate({
+        yield* integrateCompletedRun({
           sourceThreadId,
           run: succeededRun,
           createdAt: directive.reportedAt,
-        });
+        }).pipe(
+          Effect.catchCause((cause) => {
+            if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause);
+            return blockRun({
+              sourceThreadId,
+              run: { ...succeededRun, status: "integrating" },
+              retryableStage: "integration",
+              reasonMarkdown: `Final branch integration failed.\n\n\`\`\`\n${Cause.pretty(cause)}\n\`\`\``,
+              updatedAt: directive.reportedAt,
+            });
+          }),
+        );
         return;
       }
 
@@ -1069,6 +2104,148 @@ const make = Effect.gen(function* () {
     },
   );
 
+  const handleFastBuildResult = Effect.fn("ImplementationWorkflowReactor.handleFastBuildResult")(
+    function* (
+      event: Extract<ImplementationWorkflowEvent, { type: "thread.activity-appended" }>,
+      directive: FastBuildDirective,
+    ) {
+      const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+      const run = findRunById(readModel, directive.runId);
+      if (
+        run === null ||
+        run.artifactSource !== "proposed-plan" ||
+        run.orchestratorThreadId !== event.payload.threadId ||
+        run.fastBuildResult?.status === "succeeded"
+      ) {
+        return;
+      }
+      const sourceThreadId = findRunSourceThreadId({ readModel, run });
+      if (sourceThreadId === null) return;
+      const updatedAt = event.payload.activity.createdAt;
+      const buildResult = {
+        runId: run.id,
+        status: directive.status,
+        ...(directive.commitSha === undefined
+          ? { commitSha: null }
+          : { commitSha: directive.commitSha }),
+        validations: [...directive.validations],
+        notesMarkdown: directive.notesMarkdown,
+      } as OrchestrationImplementationRun["fastBuildResult"];
+      if (directive.status !== "succeeded" || directive.commitSha === undefined) {
+        yield* blockRun({
+          sourceThreadId,
+          run: { ...run, fastBuildResult: buildResult, updatedAt },
+          retryableStage: "build",
+          reasonMarkdown:
+            directive.notesMarkdown || `Fast feature Build reported ${directive.status}.`,
+          updatedAt,
+        });
+        return;
+      }
+      if (
+        !requiredValidationsPassed({
+          requiredCommands: run.launchSummary.validationCommands,
+          validations: directive.validations,
+        })
+      ) {
+        yield* blockRun({
+          sourceThreadId,
+          run: { ...run, fastBuildResult: buildResult, updatedAt },
+          retryableStage: "build",
+          reasonMarkdown: `Fast feature Build did not report passing results for every required validation command: ${run.launchSummary.validationCommands.join(", ")}.`,
+          updatedAt,
+        });
+        return;
+      }
+      const [head, reportedHead] = yield* Effect.all([
+        gitWorkflow.resolveCommit({
+          cwd: run.orchestratorWorktreePath,
+          ref: "HEAD",
+        }),
+        gitWorkflow.resolveCommit({
+          cwd: run.orchestratorWorktreePath,
+          ref: directive.commitSha,
+        }),
+      ]);
+      const buildWorktreeStatus = yield* gitWorkflow.localStatus({
+        cwd: run.orchestratorWorktreePath,
+      });
+      if (
+        !buildWorktreeStatus.isRepo ||
+        buildWorktreeStatus.refName !== run.orchestratorBranch ||
+        buildWorktreeStatus.hasWorkingTreeChanges
+      ) {
+        yield* blockRun({
+          sourceThreadId,
+          run: { ...run, fastBuildResult: buildResult, updatedAt },
+          retryableStage: "build",
+          reasonMarkdown: `Fast feature Build must finish with a clean worktree on branch '${run.orchestratorBranch}'. Commit all completed changes on that branch, then retry.`,
+          updatedAt,
+        });
+        return;
+      }
+      if (head.commitSha !== reportedHead.commitSha) {
+        yield* blockRun({
+          sourceThreadId,
+          run: { ...run, fastBuildResult: buildResult, updatedAt },
+          retryableStage: "build",
+          reasonMarkdown: `Fast feature Build reported commit '${reportedHead.commitSha}', but the worktree branch HEAD is '${head.commitSha}'.`,
+          updatedAt,
+        });
+        return;
+      }
+      const changedFiles = yield* gitWorkflow.listChangedFiles({
+        cwd: run.orchestratorWorktreePath,
+        baseRef: run.pinnedCommit,
+        headRef: head.commitSha,
+      });
+      const changedNativeMobileFiles = changedFiles.some(
+        (path) => path === "apps/mobile" || path.startsWith("apps/mobile/"),
+      );
+      if (
+        changedNativeMobileFiles &&
+        !requiredValidationsPassed({
+          requiredCommands: ["vp run lint:mobile"],
+          validations: directive.validations,
+        })
+      ) {
+        yield* blockRun({
+          sourceThreadId,
+          run: { ...run, fastBuildResult: buildResult, updatedAt },
+          retryableStage: "build",
+          reasonMarkdown:
+            "Fast feature Build changed native mobile files without reporting a passing `vp run lint:mobile` validation.",
+          updatedAt,
+        });
+        return;
+      }
+      const succeededRun: OrchestrationImplementationRun = {
+        ...run,
+        status: "qa-reviewing",
+        fastBuildResult: {
+          runId: run.id,
+          status: "succeeded",
+          commitSha: reportedHead.commitSha,
+          validations: [...directive.validations],
+          notesMarkdown: directive.notesMarkdown,
+        },
+        finalValidation: validationSummary(
+          directive.validations,
+          "fast feature build",
+          directive.notesMarkdown,
+          updatedAt,
+        ),
+        finalValidationResults: [...directive.validations],
+        integrationHeadSha: head.commitSha,
+        validatedHeadSha: head.commitSha,
+        retryableFailure: null,
+        updatedAt,
+      };
+      yield* updateRun({ sourceThreadId, run: succeededRun, createdAt: updatedAt });
+      yield* startBrowserReview({ sourceThreadId, run: succeededRun, createdAt: updatedAt });
+    },
+  );
+
   const handleMergeGateResult = Effect.fn("ImplementationWorkflowReactor.handleMergeGateResult")(
     function* (
       event: Extract<ImplementationWorkflowEvent, { type: "thread.activity-appended" }>,
@@ -1076,26 +2253,72 @@ const make = Effect.gen(function* () {
     ) {
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
       const run = findRunById(readModel, directive.runId);
-      if (run === null) return;
+      if (
+        run === null ||
+        run.status !== "validating" ||
+        run.activeValidatorThreadId !== event.payload.threadId
+      ) {
+        return;
+      }
       const sourceThreadId = findRunSourceThreadId({ readModel, run });
       if (sourceThreadId === null) return;
       const updatedAt = event.payload.activity.createdAt;
+      const [head, status] = yield* Effect.all([
+        gitWorkflow.resolveCommit({ cwd: run.orchestratorWorktreePath, ref: "HEAD" }),
+        gitWorkflow.localStatus({ cwd: run.orchestratorWorktreePath }),
+      ]);
+      const integrated =
+        run.artifactSource === "planning-spec"
+          ? yield* verifyIntegratedWorkerCommits(run).pipe(
+              Effect.map((integratedHead) => integratedHead === head.commitSha),
+              Effect.orElseSucceed(() => false),
+            )
+          : true;
       const finalValidation = validationSummary(
         directive.validations,
         "merge gate",
         directive.summaryMarkdown,
         updatedAt,
       );
+      const passed =
+        directive.status === "passed" &&
+        run.activeValidationHeadSha === head.commitSha &&
+        status.isRepo &&
+        status.refName === run.orchestratorBranch &&
+        !status.hasWorkingTreeChanges &&
+        integrated &&
+        requiredValidationsPassed({
+          requiredCommands: run.launchSummary.validationCommands,
+          validations: directive.validations,
+        });
 
-      if (directive.status === "failed") {
-        yield* updateRun({
+      yield* appendActivity({
+        threadId: run.orchestratorThreadId,
+        tone: passed ? "info" : "error",
+        kind: "implementation-merge-gate-finished",
+        summary: `Merge gate ${passed ? "passed" : "failed"}`,
+        payload: { runId: run.id, status: passed ? "passed" : "failed" },
+        createdAt: updatedAt,
+      });
+
+      if (!passed) {
+        yield* startFixer({
           sourceThreadId,
           run: {
             ...run,
-            status: "needs-human-attention",
             finalValidation,
+            finalValidationResults: [...directive.validations],
+            activeValidatorThreadId: null,
+            activeValidationHeadSha: null,
             updatedAt,
           },
+          status: "fixing",
+          origin: "merge-gate",
+          title: "Fix merge gate",
+          promptText: buildMergeGateFixPrompt({
+            run,
+            reportMarkdown: directive.summaryMarkdown,
+          }),
           createdAt: updatedAt,
         });
         return;
@@ -1107,6 +2330,12 @@ const make = Effect.gen(function* () {
           ...run,
           status: "qa-reviewing",
           finalValidation,
+          finalValidationResults: [...directive.validations],
+          integrationHeadSha: head.commitSha,
+          validatedHeadSha: head.commitSha,
+          activeValidationHeadSha: null,
+          activeValidatorThreadId: null,
+          retryableFailure: null,
           updatedAt,
         },
         createdAt: updatedAt,
@@ -1120,7 +2349,13 @@ const make = Effect.gen(function* () {
   ) {
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
     const run = findRunById(readModel, directive.runId);
-    if (run === null) return;
+    if (
+      run === null ||
+      (run.status !== "fixing" && run.status !== "code-review-fixing") ||
+      run.activeFixerThreadId !== event.payload.threadId
+    ) {
+      return;
+    }
     const sourceThreadId = findRunSourceThreadId({ readModel, run });
     if (sourceThreadId === null) return;
     const updatedAt = event.payload.activity.createdAt;
@@ -1135,28 +2370,117 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    if (run.status === "code-review-fixing") {
-      yield* fileChangeRequest({
+    if (
+      !requiredValidationsPassed({
+        requiredCommands: run.launchSummary.validationCommands,
+        validations: directive.validations,
+      })
+    ) {
+      yield* blockRun({
         sourceThreadId,
-        run: { ...run, updatedAt },
-        createdAt: updatedAt,
+        run,
+        reasonMarkdown: `Fix result did not include passing results for every required validation command. Required commands: ${run.launchSummary.validationCommands.join(", ")}.`,
+        updatedAt,
       });
       return;
     }
 
+    const changedFiles = yield* gitWorkflow.listChangedFiles({
+      cwd: run.orchestratorWorktreePath,
+      baseRef: run.pinnedCommit,
+      headRef: "HEAD",
+    });
+    if (
+      changedFiles.some((path) => path === "apps/mobile" || path.startsWith("apps/mobile/")) &&
+      !requiredValidationsPassed({
+        requiredCommands: ["vp run lint:mobile"],
+        validations: directive.validations,
+      })
+    ) {
+      yield* blockRun({
+        sourceThreadId,
+        run,
+        reasonMarkdown:
+          "Fix result changed native mobile files without a passing `vp run lint:mobile` validation.",
+        updatedAt,
+      });
+      return;
+    }
+
+    const latestValidation = validationSummary(
+      directive.validations,
+      "fix validation",
+      directive.notesMarkdown,
+      updatedAt,
+    );
+    const [head, status] = yield* Effect.all([
+      gitWorkflow.resolveCommit({ cwd: run.orchestratorWorktreePath, ref: "HEAD" }),
+      gitWorkflow.localStatus({ cwd: run.orchestratorWorktreePath }),
+    ]);
+    if (
+      !status.isRepo ||
+      status.refName !== run.orchestratorBranch ||
+      status.hasWorkingTreeChanges
+    ) {
+      yield* blockRun({
+        sourceThreadId,
+        run,
+        retryableStage: run.fixOrigin === "code-review" ? "code-review" : "merge-gate",
+        reasonMarkdown: "Fixer must finish with a committed, clean orchestrator worktree.",
+        updatedAt,
+      });
+      return;
+    }
+    if (directive.commitSha !== undefined) {
+      const reported = yield* gitWorkflow.resolveCommit({
+        cwd: run.orchestratorWorktreePath,
+        ref: directive.commitSha,
+      });
+      if (reported.commitSha !== head.commitSha) {
+        yield* blockRun({
+          sourceThreadId,
+          run,
+          retryableStage: run.fixOrigin === "code-review" ? "code-review" : "merge-gate",
+          reasonMarkdown: `Fixer reported '${reported.commitSha}', but orchestrator HEAD is '${head.commitSha}'.`,
+          updatedAt,
+        });
+        return;
+      }
+    }
+
     const fixedRun: OrchestrationImplementationRun = {
       ...run,
-      status: "validating",
+      status: "integrating",
+      finalValidation: latestValidation,
+      finalValidationResults: [...directive.validations],
+      integrationHeadSha: head.commitSha,
+      activeFixerThreadId: null,
+      fixOrigin: null,
+      retryableFailure: null,
       updatedAt,
     };
-    yield* updateRun({ sourceThreadId, run: fixedRun, createdAt: updatedAt });
-    yield* startMergeGate({ sourceThreadId, run: fixedRun, createdAt: updatedAt });
+    yield* startMergeGate({
+      sourceThreadId,
+      run: fixedRun,
+      integration: {
+        baseTicketId: null,
+        baseRefName: fixedRun.orchestratorBranch,
+        mergedTicketIds: [],
+        conflictedTicketId: null,
+        conflictedRefName: null,
+        conflictedFiles: [],
+        remainingTicketIds: [],
+        remainingRefNames: [],
+      },
+      createdAt: updatedAt,
+    });
   });
 
   const startFixer = Effect.fn("ImplementationWorkflowReactor.startFixer")(function* (input: {
     readonly sourceThreadId: ThreadId;
     readonly run: OrchestrationImplementationRun;
     readonly status: "fixing" | "code-review-fixing";
+    readonly origin: "merge-gate" | "dev-review" | "code-review";
     readonly title: string;
     readonly promptText: string;
     readonly createdAt: string;
@@ -1168,6 +2492,11 @@ const make = Effect.gen(function* () {
     const fixingRun: OrchestrationImplementationRun = {
       ...input.run,
       status: input.status,
+      activeFixerThreadId: fixerThreadId,
+      fixOrigin: input.origin,
+      validatedHeadSha: null,
+      devReviewedHeadSha: null,
+      codeReviewedHeadSha: null,
       updatedAt: input.createdAt,
     };
     yield* updateRun({
@@ -1211,6 +2540,20 @@ const make = Effect.gen(function* () {
       interactionMode: "implementation-workflow",
       createdAt: input.createdAt,
     });
+
+    yield* appendActivity({
+      threadId: input.run.orchestratorThreadId,
+      tone: "info",
+      kind: "implementation-fixer-started",
+      summary: input.title,
+      payload: {
+        runId: input.run.id,
+        fixerThreadId,
+        mode: input.status,
+        origin: input.origin,
+      },
+      createdAt: input.createdAt,
+    });
   });
 
   const handleCodeReviewResult = Effect.fn("ImplementationWorkflowReactor.handleCodeReviewResult")(
@@ -1220,17 +2563,54 @@ const make = Effect.gen(function* () {
     ) {
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
       const run = findRunById(readModel, directive.runId);
-      if (run === null) return;
+      if (
+        run === null ||
+        run.status !== "code-reviewing" ||
+        run.activeCodeReviewThreadId !== event.payload.threadId
+      ) {
+        return;
+      }
       const sourceThreadId = findRunSourceThreadId({ readModel, run });
       if (sourceThreadId === null) return;
       const updatedAt = event.payload.activity.createdAt;
+      const [head, status] = yield* Effect.all([
+        gitWorkflow.resolveCommit({ cwd: run.orchestratorWorktreePath, ref: "HEAD" }),
+        gitWorkflow.localStatus({ cwd: run.orchestratorWorktreePath }),
+      ]);
+      if (
+        run.activeCodeReviewHeadSha !== head.commitSha ||
+        !status.isRepo ||
+        status.refName !== run.orchestratorBranch ||
+        status.hasWorkingTreeChanges
+      ) {
+        yield* blockRun({
+          sourceThreadId,
+          run,
+          retryableStage: "code-review",
+          reasonMarkdown: `Code Review result is stale or the orchestrator worktree is not clean at reviewed HEAD '${run.activeCodeReviewHeadSha ?? "unknown"}'.`,
+          updatedAt,
+        });
+        return;
+      }
+
+      yield* appendActivity({
+        threadId: run.orchestratorThreadId,
+        tone: directive.status === "blocked" ? "error" : "info",
+        kind: "implementation-code-review-finished",
+        summary: `Code review ${directive.status}`,
+        payload: { runId: run.id, status: directive.status },
+        createdAt: updatedAt,
+      });
 
       if (directive.status === "clean") {
-        yield* updateRun({
+        yield* fileChangeRequest({
           sourceThreadId,
           run: {
             ...run,
-            status: "completed",
+            codeReviewedHeadSha: head.commitSha,
+            activeCodeReviewHeadSha: null,
+            activeCodeReviewThreadId: null,
+            latestCodeReviewReportMarkdown: directive.reportMarkdown,
             updatedAt,
           },
           createdAt: updatedAt,
@@ -1242,6 +2622,7 @@ const make = Effect.gen(function* () {
         yield* blockRun({
           sourceThreadId,
           run,
+          retryableStage: "code-review",
           reasonMarkdown: directive.reportMarkdown,
           updatedAt,
         });
@@ -1260,8 +2641,14 @@ const make = Effect.gen(function* () {
 
       yield* startFixer({
         sourceThreadId,
-        run,
+        run: {
+          ...run,
+          latestCodeReviewReportMarkdown: directive.reportMarkdown,
+          activeCodeReviewHeadSha: null,
+          activeCodeReviewThreadId: null,
+        },
         status: "code-review-fixing",
+        origin: "code-review",
         title: "Fix code review findings",
         promptText: buildCodeReviewFixPrompt({ run, reportMarkdown: directive.reportMarkdown }),
         createdAt: updatedAt,
@@ -1278,14 +2665,65 @@ const make = Effect.gen(function* () {
         event.payload.reviewId,
         event.payload.sourceThreadId,
       );
-      if (run === null) return;
+      if (
+        run === null ||
+        run.status !== "qa-reviewing" ||
+        run.devReviewIds.at(-1) !== event.payload.reviewId
+      ) {
+        return;
+      }
       const sourceThreadId = findRunSourceThreadId({ readModel, run });
       if (sourceThreadId === null) return;
-
-      if (event.payload.status === "passed") {
-        yield* fileChangeRequest({
+      const [head, status] = yield* Effect.all([
+        gitWorkflow.resolveCommit({ cwd: run.orchestratorWorktreePath, ref: "HEAD" }),
+        gitWorkflow.localStatus({ cwd: run.orchestratorWorktreePath }),
+      ]);
+      if (
+        run.activeDevReviewHeadSha !== head.commitSha ||
+        !status.isRepo ||
+        status.refName !== run.orchestratorBranch ||
+        status.hasWorkingTreeChanges
+      ) {
+        yield* blockRun({
           sourceThreadId,
           run,
+          retryableStage: "dev-review",
+          reasonMarkdown: `Dev Review result is stale or the orchestrator worktree is not clean at reviewed HEAD '${run.activeDevReviewHeadSha ?? "unknown"}'.`,
+          updatedAt: event.payload.updatedAt,
+        });
+        return;
+      }
+
+      if (
+        event.payload.status === "passed" ||
+        event.payload.status === "failed" ||
+        event.payload.status === "blocked"
+      ) {
+        yield* appendActivity({
+          threadId: run.orchestratorThreadId,
+          tone: event.payload.status === "passed" ? "info" : "error",
+          kind: "implementation-browser-review-finished",
+          summary: `Browser dev review ${event.payload.status}`,
+          payload: {
+            runId: run.id,
+            reviewId: event.payload.reviewId,
+            status: event.payload.status,
+          },
+          createdAt: event.payload.updatedAt,
+        });
+      }
+
+      if (event.payload.status === "passed") {
+        yield* startCodeReview({
+          sourceThreadId,
+          run: {
+            ...run,
+            devReviewedHeadSha: head.commitSha,
+            activeDevReviewHeadSha: null,
+            activeDevReviewThreadId: null,
+            retryableFailure: null,
+            updatedAt: event.payload.updatedAt,
+          },
           createdAt: event.payload.updatedAt,
         });
         return;
@@ -1303,14 +2741,33 @@ const make = Effect.gen(function* () {
         return;
       }
 
+      if (event.payload.status === "blocked") {
+        yield* startBrowserReview({
+          sourceThreadId,
+          run: {
+            ...run,
+            activeDevReviewHeadSha: null,
+            activeDevReviewThreadId: null,
+            updatedAt: event.payload.updatedAt,
+          },
+          createdAt: event.payload.updatedAt,
+        });
+        return;
+      }
+
       yield* startFixer({
         sourceThreadId,
-        run,
+        run: {
+          ...run,
+          activeDevReviewHeadSha: null,
+          activeDevReviewThreadId: null,
+        },
         status: "fixing",
+        origin: "dev-review",
         title: "Fix browser dev review",
         promptText: buildFixPrompt({
           run,
-          reviewMarkdown: devReviewMarkdown(event.payload.document),
+          reviewId: event.payload.reviewId,
         }),
         createdAt: event.payload.updatedAt,
       });
@@ -1341,6 +2798,142 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const resumeRetryableRun = Effect.fn("ImplementationWorkflowReactor.resumeRetryableRun")(
+    function* (input: {
+      readonly sourceThreadId: ThreadId;
+      readonly run: OrchestrationImplementationRun;
+      readonly createdAt: string;
+    }) {
+      const failure = input.run.retryableFailure;
+      if (failure === null || failure.attemptCount > failure.maxAttempts) return;
+
+      if (failure.stage === "change-request") {
+        yield* fileChangeRequest({
+          sourceThreadId: input.sourceThreadId,
+          run: input.run,
+          createdAt: input.createdAt,
+        });
+        return;
+      }
+      if (failure.stage === "integration") {
+        yield* integrateCompletedRun({
+          sourceThreadId: input.sourceThreadId,
+          run: input.run,
+          createdAt: input.createdAt,
+        });
+        return;
+      }
+      if (failure.stage === "merge-gate") {
+        yield* startMergeGate({
+          sourceThreadId: input.sourceThreadId,
+          run: {
+            ...input.run,
+            status: "integrating",
+            activeValidatorThreadId: null,
+            activeValidationHeadSha: null,
+          },
+          integration: {
+            baseTicketId: null,
+            baseRefName: input.run.orchestratorBranch,
+            mergedTicketIds: [],
+            conflictedTicketId: null,
+            conflictedRefName: null,
+            conflictedFiles: [],
+            remainingTicketIds: [],
+            remainingRefNames: [],
+          },
+          createdAt: input.createdAt,
+        });
+        return;
+      }
+      if (failure.stage === "dev-review" || failure.stage === "app-dev-stack") {
+        yield* startBrowserReview({
+          sourceThreadId: input.sourceThreadId,
+          run: {
+            ...input.run,
+            activeDevReviewThreadId: null,
+            activeDevReviewHeadSha: null,
+          },
+          createdAt: input.createdAt,
+        });
+        return;
+      }
+      if (failure.stage === "code-review") {
+        yield* startCodeReview({
+          sourceThreadId: input.sourceThreadId,
+          run: {
+            ...input.run,
+            activeCodeReviewThreadId: null,
+            activeCodeReviewHeadSha: null,
+          },
+          createdAt: input.createdAt,
+        });
+        return;
+      }
+      if (failure.stage === "worker-setup" || failure.stage === "worker-execution") {
+        const resumedRun: OrchestrationImplementationRun = {
+          ...input.run,
+          status: "running",
+          ticketStates: input.run.ticketStates.map((state) =>
+            state.status === "failed"
+              ? {
+                  ...state,
+                  status: "ready" as const,
+                  workerThreadId: null,
+                  workerResult: null,
+                  updatedAt: input.createdAt,
+                }
+              : state,
+          ),
+          updatedAt: input.createdAt,
+        };
+        yield* updateRun({
+          sourceThreadId: input.sourceThreadId,
+          run: resumedRun,
+          createdAt: input.createdAt,
+        });
+        yield* startReadyWorkers({
+          sourceThreadId: input.sourceThreadId,
+          run: resumedRun,
+          createdAt: input.createdAt,
+        });
+        return;
+      }
+      if (input.run.artifactSource === "proposed-plan") {
+        yield* ensureFastFeatureRun({
+          sourceThreadId: input.sourceThreadId,
+          run: input.run,
+          createdAt: input.createdAt,
+        });
+      }
+    },
+  );
+
+  const handleRunRetry = Effect.fn("ImplementationWorkflowReactor.handleRunRetry")(function* (
+    event: Extract<
+      ImplementationWorkflowEvent,
+      { type: "thread.implementation-run-retry-requested" }
+    >,
+  ) {
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    const run = findRunById(readModel, event.payload.run.id) ?? event.payload.run;
+    const sourceThreadId = findRunSourceThreadId({ readModel, run });
+    if (sourceThreadId === null || run.retryableFailure === null) return;
+    yield* resumeRetryableRun({ sourceThreadId, run, createdAt: event.occurredAt }).pipe(
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.failCause(cause)
+          : blockRun({
+              sourceThreadId,
+              run,
+              retryableStage: run.retryableFailure?.stage ?? "worktree-setup",
+              reasonMarkdown: `Fast feature retry failed.\n\n\`\`\`\n${Cause.pretty(cause)}\n\`\`\``,
+              updatedAt: event.occurredAt,
+            }),
+      ),
+    );
+  });
+
   const processActivity = Effect.fn("ImplementationWorkflowReactor.processActivity")(function* (
     event: Extract<ImplementationWorkflowEvent, { type: "thread.activity-appended" }>,
   ) {
@@ -1365,6 +2958,11 @@ const make = Effect.gen(function* () {
         if (directive !== null) yield* handleCodeReviewResult(event, directive);
         return;
       }
+      case "implementation-fast-build-result": {
+        const directive = asFastBuildDirective(event.payload.activity.payload);
+        if (directive !== null) yield* handleFastBuildResult(event, directive);
+        return;
+      }
       default:
         return;
     }
@@ -1386,6 +2984,9 @@ const make = Effect.gen(function* () {
       case "thread.implementation-change-request-retry-requested":
         yield* handleChangeRequestRetry(event);
         return;
+      case "thread.implementation-run-retry-requested":
+        yield* handleRunRetry(event);
+        return;
     }
   });
 
@@ -1404,6 +3005,357 @@ const make = Effect.gen(function* () {
 
   const worker = yield* makeDrainableWorker(processEventSafely);
 
+  const recoverRunStage = <A, E, R>(
+    runId: OrchestrationImplementationRun["id"],
+    stage: string,
+    effect: Effect.Effect<A, E, R>,
+  ) =>
+    effect.pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("implementation workflow run stage recovery failed", {
+          runId,
+          stage,
+          cause: Cause.pretty(cause),
+        }),
+      ),
+    );
+
+  const recoverIncompleteBrowserReviews = Effect.fn(
+    "ImplementationWorkflowReactor.recoverIncompleteBrowserReviews",
+  )(function* () {
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    const createdAt = DateTime.formatIso(yield* DateTime.now);
+    for (const run of readModel.implementationRuns) {
+      const recoverStackFailure =
+        run.artifactSource === "planning-spec" &&
+        run.status === "needs-human-attention" &&
+        run.appDevStack.status === "failed" &&
+        run.finalValidation?.status === "passed" &&
+        run.devReviewIds.length === 0;
+      const reviewThreads = readModel.threads.filter(
+        (thread) =>
+          thread.parentThreadId === run.orchestratorThreadId &&
+          thread.workflowRole === "implementation-qa-reviewer" &&
+          thread.deletedAt === null,
+      );
+      const latestReviewThread = [...reviewThreads].sort((a, b) =>
+        a.createdAt < b.createdAt ? 1 : -1,
+      )[0];
+      const recoverInterruptedReview =
+        run.status === "qa-reviewing" &&
+        run.devReviewIds.length > 0 &&
+        run.qaAttemptCount < MAX_BROWSER_REVIEW_ATTEMPTS &&
+        (latestReviewThread?.session?.status === "error" ||
+          latestReviewThread?.session?.status === "stopped");
+      if (!recoverStackFailure && !recoverInterruptedReview) continue;
+      const sourceThreadId = findRunSourceThreadId({ readModel, run });
+      if (sourceThreadId === null) continue;
+      yield* startBrowserReview({ sourceThreadId, run, createdAt }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("implementation workflow stack-failure recovery failed", {
+            runId: run.id,
+            cause: Cause.pretty(cause),
+          }),
+        ),
+      );
+    }
+  });
+
+  const recoverIncompleteIntegrations = Effect.fn(
+    "ImplementationWorkflowReactor.recoverIncompleteIntegrations",
+  )(function* () {
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    const createdAt = DateTime.formatIso(yield* DateTime.now);
+    for (const run of readModel.implementationRuns) {
+      if (
+        run.artifactSource !== "planning-spec" ||
+        (run.status !== "running" && run.status !== "integrating" && run.status !== "validating") ||
+        !run.ticketStates.every((state) => state.status === "succeeded")
+      ) {
+        continue;
+      }
+      const hasValidator = readModel.threads.some(
+        (thread) =>
+          thread.parentThreadId === run.orchestratorThreadId &&
+          thread.workflowRole === "implementation-validator" &&
+          thread.deletedAt === null,
+      );
+      if (hasValidator) continue;
+      const sourceThreadId = findRunSourceThreadId({ readModel, run });
+      if (sourceThreadId === null) continue;
+      yield* integrateCompletedRun({ sourceThreadId, run, createdAt }).pipe(
+        Effect.catchCause((cause) => {
+          if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause);
+          return blockRun({
+            sourceThreadId,
+            run: { ...run, status: "integrating" },
+            retryableStage: "integration",
+            reasonMarkdown: `Final branch integration recovery failed.\n\n\`\`\`\n${Cause.pretty(cause)}\n\`\`\``,
+            updatedAt: createdAt,
+          });
+        }),
+      );
+    }
+  });
+
+  const recoverIncompleteStages = Effect.fn(
+    "ImplementationWorkflowReactor.recoverIncompleteStages",
+  )(function* () {
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    const createdAt = DateTime.formatIso(yield* DateTime.now);
+    for (const run of readModel.implementationRuns) {
+      const sourceThreadId = findRunSourceThreadId({ readModel, run });
+      if (sourceThreadId === null) continue;
+      const childThreads = readModel.threads.filter(
+        (thread) => thread.parentThreadId === run.orchestratorThreadId && thread.deletedAt === null,
+      );
+      const hasActiveChild = (input: {
+        readonly threadId: ThreadId | null;
+        readonly role:
+          | "implementation-validator"
+          | "implementation-qa-reviewer"
+          | "implementation-code-reviewer"
+          | "implementation-fixer";
+      }) => {
+        const matches = childThreads.filter(
+          (thread) =>
+            thread.workflowRole === input.role &&
+            (input.threadId === null || thread.id === input.threadId),
+        );
+        return matches.some(
+          (thread) => thread.session?.status === "starting" || thread.session?.status === "running",
+        );
+      };
+
+      if (
+        run.artifactSource === "planning-spec" &&
+        run.status === "needs-human-attention" &&
+        run.retryableFailure === null &&
+        run.ticketStates.some((state) => state.status === "ready") &&
+        run.ticketStates.every((state) => state.status === "ready" || state.status === "succeeded")
+      ) {
+        const completedDependenciesStillMatch = yield* Effect.forEach(
+          run.ticketStates.filter((state) => state.status === "succeeded"),
+          (state) => verifiedDependency({ run, ticketId: state.ticketId }),
+          { concurrency: 4, discard: true },
+        ).pipe(Effect.result);
+        if (completedDependenciesStillMatch._tag === "Success") {
+          const resumedRun: OrchestrationImplementationRun = {
+            ...run,
+            status: "running",
+            updatedAt: createdAt,
+          };
+          yield* recoverRunStage(
+            run.id,
+            "legacy-worker-setup",
+            updateRun({ sourceThreadId, run: resumedRun, createdAt }).pipe(
+              Effect.andThen(startReadyWorkers({ sourceThreadId, run: resumedRun, createdAt })),
+            ),
+          );
+          continue;
+        }
+      }
+
+      if (run.artifactSource === "planning-spec" && run.status === "running") {
+        const interruptedWorkerIds = new Set(
+          run.ticketStates
+            .filter((state) => {
+              if (state.status !== "running" || state.workerThreadId === null) return false;
+              const thread = readModel.threads.find(
+                (candidate) => candidate.id === state.workerThreadId,
+              );
+              const resultAlreadyReported = thread?.activities.some(
+                (activity) => activity.kind === "implementation-worker-result",
+              );
+              return (
+                !resultAlreadyReported &&
+                thread?.session?.status !== "starting" &&
+                thread?.session?.status !== "running"
+              );
+            })
+            .map((state) => state.ticketId),
+        );
+        if (interruptedWorkerIds.size > 0) {
+          const resumedRun: OrchestrationImplementationRun = {
+            ...run,
+            ticketStates: run.ticketStates.map((state) =>
+              interruptedWorkerIds.has(state.ticketId)
+                ? {
+                    ...state,
+                    status: "ready" as const,
+                    workerThreadId: null,
+                    workerResult: null,
+                    updatedAt: createdAt,
+                  }
+                : state,
+            ),
+            updatedAt: createdAt,
+          };
+          yield* recoverRunStage(
+            run.id,
+            "interrupted-worker",
+            updateRun({ sourceThreadId, run: resumedRun, createdAt }).pipe(
+              Effect.andThen(startReadyWorkers({ sourceThreadId, run: resumedRun, createdAt })),
+            ),
+          );
+          continue;
+        }
+      }
+
+      if (
+        run.artifactSource === "planning-spec" &&
+        run.status === "running" &&
+        run.ticketStates.some((state) => state.status === "ready")
+      ) {
+        yield* recoverRunStage(
+          run.id,
+          "worker-setup",
+          startReadyWorkers({ sourceThreadId, run, createdAt }),
+        );
+        continue;
+      }
+      if (
+        run.status === "validating" &&
+        !hasActiveChild({
+          threadId: run.activeValidatorThreadId,
+          role: "implementation-validator",
+        })
+      ) {
+        yield* recoverRunStage(
+          run.id,
+          "merge-gate",
+          startMergeGate({
+            sourceThreadId,
+            run: { ...run, activeValidatorThreadId: null },
+            integration: {
+              baseTicketId: null,
+              baseRefName: run.orchestratorBranch,
+              mergedTicketIds: [],
+              conflictedTicketId: null,
+              conflictedRefName: null,
+              conflictedFiles: [],
+              remainingTicketIds: [],
+              remainingRefNames: [],
+            },
+            createdAt,
+          }),
+        );
+        continue;
+      }
+      if (
+        run.status === "qa-reviewing" &&
+        !hasActiveChild({
+          threadId: run.activeDevReviewThreadId,
+          role: "implementation-qa-reviewer",
+        })
+      ) {
+        yield* startBrowserReview({
+          sourceThreadId,
+          run: { ...run, activeDevReviewThreadId: null, activeDevReviewHeadSha: null },
+          createdAt,
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("implementation workflow run stage recovery failed", {
+              runId: run.id,
+              stage: "dev-review",
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        );
+        continue;
+      }
+      if (
+        run.status === "code-reviewing" &&
+        !hasActiveChild({
+          threadId: run.activeCodeReviewThreadId,
+          role: "implementation-code-reviewer",
+        })
+      ) {
+        yield* recoverRunStage(
+          run.id,
+          "code-review",
+          startCodeReview({
+            sourceThreadId,
+            run: { ...run, activeCodeReviewThreadId: null, activeCodeReviewHeadSha: null },
+            createdAt,
+          }),
+        );
+        continue;
+      }
+      if (
+        (run.status === "fixing" || run.status === "code-review-fixing") &&
+        !hasActiveChild({ threadId: run.activeFixerThreadId, role: "implementation-fixer" })
+      ) {
+        const origin = run.fixOrigin ?? (run.status === "fixing" ? "dev-review" : "code-review");
+        const reviewId = run.devReviewIds.at(-1);
+        yield* recoverRunStage(
+          run.id,
+          "fixer",
+          startFixer({
+            sourceThreadId,
+            run: { ...run, activeFixerThreadId: null },
+            status: run.status,
+            origin,
+            title:
+              origin === "merge-gate"
+                ? "Fix merge gate failures"
+                : origin === "dev-review"
+                  ? "Fix browser dev review"
+                  : "Fix code review findings",
+            promptText:
+              origin === "merge-gate"
+                ? buildMergeGateFixPrompt({
+                    run,
+                    reportMarkdown: "The previous merge-gate fixer was interrupted.",
+                  })
+                : origin === "dev-review" && reviewId !== undefined
+                  ? buildFixPrompt({ run, reviewId: DevReviewId.make(reviewId) })
+                  : buildCodeReviewFixPrompt({
+                      run,
+                      reportMarkdown:
+                        run.latestCodeReviewReportMarkdown ??
+                        "The previous code-review fixer was interrupted.",
+                    }),
+            createdAt,
+          }),
+        );
+        continue;
+      }
+      if (run.status === "publishing-change-request") {
+        yield* recoverRunStage(
+          run.id,
+          "change-request",
+          fileChangeRequest({ sourceThreadId, run, createdAt }),
+        );
+      }
+    }
+  });
+
+  const recoverRetryableRuns = Effect.fn("ImplementationWorkflowReactor.recoverRetryableRuns")(
+    function* () {
+      const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+      const createdAt = DateTime.formatIso(yield* DateTime.now);
+      for (const run of readModel.implementationRuns) {
+        if (
+          run.status !== "needs-human-attention" ||
+          run.retryableFailure === null ||
+          run.retryableFailure.attemptCount > run.retryableFailure.maxAttempts
+        ) {
+          continue;
+        }
+        const sourceThreadId = findRunSourceThreadId({ readModel, run });
+        if (sourceThreadId === null) continue;
+        yield* orchestrationEngine.dispatch({
+          type: "thread.implementation-run.retry",
+          commandId: yield* serverCommandId("implementation-auto-retry"),
+          threadId: sourceThreadId,
+          runId: run.id,
+          createdAt,
+        });
+      }
+    },
+  );
+
   const start: ImplementationWorkflowReactorShape["start"] = Effect.fn("start")(function* () {
     yield* Effect.forkScoped(
       Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
@@ -1411,12 +3363,44 @@ const make = Effect.gen(function* () {
           event.type !== "thread.implementation-run-launched" &&
           event.type !== "thread.activity-appended" &&
           event.type !== "thread.dev-review-updated" &&
-          event.type !== "thread.implementation-change-request-retry-requested"
+          event.type !== "thread.implementation-change-request-retry-requested" &&
+          event.type !== "thread.implementation-run-retry-requested"
         ) {
           return Effect.void;
         }
         return worker.enqueue(event);
       }),
+    );
+    yield* recoverIncompleteIntegrations().pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("implementation workflow integration recovery failed", {
+          cause: Cause.pretty(cause),
+        }),
+      ),
+    );
+    yield* recoverIncompleteBrowserReviews().pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("implementation workflow startup recovery failed", {
+          cause: Cause.pretty(cause),
+        }),
+      ),
+    );
+    yield* recoverIncompleteStages().pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("implementation workflow stage recovery failed", {
+          cause: Cause.pretty(cause),
+        }),
+      ),
+    );
+    yield* Effect.forkScoped(
+      recoverRetryableRuns().pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("implementation workflow automatic retry sweep failed", {
+            cause: Cause.pretty(cause),
+          }),
+        ),
+        Effect.repeat(Schedule.spaced(Duration.seconds(30))),
+      ),
     );
   });
 

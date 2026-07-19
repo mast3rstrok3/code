@@ -12,7 +12,10 @@ import {
   ThreadId,
   TurnId,
   type OrchestrationImplementationRun,
+  type OrchestrationPlanningWorkflowStage,
   type OrchestrationSessionStatus,
+  type OrchestrationThreadWorkflowRole,
+  type ProviderInteractionMode,
   type ProviderSession,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
@@ -36,6 +39,7 @@ import * as ProviderSessionRuntime from "../../persistence/ProviderSessionRuntim
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
+import { WORKFLOW_PROMPT_IDS } from "../../provider/WorkflowPromptRegistry.ts";
 import { ProviderSessionDirectory } from "../../provider/Services/ProviderSessionDirectory.ts";
 import { ProviderSessionDirectoryLive } from "../../provider/Layers/ProviderSessionDirectory.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
@@ -45,6 +49,7 @@ import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import {
   makeStaleTurnReconcilerLive,
+  STALE_TURN_RESUME_ACTIVITY_KIND,
   type StaleTurnReconcilerLiveOptions,
 } from "./StaleTurnReconciler.ts";
 import {
@@ -67,6 +72,8 @@ import {
 const now = "2026-01-01T00:00:00.000Z";
 const projectId = ProjectId.make("project-stale-turn-reconciler");
 const sourceThreadId = ThreadId.make("thread-stale-turn-source");
+
+const RESUME_MESSAGE_MARKER = "interrupted by a server restart";
 
 interface ReconcilerSystem {
   readonly engine: OrchestrationEngineShape;
@@ -131,6 +138,8 @@ function makeTestLayer(
               refName: input.newRefName ?? "HEAD",
             },
           }),
+        resolveCommit: () => Effect.succeed({ commitSha: "def456" }),
+        mergeRef: () => Effect.succeed({ status: "merged" as const }),
         createOrOpenChangeRequest: () =>
           Effect.succeed({
             provider: "github" as const,
@@ -241,6 +250,24 @@ function sessionStatus(system: ReconcilerSystem, threadId: ThreadId) {
   return getThread(system, threadId).pipe(Effect.map((thread) => thread?.session?.status));
 }
 
+function resumeActivities(system: ReconcilerSystem, threadId: ThreadId) {
+  return getThread(system, threadId).pipe(
+    Effect.map((thread) =>
+      (thread?.activities ?? []).filter(
+        (activity) => activity.kind === STALE_TURN_RESUME_ACTIVITY_KIND,
+      ),
+    ),
+  );
+}
+
+function resumeMessages(system: ReconcilerSystem, threadId: ThreadId) {
+  return getThread(system, threadId).pipe(
+    Effect.map((thread) =>
+      (thread?.messages ?? []).filter((message) => message.text.includes(RESUME_MESSAGE_MARKER)),
+    ),
+  );
+}
+
 function setThreadSession(
   system: ReconcilerSystem,
   input: {
@@ -268,25 +295,137 @@ function setThreadSession(
   });
 }
 
-function createPlainThread(system: ReconcilerSystem, threadId: ThreadId, tag: string) {
+/**
+ * Seed a stale-turn-resumed activity as if a prior sweep had appended it. Pass
+ * `asReconcilerCommand: true` to reuse the reconciler's deterministic
+ * commandId, mimicking a crash between the activity append and the turn start.
+ */
+function seedResumeActivity(
+  system: ReconcilerSystem,
+  input: {
+    readonly threadId: ThreadId;
+    readonly interruptedTurnId: TurnId;
+    readonly tag: string;
+    readonly asReconcilerCommand?: boolean;
+  },
+) {
+  return system.engine.dispatch({
+    type: "thread.activity.append",
+    commandId:
+      input.asReconcilerCommand === true
+        ? CommandId.make(`server:stale-turn:resumed:${input.threadId}:${input.interruptedTurnId}`)
+        : commandId(`seed-resume-${input.tag}`),
+    threadId: input.threadId,
+    activity: {
+      id: eventId(`seed-resume-${input.tag}`),
+      tone: "info",
+      kind: STALE_TURN_RESUME_ACTIVITY_KIND,
+      summary: "Resumed after interrupted turn (attempt 1/2)",
+      payload: {
+        type: STALE_TURN_RESUME_ACTIVITY_KIND,
+        attempt: 1,
+        maxAttempts: 2,
+        interruptedTurnId: input.interruptedTurnId,
+        resumeMessageId: `message-stale-turn-resume-${input.threadId}-${input.interruptedTurnId}`,
+        workflowPromptId: null,
+        reason: "provider-session-lost",
+        resumedAt: now,
+      },
+      turnId: null,
+      createdAt: now,
+    },
+    createdAt: now,
+  });
+}
+
+/**
+ * Seed a fully completed prior resume: the activity AND the resume turn.start
+ * receipt under the reconciler's deterministic commandIds, exactly the state a
+ * finished resume leaves behind. Keeps later sweeps' safety-net replays
+ * no-ops, as in production.
+ */
+function seedCompletedResume(
+  system: ReconcilerSystem,
+  input: {
+    readonly threadId: ThreadId;
+    readonly interruptedTurnId: TurnId;
+    readonly tag: string;
+  },
+) {
+  return Effect.gen(function* () {
+    yield* seedResumeActivity(system, { ...input, asReconcilerCommand: true });
+    yield* system.engine.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.make(
+        `server:stale-turn:resume:${input.threadId}:${input.interruptedTurnId}`,
+      ),
+      threadId: input.threadId,
+      message: {
+        messageId: messageId(`seed-resume-turn-${input.tag}`),
+        role: "user",
+        text: "Seeded prior resume turn.",
+        attachments: [],
+      },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      createdAt: now,
+    });
+  });
+}
+
+function createThread(
+  system: ReconcilerSystem,
+  threadId: ThreadId,
+  tag: string,
+  options?: {
+    readonly workflowRole?: OrchestrationThreadWorkflowRole | null;
+    readonly interactionMode?: ProviderInteractionMode;
+    readonly parentThreadId?: ThreadId | null;
+  },
+) {
   return system.engine.dispatch({
     type: "thread.create",
     commandId: commandId(`thread-create-${tag}`),
     threadId,
     projectId,
     ownerUserId: DEFAULT_WORKSPACE_USER_ID,
-    parentThreadId: null,
-    workflowRole: null,
+    parentThreadId: options?.parentThreadId ?? null,
+    workflowRole: options?.workflowRole ?? null,
     title: `Thread ${tag}`,
     modelSelection: {
       instanceId: ProviderInstanceId.make("codex"),
       model: "gpt-5-codex",
     },
     runtimeMode: "full-access",
-    interactionMode: "default",
+    interactionMode: options?.interactionMode ?? "default",
     branch: null,
     worktreePath: null,
     createdAt: now,
+  });
+}
+
+function createPlainThread(system: ReconcilerSystem, threadId: ThreadId, tag: string) {
+  return createThread(system, threadId, tag);
+}
+
+function createPlanningOrchestratorThread(
+  system: ReconcilerSystem,
+  threadId: ThreadId,
+  tag: string,
+  stage: OrchestrationPlanningWorkflowStage,
+) {
+  return Effect.gen(function* () {
+    yield* createThread(system, threadId, tag, {
+      workflowRole: "planning-orchestrator",
+      interactionMode: "planning-workflow",
+    });
+    yield* system.engine.dispatch({
+      type: "thread.planning-workflow.stage.set",
+      commandId: commandId(`stage-set-${tag}`),
+      threadId,
+      stage,
+      createdAt: now,
+    });
   });
 }
 
@@ -347,6 +486,7 @@ function seedPlanning(system: ReconcilerSystem) {
           key: "TICKET-1",
           title: "Checkout tracer",
           bodyMarkdown: "Implement checkout tracer.",
+          plannedFileChanges: [{ path: "src/checkout.ts", action: "update" }],
           dependencyKeys: [],
         },
       ],
@@ -379,6 +519,12 @@ function launchRun(system: ReconcilerSystem) {
   });
 }
 
+function requireWorkerThreadId(run: OrchestrationImplementationRun) {
+  const workerThreadId = run.ticketStates[0]?.workerThreadId;
+  if (!workerThreadId) throw new Error("Worker was not started.");
+  return workerThreadId;
+}
+
 function appendWorkerSuccess(system: ReconcilerSystem, run: OrchestrationImplementationRun) {
   return Effect.gen(function* () {
     const state = run.ticketStates[0];
@@ -402,7 +548,12 @@ function appendWorkerSuccess(system: ReconcilerSystem, run: OrchestrationImpleme
           worktreePath: state.worktreePath,
           status: "succeeded",
           commitSha: "def456",
-          validations: [],
+          validations: ["vp check", "vp run typecheck"].map((command) => ({
+            command,
+            status: "passed" as const,
+            outputMarkdown: "ok",
+            completedAt: "2026-01-01T00:00:02.000Z",
+          })),
           notesMarkdown: "succeeded",
           reportedAt: "2026-01-01T00:00:01.000Z",
         },
@@ -435,7 +586,14 @@ function passMergeGate(system: ReconcilerSystem, run: OrchestrationImplementatio
           type: "implementation-merge-gate-result",
           runId: run.id,
           status: "passed",
-          validations: [],
+          validations: [
+            {
+              command: "vp check",
+              status: "passed",
+              outputMarkdown: "ok",
+              completedAt: "2026-01-01T00:00:02.000Z",
+            },
+          ],
           summaryMarkdown: "ok",
         },
         turnId: null,
@@ -521,6 +679,7 @@ describe("StaleTurnReconciler", () => {
           expect(thread?.session?.activeTurnId).toBeNull();
           expect(thread?.session?.lastError).toContain("stale-turn reconciler");
           expect(thread?.activities ?? []).toHaveLength(0);
+          expect(thread?.messages ?? []).toHaveLength(0);
 
           // The snapshot's latestTurn join is keyed on activeTurnId (nulled by
           // the settle), so the settled turn state is asserted on the
@@ -666,21 +825,111 @@ describe("StaleTurnReconciler", () => {
     ),
   );
 
-  it.live("fails the ticket and flips the run when a worker turn is orphaned", () =>
+  it.live("resumes an orphaned worker turn instead of failing the run", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
           const { run } = yield* launchRun(system);
-          const workerThreadId = run.ticketStates[0]?.workerThreadId;
-          if (!workerThreadId) throw new Error("Worker was not started.");
+          const workerThreadId = requireWorkerThreadId(run);
+          const turnId = TurnId.make("turn-stale-worker-resume");
+          yield* system.directory.upsert({
+            threadId: workerThreadId,
+            provider: ProviderDriverKind.make("codex"),
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            status: "running",
+            runtimeMode: "full-access",
+            resumeCursor: { opaque: "resume-worker" },
+          });
           yield* setThreadSession(system, {
             threadId: workerThreadId,
             status: "running",
-            activeTurnId: TurnId.make("turn-stale-worker"),
+            activeTurnId: turnId,
             tag: "worker-orphan",
           });
 
           yield* system.reconciler.start();
+          yield* waitUntil(
+            resumeActivities(system, workerThreadId).pipe(
+              Effect.map((activities) => activities.length === 1),
+            ),
+            "worker resume activity",
+          );
+          yield* system.reactor.drain;
+
+          const workerThread = yield* getThread(system, workerThreadId);
+          expect(workerThread?.session?.status).toBe("error");
+          expect(workerThread?.session?.activeTurnId).toBeNull();
+
+          const resumes = yield* resumeActivities(system, workerThreadId);
+          expect(resumes).toHaveLength(1);
+          expect(resumes[0]?.tone).toBe("info");
+          const payload = resumes[0]?.payload as Record<string, unknown>;
+          expect(payload["attempt"]).toBe(1);
+          expect(payload["maxAttempts"]).toBe(2);
+          expect(payload["interruptedTurnId"]).toBe(turnId);
+          expect(payload["workflowPromptId"]).toBe(WORKFLOW_PROMPT_IDS.implementationTddCodex);
+
+          const messages = yield* resumeMessages(system, workerThreadId);
+          expect(messages).toHaveLength(1);
+
+          const binding = Option.getOrUndefined(yield* system.directory.getBinding(workerThreadId));
+          expect(binding?.status).toBe("stopped");
+          expect(binding?.resumeCursor).toEqual({ opaque: "resume-worker" });
+
+          const settledRun = yield* getRun(system, run.id);
+          expect(settledRun?.status).toBe("running");
+          expect(settledRun?.ticketStates[0]?.status).toBe("running");
+          expect(settledRun?.workerResults).toHaveLength(0);
+          const workerResultActivities = (workerThread?.activities ?? []).filter(
+            (activity) => activity.kind === "implementation-worker-result",
+          );
+          expect(workerResultActivities).toHaveLength(0);
+        }),
+      { reconciler: bootOnlyOptions },
+    ),
+  );
+
+  it.live("fails the run when the worker resume budget is exhausted", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          const workerThreadId = requireWorkerThreadId(run);
+
+          yield* system.reconciler.start();
+
+          yield* setThreadSession(system, {
+            threadId: workerThreadId,
+            status: "running",
+            activeTurnId: TurnId.make("turn-stale-worker-budget-1"),
+            tag: "budget-1",
+          });
+          yield* waitUntil(
+            resumeActivities(system, workerThreadId).pipe(
+              Effect.map((activities) => activities.length === 1),
+            ),
+            "first worker resume",
+          );
+
+          yield* setThreadSession(system, {
+            threadId: workerThreadId,
+            status: "running",
+            activeTurnId: TurnId.make("turn-stale-worker-budget-2"),
+            tag: "budget-2",
+          });
+          yield* waitUntil(
+            resumeActivities(system, workerThreadId).pipe(
+              Effect.map((activities) => activities.length === 2),
+            ),
+            "second worker resume",
+          );
+
+          yield* setThreadSession(system, {
+            threadId: workerThreadId,
+            status: "running",
+            activeTurnId: TurnId.make("turn-stale-worker-budget-3"),
+            tag: "budget-3",
+          });
           yield* waitUntil(
             getRun(system, run.id).pipe(
               Effect.map((entry) => entry?.status === "needs-human-attention"),
@@ -694,20 +943,19 @@ describe("StaleTurnReconciler", () => {
           expect(settledRun?.ticketStates[0]?.status).toBe("failed");
           expect(settledRun?.workerResults).toHaveLength(1);
           expect(settledRun?.workerResults[0]?.status).toBe("failed");
-          expect(settledRun?.workerResults[0]?.branch).toBe(run.ticketStates[0]?.branch);
-          expect(yield* sessionStatus(system, workerThreadId)).toBe("error");
+          expect(yield* resumeActivities(system, workerThreadId)).toHaveLength(2);
+          expect(yield* resumeMessages(system, workerThreadId)).toHaveLength(2);
         }),
-      { reconciler: bootOnlyOptions },
+      { reconciler: { sweepIntervalMs: 100, graceMs: 0, confirmDelayMs: 0 } },
     ),
   );
 
-  it.live("does not duplicate worker failure results across repeated sweeps", () =>
+  it.live("does not duplicate resume artifacts across repeated sweeps", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
           const { run } = yield* launchRun(system);
-          const workerThreadId = run.ticketStates[0]?.workerThreadId;
-          if (!workerThreadId) throw new Error("Worker was not started.");
+          const workerThreadId = requireWorkerThreadId(run);
           const turnId = TurnId.make("turn-stale-worker-repeat");
           yield* setThreadSession(system, {
             threadId: workerThreadId,
@@ -718,8 +966,10 @@ describe("StaleTurnReconciler", () => {
 
           yield* system.reconciler.start();
           yield* waitUntil(
-            sessionStatus(system, workerThreadId).pipe(Effect.map((status) => status === "error")),
-            "worker session to settle",
+            resumeActivities(system, workerThreadId).pipe(
+              Effect.map((activities) => activities.length === 1),
+            ),
+            "worker resume activity",
           );
 
           // Re-orphan the same turn (as if the settle had been lost) and use a
@@ -747,52 +997,16 @@ describe("StaleTurnReconciler", () => {
           );
           yield* system.reactor.drain;
 
+          expect(yield* resumeActivities(system, workerThreadId)).toHaveLength(1);
+          expect(yield* resumeMessages(system, workerThreadId)).toHaveLength(1);
           const settledRun = yield* getRun(system, run.id);
-          expect(settledRun?.workerResults).toHaveLength(1);
-          const workerThread = yield* getThread(system, workerThreadId);
-          const workerResultActivities = (workerThread?.activities ?? []).filter(
-            (activity) => activity.kind === "implementation-worker-result",
-          );
-          expect(workerResultActivities).toHaveLength(1);
+          expect(settledRun?.workerResults).toHaveLength(0);
         }),
       { reconciler: { sweepIntervalMs: 100, graceMs: 0, confirmDelayMs: 0 } },
     ),
   );
 
-  it.live("settles without propagation when the ticket already succeeded", () =>
-    withSystem(
-      (system) =>
-        Effect.gen(function* () {
-          const { run } = yield* launchRun(system);
-          const workerThreadId = run.ticketStates[0]?.workerThreadId;
-          if (!workerThreadId) throw new Error("Worker was not started.");
-          yield* appendWorkerSuccess(system, run);
-
-          yield* setThreadSession(system, {
-            threadId: workerThreadId,
-            status: "running",
-            activeTurnId: TurnId.make("turn-stale-succeeded"),
-            tag: "succeeded-orphan",
-          });
-
-          yield* system.reconciler.start();
-          yield* waitUntil(
-            sessionStatus(system, workerThreadId).pipe(Effect.map((status) => status === "error")),
-            "worker session to settle",
-          );
-          yield* system.reactor.drain;
-
-          const settledRun = yield* getRun(system, run.id);
-          expect(settledRun?.status).toBe("validating");
-          expect(settledRun?.ticketStates[0]?.status).toBe("succeeded");
-          expect(settledRun?.workerResults).toHaveLength(1);
-          expect(settledRun?.workerResults[0]?.status).toBe("succeeded");
-        }),
-      { reconciler: bootOnlyOptions },
-    ),
-  );
-
-  it.live("propagates a merge-gate failure when a validator turn is orphaned", () =>
+  it.live("resumes an orphaned validator turn", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
@@ -800,6 +1014,57 @@ describe("StaleTurnReconciler", () => {
           yield* appendWorkerSuccess(system, run);
           const validator = yield* findThreadByRole(system, "implementation-validator");
           if (!validator) throw new Error("Validator missing.");
+          const turnId = TurnId.make("turn-stale-validator-resume");
+          yield* setThreadSession(system, {
+            threadId: validator.id,
+            status: "running",
+            activeTurnId: turnId,
+            tag: "validator-orphan",
+          });
+
+          yield* system.reconciler.start();
+          yield* waitUntil(
+            resumeActivities(system, validator.id).pipe(
+              Effect.map((activities) => activities.length === 1),
+            ),
+            "validator resume activity",
+          );
+          yield* system.reactor.drain;
+
+          const resumes = yield* resumeActivities(system, validator.id);
+          const payload = resumes[0]?.payload as Record<string, unknown>;
+          expect(payload["workflowPromptId"]).toBe(
+            WORKFLOW_PROMPT_IDS.implementationMergeGateCodex,
+          );
+          expect(yield* resumeMessages(system, validator.id)).toHaveLength(1);
+          expect(yield* sessionStatus(system, validator.id)).toBe("error");
+
+          const settledRun = yield* getRun(system, run.id);
+          expect(settledRun?.status).toBe("validating");
+          expect(settledRun?.finalValidation ?? null).toBeNull();
+        }),
+      { reconciler: bootOnlyOptions },
+    ),
+  );
+
+  it.live("propagates a merge-gate failure when the validator resume budget is exhausted", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          yield* appendWorkerSuccess(system, run);
+          const validator = yield* findThreadByRole(system, "implementation-validator");
+          if (!validator) throw new Error("Validator missing.");
+          yield* seedCompletedResume(system, {
+            threadId: validator.id,
+            interruptedTurnId: TurnId.make("turn-stale-validator-prior-1"),
+            tag: "validator-prior-1",
+          });
+          yield* seedCompletedResume(system, {
+            threadId: validator.id,
+            interruptedTurnId: TurnId.make("turn-stale-validator-prior-2"),
+            tag: "validator-prior-2",
+          });
           yield* setThreadSession(system, {
             threadId: validator.id,
             status: "running",
@@ -819,12 +1084,13 @@ describe("StaleTurnReconciler", () => {
           expect(settledRun?.status).toBe("needs-human-attention");
           expect(settledRun?.finalValidation?.status).toBe("failed");
           expect(yield* sessionStatus(system, validator.id)).toBe("error");
+          expect(yield* resumeActivities(system, validator.id)).toHaveLength(2);
         }),
       { reconciler: bootOnlyOptions },
     ),
   );
 
-  it.live("blocks the run when a code reviewer turn is orphaned", () =>
+  it.live("blocks the run when the code reviewer resume budget is exhausted", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
@@ -836,6 +1102,16 @@ describe("StaleTurnReconciler", () => {
           if (!reviewer) throw new Error("Code reviewer missing.");
           const runBefore = yield* getRun(system, run.id);
           expect(runBefore?.status).toBe("code-reviewing");
+          yield* seedCompletedResume(system, {
+            threadId: reviewer.id,
+            interruptedTurnId: TurnId.make("turn-stale-reviewer-prior-1"),
+            tag: "reviewer-prior-1",
+          });
+          yield* seedCompletedResume(system, {
+            threadId: reviewer.id,
+            interruptedTurnId: TurnId.make("turn-stale-reviewer-prior-2"),
+            tag: "reviewer-prior-2",
+          });
           yield* setThreadSession(system, {
             threadId: reviewer.id,
             status: "running",
@@ -857,7 +1133,7 @@ describe("StaleTurnReconciler", () => {
     ),
   );
 
-  it.live("blocks the run when a fixer turn is orphaned", () =>
+  it.live("blocks the run when the fixer resume budget is exhausted", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
@@ -892,6 +1168,16 @@ describe("StaleTurnReconciler", () => {
           if (!fixer) throw new Error("Fixer missing.");
           const runBefore = yield* getRun(system, run.id);
           expect(runBefore?.status).toBe("code-review-fixing");
+          yield* seedCompletedResume(system, {
+            threadId: fixer.id,
+            interruptedTurnId: TurnId.make("turn-stale-fixer-prior-1"),
+            tag: "fixer-prior-1",
+          });
+          yield* seedCompletedResume(system, {
+            threadId: fixer.id,
+            interruptedTurnId: TurnId.make("turn-stale-fixer-prior-2"),
+            tag: "fixer-prior-2",
+          });
           yield* setThreadSession(system, {
             threadId: fixer.id,
             status: "running",
@@ -908,6 +1194,227 @@ describe("StaleTurnReconciler", () => {
           );
 
           expect(yield* sessionStatus(system, fixer.id)).toBe("error");
+        }),
+      { reconciler: bootOnlyOptions },
+    ),
+  );
+
+  it.live("resumes a planning orchestrator mid-stage and settles it outside resumable stages", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const specThreadId = ThreadId.make("thread-stale-planning-spec");
+          const stuckThreadId = ThreadId.make("thread-stale-planning-stuck");
+          yield* seedProject(system);
+          yield* createPlanningOrchestratorThread(
+            system,
+            specThreadId,
+            "planning-spec",
+            "spec-authoring",
+          );
+          yield* createPlanningOrchestratorThread(
+            system,
+            stuckThreadId,
+            "planning-stuck",
+            "needs-human-attention",
+          );
+          yield* setThreadSession(system, {
+            threadId: specThreadId,
+            status: "running",
+            activeTurnId: TurnId.make("turn-stale-planning-spec"),
+            tag: "planning-spec-orphan",
+          });
+          yield* setThreadSession(system, {
+            threadId: stuckThreadId,
+            status: "running",
+            activeTurnId: TurnId.make("turn-stale-planning-stuck"),
+            tag: "planning-stuck-orphan",
+          });
+
+          yield* system.reconciler.start();
+          yield* waitUntil(
+            Effect.zipWith(
+              sessionStatus(system, specThreadId),
+              sessionStatus(system, stuckThreadId),
+              (spec, stuck) => spec === "error" && stuck === "error",
+            ),
+            "planning sessions to settle",
+          );
+
+          const resumes = yield* resumeActivities(system, specThreadId);
+          expect(resumes).toHaveLength(1);
+          const payload = resumes[0]?.payload as Record<string, unknown>;
+          expect(payload["workflowPromptId"]).toBe(WORKFLOW_PROMPT_IDS.planningSpecCodex);
+          expect(yield* resumeMessages(system, specThreadId)).toHaveLength(1);
+
+          expect(yield* resumeActivities(system, stuckThreadId)).toHaveLength(0);
+          const stuckThread = yield* getThread(system, stuckThreadId);
+          expect(stuckThread?.messages ?? []).toHaveLength(0);
+        }),
+      { reconciler: bootOnlyOptions },
+    ),
+  );
+
+  it.live("settles without resume artifacts when the ticket already succeeded", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          const workerThreadId = requireWorkerThreadId(run);
+          yield* appendWorkerSuccess(system, run);
+
+          yield* setThreadSession(system, {
+            threadId: workerThreadId,
+            status: "running",
+            activeTurnId: TurnId.make("turn-stale-succeeded"),
+            tag: "succeeded-orphan",
+          });
+
+          yield* system.reconciler.start();
+          yield* waitUntil(
+            sessionStatus(system, workerThreadId).pipe(Effect.map((status) => status === "error")),
+            "worker session to settle",
+          );
+          yield* system.reactor.drain;
+
+          const settledRun = yield* getRun(system, run.id);
+          expect(settledRun?.status).toBe("validating");
+          expect(settledRun?.ticketStates[0]?.status).toBe("succeeded");
+          expect(settledRun?.workerResults).toHaveLength(1);
+          expect(settledRun?.workerResults[0]?.status).toBe("succeeded");
+          expect(yield* resumeActivities(system, workerThreadId)).toHaveLength(0);
+          expect(yield* resumeMessages(system, workerThreadId)).toHaveLength(0);
+        }),
+      { reconciler: bootOnlyOptions },
+    ),
+  );
+
+  it.live("re-dispatches the resume turn when a prior resume crashed before starting it", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          const workerThreadId = requireWorkerThreadId(run);
+          const turnId = TurnId.make("turn-stale-safety-replay");
+          // Mimic a crash between the resume-activity append and the turn
+          // start: the activity exists under the reconciler's own commandId
+          // and the session is already settled, but no resume turn started.
+          yield* seedResumeActivity(system, {
+            threadId: workerThreadId,
+            interruptedTurnId: turnId,
+            tag: "safety-replay",
+            asReconcilerCommand: true,
+          });
+          yield* setThreadSession(system, {
+            threadId: workerThreadId,
+            status: "error",
+            activeTurnId: null,
+            tag: "safety-replay-settled",
+          });
+
+          yield* system.reconciler.start();
+          yield* waitUntil(
+            resumeMessages(system, workerThreadId).pipe(
+              Effect.map((messages) => messages.length === 1),
+            ),
+            "resume turn to dispatch",
+          );
+          // Let several more sweeps run to prove the dispatch is idempotent.
+          yield* Effect.sleep(Duration.millis(500));
+          yield* system.reactor.drain;
+
+          expect(yield* resumeMessages(system, workerThreadId)).toHaveLength(1);
+          expect(yield* resumeActivities(system, workerThreadId)).toHaveLength(1);
+          const settledRun = yield* getRun(system, run.id);
+          expect(settledRun?.status).toBe("running");
+          expect(settledRun?.ticketStates[0]?.status).toBe("running");
+        }),
+      { reconciler: { sweepIntervalMs: 100, graceMs: 0, confirmDelayMs: 0 } },
+    ),
+  );
+
+  it.live("propagates the failure when the safety-net resume budget is exhausted", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          const workerThreadId = requireWorkerThreadId(run);
+          yield* seedCompletedResume(system, {
+            threadId: workerThreadId,
+            interruptedTurnId: TurnId.make("turn-stale-safety-prior-1"),
+            tag: "safety-prior-1",
+          });
+          yield* seedCompletedResume(system, {
+            threadId: workerThreadId,
+            interruptedTurnId: TurnId.make("turn-stale-safety-prior-2"),
+            tag: "safety-prior-2",
+          });
+          yield* setThreadSession(system, {
+            threadId: workerThreadId,
+            status: "error",
+            activeTurnId: null,
+            tag: "safety-budget-settled",
+          });
+
+          yield* system.reconciler.start();
+          yield* waitUntil(
+            getRun(system, run.id).pipe(
+              Effect.map((entry) => entry?.status === "needs-human-attention"),
+            ),
+            "run to need human attention",
+          );
+          yield* system.reactor.drain;
+
+          const settledRun = yield* getRun(system, run.id);
+          expect(settledRun?.status).toBe("needs-human-attention");
+          expect(settledRun?.ticketStates[0]?.status).toBe("failed");
+          expect(settledRun?.workerResults).toHaveLength(1);
+          expect(settledRun?.workerResults[0]?.status).toBe("failed");
+          expect(yield* resumeActivities(system, workerThreadId)).toHaveLength(2);
+          expect(yield* resumeMessages(system, workerThreadId)).toHaveLength(0);
+        }),
+      { reconciler: { ...bootOnlyOptions, maxResumeAttempts: 1 } },
+    ),
+  );
+
+  it.live("leaves errored workflow sessions alone when the reconciler never resumed them", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          const workerThreadId = requireWorkerThreadId(run);
+          yield* setThreadSession(system, {
+            threadId: workerThreadId,
+            status: "error",
+            activeTurnId: null,
+            tag: "plain-error",
+          });
+          const sentinelThreadId = ThreadId.make("thread-stale-containment-sentinel");
+          yield* createPlainThread(system, sentinelThreadId, "containment-sentinel");
+          yield* setThreadSession(system, {
+            threadId: sentinelThreadId,
+            status: "running",
+            activeTurnId: TurnId.make("turn-stale-containment-sentinel"),
+            tag: "containment-sentinel",
+          });
+
+          yield* system.reconciler.start();
+          yield* waitUntil(
+            sessionStatus(system, sentinelThreadId).pipe(
+              Effect.map((status) => status === "error"),
+            ),
+            "sentinel session to settle",
+          );
+          yield* system.reactor.drain;
+
+          const workerThread = yield* getThread(system, workerThreadId);
+          // Untouched: the reconciler's settle would have stamped lastError.
+          expect(workerThread?.session?.lastError).toBeNull();
+          expect(yield* resumeActivities(system, workerThreadId)).toHaveLength(0);
+          expect(yield* resumeMessages(system, workerThreadId)).toHaveLength(0);
+          const settledRun = yield* getRun(system, run.id);
+          expect(settledRun?.status).toBe("running");
+          expect(settledRun?.ticketStates[0]?.status).toBe("running");
         }),
       { reconciler: bootOnlyOptions },
     ),

@@ -269,7 +269,10 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /vertical slices are correct tracer bullets/);
     NodeAssert.match(rendered, /cover the Spec's user stories/);
     NodeAssert.match(rendered, /not a horizontal layer-only task/);
-    NodeAssert.match(rendered, /Repeat review after ticket adjustments/);
+    NodeAssert.match(rendered, /call `workflow_tickets_list`/);
+    NodeAssert.match(rendered, /retrieve every ticket with `workflow_ticket_get`/);
+    NodeAssert.match(rendered, /review only the failed, reworked, or replacement tickets/);
+    NodeAssert.match(rendered, /A clean targeted pass completes ticket review/);
     NodeAssert.match(
       rendered,
       /Do not quiz the user while the ticket set still needs review corrections/,
@@ -323,7 +326,7 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /Use status "clean" only when neither axis has findings/);
   });
 
-  it("registers Product Workflow without legacy prompt aliases", () => {
+  it("registers the legacy Product prompt and all authoritative preset grills", () => {
     const contracts = listWorkflowPromptContracts();
     const product = contracts.find(
       (contract) => contract.id === WORKFLOW_PROMPT_IDS.productWorkflowCodex,
@@ -332,13 +335,28 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.ok(product);
     NodeAssert.equal(product.workflow, "product");
     NodeAssert.equal(product.stage, "intent");
-    NodeAssert.equal(product.title, "Product Workflow");
+    NodeAssert.equal(product.title, "Full feature workflow (legacy)");
     NodeAssert.deepEqual(
       contracts
         .filter((contract) => contract.workflow === "product")
-        .map((contract) => contract.stage),
-      ["intent"],
+        .map((contract) => contract.id),
+      [
+        WORKFLOW_PROMPT_IDS.productWorkflowCodex,
+        WORKFLOW_PROMPT_IDS.productFixCodex,
+        WORKFLOW_PROMPT_IDS.productFastFeatureCodex,
+        WORKFLOW_PROMPT_IDS.productFullFeatureCodex,
+      ],
     );
+    for (const id of [
+      WORKFLOW_PROMPT_IDS.productFixCodex,
+      WORKFLOW_PROMPT_IDS.productFastFeatureCodex,
+      WORKFLOW_PROMPT_IDS.productFullFeatureCodex,
+    ]) {
+      const preset = contracts.find((contract) => contract.id === id);
+      NodeAssert.ok(preset);
+      NodeAssert.doesNotMatch(preset.promptText, /Fix-or-feature classification \(hard gate\)/);
+      NodeAssert.match(preset.promptText, /Never ask whether the request is a feature or a fix/);
+    }
     // Domain-model maintenance (CONTEXT.md/ADR) is owned by the Planning
     // Workflow: the product grill stays product-only and carries no format docs.
     NodeAssert.equal(product.associatedDocs, undefined);

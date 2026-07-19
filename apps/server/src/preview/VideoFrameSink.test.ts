@@ -41,7 +41,10 @@ describe("VideoFrameSink", () => {
       const rIndex = args.indexOf("-r");
       assert.strictEqual(args[rIndex + 1], "25");
       const vfIndex = args.indexOf("-vf");
-      assert.strictEqual(args[vfIndex + 1], "pad=1282:800:0:0:gray,crop=1282:800:0:0");
+      assert.strictEqual(
+        args[vfIndex + 1],
+        "scale=1282:800:force_original_aspect_ratio=decrease,pad=1282:800:(ow-iw)/2:(oh-ih)/2:gray",
+      );
     });
   });
 

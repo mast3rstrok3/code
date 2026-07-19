@@ -121,6 +121,7 @@ export const DevReviewRecord = Schema.Struct({
   id: DevReviewId,
   sourceThreadId: ThreadId,
   reviewThreadId: ThreadId,
+  planningTicketIds: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
   sourceTurnId: Schema.NullOr(TurnId),
   status: DevReviewStatus,
   document: DevReviewDocument,

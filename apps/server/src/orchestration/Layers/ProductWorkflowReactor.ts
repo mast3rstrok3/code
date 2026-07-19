@@ -14,6 +14,10 @@ import {
   buildPlanImplementationThreadTitle,
 } from "@t3tools/shared/orchestrationPlanning";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import {
+  expectedIntentKindForWorkflowPreset,
+  isProductWorkflowRoot,
+} from "@t3tools/shared/workflowPresets";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -22,10 +26,6 @@ import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
-import {
-  appendWorkflowSkillCommandSection,
-  WORKFLOW_PROMPT_IDS,
-} from "../../provider/WorkflowPromptRegistry.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   ProductWorkflowReactor,
@@ -33,7 +33,7 @@ import {
 } from "../Services/ProductWorkflowReactor.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 
-export const MAX_PLANNING_REVIEW_CYCLE_NUMBER = 5;
+export const MAX_PLANNING_REVIEW_CYCLE_NUMBER = 10;
 
 type ProductWorkflowEvent = Extract<
   OrchestrationEvent,
@@ -46,10 +46,7 @@ type ProductWorkflowEvent = Extract<
   }
 >;
 
-const isProductWorkflowThread = (thread: {
-  readonly interactionMode: string;
-  readonly workflowRole: string | null;
-}) => thread.interactionMode === "product-workflow" && thread.workflowRole === null;
+const isProductWorkflowThread = isProductWorkflowRoot;
 
 const isProductPlanningOrchestratorThread = (thread: {
   readonly interactionMode: string;
@@ -70,12 +67,13 @@ const hasFixIntentLockedActivity = (thread: OrchestrationThread) =>
     return payload.intentKind === "fix";
   });
 
-const buildProductFixPlanPrompt = (input: {
+const buildProductLightweightPlanPrompt = (input: {
+  readonly intentKind: "fix" | "feature";
   readonly intentTitle: string;
   readonly intentSummaryMarkdown: string;
 }) =>
   [
-    `Create an implementation plan for the locked fix intent "${input.intentTitle}".`,
+    `Create an implementation plan for the locked ${input.intentKind} intent "${input.intentTitle}".`,
     "",
     "The intent is locked. Do not ask the user questions or reopen the intent.",
     "",
@@ -181,108 +179,73 @@ const make = Effect.gen(function* () {
     >,
   ) {
     if (event.payload.stage !== "ticket-review") return;
+    const thread = yield* resolveThread(event.payload.threadId);
+    if (!thread) return;
+    const planningWorkflow = thread.planningWorkflow;
+    const spec = planningWorkflow?.spec;
+    if (!spec || spec.id !== event.payload.specId) return;
     if (
-      event.type === "thread.planning-tickets-revised" &&
-      event.payload.reviewCycle !== undefined
+      planningWorkflow.stage !== "ticket-review" ||
+      planningWorkflow.reviewCycles.length >= MAX_PLANNING_REVIEW_CYCLE_NUMBER
     ) {
       return;
     }
-    const thread = yield* resolveThread(event.payload.threadId);
-    if (!thread) return;
-    const context = yield* resolveProductPlanningContext(thread);
-    if (context === null) return;
-    const spec = context.planningThread.planningWorkflow?.spec;
-    if (!spec || spec.id !== event.payload.specId) return;
 
     yield* orchestrationEngine.dispatch({
       type: "thread.planning-ticket-review.request",
       commandId: yield* serverCommandId("product-ticket-review-request"),
-      threadId: context.planningThread.id,
+      threadId: thread.id,
       specId: spec.id,
       createdAt: event.occurredAt,
     });
   });
 
-  const reviseTickets = Effect.fn("ProductWorkflowReactor.reviseTickets")(function* (input: {
-    readonly threadId: ThreadId;
-    readonly specId: string;
+  const completePlanningWithWarnings = Effect.fn(
+    "ProductWorkflowReactor.completePlanningWithWarnings",
+  )(function* (input: {
+    readonly planningThreadId: ThreadId;
+    readonly activityThreadId: ThreadId;
     readonly cycle: OrchestrationPlanningReviewCycle;
     readonly createdAt: string;
   }) {
-    const thread = yield* resolveThread(input.threadId);
-    if (!thread) return;
-    const context = yield* resolveProductPlanningContext(thread);
-    if (context === null) return;
-    const spec = context.planningThread.planningWorkflow?.spec;
-    if (!spec || spec.id !== input.specId) return;
-
-    const messageId = yield* serverMessageId("product-tickets-revision");
-    const feedback = [
-      `Revise planning tickets for Spec "${spec.title}" after failed review cycle ${input.cycle.cycleNumber}.`,
-      "",
-      "Do not ask the user questions. Apply the concrete reviewer feedback and finish with a planning-tickets-artifact JSON directive.",
-      "",
-      "Reviewer verdict:",
-      input.cycle.verdictMarkdown,
-      "",
-      "Failing ticket ids:",
-      input.cycle.failingPlanningTicketIds.length > 0
-        ? input.cycle.failingPlanningTicketIds.map((id) => `- ${id}`).join("\n")
-        : "- None specified",
-    ].join("\n");
-
-    yield* orchestrationEngine.dispatch({
-      type: "thread.turn.start",
-      commandId: yield* serverCommandId("product-tickets-revision-turn"),
-      threadId: context.planningThread.id,
-      message: {
-        messageId,
-        role: "user",
-        text: appendWorkflowSkillCommandSection(feedback, WORKFLOW_PROMPT_IDS.planningTicketsCodex),
-        attachments: [],
-      },
-      workflowPromptId: WORKFLOW_PROMPT_IDS.planningTicketsCodex,
-      runtimeMode: context.planningThread.runtimeMode,
-      interactionMode: context.planningThread.interactionMode,
-      createdAt: input.createdAt,
-    });
-  });
-
-  const blockPlanning = Effect.fn("ProductWorkflowReactor.blockPlanning")(function* (input: {
-    readonly planningThreadId: ThreadId;
-    readonly productRootThreadId: ThreadId;
-    readonly reasonMarkdown: string;
-    readonly createdAt: string;
-  }) {
+    const reasonMarkdown = `Planning ticket review reached cycle ${input.cycle.cycleNumber} without a clean full pass. Latest verdict:\n\n${input.cycle.verdictMarkdown}`;
     yield* orchestrationEngine.dispatch({
       type: "thread.planning-workflow.stage.set",
-      commandId: yield* serverCommandId("product-planning-stage-blocked"),
+      commandId: yield* serverCommandId("product-planning-stage-warnings"),
       threadId: input.planningThreadId,
-      stage: "needs-human-attention",
-      reasonMarkdown: input.reasonMarkdown,
+      stage: "completed-with-warnings",
+      reasonMarkdown,
       createdAt: input.createdAt,
     });
     yield* appendActivity({
-      threadId: input.productRootThreadId,
+      threadId: input.activityThreadId,
       tone: "error",
-      kind: "product-workflow.needs-human-attention",
-      summary: "Product Workflow needs human attention",
-      payload: { reasonMarkdown: input.reasonMarkdown },
+      kind: "planning-workflow.completed-with-warnings",
+      summary: "Planning completed with unresolved ticket review warnings",
+      payload: {
+        reasonMarkdown,
+        cycleNumber: input.cycle.cycleNumber,
+        unresolvedTicketIds: input.cycle.failingPlanningTicketIds,
+      },
       createdAt: input.createdAt,
     });
   });
 
-  const launchImplementation = Effect.fn("ProductWorkflowReactor.launchImplementation")(function* (
-    event: Extract<ProductWorkflowEvent, { type: "thread.planning-tickets-revised" }>,
-  ) {
-    const thread = yield* resolveThread(event.payload.threadId);
-    if (!thread) return;
-    const context = yield* resolveProductPlanningContext(thread);
-    if (context === null) return;
+  const launchImplementationForContext = Effect.fn(
+    "ProductWorkflowReactor.launchImplementationForContext",
+  )(function* (input: {
+    readonly context: {
+      readonly planningThread: OrchestrationThread;
+      readonly productRootThread: OrchestrationThread;
+    };
+    readonly specId: string;
+    readonly occurredAt: string;
+  }) {
+    const context = input.context;
     const workflow = context.planningThread.planningWorkflow;
     const spec = workflow?.spec ?? null;
     if (!workflow) return;
-    if (!spec || spec.id !== event.payload.specId || workflow.tickets.length === 0) return;
+    if (!spec || spec.id !== input.specId || workflow.tickets.length === 0) return;
 
     const existingRun =
       (yield* projectionSnapshotQuery.getCommandReadModel()).implementationRuns.find(
@@ -314,8 +277,46 @@ const make = Effect.gen(function* () {
       orchestratorBranch: identity.orchestratorBranch,
       orchestratorWorktreePath: identity.orchestratorWorktreePath,
       validationCommands: ["vp check", "vp run typecheck"],
-      createdAt: event.occurredAt,
+      createdAt: input.occurredAt,
     });
+  });
+
+  const launchImplementation = Effect.fn("ProductWorkflowReactor.launchImplementation")(function* (
+    event: Extract<ProductWorkflowEvent, { type: "thread.planning-tickets-revised" }>,
+  ) {
+    const thread = yield* resolveThread(event.payload.threadId);
+    if (!thread) return;
+    const context = yield* resolveProductPlanningContext(thread);
+    if (context === null) return;
+    yield* launchImplementationForContext({
+      context,
+      specId: event.payload.specId,
+      occurredAt: event.payload.revisedAt,
+    });
+  });
+
+  const reconcileImplementationLaunches = Effect.fn(
+    "ProductWorkflowReactor.reconcileImplementationLaunches",
+  )(function* () {
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    for (const planningThread of readModel.threads) {
+      if (!isProductPlanningOrchestratorThread(planningThread)) continue;
+      const workflow = planningThread.planningWorkflow;
+      if (
+        workflow?.spec === null ||
+        workflow?.spec === undefined ||
+        (workflow.stage !== "completed" && workflow.stage !== "completed-with-warnings")
+      ) {
+        continue;
+      }
+      const context = yield* resolveProductPlanningContext(planningThread);
+      if (context === null) continue;
+      yield* launchImplementationForContext({
+        context,
+        specId: workflow.spec.id,
+        occurredAt: planningThread.updatedAt,
+      });
+    }
   });
 
   const handleReviewCycle = Effect.fn("ProductWorkflowReactor.handleReviewCycle")(function* (
@@ -326,33 +327,30 @@ const make = Effect.gen(function* () {
     const thread = yield* resolveThread(event.payload.threadId);
     if (!thread) return;
     const context = yield* resolveProductPlanningContext(thread);
-    if (context === null) return;
 
-    if (cycle.status === "failed") {
-      if (cycle.cycleNumber < MAX_PLANNING_REVIEW_CYCLE_NUMBER) {
-        yield* reviseTickets({
-          threadId: context.planningThread.id,
-          specId: event.payload.specId,
-          cycle,
-          createdAt: event.payload.revisedAt,
-        });
-        return;
-      }
-      yield* blockPlanning({
-        planningThreadId: context.planningThread.id,
-        productRootThreadId: context.productRootThread.id,
-        reasonMarkdown: `Planning ticket review failed ${cycle.cycleNumber} times. Latest verdict:\n\n${cycle.verdictMarkdown}`,
-        createdAt: event.payload.revisedAt,
-      });
+    if (cycle.status === "passed" && context !== null) {
+      yield* launchImplementation(event);
       return;
     }
 
-    yield* launchImplementation(event);
+    if (cycle.cycleNumber >= MAX_PLANNING_REVIEW_CYCLE_NUMBER) {
+      yield* completePlanningWithWarnings({
+        planningThreadId: thread.id,
+        activityThreadId: context?.productRootThread.id ?? thread.id,
+        cycle,
+        createdAt: event.payload.revisedAt,
+      });
+      if (context !== null) {
+        yield* launchImplementation(event);
+      }
+      return;
+    }
   });
 
-  const launchFixPlanning = Effect.fn("ProductWorkflowReactor.launchFixPlanning")(
+  const launchLightweightPlanning = Effect.fn("ProductWorkflowReactor.launchLightweightPlanning")(
     function* (input: {
       readonly thread: OrchestrationThread;
+      readonly intentKind: "fix" | "feature";
       readonly intentTitle: string;
       readonly intentSummaryMarkdown: string;
       readonly createdAt: string;
@@ -371,7 +369,8 @@ const make = Effect.gen(function* () {
         message: {
           messageId: yield* serverMessageId("product-fix-plan"),
           role: "user",
-          text: buildProductFixPlanPrompt({
+          text: buildProductLightweightPlanPrompt({
+            intentKind: input.intentKind,
             intentTitle: input.intentTitle,
             intentSummaryMarkdown: input.intentSummaryMarkdown,
           }),
@@ -384,11 +383,25 @@ const make = Effect.gen(function* () {
       yield* appendActivity({
         threadId: input.thread.id,
         tone: "info",
-        kind: "product-fix-plan-started",
-        summary: "Fix planning started",
+        kind: input.intentKind === "fix" ? "product-fix-plan-started" : "product-fast-plan-started",
+        summary:
+          input.intentKind === "fix" ? "Fix planning started" : "Fast feature planning started",
         payload: { intentTitle: input.intentTitle },
         createdAt: input.createdAt,
       });
+    },
+  );
+
+  const hasActiveFastFeatureRun = Effect.fn("ProductWorkflowReactor.hasActiveFastFeatureRun")(
+    function* (threadId: ThreadId, planId: string) {
+      const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+      return readModel.implementationRuns.some(
+        (run) =>
+          run.artifactSource === "proposed-plan" &&
+          run.sourceProposedPlan?.threadId === threadId &&
+          run.sourceProposedPlan.planId === planId &&
+          run.status !== "canceled",
+      );
     },
   );
 
@@ -409,9 +422,25 @@ const make = Effect.gen(function* () {
       const intentSummaryMarkdown = payloadSummary.length > 0 ? payloadSummary : intentTitle;
       if (intentTitle.trim().length === 0 || intentSummaryMarkdown.trim().length === 0) return;
 
-      if (payload.intentKind === "fix") {
-        yield* launchFixPlanning({
+      const presetIntentKind = expectedIntentKindForWorkflowPreset(thread.workflowPreset);
+      const intentKind = presetIntentKind ?? payload.intentKind;
+      if (
+        thread.workflowPreset === "fix" ||
+        thread.workflowPreset === "fast-feature" ||
+        intentKind === "fix"
+      ) {
+        if (
+          thread.activities.some(
+            (activity) =>
+              activity.kind === "product-fix-plan-started" ||
+              activity.kind === "product-fast-plan-started",
+          )
+        ) {
+          return;
+        }
+        yield* launchLightweightPlanning({
           thread,
+          intentKind: intentKind === "fix" ? "fix" : "feature",
           intentTitle,
           intentSummaryMarkdown,
           createdAt: event.payload.activity.createdAt,
@@ -440,7 +469,50 @@ const make = Effect.gen(function* () {
     const thread = yield* resolveThread(event.payload.threadId);
     if (!thread) return;
     if (thread.workflowRole !== null) return;
-    if (!hasFixIntentLockedActivity(thread)) return;
+    const isFastFeature = thread.workflowPreset === "fast-feature";
+    const isFix = thread.workflowPreset === "fix" || hasFixIntentLockedActivity(thread);
+    if (!isFastFeature && !isFix) return;
+    if (isFastFeature) {
+      if (yield* hasActiveFastFeatureRun(thread.id, plan.id)) return;
+      if (thread.branch === null || thread.branch.trim().length === 0) {
+        yield* appendActivity({
+          threadId: thread.id,
+          tone: "error",
+          kind: "fast-feature.needs-human-attention",
+          summary: "Fast feature needs a named source branch",
+          payload: { planId: plan.id },
+          createdAt: event.occurredAt,
+        });
+        return;
+      }
+      const project = yield* resolveProject(thread.projectId);
+      if (!project) return;
+      const sourceCwd = thread.worktreePath ?? project.workspaceRoot;
+      const pinnedCommit = (yield* gitWorkflow.resolveCommit({ cwd: sourceCwd, ref: "HEAD" }))
+        .commitSha;
+      const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+      const identity = resolveImplementationBranchIdentity({
+        specId: plan.id,
+        specTitle: buildPlanImplementationThreadTitle(plan.planMarkdown),
+        baseBranch: thread.branch,
+        workspaceRoot: sourceCwd,
+        implementationRuns: readModel.implementationRuns,
+        branchPrefix: "fast-feature",
+      });
+      yield* orchestrationEngine.dispatch({
+        type: "thread.fast-feature-run.launch",
+        commandId: yield* serverCommandId("fast-feature-launch"),
+        threadId: thread.id,
+        proposedPlanId: plan.id,
+        baseBranch: identity.baseBranch,
+        pinnedCommit,
+        orchestratorBranch: identity.orchestratorBranch,
+        orchestratorWorktreePath: identity.orchestratorWorktreePath,
+        validationCommands: ["vp check", "vp run typecheck"],
+        createdAt: event.occurredAt,
+      });
+      return;
+    }
     if (yield* hasActiveFixImplementerChild(thread.id)) return;
 
     const implementationThreadId = yield* serverThreadId("product-fix-implementer");
@@ -523,6 +595,13 @@ const make = Effect.gen(function* () {
   const worker = yield* makeDrainableWorker(processEventSafely);
 
   const start: ProductWorkflowReactorShape["start"] = Effect.fn("start")(function* () {
+    yield* reconcileImplementationLaunches().pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("product workflow implementation reconciliation failed", {
+          cause: Cause.pretty(cause),
+        }),
+      ),
+    );
     yield* Effect.forkScoped(
       Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
         if (

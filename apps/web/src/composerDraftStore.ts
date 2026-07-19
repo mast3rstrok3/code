@@ -18,6 +18,7 @@ import {
   type ScopedThreadRef,
   ThreadId,
   WorkspaceUserId,
+  WorkflowPreset,
   type WorkspaceUserId as WorkspaceUserIdType,
 } from "@t3tools/contracts";
 import {
@@ -56,12 +57,13 @@ import { getDefaultServerModel } from "./providerModels";
 import { UnifiedSettings } from "@t3tools/contracts/settings";
 import { ReviewCommentContextSchema, type ReviewCommentContext } from "./reviewCommentContext";
 const isProviderInteractionMode = Schema.is(ProviderInteractionMode);
+const isWorkflowPreset = Schema.is(WorkflowPreset);
 const isRuntimeMode = Schema.is(RuntimeMode);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 const isReviewCommentContext = Schema.is(ReviewCommentContextSchema);
 
 export const COMPOSER_DRAFT_STORAGE_KEY = "t3code:composer-drafts:v1";
-const COMPOSER_DRAFT_STORAGE_VERSION = 8;
+const COMPOSER_DRAFT_STORAGE_VERSION = 9;
 const DraftThreadEnvModeSchema = Schema.Literals(["local", "worktree"]);
 export type DraftThreadEnvMode = typeof DraftThreadEnvModeSchema.Type;
 
@@ -151,6 +153,8 @@ const PersistedComposerThreadDraftState = Schema.Struct({
   activeProvider: Schema.optionalKey(Schema.NullOr(ProviderInstanceId)),
   runtimeMode: Schema.optionalKey(RuntimeMode),
   interactionMode: Schema.optionalKey(ProviderInteractionMode),
+  workflowPreset: Schema.optionalKey(Schema.NullOr(WorkflowPreset)),
+  lastWorkflowPreset: Schema.optionalKey(WorkflowPreset),
 });
 type PersistedComposerThreadDraftState = typeof PersistedComposerThreadDraftState.Type;
 
@@ -219,6 +223,7 @@ const PersistedDraftThreadState = Schema.Struct({
   createdAt: Schema.String,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
+  workflowPreset: Schema.optionalKey(Schema.NullOr(WorkflowPreset)),
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
   envMode: DraftThreadEnvModeSchema,
@@ -282,6 +287,8 @@ export interface ComposerThreadDraftState {
   activeProvider: ProviderInstanceId | null;
   runtimeMode: RuntimeMode | null;
   interactionMode: ProviderInteractionMode | null;
+  workflowPreset: WorkflowPreset | null;
+  lastWorkflowPreset: WorkflowPreset | null;
 }
 
 /**
@@ -299,6 +306,7 @@ export interface DraftSessionState {
   createdAt: string;
   runtimeMode: RuntimeMode;
   interactionMode: ProviderInteractionMode;
+  workflowPreset: WorkflowPreset | null;
   branch: string | null;
   worktreePath: string | null;
   envMode: DraftThreadEnvMode;
@@ -368,6 +376,7 @@ interface ComposerDraftStoreState {
       startFromOrigin?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
+      workflowPreset?: WorkflowPreset | null;
     },
   ) => void;
   /** Creates or updates the draft session tracked for a concrete project ref. */
@@ -384,6 +393,7 @@ interface ComposerDraftStoreState {
       startFromOrigin?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
+      workflowPreset?: WorkflowPreset | null;
     },
   ) => void;
   /** Updates mutable draft-session metadata without touching composer content. */
@@ -399,6 +409,7 @@ interface ComposerDraftStoreState {
       startFromOrigin?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
+      workflowPreset?: WorkflowPreset | null;
     },
   ) => void;
   clearProjectDraftThreadId: (projectRef: ScopedProjectRef) => void;
@@ -444,6 +455,11 @@ interface ComposerDraftStoreState {
   setInteractionMode: (
     threadRef: ComposerThreadTarget,
     interactionMode: ProviderInteractionMode | null | undefined,
+  ) => void;
+  setComposerMode: (
+    threadRef: ComposerThreadTarget,
+    interactionMode: ProviderInteractionMode,
+    workflowPreset: WorkflowPreset | null,
   ) => void;
   addImage: (threadRef: ComposerThreadTarget, image: ComposerImageAttachment) => void;
   addImages: (threadRef: ComposerThreadTarget, images: ComposerImageAttachment[]) => void;
@@ -595,6 +611,8 @@ const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   activeProvider: null,
   runtimeMode: null,
   interactionMode: null,
+  workflowPreset: null,
+  lastWorkflowPreset: null,
 });
 
 /**
@@ -617,6 +635,8 @@ export function createEmptyThreadDraft(): ComposerThreadDraftState {
     activeProvider: null,
     runtimeMode: null,
     interactionMode: null,
+    workflowPreset: null,
+    lastWorkflowPreset: null,
   };
 }
 
@@ -689,7 +709,9 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     Object.keys(draft.modelSelectionByProvider).length === 0 &&
     draft.activeProvider === null &&
     draft.runtimeMode === null &&
-    draft.interactionMode === null
+    draft.interactionMode === null &&
+    draft.workflowPreset === null &&
+    draft.lastWorkflowPreset === null
   );
 }
 
@@ -1334,6 +1356,7 @@ function createDraftThreadState(
     startFromOrigin?: boolean;
     runtimeMode?: RuntimeMode;
     interactionMode?: ProviderInteractionMode;
+    workflowPreset?: WorkflowPreset | null;
   },
 ): DraftThreadState {
   const projectChanged =
@@ -1368,6 +1391,7 @@ function createDraftThreadState(
     runtimeMode: options?.runtimeMode ?? existingThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
     interactionMode:
       options?.interactionMode ?? existingThread?.interactionMode ?? DEFAULT_INTERACTION_MODE,
+    workflowPreset: options?.workflowPreset ?? existingThread?.workflowPreset ?? null,
     branch: nextBranch,
     worktreePath: nextWorktreePath,
     envMode:
@@ -1407,6 +1431,7 @@ function draftThreadsEqual(left: DraftThreadState | undefined, right: DraftThrea
     left.createdAt === right.createdAt &&
     left.runtimeMode === right.runtimeMode &&
     left.interactionMode === right.interactionMode &&
+    left.workflowPreset === right.workflowPreset &&
     left.branch === right.branch &&
     left.worktreePath === right.worktreePath &&
     left.envMode === right.envMode &&
@@ -1553,6 +1578,9 @@ function normalizePersistedDraftThreads(
         interactionMode: isProviderInteractionMode(candidateDraftThread.interactionMode)
           ? candidateDraftThread.interactionMode
           : DEFAULT_INTERACTION_MODE,
+        workflowPreset: isWorkflowPreset(candidateDraftThread.workflowPreset)
+          ? candidateDraftThread.workflowPreset
+          : null,
         branch: typeof branch === "string" ? branch : null,
         worktreePath: normalizedWorktreePath,
         envMode: normalizeDraftThreadEnvMode(candidateDraftThread.envMode, normalizedWorktreePath),
@@ -1600,6 +1628,7 @@ function normalizePersistedDraftThreads(
           createdAt: new Date().toISOString(),
           runtimeMode: DEFAULT_RUNTIME_MODE,
           interactionMode: DEFAULT_INTERACTION_MODE,
+          workflowPreset: null,
           branch: null,
           worktreePath: null,
           envMode: "local",
@@ -1685,6 +1714,12 @@ function normalizePersistedDraftsByThreadId(
     const interactionMode = isProviderInteractionMode(draftCandidate.interactionMode)
       ? draftCandidate.interactionMode
       : null;
+    const workflowPreset = isWorkflowPreset(draftCandidate.workflowPreset)
+      ? draftCandidate.workflowPreset
+      : null;
+    const lastWorkflowPreset = isWorkflowPreset(draftCandidate.lastWorkflowPreset)
+      ? draftCandidate.lastWorkflowPreset
+      : workflowPreset;
     const prompt = ensureInlineTerminalContextPlaceholders(
       promptCandidate,
       terminalContexts.length,
@@ -1745,7 +1780,9 @@ function normalizePersistedDraftsByThreadId(
       reviewComments.length === 0 &&
       !hasModelData &&
       !runtimeMode &&
-      !interactionMode
+      !interactionMode &&
+      !workflowPreset &&
+      !lastWorkflowPreset
     ) {
       continue;
     }
@@ -1775,6 +1812,8 @@ function normalizePersistedDraftsByThreadId(
         : {}),
       ...(runtimeMode ? { runtimeMode } : {}),
       ...(interactionMode ? { interactionMode } : {}),
+      ...(workflowPreset ? { workflowPreset } : {}),
+      ...(lastWorkflowPreset ? { lastWorkflowPreset } : {}),
     };
   }
 
@@ -1854,7 +1893,9 @@ function partializeComposerDraftStoreState(
       draft.reviewComments.length === 0 &&
       !hasModelData &&
       draft.runtimeMode === null &&
-      draft.interactionMode === null
+      draft.interactionMode === null &&
+      draft.workflowPreset === null &&
+      draft.lastWorkflowPreset === null
     ) {
       continue;
     }
@@ -1913,6 +1954,10 @@ function partializeComposerDraftStoreState(
         : {}),
       ...(draft.runtimeMode ? { runtimeMode: draft.runtimeMode } : {}),
       ...(draft.interactionMode ? { interactionMode: draft.interactionMode } : {}),
+      ...(draft.workflowPreset !== null ? { workflowPreset: draft.workflowPreset } : {}),
+      ...(draft.lastWorkflowPreset !== null
+        ? { lastWorkflowPreset: draft.lastWorkflowPreset }
+        : {}),
     };
     persistedDraftsByThreadKey[threadKey] = persistedDraft;
   }
@@ -2150,6 +2195,8 @@ function toHydratedThreadDraft(
     activeProvider,
     runtimeMode: persistedDraft.runtimeMode ?? null,
     interactionMode: persistedDraft.interactionMode ?? null,
+    workflowPreset: persistedDraft.workflowPreset ?? null,
+    lastWorkflowPreset: persistedDraft.lastWorkflowPreset ?? null,
   };
 }
 
@@ -2172,6 +2219,7 @@ function toHydratedDraftThreadState(
     createdAt: persistedDraftThread.createdAt,
     runtimeMode: persistedDraftThread.runtimeMode,
     interactionMode: persistedDraftThread.interactionMode,
+    workflowPreset: persistedDraftThread.workflowPreset ?? null,
     branch: persistedDraftThread.branch,
     worktreePath: persistedDraftThread.worktreePath,
     envMode: persistedDraftThread.envMode,
@@ -2379,6 +2427,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                   : options.createdAt || existing.createdAt,
               runtimeMode: options.runtimeMode ?? existing.runtimeMode,
               interactionMode: options.interactionMode ?? existing.interactionMode,
+              workflowPreset: options.workflowPreset ?? existing.workflowPreset,
               branch: nextBranch,
               worktreePath: nextWorktreePath,
               envMode:
@@ -2399,6 +2448,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               nextDraftThread.createdAt === existing.createdAt &&
               nextDraftThread.runtimeMode === existing.runtimeMode &&
               nextDraftThread.interactionMode === existing.interactionMode &&
+              nextDraftThread.workflowPreset === existing.workflowPreset &&
               nextDraftThread.branch === existing.branch &&
               nextDraftThread.worktreePath === existing.worktreePath &&
               nextDraftThread.envMode === existing.envMode &&
@@ -2854,6 +2904,35 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               nextDraftsByThreadKey[threadKey] = nextDraft;
             }
             return { draftsByThreadKey: nextDraftsByThreadKey };
+          });
+        },
+        setComposerMode: (threadRef, interactionMode, workflowPreset) => {
+          const threadKey = resolveComposerDraftKey(get(), threadRef) ?? "";
+          if (threadKey.length === 0 || !isProviderInteractionMode(interactionMode)) return;
+          const nextWorkflowPreset = isWorkflowPreset(workflowPreset) ? workflowPreset : null;
+          set((state) => {
+            const existing = state.draftsByThreadKey[threadKey];
+            const base = existing ?? createEmptyThreadDraft();
+            const lastWorkflowPreset = nextWorkflowPreset ?? base.lastWorkflowPreset;
+            if (
+              base.interactionMode === interactionMode &&
+              base.workflowPreset === nextWorkflowPreset &&
+              base.lastWorkflowPreset === lastWorkflowPreset
+            ) {
+              return state;
+            }
+            const nextDraft: ComposerThreadDraftState = {
+              ...base,
+              interactionMode,
+              workflowPreset: nextWorkflowPreset,
+              lastWorkflowPreset,
+            };
+            return {
+              draftsByThreadKey: {
+                ...state.draftsByThreadKey,
+                [threadKey]: nextDraft,
+              },
+            };
           });
         },
         addImage: (threadRef, image) => {

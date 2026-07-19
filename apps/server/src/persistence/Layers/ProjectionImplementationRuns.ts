@@ -17,7 +17,8 @@ const makeProjectionImplementationRunRepository = Effect.gen(function* () {
     Request: ProjectionImplementationRun,
     execute: (row) => sql`
       INSERT INTO projection_implementation_runs (
-        run_id, spec_id, orchestrator_thread_id, source_thread_id, status,
+        run_id, spec_id, artifact_source, proposed_plan_source_thread_id, proposed_plan_id,
+        orchestrator_thread_id, source_thread_id, status,
         base_branch, pinned_commit, orchestrator_branch, orchestrator_worktree_path,
         launch_summary_json, ticket_states_json, worker_results_json,
         terminal_lineage_ticket_ids_json, final_validation_json, dev_review_ids_json,
@@ -25,7 +26,9 @@ const makeProjectionImplementationRunRepository = Effect.gen(function* () {
         created_at, updated_at
       )
       VALUES (
-        ${row.runId}, ${row.run.specId}, ${row.run.orchestratorThreadId},
+        ${row.runId}, ${row.run.specId}, ${row.run.artifactSource},
+        ${row.run.sourceProposedPlan?.threadId ?? null}, ${row.run.sourceProposedPlan?.planId ?? null},
+        ${row.run.orchestratorThreadId},
         ${row.sourceThreadId}, ${row.run.status}, ${row.run.baseBranch}, ${row.run.pinnedCommit},
         ${row.run.orchestratorBranch}, ${row.run.orchestratorWorktreePath},
         ${JSON.stringify(row.run.launchSummary)}, ${JSON.stringify(row.run.ticketStates)},
@@ -38,6 +41,9 @@ const makeProjectionImplementationRunRepository = Effect.gen(function* () {
       ON CONFLICT (run_id)
       DO UPDATE SET
         spec_id = excluded.spec_id,
+        artifact_source = excluded.artifact_source,
+        proposed_plan_source_thread_id = excluded.proposed_plan_source_thread_id,
+        proposed_plan_id = excluded.proposed_plan_id,
         orchestrator_thread_id = excluded.orchestrator_thread_id,
         source_thread_id = COALESCE(projection_implementation_runs.source_thread_id, excluded.source_thread_id),
         status = excluded.status,

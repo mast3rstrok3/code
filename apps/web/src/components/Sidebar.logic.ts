@@ -1,6 +1,11 @@
 import * as React from "react";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import {
+  collectHierarchyPostOrder,
+  orderHierarchyPostOrder,
+  type HierarchyAccessors,
+} from "@t3tools/shared/threadHierarchy";
+import {
   getThreadSortTimestamp,
   sortThreads,
   toSortableTimestamp,
@@ -721,6 +726,75 @@ export function getFallbackThreadIdAfterDelete<
       sortOrder,
     )[0]?.id ?? null
   );
+}
+
+export function expandHierarchySelectionIds<TNode, TId>(input: {
+  readonly nodes: ReadonlyArray<TNode>;
+  readonly selectedIds: ReadonlySet<TId>;
+  readonly accessors: HierarchyAccessors<TNode, TId>;
+}): Set<TId> {
+  const expanded = new Set<TId>();
+  for (const selectedId of input.selectedIds) {
+    for (const node of collectHierarchyPostOrder(input.nodes, selectedId, input.accessors)) {
+      expanded.add(input.accessors.getId(node));
+    }
+  }
+  return expanded;
+}
+
+export function getSelectedHierarchyRootIds<TNode, TId>(input: {
+  readonly nodes: ReadonlyArray<TNode>;
+  readonly selectedIds: ReadonlySet<TId>;
+  readonly accessors: HierarchyAccessors<TNode, TId>;
+}): TId[] {
+  const coveredSelectedIds = new Set<TId>();
+  const rootIds = new Set<TId>();
+  const parentFirst = orderHierarchyPostOrder(input.nodes, input.accessors).toReversed();
+
+  for (const node of parentFirst) {
+    const id = input.accessors.getId(node);
+    if (!input.selectedIds.has(id) || coveredSelectedIds.has(id)) continue;
+    rootIds.add(id);
+    for (const descendant of collectHierarchyPostOrder(input.nodes, id, input.accessors)) {
+      const descendantId = input.accessors.getId(descendant);
+      if (input.selectedIds.has(descendantId)) coveredSelectedIds.add(descendantId);
+    }
+  }
+
+  // Preserve selection order between independent roots.
+  return [...input.selectedIds].filter((id) => rootIds.has(id));
+}
+
+export function getThreadDeleteConfirmationText(title: string): string {
+  return [
+    `Delete thread "${title}"?`,
+    "This permanently clears this thread, all sub-threads, and their conversation history.",
+  ].join("\n");
+}
+
+export function getMultiThreadDeleteConfirmationText(count: number): string {
+  return [
+    `Delete ${count} thread${count === 1 ? "" : "s"}?`,
+    "This permanently clears the selected threads, all their descendants, and their conversation history.",
+  ].join("\n");
+}
+
+export function getArchiveConfirmationCopy(hasChildren: boolean): {
+  readonly label: string;
+  readonly accessibleLabel: string;
+  readonly tooltip: string | null;
+} {
+  return hasChildren
+    ? {
+        label: "Archive all",
+        accessibleLabel: "Archive this thread and all sub-threads",
+        tooltip: "Includes all sub-threads",
+      }
+    : {
+        label: "Confirm",
+        accessibleLabel: "Confirm archive",
+        tooltip: null,
+      };
 }
 export function getProjectSortTimestamp(
   project: SidebarProject,

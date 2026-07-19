@@ -133,6 +133,14 @@ export const ProviderInteractionMode = Schema.Literals([
 ]);
 export type ProviderInteractionMode = typeof ProviderInteractionMode.Type;
 export const DEFAULT_PROVIDER_INTERACTION_MODE: ProviderInteractionMode = "default";
+export const WorkflowPreset = Schema.Literals([
+  "fix",
+  "fast-feature",
+  "full-feature",
+  "implementation",
+  "planning",
+]);
+export type WorkflowPreset = typeof WorkflowPreset.Type;
 export const isPlanningWorkflowInteractionMode = (
   mode: ProviderInteractionMode | null | undefined,
 ): mode is "planning-workflow" | "product-workflow" =>
@@ -268,6 +276,18 @@ export type OrchestrationProposedPlan = typeof OrchestrationProposedPlan.Type;
 export const OrchestrationPlanningSpecId = TrimmedNonEmptyString;
 export type OrchestrationPlanningSpecId = typeof OrchestrationPlanningSpecId.Type;
 
+export const WorkflowId = TrimmedNonEmptyString.pipe(Schema.brand("WorkflowId"));
+export type WorkflowId = typeof WorkflowId.Type;
+
+export const ThreadWorkflowContext = Schema.Struct({
+  workflowId: WorkflowId,
+  rootThreadId: ThreadId,
+  ticketScope: Schema.Array(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+});
+export type ThreadWorkflowContext = typeof ThreadWorkflowContext.Type;
+
 export const OrchestrationPlanningSpec = Schema.Struct({
   id: OrchestrationPlanningSpecId,
   title: TrimmedNonEmptyString,
@@ -283,7 +303,7 @@ export const OrchestrationPlanningSpec = Schema.Struct({
   createdBy: Schema.NullOr(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
-  workflowId: TrimmedNonEmptyString,
+  workflowId: WorkflowId,
   ticketCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -292,6 +312,27 @@ export type OrchestrationPlanningSpec = typeof OrchestrationPlanningSpec.Type;
 
 export const OrchestrationPlanningTicketId = TrimmedNonEmptyString;
 export type OrchestrationPlanningTicketId = typeof OrchestrationPlanningTicketId.Type;
+
+export const OrchestrationPlanningTicketKey = TrimmedNonEmptyString;
+export type OrchestrationPlanningTicketKey = typeof OrchestrationPlanningTicketKey.Type;
+
+export const OrchestrationPlanningFileChangeAction = Schema.Literals([
+  "create",
+  "update",
+  "delete",
+]);
+export type OrchestrationPlanningFileChangeAction =
+  typeof OrchestrationPlanningFileChangeAction.Type;
+
+export const OrchestrationPlanningFileChange = Schema.Struct({
+  path: TrimmedNonEmptyString,
+  action: OrchestrationPlanningFileChangeAction,
+});
+export type OrchestrationPlanningFileChange = typeof OrchestrationPlanningFileChange.Type;
+
+export const NonEmptyOrchestrationPlanningFileChanges = Schema.Array(
+  OrchestrationPlanningFileChange,
+).check(Schema.isMinLength(1));
 
 export const OrchestrationPlanningTicketDependency = Schema.Struct({
   specId: OrchestrationPlanningSpecId,
@@ -302,10 +343,14 @@ export type OrchestrationPlanningTicketDependency =
 
 export const OrchestrationPlanningTicket = Schema.Struct({
   id: OrchestrationPlanningTicketId,
+  key: Schema.optionalKey(OrchestrationPlanningTicketKey),
   specId: OrchestrationPlanningSpecId,
   ordinal: NonNegativeInt,
   title: TrimmedNonEmptyString,
   bodyMarkdown: TrimmedNonEmptyString,
+  plannedFileChanges: Schema.Array(OrchestrationPlanningFileChange).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
   dependencies: Schema.Array(OrchestrationPlanningTicketDependency).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
@@ -323,17 +368,36 @@ export const OrchestrationPlanningReviewTicketFeedback = Schema.Struct({
 export type OrchestrationPlanningReviewTicketFeedback =
   typeof OrchestrationPlanningReviewTicketFeedback.Type;
 
-export const OrchestrationPlanningReviewCycleStatus = Schema.Literals(["passed", "failed"]);
+export const PLANNING_REVIEW_MAX_CYCLES = 10;
+
+export const OrchestrationPlanningReviewMode = Schema.Literals(["full", "targeted"]);
+export type OrchestrationPlanningReviewMode = typeof OrchestrationPlanningReviewMode.Type;
+
+export const OrchestrationPlanningReviewCycleStatus = Schema.Literals([
+  "passed",
+  "failed",
+  "revised",
+  "runtime-failed",
+]);
 export type OrchestrationPlanningReviewCycleStatus =
   typeof OrchestrationPlanningReviewCycleStatus.Type;
 
 export const OrchestrationPlanningReviewCycle = Schema.Struct({
   cycleNumber: NonNegativeInt,
+  mode: OrchestrationPlanningReviewMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed("full" as const)),
+  ),
   status: OrchestrationPlanningReviewCycleStatus,
   reviewerThreadId: ThreadId,
   reviewerMessageId: MessageId,
   verdictMarkdown: Schema.String,
   failingPlanningTicketIds: Schema.Array(OrchestrationPlanningTicketId).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+  targetPlanningTicketIds: Schema.Array(OrchestrationPlanningTicketId).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+  editedPlanningTicketIds: Schema.Array(OrchestrationPlanningTicketId).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   dependencyFeedback: Schema.Array(Schema.String).pipe(
@@ -353,9 +417,20 @@ export const OrchestrationPlanningWorkflowStage = Schema.Literals([
   "ticket-review",
   "ticket-revision",
   "completed",
+  "completed-with-warnings",
   "needs-human-attention",
 ]);
 export type OrchestrationPlanningWorkflowStage = typeof OrchestrationPlanningWorkflowStage.Type;
+
+export const OrchestrationPlanningActiveReviewRequest = Schema.Struct({
+  cycleNumber: NonNegativeInt,
+  mode: OrchestrationPlanningReviewMode,
+  reviewerThreadId: ThreadId,
+  targetPlanningTicketIds: Schema.Array(OrchestrationPlanningTicketId),
+  requestedAt: IsoDateTime,
+});
+export type OrchestrationPlanningActiveReviewRequest =
+  typeof OrchestrationPlanningActiveReviewRequest.Type;
 
 export const OrchestrationPlanningWorkflow = Schema.Struct({
   stage: OrchestrationPlanningWorkflowStage,
@@ -367,6 +442,7 @@ export const OrchestrationPlanningWorkflow = Schema.Struct({
   reviewCycles: Schema.Array(OrchestrationPlanningReviewCycle).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
+  activeReview: Schema.optionalKey(Schema.NullOr(OrchestrationPlanningActiveReviewRequest)),
 });
 export type OrchestrationPlanningWorkflow = typeof OrchestrationPlanningWorkflow.Type;
 
@@ -385,6 +461,12 @@ export const IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS = 5;
 
 export const OrchestrationImplementationRunId = TrimmedNonEmptyString;
 export type OrchestrationImplementationRunId = typeof OrchestrationImplementationRunId.Type;
+
+export const SourceProposedPlanReference = Schema.Struct({
+  threadId: ThreadId,
+  planId: OrchestrationProposedPlanId,
+});
+export type SourceProposedPlanReference = typeof SourceProposedPlanReference.Type;
 
 export const OrchestrationImplementationChangeRequest = ChangeRequest.mapFields(
   Struct.assign({
@@ -419,11 +501,41 @@ export const OrchestrationImplementationRunStatus = Schema.Literals([
   "fixing",
   "code-reviewing",
   "code-review-fixing",
+  "publishing-change-request",
   "needs-human-attention",
   "completed",
   "canceled",
 ]);
 export type OrchestrationImplementationRunStatus = typeof OrchestrationImplementationRunStatus.Type;
+
+export const OrchestrationImplementationArtifactSource = Schema.Literals([
+  "planning-spec",
+  "proposed-plan",
+]);
+export type OrchestrationImplementationArtifactSource =
+  typeof OrchestrationImplementationArtifactSource.Type;
+
+export const OrchestrationImplementationRetryableFailure = Schema.Struct({
+  stage: Schema.Literals([
+    "source-dirty",
+    "worktree-setup",
+    "worker-setup",
+    "worker-execution",
+    "integration",
+    "merge-gate",
+    "app-dev-stack",
+    "dev-review",
+    "code-review",
+    "build",
+    "change-request",
+  ]),
+  detail: TrimmedNonEmptyString,
+  failedAt: IsoDateTime,
+  attemptCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(1))),
+  maxAttempts: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(3))),
+});
+export type OrchestrationImplementationRetryableFailure =
+  typeof OrchestrationImplementationRetryableFailure.Type;
 
 export const OrchestrationImplementationDependencyEdge = Schema.Struct({
   blockingTicketId: OrchestrationPlanningTicketId,
@@ -502,7 +614,7 @@ export type OrchestrationImplementationQaToolingState =
   typeof OrchestrationImplementationQaToolingState.Type;
 
 export const OrchestrationImplementationLaunchSummary = Schema.Struct({
-  specId: OrchestrationPlanningSpecId,
+  specId: Schema.NullOr(OrchestrationPlanningSpecId),
   planningTicketIds: Schema.Array(OrchestrationPlanningTicketId),
   baseBranch: TrimmedNonEmptyString,
   pinnedCommit: TrimmedNonEmptyString,
@@ -539,6 +651,29 @@ export const OrchestrationImplementationValidationResult = Schema.Struct({
 });
 export type OrchestrationImplementationValidationResult =
   typeof OrchestrationImplementationValidationResult.Type;
+
+export const OrchestrationImplementationFastBuildResult = Schema.Union([
+  Schema.Struct({
+    runId: OrchestrationImplementationRunId,
+    status: Schema.Literal("succeeded"),
+    commitSha: TrimmedNonEmptyString,
+    validations: Schema.Array(OrchestrationImplementationValidationResult),
+    notesMarkdown: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  }),
+  Schema.Struct({
+    runId: OrchestrationImplementationRunId,
+    status: Schema.Literals(["failed", "blocked"]),
+    commitSha: Schema.NullOr(TrimmedNonEmptyString).pipe(
+      Schema.withDecodingDefault(Effect.succeed(null)),
+    ),
+    validations: Schema.Array(OrchestrationImplementationValidationResult).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+    ),
+    notesMarkdown: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  }),
+]);
+export type OrchestrationImplementationFastBuildResult =
+  typeof OrchestrationImplementationFastBuildResult.Type;
 
 export const OrchestrationImplementationDevReviewEvidence = Schema.Struct({
   label: TrimmedNonEmptyString,
@@ -677,6 +812,7 @@ export const OrchestrationImplementationTicketState = Schema.Struct({
   workerResult: Schema.NullOr(OrchestrationImplementationWorkerResult).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  attemptCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
   updatedAt: IsoDateTime,
 });
 export type OrchestrationImplementationTicketState =
@@ -684,7 +820,13 @@ export type OrchestrationImplementationTicketState =
 
 export const OrchestrationImplementationRun = Schema.Struct({
   id: OrchestrationImplementationRunId,
-  specId: OrchestrationPlanningSpecId,
+  artifactSource: OrchestrationImplementationArtifactSource.pipe(
+    Schema.withDecodingDefault(Effect.succeed("planning-spec" as const)),
+  ),
+  specId: Schema.NullOr(OrchestrationPlanningSpecId),
+  sourceProposedPlan: Schema.NullOr(SourceProposedPlanReference).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   planningTicketIds: Schema.Array(OrchestrationPlanningTicketId),
   orchestratorThreadId: ThreadId,
   status: OrchestrationImplementationRunStatus.pipe(
@@ -704,9 +846,25 @@ export const OrchestrationImplementationRun = Schema.Struct({
   terminalLineageTicketIds: Schema.Array(OrchestrationPlanningTicketId).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
+  integrationHeadSha: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   finalValidation: Schema.NullOr(OrchestrationImplementationValidationResult).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  finalValidationResults: Schema.Array(OrchestrationImplementationValidationResult).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+  validatedHeadSha: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  activeValidationHeadSha: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  activeValidatorThreadId: Schema.NullOr(ThreadId).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  mergeGateAttemptCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
   appDevStack: OrchestrationImplementationAppDevStackState.pipe(
     Schema.withDecodingDefault(
       Effect.succeed({
@@ -738,8 +896,35 @@ export const OrchestrationImplementationRun = Schema.Struct({
   devReviews: Schema.Array(OrchestrationImplementationDevReviewArtifact).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
+  devReviewedHeadSha: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  activeDevReviewHeadSha: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  activeDevReviewThreadId: Schema.NullOr(ThreadId).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   qaAttemptCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+  codeReviewedHeadSha: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  activeCodeReviewHeadSha: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  activeCodeReviewThreadId: Schema.NullOr(ThreadId).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   codeReviewAttemptCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+  activeFixerThreadId: Schema.NullOr(ThreadId).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  fixOrigin: Schema.NullOr(Schema.Literals(["merge-gate", "dev-review", "code-review"])).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  latestCodeReviewReportMarkdown: Schema.NullOr(Schema.String).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   handoffTarget: Schema.Literal("orchestrator-worktree").pipe(
     Schema.withDecodingDefault(Effect.succeed("orchestrator-worktree" as const)),
   ),
@@ -755,15 +940,16 @@ export const OrchestrationImplementationRun = Schema.Struct({
   changeRequestPublisherUserId: Schema.NullOr(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  fastBuildResult: Schema.NullOr(OrchestrationImplementationFastBuildResult).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  retryableFailure: Schema.NullOr(OrchestrationImplementationRetryableFailure).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
 export type OrchestrationImplementationRun = typeof OrchestrationImplementationRun.Type;
-
-const SourceProposedPlanReference = Schema.Struct({
-  threadId: ThreadId,
-  planId: OrchestrationProposedPlanId,
-});
 
 export const OrchestrationSessionStatus = Schema.Literals([
   "idle",
@@ -786,6 +972,7 @@ export const OrchestrationThreadWorkflowRole = Schema.Literals([
   "implementation-fixer",
   "implementation-code-reviewer",
   "product-fix-implementer",
+  "fast-feature-implementer",
 ]);
 export type OrchestrationThreadWorkflowRole = typeof OrchestrationThreadWorkflowRole.Type;
 
@@ -940,6 +1127,7 @@ export const OrchestrationThread = Schema.Struct({
   workflowRole: Schema.NullOr(OrchestrationThreadWorkflowRole).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  workflowContext: Schema.optionalKey(Schema.NullOr(ThreadWorkflowContext)),
   workflowSubagentBatchProvenance: Schema.optionalKey(
     Schema.NullOr(WorkflowSubagentBatchProvenance),
   ),
@@ -949,6 +1137,7 @@ export const OrchestrationThread = Schema.Struct({
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
+  workflowPreset: Schema.optionalKey(Schema.NullOr(WorkflowPreset)),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
@@ -1004,6 +1193,7 @@ export const OrchestrationThreadShell = Schema.Struct({
   workflowRole: Schema.NullOr(OrchestrationThreadWorkflowRole).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  workflowContext: Schema.optionalKey(Schema.NullOr(ThreadWorkflowContext)),
   workflowSubagentBatchProvenance: Schema.optionalKey(
     Schema.NullOr(WorkflowSubagentBatchProvenance),
   ),
@@ -1013,6 +1203,7 @@ export const OrchestrationThreadShell = Schema.Struct({
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
+  workflowPreset: Schema.optionalKey(Schema.NullOr(WorkflowPreset)),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
@@ -1168,6 +1359,7 @@ const ThreadCreateCommand = Schema.Struct({
   ),
   parentThreadId: Schema.optionalKey(Schema.NullOr(ThreadId)),
   workflowRole: Schema.optionalKey(Schema.NullOr(OrchestrationThreadWorkflowRole)),
+  workflowContext: Schema.optionalKey(Schema.NullOr(ThreadWorkflowContext)),
   workflowSubagentBatchProvenance: Schema.optionalKey(
     Schema.NullOr(WorkflowSubagentBatchProvenance),
   ),
@@ -1177,6 +1369,7 @@ const ThreadCreateCommand = Schema.Struct({
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
+  workflowPreset: Schema.optionalKey(Schema.NullOr(WorkflowPreset)),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
@@ -1225,6 +1418,15 @@ const ThreadInteractionModeSetCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   interactionMode: ProviderInteractionMode,
+  createdAt: IsoDateTime,
+});
+
+const ThreadComposerModeSetCommand = Schema.Struct({
+  type: Schema.Literal("thread.composer-mode.set"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  interactionMode: ProviderInteractionMode,
+  workflowPreset: Schema.NullOr(WorkflowPreset),
   createdAt: IsoDateTime,
 });
 
@@ -1281,11 +1483,46 @@ export const ThreadPlanningTicketArtifactInput = Schema.Struct({
   key: TrimmedNonEmptyString,
   title: TrimmedNonEmptyString,
   bodyMarkdown: TrimmedNonEmptyString,
+  plannedFileChanges: NonEmptyOrchestrationPlanningFileChanges,
   dependencyKeys: Schema.Array(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
 });
 export type ThreadPlanningTicketArtifactInput = typeof ThreadPlanningTicketArtifactInput.Type;
+
+export const PlanningReviewerTicketEdit = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("update"),
+    ticketId: OrchestrationPlanningTicketId,
+    title: Schema.optional(TrimmedNonEmptyString),
+    bodyMarkdown: Schema.optional(TrimmedNonEmptyString),
+    plannedFileChanges: Schema.optional(NonEmptyOrchestrationPlanningFileChanges),
+    dependencyKeys: Schema.optional(Schema.Array(OrchestrationPlanningTicketKey)),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("create"),
+    key: OrchestrationPlanningTicketKey,
+    title: TrimmedNonEmptyString,
+    bodyMarkdown: TrimmedNonEmptyString,
+    plannedFileChanges: NonEmptyOrchestrationPlanningFileChanges,
+    dependencyKeys: Schema.Array(OrchestrationPlanningTicketKey).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+    ),
+    replacesPlanningTicketIds: Schema.Array(OrchestrationPlanningTicketId).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+    ),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("delete"),
+    ticketId: OrchestrationPlanningTicketId,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("update-dependencies"),
+    ticketId: OrchestrationPlanningTicketId,
+    dependencyKeys: Schema.Array(OrchestrationPlanningTicketKey),
+  }),
+]);
+export type PlanningReviewerTicketEdit = typeof PlanningReviewerTicketEdit.Type;
 
 const ThreadPlanningTicketsApplyCommand = Schema.Struct({
   type: Schema.Literal("thread.planning-tickets.apply"),
@@ -1311,6 +1548,11 @@ const ThreadPlanningReviewerVerdictApplyCommand = Schema.Struct({
   threadId: ThreadId,
   reviewerThreadId: ThreadId,
   reviewerMessageId: MessageId,
+  cycleNumber: Schema.optional(NonNegativeInt),
+  mode: Schema.optional(OrchestrationPlanningReviewMode),
+  targetPlanningTicketIds: Schema.optional(Schema.Array(OrchestrationPlanningTicketId)),
+  ticketEdits: Schema.optional(Schema.Array(PlanningReviewerTicketEdit)),
+  runtimeFailure: Schema.optional(Schema.Boolean),
   verdictMarkdown: Schema.String,
   passed: Schema.optional(Schema.Boolean),
   failingPlanningTicketIds: Schema.optional(Schema.Array(OrchestrationPlanningTicketId)),
@@ -1360,6 +1602,27 @@ const ThreadImplementationChangeRequestRetryCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadFastFeatureRunLaunchCommand = Schema.Struct({
+  type: Schema.Literal("thread.fast-feature-run.launch"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  proposedPlanId: OrchestrationProposedPlanId,
+  baseBranch: Schema.optional(TrimmedNonEmptyString),
+  pinnedCommit: Schema.optional(TrimmedNonEmptyString),
+  orchestratorBranch: Schema.optional(TrimmedNonEmptyString),
+  orchestratorWorktreePath: Schema.optional(TrimmedNonEmptyString),
+  validationCommands: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  createdAt: IsoDateTime,
+});
+
+const ThreadImplementationRunRetryCommand = Schema.Struct({
+  type: Schema.Literal("thread.implementation-run.retry"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  runId: OrchestrationImplementationRunId,
+  createdAt: IsoDateTime,
+});
+
 const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
   projectId: ProjectId,
   ownerUserId: WorkspaceUserId.pipe(
@@ -1367,6 +1630,7 @@ const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
   ),
   parentThreadId: Schema.optionalKey(Schema.NullOr(ThreadId)),
   workflowRole: Schema.optionalKey(Schema.NullOr(OrchestrationThreadWorkflowRole)),
+  workflowContext: Schema.optionalKey(Schema.NullOr(ThreadWorkflowContext)),
   workflowSubagentBatchProvenance: Schema.optionalKey(
     Schema.NullOr(WorkflowSubagentBatchProvenance),
   ),
@@ -1374,6 +1638,7 @@ const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
+  workflowPreset: Schema.optionalKey(Schema.NullOr(WorkflowPreset)),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
@@ -1422,6 +1687,7 @@ const ThreadDevReviewLaunchCommand = Schema.Struct({
   sourceThreadId: ThreadId,
   reviewThreadId: ThreadId,
   reviewId: DevReviewId,
+  planningTicketIds: Schema.optional(Schema.Array(OrchestrationPlanningTicketId)),
   message: Schema.Struct({
     messageId: MessageId,
     role: Schema.Literal("user"),
@@ -1587,12 +1853,15 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadMetaUpdateCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
+  ThreadComposerModeSetCommand,
   ThreadPlanningSpecCreateCommand,
   ThreadPlanningStageStartCommand,
   ThreadPlanningWorkflowLaunchCommand,
   ThreadPlanningTicketReviewRequestCommand,
   ThreadPlanningSpecBundleLoadCommand,
   ThreadImplementationRunLaunchCommand,
+  ThreadFastFeatureRunLaunchCommand,
+  ThreadImplementationRunRetryCommand,
   ThreadImplementationChangeRequestRetryCommand,
   ThreadDevReviewLaunchCommand,
   ThreadTurnStartCommand,
@@ -1616,12 +1885,15 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadMetaUpdateCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
+  ThreadComposerModeSetCommand,
   ThreadPlanningSpecCreateCommand,
   ThreadPlanningStageStartCommand,
   ThreadPlanningWorkflowLaunchCommand,
   ThreadPlanningTicketReviewRequestCommand,
   ThreadPlanningSpecBundleLoadCommand,
   ThreadImplementationRunLaunchCommand,
+  ThreadFastFeatureRunLaunchCommand,
+  ThreadImplementationRunRetryCommand,
   ThreadImplementationChangeRequestRetryCommand,
   ThreadDevReviewLaunchCommand,
   ClientThreadTurnStartCommand,
@@ -1760,6 +2032,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.meta-updated",
   "thread.runtime-mode-set",
   "thread.interaction-mode-set",
+  "thread.composer-mode-set",
   "thread.planning-stage-started",
   "thread.planning-spec-created",
   "thread.planning-tickets-created",
@@ -1769,6 +2042,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.planning-workflow-stage-set",
   "thread.implementation-run-launched",
   "thread.implementation-run-updated",
+  "thread.implementation-run-retry-requested",
   "thread.implementation-change-request-retry-requested",
   "thread.message-sent",
   "thread.turn-start-requested",
@@ -1829,6 +2103,7 @@ export const ThreadCreatedPayload = Schema.Struct({
   ),
   parentThreadId: Schema.optionalKey(Schema.NullOr(ThreadId)),
   workflowRole: Schema.optionalKey(Schema.NullOr(OrchestrationThreadWorkflowRole)),
+  workflowContext: Schema.optionalKey(Schema.NullOr(ThreadWorkflowContext)),
   workflowSubagentBatchProvenance: Schema.optionalKey(
     Schema.NullOr(WorkflowSubagentBatchProvenance),
   ),
@@ -1838,6 +2113,7 @@ export const ThreadCreatedPayload = Schema.Struct({
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
+  workflowPreset: Schema.optionalKey(Schema.NullOr(WorkflowPreset)),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
@@ -1884,6 +2160,13 @@ export const ThreadInteractionModeSetPayload = Schema.Struct({
   updatedAt: IsoDateTime,
 });
 
+export const ThreadComposerModeSetPayload = Schema.Struct({
+  threadId: ThreadId,
+  interactionMode: ProviderInteractionMode,
+  workflowPreset: Schema.NullOr(WorkflowPreset),
+  updatedAt: IsoDateTime,
+});
+
 export const ThreadPlanningStageStartedPayload = Schema.Struct({
   threadId: ThreadId,
   stage: OrchestrationPlanningWorkflowStage,
@@ -1916,6 +2199,12 @@ export const ThreadPlanningTicketReviewRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   specId: OrchestrationPlanningSpecId,
   cycleNumber: NonNegativeInt,
+  mode: OrchestrationPlanningReviewMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed("full" as const)),
+  ),
+  targetPlanningTicketIds: Schema.Array(OrchestrationPlanningTicketId).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
   reviewerThreadId: ThreadId,
   reviewerMessageId: MessageId,
   stage: Schema.Literal("ticket-review"),
@@ -1948,6 +2237,10 @@ export const ThreadImplementationRunUpdatedPayload = Schema.Struct({
 });
 
 export const ThreadImplementationChangeRequestRetryRequestedPayload = Schema.Struct({
+  run: OrchestrationImplementationRun,
+});
+
+export const ThreadImplementationRunRetryRequestedPayload = Schema.Struct({
   run: OrchestrationImplementationRun,
 });
 
@@ -2155,6 +2448,11 @@ export const OrchestrationEvent = Schema.Union([
   }),
   Schema.Struct({
     ...EventBaseFields,
+    type: Schema.Literal("thread.composer-mode-set"),
+    payload: ThreadComposerModeSetPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
     type: Schema.Literal("thread.planning-stage-started"),
     payload: ThreadPlanningStageStartedPayload,
   }),
@@ -2197,6 +2495,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.implementation-run-updated"),
     payload: ThreadImplementationRunUpdatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.implementation-run-retry-requested"),
+    payload: ThreadImplementationRunRetryRequestedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
