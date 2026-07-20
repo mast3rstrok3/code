@@ -408,6 +408,23 @@ ${JSON.stringify({
     NodeAssert.equal(result.directive.status, "blocked");
   });
 
+  it("normalizes structured focused results that use summary fields", () => {
+    const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
+{
+  "type": "workflow-subagent-result",
+  "status": "blocked",
+  "summary": "Authentication blocked the browser review.",
+  "blockers": ["No seeded reviewer account was available."],
+  "recommendations": ["Provide an authenticated feature URL."]
+}
+\`\`\``);
+
+    NodeAssert.equal(result.kind, "parsed");
+    if (result.kind !== "parsed" || result.directive.type !== "workflow-subagent-result") return;
+    NodeAssert.match(result.directive.resultMarkdown, /Authentication blocked/);
+    NodeAssert.match(result.directive.resultMarkdown, /seeded reviewer account/);
+  });
+
   it("parses workflow agent message directives", () => {
     const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
 {

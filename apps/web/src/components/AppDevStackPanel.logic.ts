@@ -7,6 +7,27 @@ export interface PreviewCandidate {
 }
 
 const PRIMARY_PREVIEW_SERVICE_NAMES = ["frontend-dev", "frontend", "web", "app"] as const;
+const TRANSITIONING_STACK_STATUSES = new Set<AppDevStack["status"]>([
+  "pending",
+  "starting",
+  "stopping",
+]);
+
+export function isTransitioningAppDevStackStatus(status: AppDevStack["status"]): boolean {
+  return TRANSITIONING_STACK_STATUSES.has(status);
+}
+
+export function shouldPollAppDevStacks(
+  currentStack: AppDevStack | null | undefined,
+  listedStacks: ReadonlyArray<AppDevStack>,
+): boolean {
+  return (
+    (currentStack !== null &&
+      currentStack !== undefined &&
+      isTransitioningAppDevStackStatus(currentStack.status)) ||
+    listedStacks.some((stack) => isTransitioningAppDevStackStatus(stack.status))
+  );
+}
 
 function nonEmpty(value: string | null | undefined): string | null {
   const trimmed = value?.trim();

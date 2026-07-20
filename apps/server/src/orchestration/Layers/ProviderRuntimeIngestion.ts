@@ -1280,6 +1280,15 @@ const make = Effect.gen(function* () {
     readonly createdAt: string;
   }) {
     const batchId = workflowBatchId(input.thread.id, input.sourceMessageId);
+    const implementationRun =
+      (yield* projectionSnapshotQuery.getCommandReadModel()).implementationRuns
+        .filter(
+          (run) =>
+            run.orchestratorThreadId === input.thread.id &&
+            run.status !== "completed" &&
+            run.status !== "canceled",
+        )
+        .toSorted((left, right) => (left.updatedAt < right.updatedAt ? 1 : -1))[0];
     const persistedChildren = input.children.map((child, index) => {
       const definition = resolveWorkflowSubagentSpawnDefinition(child.workflowPromptId);
       const isBrowser =
@@ -1380,6 +1389,11 @@ const make = Effect.gen(function* () {
               `Workflow sub-agent request from parent thread '${input.thread.id}'.`,
               `Target workflowPromptId: '${definition.workflowPromptId}'.`,
               `Expected result directive: '${persistedChild.expectedResult}'.`,
+              ...(implementationRun === undefined
+                ? []
+                : [
+                    `Implementation run ID: '${implementationRun.id}'. Use this exact value for any runId field.`,
+                  ]),
               child.promptMarkdown,
             ].join("\n\n"),
             definition.workflowPromptId,
@@ -1439,7 +1453,7 @@ const make = Effect.gen(function* () {
               role: "user",
               text:
                 persistedChild.devReviewMode === "feedback"
-                  ? `${childPrompt}\n\nThis is focused feedback mode. Use preview_* tools only, open previews with show: false, do not call dev_review_* tools, and finish with workflow-subagent-result. Recording and screenshots are not required.`
+                  ? `${childPrompt}\n\nThis is focused feedback mode. Use preview_* tools only, open previews with show: false, do not call dev_review_* tools, and finish with exactly one fenced JSON directive shaped as { "type": "workflow-subagent-result", "status": "completed" | "blocked", "resultMarkdown": "concise findings, reproduction steps, blockers, and recommendations" }. Recording and screenshots are not required.`
                   : childPrompt,
               attachments: [],
             },
@@ -3093,7 +3107,12 @@ const make = Effect.gen(function* () {
         }
       }
 
-      if (event.type === "turn.completed") {
+      if (
+        event.type === "turn.completed" &&
+        activeTurnId !== null &&
+        eventTurnId !== undefined &&
+        sameId(activeTurnId, eventTurnId)
+      ) {
         yield* settleRunningBatchChildAfterTermination(
           thread,
           now,

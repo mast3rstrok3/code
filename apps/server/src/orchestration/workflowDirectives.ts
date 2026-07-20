@@ -197,6 +197,23 @@ function optionalString(record: Record<string, unknown>, key: string): string | 
     : `Directive field '${key}' must be a non-empty string when provided.`;
 }
 
+function workflowSubagentResultMarkdown(record: Record<string, unknown>): string {
+  const explicit = requiredString(record, "resultMarkdown");
+  if (!explicit.startsWith("Directive field")) return explicit;
+
+  const summary = requiredString(record, "summary");
+  if (summary.startsWith("Directive field")) return explicit;
+
+  const detail = Object.fromEntries(
+    Object.entries(record).filter(
+      ([key]) => key !== "type" && key !== "status" && key !== "summary",
+    ),
+  );
+  return Object.keys(detail).length === 0
+    ? summary
+    : `${summary}\n\n\`\`\`json\n${JSON.stringify(detail, null, 2)}\n\`\`\``;
+}
+
 function parseWorkflowSubagentChild(value: unknown, index?: number): WorkflowSubagentCreateChild {
   const prefix =
     index === undefined
@@ -769,7 +786,7 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
     }
     case "workflow-subagent-result": {
       const status = record["status"];
-      const resultMarkdown = requiredString(record, "resultMarkdown");
+      const resultMarkdown = workflowSubagentResultMarkdown(record);
       if (status !== "completed" && status !== "blocked") {
         return "workflow-subagent-result.status must be completed or blocked.";
       }

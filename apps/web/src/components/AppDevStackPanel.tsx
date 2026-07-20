@@ -46,9 +46,11 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import {
+  isTransitioningAppDevStackStatus,
   primaryPreviewForStack,
   previewForPod,
   previewUrlForService,
+  shouldPollAppDevStacks,
   type PreviewCandidate,
 } from "./AppDevStackPanel.logic";
 import {
@@ -59,7 +61,6 @@ import {
   resolveCurrentStackPath,
 } from "./AppDevStackLogsPanel.logic";
 
-const TRANSITIONING_STATUSES = new Set(["pending", "starting", "stopping"]);
 const KUBERNETES_NAMESPACE_MAX_LENGTH = 63;
 
 interface AppDevStackPanelProps {
@@ -145,7 +146,8 @@ function StatusBadge({ status }: { readonly status: AppDevStack["status"] }) {
         status === "running" && "border-emerald-500/30 bg-emerald-500/10 text-emerald-600",
         status === "error" && "border-destructive/30 bg-destructive/10 text-destructive",
         status === "stopped" && "border-border bg-muted text-muted-foreground",
-        TRANSITIONING_STATUSES.has(status) && "border-amber-500/30 bg-amber-500/10 text-amber-600",
+        isTransitioningAppDevStackStatus(status) &&
+          "border-amber-500/30 bg-amber-500/10 text-amber-600",
       )}
     >
       {status}
@@ -581,6 +583,16 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
     podsQuery.refresh();
     podLogsQuery.refresh();
   }, [currentStackQuery, listQuery, podLogsQuery, podsQuery, statusQuery]);
+
+  const pollTransitioningStacks = shouldPollAppDevStacks(
+    currentStackQuery.data?.stack,
+    listQuery.data?.stacks ?? [],
+  );
+  useEffect(() => {
+    if (!pollTransitioningStacks) return;
+    const interval = window.setInterval(refreshStacks, 2_500);
+    return () => window.clearInterval(interval);
+  }, [pollTransitioningStacks, refreshStacks]);
 
   const stacks = useMemo(() => {
     const currentNormalized = normalizeWorktreePath(currentPath);

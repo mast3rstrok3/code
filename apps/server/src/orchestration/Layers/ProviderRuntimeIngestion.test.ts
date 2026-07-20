@@ -3265,6 +3265,132 @@ describe("ProviderRuntimeIngestion", () => {
     expect(parent?.devReviews).toHaveLength(0);
   });
 
+  it("ignores unrelated turn completions until the workflow child reports its result", async () => {
+    const harness = await createHarness();
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    const parentThreadId = asThreadId("thread-subagent-result-parent");
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-subagent-result-parent-create"),
+        threadId: parentThreadId,
+        projectId: asProjectId("project-1"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+        parentThreadId: null,
+        workflowRole: null,
+        title: "Sub-agent result parent",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: "default",
+        runtimeMode: "full-access",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-subagent-result-create"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt,
+      threadId: parentThreadId,
+      turnId: asTurnId("turn-subagent-result-create"),
+      itemId: asItemId("item-subagent-result-create"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail: `\`\`\`json
+{
+  "type": "workflow-subagent-create",
+  "workflowPromptId": "${WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex}",
+  "title": "Review checkout",
+  "promptMarkdown": "Review checkout in the browser."
+}
+\`\`\``,
+      },
+    });
+
+    const launched = await waitForReadModel(harness.readModel, (readModel) =>
+      readModel.threads.some(
+        (thread) =>
+          thread.parentThreadId === parentThreadId &&
+          thread.workflowRole === "implementation-qa-reviewer",
+      ),
+    );
+    const childThread = launched.threads.find(
+      (thread) =>
+        thread.parentThreadId === parentThreadId &&
+        thread.workflowRole === "implementation-qa-reviewer",
+    );
+    if (childThread === undefined) throw new Error("Workflow child was not created.");
+    expect(childThread.messages[0]?.text).toContain('"resultMarkdown"');
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-subagent-result-turn-started"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt,
+      threadId: childThread.id,
+      turnId: asTurnId("turn-subagent-result-active"),
+    });
+    await waitForThread(
+      harness.readModel,
+      (thread) => thread.session?.activeTurnId === "turn-subagent-result-active",
+      2_000,
+      childThread.id,
+    );
+    const beforeUnrelatedCompletion = (await harness.readModel()).threads.find(
+      (thread) => thread.id === parentThreadId,
+    );
+    expect(beforeUnrelatedCompletion?.workflowSubagentBatches?.[0]?.children[0]?.status).toBe(
+      "running",
+    );
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-subagent-result-unrelated-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt,
+      threadId: childThread.id,
+      turnId: asTurnId("turn-subagent-result-unrelated"),
+      payload: { state: "completed" },
+    });
+    await harness.drain();
+    let parent = (await harness.readModel()).threads.find((thread) => thread.id === parentThreadId);
+    expect(parent?.workflowSubagentBatches?.[0]?.children[0]?.status).toBe("running");
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-subagent-result-item"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt,
+      threadId: childThread.id,
+      turnId: asTurnId("turn-subagent-result-active"),
+      itemId: asItemId("item-subagent-result-item"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail: `\`\`\`json
+{
+  "type": "workflow-subagent-result",
+  "status": "blocked",
+  "summary": "Authentication blocked the browser review.",
+  "recommendations": ["Provide a seeded account."]
+}
+\`\`\``,
+      },
+    });
+    await harness.drain();
+    parent = (await harness.readModel()).threads.find((thread) => thread.id === parentThreadId);
+    expect(parent?.workflowSubagentBatches?.[0]?.children[0]?.status).toBe("blocked");
+    expect(parent?.workflowSubagentBatches?.[0]?.children[0]?.resultMarkdown).toContain(
+      "Authentication blocked",
+    );
+  });
+
   it("creates durable browser dev reviews from sub-agent directives with the codex hardlock", async () => {
     const harness = await createHarness();
     const createdAt = "2026-01-01T00:00:00.000Z";

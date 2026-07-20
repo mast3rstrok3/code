@@ -526,6 +526,7 @@ export const OrchestrationImplementationRetryableFailure = Schema.Struct({
     "app-dev-stack",
     "dev-review",
     "code-review",
+    "fixer",
     "build",
     "change-request",
   ]),

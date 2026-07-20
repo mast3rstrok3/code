@@ -360,7 +360,7 @@ function buildFixPrompt(input: {
     "",
     "Before reporting success, run every required validation command:",
     ...input.run.launchSummary.validationCommands.map((command) => `- ${command}`),
-    "If native mobile files changed, also run vp run lint:mobile.",
+    `If git diff ${input.run.pinnedCommit}...HEAD includes apps/mobile, also run vp run lint:mobile, even when the current fix did not touch those files.`,
     "",
     "Finish with exactly one fenced JSON directive of type implementation-fix-result for this runId.",
   ].join("\n");
@@ -410,7 +410,7 @@ function buildCodeReviewFixPrompt(input: {
     "",
     "Before reporting success, run every required validation command:",
     ...input.run.launchSummary.validationCommands.map((command) => `- ${command}`),
-    "If native mobile files changed, also run vp run lint:mobile.",
+    `If git diff ${input.run.pinnedCommit}...HEAD includes apps/mobile, also run vp run lint:mobile, even when the current fix did not touch those files.`,
     "",
     "Finish with exactly one fenced JSON directive of type implementation-fix-result for this runId.",
   ].join("\n");
@@ -430,7 +430,7 @@ function buildMergeGateFixPrompt(input: {
     "",
     "Before reporting success, run every required validation command:",
     ...input.run.launchSummary.validationCommands.map((command) => `- ${command}`),
-    "If native mobile files changed, also run vp run lint:mobile.",
+    `If git diff ${input.run.pinnedCommit}...HEAD includes apps/mobile, also run vp run lint:mobile, even when the current fix did not touch those files.`,
     "",
     "Finish with exactly one fenced JSON directive of type implementation-fix-result for this runId.",
   ].join("\n");
@@ -598,6 +598,7 @@ const make = Effect.gen(function* () {
       | "app-dev-stack"
       | "dev-review"
       | "code-review"
+      | "fixer"
       | "build"
       | "change-request";
   }) {
@@ -2364,6 +2365,7 @@ const make = Effect.gen(function* () {
       yield* blockRun({
         sourceThreadId,
         run,
+        retryableStage: "fixer",
         reasonMarkdown: directive.notesMarkdown,
         updatedAt,
       });
@@ -2379,6 +2381,7 @@ const make = Effect.gen(function* () {
       yield* blockRun({
         sourceThreadId,
         run,
+        retryableStage: "fixer",
         reasonMarkdown: `Fix result did not include passing results for every required validation command. Required commands: ${run.launchSummary.validationCommands.join(", ")}.`,
         updatedAt,
       });
@@ -2400,6 +2403,7 @@ const make = Effect.gen(function* () {
       yield* blockRun({
         sourceThreadId,
         run,
+        retryableStage: "fixer",
         reasonMarkdown:
           "Fix result changed native mobile files without a passing `vp run lint:mobile` validation.",
         updatedAt,
@@ -2425,7 +2429,7 @@ const make = Effect.gen(function* () {
       yield* blockRun({
         sourceThreadId,
         run,
-        retryableStage: run.fixOrigin === "code-review" ? "code-review" : "merge-gate",
+        retryableStage: "fixer",
         reasonMarkdown: "Fixer must finish with a committed, clean orchestrator worktree.",
         updatedAt,
       });
@@ -2440,7 +2444,7 @@ const make = Effect.gen(function* () {
         yield* blockRun({
           sourceThreadId,
           run,
-          retryableStage: run.fixOrigin === "code-review" ? "code-review" : "merge-gate",
+          retryableStage: "fixer",
           reasonMarkdown: `Fixer reported '${reported.commitSha}', but orchestrator HEAD is '${head.commitSha}'.`,
           updatedAt,
         });
@@ -2735,6 +2739,7 @@ const make = Effect.gen(function* () {
         yield* blockRun({
           sourceThreadId,
           run,
+          retryableStage: "dev-review",
           reasonMarkdown: `Browser dev review reached ${run.qaAttemptCount} attempts without passing.`,
           updatedAt: event.payload.updatedAt,
         });
@@ -2806,6 +2811,7 @@ const make = Effect.gen(function* () {
     }) {
       const failure = input.run.retryableFailure;
       if (failure === null || failure.attemptCount > failure.maxAttempts) return;
+      const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
 
       if (failure.stage === "change-request") {
         yield* fileChangeRequest({
@@ -2846,7 +2852,46 @@ const make = Effect.gen(function* () {
         });
         return;
       }
-      if (failure.stage === "dev-review" || failure.stage === "app-dev-stack") {
+      if (failure.stage === "dev-review") {
+        const reviewId = input.run.devReviewIds.at(-1);
+        const latestReview =
+          reviewId === undefined
+            ? undefined
+            : findThread(readModel, input.run.orchestratorThreadId)?.devReviews.find(
+                (review) => review.id === reviewId,
+              );
+        if (latestReview?.status === "failed") {
+          yield* startFixer({
+            sourceThreadId: input.sourceThreadId,
+            run: {
+              ...input.run,
+              activeDevReviewThreadId: null,
+              activeDevReviewHeadSha: null,
+              retryableFailure: null,
+            },
+            status: "fixing",
+            origin: "dev-review",
+            title: "Fix browser dev review",
+            promptText: buildFixPrompt({
+              run: input.run,
+              reviewId: latestReview.id,
+            }),
+            createdAt: input.createdAt,
+          });
+          return;
+        }
+        yield* startBrowserReview({
+          sourceThreadId: input.sourceThreadId,
+          run: {
+            ...input.run,
+            activeDevReviewThreadId: null,
+            activeDevReviewHeadSha: null,
+          },
+          createdAt: input.createdAt,
+        });
+        return;
+      }
+      if (failure.stage === "app-dev-stack") {
         yield* startBrowserReview({
           sourceThreadId: input.sourceThreadId,
           run: {
@@ -2866,6 +2911,51 @@ const make = Effect.gen(function* () {
             activeCodeReviewThreadId: null,
             activeCodeReviewHeadSha: null,
           },
+          createdAt: input.createdAt,
+        });
+        return;
+      }
+      if (failure.stage === "fixer") {
+        const origin =
+          input.run.fixOrigin ??
+          (input.run.status === "code-review-fixing" ? "code-review" : "dev-review");
+        const reviewId = input.run.devReviewIds.at(-1);
+        if (origin === "dev-review" && reviewId === undefined) {
+          yield* blockRun({
+            sourceThreadId: input.sourceThreadId,
+            run: input.run,
+            reasonMarkdown:
+              "Cannot retry the Browser Dev Review fixer without a Dev Review record.",
+            updatedAt: input.createdAt,
+          });
+          return;
+        }
+        yield* startFixer({
+          sourceThreadId: input.sourceThreadId,
+          run: { ...input.run, activeFixerThreadId: null, retryableFailure: null },
+          status: origin === "code-review" ? "code-review-fixing" : "fixing",
+          origin,
+          title:
+            origin === "merge-gate"
+              ? "Fix merge gate failures"
+              : origin === "dev-review"
+                ? "Fix browser dev review"
+                : "Fix code review findings",
+          promptText:
+            origin === "merge-gate"
+              ? buildMergeGateFixPrompt({
+                  run: input.run,
+                  reportMarkdown: failure.detail,
+                })
+              : origin === "dev-review"
+                ? buildFixPrompt({
+                    run: input.run,
+                    reviewId: DevReviewId.make(reviewId as string),
+                  })
+                : buildCodeReviewFixPrompt({
+                    run: input.run,
+                    reportMarkdown: input.run.latestCodeReviewReportMarkdown ?? failure.detail,
+                  }),
           createdAt: input.createdAt,
         });
         return;
@@ -3126,6 +3216,52 @@ const make = Effect.gen(function* () {
           (thread) => thread.session?.status === "starting" || thread.session?.status === "running",
         );
       };
+
+      if (
+        run.status === "needs-human-attention" &&
+        run.retryableFailure === null &&
+        run.activeFixerThreadId !== null &&
+        run.fixOrigin !== null &&
+        !hasActiveChild({
+          threadId: run.activeFixerThreadId,
+          role: "implementation-fixer",
+        })
+      ) {
+        const reviewId = run.devReviewIds.at(-1);
+        if (run.fixOrigin === "dev-review" && reviewId === undefined) continue;
+        yield* recoverRunStage(
+          run.id,
+          "legacy-fixer",
+          startFixer({
+            sourceThreadId,
+            run: { ...run, activeFixerThreadId: null },
+            status: run.fixOrigin === "code-review" ? "code-review-fixing" : "fixing",
+            origin: run.fixOrigin,
+            title:
+              run.fixOrigin === "merge-gate"
+                ? "Fix merge gate failures"
+                : run.fixOrigin === "dev-review"
+                  ? "Fix browser dev review"
+                  : "Fix code review findings",
+            promptText:
+              run.fixOrigin === "merge-gate"
+                ? buildMergeGateFixPrompt({
+                    run,
+                    reportMarkdown: "The previous merge-gate fixer was interrupted.",
+                  })
+                : run.fixOrigin === "dev-review"
+                  ? buildFixPrompt({ run, reviewId: DevReviewId.make(reviewId as string) })
+                  : buildCodeReviewFixPrompt({
+                      run,
+                      reportMarkdown:
+                        run.latestCodeReviewReportMarkdown ??
+                        "The previous code-review fixer was interrupted.",
+                    }),
+            createdAt,
+          }),
+        );
+        continue;
+      }
 
       if (
         run.artifactSource === "planning-spec" &&
@@ -3393,14 +3529,22 @@ const make = Effect.gen(function* () {
       ),
     );
     yield* Effect.forkScoped(
-      recoverRetryableRuns().pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("implementation workflow automatic retry sweep failed", {
-            cause: Cause.pretty(cause),
-          }),
-        ),
-        Effect.repeat(Schedule.spaced(Duration.seconds(30))),
-      ),
+      Effect.gen(function* () {
+        yield* recoverRetryableRuns().pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("implementation workflow automatic retry sweep failed", {
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        );
+        yield* recoverIncompleteStages().pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("implementation workflow periodic stage recovery failed", {
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        );
+      }).pipe(Effect.repeat(Schedule.spaced(Duration.seconds(30)))),
     );
   });
 

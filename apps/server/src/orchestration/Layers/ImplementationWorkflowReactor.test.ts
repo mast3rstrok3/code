@@ -21,6 +21,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import type * as Scope from "effect/Scope";
 import { describe } from "vite-plus/test";
 
 import { AppDevStackManager } from "../../appDevStack/AppDevStackManager.ts";
@@ -311,7 +312,7 @@ function makeTestLayer(
 }
 
 function withSystem<A, E>(
-  use: (system: ImplementationSystem) => Effect.Effect<A, E>,
+  use: (system: ImplementationSystem) => Effect.Effect<A, E, Scope.Scope>,
   options?: {
     readonly serverSettings?: DeepPartial<ServerSettings>;
     readonly failCreateWorktreeAfter?: number;
@@ -1569,7 +1570,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("blocks browser fixes that omit required validation results", () =>
+  it.effect("makes browser fixes with missing validation results retryable", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         const { run } = yield* launchRun(system);
@@ -1581,9 +1582,175 @@ describe("ImplementationWorkflowReactor", () => {
         const snapshot = yield* system.query.getSnapshot();
         const updated = snapshot.implementationRuns.find((candidate) => candidate.id === run.id);
         expect(updated?.status).toBe("needs-human-attention");
+        expect(updated?.retryableFailure?.stage).toBe("fixer");
         expect(updated?.devReviewIds).toHaveLength(1);
         expect(
           snapshot.threads.filter((thread) => thread.workflowRole === "implementation-validator"),
+        ).toHaveLength(1);
+      }),
+    ),
+  );
+
+  it.effect("retries an interrupted browser fixer instead of terminally blocking the run", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+        yield* passMergeGate(system, run);
+        yield* failDevReview(system, run);
+
+        let snapshot = yield* system.query.getSnapshot();
+        const firstFixer = snapshot.threads.find(
+          (thread) => thread.workflowRole === "implementation-fixer",
+        );
+        if (firstFixer === undefined) throw new Error("Fixer missing.");
+        yield* system.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: commandId("browser-fix-interrupted"),
+          threadId: firstFixer.id,
+          activity: {
+            id: eventId("browser-fix-interrupted"),
+            tone: "error",
+            kind: "implementation-fix-result",
+            summary: "Implementation fix failed",
+            payload: {
+              type: "implementation-fix-result",
+              runId: run.id,
+              status: "failed",
+              validations: [],
+              notesMarkdown:
+                "Provider session lost while a turn was running; settled by the stale-turn reconciler.",
+            },
+            turnId: null,
+            createdAt: "2026-01-01T00:00:04.000Z",
+          },
+          createdAt: "2026-01-01T00:00:04.000Z",
+        });
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        const interrupted = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(interrupted?.status).toBe("needs-human-attention");
+        expect(interrupted?.retryableFailure?.stage).toBe("fixer");
+
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.retry",
+          commandId: commandId("browser-fix-interrupted-retry"),
+          threadId: sourceThreadId,
+          runId: run.id,
+          createdAt: "2026-01-01T00:00:05.000Z",
+        });
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        const retried = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(retried?.status).toBe("fixing");
+        expect(retried?.retryableFailure).toBeNull();
+        expect(retried?.activeFixerThreadId).not.toBe(firstFixer.id);
+        expect(
+          snapshot.threads.filter((thread) => thread.workflowRole === "implementation-fixer"),
+        ).toHaveLength(2);
+      }),
+    ),
+  );
+
+  it.effect("recovers legacy interrupted fixers that predate retryable fixer failures", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+        yield* passMergeGate(system, run);
+        yield* failDevReview(system, run);
+
+        let snapshot = yield* system.query.getSnapshot();
+        const fixingRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        const firstFixer = snapshot.threads.find(
+          (thread) => thread.workflowRole === "implementation-fixer",
+        );
+        if (fixingRun === undefined || firstFixer === undefined) {
+          throw new Error("Fixer missing.");
+        }
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("legacy-browser-fix-interrupted"),
+          threadId: sourceThreadId,
+          run: {
+            ...fixingRun,
+            status: "needs-human-attention",
+            retryableFailure: null,
+          },
+          createdAt: "2026-01-01T00:00:04.000Z",
+        });
+        yield* system.engine.dispatch({
+          type: "thread.session.set",
+          commandId: commandId("legacy-browser-fixer-session-error"),
+          threadId: firstFixer.id,
+          session: {
+            threadId: firstFixer.id,
+            status: "error",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: "Provider session lost.",
+            updatedAt: "2026-01-01T00:00:04.000Z",
+          },
+          createdAt: "2026-01-01T00:00:04.000Z",
+        });
+
+        yield* system.reactor.start();
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        const recovered = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(recovered?.status).toBe("fixing");
+        expect(recovered?.activeFixerThreadId).not.toBe(firstFixer.id);
+        expect(
+          snapshot.threads.filter((thread) => thread.workflowRole === "implementation-fixer"),
+        ).toHaveLength(2);
+      }),
+    ),
+  );
+
+  it.effect("makes an exhausted browser review retryable", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+        yield* passMergeGate(system, run);
+
+        let snapshot = yield* system.query.getSnapshot();
+        const reviewingRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        if (reviewingRun === undefined) throw new Error("Reviewing run missing.");
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("exhaust-browser-review-attempts"),
+          threadId: sourceThreadId,
+          run: { ...reviewingRun, qaAttemptCount: 5 },
+          createdAt: "2026-01-01T00:00:03.000Z",
+        });
+        yield* failDevReview(system, run);
+
+        snapshot = yield* system.query.getSnapshot();
+        const exhausted = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(exhausted?.status).toBe("needs-human-attention");
+        expect(exhausted?.retryableFailure?.stage).toBe("dev-review");
+
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.retry",
+          commandId: commandId("retry-exhausted-browser-review"),
+          threadId: sourceThreadId,
+          runId: run.id,
+          createdAt: "2026-01-01T00:00:04.000Z",
+        });
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        const fixing = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(fixing?.status).toBe("fixing");
+        expect(fixing?.fixOrigin).toBe("dev-review");
+        expect(fixing?.retryableFailure).toBeNull();
+        expect(
+          snapshot.threads.filter((thread) => thread.workflowRole === "implementation-fixer"),
         ).toHaveLength(1);
       }),
     ),

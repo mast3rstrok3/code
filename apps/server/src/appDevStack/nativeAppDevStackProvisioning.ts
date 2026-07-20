@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - Native Kubernetes provisioning writes a kubectl manifest file.
+import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeHttps from "node:https";
@@ -48,6 +49,14 @@ interface ParsedComposeBuild {
   readonly args: ReadonlyMap<string, string>;
 }
 
+interface ParsedComposeHealthcheck {
+  readonly test: unknown;
+  readonly interval: unknown;
+  readonly timeout: unknown;
+  readonly startPeriod: unknown;
+  readonly retries: unknown;
+}
+
 interface ParsedComposeService {
   readonly name: string;
   readonly image: string;
@@ -60,6 +69,7 @@ interface ParsedComposeService {
   readonly command: unknown;
   readonly entrypoint: unknown;
   readonly workingDir: string | undefined;
+  readonly healthcheck: ParsedComposeHealthcheck | undefined;
 }
 
 type KubernetesDocument = Record<string, unknown>;
@@ -248,6 +258,17 @@ const parseComposeBuild = (raw: unknown): ParsedComposeBuild | undefined => {
   };
 };
 
+const parseComposeHealthcheck = (raw: unknown): ParsedComposeHealthcheck | undefined => {
+  if (!isRecord(raw) || raw.disable === true) return undefined;
+  return {
+    test: raw.test,
+    interval: raw.interval,
+    timeout: raw.timeout,
+    startPeriod: raw.start_period ?? raw.startPeriod,
+    retries: raw.retries,
+  };
+};
+
 const parseComposeServices = (compose: unknown): Array<ParsedComposeService> => {
   if (!isRecord(compose) || !isRecord(compose.services)) return [];
   return Object.entries(compose.services).flatMap(([name, rawService]) => {
@@ -277,8 +298,90 @@ const parseComposeServices = (compose: unknown): Array<ParsedComposeService> => 
         entrypoint: rawService.entrypoint,
         workingDir:
           stringOrUndefined(rawService.working_dir) ?? stringOrUndefined(rawService.workingDir),
+        healthcheck: parseComposeHealthcheck(rawService.healthcheck),
       },
     ];
+  });
+};
+
+interface ComposePortTarget {
+  readonly serviceName: string;
+  readonly containerPort: number;
+}
+
+const composePortTargets = (
+  services: ReadonlyArray<ParsedComposeService>,
+): ReadonlyMap<number, ComposePortTarget> => {
+  const targets = new Map<number, ComposePortTarget>();
+  const ambiguousPorts = new Set<number>();
+  for (const service of services) {
+    for (const port of service.ports) {
+      if (port.host === null || port.protocol !== "tcp") continue;
+      if (targets.has(port.host)) {
+        ambiguousPorts.add(port.host);
+        targets.delete(port.host);
+        continue;
+      }
+      if (!ambiguousPorts.has(port.host)) {
+        targets.set(port.host, {
+          serviceName: sanitizeKubernetesName(service.name),
+          containerPort: port.container,
+        });
+      }
+    }
+  }
+  return targets;
+};
+
+const rewriteComposeHostReferences = (
+  config: NativeProvisionConfig,
+  services: ReadonlyArray<ParsedComposeService>,
+): ReadonlyArray<ParsedComposeService> => {
+  const targets = composePortTargets(services);
+  const publicUrlReplacements = services
+    .flatMap((service) => {
+      const configuredHost = firstAppLabel(service.labels, ["hostname", "host"]);
+      const stackScopedUrl = appDevStackPreviewUrlForService({
+        namespace: config.namespace,
+        serviceName: service.name,
+        frontendUrl: config.frontendUrl,
+        backendUrl: config.backendUrl,
+        keycloakUrl: config.keycloakUrl,
+        minioUrl: config.minioUrl,
+      });
+      if (
+        !config.preferStackScopedUrls ||
+        configuredHost === undefined ||
+        stackScopedUrl === null
+      ) {
+        return [];
+      }
+      const configuredUrl = configuredHost.includes("://")
+        ? configuredHost
+        : `https://${configuredHost}`;
+      const configuredHostname = configuredUrl.replace(/^https?:\/\//u, "").replace(/\/+$/u, "");
+      const stackScopedHostname = stackScopedUrl.replace(/^https?:\/\//u, "").replace(/\/+$/u, "");
+      return [
+        [configuredUrl.replace(/\/+$/u, ""), stackScopedUrl.replace(/\/+$/u, "")],
+        [configuredHostname, stackScopedHostname],
+      ] as const;
+    })
+    .sort(([left], [right]) => right.length - left.length);
+  return services.map((service) => {
+    const environment = new Map(
+      [...service.environment].map(([name, value]) => [
+        name,
+        publicUrlReplacements.reduce(
+          (rewritten, [source, target]) => rewritten.replaceAll(source, target),
+          value.replace(/host\.containers\.internal:(\d{1,5})/gu, (match, rawPort: string) => {
+            const target = targets.get(Number.parseInt(rawPort, 10));
+            return target === undefined ? match : `${target.serviceName}:${target.containerPort}`;
+          }),
+        ),
+      ]),
+    );
+    if (!environment.has("CI")) environment.set("CI", "true");
+    return { ...service, environment };
   });
 };
 
@@ -395,10 +498,15 @@ const uniqueVolumeName = (base: string, used: Set<string>): string => {
   return candidate;
 };
 
-const resolveVolumeSource = (source: string, composeDir: string): string =>
-  source === "." || source === ".." || source.startsWith("./") || source.startsWith("../")
-    ? NodePath.resolve(composeDir, expandEnv(source))
-    : expandEnv(source);
+const resolveVolumeSource = (source: string, composeDir: string): string => {
+  const expanded = expandEnv(source);
+  return expanded === "." ||
+    expanded === ".." ||
+    expanded.startsWith("./") ||
+    expanded.startsWith("../")
+    ? NodePath.resolve(composeDir, expanded)
+    : expanded;
+};
 
 const resolveComposeRelativePath = (value: string, composeDir: string): string => {
   const expanded = expandEnv(value);
@@ -820,21 +928,34 @@ const prepareServices = async (
   return prepared;
 };
 
+interface AnonymousVolumeSeed {
+  readonly name: string;
+  readonly sourcePath: string;
+}
+
 const volumeMountDocuments = (
   service: ParsedComposeService,
   composeDir: string,
 ): {
   readonly volumeMounts: Array<Record<string, unknown>>;
   readonly volumes: Array<Record<string, unknown>>;
+  readonly anonymousVolumeSeeds: ReadonlyArray<AnonymousVolumeSeed>;
 } => {
   const usedNames = new Set<string>();
   const volumeMounts: Array<Record<string, unknown>> = [];
   const volumes: Array<Record<string, unknown>> = [];
+  const anonymousVolumeSeeds: AnonymousVolumeSeed[] = [];
 
-  const addEmptyDir = (nameBase: string, mountPath: string, readOnly = false) => {
+  const addEmptyDir = (
+    nameBase: string,
+    mountPath: string,
+    readOnly = false,
+    seedFromImage = false,
+  ) => {
     const name = uniqueVolumeName(nameBase, usedNames);
     volumeMounts.push({ name, mountPath, readOnly });
     volumes.push({ name, emptyDir: {} });
+    if (seedFromImage) anonymousVolumeSeeds.push({ name, sourcePath: mountPath });
   };
 
   const addHostPath = (source: string, mountPath: string, readOnly = false) => {
@@ -855,7 +976,7 @@ const volumeMountDocuments = (
       const parts = splitComposeVolumeSpec(rawVolume);
       if (parts.length === 1) {
         const mountPath = parts[0]?.trim();
-        if (mountPath?.startsWith("/")) addEmptyDir(mountPath, mountPath);
+        if (mountPath?.startsWith("/")) addEmptyDir(mountPath, mountPath, false, true);
         continue;
       }
       const source = parts[0]?.trim();
@@ -889,7 +1010,38 @@ const volumeMountDocuments = (
     }
   }
 
-  return { volumeMounts, volumes };
+  return { volumeMounts, volumes, anonymousVolumeSeeds };
+};
+
+const shellQuote = (value: string): string => `'${value.replace(/'/gu, `'\\''`)}'`;
+
+const anonymousVolumeInitContainer = (
+  service: ParsedComposeService,
+  seeds: ReadonlyArray<AnonymousVolumeSeed>,
+): Record<string, unknown> | null => {
+  if (seeds.length === 0) return null;
+  const volumeMounts = seeds.map((seed, index) => ({
+    name: seed.name,
+    mountPath: `/t3code-volume-init/${index}`,
+  }));
+  const script = seeds
+    .map((seed, index) => {
+      const source = shellQuote(seed.sourcePath);
+      const target = shellQuote(`/t3code-volume-init/${index}`);
+      return `if [ -d ${source} ]; then cp -a ${source}/. ${target}/; fi`;
+    })
+    .join("\n");
+  return {
+    name: "anonymous-volume-init",
+    image: service.image,
+    imagePullPolicy: imagePullPolicyForImage(service.image),
+    command: ["/bin/sh", "-ec"],
+    args: [script],
+    volumeMounts,
+    resources: {
+      requests: { cpu: "10m", memory: "32Mi" },
+    },
+  };
 };
 
 const splitComposeCommand = (value: string): Array<string> => {
@@ -940,6 +1092,65 @@ const commandArray = (value: unknown): Array<string> | undefined => {
     return args.length > 0 ? args : undefined;
   }
   return undefined;
+};
+
+const durationSeconds = (value: unknown): number | undefined => {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.max(1, Math.ceil(value / 1_000_000_000));
+  }
+  if (typeof value !== "string") return undefined;
+  const match = /^(\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h)$/u.exec(value.trim());
+  if (match === null) return undefined;
+  const amount = Number.parseFloat(match[1] ?? "");
+  const unit = match[2];
+  const multiplier =
+    unit === "h"
+      ? 3600
+      : unit === "m"
+        ? 60
+        : unit === "s"
+          ? 1
+          : unit === "ms"
+            ? 0.001
+            : unit === "us" || unit === "µs"
+              ? 0.000001
+              : 0.000000001;
+  return Math.max(1, Math.ceil(amount * multiplier));
+};
+
+const positiveInteger = (value: unknown): number | undefined => {
+  const parsed = typeof value === "number" ? value : Number.parseInt(String(value), 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+};
+
+const healthcheckCommand = (test: unknown): ReadonlyArray<string> | undefined => {
+  if (typeof test === "string" && test.trim().length > 0) {
+    return ["/bin/sh", "-c", expandEnv(test)];
+  }
+  if (!Array.isArray(test) || test.length === 0) return undefined;
+  const [rawMode, ...rawCommand] = test;
+  const mode = String(rawMode).toUpperCase();
+  if (mode === "NONE") return undefined;
+  if (mode === "CMD") return rawCommand.map((item) => expandEnv(String(item)));
+  if (mode === "CMD-SHELL") {
+    return ["/bin/sh", "-c", rawCommand.map((item) => expandEnv(String(item))).join(" ")];
+  }
+  return test.map((item) => expandEnv(String(item)));
+};
+
+const readinessProbeForHealthcheck = (
+  healthcheck: ParsedComposeHealthcheck | undefined,
+): Record<string, unknown> | null => {
+  if (healthcheck === undefined) return null;
+  const command = healthcheckCommand(healthcheck.test);
+  if (command === undefined || command.length === 0) return null;
+  return {
+    exec: { command },
+    periodSeconds: durationSeconds(healthcheck.interval) ?? 30,
+    timeoutSeconds: durationSeconds(healthcheck.timeout) ?? 30,
+    initialDelaySeconds: durationSeconds(healthcheck.startPeriod) ?? 0,
+    failureThreshold: positiveInteger(healthcheck.retries) ?? 3,
+  };
 };
 
 const buildNamespace = (namespace: string, stackId: string): KubernetesDocument => ({
@@ -1000,6 +1211,11 @@ const imagePullPolicyForImage = (image: string) => {
     : "IfNotPresent";
 };
 
+const environmentHash = (environment: ReadonlyMap<string, string>): string =>
+  NodeCrypto.createHash("sha256")
+    .update(JSON.stringify([...environment].sort(([left], [right]) => left.localeCompare(right))))
+    .digest("hex");
+
 const buildDeployment = (
   namespace: string,
   stackId: string,
@@ -1008,7 +1224,7 @@ const buildDeployment = (
 ): KubernetesDocument => {
   const name = sanitizeKubernetesName(service.name);
   const labels = makeLabels(stackId, service.name);
-  const { volumeMounts, volumes } = volumeMountDocuments(service, composeDir);
+  const { volumeMounts, volumes, anonymousVolumeSeeds } = volumeMountDocuments(service, composeDir);
   const container: Record<string, unknown> = {
     name,
     image: service.image,
@@ -1029,9 +1245,10 @@ const buildDeployment = (
   if (args !== undefined) container.args = args;
   if (service.workingDir !== undefined) container.workingDir = service.workingDir;
   if (volumeMounts.length > 0) container.volumeMounts = volumeMounts;
+  const readinessProbe = readinessProbeForHealthcheck(service.healthcheck);
+  if (readinessProbe !== null) container.readinessProbe = readinessProbe;
   container.resources = {
     requests: { cpu: "25m", memory: "128Mi" },
-    limits: { cpu: "1", memory: "1Gi" },
   };
 
   const podSpec: Record<string, unknown> = {
@@ -1039,6 +1256,8 @@ const buildDeployment = (
     restartPolicy: "Always",
   };
   if (volumes.length > 0) podSpec.volumes = volumes;
+  const initContainer = anonymousVolumeInitContainer(service, anonymousVolumeSeeds);
+  if (initContainer !== null) podSpec.initContainers = [initContainer];
 
   return {
     apiVersion: "apps/v1",
@@ -1048,7 +1267,12 @@ const buildDeployment = (
       replicas: 1,
       selector: { matchLabels: { "app.kubernetes.io/name": name } },
       template: {
-        metadata: { labels },
+        metadata: {
+          labels,
+          annotations: {
+            "t3code.dev/environment-hash": environmentHash(service.environment),
+          },
+        },
         spec: podSpec,
       },
     },
@@ -1123,7 +1347,7 @@ export const generateNativeAppDevStackManifests = async (
   const compose = parseYamlValue(composeRaw);
   const namespace = config.namespace;
   const stackId = config.id;
-  const parsedServices = parseComposeServices(compose);
+  const parsedServices = rewriteComposeHostReferences(config, parseComposeServices(compose));
   if (parsedServices.length === 0) {
     throw new Error(`No services found in app-dev compose file: ${composePath}`);
   }
@@ -1150,7 +1374,9 @@ export const generateNativeAppDevStackManifests = async (
 };
 
 const stringifyDocuments = (documents: ReadonlyArray<KubernetesDocument>): string =>
-  documents.map((document) => `---\n${stringifyYamlValue(document, { lineWidth: 1000 })}`).join("");
+  documents
+    .map((document) => `---\n${stringifyYamlValue(document, { lineWidth: 1000, version: "1.1" })}`)
+    .join("");
 
 export const provisionNativeAppDevStack = async (
   config: NativeProvisionConfig,

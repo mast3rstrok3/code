@@ -1,5 +1,6 @@
 import {
   CommandId,
+  DevReviewId,
   EventId,
   MessageId,
   type OrchestrationProposedPlanId,
@@ -492,6 +493,30 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
                 status: "blocked",
                 reportMarkdown: STALE_TURN_ERROR_MESSAGE,
               },
+              createdAt,
+            });
+            return;
+          }
+          case "implementation-qa-reviewer": {
+            const run = readModel.implementationRuns.find(
+              (candidate) =>
+                candidate.orchestratorThreadId === thread.parentThreadId &&
+                candidate.status === "qa-reviewing" &&
+                candidate.activeDevReviewThreadId === thread.id,
+            );
+            const reviewId = run?.devReviewIds.at(-1);
+            if (run === undefined || reviewId === undefined) return;
+            yield* orchestrationEngine.dispatch({
+              type: "thread.dev-review.update",
+              commandId: yield* staleTurnCommandId(
+                "browser-review-runtime-failure",
+                thread.id,
+                pinnedTurnId,
+              ),
+              threadId: run.orchestratorThreadId,
+              reviewId: DevReviewId.make(reviewId),
+              status: "blocked",
+              updatedAt: createdAt,
               createdAt,
             });
             return;

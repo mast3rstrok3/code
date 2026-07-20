@@ -5,6 +5,7 @@ import {
   normalizePreviewHref,
   previewForPod,
   primaryPreviewForStack,
+  shouldPollAppDevStacks,
 } from "./AppDevStackPanel.logic";
 
 const makeStack = (input: Partial<AppDevStack> = {}): AppDevStack => ({
@@ -39,6 +40,12 @@ const makePod = (input: Partial<AppDevStackPod> = {}): AppDevStackPod => ({
 });
 
 describe("AppDevStackPanel URL helpers", () => {
+  it("polls while a current or listed stack is transitioning", () => {
+    expect(shouldPollAppDevStacks(makeStack({ status: "starting" }), [])).toBe(true);
+    expect(shouldPollAppDevStacks(makeStack(), [makeStack({ status: "stopping" })])).toBe(true);
+    expect(shouldPollAppDevStacks(makeStack(), [makeStack()])).toBe(false);
+  });
+
   it("prefers frontend aliases when choosing the primary stack preview", () => {
     const stack = makeStack({
       services: [

@@ -116,7 +116,7 @@ it.effect("translates interpolated bind mounts and string commands for Kubernete
     "    image: quay.io/minio/minio:latest",
     '    command: server /data --console-address ":9001"',
     "    volumes:",
-    "      - ${T3_TEST_APP_DATA_PATH:-/tmp/t3-app-data}:/data:rw",
+    "      - ${T3_TEST_APP_DATA_PATH:-../t3-app-data}:/data:rw",
     "    ports:",
     "      - '9000:9000'",
   ]);
@@ -165,7 +165,183 @@ it.effect("translates interpolated bind mounts and string commands for Kubernete
     const container = spec?.template.spec.containers[0];
 
     assert.deepEqual(container?.args, ["server", "/data", "--console-address", ":9001"]);
-    assert.equal(spec?.template.spec.volumes[0]?.hostPath?.path, "/tmp/t3-app-data");
+    assert.equal(
+      spec?.template.spec.volumes[0]?.hostPath?.path,
+      NodePath.join(tempDir, "infra", "t3-app-data"),
+    );
+  }).pipe(
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { force: true, recursive: true }))),
+  );
+});
+
+it.effect("rewrites Compose host port references to Kubernetes service DNS", () => {
+  const tempDir = makeTempHeroComposeWorktree([
+    "    image: hero-web:latest",
+    "    labels:",
+    "      rudi.appDevStack.hostname: rudi-dev.nightingale-ai.com",
+    "    environment:",
+    "      DATABASE_URL: postgresql://host.containers.internal:7013/hero",
+    "      EXTERNAL_URL: http://host.containers.internal:7999",
+    "      PUBLIC_URL: https://rudi-dev.nightingale-ai.com/assets",
+    "  postgres:",
+    "    image: postgres:17-alpine",
+    "    ports:",
+    "      - '7013:5432'",
+  ]);
+
+  return Effect.gen(function* () {
+    const documents = yield* Effect.promise(() =>
+      generateNativeAppDevStackManifests({
+        id: "hero-dev",
+        namespace: "hero-dev",
+        worktreePath: tempDir,
+        composePath: "infra/compose/compose.app-dev.yml",
+        displayName: "hero",
+        displaySlug: undefined,
+        repoName: "hero",
+        branchName: "main",
+        dockerPath: "docker",
+        buildctlPath: "buildctl",
+        imageBuilder: "docker",
+        imageRegistry: undefined,
+        imagePushRegistry: undefined,
+        imageProject: undefined,
+        buildkitAddr: undefined,
+        buildkitDockerConfig: undefined,
+        buildkitDockerConfigsDir: undefined,
+        buildkitHarborCaCert: undefined,
+        frontendUrl: undefined,
+        backendUrl: undefined,
+        keycloakUrl: undefined,
+        minioUrl: undefined,
+        preferStackScopedUrls: true,
+      }),
+    );
+    const configMap = documents.find(
+      (document) =>
+        document.kind === "ConfigMap" &&
+        (document.metadata as { readonly name?: unknown } | undefined)?.name === "web-env",
+    );
+    const deployment = documents.find(
+      (document) =>
+        document.kind === "Deployment" &&
+        (document.metadata as { readonly name?: unknown } | undefined)?.name === "web",
+    );
+    const data = configMap?.data as Readonly<Record<string, unknown>> | undefined;
+    const templateMetadata = (
+      deployment?.spec as
+        | {
+            readonly template?: {
+              readonly metadata?: { readonly annotations?: Readonly<Record<string, unknown>> };
+            };
+          }
+        | undefined
+    )?.template?.metadata;
+
+    assert.equal(data?.DATABASE_URL, "postgresql://postgres:5432/hero");
+    assert.equal(data?.EXTERNAL_URL, "http://host.containers.internal:7999");
+    assert.equal(data?.PUBLIC_URL, "https://hero-dev.nightingale-ai.com/assets");
+    assert.equal(data?.CI, "true");
+    assert.match(
+      String(templateMetadata?.annotations?.["t3code.dev/environment-hash"]),
+      /^[a-f\d]{64}$/u,
+    );
+  }).pipe(
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { force: true, recursive: true }))),
+  );
+});
+
+it.effect("seeds anonymous Compose volumes from the container image", () => {
+  const tempDir = makeTempHeroComposeWorktree([
+    "    image: hero-web:latest",
+    "    healthcheck:",
+    "      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:3000/health']",
+    "      interval: 5s",
+    "      timeout: 2s",
+    "      start_period: 10s",
+    "      retries: 4",
+    "    volumes:",
+    "      - /app/node_modules",
+    "      - /app/packages/ui/node_modules",
+    "      - hero-data:/data",
+  ]);
+
+  return Effect.gen(function* () {
+    const documents = yield* Effect.promise(() =>
+      generateNativeAppDevStackManifests({
+        id: "hero-dev",
+        namespace: "hero-dev",
+        worktreePath: tempDir,
+        composePath: "infra/compose/compose.app-dev.yml",
+        displayName: "hero",
+        displaySlug: undefined,
+        repoName: "hero",
+        branchName: "main",
+        dockerPath: "docker",
+        buildctlPath: "buildctl",
+        imageBuilder: "docker",
+        imageRegistry: undefined,
+        imagePushRegistry: undefined,
+        imageProject: undefined,
+        buildkitAddr: undefined,
+        buildkitDockerConfig: undefined,
+        buildkitDockerConfigsDir: undefined,
+        buildkitHarborCaCert: undefined,
+        frontendUrl: undefined,
+        backendUrl: undefined,
+        keycloakUrl: undefined,
+        minioUrl: undefined,
+        preferStackScopedUrls: true,
+      }),
+    );
+    const deployment = documents.find((document) => document.kind === "Deployment");
+    const podSpec = (
+      deployment?.spec as
+        | {
+            readonly template?: {
+              readonly spec?: {
+                readonly initContainers?: ReadonlyArray<Readonly<Record<string, unknown>>>;
+                readonly containers?: ReadonlyArray<Readonly<Record<string, unknown>>>;
+              };
+            };
+          }
+        | undefined
+    )?.template?.spec;
+    const initContainer = podSpec?.initContainers?.[0];
+    const container = podSpec?.containers?.[0];
+    const initMounts = initContainer?.volumeMounts as
+      | ReadonlyArray<{ readonly name?: unknown; readonly mountPath?: unknown }>
+      | undefined;
+
+    assert.deepEqual(initContainer?.command, ["/bin/sh", "-ec"]);
+    assert.lengthOf(initMounts ?? [], 2);
+    assert.notInclude(
+      (initMounts ?? []).map((mount) => mount.name),
+      "hero-data",
+    );
+    assert.include(
+      String((initContainer?.args as ReadonlyArray<unknown> | undefined)?.[0]),
+      "/app/node_modules",
+    );
+    assert.include(
+      String((initContainer?.args as ReadonlyArray<unknown> | undefined)?.[0]),
+      "/app/packages/ui/node_modules",
+    );
+    assert.deepEqual(container?.readinessProbe, {
+      exec: { command: ["wget", "-qO-", "http://127.0.0.1:3000/health"] },
+      periodSeconds: 5,
+      timeoutSeconds: 2,
+      initialDelaySeconds: 10,
+      failureThreshold: 4,
+    });
+    assert.notProperty(
+      (initContainer?.resources as Readonly<Record<string, unknown>> | undefined) ?? {},
+      "limits",
+    );
+    assert.notProperty(
+      (container?.resources as Readonly<Record<string, unknown>> | undefined) ?? {},
+      "limits",
+    );
   }).pipe(
     Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { force: true, recursive: true }))),
   );
@@ -939,6 +1115,7 @@ it.effect("uses an explicit native namespace for a new worktree when provided", 
 it.effect("provisions Kubernetes resources when auto-creating a missing native namespace", () => {
   const tempDir = makeTempHeroComposeWorktree([
     "    image: hero-web:latest",
+    "    command: redis-server --appendonly yes",
     "    labels:",
     "      rudi.appDevStack.hostname: rudi-dev.nightingale-ai.com",
     "    environment:",
@@ -994,6 +1171,7 @@ it.effect("provisions Kubernetes resources when auto-creating a missing native n
     assert.include(appliedManifest, "kind: Deployment");
     assert.include(appliedManifest, "image: hero-web:latest");
     assert.include(appliedManifest, "imagePullPolicy: Always");
+    assert.include(appliedManifest, '- "yes"');
     assert.include(appliedManifest, "kind: IngressRoute");
     assert.include(appliedManifest, "Host(`hero-dev.nightingale-ai.com`)");
     assert.notInclude(appliedManifest, "Host(`rudi-dev.nightingale-ai.com`)");

@@ -160,6 +160,44 @@ const viewportFromResizeInput = (
   return input.renderedViewport ?? DEFAULT_VIEWPORT;
 };
 
+const withTimeoutFallback = async <A>(
+  promise: Promise<A>,
+  timeoutMs: number,
+  fallback: A,
+): Promise<A> => {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<A>((resolve) => {
+        timeout = setTimeout(() => resolve(fallback), timeoutMs);
+        timeout.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+};
+
+const withTimeoutReject = async <A>(
+  promise: Promise<A>,
+  timeoutMs: number,
+  message: string,
+): Promise<A> => {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<A>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+        timeout.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+};
+
 const modifiersDown = (modifiers: ReadonlyArray<string> | undefined, modifier: string): boolean =>
   modifiers?.includes(modifier) ?? false;
 
@@ -176,7 +214,10 @@ const readHistoryState = async (
   cdp: CDPSession,
 ): Promise<{ readonly canGoBack: boolean; readonly canGoForward: boolean }> => {
   try {
-    const history = (await cdp.send("Page.getNavigationHistory")) as {
+    const history = (await withTimeoutFallback(cdp.send("Page.getNavigationHistory"), 2_000, {
+      currentIndex: 0,
+      entries: [],
+    })) as {
       readonly currentIndex?: number;
       readonly entries?: ReadonlyArray<unknown>;
     };
@@ -387,8 +428,10 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
       try: async () => {
         const statusTag = typeof status === "string" ? status : status?._tag;
         const url = tab.page.url();
-        const title = await tab.page.title().catch(() => "");
-        const history = await readHistoryState(tab.cdp);
+        const [title, history] = await Promise.all([
+          withTimeoutFallback(tab.page.title(), 2_000, "").catch(() => ""),
+          readHistoryState(tab.cdp),
+        ]);
         if (typeof status !== "string" && status?._tag === "LoadFailed") {
           const failureStatus = status;
           const failure =
@@ -458,7 +501,18 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
       viewport: DEFAULT_VIEWPORT,
       ignoreHTTPSErrors: true,
     };
-    const context = await playwright.chromium.launchPersistentContext(userDataDir, options);
+    const contextPromise = playwright.chromium.launchPersistentContext(userDataDir, options);
+    let context: Awaited<typeof contextPromise>;
+    try {
+      context = await withTimeoutReject(
+        contextPromise,
+        10_000,
+        "Timed out while launching the server preview browser.",
+      );
+    } catch (error) {
+      void contextPromise.then((lateContext) => lateContext.close()).catch(() => {});
+      throw error;
+    }
     return { context, source: resolution.source };
   };
 
@@ -492,14 +546,46 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
     const framePubSub = yield* PubSub.sliding<PreviewFrameEvent>(1);
     const page = yield* Effect.tryPromise({
       try: async () => {
-        const created = await runtime.context.newPage();
-        await created.setViewportSize(renderedViewport);
-        return created;
+        const pagePromise = runtime.context.newPage();
+        let created: Page | null = null;
+        try {
+          created = await withTimeoutReject(
+            pagePromise,
+            3_000,
+            "Timed out while creating the server preview browser page.",
+          );
+          await withTimeoutReject(
+            created.setViewportSize(renderedViewport),
+            2_000,
+            "Timed out while sizing the server preview browser page.",
+          );
+          return created;
+        } catch (error) {
+          if (created) {
+            void created.close().catch(() => {});
+          } else {
+            void pagePromise.then((latePage) => latePage.close()).catch(() => {});
+          }
+          throw error;
+        }
       },
       catch: browserError,
     });
     const cdp = yield* Effect.tryPromise({
-      try: async () => runtime.context.newCDPSession(page),
+      try: async () => {
+        const sessionPromise = runtime.context.newCDPSession(page);
+        try {
+          return await withTimeoutReject(
+            sessionPromise,
+            3_000,
+            "Timed out while attaching browser automation to the server preview page.",
+          );
+        } catch (error) {
+          void sessionPromise.then((lateSession) => lateSession.detach()).catch(() => {});
+          void page.close().catch(() => {});
+          throw error;
+        }
+      },
       catch: browserError,
     });
     const tab: ServerBrowserTab = {
@@ -570,13 +656,17 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
     });
     yield* Effect.tryPromise({
       try: async () => {
-        await cdp.send("Page.enable");
-        await cdp.send("Page.startScreencast", {
-          format: "jpeg",
-          quality: config.previewBrowserJpegQuality,
-          maxWidth: config.previewBrowserMaxFrameWidth,
-          maxHeight: config.previewBrowserMaxFrameHeight,
-        });
+        await withTimeoutFallback(cdp.send("Page.enable"), 2_000, undefined);
+        await withTimeoutFallback(
+          cdp.send("Page.startScreencast", {
+            format: "jpeg",
+            quality: config.previewBrowserJpegQuality,
+            maxWidth: config.previewBrowserMaxFrameWidth,
+            maxHeight: config.previewBrowserMaxFrameHeight,
+          }),
+          2_000,
+          undefined,
+        );
       },
       catch: browserError,
     });
@@ -588,7 +678,18 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
   });
 
   const ensureTab: ServerBrowserManager["Service"]["ensureTab"] = (input) =>
-    attachPage(input).pipe(Effect.asVoid);
+    attachPage(input).pipe(
+      Effect.timeoutOrElse({
+        duration: "10 seconds",
+        orElse: () =>
+          Effect.fail(
+            new PreviewBrowserUnavailableError({
+              message: "Timed out while initializing the server preview browser tab.",
+            }),
+          ),
+      }),
+      Effect.asVoid,
+    );
 
   const navigate: ServerBrowserManager["Service"]["navigate"] = Effect.fn(
     "ServerBrowserManager.navigate",
@@ -597,7 +698,12 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
     tab.lastRequestedUrl = input.url;
     yield* reportStatus(tab, { _tag: "Loading", url: input.url });
     yield* Effect.tryPromise({
-      try: () => tab.page.goto(input.url, { waitUntil: "domcontentloaded", timeout: 30_000 }),
+      try: () =>
+        withTimeoutReject(
+          tab.page.goto(input.url, { waitUntil: "domcontentloaded", timeout: 30_000 }),
+          8_000,
+          "Timed out while navigating the server preview browser page.",
+        ),
       catch: browserError,
     }).pipe(
       Effect.catch((error) =>
