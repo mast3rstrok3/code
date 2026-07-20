@@ -10,6 +10,7 @@ import {
   getProviderOptionDescriptors,
   getProviderOptionBooleanSelectionValue,
   getProviderOptionStringSelectionValue,
+  normalizeCustomModelSlug,
   normalizeModelSlug,
 } from "./model.ts";
 
@@ -146,7 +147,7 @@ describe("descriptor helpers", () => {
   });
 });
 
-describe("normalizeModelSlug", () => {
+describe("model slug normalization", () => {
   const codexDriver = ProviderDriverKind.make("codex");
 
   it("expands the 5.5 codex alias to gpt-5.5", () => {
@@ -155,5 +156,12 @@ describe("normalizeModelSlug", () => {
 
   it("passes gpt-5.5 through unchanged", () => {
     expect(normalizeModelSlug("gpt-5.5", codexDriver)).toBe("gpt-5.5");
+  });
+
+  it("preserves exact custom slugs instead of expanding provider aliases", () => {
+    const claude = ProviderDriverKind.make("claudeAgent");
+
+    expect(normalizeModelSlug("opus", claude)).toBe("claude-opus-4-8");
+    expect(normalizeCustomModelSlug(" opus ")).toBe("opus");
   });
 });

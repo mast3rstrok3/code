@@ -470,6 +470,10 @@ export const ServerConfig = Schema.Struct({
   observability: ServerObservability,
   settings: ServerSettings,
   previewBrowser: Schema.optional(ServerPreviewBrowserStatus),
+  /** Whether shell subscriptions can emit an opt-in catch-up completion marker. */
+  shellResumeCompletionMarker: Schema.optionalKey(Schema.Boolean),
+  /** Whether thread subscriptions can emit an opt-in catch-up completion marker. */
+  threadResumeCompletionMarker: Schema.optionalKey(Schema.Boolean),
 });
 export type ServerConfig = typeof ServerConfig.Type;
 

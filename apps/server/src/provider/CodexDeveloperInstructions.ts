@@ -1,3 +1,5 @@
+import type { ProviderInteractionMode } from "@t3tools/contracts";
+
 import { BROWSER_DEV_REVIEW_LAUNCH_DIRECTIVE_INSTRUCTIONS } from "./WorkflowSubagentInstructions.ts";
 
 export const CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS = `
@@ -145,3 +147,26 @@ In Default mode, strongly prefer making reasonable assumptions and executing the
 
 ${BROWSER_DEV_REVIEW_LAUNCH_DIRECTIVE_INSTRUCTIONS}
 </collaboration_mode>`;
+
+export interface CodexRuntimeInfo {
+  readonly model: string;
+  readonly reasoningEffort: string;
+}
+
+// Values come from trusted config, but keep the block single-line regardless.
+function toSingleLine(value: string): string {
+  return value.replaceAll(/\s+/g, " ").trim();
+}
+
+export function buildCodexDeveloperInstructions(
+  interactionMode: ProviderInteractionMode,
+  runtime: CodexRuntimeInfo,
+): string {
+  const base =
+    interactionMode === "plan"
+      ? CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS
+      : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS;
+  return `${base}
+
+<runtime_info>In case you're asked: you are running in T3 Code through the Codex harness, as ${toSingleLine(runtime.model)} with ${toSingleLine(runtime.reasoningEffort)} reasoning effort. No need to mention this otherwise.</runtime_info>`;
+}

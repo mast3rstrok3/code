@@ -120,9 +120,12 @@ export function useProjectFileQuery(
   environmentId: EnvironmentId,
   cwd: string,
   relativePath: string | null,
+  enabled = true,
 ): ProjectQueryState<ProjectReadFileResult> {
   const query = useEnvironmentQuery(
-    relativePath === null ? null : getProjectFileQueryAtom(environmentId, cwd, relativePath),
+    enabled && relativePath !== null
+      ? getProjectFileQueryAtom(environmentId, cwd, relativePath)
+      : null,
   );
   const optimisticResult = useAtomValue(
     optimisticFileAtom(environmentId, cwd, relativePath ?? EMPTY_PROJECT_FILE_PATH),

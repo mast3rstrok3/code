@@ -37,11 +37,11 @@ import * as CodexRpc from "effect-codex-app-server/rpc";
 import * as EffectCodexSchema from "effect-codex-app-server/schema";
 
 import { buildCodexInitializeParams } from "./CodexProvider.ts";
+import { codexSessionAppServerArgs } from "./codexLaunchArgs.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
 import {
   CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS,
-  CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
-  CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
+  buildCodexDeveloperInstructions,
 } from "../CodexDeveloperInstructions.ts";
 import {
   isBrowserDevReviewWorkflowPromptId,
@@ -107,6 +107,7 @@ export interface CodexSessionRuntimeOptions {
   readonly providerInstanceId?: ProviderInstanceId;
   readonly binaryPath: string;
   readonly homePath?: string;
+  readonly launchArgs?: string;
   readonly environment?: NodeJS.ProcessEnv;
   readonly cwd: string;
   readonly runtimeMode: RuntimeMode;
@@ -350,11 +351,12 @@ function buildCodexCollaborationMode(input: {
       : isPlanningWorkflowInteractionMode(input.interactionMode)
         ? "plan"
         : input.interactionMode;
-  const baseDeveloperInstructions =
-    mode === "plan"
-      ? CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS
-      : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS;
-  const scopedDeveloperInstructions = isBrowserDevReviewWorkflowPromptId(input.workflowPromptId)
+  const reasoningEffort = input.effort ?? "medium";
+  const baseDeveloperInstructions = buildCodexDeveloperInstructions(mode, {
+    model,
+    reasoningEffort,
+  });
+  const scopedDeveloperInstructions = isBrowserDevReviewWorkflowPromptId(workflowPromptId)
     ? `${baseDeveloperInstructions}\n\n${CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS}`
     : baseDeveloperInstructions;
   const workflowInstructions = resolveWorkflowSystemInstructions({
@@ -369,7 +371,7 @@ function buildCodexCollaborationMode(input: {
     mode,
     settings: {
       model,
-      reasoning_effort: input.effort ?? "medium",
+      reasoning_effort: reasoningEffort,
       developer_instructions: developerInstructions,
     },
   };
@@ -752,11 +754,11 @@ export const makeCodexSessionRuntime = (
       ...(resolvedHomePath ? { CODEX_HOME: resolvedHomePath } : {}),
     };
     const extendEnv = options.environment === undefined;
-    const spawnCommand = yield* resolveSpawnCommand(
-      options.binaryPath,
-      ["app-server", ...(options.appServerArgs ?? [])],
-      { env, extendEnv },
-    );
+    const appServerArgs = codexSessionAppServerArgs(options.appServerArgs, options.launchArgs);
+    const spawnCommand = yield* resolveSpawnCommand(options.binaryPath, appServerArgs, {
+      env,
+      extendEnv,
+    });
     const child = yield* spawner
       .spawn(
         ChildProcess.make(spawnCommand.command, spawnCommand.args, {

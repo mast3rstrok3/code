@@ -7,6 +7,7 @@ import {
   type PreviewViewportSetting,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
+import { normalizePreviewUrl } from "@t3tools/shared/preview";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useComposerDraftStore } from "~/composerDraftStore";
@@ -119,30 +120,44 @@ export function PreviewView({ threadRef, tabId: requestedTabId, configuredUrls, 
     runtimeBridge?.kind === "server" ? snapshot !== null : desktopOverlay !== null;
   const desktopPreviewBridge = previewBridge;
 
+  const navigateToResolvedUrl = useCallback(
+    async (resolvedUrl: string) => {
+      if (tabId && runtimeBridge) {
+        // Drive the webview imperatively; `usePreviewBridge` mirrors the
+        // resolved URL back to the server so other clients stay in sync.
+        await runtimeBridge.navigate(tabId, resolvedUrl);
+        rememberPreviewUrl(threadRef, resolvedUrl);
+      } else {
+        await openPreviewSession({
+          openPreview: open,
+          threadRef,
+          url: resolvedUrl,
+        });
+      }
+    },
+    [open, runtimeBridge, tabId, threadRef],
+  );
+
   const handleSubmitUrl = useCallback(
     async (next: string) => {
       try {
-        const resolvedUrl =
-          runtimeBridge?.kind === "server"
-            ? next
-            : resolveDiscoveredServerUrl(threadRef.environmentId, next);
-        if (tabId && runtimeBridge) {
-          // Drive the webview imperatively; `usePreviewBridge` mirrors the
-          // resolved URL back to the server so other clients stay in sync.
-          await runtimeBridge.navigate(tabId, resolvedUrl);
-          rememberPreviewUrl(threadRef, resolvedUrl);
-        } else {
-          await openPreviewSession({
-            openPreview: open,
-            threadRef,
-            url: resolvedUrl,
-          });
-        }
+        await navigateToResolvedUrl(normalizePreviewUrl(next));
       } catch {
         // Server-side `failed` event renders the unreachable view.
       }
     },
-    [open, runtimeBridge, tabId, threadRef],
+    [navigateToResolvedUrl],
+  );
+
+  const handleOpenServerUrl = useCallback(
+    async (next: string) => {
+      try {
+        await navigateToResolvedUrl(resolveDiscoveredServerUrl(threadRef.environmentId, next));
+      } catch {
+        // Server-side `failed` event renders the unreachable view.
+      }
+    },
+    [navigateToResolvedUrl, threadRef.environmentId],
   );
 
   const handleRefresh = useCallback(() => {
@@ -696,7 +711,7 @@ export function PreviewView({ threadRef, tabId: requestedTabId, configuredUrls, 
             environmentId={threadRef.environmentId}
             configuredUrls={configuredUrls}
             recentlySeenUrls={previewState.recentlySeenUrls}
-            onOpenUrl={(next) => void handleSubmitUrl(next)}
+            onOpenUrl={(next) => void handleOpenServerUrl(next)}
           />
         ) : null}
         {snapshot && desktopOverlay ? (

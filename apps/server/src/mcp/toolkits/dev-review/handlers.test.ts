@@ -99,6 +99,7 @@ const makeHarness = (input: {
     Layer.succeed(
       OrchestrationEngineService,
       OrchestrationEngineService.of({
+        latestSequence: Effect.succeed(0),
         readEvents: () => Stream.empty,
         dispatch: (command) => {
           dispatched.push(command);

@@ -42,8 +42,13 @@ import {
   detectComposerTrigger,
   expandCollapsedComposerCursor,
   replaceTextRange,
+  shouldSubmitComposerOnEnter,
 } from "../../composer-logic";
 import { deriveComposerSendState, readFileAsDataUrl } from "../ChatView.logic";
+import {
+  dataTransferHasComposerMention,
+  makeComposerMentionDragHandlers,
+} from "./composerMentionDrag";
 import {
   type ComposerImageAttachment,
   type DraftId,
@@ -95,6 +100,7 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
 import {
+  CheckIcon,
   CircleAlertIcon,
   ListTodoIcon,
   type LucideIcon,
@@ -254,16 +260,25 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
             {runtimeModeOptions.map((mode) => {
               const option = runtimeModeConfig[mode];
               const OptionIcon = option.icon;
+              const isSelected = props.runtimeMode === mode;
               return (
-                <SelectItem key={mode} value={mode} className="min-w-64 py-2">
-                  <div className="grid min-w-0 gap-0.5">
-                    <span className="inline-flex items-center gap-1.5 font-medium text-foreground">
-                      <OptionIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                      {option.label}
-                    </span>
-                    <span className="text-muted-foreground text-xs leading-4">
-                      {option.description}
-                    </span>
+                <SelectItem key={mode} value={mode} hideIndicator className="min-w-64 py-2">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <div className="grid min-w-0 flex-1 gap-0.5">
+                      <span className="inline-flex items-center gap-1.5 font-medium text-foreground">
+                        <OptionIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                        {option.label}
+                      </span>
+                      <span className="text-muted-foreground text-xs leading-4">
+                        {option.description}
+                      </span>
+                    </div>
+                    <CheckIcon
+                      className={cn(
+                        "size-4 text-blue-400",
+                        isSelected ? "opacity-100" : "opacity-0",
+                      )}
+                    />
                   </div>
                 </SelectItem>
               );
@@ -369,7 +384,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
 export interface ChatComposerHandle {
   focusAtEnd: () => void;
   focusAt: (cursor: number) => void;
-  insertTextAtEnd: (text: string) => boolean;
+  insertTextAtEnd: (text: string, options?: { ensureLeadingBoundary?: boolean }) => boolean;
   openModelPicker: () => void;
   toggleModelPicker: () => void;
   isModelPickerOpen: () => boolean;
@@ -421,6 +436,8 @@ export interface ChatComposerProps {
   activeThread: Thread | undefined;
   isServerThread: boolean;
   isLocalDraftThread: boolean;
+  forceExpandedOnMobile: boolean;
+  projectSelectionRequired: boolean;
 
   // Session phase
   phase: SessionPhase;
@@ -537,6 +554,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeThread,
     isServerThread: _isServerThread,
     isLocalDraftThread: _isLocalDraftThread,
+    forceExpandedOnMobile,
+    projectSelectionRequired,
     phase,
     isConnecting,
     isSendBusy,
@@ -894,7 +913,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const [isComposerModelPickerOpen, setIsComposerModelPickerOpen] = useState(false);
   const [isComposerFocused, setIsComposerFocused] = useState(false);
   const isMobileViewport = useMediaQuery("max-sm");
-  const isComposerCollapsedMobile = isMobileViewport && !isComposerFocused;
+  const isComposerCollapsedMobile =
+    isMobileViewport && !forceExpandedOnMobile && !isComposerFocused;
 
   // ------------------------------------------------------------------
   // Refs
@@ -1147,7 +1167,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     [activePendingIsResponding, activePendingProgress, activePendingResolvedAnswers],
   );
   const collapsedComposerPrimaryActionDisabled =
-    phase === "running" || isSendBusy || isConnecting || !composerSendState.hasSendableContent;
+    phase === "running" ||
+    isSendBusy ||
+    isConnecting ||
+    projectSelectionRequired ||
+    !composerSendState.hasSendableContent;
   const collapsedComposerPrimaryActionLabel = "Send message";
   const showMobilePendingAnswerActions =
     isMobileViewport && !isComposerCollapsedMobile && pendingPrimaryAction !== null;
@@ -1762,7 +1786,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         return true;
       }
     }
-    if (key === "Enter" && !event.shiftKey) {
+    if (
+      key === "Enter" &&
+      shouldSubmitComposerOnEnter({ isMobileViewport, shiftKey: event.shiftKey })
+    ) {
       submitComposer();
       return true;
     }
@@ -1867,6 +1894,67 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     addComposerImages(files);
     focusComposer();
   };
+
+  const insertComposerTextAtEnd = (
+    text: string,
+    options?: { ensureLeadingBoundary?: boolean },
+  ): boolean => {
+    if (
+      text.length === 0 ||
+      isConnecting ||
+      isComposerApprovalState ||
+      pendingUserInputs.length > 0 ||
+      projectSelectionRequired ||
+      (environmentUnavailable !== null && activePendingProgress === null)
+    ) {
+      return false;
+    }
+    const prompt = promptRef.current;
+    const needsLeadingSpace =
+      (options?.ensureLeadingBoundary ?? false) && prompt.length > 0 && !/\s$/.test(prompt);
+    return applyPromptReplacement(
+      prompt.length,
+      prompt.length,
+      needsLeadingSpace ? ` ${text}` : text,
+    );
+  };
+
+  // File-tree drags land as mentions. Handled in the capture phase so the
+  // editor never sees the drop; the load-bearing rules (native stop, "move"
+  // effect, no eager focus) live in makeComposerMentionDragHandlers.
+  const composerMentionDragHandlers = makeComposerMentionDragHandlers({
+    insertMentionAtEnd: (text) => insertComposerTextAtEnd(text, { ensureLeadingBoundary: true }),
+    setDragActive: setIsDragOverComposer,
+    onInsertRejected: () => {
+      toastManager.add({
+        type: "error",
+        title: "Unable to add to chat",
+        description: "The composer is busy; try again once it is ready.",
+      });
+    },
+  });
+
+  const onComposerMentionDragLeaveCapture = (event: React.DragEvent<HTMLDivElement>) => {
+    if (!dataTransferHasComposerMention(event.dataTransfer.types)) return;
+    event.stopPropagation();
+    const nextTarget = event.relatedTarget;
+    if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return;
+    setIsDragOverComposer(false);
+  };
+
+  // A cancelled drag (Escape) can end without a dragleave on the hovered
+  // target, which would leave the drop highlight stuck. dragend always fires
+  // on the in-page drag source and bubbles to window, so it is the reset of
+  // last resort while the highlight is up.
+  useEffect(() => {
+    if (!isDragOverComposer) return;
+    const onWindowDragEnd = () => {
+      dragDepthRef.current = 0;
+      setIsDragOverComposer(false);
+    };
+    window.addEventListener("dragend", onWindowDragEnd);
+    return () => window.removeEventListener("dragend", onWindowDragEnd);
+  }, [isDragOverComposer]);
   const handleInterruptPrimaryAction = useCallback(() => {
     void onInterrupt();
   }, [onInterrupt]);
@@ -1930,19 +2018,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       focusAt: (cursor: number) => {
         composerEditorRef.current?.focusAt(cursor);
       },
-      insertTextAtEnd: (text: string) => {
-        if (
-          text.length === 0 ||
-          isConnecting ||
-          isComposerApprovalState ||
-          pendingUserInputs.length > 0 ||
-          (environmentUnavailable !== null && activePendingProgress === null)
-        ) {
-          return false;
-        }
-        const rangeEnd = promptRef.current.length;
-        return applyPromptReplacement(rangeEnd, rangeEnd, text);
-      },
+      insertTextAtEnd: insertComposerTextAtEnd,
       openModelPicker: () => {
         setIsComposerModelPickerOpen(true);
       },
@@ -2036,6 +2112,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       isConnecting,
       isComposerApprovalState,
       pendingUserInputs.length,
+      projectSelectionRequired,
       environmentUnavailable,
       activePendingProgress,
       applyPromptReplacement,
@@ -2068,14 +2145,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         onDragOver={onComposerDragOver}
         onDragLeave={onComposerDragLeave}
         onDrop={onComposerDrop}
+        onDragEnterCapture={composerMentionDragHandlers.onDragEnter}
+        onDragOverCapture={composerMentionDragHandlers.onDragOver}
+        onDragLeaveCapture={onComposerMentionDragLeaveCapture}
+        onDropCapture={composerMentionDragHandlers.onDrop}
       >
         <div
           ref={composerSurfaceRef}
           data-chat-composer-mobile-collapsed={isComposerCollapsedMobile ? "true" : "false"}
           className={cn(
-            "chat-composer-glass rounded-[20px] border transition-colors duration-200 has-focus-visible:border-ring/45",
+            "chat-composer-glass rounded-[20px] border transition-[background-color] duration-200 has-focus-visible:border-ring/45",
             isDragOverComposer ? "border-primary/70 bg-accent/45" : "border-border",
-            environmentUnavailable ? "opacity-75" : null,
+            environmentUnavailable || projectSelectionRequired ? "opacity-75" : null,
             composerProviderState.composerSurfaceClassName,
           )}
           onFocusCapture={(event) => {
@@ -2187,7 +2268,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       promptHasText={false}
                       isSendBusy={isSendBusy}
                       isConnecting={isConnecting}
-                      isEnvironmentUnavailable={environmentUnavailable !== null}
+                      isEnvironmentUnavailable={
+                        environmentUnavailable !== null || projectSelectionRequired
+                      }
                       isPreparingWorktree={false}
                       hasSendableContent={false}
                       preserveComposerFocusOnPointerDown
@@ -2421,17 +2504,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       ? "Type your own answer, or leave this blank to use the selected option"
                       : showPlanFollowUpPrompt && activeProposedPlan
                         ? "Add feedback to refine the plan, or leave this blank to implement it"
-                        : environmentUnavailable
-                          ? `${environmentUnavailable.label}: ${connectionStatusText(
-                              environmentUnavailable.connection,
-                            )}`
-                          : phase === "disconnected"
-                            ? "Ask for follow-up changes or attach images"
-                            : "Ask anything, @tag files/folders, $use skills, or / for commands"
+                        : projectSelectionRequired
+                          ? "Choose a project above to start a thread"
+                          : environmentUnavailable
+                            ? `${environmentUnavailable.label}: ${connectionStatusText(
+                                environmentUnavailable.connection,
+                              )}`
+                            : phase === "disconnected"
+                              ? "Ask for follow-up changes or attach images"
+                              : "Ask anything, @tag files/folders, $use skills, or / for commands"
                 }
                 disabled={
                   isConnecting ||
                   isComposerApprovalState ||
+                  projectSelectionRequired ||
                   (environmentUnavailable !== null && activePendingProgress === null)
                 }
               />
@@ -2448,7 +2534,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     promptHasText={false}
                     isSendBusy={isSendBusy}
                     isConnecting={isConnecting}
-                    isEnvironmentUnavailable={environmentUnavailable !== null}
+                    isEnvironmentUnavailable={
+                      environmentUnavailable !== null || projectSelectionRequired
+                    }
                     isPreparingWorktree={false}
                     hasSendableContent={false}
                     preserveComposerFocusOnPointerDown
@@ -2565,7 +2653,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   promptHasText={prompt.trim().length > 0}
                   isSendBusy={isSendBusy}
                   isConnecting={isConnecting}
-                  isEnvironmentUnavailable={environmentUnavailable !== null}
+                  isEnvironmentUnavailable={
+                    environmentUnavailable !== null || projectSelectionRequired
+                  }
                   isPreparingWorktree={isPreparingWorktree}
                   hasSendableContent={composerSendState.hasSendableContent}
                   preserveComposerFocusOnPointerDown={isMobileViewport}

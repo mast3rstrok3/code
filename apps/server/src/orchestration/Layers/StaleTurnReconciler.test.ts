@@ -139,6 +139,18 @@ function makeTestLayer(
             },
           }),
         resolveCommit: () => Effect.succeed({ commitSha: "def456" }),
+        localStatus: (input) =>
+          Effect.succeed({
+            isRepo: true,
+            hasPrimaryRemote: true,
+            isDefaultRef: false,
+            refName: input.cwd.endsWith("checkout-ticket-1")
+              ? "implementation/checkout-ticket-1"
+              : "implementation/checkout",
+            hasWorkingTreeChanges: false,
+            workingTree: { files: [], insertions: 0, deletions: 0 },
+          }),
+        isAncestor: () => Effect.succeed(true),
         mergeRef: () => Effect.succeed({ status: "merged" as const }),
         createOrOpenChangeRequest: () =>
           Effect.succeed({
@@ -1047,7 +1059,7 @@ describe("StaleTurnReconciler", () => {
     ),
   );
 
-  it.live("propagates a merge-gate failure when the validator resume budget is exhausted", () =>
+  it.live("starts a merge-gate fixer when the validator resume budget is exhausted", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
@@ -1074,14 +1086,13 @@ describe("StaleTurnReconciler", () => {
 
           yield* system.reconciler.start();
           yield* waitUntil(
-            getRun(system, run.id).pipe(
-              Effect.map((entry) => entry?.status === "needs-human-attention"),
-            ),
-            "run to need human attention",
+            getRun(system, run.id).pipe(Effect.map((entry) => entry?.status === "fixing")),
+            "run to start merge-gate fixing",
           );
 
           const settledRun = yield* getRun(system, run.id);
-          expect(settledRun?.status).toBe("needs-human-attention");
+          expect(settledRun?.status).toBe("fixing");
+          expect(settledRun?.activeFixerThreadId).not.toBeNull();
           expect(settledRun?.finalValidation?.status).toBe("failed");
           expect(yield* sessionStatus(system, validator.id)).toBe("error");
           expect(yield* resumeActivities(system, validator.id)).toHaveLength(2);
