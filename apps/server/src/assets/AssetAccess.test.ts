@@ -22,6 +22,7 @@ import {
   type ProjectionThreadDevReview,
 } from "../persistence/Services/ProjectionThreadDevReviews.ts";
 import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
+import * as T3ProjectFileLoader from "../project/T3ProjectFileLoader.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { ASSET_ROUTE_PREFIX, issueAssetUrl, resolveAsset } from "./AssetAccess.ts";
 
@@ -45,7 +46,10 @@ const devReviewRepositoryLayer = Layer.succeed(
 const testLayer = Layer.mergeAll(
   configLayer,
   WorkspacePaths.layer,
-  ProjectFaviconResolver.layer.pipe(Layer.provide(WorkspacePaths.layer)),
+  ProjectFaviconResolver.layer.pipe(
+    Layer.provide(WorkspacePaths.layer),
+    Layer.provide(T3ProjectFileLoader.layer),
+  ),
   ServerSecretStore.layer.pipe(Layer.provide(configLayer)),
   devReviewRepositoryLayer,
 ).pipe(Layer.provideMerge(NodeServices.layer));

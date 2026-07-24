@@ -16,17 +16,22 @@ import {
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
   buildBrowserDevReviewLaunchMessage,
   buildLocalDraftThread,
+  branchMismatchKey,
   buildExpiredTerminalContextToastCopy,
   buildThreadTurnInterruptInput,
   createLocalDispatchSnapshot,
   deriveComposerSendState,
+  dismissBranchMismatchForSession,
   getStartedThreadModelChangeBlockReason,
   hasServerAcknowledgedLocalDispatch,
+  isBranchMismatchDismissedForSession,
   reconcileMountedTerminalThreadIds,
   reconcileRetainedMountedThreadIds,
   resolveProductWorkflowPlanningThreadId,
   resolveSendEnvMode,
   selectBrowserDevReviewAutoContext,
+  resolveThreadMetadataUpdateForNextTurn,
+  shouldShowBranchMismatchBanner,
   shouldWriteThreadErrorToCurrentServerThread,
 } from "./ChatView.logic";
 
@@ -61,6 +66,8 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     createdAt: now,
     updatedAt: now,
     archivedAt: null,
+    settledOverride: null,
+    settledAt: null,
     deletedAt: null,
     latestTurn: null,
     branch: null,
@@ -280,6 +287,34 @@ describe("selectBrowserDevReviewAutoContext", () => {
       selectBrowserDevReviewAutoContext({
         latestTurn: null,
         messages: [makeMessage({ id: "assistant-only", role: "assistant", text: "No user turn" })],
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("resolveThreadMetadataUpdateForNextTurn", () => {
+  const modelSelection = {
+    instanceId: ProviderInstanceId.make("codex"),
+    model: "gpt-5.4",
+  };
+
+  it("updates a stale local thread branch to the active checkout", () => {
+    expect(
+      resolveThreadMetadataUpdateForNextTurn({
+        currentModelSelection: modelSelection,
+        currentBranch: "feature/thread",
+        nextBranch: "feature/checkout",
+      }),
+    ).toEqual({ branch: "feature/checkout", worktreePath: null });
+  });
+
+  it("does not write metadata when the model and branch are unchanged", () => {
+    expect(
+      resolveThreadMetadataUpdateForNextTurn({
+        currentModelSelection: modelSelection,
+        nextModelSelection: modelSelection,
+        currentBranch: "feature/current",
+        nextBranch: "feature/current",
       }),
     ).toBeNull();
   });
@@ -512,6 +547,61 @@ describe("resolveSendEnvMode", () => {
   it("keeps worktree mode only for git repositories", () => {
     expect(resolveSendEnvMode({ requestedEnvMode: "worktree", isGitRepo: true })).toBe("worktree");
     expect(resolveSendEnvMode({ requestedEnvMode: "worktree", isGitRepo: false })).toBe("local");
+  });
+});
+
+describe("branchMismatchKey", () => {
+  it("builds a key from thread id and both branches", () => {
+    expect(branchMismatchKey("thread-1", { threadBranch: "feat/a", currentBranch: "feat/b" })).toBe(
+      "thread-1:feat/a:feat/b",
+    );
+  });
+
+  it("returns null without a thread or mismatch", () => {
+    expect(branchMismatchKey(null, { threadBranch: "a", currentBranch: "b" })).toBeNull();
+    expect(branchMismatchKey("thread-1", null)).toBeNull();
+  });
+});
+
+describe("shouldShowBranchMismatchBanner", () => {
+  const base = {
+    hasMismatch: true,
+    isDismissed: false,
+    composerHasContent: false,
+    wasShownForCurrentMismatch: false,
+  };
+
+  it("stays hidden during passive browsing (even though the composer autofocuses)", () => {
+    expect(shouldShowBranchMismatchBanner(base)).toBe(false);
+  });
+
+  it("shows once the composer has draft content", () => {
+    expect(shouldShowBranchMismatchBanner({ ...base, composerHasContent: true })).toBe(true);
+  });
+
+  it("stays mounted after the draft clears once shown for the current mismatch", () => {
+    expect(shouldShowBranchMismatchBanner({ ...base, wasShownForCurrentMismatch: true })).toBe(
+      true,
+    );
+  });
+
+  it("never shows when dismissed or without a mismatch", () => {
+    expect(
+      shouldShowBranchMismatchBanner({ ...base, composerHasContent: true, isDismissed: true }),
+    ).toBe(false);
+    expect(
+      shouldShowBranchMismatchBanner({ ...base, composerHasContent: true, hasMismatch: false }),
+    ).toBe(false);
+  });
+});
+
+describe("session branch mismatch dismissal", () => {
+  it("tracks dismissed keys and treats other keys as active", () => {
+    expect(isBranchMismatchDismissedForSession("t1:a:b")).toBe(false);
+    dismissBranchMismatchForSession("t1:a:b");
+    expect(isBranchMismatchDismissedForSession("t1:a:b")).toBe(true);
+    expect(isBranchMismatchDismissedForSession("t1:a:c")).toBe(false);
+    expect(isBranchMismatchDismissedForSession(null)).toBe(false);
   });
 });
 

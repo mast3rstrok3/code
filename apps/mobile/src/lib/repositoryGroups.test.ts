@@ -47,6 +47,8 @@ function makeThread(
     ...input,
     parentThreadId: input.parentThreadId ?? null,
     workflowRole: input.workflowRole ?? null,
+    settledOverride: input.settledOverride ?? null,
+    settledAt: input.settledAt ?? null,
   };
 }
 

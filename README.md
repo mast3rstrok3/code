@@ -54,6 +54,8 @@ There's no public docs site yet, checkout the miscellaneous markdown files in [d
 ## Documentation
 
 - [Getting started](./docs/getting-started/quick-start.md)
+- [Remote access](./docs/user/remote-access.md)
+- [Keeping T3 Code in sync](./docs/user/server-updates.md)
 - [Architecture overview](./docs/architecture/overview.md)
 - [App Dev stack integration](./docs/integrations/app-dev-stacks.md)
 - [Copy/paste App Dev stack agent prompt](./docs/integrations/app-dev-stack-agent-prompt.md)

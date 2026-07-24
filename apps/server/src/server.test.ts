@@ -96,6 +96,7 @@ import * as PortScanner from "./preview/PortScanner.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as BrowserTraceCollector from "./observability/BrowserTraceCollector.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
+import * as T3ProjectFileLoader from "./project/T3ProjectFileLoader.ts";
 import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
@@ -172,6 +173,8 @@ const makeDefaultOrchestrationReadModel = () => {
         createdAt: now,
         updatedAt: now,
         archivedAt: null,
+        settledOverride: null,
+        settledAt: null,
         latestTurn: null,
         messages: [],
         session: null,
@@ -205,6 +208,8 @@ const makeDefaultOrchestrationThreadShell = (
     createdAt: now,
     updatedAt: now,
     archivedAt: null,
+    settledOverride: null,
+    settledAt: null,
     session: null,
     latestUserMessageAt: null,
     hasPendingApprovals: false,
@@ -528,7 +533,10 @@ const buildAppUnderTest = (options?: {
         Layer.provide(WorkspacePaths.layer),
         Layer.provide(workspaceEntriesLayer),
       ),
-      ProjectFaviconResolver.layer.pipe(Layer.provide(WorkspacePaths.layer)),
+      ProjectFaviconResolver.layer.pipe(
+        Layer.provide(WorkspacePaths.layer),
+        Layer.provide(T3ProjectFileLoader.layer),
+      ),
     );
     const gitWorkflowLayer = GitWorkflowService.layer.pipe(
       Layer.provideMerge(vcsDriverRegistryLayer),
@@ -5387,6 +5395,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           gitManager: {
             invalidateLocalStatus: () => Effect.void,
             invalidateRemoteStatus: () => Effect.void,
+            invalidateStatus: () => Effect.void,
             localStatus: () =>
               Effect.succeed({
                 isRepo: true,
@@ -5433,6 +5442,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             gitManager: {
               invalidateLocalStatus: () => Effect.void,
               invalidateRemoteStatus: () => Effect.void,
+              invalidateStatus: () => Effect.void,
               localStatus: () =>
                 Effect.succeed({
                   isRepo: true,
@@ -5509,6 +5519,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             gitManager: {
               invalidateLocalStatus: () => Effect.void,
               invalidateRemoteStatus: () => Effect.void,
+              invalidateStatus: () => Effect.void,
               localStatus: () =>
                 Deferred.succeed(localRefreshStarted, undefined).pipe(
                   Effect.ignore,
@@ -5608,6 +5619,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             createdAt: now,
             updatedAt: now,
             archivedAt: null,
+            settledOverride: null,
+            settledAt: null,
             latestTurn: null,
             messages: [],
             session: null,

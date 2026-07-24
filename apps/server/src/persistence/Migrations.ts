@@ -45,7 +45,7 @@ import Migration0029 from "./Migrations/029_ProjectionThreadDetailOrderingIndexe
 import Migration0030 from "./Migrations/030_ProjectionThreadShellArchiveIndexes.ts";
 import Migration0031 from "./Migrations/031_AuthAuthorizationScopes.ts";
 import Migration0032 from "./Migrations/032_AuthPairingProofKeyThumbprint.ts";
-import Migration0033 from "./Migrations/033_ProjectionThreadsOwnerUserId.ts";
+import Migration0035 from "./Migrations/035_ProjectionThreadsOwnerUserId.ts";
 import Migration0044 from "./Migrations/044_BackfillProjectionThreadOwnerUserId.ts";
 import Migration0045 from "./Migrations/045_ProjectionThreadDevReviews.ts";
 import Migration0046 from "./Migrations/046_ProjectionThreadsWorkflowColumns.ts";
@@ -61,6 +61,8 @@ import Migration0056 from "./Migrations/056_ProjectionWorkflowSubagentBatches.ts
 import Migration0057 from "./Migrations/057_WorkflowArtifactLineage.ts";
 import Migration0058 from "./Migrations/058_PlanningTicketPlannedFileChanges.ts";
 import Migration0059 from "./Migrations/059_WorkflowPresetsAndFastFeatureRuns.ts";
+import Migration0033 from "./Migrations/033_ProjectionThreadsSettled.ts";
+import Migration0034 from "./Migrations/034_ProjectionThreadsSnoozed.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -105,7 +107,9 @@ export const migrationEntries = [
   [30, "ProjectionThreadShellArchiveIndexes", Migration0030],
   [31, "AuthAuthorizationScopes", Migration0031],
   [32, "AuthPairingProofKeyThumbprint", Migration0032],
-  [33, "ProjectionThreadsOwnerUserId", Migration0033],
+  [33, "ProjectionThreadsSettled", Migration0033],
+  [34, "ProjectionThreadsSnoozed", Migration0034],
+  [35, "ProjectionThreadsOwnerUserId", Migration0035],
   [44, "BackfillProjectionThreadOwnerUserId", Migration0044],
   [45, "ProjectionThreadDevReviews", Migration0045],
   [46, "ProjectionThreadsWorkflowColumns", Migration0046],
@@ -121,6 +125,11 @@ export const migrationEntries = [
   [57, "WorkflowArtifactLineage", Migration0057],
   [58, "PlanningTicketPlannedFileChanges", Migration0058],
   [59, "WorkflowPresetsAndFastFeatureRuns", Migration0059],
+  // Fork databases may already be at migration 59, which means upstream's new
+  // 33/34 migrations would be skipped. Re-run their idempotent effects at the
+  // next available IDs so existing databases receive the same columns.
+  [60, "ProjectionThreadsSettledCompatibility", Migration0033],
+  [61, "ProjectionThreadsSnoozedCompatibility", Migration0034],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
