@@ -1454,6 +1454,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       switch (event.type) {
         case "thread.implementation-run-launched":
         case "thread.implementation-run-updated":
+        case "thread.implementation-run-cancel-requested":
           yield* projectionImplementationRunRepository.upsert({
             runId: event.payload.run.id,
             sourceThreadId: event.payload.sourceThreadId,

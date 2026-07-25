@@ -118,6 +118,8 @@ export type WorkflowDirective =
       readonly type: "implementation-code-review-result";
       readonly runId: string;
       readonly status: "clean" | "findings" | "blocked";
+      readonly commitSha?: string;
+      readonly validations: ReadonlyArray<OrchestrationImplementationValidationResult>;
       readonly reportMarkdown: string;
     }
   | {
@@ -754,15 +756,27 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
       const runId = requiredString(record, "runId");
       const reportMarkdown = requiredString(record, "reportMarkdown");
       const status = record["status"];
+      const validations = parseValidationResults(record["validations"] ?? []);
+      const commitSha = optionalString(record, "commitSha");
       if (runId.startsWith("Directive field")) return runId;
       if (reportMarkdown.startsWith("Directive field")) return reportMarkdown;
       if (status !== "clean" && status !== "findings" && status !== "blocked") {
         return "implementation-code-review-result.status must be clean, findings, or blocked.";
       }
+      if (typeof validations === "string") return validations;
+      if (typeof commitSha === "string" && commitSha.startsWith("Directive field"))
+        return commitSha;
+      // Code Review is a single review-and-fix pass, so "findings" means the reviewer landed its own
+      // fixes and must name the commit they produced.
+      if (status === "findings" && commitSha === undefined) {
+        return "implementation-code-review-result.commitSha is required when status is findings.";
+      }
       return {
         type: "implementation-code-review-result",
         runId,
         status,
+        ...(commitSha === undefined ? {} : { commitSha }),
+        validations,
         reportMarkdown,
       };
     }

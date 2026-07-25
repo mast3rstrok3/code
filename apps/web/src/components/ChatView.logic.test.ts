@@ -3,6 +3,7 @@ import {
   EnvironmentId,
   MessageId,
   ProjectId,
+  type OrchestrationImplementationRun,
   ProviderInstanceId,
   ThreadId,
   TurnId,
@@ -22,6 +23,7 @@ import {
   createLocalDispatchSnapshot,
   deriveComposerSendState,
   dismissBranchMismatchForSession,
+  findCancelableImplementationRunForThread,
   getStartedThreadModelChangeBlockReason,
   hasServerAcknowledgedLocalDispatch,
   isBranchMismatchDismissedForSession,
@@ -341,6 +343,65 @@ describe("buildThreadTurnInterruptInput", () => {
     expect(buildThreadTurnInterruptInput(makeThread({ session: readySession }))).toEqual({
       threadId,
     });
+  });
+});
+
+describe("findCancelableImplementationRunForThread", () => {
+  const run = (
+    overrides: Partial<OrchestrationImplementationRun>,
+  ): OrchestrationImplementationRun =>
+    ({
+      id: "run-1",
+      status: "running",
+      orchestratorThreadId: ThreadId.make("thread-implementer"),
+      sourceProposedPlan: null,
+      updatedAt: now,
+      ...overrides,
+    }) as OrchestrationImplementationRun;
+
+  it("matches the run this thread orchestrates", () => {
+    const found = findCancelableImplementationRunForThread({
+      threadId: ThreadId.make("thread-implementer"),
+      implementationRuns: [run({})],
+    });
+    expect(found?.id).toBe("run-1");
+  });
+
+  it("matches the run launched from this thread's proposed plan", () => {
+    const found = findCancelableImplementationRunForThread({
+      threadId,
+      implementationRuns: [run({ sourceProposedPlan: { threadId, planId: "plan-1" } as never })],
+    });
+    expect(found?.id).toBe("run-1");
+  });
+
+  it("ignores terminal runs and unrelated threads", () => {
+    expect(
+      findCancelableImplementationRunForThread({
+        threadId: ThreadId.make("thread-implementer"),
+        implementationRuns: [
+          run({ status: "completed" }),
+          run({ id: "run-2", status: "canceled" }),
+        ],
+      }),
+    ).toBeNull();
+    expect(
+      findCancelableImplementationRunForThread({
+        threadId: ThreadId.make("thread-unrelated"),
+        implementationRuns: [run({})],
+      }),
+    ).toBeNull();
+  });
+
+  it("prefers the most recently updated candidate", () => {
+    const found = findCancelableImplementationRunForThread({
+      threadId: ThreadId.make("thread-implementer"),
+      implementationRuns: [
+        run({ id: "run-old", updatedAt: "2026-03-28T00:00:00.000Z" }),
+        run({ id: "run-new", updatedAt: "2026-03-30T00:00:00.000Z" }),
+      ],
+    });
+    expect(found?.id).toBe("run-new");
   });
 });
 

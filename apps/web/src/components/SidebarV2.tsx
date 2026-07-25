@@ -18,6 +18,7 @@ import {
   AlarmClockOffIcon,
   CheckIcon,
   ChevronDownIcon,
+  ChevronRightIcon,
   CircleAlertIcon,
   CircleCheckIcon,
   CircleDashedIcon,
@@ -101,19 +102,28 @@ import { formatRelativeTimeLabel, parseTimestampDate } from "../timestampFormat"
 import type { SidebarThreadSummary } from "../types";
 import { cn } from "~/lib/utils";
 import {
+  buildSidebarV2ThreadTreeRows,
+  findSidebarV2ThreadGroupIndex,
+  flattenSidebarV2ThreadGroups,
   formatWorkingDurationLabel,
   firstValidTimestampMs,
   hasUnseenCompletion,
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
+  partitionSidebarV2ThreadGroups,
   resolveAdjacentThreadId,
+  resolveHighestPrioritySidebarV2Status,
   resolveSettledTimestamp,
   resolveSidebarV2Status,
   resolveWorkingStartedAt,
+  selectVisibleSidebarV2TreeRows,
   shouldNavigateAfterProjectRemoval,
   sortLogicalProjectsForSidebar,
-  sortSettledThreadsForSidebarV2,
-  sortThreadsForSidebarV2,
+  workflowRoleShortLabel,
+  type SidebarThreadTreeRow,
+  type SidebarV2Section,
+  type SidebarV2Status,
+  type SidebarV2ThreadGroup,
 } from "./Sidebar.logic";
 import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
 import {
@@ -389,6 +399,17 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   onSnooze: (threadRef: ScopedThreadRef, preset: SnoozePreset) => void;
   onUnsnooze: (threadRef: ScopedThreadRef) => void;
   onChangeRequestState: (threadKey: string, state: "open" | "closed" | "merged" | null) => void;
+  // Sub-thread nesting. visualDepth is capped by the tree builder so a deep
+  // workflow can't indent itself off the edge of a narrow sidebar.
+  visualDepth: number;
+  hasChildren: boolean;
+  isExpanded: boolean;
+  descendantCount: number;
+  // Highest-priority status across the hidden subtree; null when expanded or
+  // childless. This is what keeps a collapsed group honest about a worker
+  // waiting on approval.
+  descendantStatus: SidebarV2Status | null;
+  onToggleExpanded: (threadKey: string) => void;
 }) {
   const {
     isRenaming,
@@ -409,6 +430,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
     variant,
     variantAction,
   } = props;
+  const { hasChildren, isExpanded, onToggleExpanded, visualDepth } = props;
   const threadRef = useMemo(
     () => scopeThreadRef(thread.environmentId, thread.id),
     [thread.environmentId, thread.id],
@@ -668,6 +690,95 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
       "opacity-70 transition-opacity hover:opacity-100",
   );
 
+  // ── Sub-thread nesting ────────────────────────────────────────────
+  // A workflow spawns a tree of real threads. Indentation plus a continuous
+  // rail is the primary "these are one workflow" cue; the tree builder caps
+  // visualDepth so a deep workflow can't indent itself off a narrow sidebar.
+  const isSubThread = visualDepth > 0;
+  // calc, not a bare rem: the row's own px-2.5 has to survive the override.
+  const indentStyle = isSubThread
+    ? { paddingLeft: `calc(0.625rem + ${visualDepth * 0.75}rem)` }
+    : undefined;
+  const handleToggleExpanded = useCallback(
+    (event: ReactMouseEvent<HTMLElement>) => {
+      // Toggling a group must never navigate into its root.
+      event.preventDefault();
+      event.stopPropagation();
+      onToggleExpanded(threadKey);
+    },
+    [onToggleExpanded, threadKey],
+  );
+  const disclosure = hasChildren ? (
+    <button
+      type="button"
+      // Keeps a chevron click inside THREAD_SELECTION_SAFE_SELECTOR so
+      // expanding a group doesn't clear an active multi-selection.
+      data-thread-selection-safe
+      aria-expanded={isExpanded}
+      aria-label={isExpanded ? "Collapse sub-threads" : "Expand sub-threads"}
+      onClick={handleToggleExpanded}
+      onPointerDown={(event) => event.stopPropagation()}
+      onDoubleClick={(event) => event.stopPropagation()}
+      className="inline-flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground/70 hover:bg-accent hover:text-foreground"
+    >
+      <ChevronRightIcon
+        aria-hidden
+        className={cn("size-3 transition-transform", isExpanded && "rotate-90")}
+      />
+    </button>
+  ) : isSubThread ? (
+    // Alignment spacer, rendered only inside a group: a flat sidebar with no
+    // workflows keeps its exact current layout.
+    <span aria-hidden className="size-4 shrink-0" />
+  ) : null;
+  const subThreadRail = isSubThread ? (
+    <span
+      aria-hidden
+      className="pointer-events-none absolute inset-y-0 w-px bg-sidebar-border"
+      style={{ left: `calc(0.625rem + ${(visualDepth - 1) * 0.75}rem + 0.4375rem)` }}
+    />
+  ) : null;
+  const roleLabel = isSubThread ? workflowRoleShortLabel(thread.workflowRole) : null;
+  const roleChip = roleLabel ? (
+    <span className="shrink-0 rounded-sm bg-muted/60 px-1 py-px text-[10px] font-medium tracking-wide text-muted-foreground/80">
+      {roleLabel}
+    </span>
+  ) : null;
+  // What a COLLAPSED group reports about the branch it is hiding. Ready is
+  // omitted: a resting subtree has nothing to announce.
+  const descendantStatusChip =
+    props.descendantStatus === null || props.descendantStatus === "ready" ? null : (
+      <span
+        className={cn(
+          "shrink-0 font-medium",
+          props.descendantStatus === "approval"
+            ? "text-amber-700 dark:text-amber-300"
+            : props.descendantStatus === "input"
+              ? "text-indigo-600 dark:text-indigo-300"
+              : props.descendantStatus === "working"
+                ? "text-sky-600 dark:text-sky-400"
+                : "text-red-600 dark:text-red-400",
+        )}
+      >
+        {props.descendantStatus === "approval"
+          ? "Approval"
+          : props.descendantStatus === "input"
+            ? "Input"
+            : props.descendantStatus === "working"
+              ? "Working"
+              : "Failed"}
+      </span>
+    );
+  const subThreadSummary =
+    !isExpanded && props.descendantCount > 0 ? (
+      <span className="flex min-w-0 flex-1 items-center gap-1.5">
+        <span className="shrink-0 truncate">
+          {props.descendantCount} sub-thread{props.descendantCount === 1 ? "" : "s"}
+        </span>
+        {descendantStatusChip}
+      </span>
+    ) : null;
+
   const title = isRenaming ? (
     <input
       autoFocus
@@ -734,6 +845,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
     return (
       <li
         data-thread-item
+        data-testid={isSubThread ? "sidebar-v2-row-subthread" : undefined}
         className="list-none [content-visibility:auto] [contain-intrinsic-size:auto_34px]"
       >
         <Tooltip>
@@ -743,6 +855,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                 role="button"
                 tabIndex={0}
                 data-testid="sidebar-v2-row-slim"
+                style={indentStyle}
                 className={cn(rowSurfaceClassName, "flex h-9 items-center gap-2.5 px-2.5")}
                 onClick={handleClick}
                 onDoubleClick={handleDoubleClick}
@@ -751,6 +864,8 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
               />
             }
           >
+            {subThreadRail}
+            {disclosure}
             {/* Settled history recedes: dimmed favicon at rest, restored on
               hover so the tail stays scannable when you're hunting. */}
             <span
@@ -768,6 +883,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
               />
             </span>
             {title}
+            {roleChip}
             {/* The PR badge stays outside the hover-fading slot: it must
               remain visible AND clickable while the row is hovered. Only
               the time/jump label yields to the settle affordance. */}
@@ -862,6 +978,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
         >
           <div className="relative z-10 h-[4.875rem] px-2.5 py-2">
             <div className="flex h-5 min-w-0 items-center gap-1.5">
+              {disclosure}
               <ProjectFavicon
                 environmentId={thread.environmentId}
                 cwd={props.projectCwd ?? ""}
@@ -945,11 +1062,12 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
             </div>
             <div className="mt-1 flex min-w-0">{title}</div>
             <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground/75">
-              {thread.branch ? (
-                <span className="min-w-0 flex-1 truncate whitespace-nowrap">{thread.branch}</span>
-              ) : (
-                <span className="flex-1" />
-              )}
+              {subThreadSummary ??
+                (thread.branch ? (
+                  <span className="min-w-0 flex-1 truncate whitespace-nowrap">{thread.branch}</span>
+                ) : (
+                  <span className="flex-1" />
+                ))}
               {prBadge}
               {diff ? (
                 <span className="shrink-0 font-mono">
@@ -1359,7 +1477,13 @@ export default function SidebarV2() {
   // merging, no optimistic holds. Archived threads remain hidden here —
   // archive keeps its original "remove from sidebar" meaning.
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
-  const { activeThreads, snoozedThreads, settledThreads, snoozeNow } = useMemo(() => {
+  const {
+    groupsBySection,
+    sectionByThreadKey,
+    groupCountBySection,
+    snoozeNow,
+    nextSnoozeWakeAtMs,
+  } = useMemo(() => {
     const now = `${nowMinute}:00.000Z`;
     // Snooze classification uses a REAL clock, not the quantized minute:
     // wake times are second-precise and a woken thread must not linger on
@@ -1373,45 +1497,66 @@ export default function SidebarV2() {
         (scopedProjectKeys === null ||
           scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
     );
-    const active: EnvironmentThreadShell[] = [];
-    const snoozed: EnvironmentThreadShell[] = [];
-    const settled: EnvironmentThreadShell[] = [];
-    for (const thread of visible) {
-      // Threads on servers without the settlement capability (old server,
-      // or descriptor not loaded yet) never classify as settled: the user
-      // could neither un-settle nor pin them, so auto-settling them would
-      // strand rows in a tail with no working affordances.
-      const supportsSettlement =
-        serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSettlement === true;
-      const supportsSnooze =
-        serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSnooze === true;
-      const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-      const changeRequestState = changeRequestStateByKey.get(threadKey) ?? null;
-      // Snooze outranks settled classification: an explicitly snoozed thread
-      // belongs to the shelf even if it would also auto-settle (the shelf's
-      // wake time is a stronger statement about when it matters again).
-      if (supportsSnooze && effectiveSnoozed(thread, { now: preciseNow })) {
-        snoozed.push(thread);
-      } else if (
-        supportsSettlement &&
-        effectiveSettled(thread, { now, autoSettleAfterDays, changeRequestState })
-      ) {
-        settled.push(thread);
-      } else {
-        active.push(thread);
+    // Sub-threads nest under the thread that spawned them so a workflow
+    // reads as one block instead of 5-10 unrelated-looking rows. Parent keys
+    // are environment-scoped; a cross-environment parent can't resolve and
+    // the builder promotes those rows back to roots.
+    const rows = buildSidebarV2ThreadTreeRows(visible, {
+      getThreadKey: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+      getParentThreadKey: (thread) =>
+        thread.parentThreadId === null
+          ? null
+          : scopedThreadKey(scopeThreadRef(thread.environmentId, thread.parentThreadId)),
+    });
+    const partition = partitionSidebarV2ThreadGroups({
+      rows,
+      classifyThread: (thread) => {
+        // Threads on servers without the settlement capability (old server,
+        // or descriptor not loaded yet) never classify as settled: the user
+        // could neither un-settle nor pin them, so auto-settling them would
+        // strand rows in a tail with no working affordances.
+        const supportsSettlement =
+          serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSettlement ===
+          true;
+        const supportsSnooze =
+          serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSnooze === true;
+        const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+        const changeRequestState = changeRequestStateByKey.get(threadKey) ?? null;
+        // Snooze outranks settled classification: an explicitly snoozed
+        // thread belongs to the shelf even if it would also auto-settle (the
+        // shelf's wake time is a stronger statement about when it matters
+        // again).
+        if (supportsSnooze && effectiveSnoozed(thread, { now: preciseNow })) {
+          return "snoozed";
+        }
+        if (
+          supportsSettlement &&
+          effectiveSettled(thread, { now, autoSettleAfterDays, changeRequestState })
+        ) {
+          return "settled";
+        }
+        return "active";
+      },
+      // Soonest wake first: "what comes back next" is the shelf's question.
+      resolveSnoozeSortMs: (thread) => firstValidTimestampMs(thread.snoozedUntil ?? null),
+      // Settled groups are history, so they order by when the work ENDED
+      // anywhere in the group, not when the root was created.
+      resolveSettledSortMs: (thread) => firstValidTimestampMs(resolveSettledTimestamp(thread)),
+    });
+
+    // The wake timer watches every snoozed THREAD, including one parked
+    // inside an otherwise-active group — that row still has to leave the
+    // shelf on time.
+    let nextWakeAtMs: number | null = null;
+    for (const row of rows) {
+      if (partition.sectionByThreadKey.get(row.threadKey) !== "snoozed") continue;
+      const wakeAtMs = firstValidTimestampMs(row.thread.snoozedUntil ?? null);
+      if (wakeAtMs > 0 && (nextWakeAtMs === null || wakeAtMs < nextWakeAtMs)) {
+        nextWakeAtMs = wakeAtMs;
       }
     }
-    return {
-      activeThreads: sortThreadsForSidebarV2(active),
-      // Soonest wake first: "what comes back next" is the shelf's question.
-      snoozedThreads: snoozed.toSorted(
-        (left, right) =>
-          firstValidTimestampMs(left.snoozedUntil ?? null) -
-          firstValidTimestampMs(right.snoozedUntil ?? null),
-      ),
-      settledThreads: sortSettledThreadsForSidebarV2(settled),
-      snoozeNow: preciseNow,
-    };
+
+    return { ...partition, snoozeNow: preciseNow, nextSnoozeWakeAtMs: nextWakeAtMs };
   }, [
     autoSettleAfterDays,
     changeRequestStateByKey,
@@ -1422,28 +1567,28 @@ export default function SidebarV2() {
     threads,
   ]);
 
+  const activeGroups = groupsBySection.active;
+  const snoozedGroups = groupsBySection.snoozed;
+  const settledGroups = groupsBySection.settled;
+
   // Arm a timeout for the earliest upcoming wake so the shelf empties the
-  // moment a snooze expires instead of on the next minute tick. Sorted
-  // soonest-first, so entry 0 is the boundary.
+  // moment a snooze expires instead of on the next minute tick.
   useEffect(() => {
-    const nextWakeAtMs =
-      snoozedThreads.length > 0 && snoozedThreads[0]?.snoozedUntil != null
-        ? Date.parse(snoozedThreads[0].snoozedUntil)
-        : Number.NaN;
-    if (Number.isNaN(nextWakeAtMs)) return;
+    if (nextSnoozeWakeAtMs === null) return;
     // setTimeout delays are signed 32-bit: anything larger overflows and
     // fires immediately, turning a far-future wake (event-condition snoozes
     // synced from elsewhere) into a tight re-arm loop. Clamped, the timer
     // just re-arms every ~24.8 days until the wake is in range.
-    const delayMs = Math.min(Math.max(0, nextWakeAtMs - Date.now()) + 50, 2_147_483_647);
+    const delayMs = Math.min(Math.max(0, nextSnoozeWakeAtMs - Date.now()) + 50, 2_147_483_647);
     const id = window.setTimeout(() => bumpSnoozeWakeTick((tick) => tick + 1), delayMs);
     return () => window.clearTimeout(id);
-  }, [snoozedThreads]);
+  }, [nextSnoozeWakeAtMs]);
 
   // The settled tail renders in pages: history shouldn't dominate the
-  // sidebar, and the common lookups are recent. Expansion resets when the
-  // filter context changes so a scope/search flip never inherits a deep
-  // page state.
+  // sidebar, and the common lookups are recent. Pages count GROUPS, never
+  // rows, so a workflow is never cut in half by a page boundary. Expansion
+  // resets when the filter context changes so a scope/search flip never
+  // inherits a deep page state.
   const [settledVisibleCount, setSettledVisibleCount] = useState(SETTLED_TAIL_INITIAL_COUNT);
   const settledResetKey = projectScopeKey ?? "all";
   const lastSettledResetKeyRef = useRef(settledResetKey);
@@ -1451,70 +1596,135 @@ export default function SidebarV2() {
     lastSettledResetKeyRef.current = settledResetKey;
     setSettledVisibleCount(SETTLED_TAIL_INITIAL_COUNT);
   }
-  const visibleSettledThreads = useMemo(() => {
-    if (settledThreads.length <= settledVisibleCount) return settledThreads;
-    const visible = settledThreads.slice(0, settledVisibleCount);
+  const visibleSettledGroups = useMemo(() => {
+    if (settledGroups.length <= settledVisibleCount) return settledGroups;
+    const visible = settledGroups.slice(0, settledVisibleCount);
     // The open thread must never hide under "Show more": navigating into a
-    // deep settled thread (search, deep link) pulls its row into the visible
-    // tail so the highlight and the un-settle affordance stay reachable.
+    // deep settled thread (search, deep link) pulls its whole group into the
+    // visible tail so the highlight and the un-settle affordance stay
+    // reachable.
     if (routeThreadKey !== null) {
-      const routeThread = settledThreads
-        .slice(settledVisibleCount)
-        .find(
-          (thread) =>
-            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === routeThreadKey,
-        );
-      if (routeThread !== undefined) visible.push(routeThread);
+      const routeGroupIndex = findSidebarV2ThreadGroupIndex(
+        settledGroups.slice(settledVisibleCount),
+        routeThreadKey,
+      );
+      const routeGroup = settledGroups[settledVisibleCount + routeGroupIndex];
+      if (routeGroupIndex >= 0 && routeGroup !== undefined) visible.push(routeGroup);
     }
     return visible;
-  }, [routeThreadKey, settledThreads, settledVisibleCount]);
-  const hiddenSettledCount = settledThreads.length - visibleSettledThreads.length;
+  }, [routeThreadKey, settledGroups, settledVisibleCount]);
+  const hiddenSettledCount = settledGroups.length - visibleSettledGroups.length;
   const showMoreSettled = useCallback(
     () => setSettledVisibleCount((count) => count + SETTLED_TAIL_PAGE_COUNT),
     [],
   );
   const [settledShelfExpanded, setSettledShelfExpanded] = useState(true);
   const toggleSettledShelf = useCallback(() => setSettledShelfExpanded((value) => !value), []);
-  const renderedSettledThreads = useMemo(() => {
-    if (settledShelfExpanded) return visibleSettledThreads;
+  const renderedSettledGroups = useMemo(() => {
+    if (settledShelfExpanded) return visibleSettledGroups;
     if (routeThreadKey === null) return [];
-    const routeThread = visibleSettledThreads.find(
-      (thread) =>
-        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === routeThreadKey,
-    );
-    return routeThread === undefined ? [] : [routeThread];
-  }, [routeThreadKey, settledShelfExpanded, visibleSettledThreads]);
+    const routeGroupIndex = findSidebarV2ThreadGroupIndex(visibleSettledGroups, routeThreadKey);
+    const routeGroup = routeGroupIndex < 0 ? undefined : visibleSettledGroups[routeGroupIndex];
+    return routeGroup === undefined ? [] : [routeGroup];
+  }, [routeThreadKey, settledShelfExpanded, visibleSettledGroups]);
 
   // The snoozed shelf is collapsed by default: out of the way, never gone.
-  // Collapsed threads don't render (and so don't participate in jump
+  // Collapsed groups don't render (and so don't participate in jump
   // shortcuts or multi-select), matching the settled tail's paging model.
   const [snoozedShelfExpanded, setSnoozedShelfExpanded] = useState(false);
   const toggleSnoozedShelf = useCallback(() => setSnoozedShelfExpanded((value) => !value), []);
-  const visibleSnoozedThreads = useMemo(() => {
-    if (snoozedShelfExpanded) return snoozedThreads;
+  const visibleSnoozedGroups = useMemo(() => {
+    if (snoozedShelfExpanded) return snoozedGroups;
     // The open thread must never vanish behind the collapsed shelf: a
     // snoozed thread reached by route (deep link, open before snoozing
-    // elsewhere) keeps its row — with highlight and wake affordance — same
+    // elsewhere) keeps its group — with highlight and wake affordance — same
     // exception the settled tail's "Show more" makes.
     if (routeThreadKey === null) return [];
-    const routeThread = snoozedThreads.find(
-      (thread) =>
-        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === routeThreadKey,
-    );
-    return routeThread === undefined ? [] : [routeThread];
-  }, [routeThreadKey, snoozedShelfExpanded, snoozedThreads]);
+    const routeGroupIndex = findSidebarV2ThreadGroupIndex(snoozedGroups, routeThreadKey);
+    const routeGroup = routeGroupIndex < 0 ? undefined : snoozedGroups[routeGroupIndex];
+    return routeGroup === undefined ? [] : [routeGroup];
+  }, [routeThreadKey, snoozedShelfExpanded, snoozedGroups]);
 
-  const orderedThreads = useMemo(
-    () => [...activeThreads, ...visibleSnoozedThreads, ...renderedSettledThreads],
-    [activeThreads, visibleSnoozedThreads, renderedSettledThreads],
-  );
-  const orderedThreadKeys = useMemo(
+  // Sub-threads default to COLLAPSED and the expansion set is persisted, so a
+  // group the user opened stays open across reloads.
+  const threadTreeExpandedByKey = useUiStateStore((state) => state.threadTreeExpandedByKey);
+  const setThreadTreeExpanded = useUiStateStore((state) => state.setThreadTreeExpanded);
+  const expandedThreadKeys = useMemo(
     () =>
-      orderedThreads.map((thread) =>
-        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+      new Set(
+        Object.entries(threadTreeExpandedByKey)
+          .filter(([, expanded]) => expanded)
+          .map(([threadKey]) => threadKey),
       ),
-    [orderedThreads],
+    [threadTreeExpandedByKey],
   );
+  const selectVisibleRows = useCallback(
+    (groups: readonly SidebarV2ThreadGroup<EnvironmentThreadShell>[]) =>
+      selectVisibleSidebarV2TreeRows({
+        rows: flattenSidebarV2ThreadGroups(groups),
+        expandedThreadKeys,
+        // Render-only exception: the open thread's ancestors reveal without
+        // being written to the store, so navigating away re-collapses.
+        activeThreadKey: routeThreadKey,
+      }),
+    [expandedThreadKeys, routeThreadKey],
+  );
+  const activeRows = useMemo(
+    () => selectVisibleRows(activeGroups),
+    [activeGroups, selectVisibleRows],
+  );
+  const snoozedRows = useMemo(
+    () => selectVisibleRows(visibleSnoozedGroups),
+    [selectVisibleRows, visibleSnoozedGroups],
+  );
+  const settledRows = useMemo(
+    () => selectVisibleRows(renderedSettledGroups),
+    [renderedSettledGroups, selectVisibleRows],
+  );
+
+  const toggleThreadTreeExpansion = useCallback(
+    (threadKey: string) => setThreadTreeExpanded(threadKey, !expandedThreadKeys.has(threadKey)),
+    [expandedThreadKeys, setThreadTreeExpanded],
+  );
+
+  // Every ancestor's full subtree, not just its direct children: a collapsed
+  // root hides the whole branch, so its count and rolled-up status have to
+  // speak for all of it. Built from the unfiltered group rows so collapsing
+  // never changes what a collapsed row reports.
+  const descendantsByRowKey = useMemo(() => {
+    const rows = [
+      ...flattenSidebarV2ThreadGroups(activeGroups),
+      ...flattenSidebarV2ThreadGroups(snoozedGroups),
+      ...flattenSidebarV2ThreadGroups(settledGroups),
+    ];
+    const parentKeyByThreadKey = new Map(
+      rows.map((row) => [row.threadKey, row.parentThreadKey] as const),
+    );
+    const descendants = new Map<string, EnvironmentThreadShell[]>();
+    for (const row of rows) {
+      let ancestorKey = row.parentThreadKey;
+      const guard = new Set<string>();
+      while (ancestorKey !== null && !guard.has(ancestorKey)) {
+        guard.add(ancestorKey);
+        const existing = descendants.get(ancestorKey);
+        if (existing === undefined) {
+          descendants.set(ancestorKey, [row.thread]);
+        } else {
+          existing.push(row.thread);
+        }
+        ancestorKey = parentKeyByThreadKey.get(ancestorKey) ?? null;
+      }
+    }
+    return descendants;
+  }, [activeGroups, snoozedGroups, settledGroups]);
+
+  // Only RENDERED rows are ordered: a collapsed sub-thread must not consume a
+  // jump shortcut, extend a shift-range selection, or get prewarmed.
+  const orderedRows = useMemo(
+    () => [...activeRows, ...snoozedRows, ...settledRows],
+    [activeRows, snoozedRows, settledRows],
+  );
+  const orderedThreadKeys = useMemo(() => orderedRows.map((row) => row.threadKey), [orderedRows]);
   // Rows call back into the click handler without carrying the ordered list as
   // a prop — a fresh array identity per shell update would defeat every row's
   // memoization. The ref keeps shift-range-select working against the list as
@@ -1522,14 +1732,8 @@ export default function SidebarV2() {
   const orderedThreadKeysRef = useRef(orderedThreadKeys);
   orderedThreadKeysRef.current = orderedThreadKeys;
   const threadByKey = useMemo(
-    () =>
-      new Map(
-        orderedThreads.map(
-          (thread) =>
-            [scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)), thread] as const,
-        ),
-      ),
-    [orderedThreads],
+    () => new Map(orderedRows.map((row) => [row.threadKey, row.thread] as const)),
+    [orderedRows],
   );
   // Handlers read these through refs: depending on per-update Map/Set
   // identities would give every row a fresh callback prop on each shell
@@ -1540,26 +1744,24 @@ export default function SidebarV2() {
   // a ref keeps it out of attemptSettle's dependency array.
   const handleNewThreadRef = useRef(newThreadContext.handleNewThread);
   handleNewThreadRef.current = newThreadContext.handleNewThread;
-  const settledThreadKeys = useMemo(
-    () =>
-      new Set(
-        settledThreads.map((thread) =>
-          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-        ),
-      ),
-    [settledThreads],
-  );
+  // Keyed off each thread's OWN classification, not its group's: a settled
+  // child inside an active group still settles/un-settles on its own terms.
+  const settledThreadKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const [threadKey, section] of sectionByThreadKey) {
+      if (section === "settled") keys.add(threadKey);
+    }
+    return keys;
+  }, [sectionByThreadKey]);
   const settledThreadKeysRef = useRef(settledThreadKeys);
   settledThreadKeysRef.current = settledThreadKeys;
-  const snoozedThreadKeys = useMemo(
-    () =>
-      new Set(
-        snoozedThreads.map((thread) =>
-          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-        ),
-      ),
-    [snoozedThreads],
-  );
+  const snoozedThreadKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const [threadKey, section] of sectionByThreadKey) {
+      if (section === "snoozed") keys.add(threadKey);
+    }
+    return keys;
+  }, [sectionByThreadKey]);
   const snoozedThreadKeysRef = useRef(snoozedThreadKeys);
   snoozedThreadKeysRef.current = snoozedThreadKeys;
 
@@ -2368,18 +2570,30 @@ export default function SidebarV2() {
             <ul ref={attachListAutoAnimateRef} role="list" className="flex flex-col gap-px">
               {(() => {
                 const renderThreadRow = (
-                  thread: EnvironmentThreadShell,
-                  section: "active" | "snoozed" | "settled",
+                  row: SidebarThreadTreeRow<EnvironmentThreadShell>,
+                  section: SidebarV2Section,
                 ) => {
-                  const threadKey = scopedThreadKey(
-                    scopeThreadRef(thread.environmentId, thread.id),
-                  );
+                  const thread = row.thread;
+                  const threadKey = row.threadKey;
                   // Settled and snoozed are the ONLY things that collapse a
                   // row: every other thread is a full card. Density comes
                   // from users (or the auto rules) actually parking work,
                   // not from the sidebar second-guessing what still matters.
-                  const isCard = section === "active";
+                  // Sub-threads are the exception — a nested stack of cards is
+                  // unreadable in a sidebar, and slim rows are what make a
+                  // group scan as one block.
+                  const isCard = section === "active" && row.depth === 0;
                   const rowVariant = isCard ? "card" : "slim";
+                  // A collapsed group has to speak for its children: without
+                  // this, collapsed-by-default would bury a worker's pending
+                  // approval entirely.
+                  const isExpanded = expandedThreadKeys.has(threadKey);
+                  const descendants = row.hasChildren
+                    ? (descendantsByRowKey.get(threadKey) ?? [])
+                    : [];
+                  // Each thread's OWN state drives its affordance, even when
+                  // its group sits in another section.
+                  const ownSection = sectionByThreadKey.get(threadKey) ?? section;
                   return (
                     <SidebarV2Row
                       // Keyed per variant on purpose: when a thread settles,
@@ -2395,9 +2609,9 @@ export default function SidebarV2() {
                       // settles clear the override, auto-settled rows get
                       // pinned active); cards settle.
                       variantAction={
-                        section === "snoozed"
+                        ownSection === "snoozed"
                           ? "unsnooze"
-                          : section === "settled"
+                          : ownSection === "settled"
                             ? "unsettle"
                             : "settle"
                       }
@@ -2410,7 +2624,7 @@ export default function SidebarV2() {
                           .threadSnooze === true
                       }
                       snoozeWakeLabelText={
-                        section === "snoozed" && thread.snoozedUntil != null
+                        ownSection === "snoozed" && thread.snoozedUntil != null
                           ? snoozeWakeLabel(thread.snoozedUntil, new Date())
                           : null
                       }
@@ -2446,18 +2660,26 @@ export default function SidebarV2() {
                       onSnooze={attemptSnooze}
                       onUnsnooze={attemptUnsnooze}
                       onChangeRequestState={handleChangeRequestState}
+                      visualDepth={row.visualDepth}
+                      hasChildren={row.hasChildren}
+                      isExpanded={isExpanded}
+                      descendantCount={descendants.length}
+                      descendantStatus={
+                        isExpanded || descendants.length === 0
+                          ? null
+                          : resolveHighestPrioritySidebarV2Status(descendants)
+                      }
+                      onToggleExpanded={toggleThreadTreeExpansion}
                     />
                   );
                 };
-                const items: ReactNode[] = activeThreads.map((thread) =>
-                  renderThreadRow(thread, "active"),
-                );
+                const items: ReactNode[] = activeRows.map((row) => renderThreadRow(row, "active"));
                 // Snoozed shelf: between the inbox and Settled — out of the
                 // way, never gone. The header always renders while anything
                 // is snoozed (the count is the whole footprint when
                 // collapsed); rows only when expanded. Vanishes entirely at
                 // count 0.
-                if (snoozedThreads.length > 0) {
+                if (snoozedGroups.length > 0) {
                   items.push(
                     <li key="snoozed-shelf-header" data-thread-selection-safe className="list-none">
                       <button
@@ -2468,7 +2690,9 @@ export default function SidebarV2() {
                         className="mb-1 mt-3 flex w-full cursor-pointer items-center gap-2 px-2.5 text-left"
                       >
                         <span className="text-xs font-medium text-blue-600 dark:text-blue-400">
-                          {snoozedShelfExpanded ? "Snoozed" : `Snoozed (${snoozedThreads.length})`}
+                          {snoozedShelfExpanded
+                            ? "Snoozed"
+                            : `Snoozed (${groupCountBySection.snoozed})`}
                         </span>
                         <span className="h-px flex-1 bg-blue-500/20 dark:bg-blue-400/15" />
                         <ChevronDownIcon
@@ -2481,11 +2705,11 @@ export default function SidebarV2() {
                       </button>
                     </li>,
                   );
-                  for (const thread of visibleSnoozedThreads) {
-                    items.push(renderThreadRow(thread, "snoozed"));
+                  for (const row of snoozedRows) {
+                    items.push(renderThreadRow(row, "snoozed"));
                   }
                 }
-                if (settledThreads.length > 0) {
+                if (settledGroups.length > 0) {
                   items.push(
                     <li key="settled-shelf-header" data-thread-selection-safe className="list-none">
                       <button
@@ -2496,7 +2720,9 @@ export default function SidebarV2() {
                         className="mb-1 mt-3 flex w-full cursor-pointer items-center gap-2 px-2.5 text-left"
                       >
                         <span className="text-xs font-medium text-muted-foreground/50">
-                          {settledShelfExpanded ? "Settled" : `Settled (${settledThreads.length})`}
+                          {settledShelfExpanded
+                            ? "Settled"
+                            : `Settled (${groupCountBySection.settled})`}
                         </span>
                         <span className="h-px flex-1 bg-sidebar-border/60" />
                         <ChevronDownIcon
@@ -2510,8 +2736,8 @@ export default function SidebarV2() {
                     </li>,
                   );
                 }
-                for (const thread of renderedSettledThreads) {
-                  items.push(renderThreadRow(thread, "settled"));
+                for (const row of settledRows) {
+                  items.push(renderThreadRow(row, "settled"));
                 }
                 return items;
               })()}
@@ -2531,7 +2757,10 @@ export default function SidebarV2() {
               ) : null}
             </ul>
           </TooltipProvider>
-          {activeThreads.length + snoozedThreads.length + settledThreads.length === 0 ? (
+          {groupCountBySection.active +
+            groupCountBySection.snoozed +
+            groupCountBySection.settled ===
+          0 ? (
             <div className="flex flex-col items-center gap-2 px-2 py-6 text-center text-xs text-muted-foreground/60">
               {projects.length === 0 ? (
                 <>

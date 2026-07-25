@@ -491,6 +491,7 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
                 type: "implementation-code-review-result",
                 runId: run.id,
                 status: "blocked",
+                validations: [],
                 reportMarkdown: STALE_TURN_ERROR_MESSAGE,
               },
               createdAt,

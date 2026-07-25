@@ -695,6 +695,7 @@ export function applyThreadDetailEvent(
 
     case "thread.implementation-run-launched":
     case "thread.implementation-run-updated":
+    case "thread.implementation-run-cancel-requested":
     case "thread.implementation-change-request-retry-requested":
       return { kind: "unchanged" };
 

@@ -327,6 +327,23 @@ ${JSON.stringify({
   "type": "implementation-code-review-result",
   "runId": "implementation-run-1",
   "status": "findings",
+  "commitSha": "cafe1234",
+  "validations": [
+    {
+      "command": "vp check",
+      "status": "passed",
+      "outputMarkdown": "ok",
+      "completedAt": "2026-01-01T00:00:00.000Z"
+    }
+  ],
+  "reportMarkdown": "## Standards\\n- Mysterious Name in checkout.ts"
+}
+\`\`\``);
+    const findingsWithoutCommit = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
+{
+  "type": "implementation-code-review-result",
+  "runId": "implementation-run-1",
+  "status": "findings",
   "reportMarkdown": "## Standards\\n- Mysterious Name in checkout.ts"
 }
 \`\`\``);
@@ -343,11 +360,26 @@ ${JSON.stringify({
     if (clean.kind === "parsed") {
       NodeAssert.equal(clean.directive.type, "implementation-code-review-result");
       NodeAssert.equal(clean.directive.status, "clean");
+      if (clean.directive.type === "implementation-code-review-result") {
+        NodeAssert.equal(clean.directive.commitSha, undefined);
+        NodeAssert.deepEqual(clean.directive.validations, []);
+      }
     }
     NodeAssert.equal(findings.kind, "parsed");
     if (findings.kind === "parsed") {
       NodeAssert.equal(findings.directive.type, "implementation-code-review-result");
       NodeAssert.equal(findings.directive.status, "findings");
+      if (findings.directive.type === "implementation-code-review-result") {
+        NodeAssert.equal(findings.directive.commitSha, "cafe1234");
+        NodeAssert.equal(findings.directive.validations.length, 1);
+      }
+    }
+    NodeAssert.equal(findingsWithoutCommit.kind, "error");
+    if (findingsWithoutCommit.kind === "error") {
+      NodeAssert.match(
+        findingsWithoutCommit.message,
+        /commitSha is required when status is findings/,
+      );
     }
     NodeAssert.equal(invalid.kind, "error");
     if (invalid.kind === "error") {

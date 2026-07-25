@@ -31,6 +31,7 @@ import {
   ThreadComposerModeSetPayload,
   ThreadMetaUpdatedPayload,
   ThreadImplementationChangeRequestRetryRequestedPayload,
+  ThreadImplementationRunCancelRequestedPayload,
   ThreadImplementationRunLaunchedPayload,
   ThreadImplementationRunUpdatedPayload,
   ThreadPlanningTicketReviewRequestedPayload,
@@ -742,6 +743,19 @@ export function projectEvent(
     case "thread.implementation-run-updated":
       return decodeForEvent(
         ThreadImplementationRunUpdatedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          implementationRuns: upsertImplementationRun(nextBase.implementationRuns, payload.run),
+        })),
+      );
+
+    case "thread.implementation-run-cancel-requested":
+      return decodeForEvent(
+        ThreadImplementationRunCancelRequestedPayload,
         event.payload,
         event.type,
         "payload",

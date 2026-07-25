@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import {
   archiveSelectedThreadEntries,
   buildSidebarThreadTreeRows,
+  buildSidebarV2ThreadTreeRows,
   buildMultiSelectThreadContextMenuItems,
   createThreadJumpHintVisibilityController,
   expandHierarchySelectionIds,
@@ -19,12 +20,16 @@ import {
   isContextMenuPointerDown,
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
+  partitionSidebarV2ThreadGroups,
+  resolveHighestPrioritySidebarV2Status,
   resolveProjectStatusIndicator,
   resolveSidebarStageBadgeLabel,
   resolveThreadRowClassName,
   resolveSidebarV2Status,
   resolveThreadStatusPill,
   selectVisibleSidebarThreadRows,
+  selectVisibleSidebarV2TreeRows,
+  workflowRoleShortLabel,
   resolveWorkingStartedAt,
   formatWorkingDurationLabel,
   shouldNavigateAfterProjectRemoval,
@@ -1780,5 +1785,235 @@ describe("sortLogicalProjectsForSidebar", () => {
         (project) => project.projectKey,
       ),
     ).toEqual(["logical-newer", "logical-older"]);
+  });
+});
+
+describe("buildSidebarV2ThreadTreeRows", () => {
+  const node = (input: { id: string; createdAt: string; parentThreadId?: string }) => ({
+    id: ThreadId.make(input.id),
+    parentThreadId: input.parentThreadId === undefined ? null : ThreadId.make(input.parentThreadId),
+    createdAt: input.createdAt,
+  });
+
+  it("reduces to sortThreadsForSidebarV2 order when nothing has a parent", () => {
+    const threads = [
+      node({ id: "oldest", createdAt: "2026-03-09T08:00:00.000Z" }),
+      node({ id: "newest", createdAt: "2026-03-09T12:00:00.000Z" }),
+      node({ id: "middle", createdAt: "2026-03-09T10:00:00.000Z" }),
+    ];
+
+    expect(buildSidebarV2ThreadTreeRows(threads).map((row) => row.thread.id)).toEqual(
+      sortThreadsForSidebarV2(threads).map((thread) => thread.id),
+    );
+  });
+
+  it("nests sub-threads under their parent in execution order", () => {
+    const rows = buildSidebarV2ThreadTreeRows([
+      node({ id: "worker-b", createdAt: "2026-03-09T10:30:00.000Z", parentThreadId: "planning" }),
+      node({ id: "root", createdAt: "2026-03-09T10:00:00.000Z" }),
+      node({ id: "worker-a", createdAt: "2026-03-09T10:20:00.000Z", parentThreadId: "planning" }),
+      node({ id: "planning", createdAt: "2026-03-09T10:10:00.000Z", parentThreadId: "root" }),
+    ]);
+
+    expect(rows.map((row) => [row.thread.id, row.depth, row.hasChildren])).toEqual([
+      ["root", 0, true],
+      ["planning", 1, true],
+      ["worker-a", 2, false],
+      ["worker-b", 2, false],
+    ]);
+    expect(rows.every((row) => row.rootThreadKey === "root")).toBe(true);
+  });
+
+  it("caps visual depth so a deep workflow cannot indent off the sidebar", () => {
+    const rows = buildSidebarV2ThreadTreeRows([
+      node({ id: "d0", createdAt: "2026-03-09T10:00:00.000Z" }),
+      node({ id: "d1", createdAt: "2026-03-09T10:01:00.000Z", parentThreadId: "d0" }),
+      node({ id: "d2", createdAt: "2026-03-09T10:02:00.000Z", parentThreadId: "d1" }),
+      node({ id: "d3", createdAt: "2026-03-09T10:03:00.000Z", parentThreadId: "d2" }),
+      node({ id: "d4", createdAt: "2026-03-09T10:04:00.000Z", parentThreadId: "d3" }),
+    ]);
+
+    expect(rows.map((row) => row.visualDepth)).toEqual([0, 1, 2, 3, 3]);
+  });
+
+  it("does not let a newly spawned sub-thread reorder its root", () => {
+    const withoutChild = [
+      node({ id: "older-root", createdAt: "2026-03-09T08:00:00.000Z" }),
+      node({ id: "newer-root", createdAt: "2026-03-09T09:00:00.000Z" }),
+    ];
+    const withChild = [
+      ...withoutChild,
+      // Spawned long after the newer root — a roll-up sort would lift
+      // older-root to the top. v2 must not move.
+      node({ id: "worker", createdAt: "2026-03-09T23:00:00.000Z", parentThreadId: "older-root" }),
+    ];
+
+    expect(
+      buildSidebarV2ThreadTreeRows(withChild)
+        .filter((row) => row.depth === 0)
+        .map((row) => row.thread.id),
+    ).toEqual(["newer-root", "older-root"]);
+  });
+
+  it("promotes dangling and self parents to roots and still emits cycles once", () => {
+    const rows = buildSidebarV2ThreadTreeRows([
+      node({ id: "orphan", createdAt: "2026-03-09T10:00:00.000Z", parentThreadId: "missing" }),
+      node({ id: "self", createdAt: "2026-03-09T10:01:00.000Z", parentThreadId: "self" }),
+      node({ id: "cycle-a", createdAt: "2026-03-09T10:02:00.000Z", parentThreadId: "cycle-b" }),
+      node({ id: "cycle-b", createdAt: "2026-03-09T10:03:00.000Z", parentThreadId: "cycle-a" }),
+    ]);
+
+    expect(rows).toHaveLength(4);
+    expect(new Set(rows.map((row) => row.thread.id))).toEqual(
+      new Set(["orphan", "self", "cycle-a", "cycle-b"]),
+    );
+    for (const id of ["orphan", "self"]) {
+      expect(rows.find((row) => row.thread.id === id)?.depth).toBe(0);
+    }
+  });
+});
+
+describe("selectVisibleSidebarV2TreeRows", () => {
+  const rows = buildSidebarV2ThreadTreeRows([
+    { id: ThreadId.make("root"), parentThreadId: null, createdAt: "2026-03-09T10:00:00.000Z" },
+    {
+      id: ThreadId.make("planning"),
+      parentThreadId: ThreadId.make("root"),
+      createdAt: "2026-03-09T10:10:00.000Z",
+    },
+    {
+      id: ThreadId.make("worker"),
+      parentThreadId: ThreadId.make("planning"),
+      createdAt: "2026-03-09T10:20:00.000Z",
+    },
+  ]);
+
+  it("hides every sub-thread by default", () => {
+    expect(
+      selectVisibleSidebarV2TreeRows({
+        rows,
+        expandedThreadKeys: new Set(),
+        activeThreadKey: null,
+      }).map((row) => row.threadKey),
+    ).toEqual(["root"]);
+  });
+
+  it("reveals only the expanded node's direct children", () => {
+    expect(
+      selectVisibleSidebarV2TreeRows({
+        rows,
+        expandedThreadKeys: new Set(["root"]),
+        activeThreadKey: null,
+      }).map((row) => row.threadKey),
+    ).toEqual(["root", "planning"]);
+  });
+
+  it("forces the open thread's whole ancestor path visible without expanding it", () => {
+    const expandedThreadKeys = new Set<string>();
+
+    expect(
+      selectVisibleSidebarV2TreeRows({
+        rows,
+        expandedThreadKeys,
+        activeThreadKey: "worker",
+      }).map((row) => row.threadKey),
+    ).toEqual(["root", "planning", "worker"]);
+    expect(expandedThreadKeys.size).toBe(0);
+  });
+});
+
+describe("partitionSidebarV2ThreadGroups", () => {
+  const tree = (
+    entries: readonly { id: string; parentThreadId?: string; snoozedUntil?: string }[],
+  ) =>
+    buildSidebarV2ThreadTreeRows(
+      entries.map((entry, index) => ({
+        id: ThreadId.make(entry.id),
+        parentThreadId:
+          entry.parentThreadId === undefined ? null : ThreadId.make(entry.parentThreadId),
+        createdAt: `2026-03-09T10:${String(index).padStart(2, "0")}:00.000Z`,
+        snoozedUntil: entry.snoozedUntil ?? null,
+      })),
+    );
+
+  const partition = (
+    rows: ReturnType<typeof tree>,
+    sectionById: Record<string, "active" | "snoozed" | "settled">,
+  ) =>
+    partitionSidebarV2ThreadGroups({
+      rows,
+      classifyThread: (thread) => sectionById[thread.id] ?? "active",
+      resolveSnoozeSortMs: (thread) =>
+        thread.snoozedUntil === null ? 0 : Date.parse(thread.snoozedUntil),
+      resolveSettledSortMs: () => 0,
+    });
+
+  it("keeps a workflow whole in Active when any member is still active", () => {
+    const rows = tree([{ id: "root" }, { id: "worker-a", parentThreadId: "root" }]);
+    const result = partition(rows, { root: "settled", "worker-a": "active" });
+
+    expect(result.groupsBySection.active.map((group) => group.rootThreadKey)).toEqual(["root"]);
+    expect(result.groupsBySection.settled).toHaveLength(0);
+    expect(result.groupCountBySection.active).toBe(1);
+  });
+
+  it("still reports each thread's own state so its affordance stays correct", () => {
+    const rows = tree([{ id: "root" }, { id: "worker-a", parentThreadId: "root" }]);
+    const result = partition(rows, { root: "active", "worker-a": "settled" });
+
+    expect(result.sectionByThreadKey.get("worker-a")).toBe("settled");
+    expect(result.sectionByThreadKey.get("root")).toBe("active");
+  });
+
+  it("moves an all-settled workflow into the tail as one unit", () => {
+    const rows = tree([{ id: "root" }, { id: "worker-a", parentThreadId: "root" }]);
+    const result = partition(rows, { root: "settled", "worker-a": "settled" });
+
+    expect(result.groupsBySection.active).toHaveLength(0);
+    expect(result.groupsBySection.settled).toHaveLength(1);
+    expect(result.groupsBySection.settled[0]?.rows.map((row) => row.threadKey)).toEqual([
+      "root",
+      "worker-a",
+    ]);
+  });
+
+  it("orders snoozed groups by the soonest wake among their members", () => {
+    const rows = tree([
+      { id: "late", snoozedUntil: "2026-03-10T12:00:00.000Z" },
+      { id: "soon", snoozedUntil: "2026-03-10T08:00:00.000Z" },
+    ]);
+    const result = partition(rows, { late: "snoozed", soon: "snoozed" });
+
+    expect(result.groupsBySection.snoozed.map((group) => group.rootThreadKey)).toEqual([
+      "soon",
+      "late",
+    ]);
+  });
+});
+
+describe("resolveHighestPrioritySidebarV2Status", () => {
+  const idle = { hasPendingApprovals: false, hasPendingUserInput: false, session: null };
+
+  it("surfaces the most urgent status hidden inside a collapsed group", () => {
+    expect(
+      resolveHighestPrioritySidebarV2Status([
+        idle,
+        { ...idle, hasPendingUserInput: true },
+        { ...idle, hasPendingApprovals: true },
+      ]),
+    ).toBe("approval");
+  });
+
+  it("returns null with no descendants", () => {
+    expect(resolveHighestPrioritySidebarV2Status([])).toBeNull();
+  });
+});
+
+describe("workflowRoleShortLabel", () => {
+  it("labels workflow sub-threads and leaves plain threads unlabeled", () => {
+    expect(workflowRoleShortLabel("implementation-worker")).toBe("Worker");
+    expect(workflowRoleShortLabel("implementation-qa-reviewer")).toBe("Dev review");
+    expect(workflowRoleShortLabel("planning-orchestrator")).toBe("Planning");
+    expect(workflowRoleShortLabel(null)).toBeNull();
   });
 });

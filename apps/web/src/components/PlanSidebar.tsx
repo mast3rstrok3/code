@@ -33,6 +33,7 @@ import {
   PlayIcon,
   RefreshCwIcon,
   RotateCcwIcon,
+  SquareIcon,
 } from "lucide-react";
 import { cn } from "~/lib/utils";
 import type { ActivePlanState } from "../session-logic";
@@ -236,6 +237,7 @@ interface PlanSidebarProps {
   onLaunchImplementationRun?: (specId: OrchestrationPlanningSpecId) => void;
   onRetryImplementationChangeRequest?: (runId: OrchestrationImplementationRun["id"]) => void;
   onRetryImplementationRun?: (runId: OrchestrationImplementationRun["id"]) => void;
+  onCancelImplementationRun?: (runId: OrchestrationImplementationRun["id"]) => void;
   focusedTicketId?: string | null;
 }
 
@@ -455,6 +457,7 @@ const PlanSidebar = memo(function PlanSidebar({
   onLaunchImplementationRun,
   onRetryImplementationChangeRequest,
   onRetryImplementationRun,
+  onCancelImplementationRun,
   focusedTicketId = null,
 }: PlanSidebarProps) {
   const [expandedSectionIds, setExpandedSectionIds] = useState<ReadonlySet<PlanSidebarSectionId>>(
@@ -1112,7 +1115,17 @@ const PlanSidebar = memo(function PlanSidebar({
                                   : "not published"}
                             </div>
                             {run.retryableFailure ? (
-                              <div className="text-destructive">
+                              // The failure record survives a retry so attempts
+                              // accumulate, so it describes the last attempt
+                              // rather than the current state once work resumes.
+                              <div
+                                className={
+                                  run.status === "needs-human-attention"
+                                    ? "text-destructive"
+                                    : "text-muted-foreground/60"
+                                }
+                              >
+                                {run.status === "needs-human-attention" ? "" : "Last failure — "}
                                 {run.retryableFailure.stage}: {run.retryableFailure.detail}
                               </div>
                             ) : null}
@@ -1144,7 +1157,9 @@ const PlanSidebar = memo(function PlanSidebar({
                                 Retry PR
                               </Button>
                             ) : null}
-                            {run.retryableFailure && onRetryImplementationRun ? (
+                            {run.retryableFailure &&
+                            run.status === "needs-human-attention" &&
+                            onRetryImplementationRun ? (
                               <Button
                                 size="xs"
                                 variant="outline"
@@ -1153,6 +1168,19 @@ const PlanSidebar = memo(function PlanSidebar({
                               >
                                 <RotateCcwIcon className="size-3" />
                                 Retry {run.retryableFailure.stage}
+                              </Button>
+                            ) : null}
+                            {run.status !== "completed" &&
+                            run.status !== "canceled" &&
+                            onCancelImplementationRun ? (
+                              <Button
+                                size="xs"
+                                variant="outline"
+                                className="h-6 text-[11px]"
+                                onClick={() => onCancelImplementationRun(run.id)}
+                              >
+                                <SquareIcon className="size-3" />
+                                Cancel run
                               </Button>
                             ) : null}
                           </div>

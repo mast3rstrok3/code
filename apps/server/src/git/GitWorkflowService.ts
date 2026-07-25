@@ -115,6 +115,7 @@ export class GitWorkflowService extends Context.Service<
       readonly expectedHeadSha: string;
       readonly threadId?: ThreadId;
       readonly commitMessage?: string;
+      readonly pullRequestBodyNote?: string;
     }) => Effect.Effect<ChangeRequest, GitManagerServiceError>;
     readonly removeWorktree: (
       input: VcsRemoveWorktreeInput,
@@ -504,6 +505,9 @@ export const make = Effect.gen(function* () {
               pullRequestBaseBranch: input.baseRefName,
               ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
               ...(input.commitMessage !== undefined ? { commitMessage: input.commitMessage } : {}),
+              ...(input.pullRequestBodyNote !== undefined
+                ? { pullRequestBodyNote: input.pullRequestBodyNote }
+                : {}),
             });
           }),
         ),

@@ -371,6 +371,7 @@ function createTextGeneration(
 function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
   service: GitHubCli.GitHubCli["Service"];
   ghCalls: string[];
+  prBodies: string[];
 } {
   const prListQueue = [...(scenario.prListSequence ?? [])];
   const prListQueueByHeadSelector = new Map(
@@ -380,10 +381,22 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
     ]),
   );
   const ghCalls: string[] = [];
+  // The PR body temp file is removed right after `gh pr create`, so capture its contents here.
+  const prBodies: string[] = [];
 
   const execute: GitHubCli.GitHubCli["Service"]["execute"] = (input) => {
     const args = [...input.args];
     ghCalls.push(args.join(" "));
+
+    const bodyFileIndex = args.findIndex((value) => value === "--body-file");
+    const bodyFilePath = bodyFileIndex >= 0 ? args[bodyFileIndex + 1] : undefined;
+    if (typeof bodyFilePath === "string") {
+      try {
+        prBodies.push(NodeFS.readFileSync(bodyFilePath, "utf8"));
+      } catch {
+        // A missing body file is asserted through ghCalls instead.
+      }
+    }
 
     if (scenario.failWith && ghCalls.length > (scenario.failAfterCalls ?? 0)) {
       return Effect.fail(scenario.failWith);
@@ -599,6 +612,7 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
         }).pipe(Effect.asVoid),
     },
     ghCalls,
+    prBodies,
   };
 }
 
@@ -612,6 +626,7 @@ function runStackedAction(
     featureBranch?: boolean;
     filePaths?: readonly string[];
     pullRequestBaseBranch?: string;
+    pullRequestBodyNote?: string;
   },
   options?: Parameters<GitManager.GitManager["Service"]["runStackedAction"]>[1],
 ) {
@@ -643,7 +658,7 @@ function makeManager(input?: {
   textGeneration?: Partial<FakeGitTextGeneration>;
   setupScriptRunner?: ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"];
 }) {
-  const { service: gitHubCli, ghCalls } = createGitHubCliWithFakeGh(input?.ghScenario);
+  const { service: gitHubCli, ghCalls, prBodies } = createGitHubCliWithFakeGh(input?.ghScenario);
   const textGeneration = createTextGeneration(input?.textGeneration);
   const serverConfigLayer = ServerConfig.layerTest(process.cwd(), {
     prefix: "t3-git-manager-test-",
@@ -685,7 +700,7 @@ function makeManager(input?: {
 
   return GitManager.make.pipe(
     Effect.provide(managerLayer),
-    Effect.map((manager) => ({ manager, ghCalls })),
+    Effect.map((manager) => ({ manager, ghCalls, prBodies })),
   );
 }
 
@@ -1891,6 +1906,48 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           ),
         ).toBe(true);
       }),
+  );
+
+  it.effect("appends pullRequestBodyNote to the generated pull request body", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/body-note"]);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      NodeFS.writeFileSync(NodePath.join(repoDir, "note.txt"), "note\n");
+
+      const { manager, prBodies } = yield* makeManager({
+        ghScenario: {
+          prListSequence: [
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify([]),
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify([
+              {
+                number: 91,
+                title: "Body note PR",
+                url: "https://github.com/pingdotgg/codething-mvp/pull/91",
+                baseRefName: "main",
+                headRefName: "feature/body-note",
+              },
+            ]),
+          ],
+        },
+      });
+      const result = yield* runStackedAction(manager, {
+        cwd: repoDir,
+        action: "commit_push_pr",
+        pullRequestBodyNote: "## Automated review\n- ⚠️ Dev Review: **did not pass**",
+      });
+
+      expect(result.pr.status).toBe("created");
+      const body = prBodies.at(-1) ?? "";
+      // The generated body is preserved and the note is appended after it.
+      expect(body).toContain("## Summary");
+      expect(body).toContain("- ⚠️ Dev Review: **did not pass**");
+      expect(body.indexOf("## Summary")).toBeLessThan(body.indexOf("## Automated review"));
+    }),
   );
 
   it.effect("skips push when branch is already up to date", () =>

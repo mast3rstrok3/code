@@ -595,6 +595,7 @@ function buildImplementationRun(input: {
     activeDevReviewHeadSha: null,
     activeDevReviewThreadId: null,
     qaAttemptCount: 0,
+    devReviewExhaustedAt: null,
     codeReviewedHeadSha: null,
     activeCodeReviewHeadSha: null,
     activeCodeReviewThreadId: null,
@@ -2272,6 +2273,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         activeDevReviewHeadSha: null,
         activeDevReviewThreadId: null,
         qaAttemptCount: 0,
+        devReviewExhaustedAt: null,
         codeReviewedHeadSha: null,
         activeCodeReviewHeadSha: null,
         activeCodeReviewThreadId: null,
@@ -2538,6 +2540,42 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         })),
         type: "thread.implementation-run-retry-requested",
         payload: { run: existingRun },
+      };
+    }
+
+    case "thread.implementation-run.cancel": {
+      yield* requireThread({ readModel, command, threadId: command.threadId });
+      const existingRun = readModel.implementationRuns.find((run) => run.id === command.runId);
+      if (existingRun === undefined) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Implementation Run '${command.runId}' does not exist.`,
+        });
+      }
+      if (existingRun.status === "completed" || existingRun.status === "canceled") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Implementation Run '${command.runId}' has already reached status '${existingRun.status}'.`,
+        });
+      }
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.implementation-run-cancel-requested",
+        payload: {
+          sourceThreadId: command.threadId,
+          run: {
+            ...existingRun,
+            status: "canceled",
+            retryableFailure: null,
+            updatedAt: command.createdAt,
+          },
+          ...(command.reason !== undefined ? { reason: command.reason } : {}),
+        },
       };
     }
 

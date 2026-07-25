@@ -221,6 +221,7 @@ import {
   useProject,
   useProjects,
   useRequestPlanningTicketReviewCommand,
+  useCancelImplementationRunCommand,
   useRetryImplementationChangeRequestCommand,
   useRetryImplementationRunCommand,
   useThread,
@@ -268,6 +269,7 @@ import {
   createLocalDispatchSnapshot,
   deriveComposerSendState,
   dismissBranchMismatchForSession,
+  findCancelableImplementationRunForThread,
   hasServerAcknowledgedLocalDispatch,
   isBranchMismatchDismissedForSession,
   shouldShowBranchMismatchBanner,
@@ -405,6 +407,16 @@ const DevReviewPanel = lazy(() =>
 const FilePreviewPanel = lazy(() => import("./files/FilePreviewPanel"));
 const EMPTY_PENDING_FILE_SURFACE_IDS: ReadonlySet<string> = new Set();
 const BROWSER_DEV_REVIEW_WORKFLOW_PROMPT_ID = "implementation.browser-dev-review.codex";
+const STOP_WORKFLOW_RUN_CONFIRM_MESSAGE = [
+  "Stop this workflow run?",
+  "The current turn is interrupted and the run is canceled, so it will not resume on its own.",
+  "The run's branch and worktree are kept.",
+].join("\n");
+const CANCEL_IMPLEMENTATION_RUN_CONFIRM_MESSAGE = [
+  "Cancel this run?",
+  "It stops where it is and will not resume on its own.",
+  "The run's branch and worktree are kept.",
+].join("\n");
 const TYPE_TO_FOCUS_EDITABLE_SELECTOR = [
   "input",
   "textarea",
@@ -1183,6 +1195,7 @@ function ChatViewContent(props: ChatViewProps) {
   const launchImplementationRun = useLaunchImplementationRunCommand();
   const retryImplementationChangeRequest = useRetryImplementationChangeRequestCommand();
   const retryImplementationRun = useRetryImplementationRunCommand();
+  const cancelImplementationRun = useCancelImplementationRunCommand();
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, {
     reportFailure: false,
   });
@@ -2806,6 +2819,41 @@ function ChatViewContent(props: ChatViewProps) {
       });
     },
     [draftId, routeThreadKey, routeThreadRef, serverThread],
+  );
+
+  const handleCancelImplementationRun = useCallback(
+    async (runId: string, reason?: string) => {
+      if (!activeThread) return;
+      const result = await cancelImplementationRun({
+        environmentId: activeThread.environmentId,
+        input: {
+          threadId: activeThread.id,
+          runId,
+          ...(reason !== undefined ? { reason } : {}),
+        },
+      });
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        setThreadError(
+          activeThread.id,
+          error instanceof Error ? error.message : "Failed to cancel the implementation run.",
+        );
+      }
+    },
+    [activeThread, cancelImplementationRun, setThreadError],
+  );
+  const handleCancelImplementationRunFromSidebar = useCallback(
+    (runId: string) => {
+      void (async () => {
+        const localApi = readLocalApi();
+        const confirmed = localApi
+          ? await localApi.dialogs.confirm(CANCEL_IMPLEMENTATION_RUN_CONFIRM_MESSAGE)
+          : window.confirm(CANCEL_IMPLEMENTATION_RUN_CONFIRM_MESSAGE);
+        if (!confirmed) return;
+        await handleCancelImplementationRun(runId, "Canceled from the plan sidebar.");
+      })();
+    },
+    [handleCancelImplementationRun],
   );
 
   const focusComposer = useCallback(() => {
@@ -5329,6 +5377,22 @@ function ChatViewContent(props: ChatViewProps) {
 
   const onInterrupt = async () => {
     if (!activeThread) return;
+    // Interrupting a turn inside a workflow thread only pauses it — the
+    // implementation run's recovery sweep relaunches the stage moments later.
+    // Stop means stop, so cancel the run the thread belongs to as well.
+    const cancelableRun = findCancelableImplementationRunForThread({
+      threadId: activeThread.id,
+      implementationRuns: activeImplementationRuns,
+    });
+    if (cancelableRun !== null) {
+      const localApi = readLocalApi();
+      const confirmed = localApi
+        ? await localApi.dialogs.confirm(STOP_WORKFLOW_RUN_CONFIRM_MESSAGE)
+        : window.confirm(STOP_WORKFLOW_RUN_CONFIRM_MESSAGE);
+      if (!confirmed) {
+        return;
+      }
+    }
     const result = await interruptThreadTurn({
       environmentId,
       input: buildThreadTurnInterruptInput(activeThread),
@@ -5339,6 +5403,9 @@ function ChatViewContent(props: ChatViewProps) {
         activeThread.id,
         error instanceof Error ? error.message : "Failed to interrupt the current turn.",
       );
+    }
+    if (cancelableRun !== null) {
+      await handleCancelImplementationRun(cancelableRun.id, "Stopped from the composer.");
     }
   };
 
@@ -6104,6 +6171,7 @@ function ChatViewContent(props: ChatViewProps) {
         onLaunchImplementationRun={handleLaunchImplementationRun}
         onRetryImplementationChangeRequest={handleRetryImplementationChangeRequest}
         onRetryImplementationRun={handleRetryImplementationRun}
+        onCancelImplementationRun={handleCancelImplementationRunFromSidebar}
         focusedTicketId={focusedPlanningTicketId}
       />
     ) : activeRightPanelSurface?.kind === "app-dev-stack" &&

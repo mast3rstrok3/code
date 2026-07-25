@@ -323,7 +323,12 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /## Why two axes/);
     NodeAssert.match(rendered, /## Orchestrated Code Review Result/);
     NodeAssert.match(rendered, /"type": "implementation-code-review-result"/);
-    NodeAssert.match(rendered, /Use status "clean" only when neither axis has findings/);
+    NodeAssert.match(rendered, /Use status "clean" when neither axis has findings/);
+    // Code Review is the last automated pass: it must land its own fixes and name the commit.
+    NodeAssert.match(rendered, /single review-and-fix pass/);
+    NodeAssert.match(rendered, /"commitSha"/);
+    NodeAssert.match(rendered, /"validations"/);
+    NodeAssert.match(rendered, /do not use it to hand unfixed findings back/);
   });
 
   it("registers the legacy Product prompt and all authoritative preset grills", () => {

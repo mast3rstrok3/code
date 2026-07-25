@@ -293,6 +293,12 @@ export function useRetryImplementationRunCommand() {
   });
 }
 
+export function useCancelImplementationRunCommand() {
+  return useAtomCommand(threadEnvironment.cancelImplementationRun, {
+    label: "implementation run cancel",
+  });
+}
+
 export function readProject(ref: ScopedProjectRef): EnvironmentProject | null {
   return appAtomRegistry.get(environmentProjects.projectAtom(ref));
 }

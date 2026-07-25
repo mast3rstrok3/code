@@ -56,6 +56,7 @@ export type LaunchThreadFastFeatureRunInput = CommandInput<"thread.fast-feature-
 export type RetryThreadImplementationChangeRequestInput =
   CommandInput<"thread.implementation-change-request.retry">;
 export type RetryThreadImplementationRunInput = CommandInput<"thread.implementation-run.retry">;
+export type CancelThreadImplementationRunInput = CommandInput<"thread.implementation-run.cancel">;
 export type InterruptThreadTurnInput = CommandInput<"thread.turn.interrupt">;
 export type RespondToThreadApprovalInput = CommandInput<"thread.approval.respond">;
 export type RespondToThreadUserInputInput = CommandInput<"thread.user-input.respond">;
@@ -388,6 +389,20 @@ export const retryThreadImplementationRun: (
     return yield* dispatch({
       ...input,
       type: "thread.implementation-run.retry",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  },
+);
+
+export const cancelThreadImplementationRun: (
+  input: CancelThreadImplementationRunInput,
+) => CommandEffect = Effect.fn("EnvironmentCommands.cancelThreadImplementationRun")(
+  function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "thread.implementation-run.cancel",
       commandId: metadata.commandId,
       createdAt: metadata.createdAt,
     });

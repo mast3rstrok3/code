@@ -914,8 +914,8 @@ const make = Effect.gen(function* () {
     if (!thread) {
       return;
     }
-    const hasSession = thread.session && thread.session.status !== "stopped";
-    if (!hasSession) {
+    const session = thread.session;
+    if (!session || session.status === "stopped") {
       return yield* appendProviderFailureActivity({
         threadId: event.payload.threadId,
         kind: "provider.turn.interrupt.failed",
@@ -927,7 +927,61 @@ const make = Effect.gen(function* () {
     }
 
     // Orchestration turn ids are not provider turn ids, so interrupt by session.
-    yield* providerService.interruptTurn({ threadId: event.payload.threadId });
+    yield* providerService.interruptTurn({ threadId: event.payload.threadId }).pipe(
+      Effect.catchCause((cause) =>
+        appendProviderFailureActivity({
+          threadId: event.payload.threadId,
+          kind: "provider.turn.interrupt.failed",
+          summary: "Provider turn interrupt failed",
+          detail: formatFailureDetail(cause),
+          turnId: event.payload.turnId ?? null,
+          createdAt: event.payload.createdAt,
+        }),
+      ),
+    );
+
+    // The projection only leaves "running" when the provider reports the turn
+    // ending. If the adapter has no session, no turn in flight, or a different
+    // turn than the projection believes, that report will never arrive and the
+    // composer would stay stuck on its stop button forever. Reconcile against
+    // adapter truth; when the adapter agrees a turn is running, leave the
+    // projection alone and let the provider settle it.
+    if (session.status !== "running") {
+      return;
+    }
+    const providerSessions = yield* providerService.listSessions();
+    const providerSession = providerSessions.find(
+      (candidate) => candidate.threadId === event.payload.threadId,
+    );
+    const providerRunsProjectedTurn =
+      providerSession !== undefined &&
+      providerSession.status === "running" &&
+      providerSession.activeTurnId !== undefined &&
+      (session.activeTurnId === null || providerSession.activeTurnId === session.activeTurnId);
+    if (providerRunsProjectedTurn) {
+      return;
+    }
+    // Re-read so a session-set the provider emitted while we were interrupting
+    // wins; only repair a projection that is still stuck on the same turn.
+    const settled = yield* resolveThread(event.payload.threadId);
+    const currentSession = settled?.session;
+    if (
+      !currentSession ||
+      currentSession.status !== "running" ||
+      currentSession.activeTurnId !== session.activeTurnId
+    ) {
+      return;
+    }
+    yield* setThreadSession({
+      threadId: event.payload.threadId,
+      session: {
+        ...currentSession,
+        status: "interrupted",
+        activeTurnId: null,
+        updatedAt: event.payload.createdAt,
+      },
+      createdAt: event.payload.createdAt,
+    });
   });
 
   const processApprovalResponseRequested = Effect.fn("processApprovalResponseRequested")(function* (

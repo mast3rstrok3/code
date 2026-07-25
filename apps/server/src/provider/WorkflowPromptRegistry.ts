@@ -803,18 +803,37 @@ Reporting them separately stops one axis from masking the other.
 
 ## Orchestrated Code Review Result
 
-When this prompt is run by an automatic implementation run, do not ask the user questions. The launch message provides the fixed point, the diff command, the worktree, the change request, and the Spec source — use those instead of asking or searching the issue tracker. Run both axes, aggregate the report, and finish with exactly one fenced JSON block using this shape:
+When this prompt is run by an automatic implementation run, do not ask the user questions. The launch message provides the fixed point, the diff command, the worktree, the change request, and the Spec source — use those instead of asking or searching the issue tracker.
+
+**This is a single review-and-fix pass.** You are the last automated reviewer: nothing re-reviews your work, and the change request is published from the commit you leave at HEAD. So run both axes, aggregate the report, then act on it yourself:
+
+1. Run both axes and aggregate the two-axis report.
+2. If either axis produced findings that require code changes, fix them in the orchestrator worktree with the smallest reliable changes. Do not delegate the fixes and do not defer them to a follow-up.
+3. Run every required validation command named in the launch message, plus \`vp run lint:mobile\` when the diff touches \`apps/mobile\`.
+4. Commit your fixes on the orchestrator branch and leave the worktree clean.
+5. Report the commit you produced.
+
+Finish with exactly one fenced JSON block using this shape:
 
 \`\`\`json
 {
   "type": "implementation-code-review-result",
   "runId": "implementation-run-id",
-  "status": "clean",
+  "status": "findings",
+  "commitSha": "HEAD commit SHA after your fixes",
+  "validations": [
+    {
+      "command": "vp check",
+      "status": "passed",
+      "outputMarkdown": "summary",
+      "completedAt": "ISO timestamp"
+    }
+  ],
   "reportMarkdown": "## Standards\\n...\\n\\n## Spec\\n..."
 }
 \`\`\`
 
-Use status "clean" only when neither axis has findings that require code changes, "findings" when code changes are required (include every finding in reportMarkdown), and "blocked" when the review cannot be performed (say why in reportMarkdown).
+Use status "clean" when neither axis has findings that require code changes — omit \`commitSha\` and leave HEAD untouched. Use "findings" when code changes were required: include every finding in reportMarkdown, set \`commitSha\` to the HEAD you committed, and report each required validation in \`validations\`. Use "blocked" when the review cannot be performed at all (say why in reportMarkdown); do not use it to hand unfixed findings back.
 </collaboration_mode>`;
 
 const PRODUCT_WORKFLOW_PROMPT = `<collaboration_mode># Product Workflow: Intent Grill

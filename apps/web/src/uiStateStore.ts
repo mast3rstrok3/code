@@ -27,6 +27,7 @@ export interface PersistedUiState {
   defaultAdvertisedEndpointKey?: string | null;
   threadChangedFilesExpansionVersion?: typeof THREAD_CHANGED_FILES_EXPANSION_VERSION;
   threadChangedFilesExpandedById?: Record<string, Record<string, boolean>>;
+  threadTreeExpandedByKey?: Record<string, boolean>;
 }
 
 export interface UiProjectState {
@@ -37,6 +38,9 @@ export interface UiProjectState {
 export interface UiThreadState {
   threadLastVisitedAtById: Record<string, string>;
   threadChangedFilesExpandedById: Record<string, Record<string, boolean>>;
+  /** Sidebar v2 sub-thread disclosure, keyed by scoped thread key. Sub-threads
+      default to collapsed, so only explicit expansions are recorded. */
+  threadTreeExpandedByKey: Record<string, boolean>;
 }
 
 export interface UiEndpointState {
@@ -50,6 +54,7 @@ const initialState: UiState = {
   projectOrder: [],
   threadLastVisitedAtById: {},
   threadChangedFilesExpandedById: {},
+  threadTreeExpandedByKey: {},
   defaultAdvertisedEndpointKey: null,
 };
 
@@ -130,6 +135,7 @@ export function parsePersistedState(parsed: PersistedUiState): UiState {
       parsed.threadChangedFilesExpansionVersion === THREAD_CHANGED_FILES_EXPANSION_VERSION
         ? sanitizePersistedThreadChangedFilesExpanded(parsed.threadChangedFilesExpandedById)
         : {},
+    threadTreeExpandedByKey: sanitizeBooleanRecord(parsed.threadTreeExpandedByKey),
     defaultAdvertisedEndpointKey:
       typeof parsed.defaultAdvertisedEndpointKey === "string" &&
       parsed.defaultAdvertisedEndpointKey.length > 0
@@ -207,6 +213,7 @@ export function persistState(state: UiState): void {
         defaultAdvertisedEndpointKey: state.defaultAdvertisedEndpointKey,
         threadChangedFilesExpansionVersion: THREAD_CHANGED_FILES_EXPANSION_VERSION,
         threadChangedFilesExpandedById: state.threadChangedFilesExpandedById,
+        threadTreeExpandedByKey: state.threadTreeExpandedByKey,
       } satisfies PersistedUiState),
     );
     if (!legacyKeysCleanedUp) {
@@ -337,6 +344,29 @@ export function setProjectExpanded(
   };
 }
 
+export function setThreadTreeExpanded(
+  state: UiState,
+  threadKey: string,
+  expanded: boolean,
+): UiState {
+  if ((state.threadTreeExpandedByKey[threadKey] ?? false) === expanded) {
+    return state;
+  }
+  const threadTreeExpandedByKey = { ...state.threadTreeExpandedByKey };
+  if (expanded) {
+    threadTreeExpandedByKey[threadKey] = true;
+  } else {
+    // Collapsed is the default, so a collapse deletes the entry instead of
+    // storing `false` — otherwise every toggled group leaks into localStorage
+    // forever.
+    delete threadTreeExpandedByKey[threadKey];
+  }
+  return {
+    ...state,
+    threadTreeExpandedByKey,
+  };
+}
+
 export function reorderProjects(
   state: UiState,
   currentProjectOrder: readonly string[],
@@ -387,6 +417,7 @@ interface UiStateStore extends UiState {
   setThreadChangedFilesExpanded: (threadId: string, turnId: string, expanded: boolean) => void;
   setDefaultAdvertisedEndpointKey: (key: string | null) => void;
   setProjectExpanded: (projectIds: string | readonly string[], expanded: boolean) => void;
+  setThreadTreeExpanded: (threadKey: string, expanded: boolean) => void;
   reorderProjects: (
     currentProjectOrder: readonly string[],
     draggedProjectIds: readonly string[],
@@ -406,6 +437,8 @@ export const useUiStateStore = create<UiStateStore>((set) => ({
     set((state) => setDefaultAdvertisedEndpointKey(state, key)),
   setProjectExpanded: (projectIds, expanded) =>
     set((state) => setProjectExpanded(state, projectIds, expanded)),
+  setThreadTreeExpanded: (threadKey, expanded) =>
+    set((state) => setThreadTreeExpanded(state, threadKey, expanded)),
   reorderProjects: (currentProjectOrder, draggedProjectIds, targetProjectIds) =>
     set((state) =>
       reorderProjects(state, currentProjectOrder, draggedProjectIds, targetProjectIds),

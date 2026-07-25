@@ -636,6 +636,25 @@ function passDevReview(system: ReconcilerSystem, run: OrchestrationImplementatio
   });
 }
 
+function failDevReview(system: ReconcilerSystem, run: OrchestrationImplementationRun) {
+  return Effect.gen(function* () {
+    const snapshot = yield* system.query.getSnapshot();
+    const reviewingRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+    const reviewId = reviewingRun?.devReviewIds.at(-1);
+    if (reviewId === undefined) throw new Error("Dev review missing.");
+    yield* system.engine.dispatch({
+      type: "thread.dev-review.update",
+      commandId: commandId("dev-review-fail"),
+      threadId: run.orchestratorThreadId,
+      reviewId: DevReviewId.make(reviewId),
+      status: "failed",
+      updatedAt: "2026-01-01T00:00:03.000Z",
+      createdAt: "2026-01-01T00:00:03.000Z",
+    });
+    yield* system.reactor.drain;
+  });
+}
+
 function findThreadByRole(system: ReconcilerSystem, role: string) {
   return system.query
     .getSnapshot()
@@ -1151,34 +1170,13 @@ describe("StaleTurnReconciler", () => {
           const { run } = yield* launchRun(system);
           yield* appendWorkerSuccess(system, run);
           yield* passMergeGate(system, run);
-          yield* passDevReview(system, run);
-          const reviewer = yield* findThreadByRole(system, "implementation-code-reviewer");
-          if (!reviewer) throw new Error("Code reviewer missing.");
-          yield* system.engine.dispatch({
-            type: "thread.activity.append",
-            commandId: commandId("code-review-findings"),
-            threadId: reviewer.id,
-            activity: {
-              id: eventId("code-review-findings"),
-              tone: "info",
-              kind: "implementation-code-review-result",
-              summary: "Implementation code review findings",
-              payload: {
-                type: "implementation-code-review-result",
-                runId: run.id,
-                status: "findings",
-                reportMarkdown: "## Findings\n- fix this",
-              },
-              turnId: null,
-              createdAt: "2026-01-01T00:00:04.000Z",
-            },
-            createdAt: "2026-01-01T00:00:04.000Z",
-          });
-          yield* system.reactor.drain;
+          // A failing Dev Review is what spawns a fixer for spec-driven runs; Code Review no longer
+          // does, because it lands its own fixes in a single pass.
+          yield* failDevReview(system, run);
           const fixer = yield* findThreadByRole(system, "implementation-fixer");
           if (!fixer) throw new Error("Fixer missing.");
           const runBefore = yield* getRun(system, run.id);
-          expect(runBefore?.status).toBe("code-review-fixing");
+          expect(runBefore?.status).toBe("fixing");
           yield* seedCompletedResume(system, {
             threadId: fixer.id,
             interruptedTurnId: TurnId.make("turn-stale-fixer-prior-1"),

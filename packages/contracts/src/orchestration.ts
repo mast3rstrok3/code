@@ -458,7 +458,7 @@ export const OrchestrationPlanningSpecBundle = Schema.Struct({
 });
 export type OrchestrationPlanningSpecBundle = typeof OrchestrationPlanningSpecBundle.Type;
 
-export const IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS = 5;
+export const IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS = 10;
 
 export const OrchestrationImplementationRunId = TrimmedNonEmptyString;
 export type OrchestrationImplementationRunId = typeof OrchestrationImplementationRunId.Type;
@@ -908,6 +908,11 @@ export const OrchestrationImplementationRun = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   qaAttemptCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+  // Set when Dev Review used every allowed attempt without passing. The run still continues to
+  // Code Review and change-request publication; the unpassed review is surfaced instead of blocking.
+  devReviewExhaustedAt: Schema.NullOr(IsoDateTime).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   codeReviewedHeadSha: Schema.NullOr(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
@@ -1689,6 +1694,15 @@ const ThreadImplementationRunRetryCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadImplementationRunCancelCommand = Schema.Struct({
+  type: Schema.Literal("thread.implementation-run.cancel"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  runId: OrchestrationImplementationRunId,
+  reason: Schema.optional(TrimmedNonEmptyString),
+  createdAt: IsoDateTime,
+});
+
 const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
   projectId: ProjectId,
   ownerUserId: WorkspaceUserId.pipe(
@@ -1932,6 +1946,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadImplementationRunLaunchCommand,
   ThreadFastFeatureRunLaunchCommand,
   ThreadImplementationRunRetryCommand,
+  ThreadImplementationRunCancelCommand,
   ThreadImplementationChangeRequestRetryCommand,
   ThreadDevReviewLaunchCommand,
   ThreadTurnStartCommand,
@@ -1968,6 +1983,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadImplementationRunLaunchCommand,
   ThreadFastFeatureRunLaunchCommand,
   ThreadImplementationRunRetryCommand,
+  ThreadImplementationRunCancelCommand,
   ThreadImplementationChangeRequestRetryCommand,
   ThreadDevReviewLaunchCommand,
   ClientThreadTurnStartCommand,
@@ -2121,6 +2137,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.implementation-run-launched",
   "thread.implementation-run-updated",
   "thread.implementation-run-retry-requested",
+  "thread.implementation-run-cancel-requested",
   "thread.implementation-change-request-retry-requested",
   "thread.message-sent",
   "thread.turn-start-requested",
@@ -2349,6 +2366,12 @@ export const ThreadImplementationChangeRequestRetryRequestedPayload = Schema.Str
 
 export const ThreadImplementationRunRetryRequestedPayload = Schema.Struct({
   run: OrchestrationImplementationRun,
+});
+
+export const ThreadImplementationRunCancelRequestedPayload = Schema.Struct({
+  sourceThreadId: ThreadId,
+  run: OrchestrationImplementationRun,
+  reason: Schema.optional(Schema.String),
 });
 
 export const ThreadMessageSentPayload = Schema.Struct({
@@ -2627,6 +2650,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.implementation-run-retry-requested"),
     payload: ThreadImplementationRunRetryRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.implementation-run-cancel-requested"),
+    payload: ThreadImplementationRunCancelRequestedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

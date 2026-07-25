@@ -1,6 +1,7 @@
 import {
   type EnvironmentId,
   isProviderDriverKind,
+  type OrchestrationImplementationRun,
   ProjectId,
   type ModelSelection,
   type ProviderDriverKind,
@@ -120,6 +121,27 @@ export function buildThreadTurnInterruptInput(thread: Pick<Thread, "id" | "sessi
     threadId: thread.id,
     ...(runningTurnId !== null ? { turnId: runningTurnId } : {}),
   };
+}
+
+/**
+ * The implementation run a thread's stop button should cancel: the run this
+ * thread orchestrates, or the run launched from the proposed plan in this
+ * thread. Terminal runs are ignored — there is nothing left to stop.
+ */
+export function findCancelableImplementationRunForThread(input: {
+  threadId: ThreadId;
+  implementationRuns: ReadonlyArray<OrchestrationImplementationRun>;
+}): OrchestrationImplementationRun | null {
+  const candidates = input.implementationRuns.filter(
+    (run) =>
+      run.status !== "completed" &&
+      run.status !== "canceled" &&
+      (run.orchestratorThreadId === input.threadId ||
+        run.sourceProposedPlan?.threadId === input.threadId),
+  );
+  return (
+    [...candidates].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0] ?? null
+  );
 }
 
 export function resolveProductWorkflowPlanningThreadId(input: {

@@ -3,6 +3,7 @@ import {
   DevReviewId,
   EventId,
   GitCommandError,
+  IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS,
   MessageId,
   ThreadId,
   type OrchestrationEvent,
@@ -44,8 +45,10 @@ import {
   resolveWorkflowSubagentSpawnDefinition,
 } from "../workflowSubagents.ts";
 
-const MAX_BROWSER_REVIEW_ATTEMPTS = 5;
-const MAX_CODE_REVIEW_CYCLES = 5;
+// Code Review is a single review-and-fix pass: the reviewer lands its own fixes and the change
+// request is published from that commit, so there is no re-review cycle and no cycle budget. The
+// `code-review-fixing` status and `fixOrigin: "code-review"` remain only so runs persisted by the
+// previous re-review loop still decode and recover.
 
 type ImplementationWorkflowEvent = Extract<
   OrchestrationEvent,
@@ -55,7 +58,8 @@ type ImplementationWorkflowEvent = Extract<
       | "thread.activity-appended"
       | "thread.dev-review-updated"
       | "thread.implementation-change-request-retry-requested"
-      | "thread.implementation-run-retry-requested";
+      | "thread.implementation-run-retry-requested"
+      | "thread.implementation-run-cancel-requested";
   }
 >;
 
@@ -84,6 +88,9 @@ type CodeReviewDirective = {
   readonly type: "implementation-code-review-result";
   readonly runId: string;
   readonly status: "clean" | "findings" | "blocked";
+  /** Set when the single review-and-fix pass landed fixes; names the commit it produced. */
+  readonly commitSha?: string;
+  readonly validations: ReadonlyArray<OrchestrationImplementationValidationResult>;
   readonly reportMarkdown: string;
 };
 
@@ -110,6 +117,11 @@ type BranchIntegration = {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
 
+const asValidationResults = (
+  value: unknown,
+): ReadonlyArray<OrchestrationImplementationValidationResult> =>
+  Array.isArray(value) ? (value as ReadonlyArray<OrchestrationImplementationValidationResult>) : [];
+
 const asWorkerDirective = (value: unknown): WorkerDirective | null =>
   isRecord(value) && value["type"] === "implementation-worker-result"
     ? (value as WorkerDirective)
@@ -125,7 +137,8 @@ const asFixDirective = (value: unknown): FixDirective | null =>
 
 const asCodeReviewDirective = (value: unknown): CodeReviewDirective | null =>
   isRecord(value) && value["type"] === "implementation-code-review-result"
-    ? (value as CodeReviewDirective)
+    ? // Activities recorded before Code Review became a review-and-fix pass carry no validations.
+      { ...(value as CodeReviewDirective), validations: asValidationResults(value["validations"]) }
     : null;
 
 const asFastBuildDirective = (value: unknown): FastBuildDirective | null =>
@@ -373,9 +386,13 @@ function buildCodeReviewPrompt(input: {
   const changeRequest = input.run.changeRequest;
   const fixedPoint = input.run.pinnedCommit;
   return [
-    `Perform the implementation code review for implementation run ${input.run.id} (cycle ${input.run.codeReviewAttemptCount} of ${MAX_CODE_REVIEW_CYCLES}).`,
+    `Perform the implementation code review for implementation run ${input.run.id}. This is the only review pass: nothing re-reviews your work afterwards, and the change request is published from the commit you leave at HEAD.`,
     "",
-    "Do not ask the user questions. Review the change along the Standards and Spec axes as described in your workflow instructions.",
+    "Do not ask the user questions. Review the change along the Standards and Spec axes as described in your workflow instructions, then apply the fixes yourself and commit them.",
+    "",
+    input.run.devReviewExhaustedAt === null
+      ? "Dev Review passed at this commit."
+      : "Dev Review did not pass within its attempt budget for this run. Treat unresolved user-visible defects as review findings and fix what you reasonably can.",
     "",
     "Review scope:",
     `- worktree: ${input.run.orchestratorWorktreePath}`,
@@ -390,7 +407,13 @@ function buildCodeReviewPrompt(input: {
       : "Retrieve the canonical Spec with workflow_spec_get and the run tickets with workflow_tickets_list/workflow_ticket_get. Artifact bodies are intentionally not embedded in this prompt.",
     "Compare the actual diff with each ticket's plannedFileChanges. Report planned changes missing from the diff, unexplained changed files, and create/update/delete action mismatches. File-plan drift is review evidence rather than an automatic failure when supporting changes are justified and the implementation is correct.",
     "",
-    'Use status "clean" only when neither axis has findings that require code changes, "findings" when code changes are required, and "blocked" when the review cannot be performed. Put the full two-axis report in reportMarkdown.',
+    'Use status "clean" only when neither axis has findings that require code changes, "findings" when code changes were required, and "blocked" when the review cannot be performed. Put the full two-axis report in reportMarkdown.',
+    "",
+    `When status is "findings", fix the findings in ${input.run.orchestratorWorktreePath} on branch ${input.run.orchestratorBranch}, commit them, and set commitSha to the resulting HEAD. Leave the worktree clean.`,
+    "",
+    "Before reporting findings you fixed, run every required validation command and report each result in validations:",
+    ...input.run.launchSummary.validationCommands.map((command) => `- ${command}`),
+    `If git diff ${fixedPoint}...HEAD includes apps/mobile, also run vp run lint:mobile, even when your fixes did not touch those files.`,
     "",
     `Finish with exactly one fenced JSON directive of type implementation-code-review-result for runId ${input.run.id}.`,
   ].join("\n");
@@ -461,24 +484,15 @@ function fastFeatureArtifactMarkdown(input: {
   ].join("\n");
 }
 
-function buildFastFeaturePrompt(input: {
-  readonly run: OrchestrationImplementationRun;
-  readonly sourceThread: OrchestrationThread;
-}): string {
+function fastFeatureExecutionContract(run: OrchestrationImplementationRun): ReadonlyArray<string> {
   return [
-    `Implement Fast feature run ${input.run.id}.`,
-    "",
-    "Do not ask the user questions. Implement the canonical plan in the exact branch and worktree below, validate it, and commit all completed changes.",
-    "",
-    fastFeatureArtifactMarkdown(input),
-    "",
     "## Execution identity",
-    `- branch: ${input.run.orchestratorBranch}`,
-    `- worktree: ${input.run.orchestratorWorktreePath}`,
-    `- fixed source commit: ${input.run.pinnedCommit}`,
+    `- branch: ${run.orchestratorBranch}`,
+    `- worktree: ${run.orchestratorWorktreePath}`,
+    `- fixed source commit: ${run.pinnedCommit}`,
     "",
     "## Required validation",
-    ...input.run.launchSummary.validationCommands.map((command) => `- ${command}`),
+    ...run.launchSummary.validationCommands.map((command) => `- ${command}`),
     "- vp run lint:mobile when native mobile files changed",
     "",
     "Finish with exactly one fenced JSON directive:",
@@ -486,7 +500,7 @@ function buildFastFeaturePrompt(input: {
     JSON.stringify(
       {
         type: "implementation-fast-build-result",
-        runId: input.run.id,
+        runId: run.id,
         status: "succeeded",
         commitSha: "HEAD commit SHA",
         validations: [
@@ -503,7 +517,67 @@ function buildFastFeaturePrompt(input: {
       2,
     ),
     "```",
+  ];
+}
+
+function buildFastFeaturePrompt(input: {
+  readonly run: OrchestrationImplementationRun;
+  readonly sourceThread: OrchestrationThread;
+}): string {
+  return [
+    `Implement Fast feature run ${input.run.id}.`,
+    "",
+    "Do not ask the user questions. Implement the canonical plan in the exact branch and worktree below, validate it, and commit all completed changes.",
+    "",
+    fastFeatureArtifactMarkdown(input),
+    "",
+    ...fastFeatureExecutionContract(input.run),
   ].join("\n");
+}
+
+/**
+ * Dev Review findings are sent back into the Build thread rather than a separate fixer thread, so
+ * Build owns every commit on the orchestrator branch. The turn ends in the same
+ * implementation-fast-build-result directive as the initial build, which re-enters Dev Review.
+ */
+function buildFastFeatureDevReviewFixPrompt(input: {
+  readonly run: OrchestrationImplementationRun;
+  readonly sourceThread: OrchestrationThread;
+  readonly reviewId: DevReviewId;
+  readonly attempt: number;
+}): string {
+  return [
+    `Dev Review found problems with Fast feature run ${input.run.id}. Fix them in this same Build thread (Dev Review attempt ${input.attempt} of ${IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS}).`,
+    "",
+    `Do not ask the user questions. Retrieve Dev Review ${input.reviewId} with workflow_dev_review_get, apply its findings with the smallest reliable changes, validate, and commit them on the branch below. Dev Review re-runs automatically against your new commit.`,
+    "",
+    "Review against the proposed-plan context already provided to this Fast feature run; do not load a missing Spec or tickets.",
+    "",
+    fastFeatureArtifactMarkdown(input),
+    "",
+    ...fastFeatureExecutionContract(input.run),
+  ].join("\n");
+}
+
+/**
+ * Automated-review provenance for the published change request. A run that exhausted Dev Review is
+ * still published, so the unpassed review has to be visible on the change request itself.
+ */
+function changeRequestReviewNote(run: OrchestrationImplementationRun): string {
+  const lines = ["## Automated review"];
+  if (run.devReviewExhaustedAt === null) {
+    lines.push(`- Dev Review: passed after ${run.qaAttemptCount} attempt(s).`);
+  } else {
+    lines.push(
+      `- ⚠️ Dev Review: **did not pass** after ${run.qaAttemptCount} attempt(s) (limit ${IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS}). This change request was published with the browser dev review still failing — verify the affected flow manually before merging.`,
+    );
+  }
+  lines.push(
+    run.latestCodeReviewReportMarkdown === null
+      ? "- Code Review: no report recorded."
+      : "- Code Review: completed in a single review-and-fix pass; findings were fixed in this branch.",
+  );
+  return lines.join("\n");
 }
 
 function changeRequestFailure(input: {
@@ -547,6 +621,11 @@ const make = Effect.gen(function* () {
     readonly run: OrchestrationImplementationRun;
     readonly createdAt: string;
   }) {
+    // `canceled` is terminal. In-flight stage work (a late build directive, a
+    // recovery sweep already past its guard) must not resurrect a run the user
+    // stopped, so drop any write that would move it out of `canceled`.
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    if (findRunById(readModel, input.run.id)?.status === "canceled") return;
     yield* orchestrationEngine.dispatch({
       type: "thread.implementation-run.update",
       commandId: yield* serverCommandId("implementation-run-update"),
@@ -1459,18 +1538,42 @@ const make = Effect.gen(function* () {
         cwd: input.run.orchestratorWorktreePath,
         ref: "HEAD",
       });
-      if (
-        input.run.devReviewedHeadSha === null ||
-        input.run.devReviewedHeadSha !== reviewHead.commitSha
-      ) {
-        yield* blockRun({
-          sourceThreadId: input.sourceThreadId,
-          run: input.run,
-          retryableStage: "dev-review",
-          reasonMarkdown: `Code Review requires a passing Dev Review for current HEAD '${reviewHead.commitSha}', but the dev-reviewed HEAD is '${input.run.devReviewedHeadSha ?? "missing"}'.`,
-          updatedAt: input.createdAt,
+      // Code Review normally requires a passing Dev Review at this exact HEAD. When Dev Review used
+      // every attempt without passing, the run still continues — but only from a build-validated,
+      // clean commit, so the reviewer never starts from unvalidated work.
+      if (input.run.devReviewExhaustedAt === null) {
+        if (
+          input.run.devReviewedHeadSha === null ||
+          input.run.devReviewedHeadSha !== reviewHead.commitSha
+        ) {
+          yield* blockRun({
+            sourceThreadId: input.sourceThreadId,
+            run: input.run,
+            retryableStage: "dev-review",
+            reasonMarkdown: `Code Review requires a passing Dev Review for current HEAD '${reviewHead.commitSha}', but the dev-reviewed HEAD is '${input.run.devReviewedHeadSha ?? "missing"}'.`,
+            updatedAt: input.createdAt,
+          });
+          return;
+        }
+      } else {
+        const reviewStatus = yield* gitWorkflow.localStatus({
+          cwd: input.run.orchestratorWorktreePath,
         });
-        return;
+        if (
+          input.run.validatedHeadSha !== reviewHead.commitSha ||
+          !reviewStatus.isRepo ||
+          reviewStatus.refName !== input.run.orchestratorBranch ||
+          reviewStatus.hasWorkingTreeChanges
+        ) {
+          yield* blockRun({
+            sourceThreadId: input.sourceThreadId,
+            run: input.run,
+            retryableStage: "dev-review",
+            reasonMarkdown: `Dev Review did not pass, so Code Review requires a validated, clean HEAD on '${input.run.orchestratorBranch}'. Current HEAD is '${reviewHead.commitSha}' and the validated HEAD is '${input.run.validatedHeadSha ?? "missing"}'.`,
+            updatedAt: input.createdAt,
+          });
+          return;
+        }
       }
       const artifactSourceThread = findThread(readModel, input.sourceThreadId);
       const artifactMarkdown =
@@ -1575,19 +1678,22 @@ const make = Effect.gen(function* () {
         });
         return;
       }
-      if (
-        input.run.validatedHeadSha !== expectedHeadSha ||
-        input.run.devReviewedHeadSha !== expectedHeadSha
-      ) {
+      // Code Review commits its own fixes, so its accepted HEAD is the newest commit and the
+      // merge-gate and Dev Review evidence necessarily point at earlier commits. Dev Review may also
+      // never have passed. Require only that the run was validated at some point and that Code Review
+      // accepted the exact commit being published; createOrOpenChangeRequest re-verifies that commit
+      // against HEAD and refuses a dirty worktree.
+      if (input.run.validatedHeadSha === null) {
         yield* blockRun({
           sourceThreadId: input.sourceThreadId,
           run: input.run,
-          retryableStage: "code-review",
-          reasonMarkdown: `Cannot publish HEAD '${expectedHeadSha}' because merge-gate and Dev Review evidence do not both target that commit.`,
+          retryableStage: "merge-gate",
+          reasonMarkdown: `Cannot publish HEAD '${expectedHeadSha}' because the run has no passing validation on record.`,
           updatedAt: input.createdAt,
         });
         return;
       }
+      const reviewOutcomeNote = changeRequestReviewNote(input.run);
       const publishingRun: OrchestrationImplementationRun = {
         ...input.run,
         status: "publishing-change-request",
@@ -1606,7 +1712,8 @@ const make = Effect.gen(function* () {
           headRefName: publishingRun.orchestratorBranch,
           expectedHeadSha,
           threadId: publishingRun.orchestratorThreadId,
-          commitMessage: commitTitle,
+          commitMessage: `${commitTitle}\n\n${reviewOutcomeNote}`,
+          pullRequestBodyNote: reviewOutcomeNote,
         })
         .pipe(Effect.result);
 
@@ -1771,10 +1878,14 @@ const make = Effect.gen(function* () {
         worktreePath: setupRun.orchestratorWorktreePath,
       });
 
+      // Keep `retryableFailure` while the stage re-runs. Clearing it here would
+      // reset `blockRun`'s attempt counter on every resume, so a stage that
+      // keeps failing would never exhaust `maxAttempts` and the 30s sweep in
+      // `recoverRetryableRuns` would relaunch it forever. Success paths
+      // (e.g. `handleFastBuildResult`) clear it once the stage actually passes.
       let resumedRun: OrchestrationImplementationRun = {
         ...setupRun,
         status: "running",
-        retryableFailure: null,
         updatedAt: input.createdAt,
       };
       if (setupRun.appDevStack.status !== "ready") {
@@ -2115,11 +2226,13 @@ const make = Effect.gen(function* () {
       if (
         run === null ||
         run.artifactSource !== "proposed-plan" ||
-        run.orchestratorThreadId !== event.payload.threadId ||
-        run.fastBuildResult?.status === "succeeded"
+        run.orchestratorThreadId !== event.payload.threadId
       ) {
         return;
       }
+      // Build owns dev-review fixes too, so a run legitimately reports several successful builds.
+      // Only ignore a repeat result once the branch has moved past Build into review or publication.
+      if (run.status !== "running" && run.status !== "launch-pending") return;
       const sourceThreadId = findRunSourceThreadId({ readModel, run });
       if (sourceThreadId === null) return;
       const updatedAt = event.payload.activity.createdAt;
@@ -2560,6 +2673,94 @@ const make = Effect.gen(function* () {
     });
   });
 
+  /**
+   * Send Dev Review findings back to whoever owns commits on the orchestrator branch. Fast feature
+   * runs build in the orchestrator thread itself, so the findings become a new Build turn there and
+   * the resulting implementation-fast-build-result re-enters Dev Review. Spec-driven runs have no
+   * single Build thread, so they keep the dedicated fixer plus merge-gate route.
+   */
+  const restartAfterDevReviewFindings = Effect.fn(
+    "ImplementationWorkflowReactor.restartAfterDevReviewFindings",
+  )(function* (input: {
+    readonly sourceThreadId: ThreadId;
+    readonly run: OrchestrationImplementationRun;
+    readonly reviewId: DevReviewId;
+    readonly createdAt: string;
+  }) {
+    if (input.run.artifactSource !== "proposed-plan") {
+      yield* startFixer({
+        sourceThreadId: input.sourceThreadId,
+        run: input.run,
+        status: "fixing",
+        origin: "dev-review",
+        title: "Fix browser dev review",
+        promptText: buildFixPrompt({ run: input.run, reviewId: input.reviewId }),
+        createdAt: input.createdAt,
+      });
+      return;
+    }
+
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    const buildThread = findThread(readModel, input.run.orchestratorThreadId);
+    const sourceThread = findThread(readModel, input.sourceThreadId);
+    if (buildThread === null || sourceThread === null) return;
+    if (buildThread.latestTurn?.state === "running") return;
+
+    const rebuildingRun: OrchestrationImplementationRun = {
+      ...input.run,
+      status: "running",
+      activeDevReviewHeadSha: null,
+      activeDevReviewThreadId: null,
+      validatedHeadSha: null,
+      devReviewedHeadSha: null,
+      codeReviewedHeadSha: null,
+      retryableFailure: null,
+      updatedAt: input.createdAt,
+    };
+    yield* updateRun({
+      sourceThreadId: input.sourceThreadId,
+      run: rebuildingRun,
+      createdAt: input.createdAt,
+    });
+
+    yield* orchestrationEngine.dispatch({
+      type: "thread.turn.start",
+      commandId: yield* serverCommandId("fast-feature-dev-review-fix-turn"),
+      threadId: rebuildingRun.orchestratorThreadId,
+      message: {
+        messageId: yield* serverMessageId("fast-feature-dev-review-fix"),
+        role: "user",
+        text: buildFastFeatureDevReviewFixPrompt({
+          run: rebuildingRun,
+          sourceThread,
+          reviewId: input.reviewId,
+          attempt: rebuildingRun.qaAttemptCount,
+        }),
+        attachments: [],
+      },
+      titleSeed: buildThread.title,
+      runtimeMode: buildThread.runtimeMode,
+      interactionMode: "default",
+      ...(rebuildingRun.sourceProposedPlan === null
+        ? {}
+        : { sourceProposedPlan: rebuildingRun.sourceProposedPlan }),
+      createdAt: input.createdAt,
+    });
+
+    yield* appendActivity({
+      threadId: rebuildingRun.orchestratorThreadId,
+      tone: "info",
+      kind: "implementation-build-dev-review-fix-started",
+      summary: `Build resumed to fix dev review findings (attempt ${rebuildingRun.qaAttemptCount})`,
+      payload: {
+        runId: rebuildingRun.id,
+        reviewId: input.reviewId,
+        attempt: rebuildingRun.qaAttemptCount,
+      },
+      createdAt: input.createdAt,
+    });
+  });
+
   const handleCodeReviewResult = Effect.fn("ImplementationWorkflowReactor.handleCodeReviewResult")(
     function* (
       event: Extract<ImplementationWorkflowEvent, { type: "thread.activity-appended" }>,
@@ -2581,21 +2782,6 @@ const make = Effect.gen(function* () {
         gitWorkflow.resolveCommit({ cwd: run.orchestratorWorktreePath, ref: "HEAD" }),
         gitWorkflow.localStatus({ cwd: run.orchestratorWorktreePath }),
       ]);
-      if (
-        run.activeCodeReviewHeadSha !== head.commitSha ||
-        !status.isRepo ||
-        status.refName !== run.orchestratorBranch ||
-        status.hasWorkingTreeChanges
-      ) {
-        yield* blockRun({
-          sourceThreadId,
-          run,
-          retryableStage: "code-review",
-          reasonMarkdown: `Code Review result is stale or the orchestrator worktree is not clean at reviewed HEAD '${run.activeCodeReviewHeadSha ?? "unknown"}'.`,
-          updatedAt,
-        });
-        return;
-      }
 
       yield* appendActivity({
         threadId: run.orchestratorThreadId,
@@ -2606,7 +2792,46 @@ const make = Effect.gen(function* () {
         createdAt: updatedAt,
       });
 
+      if (directive.status === "blocked") {
+        yield* blockRun({
+          sourceThreadId,
+          run,
+          retryableStage: "code-review",
+          reasonMarkdown: directive.reportMarkdown,
+          updatedAt,
+        });
+        return;
+      }
+
+      // The reviewer lands its own fixes, so HEAD has legitimately advanced past the commit it was
+      // launched against. Require the worktree to be clean on the orchestrator branch, and require the
+      // reviewer to name the commit it produced so publication targets an exact, verified sha.
+      if (
+        !status.isRepo ||
+        status.refName !== run.orchestratorBranch ||
+        status.hasWorkingTreeChanges
+      ) {
+        yield* blockRun({
+          sourceThreadId,
+          run,
+          retryableStage: "code-review",
+          reasonMarkdown: `Code Review must finish with a committed, clean worktree on branch '${run.orchestratorBranch}', but Git reports '${status.refName ?? "detached HEAD"}'${status.hasWorkingTreeChanges ? " with uncommitted changes" : ""}.`,
+          updatedAt,
+        });
+        return;
+      }
+
       if (directive.status === "clean") {
+        if (run.activeCodeReviewHeadSha !== head.commitSha) {
+          yield* blockRun({
+            sourceThreadId,
+            run,
+            retryableStage: "code-review",
+            reasonMarkdown: `Code Review reported "clean" but HEAD moved from the reviewed commit '${run.activeCodeReviewHeadSha ?? "unknown"}' to '${head.commitSha}'. Report "findings" with a commitSha when the review lands changes.`,
+            updatedAt,
+          });
+          return;
+        }
         yield* fileChangeRequest({
           sourceThreadId,
           run: {
@@ -2622,39 +2847,83 @@ const make = Effect.gen(function* () {
         return;
       }
 
-      if (directive.status === "blocked") {
+      if (directive.commitSha === undefined) {
         yield* blockRun({
           sourceThreadId,
           run,
           retryableStage: "code-review",
-          reasonMarkdown: directive.reportMarkdown,
+          reasonMarkdown:
+            "Code Review reported findings without naming the commit that fixes them. Fix the findings, commit them, and report commitSha.",
           updatedAt,
         });
         return;
       }
 
-      if (run.codeReviewAttemptCount >= MAX_CODE_REVIEW_CYCLES) {
+      const reportedHead = yield* gitWorkflow.resolveCommit({
+        cwd: run.orchestratorWorktreePath,
+        ref: directive.commitSha,
+      });
+      if (reportedHead.commitSha !== head.commitSha) {
         yield* blockRun({
           sourceThreadId,
           run,
-          reasonMarkdown: `Implementation code review reached ${run.codeReviewAttemptCount} cycles without a clean result. Latest report:\n\n${directive.reportMarkdown}`,
+          retryableStage: "code-review",
+          reasonMarkdown: `Code Review reported commit '${reportedHead.commitSha}', but the orchestrator branch HEAD is '${head.commitSha}'.`,
           updatedAt,
         });
         return;
       }
 
-      yield* startFixer({
+      if (
+        !requiredValidationsPassed({
+          requiredCommands: run.launchSummary.validationCommands,
+          validations: directive.validations,
+        })
+      ) {
+        yield* blockRun({
+          sourceThreadId,
+          run,
+          retryableStage: "code-review",
+          reasonMarkdown: `Code Review changed code without passing results for every required validation command: ${run.launchSummary.validationCommands.join(", ")}.`,
+          updatedAt,
+        });
+        return;
+      }
+
+      const changedFiles = yield* gitWorkflow.listChangedFiles({
+        cwd: run.orchestratorWorktreePath,
+        baseRef: run.pinnedCommit,
+        headRef: head.commitSha,
+      });
+      if (
+        changedFiles.some((path) => path === "apps/mobile" || path.startsWith("apps/mobile/")) &&
+        !requiredValidationsPassed({
+          requiredCommands: ["vp run lint:mobile"],
+          validations: directive.validations,
+        })
+      ) {
+        yield* blockRun({
+          sourceThreadId,
+          run,
+          retryableStage: "code-review",
+          reasonMarkdown:
+            "Code Review changed native mobile files without a passing `vp run lint:mobile` validation.",
+          updatedAt,
+        });
+        return;
+      }
+
+      yield* fileChangeRequest({
         sourceThreadId,
         run: {
           ...run,
-          latestCodeReviewReportMarkdown: directive.reportMarkdown,
+          codeReviewedHeadSha: head.commitSha,
           activeCodeReviewHeadSha: null,
           activeCodeReviewThreadId: null,
+          latestCodeReviewReportMarkdown: directive.reportMarkdown,
+          finalValidationResults: [...directive.validations],
+          updatedAt,
         },
-        status: "code-review-fixing",
-        origin: "code-review",
-        title: "Fix code review findings",
-        promptText: buildCodeReviewFixPrompt({ run, reportMarkdown: directive.reportMarkdown }),
         createdAt: updatedAt,
       });
     },
@@ -2735,13 +3004,35 @@ const make = Effect.gen(function* () {
 
       if (event.payload.status !== "failed" && event.payload.status !== "blocked") return;
 
-      if (run.qaAttemptCount >= MAX_BROWSER_REVIEW_ATTEMPTS) {
-        yield* blockRun({
-          sourceThreadId,
-          run,
-          retryableStage: "dev-review",
-          reasonMarkdown: `Browser dev review reached ${run.qaAttemptCount} attempts without passing.`,
+      // Exhausting every Dev Review attempt no longer stops the run: the unpassed review is recorded
+      // and carried into Code Review, change-request publication, and the change-request body.
+      if (run.qaAttemptCount >= IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS) {
+        const exhaustedRun: OrchestrationImplementationRun = {
+          ...run,
+          devReviewExhaustedAt: run.devReviewExhaustedAt ?? event.payload.updatedAt,
+          devReviewedHeadSha: null,
+          activeDevReviewHeadSha: null,
+          activeDevReviewThreadId: null,
+          retryableFailure: null,
           updatedAt: event.payload.updatedAt,
+        };
+        yield* appendActivity({
+          threadId: run.orchestratorThreadId,
+          tone: "error",
+          kind: "implementation-browser-review-exhausted",
+          summary: `Browser dev review did not pass after ${run.qaAttemptCount} attempts; continuing to code review`,
+          payload: {
+            runId: run.id,
+            reviewId: event.payload.reviewId,
+            attempts: run.qaAttemptCount,
+            lastStatus: event.payload.status,
+          },
+          createdAt: event.payload.updatedAt,
+        });
+        yield* startCodeReview({
+          sourceThreadId,
+          run: exhaustedRun,
+          createdAt: event.payload.updatedAt,
         });
         return;
       }
@@ -2760,20 +3051,14 @@ const make = Effect.gen(function* () {
         return;
       }
 
-      yield* startFixer({
+      yield* restartAfterDevReviewFindings({
         sourceThreadId,
         run: {
           ...run,
           activeDevReviewHeadSha: null,
           activeDevReviewThreadId: null,
         },
-        status: "fixing",
-        origin: "dev-review",
-        title: "Fix browser dev review",
-        promptText: buildFixPrompt({
-          run,
-          reviewId: event.payload.reviewId,
-        }),
+        reviewId: event.payload.reviewId,
         createdAt: event.payload.updatedAt,
       });
     },
@@ -2861,21 +3146,14 @@ const make = Effect.gen(function* () {
                 (review) => review.id === reviewId,
               );
         if (latestReview?.status === "failed") {
-          yield* startFixer({
+          yield* restartAfterDevReviewFindings({
             sourceThreadId: input.sourceThreadId,
             run: {
               ...input.run,
               activeDevReviewThreadId: null,
               activeDevReviewHeadSha: null,
-              retryableFailure: null,
             },
-            status: "fixing",
-            origin: "dev-review",
-            title: "Fix browser dev review",
-            promptText: buildFixPrompt({
-              run: input.run,
-              reviewId: latestReview.id,
-            }),
+            reviewId: latestReview.id,
             createdAt: input.createdAt,
           });
           return;
@@ -2932,7 +3210,7 @@ const make = Effect.gen(function* () {
         }
         yield* startFixer({
           sourceThreadId: input.sourceThreadId,
-          run: { ...input.run, activeFixerThreadId: null, retryableFailure: null },
+          run: { ...input.run, activeFixerThreadId: null },
           status: origin === "code-review" ? "code-review-fixing" : "fixing",
           origin,
           title:
@@ -3024,6 +3302,52 @@ const make = Effect.gen(function* () {
     );
   });
 
+  const handleRunCancel = Effect.fn("ImplementationWorkflowReactor.handleRunCancel")(function* (
+    event: Extract<
+      ImplementationWorkflowEvent,
+      { type: "thread.implementation-run-cancel-requested" }
+    >,
+  ) {
+    const run = event.payload.run;
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    // Stop the orchestrator plus every live workflow child so no provider turn
+    // outlives the run. The worktree and branch are deliberately left in place —
+    // cancel stops work, it does not clean up.
+    const childThreadIds = readModel.threads
+      .filter(
+        (thread) =>
+          thread.parentThreadId === run.orchestratorThreadId &&
+          thread.deletedAt === null &&
+          thread.session !== null &&
+          thread.session.status !== "stopped",
+      )
+      .map((thread) => thread.id);
+    const orchestratorThread = findThread(readModel, run.orchestratorThreadId);
+    const threadIds =
+      orchestratorThread !== null && orchestratorThread.deletedAt === null
+        ? [run.orchestratorThreadId, ...childThreadIds]
+        : childThreadIds;
+    for (const threadId of threadIds) {
+      yield* orchestrationEngine.dispatch({
+        type: "thread.session.stop",
+        commandId: yield* serverCommandId("implementation-run-cancel-stop"),
+        threadId,
+        createdAt: event.occurredAt,
+      });
+    }
+    yield* appendActivity({
+      threadId: run.orchestratorThreadId,
+      tone: "info",
+      kind: "implementation-workflow.canceled",
+      summary: "Implementation workflow canceled",
+      payload: {
+        runId: run.id,
+        ...(event.payload.reason !== undefined ? { reason: event.payload.reason } : {}),
+      },
+      createdAt: event.occurredAt,
+    });
+  });
+
   const processActivity = Effect.fn("ImplementationWorkflowReactor.processActivity")(function* (
     event: Extract<ImplementationWorkflowEvent, { type: "thread.activity-appended" }>,
   ) {
@@ -3077,6 +3401,9 @@ const make = Effect.gen(function* () {
       case "thread.implementation-run-retry-requested":
         yield* handleRunRetry(event);
         return;
+      case "thread.implementation-run-cancel-requested":
+        yield* handleRunCancel(event);
+        return;
     }
   });
 
@@ -3116,6 +3443,7 @@ const make = Effect.gen(function* () {
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
     const createdAt = DateTime.formatIso(yield* DateTime.now);
     for (const run of readModel.implementationRuns) {
+      if (run.status === "canceled") continue;
       const recoverStackFailure =
         run.artifactSource === "planning-spec" &&
         run.status === "needs-human-attention" &&
@@ -3134,7 +3462,7 @@ const make = Effect.gen(function* () {
       const recoverInterruptedReview =
         run.status === "qa-reviewing" &&
         run.devReviewIds.length > 0 &&
-        run.qaAttemptCount < MAX_BROWSER_REVIEW_ATTEMPTS &&
+        run.qaAttemptCount < IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS &&
         (latestReviewThread?.session?.status === "error" ||
           latestReviewThread?.session?.status === "stopped");
       if (!recoverStackFailure && !recoverInterruptedReview) continue;
@@ -3158,6 +3486,7 @@ const make = Effect.gen(function* () {
     const createdAt = DateTime.formatIso(yield* DateTime.now);
     for (const run of readModel.implementationRuns) {
       if (
+        run.status === "canceled" ||
         run.artifactSource !== "planning-spec" ||
         (run.status !== "running" && run.status !== "integrating" && run.status !== "validating") ||
         !run.ticketStates.every((state) => state.status === "succeeded")
@@ -3194,6 +3523,7 @@ const make = Effect.gen(function* () {
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
     const createdAt = DateTime.formatIso(yield* DateTime.now);
     for (const run of readModel.implementationRuns) {
+      if (run.status === "canceled") continue;
       const sourceThreadId = findRunSourceThreadId({ readModel, run });
       if (sourceThreadId === null) continue;
       const childThreads = readModel.threads.filter(
@@ -3475,7 +3805,7 @@ const make = Effect.gen(function* () {
         if (
           run.status !== "needs-human-attention" ||
           run.retryableFailure === null ||
-          run.retryableFailure.attemptCount > run.retryableFailure.maxAttempts
+          run.retryableFailure.attemptCount >= run.retryableFailure.maxAttempts
         ) {
           continue;
         }
@@ -3500,7 +3830,8 @@ const make = Effect.gen(function* () {
           event.type !== "thread.activity-appended" &&
           event.type !== "thread.dev-review-updated" &&
           event.type !== "thread.implementation-change-request-retry-requested" &&
-          event.type !== "thread.implementation-run-retry-requested"
+          event.type !== "thread.implementation-run-retry-requested" &&
+          event.type !== "thread.implementation-run-cancel-requested"
         ) {
           return Effect.void;
         }

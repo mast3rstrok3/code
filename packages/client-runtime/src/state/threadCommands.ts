@@ -4,6 +4,7 @@ import { Atom } from "effect/unstable/reactivity";
 import { createAtomCommandScheduler, createEnvironmentCommand } from "./runtime.ts";
 import {
   type ArchiveThreadInput,
+  type CancelThreadImplementationRunInput,
   type CreateThreadInput,
   type DeleteThreadInput,
   type InterruptThreadTurnInput,
@@ -31,6 +32,7 @@ import {
   type UnsnoozeThreadInput,
   type UpdateThreadMetadataInput,
   archiveThread,
+  cancelThreadImplementationRun,
   createThreadPlanningSpec,
   createThread,
   deleteThread,
@@ -62,6 +64,7 @@ import type { EnvironmentRegistry } from "../connection/registry.ts";
 
 export type {
   ArchiveThreadInput,
+  CancelThreadImplementationRunInput,
   CreateThreadInput,
   DeleteThreadInput,
   InterruptThreadTurnInput,
@@ -285,6 +288,21 @@ export function createThreadEnvironmentAtoms<R, E>(
         }: {
           environmentId: string;
           input: RetryThreadImplementationRunInput;
+        }) => JSON.stringify([environmentId, input.threadId, input.runId]),
+      },
+    }),
+    cancelImplementationRun: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:implementation-run:cancel",
+      execute: (input: CancelThreadImplementationRunInput) => cancelThreadImplementationRun(input),
+      scheduler,
+      concurrency: {
+        mode: "serial" as const,
+        key: ({
+          environmentId,
+          input,
+        }: {
+          environmentId: string;
+          input: CancelThreadImplementationRunInput;
         }) => JSON.stringify([environmentId, input.threadId, input.runId]),
       },
     }),

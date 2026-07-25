@@ -377,6 +377,7 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
       | "thread.planning-spec-bundle-loaded"
       | "thread.planning-workflow-stage-set"
       | "thread.implementation-run-updated"
+      | "thread.implementation-run-cancel-requested"
       | "thread.activity-appended"
       | "thread.turn-diff-completed"
       | "thread.reverted"
@@ -400,6 +401,7 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
     event.type === "thread.planning-spec-bundle-loaded" ||
     event.type === "thread.planning-workflow-stage-set" ||
     event.type === "thread.implementation-run-updated" ||
+    event.type === "thread.implementation-run-cancel-requested" ||
     event.type === "thread.activity-appended" ||
     event.type === "thread.turn-diff-completed" ||
     event.type === "thread.reverted" ||
@@ -424,6 +426,7 @@ function threadDetailEventMatchesThread(event: OrchestrationEvent, threadId: str
     case "thread.dev-review-evidence-updated":
       return event.payload.sourceThreadId === threadId || event.payload.reviewThreadId === threadId;
     case "thread.implementation-run-updated":
+    case "thread.implementation-run-cancel-requested":
       return (
         event.payload.sourceThreadId === threadId ||
         event.payload.run.orchestratorThreadId === threadId ||
@@ -873,6 +876,7 @@ const makeWsRpcLayer = (
             return loadThreadUpsertOrRemoval(event.payload.threadId);
           case "thread.implementation-run-launched":
           case "thread.implementation-run-updated":
+          case "thread.implementation-run-cancel-requested":
           case "thread.implementation-change-request-retry-requested": {
             const run = event.payload.run;
             const sourceThreadId =

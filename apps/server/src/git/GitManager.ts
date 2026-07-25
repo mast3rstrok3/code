@@ -1595,6 +1595,7 @@ export const make = Effect.gen(function* () {
     emit: GitActionProgressEmitter,
     explicitBaseBranch?: string,
     credentials?: SourceControlProvider.SourceControlCredentialContext,
+    bodyNote?: string,
   ) {
     const provider = yield* sourceControlProvider(cwd);
     const terms = getChangeRequestTerminologyForKind(provider.kind);
@@ -1664,7 +1665,9 @@ export const make = Effect.gen(function* () {
       tempDir,
       `t3code-pr-body-${process.pid}-${yield* randomUUIDv4(cwd)}.md`,
     );
-    yield* fileSystem.writeFileString(bodyFile, generated.body).pipe(
+    const body =
+      bodyNote === undefined ? generated.body : `${generated.body.trimEnd()}\n\n${bodyNote}\n`;
+    yield* fileSystem.writeFileString(bodyFile, body).pipe(
       Effect.mapError(
         (cause) =>
           new GitManagerError({
@@ -2139,6 +2142,7 @@ export const make = Effect.gen(function* () {
                     progress.emit,
                     input.pullRequestBaseBranch,
                     options?.credentials,
+                    input.pullRequestBodyNote,
                   ),
                 ),
               )
