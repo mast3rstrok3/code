@@ -1,5 +1,14 @@
 # AGENTS.md
 
+## Runtime Checkouts
+
+- The Code development/miner processes, including `code-dev-t3code.service`, run from this repository at
+  `/home/nils/repos/nils/code`.
+- `https://code.nightingale-ai.com` is served by `code-main-t3code.service` from the separate production
+  checkout at `/home/nils/deployments/code-main`.
+- Do not assume that changing or building this repository updates `code.nightingale-ai.com`; production
+  must be updated through the separate `code-main` deployment checkout.
+
 ## Task Completion Requirements
 
 - Keep local verification focused on the files and packages changed. Run the smallest relevant test set; do not run the full workspace test suite as a routine completion step.
