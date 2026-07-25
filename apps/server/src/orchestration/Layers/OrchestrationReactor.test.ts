@@ -73,6 +73,7 @@ describe("OrchestrationReactor", () => {
               return Effect.void;
             },
             drain: Effect.void,
+            recoverRetryableRuns: () => Effect.void,
           }),
         ),
         Layer.provideMerge(

@@ -256,6 +256,61 @@ function toMessage(cause: unknown, fallback: string): string {
   return fallback;
 }
 
+const FILESYSTEM_FAILURE_CODES: ReadonlySet<string> = new Set([
+  "ENOENT",
+  "ENOTDIR",
+  "EACCES",
+  "EPERM",
+]);
+
+/**
+ * Walk a cause chain looking for a Node filesystem error, returning only its
+ * `code` and path.
+ *
+ * Deliberately never reads `message`: SDK failures can carry credential material
+ * in their text, and the user-facing runtime error must stay structural (see the
+ * "keeps Claude stream failure events structural" test). Both fields must sit on
+ * the same link so a `code` is never paired with an unrelated path.
+ */
+function findFilesystemFailure(cause: unknown): { code: string; path: string } | null {
+  const seen = new Set<unknown>();
+  let current = cause;
+  while (current !== null && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    const link = current as {
+      code?: unknown;
+      path?: unknown;
+      pathOrDescriptor?: unknown;
+      cause?: unknown;
+    };
+    const code = typeof link.code === "string" ? link.code : null;
+    const path =
+      typeof link.path === "string"
+        ? link.path
+        : typeof link.pathOrDescriptor === "string"
+          ? link.pathOrDescriptor
+          : null;
+    if (code !== null && path !== null && FILESYSTEM_FAILURE_CODES.has(code)) {
+      return { code, path };
+    }
+    current = link.cause;
+  }
+  return null;
+}
+
+/**
+ * Name the failing path when the cause is a filesystem error — a Fast feature
+ * worktree that was never created reads as "Claude runtime stream failed."
+ * otherwise, which looks like a model fault. Falls back to `detail` verbatim.
+ */
+function describeProcessFailure(detail: string, cause: unknown): string {
+  const filesystemFailure = findFilesystemFailure(cause);
+  if (filesystemFailure === null) {
+    return detail;
+  }
+  return `${detail.replace(/\.$/, "")}: ${filesystemFailure.code} — ${filesystemFailure.path}`;
+}
+
 function normalizeClaudeStreamMessages(
   cause: Cause.Cause<ProviderAdapterProcessError>,
 ): ReadonlyArray<string> {
@@ -2990,7 +3045,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         new ProviderAdapterProcessError({
           provider: PROVIDER,
           threadId: context.session.threadId,
-          detail: "Claude runtime stream failed.",
+          detail: describeProcessFailure("Claude runtime stream failed.", cause),
           cause,
         }),
     ).pipe(
@@ -3002,7 +3057,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
               new ProviderAdapterProcessError({
                 provider: PROVIDER,
                 threadId: context.session.threadId,
-                detail: "Failed to process Claude runtime event.",
+                detail: describeProcessFailure("Failed to process Claude runtime event.", cause),
                 cause,
               }),
           ),

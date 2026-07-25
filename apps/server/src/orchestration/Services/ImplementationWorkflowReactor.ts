@@ -5,6 +5,11 @@ import type * as Scope from "effect/Scope";
 export interface ImplementationWorkflowReactorShape {
   readonly start: () => Effect.Effect<void, never, Scope.Scope>;
   readonly drain: Effect.Effect<void>;
+  /**
+   * One pass of the automatic retry sweep that `start` otherwise runs every 30s.
+   * Exposed so its guards can be exercised without waiting on the schedule.
+   */
+  readonly recoverRetryableRuns: () => Effect.Effect<void>;
 }
 
 export class ImplementationWorkflowReactor extends Context.Service<

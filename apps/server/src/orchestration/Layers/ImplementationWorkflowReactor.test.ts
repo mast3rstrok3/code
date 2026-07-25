@@ -121,6 +121,7 @@ function makeTestLayer(
   resolvedCommitSha = "def456",
   dirtySourceStatusChecks = 0,
   autoCreateFrontendUrls?: ReadonlyArray<string | null>,
+  sourceRefName = "main",
 ) {
   const coreLayer = Layer.mergeAll(
     OrchestrationEngineLive.pipe(
@@ -212,7 +213,8 @@ function makeTestLayer(
                 hasPrimaryRemote: true,
                 isDefaultRef: input.cwd === "/tmp/implementation-reactor",
                 refName:
-                  created.find((candidate) => candidate.path === input.cwd)?.newRefName ?? "main",
+                  created.find((candidate) => candidate.path === input.cwd)?.newRefName ??
+                  (input.cwd === "/tmp/implementation-reactor" ? sourceRefName : "main"),
                 hasWorkingTreeChanges:
                   input.cwd === "/tmp/implementation-reactor" &&
                   statusCheck <= dirtySourceStatusChecks,
@@ -325,6 +327,7 @@ function withSystem<A, E>(
     readonly resolvedCommitSha?: string;
     readonly dirtySourceStatusChecks?: number;
     readonly autoCreateFrontendUrls?: ReadonlyArray<string | null>;
+    readonly sourceRefName?: string;
   },
 ) {
   return Effect.gen(function* () {
@@ -379,6 +382,7 @@ function withSystem<A, E>(
           options?.resolvedCommitSha,
           options?.dirtySourceStatusChecks,
           options?.autoCreateFrontendUrls,
+          options?.sourceRefName,
         ),
       ),
     );
@@ -1083,40 +1087,74 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("retries a dirty Fast feature source without creating duplicate Build threads", () =>
+  it.effect("launches a Fast feature run from a dirty source and warns instead of blocking", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
-          const run = yield* launchFastFeatureRun(system);
-          let snapshot = yield* system.query.getSnapshot();
-          expect(snapshot.implementationRuns[0]?.retryableFailure?.stage).toBe("source-dirty");
-          expect(yield* Ref.get(system.createWorktreeInputs)).toHaveLength(0);
-          expect(
-            snapshot.threads.filter((thread) => thread.workflowRole === "fast-feature-implementer"),
-          ).toHaveLength(1);
+          yield* launchFastFeatureRun(system);
+          const snapshot = yield* system.query.getSnapshot();
 
-          yield* system.engine.dispatch({
-            type: "thread.implementation-run.retry",
-            commandId: commandId("fast-source-retry"),
-            threadId: sourceThreadId,
-            runId: run.id,
-            createdAt: "2026-01-01T00:00:03.000Z",
-          });
-          yield* system.reactor.drain;
-
-          snapshot = yield* system.query.getSnapshot();
+          // Uncommitted work is not a reason to refuse: the worktree is created
+          // from the pinned commit, so the dirty files simply are not in the run.
           expect(snapshot.implementationRuns[0]?.status).toBe("running");
-          // The failure record survives the resume so repeat failures accumulate
-          // toward maxAttempts; only a stage success clears it.
-          expect(snapshot.implementationRuns[0]?.retryableFailure?.stage).toBe("source-dirty");
-          expect(snapshot.implementationRuns[0]?.retryableFailure?.attemptCount).toBe(1);
-          expect(snapshot.implementationRuns[0]?.pinnedCommit).toBe("def456");
+          expect(snapshot.implementationRuns[0]?.retryableFailure).toBeNull();
           expect(yield* Ref.get(system.createWorktreeInputs)).toHaveLength(1);
           expect(
             snapshot.threads.filter((thread) => thread.workflowRole === "fast-feature-implementer"),
           ).toHaveLength(1);
+
+          // The warning lands on the source thread, where the user is reading.
+          const dirtyActivity = snapshot.threads
+            .find((thread) => thread.id === sourceThreadId)
+            ?.activities.find((activity) => activity.kind === "fast-feature.source-dirty-ignored");
+          expect(dirtyActivity).toBeDefined();
+          expect(dirtyActivity?.payload).toMatchObject({
+            pinnedCommit: snapshot.implementationRuns[0]?.pinnedCommit,
+          });
         }),
       { dirtySourceStatusChecks: 1 },
+    ),
+  );
+
+  it.effect("does not warn about a dirty source when the source worktree is clean", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        yield* launchFastFeatureRun(system);
+        const snapshot = yield* system.query.getSnapshot();
+        expect(
+          snapshot.threads
+            .find((thread) => thread.id === sourceThreadId)
+            ?.activities.some((activity) => activity.kind === "fast-feature.source-dirty-ignored"),
+        ).toBe(false);
+      }),
+    ),
+  );
+
+  it.effect("blocks a moved source branch as human-blocked and never auto-retries it", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          yield* launchFastFeatureRun(system);
+          let snapshot = yield* system.query.getSnapshot();
+
+          // A moved HEAD is a real "you changed something" condition, unlike routine dirt.
+          expect(snapshot.implementationRuns[0]?.status).toBe("needs-human-attention");
+          expect(snapshot.implementationRuns[0]?.retryableFailure?.stage).toBe("source-dirty");
+          expect(snapshot.implementationRuns[0]?.retryableFailure?.humanBlocked).toBe(true);
+          expect(snapshot.implementationRuns[0]?.retryableFailure?.attemptCount).toBe(1);
+          expect(yield* Ref.get(system.createWorktreeInputs)).toHaveLength(0);
+
+          // The 30s sweep must leave the attempt budget intact: retrying a branch the
+          // user has to move back can never succeed, and burning all three attempts
+          // before they read the message is what wedged the production run.
+          yield* system.reactor.recoverRetryableRuns();
+          yield* system.reactor.recoverRetryableRuns();
+          yield* system.reactor.drain;
+
+          snapshot = yield* system.query.getSnapshot();
+          expect(snapshot.implementationRuns[0]?.retryableFailure?.attemptCount).toBe(1);
+        }),
+      { sourceRefName: "some-other-branch" },
     ),
   );
 

@@ -535,6 +535,11 @@ export const OrchestrationImplementationRetryableFailure = Schema.Struct({
   failedAt: IsoDateTime,
   attemptCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(1))),
   maxAttempts: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(3))),
+  // Set by the blocking call site, not derived from `stage`: `worktree-setup` covers
+  // both a conflicting worktree (human must act) and a generic retry failure (transient).
+  // The automatic recovery sweep skips human-blocked failures so their attempt budget
+  // survives until the human can actually clear the condition.
+  humanBlocked: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
 });
 export type OrchestrationImplementationRetryableFailure =
   typeof OrchestrationImplementationRetryableFailure.Type;

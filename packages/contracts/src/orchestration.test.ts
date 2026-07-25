@@ -10,6 +10,7 @@ import {
   OrchestrationEvent,
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetTurnDiffInput,
+  OrchestrationImplementationRetryableFailure,
   OrchestrationLatestTurn,
   OrchestrationPlanningWorkflowStage,
   ProjectCreatedPayload,
@@ -1258,5 +1259,40 @@ it.effect("ModelSelection rejects malformed instance ids", () =>
       }),
     );
     assert.strictEqual(result._tag, "Failure");
+  }),
+);
+
+const decodeRetryableFailure = Schema.decodeUnknownEffect(
+  OrchestrationImplementationRetryableFailure,
+);
+
+it.effect("retryable failures persisted before humanBlocked existed decode as auto-retryable", () =>
+  Effect.gen(function* () {
+    // Runs are persisted whole as `run_json`, so every record written before the
+    // field was added must keep decoding — and must stay eligible for the
+    // automatic retry sweep, which is what it did before the field existed.
+    const decoded = yield* decodeRetryableFailure({
+      stage: "build",
+      detail: "Build failed.",
+      failedAt: "2026-07-25T17:55:52.804Z",
+      attemptCount: 2,
+      maxAttempts: 3,
+    });
+    assert.strictEqual(decoded.humanBlocked, false);
+    assert.strictEqual(decoded.attemptCount, 2);
+  }),
+);
+
+it.effect("retryable failures round-trip an explicit humanBlocked flag", () =>
+  Effect.gen(function* () {
+    const decoded = yield* decodeRetryableFailure({
+      stage: "source-dirty",
+      detail: "The source worktree must be on the captured branch 'dev'.",
+      failedAt: "2026-07-25T17:55:52.804Z",
+      attemptCount: 1,
+      maxAttempts: 3,
+      humanBlocked: true,
+    });
+    assert.strictEqual(decoded.humanBlocked, true);
   }),
 );

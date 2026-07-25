@@ -680,6 +680,12 @@ const make = Effect.gen(function* () {
       | "fixer"
       | "build"
       | "change-request";
+    /**
+     * Set when only a human can clear the condition (a moved source branch, a
+     * conflicting worktree). `recoverRetryableRuns` skips these, so the attempt
+     * budget is not spent by the 30s sweep before the user has read the message.
+     */
+    readonly humanBlocked?: boolean;
   }) {
     const previousAttempts =
       input.retryableStage !== undefined &&
@@ -698,6 +704,7 @@ const make = Effect.gen(function* () {
               failedAt: input.updatedAt,
               attemptCount: previousAttempts + 1,
               maxAttempts: 3,
+              humanBlocked: input.humanBlocked ?? false,
             },
       updatedAt: input.updatedAt,
     };
@@ -1736,6 +1743,7 @@ const make = Effect.gen(function* () {
                   ? publishingRun.retryableFailure.attemptCount + 1
                   : 1,
               maxAttempts: 3,
+              humanBlocked: false,
             },
             updatedAt: input.createdAt,
           },
@@ -1815,23 +1823,12 @@ const make = Effect.gen(function* () {
           sourceThreadId: input.sourceThreadId,
           run: input.run,
           retryableStage: "source-dirty",
+          humanBlocked: true,
           reasonMarkdown: `The source worktree must be on the captured branch '${input.run.baseBranch}', but Git reports '${sourceStatus.refName ?? "detached HEAD"}'. Switch back to the captured branch, then retry.`,
           updatedAt: input.createdAt,
         });
         return;
       }
-      if (sourceStatus.hasWorkingTreeChanges) {
-        yield* blockRun({
-          sourceThreadId: input.sourceThreadId,
-          run: input.run,
-          retryableStage: "source-dirty",
-          reasonMarkdown:
-            "The source worktree has modified, staged, or untracked files. Commit or stash them, then retry the Fast feature run.",
-          updatedAt: input.createdAt,
-        });
-        return;
-      }
-
       const setupRun =
         input.run.retryableFailure?.stage === "source-dirty"
           ? yield* gitWorkflow.resolveCommit({ cwd: sourceCwd, ref: "HEAD" }).pipe(
@@ -1842,6 +1839,25 @@ const make = Effect.gen(function* () {
               })),
             )
           : input.run;
+
+      // A dirty source worktree does not block the run: the Fast feature worktree is
+      // created from the pinned commit, so uncommitted work is simply not part of it.
+      // Say so on the source thread — that is where the user is reading — rather than
+      // refusing to start, which made the workflow unusable on any working checkout.
+      if (sourceStatus.hasWorkingTreeChanges) {
+        yield* appendActivity({
+          threadId: input.sourceThreadId,
+          tone: "info",
+          kind: "fast-feature.source-dirty-ignored",
+          summary: "Uncommitted source changes are not included in this run",
+          payload: {
+            runId: setupRun.id,
+            pinnedCommit: setupRun.pinnedCommit,
+            reasonMarkdown: `The source worktree has modified, staged, or untracked files. This Fast feature run was created from commit \`${setupRun.pinnedCommit}\` and does **not** include them. Commit them and relaunch if they should be part of the run.`,
+          },
+          createdAt: input.createdAt,
+        });
+      }
 
       const existingWorktreeHead = yield* gitWorkflow
         .resolveCommit({ cwd: setupRun.orchestratorWorktreePath, ref: "HEAD" })
@@ -1855,6 +1871,7 @@ const make = Effect.gen(function* () {
             sourceThreadId: input.sourceThreadId,
             run: setupRun,
             retryableStage: "worktree-setup",
+            humanBlocked: true,
             reasonMarkdown: `The existing Fast feature worktree is not on the expected branch '${setupRun.orchestratorBranch}'. Resolve or remove the conflicting worktree, then retry.`,
             updatedAt: input.createdAt,
           });
@@ -2129,6 +2146,7 @@ const make = Effect.gen(function* () {
             failedAt: directive.reportedAt,
             attemptCount: (run.retryableFailure?.attemptCount ?? 0) + 1,
             maxAttempts: 3,
+            humanBlocked: false,
           },
           updatedAt: directive.reportedAt,
         };
@@ -3805,6 +3823,10 @@ const make = Effect.gen(function* () {
         if (
           run.status !== "needs-human-attention" ||
           run.retryableFailure === null ||
+          // Only a human can clear this one. Retrying burns the attempt budget in
+          // three sweeps (90s) against a condition that cannot change on its own,
+          // leaving nothing for the explicit Retry once the user has fixed it.
+          run.retryableFailure.humanBlocked ||
           run.retryableFailure.attemptCount >= run.retryableFailure.maxAttempts
         ) {
           continue;
@@ -3882,6 +3904,7 @@ const make = Effect.gen(function* () {
   return {
     start,
     drain: worker.drain,
+    recoverRetryableRuns: () => recoverRetryableRuns().pipe(Effect.orDie),
   } satisfies ImplementationWorkflowReactorShape;
 });
 

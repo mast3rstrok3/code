@@ -1657,6 +1657,77 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("names the path when a Claude stream failure is a filesystem error", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEvents: Array<ProviderRuntimeEvent> = [];
+      const runtimeEventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        Effect.sync(() => {
+          runtimeEvents.push(event);
+        }),
+      ).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "hello",
+        attachments: [],
+      });
+
+      // A Fast feature worktree that was never created spawns against a missing cwd.
+      // The bare "Claude runtime stream failed." reads as a model fault, so the
+      // whitelisted `code`/`path` pair is rebuilt into the message.
+      const spawnFailure = Object.assign(
+        new Error("credential material that must stay in the cause chain"),
+        {
+          code: "ENOENT",
+          syscall: "access",
+          path: "/home/nils/repos/nils/rudi.worktrees/implement-dashboard-list-preview-thumbnails",
+        },
+      );
+      harness.query.fail(spawnFailure);
+
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+      runtimeEventsFiber.interruptUnsafe();
+
+      const runtimeError = runtimeEvents.find((event) => event.type === "runtime.error");
+      assert.equal(runtimeError?.type, "runtime.error");
+      if (runtimeError?.type === "runtime.error") {
+        assert.equal(
+          runtimeError.payload.message,
+          "Claude runtime stream failed: ENOENT — /home/nils/repos/nils/rudi.worktrees/implement-dashboard-list-preview-thumbnails",
+        );
+        // The whitelist copies `code` and `path` only; the message text of the
+        // cause never reaches the user-facing string.
+        assert.equal(
+          runtimeError.payload.message.includes("credential material"),
+          false,
+          "cause message must not be spliced into the runtime error",
+        );
+      }
+
+      const completed = runtimeEvents.find((event) => event.type === "turn.completed");
+      assert.equal(completed?.type, "turn.completed");
+      if (completed?.type === "turn.completed") {
+        assert.equal(completed.payload.state, "failed");
+        assert.equal(
+          completed.payload.errorMessage,
+          "Claude runtime stream failed: ENOENT — /home/nils/repos/nils/rudi.worktrees/implement-dashboard-list-preview-thumbnails",
+        );
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("closes the previous session before replacing an existing thread session", () => {
     const queries: FakeClaudeQuery[] = [];
     const layer = Layer.effect(

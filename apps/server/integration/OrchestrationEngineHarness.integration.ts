@@ -372,6 +372,7 @@ export const makeOrchestrationIntegrationHarness = (
         Layer.succeed(ImplementationWorkflowReactor, {
           start: () => Effect.void,
           drain: Effect.void,
+          recoverRetryableRuns: () => Effect.void,
         }),
       ),
       Layer.provideMerge(
