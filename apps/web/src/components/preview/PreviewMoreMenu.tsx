@@ -53,6 +53,10 @@ interface Props {
   readonly onResetZoom: (() => void) | undefined;
   readonly onClearCookies: () => void;
   readonly onClearCache: () => void;
+  /** Whether the separate native always-on-top preview window is open. */
+  nativePictureInPicture: boolean;
+  /** Toggles the optional native always-on-top preview window. */
+  onNativePictureInPicture: (() => void) | undefined;
 }
 
 /**
@@ -74,6 +78,8 @@ export function PreviewMoreMenu({
   onResetZoom,
   onClearCookies,
   onClearCache,
+  nativePictureInPicture,
+  onNativePictureInPicture,
 }: Props) {
   const tabDisabled = !tabId || !hasWebContents;
 
@@ -101,6 +107,13 @@ export function PreviewMoreMenu({
         {onOpenDevTools ? (
           <MenuItem onClick={onOpenDevTools} disabled={tabDisabled}>
             Open DevTools
+          </MenuItem>
+        ) : null}
+        {onNativePictureInPicture ? (
+          <MenuItem onClick={onNativePictureInPicture} disabled={tabDisabled}>
+            {nativePictureInPicture
+              ? "Close separate preview window"
+              : "Open separate preview window"}
           </MenuItem>
         ) : null}
         <MenuItem onClick={onToggleDeviceToolbar} disabled={tabDisabled}>

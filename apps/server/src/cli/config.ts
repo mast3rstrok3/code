@@ -205,6 +205,15 @@ const EnvServerConfig = Config.all({
   codeOidcIssuer: optionalUrl("CODE_OIDC_ISSUER"),
   codeOidcClientId: optionalTrimmedString("CODE_OIDC_CLIENT_ID"),
   codeOidcClientSecret: optionalRedactedString("CODE_OIDC_CLIENT_SECRET"),
+  devAllowedOrigins: Config.string("T3CODE_DEV_ALLOWED_ORIGINS").pipe(
+    Config.withDefault(""),
+    Config.map((value) =>
+      value
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0),
+    ),
+  ),
   noBrowser: Config.boolean("T3CODE_NO_BROWSER").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
@@ -542,6 +551,7 @@ export const resolveServerConfig = (
       appDevStackBackendOidcClientSecret:
         env.appDevStackBackendOidcClientSecret ?? env.codeOidcClientSecret,
       appDevStackNative,
+      devAllowedOrigins: env.devAllowedOrigins,
       noBrowser,
       startupPresentation,
       desktopBootstrapToken,

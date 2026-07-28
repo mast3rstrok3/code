@@ -7,6 +7,8 @@ import "vite-plus/test/config";
 import { defineConfig } from "vite-plus";
 import pkg from "./package.json" with { type: "json" };
 
+import { DEV_PROXIED_PATH_PREFIXES } from "@t3tools/shared/devProxy";
+
 import {
   loadRepoEnv,
   resolveWebPrimaryEnvironmentBuildConfig,
@@ -21,13 +23,27 @@ import {
 const repoEnv = loadRepoEnv();
 Object.assign(process.env, repoEnv);
 
+// Single-origin dev is signalled positively, because it cannot be inferred
+// from the absence of VITE_HTTP_URL/VITE_WS_URL: the runner deletes those keys
+// but `loadRepoEnv` merges `.env`/`.env.local` *underneath* the process env, so
+// a developer with either URL in their `.env` gets it back here. Baking it then
+// pins the client to localhost and breaks every non-localhost origin — the
+// exact failure single-origin mode exists to prevent, and an invisible one
+// since the page still loads.
+const isSingleOriginDev = process.env.T3CODE_SINGLE_ORIGIN_DEV === "1";
+
 const port = Number(process.env.PORT ?? 5733);
-const host = process.env.HOST?.trim() || "localhost";
-const allowedHosts = process.env.VITE_ALLOWED_HOSTS?.split(",")
-  .map((value) => value.trim())
-  .filter(Boolean);
+const explicitHost = process.env.HOST?.trim();
+const host = explicitHost || "localhost";
+const configuredAllowedHosts = [
+  ...(process.env.T3CODE_DEV_ALLOWED_HOSTS ?? "").split(","),
+  ...(process.env.VITE_ALLOWED_HOSTS ?? "").split(","),
+]
+  .map((entry) => entry.trim())
+  .filter((entry) => entry.length > 0);
+const allowedHosts = [".ts.net", ...configuredAllowedHosts];
 const hmrProtocol = process.env.VITE_HMR_PROTOCOL?.trim() === "wss" ? "wss" : "ws";
-const hmrHost = process.env.VITE_HMR_HOST?.trim() || host;
+const hmrHost = process.env.VITE_HMR_HOST?.trim() || explicitHost;
 const hmrClientPort = Number(process.env.VITE_HMR_CLIENT_PORT ?? port);
 const configuredRelayUrl = repoEnv.VITE_T3CODE_RELAY_URL?.trim() || "";
 const configuredClerkPublishableKey = repoEnv.VITE_CLERK_PUBLISHABLE_KEY?.trim() || "";
@@ -80,12 +96,22 @@ const unitTestProject = {
 } satisfies TestProjectInlineConfiguration;
 
 export default defineConfig(({ command }) => {
-  const primaryEnvironmentConfig = resolveWebPrimaryEnvironmentBuildConfig({
+  const resolvedPrimaryEnvironmentConfig = resolveWebPrimaryEnvironmentBuildConfig({
     command,
     env: process.env,
   });
+  const primaryEnvironmentConfig = isSingleOriginDev
+    ? { httpUrl: "", wsUrl: "", devServerUrl: resolvedPrimaryEnvironmentConfig.devServerUrl }
+    : resolvedPrimaryEnvironmentConfig;
+  const backendPort = Number(process.env.T3CODE_PORT?.trim());
+  const singleOriginProxyTarget =
+    Number.isInteger(backendPort) && backendPort > 0
+      ? `http://localhost:${backendPort}/`
+      : undefined;
   const explicitProxyTarget =
-    process.env.T3CODE_WEB_DEV_PROXY_TARGET || process.env.VITE_DEV_PROXY_TARGET || undefined;
+    process.env.T3CODE_WEB_DEV_PROXY_TARGET ||
+    process.env.VITE_DEV_PROXY_TARGET ||
+    singleOriginProxyTarget;
   const configuredProxyWsUrl = primaryEnvironmentConfig.wsUrl || undefined;
   const devProxyTarget = resolveDevProxyTarget({
     ...(explicitProxyTarget !== undefined ? { explicitProxyTarget } : {}),
@@ -158,39 +184,37 @@ export default defineConfig(({ command }) => {
       host,
       port,
       strictPort: true,
-      ...(allowedHosts?.length ? { allowedHosts } : {}),
+      allowedHosts,
       ...(publicDevServerHeaders ? { headers: { ...publicDevServerHeaders } } : {}),
       ...(devProxyTarget
         ? {
-            proxy: {
-              "/.well-known": {
-                target: devProxyTarget,
-                changeOrigin: true,
-              },
-              "/api": {
-                target: devProxyTarget,
-                changeOrigin: true,
-              },
-              "/ws": {
-                target: devProxyTarget,
-                changeOrigin: true,
-                ws: true,
-              },
-              "/attachments": {
-                target: devProxyTarget,
-                changeOrigin: true,
-              },
+            proxy: Object.fromEntries(
+              DEV_PROXIED_PATH_PREFIXES.map((prefix) => [
+                prefix,
+                {
+                  target: devProxyTarget,
+                  changeOrigin: true,
+                  ...(prefix === "/ws" ? { ws: true } : {}),
+                },
+              ]),
+            ),
+          }
+        : {}),
+      // Electron's BrowserWindow needs the HMR socket pinned to an explicit
+      // host to connect reliably; dev:desktop is the only mode that sets HOST.
+      // Everywhere else, leaving this unset lets the client derive it from the
+      // page origin, which is what makes HMR work over Tailscale/LAN instead of
+      // failing an attempt against the wrong machine's localhost first.
+      // (Vite 8 logs connection state via console.debug — enable "Verbose".)
+      ...(hmrHost
+        ? {
+            hmr: {
+              protocol: hmrProtocol,
+              host: hmrHost,
+              clientPort: Number.isFinite(hmrClientPort) ? hmrClientPort : port,
             },
           }
         : {}),
-      hmr: {
-        // Explicit config so Vite's HMR WebSocket connects reliably
-        // inside Electron's BrowserWindow. Vite 8 uses console.debug for
-        // connection logs — enable "Verbose" in DevTools to see them.
-        protocol: hmrProtocol,
-        host: hmrHost,
-        clientPort: Number.isFinite(hmrClientPort) ? hmrClientPort : port,
-      },
     },
     build: {
       outDir: "dist",

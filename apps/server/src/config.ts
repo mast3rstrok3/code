@@ -117,6 +117,7 @@ export class ServerConfig extends Context.Service<
     readonly appDevStackBackendOidcClientId: string | undefined;
     readonly appDevStackBackendOidcClientSecret: Redacted.Redacted<string> | undefined;
     readonly appDevStackNative: NativeAppDevStackConfig | undefined;
+    readonly devAllowedOrigins: ReadonlyArray<string>;
     readonly noBrowser: boolean;
     readonly startupPresentation: StartupPresentation;
     readonly desktopBootstrapToken: string | undefined;
@@ -258,6 +259,7 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
     appDevStackBackendOidcClientId: undefined,
     appDevStackBackendOidcClientSecret: undefined,
     appDevStackNative: undefined,
+    devAllowedOrigins: [],
     noBrowser: false,
     startupPresentation: "browser",
   });
