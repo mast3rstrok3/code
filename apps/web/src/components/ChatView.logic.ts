@@ -104,8 +104,21 @@ export function buildLocalDraftThread(
   };
 }
 
+export function buildLoadingThreadFromShell(shell: ThreadShell): Thread {
+  return {
+    ...shell,
+    messages: [],
+    proposedPlans: [],
+    activities: [],
+    checkpoints: [],
+    deletedAt: null,
+    planningWorkflow: null,
+    devReviews: [],
+  };
+}
+
 export function shouldWriteThreadErrorToCurrentServerThread(input: {
-  serverThread:
+  activeServerThread:
     | {
         environmentId: EnvironmentId;
         id: ThreadId;
@@ -116,10 +129,10 @@ export function shouldWriteThreadErrorToCurrentServerThread(input: {
   targetThreadId: ThreadId;
 }): boolean {
   return Boolean(
-    input.serverThread &&
+    input.activeServerThread &&
     input.targetThreadId === input.routeThreadRef.threadId &&
-    input.serverThread.environmentId === input.routeThreadRef.environmentId &&
-    input.serverThread.id === input.targetThreadId,
+    input.activeServerThread.environmentId === input.routeThreadRef.environmentId &&
+    input.activeServerThread.id === input.targetThreadId,
   );
 }
 

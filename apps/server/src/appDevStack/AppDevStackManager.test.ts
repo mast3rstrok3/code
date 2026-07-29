@@ -78,6 +78,7 @@ const makeConfigLayer = (input?: {
     ...derivedPaths,
     staticDir: undefined,
     devUrl: undefined,
+    devAllowedOrigins: [],
     appDevStackBackendUrl: input?.url ?? backendUrl,
     appDevStackBackendBearerToken:
       input?.bearerToken === undefined ? undefined : Redacted.make(input.bearerToken),

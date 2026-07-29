@@ -121,7 +121,6 @@ const invocationLayer = Layer.succeed(McpInvocationContext.McpInvocationContext,
   providerInstanceId: ProviderInstanceId.make("codex"),
   capabilities: new Set(["workflow-artifacts"] as const),
   issuedAt: 1,
-  expiresAt: Number.MAX_SAFE_INTEGER,
 });
 
 describe("workflow-artifacts toolkit handlers", () => {

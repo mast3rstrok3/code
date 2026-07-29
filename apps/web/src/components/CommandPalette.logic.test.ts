@@ -211,6 +211,7 @@ describe("buildBrowseGroups", () => {
     const browseTo = vi.fn();
     const groups = buildBrowseGroups({
       browseEntries: [{ name: "repos", fullPath: "/home/nils/repos" }],
+
       browseQuery: "~/",
       canBrowseUp: false,
       upIcon: null,
@@ -226,5 +227,44 @@ describe("buildBrowseGroups", () => {
     await item.run();
 
     expect(browseTo).toHaveBeenCalledWith({ name: "repos", fullPath: "/home/nils/repos" });
+  });
+
+  it("waits for asynchronous browse navigation actions", async () => {
+    let finishNavigation: (() => void) | undefined;
+    const browseTo = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishNavigation = resolve;
+        }),
+    );
+    const groups = buildBrowseGroups({
+      browseEntries: [{ name: "Downloads", fullPath: "/Users/test/Downloads" }],
+      browseQuery: "~/",
+      canBrowseUp: false,
+      upIcon: null,
+      directoryIcon: null,
+      browseUp: vi.fn(),
+      browseTo,
+    });
+    const item = groups[0]?.items[0];
+    if (!item || item.kind !== "action") {
+      throw new Error("Expected a browse action");
+    }
+
+    let actionSettled = false;
+    const action = item.run().then(() => {
+      actionSettled = true;
+    });
+    await Promise.resolve();
+
+    expect(browseTo).toHaveBeenCalledWith({
+      name: "Downloads",
+      fullPath: "/Users/test/Downloads",
+    });
+    expect(actionSettled).toBe(false);
+
+    finishNavigation?.();
+    await action;
+    expect(actionSettled).toBe(true);
   });
 });

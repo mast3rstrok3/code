@@ -93,6 +93,10 @@
       "import": "./src/workspaceUsers.ts",
       "default": "./src/workspaceUsers.ts"
     },
+    "./backgroundActivitySettings": {
+      "types": "./src/backgroundActivitySettings.ts",
+      "import": "./src/backgroundActivitySettings.ts"
+    },
     "./String": {
       "types": "./src/String.ts",
       "import": "./src/String.ts"

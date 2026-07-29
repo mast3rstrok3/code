@@ -74,7 +74,6 @@ const makeHarness = (input: {
       providerInstanceId,
       capabilities: new Set(["preview", "dev-review"] as const),
       issuedAt: 1,
-      expiresAt: Number.MAX_SAFE_INTEGER,
     }),
     Layer.mock(ProjectionSnapshotQuery)({
       getThreadDetailById: () =>

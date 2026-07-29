@@ -14,7 +14,6 @@ import * as EnvironmentAuthPolicy from "./EnvironmentAuthPolicy.ts";
 import * as SessionStore from "./SessionStore.ts";
 
 import * as ServerSecretStore from "./ServerSecretStore.ts";
-import * as SessionStore from "./SessionStore.ts";
 
 /** Pinned so dev-mode cookie tests can assert the port-scoped name. */
 const TEST_SERVER_PORT = 13_773;
@@ -146,13 +145,16 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
   it.effect("reports unauthenticated session state when a browser cookie cannot be looked up", () =>
     Effect.gen(function* () {
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const sessions = yield* SessionStore.SessionStore;
       const pairingCredential = yield* serverAuth.issuePairingCredential();
       const exchanged = yield* serverAuth.createBrowserSession(
         pairingCredential.credential,
         requestMetadata,
       );
 
-      const state = yield* serverAuth.getSessionState(makeCookieRequest(exchanged.sessionToken));
+      const state = yield* serverAuth.getSessionState(
+        makeCookieRequest(sessions.cookieName, exchanged.sessionToken),
+      );
 
       expect(state.authenticated).toBe(false);
     }).pipe(Effect.provide(sessionValidationFailureEnvironmentAuthLayer)),

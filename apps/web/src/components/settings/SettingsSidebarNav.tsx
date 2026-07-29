@@ -7,6 +7,7 @@ import {
   GitBranchIcon,
   KeyboardIcon,
   Link2Icon,
+  PaletteIcon,
   Settings2Icon,
   UsersIcon,
   WorkflowIcon,
@@ -27,6 +28,7 @@ import { T3ConnectSidebarAvatar, T3ConnectSidebarSignIn } from "../clerk/T3Conne
 export type SettingsSectionPath =
   | "/settings/general"
   | "/settings/users"
+  | "/settings/appearance"
   | "/settings/keybindings"
   | "/settings/providers"
   | "/settings/workflows"
@@ -42,6 +44,7 @@ export const SETTINGS_NAV_ITEMS: ReadonlyArray<{
 }> = [
   { label: "General", to: "/settings/general", icon: Settings2Icon },
   { label: "Users", to: "/settings/users", icon: UsersIcon },
+  { label: "Appearance", to: "/settings/appearance", icon: PaletteIcon },
   { label: "Keybindings", to: "/settings/keybindings", icon: KeyboardIcon },
   { label: "Providers", to: "/settings/providers", icon: BotIcon },
   { label: "Workflow", to: "/settings/workflows", icon: WorkflowIcon },

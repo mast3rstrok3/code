@@ -448,8 +448,8 @@ describe("browser recording", () => {
     ]);
     expect(startScreencast).toHaveBeenCalledTimes(2);
     await stopBrowserRecording("recording-tab");
-    expect(isBrowserRecordingActive("recording-tab")).toBe(false);
-    expect(isBrowserRecordingActive("recording-tab-2")).toBe(true);
+    expect(readActiveBrowserRecordingTabIds().has("recording-tab")).toBe(false);
+    expect(readActiveBrowserRecordingTabIds().has("recording-tab-2")).toBe(true);
     await stopBrowserRecording("recording-tab-2");
   });
 
