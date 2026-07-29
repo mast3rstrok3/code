@@ -182,7 +182,7 @@ describe("browser recording", () => {
     await startBrowserRecording("recording-tab");
 
     expect(startScreencast).toHaveBeenCalledOnce();
-    expect(events.at(-1)).toBe('publish:["recording-tab"]');
+    expect(events.at(-1)).toBe("publish:recording-tab");
 
     await stopBrowserRecording("recording-tab");
   });
@@ -407,7 +407,7 @@ describe("browser recording", () => {
     await stopBrowserRecording(runtimeTabId);
   });
 
-  it("makes duplicate starts for the same starting tab idempotent", async () => {
+  it("does not report success for a second start while the first is still starting", async () => {
     let finishStartingScreencast: (() => void) | undefined;
     startScreencast.mockImplementationOnce(async (tabId: string) => {
       events.push("start-screencast");
@@ -426,12 +426,12 @@ describe("browser recording", () => {
     const firstStart = startBrowserRecording("recording-tab");
     await vi.waitFor(() => expect(startScreencast).toHaveBeenCalledOnce());
 
-    const duplicateStart = startBrowserRecording("recording-tab");
+    await expect(startBrowserRecording("recording-tab")).rejects.toBeInstanceOf(
+      BrowserRecordingConflictError,
+    );
 
     finishStartingScreencast?.();
-    const [firstStartedAt, duplicateStartedAt] = await Promise.all([firstStart, duplicateStart]);
-    expect(duplicateStartedAt).toBe(firstStartedAt);
-    expect(startScreencast).toHaveBeenCalledOnce();
+    await firstStart;
     await stopBrowserRecording("recording-tab");
   });
 
@@ -617,6 +617,6 @@ describe("browser recording", () => {
     expect(cleanupResult).toBeNull();
     expect(stopScreencast).toHaveBeenCalledOnce();
     expect(save).not.toHaveBeenCalled();
-    expect(events.at(-1)).toBe("publish:[]");
+    expect(events.at(-1)).toBe("clear");
   });
 });
