@@ -117,11 +117,23 @@ export const EMPTY_DEV_REVIEW_EVIDENCE: DevReviewEvidence = {
   screenshots: [],
 };
 
+/**
+ * The proposed plan a Dev Review anchors to when no Spec exists. Specs anchor
+ * reviews through their planning tickets; fast-feature and plan-mode threads
+ * only have a proposed plan, so the plan itself is the review's anchor node.
+ */
+export const DevReviewSourceProposedPlan = Schema.Struct({
+  threadId: ThreadId,
+  planId: TrimmedNonEmptyString,
+});
+export type DevReviewSourceProposedPlan = typeof DevReviewSourceProposedPlan.Type;
+
 export const DevReviewRecord = Schema.Struct({
   id: DevReviewId,
   sourceThreadId: ThreadId,
   reviewThreadId: ThreadId,
   planningTicketIds: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
+  sourceProposedPlan: Schema.optionalKey(DevReviewSourceProposedPlan),
   sourceTurnId: Schema.NullOr(TurnId),
   status: DevReviewStatus,
   document: DevReviewDocument,

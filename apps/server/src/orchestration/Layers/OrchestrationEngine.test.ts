@@ -406,6 +406,96 @@ describe("OrchestrationEngine", () => {
     await system.dispose();
   });
 
+  it("anchors a Dev Review to the source thread's proposed plan when no Spec exists", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const createdAt = now();
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-project-dev-review-plan-create"),
+        projectId: asProjectId("project-dev-review-plan"),
+        title: "Dev Review Plan Project",
+        workspaceRoot: "/tmp/project-dev-review-plan",
+        defaultModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-thread-dev-review-plan-source-create"),
+        threadId: ThreadId.make("thread-dev-review-plan-source"),
+        projectId: asProjectId("project-dev-review-plan"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+        title: "Fast feature",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "full-access",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.proposed-plan.upsert",
+        commandId: CommandId.make("cmd-dev-review-plan-upsert"),
+        threadId: ThreadId.make("thread-dev-review-plan-source"),
+        proposedPlan: {
+          id: "plan-dev-review-anchor",
+          turnId: null,
+          planMarkdown: "# Plan\n\nShip the fast feature.",
+          implementedAt: null,
+          implementationThreadId: null,
+          createdAt,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.dev-review.launch",
+        commandId: CommandId.make("cmd-dev-review-plan-launch"),
+        sourceThreadId: ThreadId.make("thread-dev-review-plan-source"),
+        reviewThreadId: ThreadId.make("thread-dev-review-plan-review"),
+        reviewId: DevReviewId.make("dev-review-plan-1"),
+        message: {
+          messageId: asMessageId("msg-dev-review-plan-launch"),
+          role: "user",
+          text: "Run Browser Dev Review",
+          attachments: [],
+        },
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        runtimeMode: "full-access",
+        workflowPromptId: "implementation.browser-dev-review.codex",
+        createdAt,
+      }),
+    );
+
+    const readModel = await system.readModel();
+    const sourceThread = readModel.threads.find(
+      (thread) => thread.id === "thread-dev-review-plan-source",
+    );
+    expect(sourceThread?.devReviews[0]?.sourceProposedPlan).toEqual({
+      threadId: "thread-dev-review-plan-source",
+      planId: "plan-dev-review-anchor",
+    });
+
+    await system.dispose();
+  });
+
   it("updates Dev Review evidence through thread.dev-review.evidence.update", async () => {
     const system = await createOrchestrationSystem();
     const { engine } = system;

@@ -59,6 +59,7 @@ const seedDevReview = (reviewId: DevReviewId, evidence: DevReviewEvidence) => {
     reviewId,
     sourceThreadId: ThreadId.make("thread-source"),
     reviewThreadId: ThreadId.make("thread-review"),
+    sourceProposedPlan: null,
     sourceTurnId: null,
     status: "running",
     document: {

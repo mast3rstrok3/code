@@ -105,7 +105,7 @@ describe("054_ProjectionThreadDevReviewEvidenceColumn", () => {
 
       // The current repository also reads workflow lineage added after this
       // migration; advance before exercising the repository contract.
-      yield* runMigrations({ toMigrationInclusive: 57 });
+      yield* runMigrations({ toMigrationInclusive: 62 });
       const persisted = yield* devReviews.getById({
         reviewId: DevReviewId.make("dev-review-legacy"),
       });
@@ -124,12 +124,13 @@ describe("054_ProjectionThreadDevReviewEvidenceColumn", () => {
       `;
       assert.ok(columns.some((column) => column.name === "evidence_json"));
 
-      yield* runMigrations({ toMigrationInclusive: 57 });
+      yield* runMigrations({ toMigrationInclusive: 62 });
       const devReviews = yield* ProjectionThreadDevReviewRepository;
       yield* devReviews.upsert({
         reviewId: DevReviewId.make("dev-review-fresh"),
         sourceThreadId: ThreadId.make("thread-source-fresh"),
         reviewThreadId: ThreadId.make("thread-review-fresh"),
+        sourceProposedPlan: null,
         sourceTurnId: null,
         status: "running",
         document: {

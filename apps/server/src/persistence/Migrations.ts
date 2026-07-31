@@ -61,6 +61,7 @@ import Migration0056 from "./Migrations/056_ProjectionWorkflowSubagentBatches.ts
 import Migration0057 from "./Migrations/057_WorkflowArtifactLineage.ts";
 import Migration0058 from "./Migrations/058_PlanningTicketPlannedFileChanges.ts";
 import Migration0059 from "./Migrations/059_WorkflowPresetsAndFastFeatureRuns.ts";
+import Migration0062 from "./Migrations/062_DevReviewSourceProposedPlan.ts";
 import Migration0033 from "./Migrations/033_ProjectionThreadsSettled.ts";
 import Migration0034 from "./Migrations/034_ProjectionThreadsSnoozed.ts";
 
@@ -130,6 +131,7 @@ export const migrationEntries = [
   // next available IDs so existing databases receive the same columns.
   [60, "ProjectionThreadsSettledCompatibility", Migration0033],
   [61, "ProjectionThreadsSnoozedCompatibility", Migration0034],
+  [62, "DevReviewSourceProposedPlan", Migration0062],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

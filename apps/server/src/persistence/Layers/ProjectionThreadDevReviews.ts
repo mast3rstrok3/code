@@ -1,4 +1,8 @@
-import { DevReviewDocument, DevReviewEvidence } from "@t3tools/contracts";
+import {
+  DevReviewDocument,
+  DevReviewEvidence,
+  DevReviewSourceProposedPlan,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -21,6 +25,7 @@ const ProjectionThreadDevReviewDbRow = ProjectionThreadDevReview.mapFields(
     document: Schema.fromJsonString(DevReviewDocument),
     evidence: Schema.fromJsonString(DevReviewEvidence),
     planningTicketIds: Schema.fromJsonString(Schema.Array(Schema.String)),
+    sourceProposedPlan: Schema.NullOr(Schema.fromJsonString(DevReviewSourceProposedPlan)),
   }),
 );
 
@@ -35,6 +40,7 @@ const makeProjectionThreadDevReviewRepository = Effect.gen(function* () {
         source_thread_id,
         review_thread_id,
         planning_ticket_ids_json,
+        source_proposed_plan_json,
         source_turn_id,
         status,
         document_json,
@@ -47,6 +53,7 @@ const makeProjectionThreadDevReviewRepository = Effect.gen(function* () {
         ${row.sourceThreadId},
         ${row.reviewThreadId},
         ${JSON.stringify(row.planningTicketIds ?? [])},
+        ${row.sourceProposedPlan === null ? null : JSON.stringify(row.sourceProposedPlan)},
         ${row.sourceTurnId},
         ${row.status},
         ${JSON.stringify(row.document)},
@@ -59,6 +66,7 @@ const makeProjectionThreadDevReviewRepository = Effect.gen(function* () {
         source_thread_id = excluded.source_thread_id,
         review_thread_id = excluded.review_thread_id,
         planning_ticket_ids_json = excluded.planning_ticket_ids_json,
+        source_proposed_plan_json = excluded.source_proposed_plan_json,
         source_turn_id = excluded.source_turn_id,
         status = excluded.status,
         document_json = excluded.document_json,
@@ -77,6 +85,7 @@ const makeProjectionThreadDevReviewRepository = Effect.gen(function* () {
         source_thread_id AS "sourceThreadId",
         review_thread_id AS "reviewThreadId",
         planning_ticket_ids_json AS "planningTicketIds",
+        source_proposed_plan_json AS "sourceProposedPlan",
         source_turn_id AS "sourceTurnId",
         status,
         document_json AS "document",
@@ -98,6 +107,7 @@ const makeProjectionThreadDevReviewRepository = Effect.gen(function* () {
         source_thread_id AS "sourceThreadId",
         review_thread_id AS "reviewThreadId",
         planning_ticket_ids_json AS "planningTicketIds",
+        source_proposed_plan_json AS "sourceProposedPlan",
         source_turn_id AS "sourceTurnId",
         status,
         document_json AS "document",
@@ -120,6 +130,7 @@ const makeProjectionThreadDevReviewRepository = Effect.gen(function* () {
         source_thread_id AS "sourceThreadId",
         review_thread_id AS "reviewThreadId",
         planning_ticket_ids_json AS "planningTicketIds",
+        source_proposed_plan_json AS "sourceProposedPlan",
         source_turn_id AS "sourceTurnId",
         status,
         document_json AS "document",

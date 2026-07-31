@@ -2621,11 +2621,28 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const planningTicketIds =
         command.planningTicketIds ??
         (inheritedTicketScope.length > 0 ? inheritedTicketScope : workflowTicketScope);
+      // A Dev Review anchors to the Spec through its planning tickets. When
+      // the source has no Spec — fast-feature runs and plan-mode threads —
+      // the proposed plan itself is the review's anchor node.
+      const runProposedPlan =
+        readModel.implementationRuns.find(
+          (run) => run.orchestratorThreadId === sourceThread.id && run.sourceProposedPlan !== null,
+        )?.sourceProposedPlan ?? null;
+      const threadProposedPlan =
+        [...sourceThread.proposedPlans].sort((left, right) =>
+          right.createdAt.localeCompare(left.createdAt),
+        )[0] ?? null;
+      const sourceProposedPlan =
+        runProposedPlan ??
+        (threadProposedPlan === null
+          ? null
+          : { threadId: sourceThread.id, planId: threadProposedPlan.id });
       const reviewRecord = {
         id: command.reviewId,
         sourceThreadId: command.sourceThreadId,
         reviewThreadId: command.reviewThreadId,
         planningTicketIds,
+        ...(sourceProposedPlan === null ? {} : { sourceProposedPlan }),
         sourceTurnId: sourceThread.latestTurn?.turnId ?? null,
         status: "running" as const,
         document: EMPTY_DEV_REVIEW_DOCUMENT,

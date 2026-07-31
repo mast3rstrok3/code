@@ -74,6 +74,15 @@ export function DevReviewPanel(props: {
               >
                 Spec · {planningWorkflow.spec.title}
               </Button>
+            ) : activeRecord.sourceProposedPlan ? (
+              <Badge
+                variant="outline"
+                size="sm"
+                title={activeRecord.sourceProposedPlan.planId}
+                aria-label="Anchored to proposed plan"
+              >
+                Proposed Plan
+              </Badge>
             ) : null}
             {(activeRecord.planningTicketIds?.length ?? 0) > 0 ? (
               <div className="mt-2 flex flex-wrap gap-1.5" aria-label="Linked planning tickets">
