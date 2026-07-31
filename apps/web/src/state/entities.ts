@@ -288,6 +288,12 @@ export function useThreadSession(ref: ScopedThreadRef | null): OrchestrationSess
   );
 }
 
+export function useCreatePlanningSpecCommand() {
+  return useAtomCommand(threadEnvironment.createPlanningSpec, {
+    label: "planning Spec create",
+  });
+}
+
 export function useLoadPlanningSpecBundleCommand() {
   return useAtomCommand(threadEnvironment.loadPlanningSpecBundle, {
     label: "planning Spec bundle load",

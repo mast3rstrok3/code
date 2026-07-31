@@ -1847,6 +1847,28 @@ const make = Effect.gen(function* () {
           return;
         }
 
+        case "planning-grill-complete": {
+          if (!isPlanningArtifactThread(thread)) {
+            yield* Effect.logWarning(
+              "provider workflow directive ignored for non-planning thread",
+              {
+                directiveType: input.directive.type,
+                threadId: thread.id,
+                workflowRole: thread.workflowRole,
+              },
+            );
+            return;
+          }
+
+          yield* orchestrationEngine.dispatch({
+            type: "thread.planning-spec.create",
+            commandId: yield* providerCommandId(input.event, "workflow-planning-grill-complete"),
+            threadId: thread.id,
+            createdAt: input.createdAt,
+          });
+          return;
+        }
+
         case "planning-spec-artifact": {
           if (!isPlanningArtifactThread(thread)) {
             yield* Effect.logWarning(

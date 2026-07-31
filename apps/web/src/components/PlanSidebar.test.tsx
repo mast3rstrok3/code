@@ -44,6 +44,42 @@ describe("PlanSidebar disclosures", () => {
   });
 });
 
+describe("PlanSidebar Spec actions", () => {
+  const baseProps = {
+    activePlan: null,
+    activeProposedPlan: null,
+    environmentId: EnvironmentId.make("environment-local"),
+    markdownCwd: undefined,
+    workspaceRoot: undefined,
+    timestampFormat: "locale" as const,
+  };
+
+  it("offers Create Spec when the thread has no Spec and a handler is provided", () => {
+    const markup = renderToStaticMarkup(
+      <PlanSidebar {...baseProps} planningWorkflow={null} onCreateSpec={() => {}} />,
+    );
+
+    expect(markup).toContain("Create Spec");
+  });
+
+  it("hides Create Spec without a handler or when the workflow is automation owned", () => {
+    const withoutHandler = renderToStaticMarkup(
+      <PlanSidebar {...baseProps} planningWorkflow={null} />,
+    );
+    const automationOwned = renderToStaticMarkup(
+      <PlanSidebar
+        {...baseProps}
+        planningWorkflow={null}
+        automationOwned={true}
+        onCreateSpec={() => {}}
+      />,
+    );
+
+    expect(withoutHandler).not.toContain("Create Spec");
+    expect(automationOwned).not.toContain("Create Spec");
+  });
+});
+
 describe("PlannedFileChanges", () => {
   it("groups actions in create, update, delete order while preserving paths", () => {
     const markup = renderToStaticMarkup(

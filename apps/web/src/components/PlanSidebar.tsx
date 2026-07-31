@@ -232,6 +232,7 @@ interface PlanSidebarProps {
   mode?: "sheet" | "sidebar" | "embedded";
   automationOwned?: boolean | undefined;
   onOpenThread?: (threadId: ThreadId) => void;
+  onCreateSpec?: (() => void) | undefined;
   onLoadSpecBundle?: (specId: OrchestrationPlanningSpecId) => void;
   onRequestTicketReview?: (specId: OrchestrationPlanningSpecId) => void;
   onLaunchImplementationRun?: (specId: OrchestrationPlanningSpecId) => void;
@@ -452,6 +453,7 @@ const PlanSidebar = memo(function PlanSidebar({
   mode = "sidebar",
   automationOwned = false,
   onOpenThread,
+  onCreateSpec,
   onLoadSpecBundle,
   onRequestTicketReview,
   onLaunchImplementationRun,
@@ -747,6 +749,16 @@ const PlanSidebar = memo(function PlanSidebar({
                 >
                   <RefreshCwIcon className="size-3" />
                   Refresh
+                </Button>
+              ) : !spec && !automationOwned && onCreateSpec ? (
+                <Button
+                  size="xs"
+                  variant="outline"
+                  className="h-6 text-[11px]"
+                  onClick={() => onCreateSpec()}
+                >
+                  <FileTextIcon className="size-3" />
+                  Create Spec
                 </Button>
               ) : null
             }

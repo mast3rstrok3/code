@@ -112,6 +112,18 @@ Create files lazily — only when you have something to write. If no \`CONTEXT.m
 Planning artifact writes are allowed for this workflow only when they are glossary or ADR updates produced by the grilling session. Do not make implementation changes during the grill.
 
 Finish the grill only when the goal, audience, success criteria, scope, non-goals, terminology, key decisions, risks, edge cases, failure modes, and acceptance criteria are clear enough that the Spec stage can proceed without reopening product intent.
+
+## Finishing the grill
+
+When the user explicitly confirms shared understanding is reached, end that turn with exactly one fenced JSON block — and no other fenced JSON block anywhere in the same message — to advance the workflow to the Spec stage:
+
+\`\`\`json
+{
+  "type": "planning-grill-complete"
+}
+\`\`\`
+
+Do not emit this directive before the user confirms. The Spec stage starts automatically once it is accepted, so do not write the Spec yourself during the grill.
 </collaboration_mode>`;
 
 const PLANNING_SPEC_PROMPT = `<collaboration_mode># Planning Workflow: Spec

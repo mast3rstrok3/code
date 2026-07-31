@@ -102,6 +102,16 @@ describe("workflowDirectives", () => {
     }
   });
 
+  it("parses planning grill complete directives", () => {
+    const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
+{ "type": "planning-grill-complete" }
+\`\`\``);
+
+    NodeAssert.equal(result.kind, "parsed");
+    if (result.kind !== "parsed") return;
+    NodeAssert.deepEqual(result.directive, { type: "planning-grill-complete" });
+  });
+
   it("parses canonical Spec, Ticket, and Ticket review directives", () => {
     const spec = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
 { "type": "planning-spec-artifact", "title": "Checkout", "summaryMarkdown": "Build checkout." }

@@ -34,6 +34,9 @@ export type WorkflowDirective =
       readonly questionMarkdown: string;
     }
   | {
+      readonly type: "planning-grill-complete";
+    }
+  | {
       readonly type: "planning-spec-artifact";
       readonly title: string;
       readonly summaryMarkdown: string;
@@ -571,6 +574,8 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
         questionMarkdown,
       };
     }
+    case "planning-grill-complete":
+      return { type: "planning-grill-complete" };
     case "planning-spec-artifact": {
       const title = requiredString(record, "title");
       const summaryMarkdown = requiredString(record, "summaryMarkdown");

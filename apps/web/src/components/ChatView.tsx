@@ -222,6 +222,7 @@ import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
   useImplementationRuns,
   useLaunchImplementationRunCommand,
+  useCreatePlanningSpecCommand,
   useLoadPlanningSpecBundleCommand,
   usePlanningWorkflowThreadShells,
   useProject,
@@ -253,6 +254,7 @@ import {
   shouldShowProviderStatusBanner,
 } from "./chat/ProviderStatusBanner";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
+import { isPlanningWorkflowAvailableForProvider } from "./chat/composerPlanningWorkflow";
 import { resolveThreadPr } from "./ThreadStatusIndicators";
 import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
 import { ThreadSyncStatusPill } from "./chat/ThreadSyncStatusPill";
@@ -1206,6 +1208,7 @@ function ChatViewContent(props: ChatViewProps) {
   const launchDevReview = useAtomCommand(threadEnvironment.launchDevReview, {
     reportFailure: false,
   });
+  const createPlanningSpec = useCreatePlanningSpecCommand();
   const loadPlanningSpecBundle = useLoadPlanningSpecBundleCommand();
   const requestPlanningTicketReview = useRequestPlanningTicketReviewCommand();
   const launchImplementationRun = useLaunchImplementationRunCommand();
@@ -2699,6 +2702,21 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [activeThread, loadPlanningSpecBundle],
   );
+  const handleCreatePlanningSpec = useCallback(() => {
+    if (!activeThread) return;
+    void createPlanningSpec({
+      environmentId: activeThread.environmentId,
+      input: {
+        threadId: activeThread.id,
+      },
+    });
+  }, [activeThread, createPlanningSpec]);
+  const canCreatePlanningSpec =
+    activeThread != null &&
+    activeThread.interactionMode === "planning-workflow" &&
+    !isProductWorkflowRoot(activeThread) &&
+    (displayedPlanningWorkflowWithCanonicalArtifacts?.spec ?? null) === null &&
+    isPlanningWorkflowAvailableForProvider(selectedProvider);
   const handleRequestPlanningTicketReview = useCallback(
     (specId: string) => {
       if (!activeThread) return;
@@ -6216,6 +6234,7 @@ function ChatViewContent(props: ChatViewProps) {
         timestampFormat={timestampFormat}
         mode="embedded"
         onOpenThread={openWorkflowThread}
+        onCreateSpec={canCreatePlanningSpec ? handleCreatePlanningSpec : undefined}
         onLoadSpecBundle={handleLoadPlanningSpecBundle}
         automationOwned={activeThread ? isProductWorkflowRoot(activeThread) : false}
         onRequestTicketReview={handleRequestPlanningTicketReview}

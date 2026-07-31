@@ -4054,6 +4054,109 @@ describe("ProviderRuntimeIngestion", () => {
     expect(childThread.messages[0]?.text).toContain("Purpose: status.");
   });
 
+  it("starts the Spec stage when a planning thread reports grill completion", async () => {
+    const harness = await createHarness();
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    const planningThreadId = asThreadId("thread-planning-grill-complete");
+
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-planning-grill-complete-create"),
+        threadId: planningThreadId,
+        projectId: asProjectId("project-1"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+        parentThreadId: null,
+        workflowRole: null,
+        title: "Plan Checkout",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: "planning-workflow",
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-planning-grill-complete"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt,
+      threadId: planningThreadId,
+      turnId: asTurnId("turn-planning-grill-complete"),
+      itemId: asItemId("item-planning-grill-complete"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail: '```json\n{ "type": "planning-grill-complete" }\n```',
+      },
+    });
+
+    const planningThread = await waitForThread(
+      harness.readModel,
+      (thread) => thread.planningWorkflow?.stage === "spec-authoring",
+      2_000,
+      planningThreadId,
+    );
+    expect(
+      planningThread.messages.some((message) =>
+        message.text.includes("Create the Spec artifact for this planning workflow."),
+      ),
+    ).toBe(true);
+  });
+
+  it("ignores grill completion directives from non-planning threads", async () => {
+    const harness = await createHarness();
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    const threadId = asThreadId("thread-default-grill-complete");
+
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-default-grill-complete-create"),
+        threadId,
+        projectId: asProjectId("project-1"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+        parentThreadId: null,
+        workflowRole: null,
+        title: "Default Thread",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: "default",
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-default-grill-complete"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt,
+      threadId,
+      turnId: asTurnId("turn-default-grill-complete"),
+      itemId: asItemId("item-default-grill-complete"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail: '```json\n{ "type": "planning-grill-complete" }\n```',
+      },
+    });
+
+    await harness.drain();
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((candidate) => candidate.id === threadId);
+    expect(thread?.planningWorkflow ?? null).toBe(null);
+  });
+
   it("rejects planning Spec artifacts from Product Workflow root threads", async () => {
     const harness = await createHarness();
     const createdAt = "2026-01-01T00:00:00.000Z";
