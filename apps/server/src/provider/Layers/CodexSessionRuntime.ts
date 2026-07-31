@@ -2,7 +2,6 @@ import {
   ApprovalRequestId,
   DEFAULT_MODEL,
   EventId,
-  isPlanningWorkflowInteractionMode,
   ProviderDriverKind,
   ProviderItemId,
   type ProviderInstanceId,
@@ -359,12 +358,10 @@ function buildCodexCollaborationMode(input: {
     return undefined;
   }
   const model = normalizeCodexModelSlug(input.model) ?? DEFAULT_MODEL;
-  const mode: "default" | "plan" =
-    input.interactionMode === undefined || input.interactionMode === "implementation-workflow"
-      ? "default"
-      : isPlanningWorkflowInteractionMode(input.interactionMode)
-        ? "plan"
-        : input.interactionMode;
+  // Only the explicit plan interaction mode maps to Codex plan mode. Workflow
+  // modes (planning/product/implementation) run in build mode: their agents
+  // grill, author Specs, and publish artifacts instead of proposing plans.
+  const mode: "default" | "plan" = input.interactionMode === "plan" ? "plan" : "default";
   const reasoningEffort = input.effort ?? "medium";
   const baseDeveloperInstructions = buildCodexDeveloperInstructions(mode, {
     model,

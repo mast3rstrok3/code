@@ -3520,6 +3520,30 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("keeps planning workflow turns in the base build permission mode", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "Start planning",
+        interactionMode: "planning-workflow",
+        attachments: [],
+      });
+
+      assert.deepEqual(harness.query.setPermissionModeCalls, ["bypassPermissions"]);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect.each<{ runtimeMode: RuntimeMode; expectedBase: PermissionMode }>([
     { runtimeMode: "full-access", expectedBase: "bypassPermissions" },
     { runtimeMode: "approval-required", expectedBase: "default" },

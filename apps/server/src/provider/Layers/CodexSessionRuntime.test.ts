@@ -132,6 +132,32 @@ describe("buildTurnStartParams", () => {
     });
   });
 
+  it.effect("runs planning and product workflow turns in build mode", () =>
+    Effect.gen(function* () {
+      for (const interactionMode of ["planning-workflow", "product-workflow"] as const) {
+        const params = yield* buildTurnStartParams({
+          threadId: "provider-thread-1",
+          runtimeMode: "full-access",
+          prompt: "Start planning",
+          model: "gpt-5.3-codex",
+          effort: "medium",
+          interactionMode,
+        });
+
+        NodeAssert.equal(params.collaborationMode?.mode, "default");
+        const instructions = params.collaborationMode?.settings.developer_instructions ?? "";
+        NodeAssert.ok(
+          instructions.startsWith(
+            buildCodexDeveloperInstructions("default", {
+              model: "gpt-5.3-codex",
+              reasoningEffort: "medium",
+            }),
+          ),
+        );
+      }
+    }),
+  );
+
   it("includes default collaboration mode and image attachments", () => {
     const params = Effect.runSync(
       buildTurnStartParams({
