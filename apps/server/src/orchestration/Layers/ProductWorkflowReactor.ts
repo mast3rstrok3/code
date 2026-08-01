@@ -5,8 +5,10 @@ import {
   type OrchestrationEvent,
   type OrchestrationThread,
   type OrchestrationPlanningReviewCycle,
+  PLANNING_REVIEW_MAX_CYCLES,
   type ProjectId,
   ThreadId,
+  WORKFLOW_AUTOMATION_RUNTIME_MODE,
 } from "@t3tools/contracts";
 import { resolveImplementationBranchIdentity } from "@t3tools/shared/orchestrationImplementation";
 import {
@@ -32,8 +34,6 @@ import {
   type ProductWorkflowReactorShape,
 } from "../Services/ProductWorkflowReactor.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
-
-export const MAX_PLANNING_REVIEW_CYCLE_NUMBER = 10;
 
 type ProductWorkflowEvent = Extract<
   OrchestrationEvent,
@@ -106,6 +106,14 @@ const make = Effect.gen(function* () {
   const resolveProductPlanningContext = Effect.fn(
     "ProductWorkflowReactor.resolveProductPlanningContext",
   )(function* (thread: OrchestrationThread) {
+    // Planning runs in the product root thread itself; the child-thread shape
+    // below only remains for planning-orchestrator threads created before that.
+    if (isProductWorkflowThread(thread) && thread.planningWorkflow != null) {
+      return {
+        planningThread: thread,
+        productRootThread: thread,
+      };
+    }
     if (!isProductPlanningOrchestratorThread(thread)) {
       return null;
     }
@@ -186,7 +194,7 @@ const make = Effect.gen(function* () {
     if (!spec || spec.id !== event.payload.specId) return;
     if (
       planningWorkflow.stage !== "ticket-review" ||
-      planningWorkflow.reviewCycles.length >= MAX_PLANNING_REVIEW_CYCLE_NUMBER
+      planningWorkflow.reviewCycles.length >= PLANNING_REVIEW_MAX_CYCLES
     ) {
       return;
     }
@@ -300,7 +308,9 @@ const make = Effect.gen(function* () {
   )(function* () {
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
     for (const planningThread of readModel.threads) {
-      if (!isProductPlanningOrchestratorThread(planningThread)) continue;
+      const plansInOwnThread =
+        isProductWorkflowThread(planningThread) && planningThread.planningWorkflow != null;
+      if (!plansInOwnThread && !isProductPlanningOrchestratorThread(planningThread)) continue;
       const workflow = planningThread.planningWorkflow;
       if (
         workflow?.spec === null ||
@@ -333,7 +343,7 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    if (cycle.cycleNumber >= MAX_PLANNING_REVIEW_CYCLE_NUMBER) {
+    if (cycle.cycleNumber >= PLANNING_REVIEW_MAX_CYCLES) {
       yield* completePlanningWithWarnings({
         planningThreadId: thread.id,
         activityThreadId: context?.productRootThread.id ?? thread.id,
@@ -362,6 +372,15 @@ const make = Effect.gen(function* () {
         interactionMode: "plan",
         createdAt: input.createdAt,
       });
+      // Intent lock ends the human gate; planning and everything after it run
+      // unattended.
+      yield* orchestrationEngine.dispatch({
+        type: "thread.runtime-mode.set",
+        commandId: yield* serverCommandId("product-fix-plan-runtime-mode"),
+        threadId: input.thread.id,
+        runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
+        createdAt: input.createdAt,
+      });
       yield* orchestrationEngine.dispatch({
         type: "thread.turn.start",
         commandId: yield* serverCommandId("product-fix-plan-turn"),
@@ -376,7 +395,7 @@ const make = Effect.gen(function* () {
           }),
           attachments: [],
         },
-        runtimeMode: input.thread.runtimeMode,
+        runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
         interactionMode: "plan",
         createdAt: input.createdAt,
       });
@@ -448,6 +467,7 @@ const make = Effect.gen(function* () {
         return;
       }
 
+      if (thread.planningWorkflow != null) return;
       if (yield* hasActivePlanningOrchestratorChild(thread.id)) return;
 
       yield* orchestrationEngine.dispatch({
@@ -527,7 +547,7 @@ const make = Effect.gen(function* () {
       workflowRole: "product-fix-implementer",
       title,
       modelSelection: thread.modelSelection,
-      runtimeMode: thread.runtimeMode,
+      runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
       interactionMode: "default",
       branch: thread.branch,
       worktreePath: thread.worktreePath,
@@ -544,7 +564,7 @@ const make = Effect.gen(function* () {
         attachments: [],
       },
       titleSeed: title,
-      runtimeMode: thread.runtimeMode,
+      runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
       interactionMode: "default",
       sourceProposedPlan: { threadId: thread.id, planId: plan.id },
       createdAt: event.occurredAt,

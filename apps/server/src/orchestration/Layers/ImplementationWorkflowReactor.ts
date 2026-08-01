@@ -13,6 +13,7 @@ import {
   type OrchestrationPlanningTicket,
   type OrchestrationReadModel,
   type OrchestrationThread,
+  WORKFLOW_AUTOMATION_RUNTIME_MODE,
   type WorkspaceUserId,
 } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
@@ -988,7 +989,7 @@ const make = Effect.gen(function* () {
           }),
       title: `Implement ${ticket?.title ?? input.ticketId}`,
       modelSelection: input.orchestratorThread.modelSelection,
-      runtimeMode: input.orchestratorThread.runtimeMode,
+      runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
       interactionMode: "implementation-workflow",
       branch: plannedWorker.branch,
       worktreePath: plannedWorker.worktreePath,
@@ -1193,7 +1194,7 @@ const make = Effect.gen(function* () {
         workflowRole: "implementation-validator",
         title: "Implementation merge gate",
         modelSelection: orchestratorThread.modelSelection,
-        runtimeMode: orchestratorThread.runtimeMode,
+        runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
         interactionMode: "implementation-workflow",
         branch: input.run.orchestratorBranch,
         worktreePath: input.run.orchestratorWorktreePath,
@@ -1614,7 +1615,7 @@ const make = Effect.gen(function* () {
         workflowRole: "implementation-code-reviewer",
         title: "Implementation code review",
         modelSelection: orchestratorThread.modelSelection,
-        runtimeMode: orchestratorThread.runtimeMode,
+        runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
         interactionMode: "implementation-workflow",
         branch: input.run.orchestratorBranch,
         worktreePath: input.run.orchestratorWorktreePath,
@@ -2027,26 +2028,62 @@ const make = Effect.gen(function* () {
         worktreePath: event.payload.run.orchestratorWorktreePath,
       });
 
+      // Provision the app dev stack alongside the worktree so it is warm before
+      // Dev Review; a failure here is retried by `startBrowserReview`'s ensure.
+      let launchedRun: OrchestrationImplementationRun = runningRun;
+      if (runningRun.appDevStack.status !== "ready") {
+        const stackResult = yield* appDevStackManager
+          .autoCreate({
+            worktreePath: runningRun.orchestratorWorktreePath,
+            displayName: `Implementation ${runningRun.id}`,
+            gitBranch: runningRun.orchestratorBranch,
+          })
+          .pipe(Effect.result);
+        launchedRun = {
+          ...runningRun,
+          appDevStack:
+            stackResult._tag === "Success"
+              ? {
+                  status: "ready",
+                  stackId: stackResult.success.stack.id,
+                  stackStatus: stackResult.success.stack.status,
+                  frontendUrl: stackResult.success.frontendUrl,
+                  frontendServiceName: stackResult.success.frontendServiceName,
+                  displayName: stackResult.success.stack.displayName,
+                  lastErrorMarkdown: null,
+                  requestedAt: runningRun.appDevStack.requestedAt || event.occurredAt,
+                  updatedAt: event.occurredAt,
+                }
+              : {
+                  ...runningRun.appDevStack,
+                  status: "failed",
+                  lastErrorMarkdown: errorDetail(stackResult.failure),
+                  requestedAt: runningRun.appDevStack.requestedAt || event.occurredAt,
+                  updatedAt: event.occurredAt,
+                },
+        };
+      }
+
       yield* updateRun({
         sourceThreadId: event.payload.sourceThreadId,
-        run: runningRun,
+        run: launchedRun,
         createdAt: event.occurredAt,
       });
       yield* startReadyWorkers({
         sourceThreadId: event.payload.sourceThreadId,
-        run: runningRun,
+        run: launchedRun,
         createdAt: event.occurredAt,
       });
       const ticketTitles = ticketsById(sourceThread);
       yield* appendActivity({
-        threadId: runningRun.orchestratorThreadId,
+        threadId: launchedRun.orchestratorThreadId,
         tone: "info",
         kind: "implementation-run-launched",
-        summary: `Implementation run launched with ${runningRun.ticketStates.length} ticket(s)`,
+        summary: `Implementation run launched with ${launchedRun.ticketStates.length} ticket(s)`,
         payload: {
-          runId: runningRun.id,
-          ticketCount: runningRun.ticketStates.length,
-          tickets: runningRun.ticketStates.map((state) => ({
+          runId: launchedRun.id,
+          ticketCount: launchedRun.ticketStates.length,
+          tickets: launchedRun.ticketStates.map((state) => ({
             ticketId: state.ticketId,
             ...(ticketTitles.get(state.ticketId)?.title !== undefined
               ? { title: ticketTitles.get(state.ticketId)?.title }
@@ -2650,7 +2687,7 @@ const make = Effect.gen(function* () {
       workflowRole: "implementation-fixer",
       title: input.title,
       modelSelection: orchestratorThread.modelSelection,
-      runtimeMode: orchestratorThread.runtimeMode,
+      runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
       interactionMode: "implementation-workflow",
       branch: input.run.orchestratorBranch,
       worktreePath: input.run.orchestratorWorktreePath,

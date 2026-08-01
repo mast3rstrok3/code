@@ -49,7 +49,7 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
       {
         label: "Dev Review",
         threadBoundary: "new review thread",
-        note: "up to ten attempts, feedback returns to Build",
+        note: "up to three attempts, feedback returns to Build",
       },
       {
         label: "Code Review",
@@ -73,7 +73,7 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
       { label: "Ticket review and revision cycles", note: "repeats until approved" },
       { label: "TDD implementation workers" },
       { label: "Merge gate and required validation" },
-      { label: "Dev Review and automatic fixes", note: "up to ten attempts" },
+      { label: "Dev Review and automatic fixes", note: "up to three attempts" },
       { label: "Code Review", note: "single pass, applies fixes and commits" },
       { label: "Change request publication" },
     ],
@@ -88,7 +88,7 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
       { label: "Load the selected Spec and initialize orchestration" },
       { label: "Run dependency-aware TDD implementation workers" },
       { label: "Integrate worker branches and run the merge gate" },
-      { label: "Run Dev Review and automatic fixes", note: "up to ten attempts" },
+      { label: "Run Dev Review and automatic fixes", note: "up to three attempts" },
       { label: "Run Code Review", note: "single pass, applies fixes and commits" },
       { label: "Publish the change request" },
     ],

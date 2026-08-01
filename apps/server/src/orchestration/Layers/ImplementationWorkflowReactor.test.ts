@@ -1685,7 +1685,8 @@ describe("ImplementationWorkflowReactor", () => {
             snapshot.implementationRuns.find((entry) => entry.id === run.id)?.retryableFailure
               ?.attemptCount,
           ).toBe(4);
-          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(4);
+          // One provisioning attempt at launch plus one per browser-review ensure.
+          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(5);
 
           yield* system.engine.dispatch({
             type: "thread.implementation-run.retry",
@@ -1695,7 +1696,7 @@ describe("ImplementationWorkflowReactor", () => {
             createdAt: "2026-01-01T00:00:06.000Z",
           });
           yield* system.reactor.drain;
-          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(4);
+          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(5);
         }),
       { failAutoCreate: true },
     ),
@@ -2005,7 +2006,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("hardlocks the browser dev review thread to codex gpt-5.5 at extra-high effort", () =>
+  it.effect("hardlocks the browser dev review thread to codex gpt-5.6-sol at high effort", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         const { run } = yield* launchRun(system, { modelSelection: claudeParentSelection });
@@ -2018,8 +2019,8 @@ describe("ImplementationWorkflowReactor", () => {
         );
         expect(reviewThread?.modelSelection).toEqual({
           instanceId: "codex",
-          model: "gpt-5.5",
-          options: [{ id: "reasoningEffort", value: "xhigh" }],
+          model: "gpt-5.6-sol",
+          options: [{ id: "reasoningEffort", value: "high" }],
         });
 
         const workerThread = snapshot.threads.find(
@@ -2055,7 +2056,7 @@ describe("ImplementationWorkflowReactor", () => {
           expect(fallbackActivity?.payload).toMatchObject({
             runId: run.id,
             requestedDriver: "codex",
-            requestedModel: "gpt-5.5",
+            requestedModel: "gpt-5.6-sol",
           });
         }),
       { serverSettings: { providers: { codex: { enabled: false } } } },

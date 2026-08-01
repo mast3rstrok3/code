@@ -545,6 +545,9 @@ export function projectEvent(
                 stage: payload.stage,
                 createTicketsAvailable: payload.stage === "tickets-authoring",
               },
+              ...(payload.workflowContext !== undefined && thread.workflowContext === null
+                ? { workflowContext: payload.workflowContext }
+                : {}),
               updatedAt: event.occurredAt,
             }),
           };

@@ -117,8 +117,8 @@ const WORKFLOW_SUBAGENT_SPAWN_DEFINITIONS: ReadonlyArray<WorkflowSubagentSpawnDe
     allowedParentWorkflowRoles: "any",
     modelOverride: {
       driver: ProviderDriverKind.make("codex"),
-      model: "gpt-5.5",
-      options: [{ id: "reasoningEffort", value: "xhigh" }],
+      model: "gpt-5.6-sol",
+      options: [{ id: "reasoningEffort", value: "high" }],
     },
   },
   {

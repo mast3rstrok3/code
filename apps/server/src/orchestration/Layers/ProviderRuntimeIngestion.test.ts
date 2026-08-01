@@ -3874,8 +3874,8 @@ describe("ProviderRuntimeIngestion", () => {
 
     expect(childThread?.modelSelection).toEqual({
       instanceId: ProviderInstanceId.make("codex"),
-      model: "gpt-5.5",
-      options: [{ id: "reasoningEffort", value: "xhigh" }],
+      model: "gpt-5.6-sol",
+      options: [{ id: "reasoningEffort", value: "high" }],
     });
     expect(parentThread?.devReviews).toHaveLength(1);
     expect(parentThread?.devReviews[0]?.reviewThreadId).toBe(childThread?.id);
@@ -3962,7 +3962,7 @@ describe("ProviderRuntimeIngestion", () => {
     expect(fallbackActivity?.tone).toBe("info");
     expect(fallbackActivity?.payload).toMatchObject({
       requestedDriver: "codex",
-      requestedModel: "gpt-5.5",
+      requestedModel: "gpt-5.6-sol",
     });
   });
 

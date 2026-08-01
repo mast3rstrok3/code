@@ -1771,7 +1771,7 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const displayedPlanningWorkflow =
     activeThread && isProductWorkflowRoot(activeThread)
-      ? productWorkflowPlanningWorkflow
+      ? (productWorkflowPlanningWorkflow ?? activePlanningWorkflow)
       : activePlanningWorkflow;
   const workflowArtifactsQuery = useEnvironmentQuery(
     isServerThread &&

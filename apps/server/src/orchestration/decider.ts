@@ -2,6 +2,7 @@ import {
   type DevReviewDocument,
   EMPTY_DEV_REVIEW_EVIDENCE,
   EventId,
+  IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS,
   MessageId,
   type OrchestrationImplementationRun,
   type OrchestrationCommand,
@@ -13,6 +14,7 @@ import {
   PLANNING_REVIEW_MAX_CYCLES,
   type PlanningReviewerTicketEdit,
   ThreadId,
+  WORKFLOW_AUTOMATION_RUNTIME_MODE,
   WorkflowId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -558,7 +560,7 @@ function buildImplementationRun(input: {
         appDevStackSource: "orchestrator-worktree",
         autoStartAppDevStack: true,
         browserMcpProfile: "agent-browser",
-        maxAttempts: 5,
+        maxAttempts: IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS,
       },
       createdAt: input.command.createdAt,
     },
@@ -1380,51 +1382,69 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
 
+      if (
+        productRootThread.planningWorkflow !== null &&
+        productRootThread.planningWorkflow !== undefined
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' already runs a Planning Workflow.`,
+        });
+      }
+
+      // Planning continues in the product root thread so the grill context stays
+      // in the conversation; the stage event stamps the workflow context the
+      // planning-orchestrator child used to carry. The preset is pinned so the
+      // thread still reads as a product root once its interaction mode flips.
       const crypto = yield* Crypto.Crypto;
-      const planningThreadUuid = yield* crypto.randomUUIDv4;
       const messageUuid = yield* crypto.randomUUIDv4;
-      const planningThreadId = ThreadId.make(`thread-planning-orchestrator-${planningThreadUuid}`);
       const messageId = MessageId.make(`message-product-spec-stage-${messageUuid}`);
-      const planningThreadCreatedEvent: PlannedOrchestrationEvent = {
+      const modeSetEvent: PlannedOrchestrationEvent = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
-          aggregateId: planningThreadId,
+          aggregateId: productRootThread.id,
           occurredAt: command.createdAt,
           commandId: command.commandId,
         })),
-        type: "thread.created",
+        type: "thread.composer-mode-set",
         payload: {
-          threadId: planningThreadId,
-          projectId: productRootThread.projectId,
-          ownerUserId: productRootThread.ownerUserId,
-          parentThreadId: productRootThread.id,
-          workflowRole: "planning-orchestrator",
-          workflowContext: productRootThread.workflowContext ?? {
-            workflowId: WorkflowId.make(`workflow-${productRootThread.id}`),
-            rootThreadId: productRootThread.id,
-            ticketScope: [],
-          },
-          title: `Plan ${command.intentTitle}`,
-          modelSelection: productRootThread.modelSelection,
-          runtimeMode: productRootThread.runtimeMode,
+          threadId: productRootThread.id,
           interactionMode: "planning-workflow",
-          branch: productRootThread.branch,
-          worktreePath: productRootThread.worktreePath,
-          createdAt: command.createdAt,
+          workflowPreset: productRootThread.workflowPreset ?? "full-feature",
+          updatedAt: command.createdAt,
+        },
+      };
+      const runtimeModeSetEvent: PlannedOrchestrationEvent = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: productRootThread.id,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        causationEventId: modeSetEvent.eventId,
+        type: "thread.runtime-mode-set",
+        payload: {
+          threadId: productRootThread.id,
+          runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
           updatedAt: command.createdAt,
         },
       };
       const stageStartedEvent: PlannedOrchestrationEvent = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
-          aggregateId: planningThreadId,
+          aggregateId: productRootThread.id,
           occurredAt: command.createdAt,
           commandId: command.commandId,
         })),
-        causationEventId: planningThreadCreatedEvent.eventId,
+        causationEventId: modeSetEvent.eventId,
         type: "thread.planning-stage-started",
         payload: {
-          threadId: planningThreadId,
+          threadId: productRootThread.id,
+          workflowContext: productRootThread.workflowContext ?? {
+            workflowId: WorkflowId.make(`workflow-${productRootThread.id}`),
+            rootThreadId: productRootThread.id,
+            ticketScope: [],
+          },
           stage: "spec-authoring",
           startedAt: command.createdAt,
         },
@@ -1432,14 +1452,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const promptEvent: PlannedOrchestrationEvent = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
-          aggregateId: planningThreadId,
+          aggregateId: productRootThread.id,
           occurredAt: command.createdAt,
           commandId: command.commandId,
         })),
         causationEventId: stageStartedEvent.eventId,
         type: "thread.message-sent",
         payload: {
-          threadId: planningThreadId,
+          threadId: productRootThread.id,
           messageId,
           role: "user",
           text: buildProductPlanningSpecStagePrompt(command),
@@ -1452,23 +1472,29 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const turnStartRequestedEvent: PlannedOrchestrationEvent = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
-          aggregateId: planningThreadId,
+          aggregateId: productRootThread.id,
           occurredAt: command.createdAt,
           commandId: command.commandId,
         })),
         causationEventId: promptEvent.eventId,
         type: "thread.turn-start-requested",
         payload: {
-          threadId: planningThreadId,
+          threadId: productRootThread.id,
           messageId,
           modelSelection: productRootThread.modelSelection,
-          runtimeMode: productRootThread.runtimeMode,
+          runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
           interactionMode: "planning-workflow",
           workflowPromptId: WORKFLOW_PROMPT_IDS.planningSpecCodex,
           createdAt: command.createdAt,
         },
       };
-      return [planningThreadCreatedEvent, stageStartedEvent, promptEvent, turnStartRequestedEvent];
+      return [
+        modeSetEvent,
+        runtimeModeSetEvent,
+        stageStartedEvent,
+        promptEvent,
+        turnStartRequestedEvent,
+      ];
     }
 
     case "thread.planning-stage.start": {
@@ -1493,6 +1519,22 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const crypto = yield* Crypto.Crypto;
       const messageUuid = yield* crypto.randomUUIDv4;
       const messageId = MessageId.make(`message-planning-spec-stage-${messageUuid}`);
+      // The grill is the workflow's human gate; from Spec authoring on, the
+      // thread runs unattended.
+      const runtimeModeSetEvent: PlannedOrchestrationEvent = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: thread.id,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.runtime-mode-set",
+        payload: {
+          threadId: thread.id,
+          runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
+          updatedAt: command.createdAt,
+        },
+      };
       const stageStartedEvent: PlannedOrchestrationEvent = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -1500,6 +1542,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           occurredAt: command.createdAt,
           commandId: command.commandId,
         })),
+        causationEventId: runtimeModeSetEvent.eventId,
         type: "thread.planning-stage-started",
         payload: {
           threadId: thread.id,
@@ -1540,13 +1583,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: thread.id,
           messageId,
           modelSelection: thread.modelSelection,
-          runtimeMode: thread.runtimeMode,
+          runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
           interactionMode: thread.interactionMode,
           workflowPromptId: WORKFLOW_PROMPT_IDS.planningSpecCodex,
           createdAt: command.createdAt,
         },
       };
-      return [stageStartedEvent, promptEvent, turnStartRequestedEvent];
+      return [runtimeModeSetEvent, stageStartedEvent, promptEvent, turnStartRequestedEvent];
     }
 
     case "thread.planning-workflow.stage.set": {
@@ -1844,7 +1887,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           },
           title: `Review ${spec.title}`,
           modelSelection: planningThread.modelSelection,
-          runtimeMode: planningThread.runtimeMode,
+          runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
           interactionMode: planningThread.interactionMode,
           branch: planningThread.branch,
           worktreePath: planningThread.worktreePath,
@@ -1891,7 +1934,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: reviewerThreadId,
           messageId: reviewerMessageId,
           modelSelection: planningThread.modelSelection,
-          runtimeMode: planningThread.runtimeMode,
+          runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
           interactionMode: planningThread.interactionMode,
           workflowPromptId: WORKFLOW_PROMPT_IDS.planningTicketReviewerCodex,
           createdAt: command.createdAt,
@@ -2236,7 +2279,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             appDevStackSource: "orchestrator-worktree",
             autoStartAppDevStack: true,
             browserMcpProfile: "agent-browser",
-            maxAttempts: 5,
+            maxAttempts: IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS,
           },
           createdAt: command.createdAt,
         },
@@ -2309,7 +2352,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           workflowContext: sourceThread.workflowContext ?? null,
           title: buildPlanImplementationThreadTitle(plan.planMarkdown),
           modelSelection: sourceThread.modelSelection,
-          runtimeMode: sourceThread.runtimeMode,
+          runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
           interactionMode: "default",
           branch: command.orchestratorBranch,
           worktreePath: command.orchestratorWorktreePath,
@@ -2405,7 +2448,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           },
           title: `Implement ${bundle.spec.title}`,
           modelSelection: launcherThread.modelSelection,
-          runtimeMode: launcherThread.runtimeMode,
+          runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
           interactionMode: "implementation-workflow",
           branch: command.orchestratorBranch,
           worktreePath: command.orchestratorWorktreePath,
@@ -2673,7 +2716,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             : {}),
           title: "Browser Dev Review",
           modelSelection: command.modelSelection,
-          runtimeMode: command.runtimeMode,
+          runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
           interactionMode: "implementation-workflow",
           branch: sourceThread.branch,
           worktreePath: sourceThread.worktreePath,
@@ -2730,7 +2773,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           messageId: command.message.messageId,
           modelSelection: command.modelSelection,
           titleSeed: "Browser Dev Review",
-          runtimeMode: command.runtimeMode,
+          runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
           interactionMode: "implementation-workflow",
           workflowPromptId: command.workflowPromptId,
           createdAt: command.createdAt,
@@ -2849,7 +2892,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           },
           title: command.title,
           modelSelection: command.modelSelection,
-          runtimeMode: command.runtimeMode,
+          runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
           interactionMode: command.interactionMode,
           branch: command.branch,
           worktreePath: command.worktreePath,
@@ -2892,7 +2935,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           messageId: command.message.messageId,
           modelSelection: command.modelSelection,
           titleSeed: command.title,
-          runtimeMode: command.runtimeMode,
+          runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
           interactionMode: command.interactionMode,
           workflowPromptId: command.workflowPromptId,
           createdAt: command.createdAt,

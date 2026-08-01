@@ -5,6 +5,7 @@ import {
   DEFAULT_WORKSPACE_USER_ID,
   EventId,
   MessageId,
+  PLANNING_REVIEW_MAX_CYCLES,
   ProviderInstanceId,
   ProjectId,
   ThreadId,
@@ -113,6 +114,7 @@ function seedProjectAndThread(
     readonly workflowPreset?: WorkflowPreset | null;
     readonly branch?: string | null;
     readonly createProject?: boolean;
+    readonly runtimeMode?: "full-access" | "approval-required";
   } = {},
 ) {
   return Effect.gen(function* () {
@@ -137,7 +139,7 @@ function seedProjectAndThread(
       workflowRole: input.workflowRole ?? null,
       title: "Product",
       modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
-      runtimeMode: "full-access",
+      runtimeMode: input.runtimeMode ?? "full-access",
       interactionMode: input.interactionMode ?? "product-workflow",
       workflowPreset: input.workflowPreset ?? null,
       branch: input.branch ?? null,
@@ -168,11 +170,9 @@ function lockProductIntent(system: ProductSystem) {
     yield* system.reactor.drain;
     const snapshot = yield* system.query.getSnapshot();
     const planningThread = snapshot.threads.find(
-      (thread) =>
-        thread.parentThreadId === productThreadId &&
-        thread.workflowRole === "planning-orchestrator",
+      (thread) => thread.id === productThreadId && thread.planningWorkflow !== null,
     );
-    if (!planningThread) throw new Error("Planning orchestrator was not created.");
+    if (!planningThread) throw new Error("Planning did not start in the product root thread.");
     return planningThread;
   });
 }
@@ -265,10 +265,10 @@ function upsertProposedPlan(
 }
 
 describe("ProductWorkflowReactor", () => {
-  it.effect("starts one child planning orchestrator after product intent locks", () =>
+  it.effect("continues planning in the product root thread after product intent locks", () =>
     withSystem((system) =>
       Effect.gen(function* () {
-        yield* seedProjectAndThread(system);
+        yield* seedProjectAndThread(system, { runtimeMode: "approval-required" });
         const planningThread = yield* lockProductIntent(system);
 
         yield* system.engine.dispatch({
@@ -289,6 +289,7 @@ describe("ProductWorkflowReactor", () => {
         yield* system.reactor.drain;
 
         const snapshot = yield* system.query.getSnapshot();
+        const rootThread = snapshot.threads.find((thread) => thread.id === productThreadId);
         const planningChildren = snapshot.threads.filter(
           (thread) =>
             thread.parentThreadId === productThreadId &&
@@ -297,18 +298,20 @@ describe("ProductWorkflowReactor", () => {
         const events = yield* Stream.runCollect(system.engine.readEvents(0)).pipe(
           Effect.map((chunk) => Array.from(chunk)),
         );
-        expect(planningChildren).toHaveLength(1);
-        expect(planningChildren[0]?.id).toBe(planningThread.id);
-        expect(planningChildren[0]?.interactionMode).toBe("planning-workflow");
-        expect(planningThread.planningWorkflow?.stage).toBe("spec-authoring");
-        expect(
-          events.some(
-            (event) =>
-              event.type === "thread.turn-start-requested" &&
-              event.payload.threadId === planningThread.id &&
-              event.payload.workflowPromptId === WORKFLOW_PROMPT_IDS.planningSpecCodex,
-          ),
-        ).toBe(true);
+        expect(planningThread.id).toBe(productThreadId);
+        expect(planningChildren).toHaveLength(0);
+        expect(rootThread?.interactionMode).toBe("planning-workflow");
+        expect(rootThread?.workflowPreset).toBe("full-feature");
+        expect(rootThread?.runtimeMode).toBe("full-access");
+        expect(rootThread?.workflowContext?.rootThreadId).toBe(productThreadId);
+        expect(rootThread?.planningWorkflow?.stage).toBe("spec-authoring");
+        const specStageTurnRequests = events.filter(
+          (event) =>
+            event.type === "thread.turn-start-requested" &&
+            event.payload.threadId === productThreadId &&
+            event.payload.workflowPromptId === WORKFLOW_PROMPT_IDS.planningSpecCodex,
+        );
+        expect(specStageTurnRequests).toHaveLength(1);
       }),
     ),
   );
@@ -356,14 +359,14 @@ describe("ProductWorkflowReactor", () => {
     ),
   );
 
-  it.effect("continues product implementation with warnings after ten failed review cycles", () =>
+  it.effect("continues product implementation with warnings after exhausted review cycles", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         yield* seedProjectAndThread(system);
         const planningThread = yield* lockProductIntent(system);
         const spec = yield* seedProductSpecAndTickets(system, planningThread.id);
 
-        for (let index = 1; index <= 10; index += 1) {
+        for (let index = 1; index <= PLANNING_REVIEW_MAX_CYCLES; index += 1) {
           const beforeVerdict = yield* system.query.getSnapshot();
           const workflow = beforeVerdict.threads.find(
             (entry) => entry.id === planningThread.id,
@@ -598,7 +601,7 @@ describe("ProductWorkflowReactor", () => {
   it.effect("switches the product thread to plan mode for fix intents and skips planning", () =>
     withSystem((system) =>
       Effect.gen(function* () {
-        yield* seedProjectAndThread(system);
+        yield* seedProjectAndThread(system, { runtimeMode: "approval-required" });
         yield* lockProductFixIntent(system);
         yield* lockProductFixIntent(system, "-duplicate");
 
@@ -618,6 +621,7 @@ describe("ProductWorkflowReactor", () => {
             event.payload.threadId === productThreadId,
         );
         expect(root?.interactionMode).toBe("plan");
+        expect(root?.runtimeMode).toBe("full-access");
         expect(planningChildren).toHaveLength(0);
         expect(fixPlanTurnStarts).toHaveLength(1);
         const turnStart = fixPlanTurnStarts[0];

@@ -28,7 +28,7 @@ const claudeParentSelection: ModelSelection = {
   model: "claude-opus-4-8",
 };
 
-const hardlockOptions = [{ id: "reasoningEffort", value: "xhigh" }];
+const hardlockOptions = [{ id: "reasoningEffort", value: "high" }];
 
 function settingsWith(input: {
   readonly legacyCodexEnabled?: boolean;
@@ -97,7 +97,7 @@ describe("resolveWorkflowSubagentModelSelection", () => {
     expect(resolved.fallbackDetail).toBeNull();
     expect(resolved.modelSelection).toEqual({
       instanceId: "codex_work",
-      model: "gpt-5.5",
+      model: "gpt-5.6-sol",
       options: hardlockOptions,
     });
   });
@@ -115,7 +115,7 @@ describe("resolveWorkflowSubagentModelSelection", () => {
     });
     expect(resolved.modelSelection).toEqual({
       instanceId: "codex",
-      model: "gpt-5.5",
+      model: "gpt-5.6-sol",
       options: hardlockOptions,
     });
   });
@@ -133,7 +133,7 @@ describe("resolveWorkflowSubagentModelSelection", () => {
     });
     expect(resolved.modelSelection).toEqual({
       instanceId: "codex_work",
-      model: "gpt-5.5",
+      model: "gpt-5.6-sol",
       options: hardlockOptions,
     });
   });
@@ -157,7 +157,7 @@ describe("resolveWorkflowSubagentModelSelection", () => {
     expect(resolved.modelSelection).toEqual(claudeParentSelection);
     expect(resolved.overrideApplied).toBe(false);
     expect(resolved.fallbackDetail).toContain("codex");
-    expect(resolved.fallbackDetail).toContain("gpt-5.5");
+    expect(resolved.fallbackDetail).toContain("gpt-5.6-sol");
   });
 
   it("uses the synthesized legacy codex instance when it is enabled", () => {
@@ -168,7 +168,7 @@ describe("resolveWorkflowSubagentModelSelection", () => {
     });
     expect(resolved.modelSelection).toEqual({
       instanceId: "codex",
-      model: "gpt-5.5",
+      model: "gpt-5.6-sol",
       options: hardlockOptions,
     });
   });

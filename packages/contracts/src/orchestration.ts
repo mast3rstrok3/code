@@ -123,6 +123,13 @@ export const RuntimeMode = Schema.Literals([
   "full-access",
 ]);
 export type RuntimeMode = typeof RuntimeMode.Type;
+
+/**
+ * Runtime mode for automated workflow phases. The human gate for workflows is
+ * the grill; every stage after it runs without approval prompts regardless of
+ * the mode the root thread was grilled in.
+ */
+export const WORKFLOW_AUTOMATION_RUNTIME_MODE: RuntimeMode = "full-access";
 export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 export const ProviderInteractionMode = Schema.Literals([
   "default",
@@ -368,7 +375,7 @@ export const OrchestrationPlanningReviewTicketFeedback = Schema.Struct({
 export type OrchestrationPlanningReviewTicketFeedback =
   typeof OrchestrationPlanningReviewTicketFeedback.Type;
 
-export const PLANNING_REVIEW_MAX_CYCLES = 10;
+export const PLANNING_REVIEW_MAX_CYCLES = 3;
 
 export const OrchestrationPlanningReviewMode = Schema.Literals(["full", "targeted"]);
 export type OrchestrationPlanningReviewMode = typeof OrchestrationPlanningReviewMode.Type;
@@ -457,7 +464,7 @@ export const OrchestrationPlanningSpecBundle = Schema.Struct({
 });
 export type OrchestrationPlanningSpecBundle = typeof OrchestrationPlanningSpecBundle.Type;
 
-export const IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS = 10;
+export const IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS = 3;
 
 export const OrchestrationImplementationRunId = TrimmedNonEmptyString;
 export type OrchestrationImplementationRunId = typeof OrchestrationImplementationRunId.Type;
@@ -2299,6 +2306,8 @@ export const ThreadPlanningStageStartedPayload = Schema.Struct({
   threadId: ThreadId,
   stage: OrchestrationPlanningWorkflowStage,
   startedAt: IsoDateTime,
+  /** Stamps a workflow context onto threads that plan in place (product roots). */
+  workflowContext: Schema.optional(ThreadWorkflowContext),
 });
 
 export const ThreadPlanningSpecCreatedPayload = Schema.Struct({
