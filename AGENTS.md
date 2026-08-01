@@ -4,14 +4,23 @@ T3 Code is a minimal GUI for coding agents. A Node WebSocket server wraps provid
 
 ## Runtime Checkouts
 
-- The Code development/miner processes, including `code-dev-t3code.service`, run from this repository at
-  `/home/nils/repos/nils/code`.
+- `https://code-dev.nightingale-ai.com` is served by `code-dev-t3code.service` as an optimized
+  production-mode build from the local `dev` checkout at `/home/nils/repos/nils/code`.
+- Code-dev deployments intentionally include the checkout's tracked and uncommitted changes. The deploy
+  is rejected unless the checked-out branch is exactly `dev`; it never fetches, resets, cleans, commits,
+  or installs dependencies.
+- Code-dev does not hot-reload. After changing the checkout, deploy it explicitly with
+  `sudo systemctl start code-dev-t3code-deploy.service`. Inspect the deployment with
+  `systemctl status code-dev-t3code-deploy.service` or
+  `journalctl -u code-dev-t3code-deploy.service`.
+- Code-dev runtime data remains under `/var/lib/code/t3code-dev`. Staged production bundles and the
+  active-release symlink live under `/home/nils/deployments/code-dev-local`.
 - `https://code.nightingale-ai.com` is served by `code-main-t3code.service` from the separate production
   checkout at `/home/nils/deployments/code-main`.
 - The production checkout follows the fork's GitHub `main` branch: deployments fetch and fast-forward
   `origin/main` from `https://github.com/mast3rstrok3/code.git` before installing, building, and restarting.
-- Do not assume that changing or building this repository updates `code.nightingale-ai.com`; production
-  must be updated through the separate `code-main` deployment checkout.
+- Deploying code-dev does not update `code.nightingale-ai.com`; production must be updated through the
+  separate `code-main` deployment checkout.
 
 ## Task Completion Requirements
 
