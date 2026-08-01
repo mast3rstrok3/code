@@ -24,6 +24,50 @@ export class ClipboardWriteError extends Schema.TaggedErrorClass<ClipboardWriteE
   }
 }
 
+export class ClipboardReadApiUnavailableError extends Schema.TaggedErrorClass<ClipboardReadApiUnavailableError>()(
+  "ClipboardReadApiUnavailableError",
+  {
+    target: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Clipboard API is unavailable while reading ${this.target}.`;
+  }
+}
+
+export class ClipboardReadError extends Schema.TaggedErrorClass<ClipboardReadError>()(
+  "ClipboardReadError",
+  {
+    target: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return `Failed to read ${this.target} from the clipboard.`;
+  }
+}
+
+export async function readTextFromClipboard(target = "text"): Promise<string> {
+  if (
+    typeof window === "undefined" ||
+    typeof navigator === "undefined" ||
+    !navigator.clipboard?.readText
+  ) {
+    throw new ClipboardReadApiUnavailableError({
+      target,
+    });
+  }
+
+  try {
+    return await navigator.clipboard.readText();
+  } catch (cause) {
+    throw new ClipboardReadError({
+      target,
+      cause,
+    });
+  }
+}
+
 export async function writeTextToClipboard(value: string, target = "text") {
   if (
     typeof window === "undefined" ||

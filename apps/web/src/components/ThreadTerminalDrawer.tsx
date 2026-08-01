@@ -5,6 +5,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import {
+  ClipboardPaste,
   Plus,
   SquareSplitHorizontal,
   SquareSplitVertical,
@@ -30,8 +31,19 @@ import {
   useRef,
   useState,
 } from "react";
+import { Button } from "~/components/ui/button";
+import {
+  Dialog,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogPanel,
+  DialogPopup,
+  DialogTitle,
+} from "~/components/ui/dialog";
 import { Popover, PopoverPopup, PopoverTrigger } from "~/components/ui/popover";
-import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
+import { Textarea } from "~/components/ui/textarea";
+import { readTextFromClipboard, writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { cn } from "~/lib/utils";
 import { type TerminalContextSelection } from "~/lib/terminalContext";
 import { useOpenInPreferredEditor } from "../editorPreferences";
@@ -284,6 +296,7 @@ interface TerminalViewportProps {
   resizeEpoch: number;
   drawerHeight: number;
   keybindings: ResolvedKeybindingsConfig;
+  registerTerminalInstance: (terminalId: string, terminal: Terminal) => () => void;
 }
 
 interface TerminalLaunchLocation {
@@ -307,6 +320,7 @@ export function TerminalViewport({
   resizeEpoch,
   drawerHeight,
   keybindings,
+  registerTerminalInstance,
 }: TerminalViewportProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -401,6 +415,7 @@ export function TerminalViewport({
 
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
+    const unregisterTerminalInstance = registerTerminalInstance(terminalId, terminal);
     previousSessionRef.current = {
       buffer: "",
       status: "closed",
@@ -728,6 +743,7 @@ export function TerminalViewport({
       window.removeEventListener("mouseup", handleMouseUp);
       mount.removeEventListener("pointerdown", handlePointerDown);
       themeObserver.disconnect();
+      unregisterTerminalInstance();
       terminalRef.current = null;
       fitAddonRef.current = null;
       terminal.dispose();
@@ -735,7 +751,15 @@ export function TerminalViewport({
     // autoFocus is intentionally omitted;
     // it is only read at mount time and must not trigger terminal teardown/recreation.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cwd, environmentId, runtimeEnvKey, terminalId, threadId, worktreePath]);
+  }, [
+    cwd,
+    environmentId,
+    registerTerminalInstance,
+    runtimeEnvKey,
+    terminalId,
+    threadId,
+    worktreePath,
+  ]);
 
   useEffect(() => {
     const terminal = terminalRef.current;
@@ -893,6 +917,79 @@ function TerminalActionButton({ label, className, onClick, children }: TerminalA
   );
 }
 
+interface TerminalPasteTarget {
+  paste: (data: string) => void;
+  focus: () => void;
+}
+
+export function pasteTextIntoTerminal(
+  terminal: TerminalPasteTarget | null | undefined,
+  text: string,
+): boolean {
+  if (!terminal || text.length === 0) {
+    return false;
+  }
+
+  terminal.paste(text);
+  terminal.focus();
+  return true;
+}
+
+function TerminalPasteDialog({
+  open,
+  onOpenChange,
+  onPaste,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onPaste: (text: string) => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogPopup className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Paste into terminal</DialogTitle>
+          <DialogDescription>
+            Touch and hold in the field below, then choose Paste. The pasted text is sent directly
+            to the terminal and is not displayed here.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogPanel className="space-y-2" scrollFade={false}>
+          <Textarea
+            aria-label="Terminal paste field"
+            autoCapitalize="none"
+            autoComplete="off"
+            autoCorrect="off"
+            autoFocus
+            onInput={(event) => {
+              event.currentTarget.value = "";
+            }}
+            onPaste={(event) => {
+              const text = event.clipboardData.getData("text/plain");
+              if (text.length === 0) {
+                return;
+              }
+              event.preventDefault();
+              event.currentTarget.value = "";
+              onPaste(text);
+            }}
+            placeholder="Touch and hold, then choose Paste"
+            spellCheck={false}
+          />
+          <p className="text-xs text-muted-foreground">
+            Paste does not press Return or submit the terminal prompt.
+          </p>
+        </DialogPanel>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+        </DialogFooter>
+      </DialogPopup>
+    </Dialog>
+  );
+}
+
 export default function ThreadTerminalDrawer({
   mode = "drawer",
   threadRef,
@@ -956,6 +1053,25 @@ export default function ThreadTerminalDrawer({
     startHeight: number;
   } | null>(null);
   const didResizeDuringDragRef = useRef(false);
+  const terminalInstancesRef = useRef(new Map<string, Terminal>());
+  const [manualPasteTargetKey, setManualPasteTargetKey] = useState<string | null>(null);
+
+  const terminalInstanceKey = useCallback(
+    (terminalId: string) => JSON.stringify([threadId, terminalId]),
+    [threadId],
+  );
+  const registerTerminalInstance = useCallback(
+    (terminalId: string, terminal: Terminal) => {
+      const key = terminalInstanceKey(terminalId);
+      terminalInstancesRef.current.set(key, terminal);
+      return () => {
+        if (terminalInstancesRef.current.get(key) === terminal) {
+          terminalInstancesRef.current.delete(key);
+        }
+      };
+    },
+    [terminalInstanceKey],
+  );
 
   const normalizedTerminalIds = useMemo(() => {
     const normalizedIds: string[] = [];
@@ -975,6 +1091,41 @@ export default function ThreadTerminalDrawer({
       : normalizedTerminalIds.includes(activeTerminalId)
         ? activeTerminalId
         : (normalizedTerminalIds[0] ?? "");
+  const activeTerminalInstanceKey = terminalInstanceKey(resolvedActiveTerminalId);
+
+  const pasteIntoRegisteredTerminal = useCallback((key: string, text: string) => {
+    return pasteTextIntoTerminal(terminalInstancesRef.current.get(key), text);
+  }, []);
+  const onPasteTerminalAction = useCallback(() => {
+    const targetKey = activeTerminalInstanceKey;
+    if (!terminalInstancesRef.current.has(targetKey)) {
+      return;
+    }
+
+    void readTextFromClipboard("terminal input").then(
+      (text) => {
+        if (!pasteIntoRegisteredTerminal(targetKey, text)) {
+          setManualPasteTargetKey(targetKey);
+        }
+      },
+      () => {
+        if (terminalInstancesRef.current.has(targetKey)) {
+          setManualPasteTargetKey(targetKey);
+        }
+      },
+    );
+  }, [activeTerminalInstanceKey, pasteIntoRegisteredTerminal]);
+  const onManualTerminalPaste = useCallback(
+    (text: string) => {
+      if (
+        manualPasteTargetKey !== null &&
+        pasteIntoRegisteredTerminal(manualPasteTargetKey, text)
+      ) {
+        setManualPasteTargetKey(null);
+      }
+    },
+    [manualPasteTargetKey, pasteIntoRegisteredTerminal],
+  );
 
   const resolvedTerminalGroups = useMemo(() => {
     if (normalizedTerminalIds.length === 0) {
@@ -1101,6 +1252,7 @@ export default function ThreadTerminalDrawer({
     : splitVerticalShortcutLabel
       ? `Split Terminal Vertically (${splitVerticalShortcutLabel})`
       : "Split Terminal Vertically";
+  const pasteTerminalActionLabel = "Paste into Terminal";
   const newTerminalActionLabel = newShortcutLabel
     ? `New Terminal (${newShortcutLabel})`
     : "New Terminal";
@@ -1279,6 +1431,14 @@ export default function ThreadTerminalDrawer({
         <div className="pointer-events-none absolute right-2 top-2 z-20">
           <div className="pointer-events-auto inline-flex items-center overflow-hidden rounded-md border border-border/80 bg-background/70">
             <TerminalActionButton
+              className="p-1 text-foreground/90 transition-colors hover:bg-accent"
+              onClick={onPasteTerminalAction}
+              label={pasteTerminalActionLabel}
+            >
+              <ClipboardPaste className="size-3.25" />
+            </TerminalActionButton>
+            <div className="h-4 w-px bg-border/80" />
+            <TerminalActionButton
               className={`p-1 text-foreground/90 transition-colors ${
                 hasReachedSplitLimit
                   ? "cursor-not-allowed opacity-45 hover:bg-transparent"
@@ -1377,6 +1537,7 @@ export default function ThreadTerminalDrawer({
                           resizeEpoch={resizeEpoch}
                           drawerHeight={drawerHeight}
                           keybindings={keybindings}
+                          registerTerminalInstance={registerTerminalInstance}
                         />
                       </div>
                     </div>
@@ -1405,6 +1566,7 @@ export default function ThreadTerminalDrawer({
                   resizeEpoch={resizeEpoch}
                   drawerHeight={drawerHeight}
                   keybindings={keybindings}
+                  registerTerminalInstance={registerTerminalInstance}
                 />
               </div>
             )}
@@ -1415,11 +1577,18 @@ export default function ThreadTerminalDrawer({
               <div className="flex h-[22px] items-stretch justify-end border-b border-border/70">
                 <div className="inline-flex h-full items-stretch">
                   <TerminalActionButton
+                    className="inline-flex h-full items-center px-1 text-foreground/90 transition-colors hover:bg-accent/70"
+                    onClick={onPasteTerminalAction}
+                    label={pasteTerminalActionLabel}
+                  >
+                    <ClipboardPaste className="size-3.25" />
+                  </TerminalActionButton>
+                  <TerminalActionButton
                     className={`inline-flex h-full items-center px-1 text-foreground/90 transition-colors ${
                       hasReachedSplitLimit
                         ? "cursor-not-allowed opacity-45 hover:bg-transparent"
                         : "hover:bg-accent/70"
-                    }`}
+                    } border-l border-border/70`}
                     onClick={onSplitTerminalAction}
                     label={splitTerminalActionLabel}
                   >
@@ -1545,6 +1714,15 @@ export default function ThreadTerminalDrawer({
           )}
         </div>
       </div>
+      <TerminalPasteDialog
+        open={manualPasteTargetKey !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setManualPasteTargetKey(null);
+          }
+        }}
+        onPaste={onManualTerminalPaste}
+      />
     </aside>
   );
 }

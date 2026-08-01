@@ -1,10 +1,33 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  pasteTextIntoTerminal,
   resolveTerminalSelectionActionPosition,
   shouldHandleTerminalSelectionMouseUp,
   terminalSelectionActionDelayForClickCount,
 } from "./ThreadTerminalDrawer";
+
+describe("pasteTextIntoTerminal", () => {
+  it("pastes exact text without submitting and restores focus", () => {
+    const paste = vi.fn();
+    const focus = vi.fn();
+    const password = "long-secret-🔐\nsecond line";
+
+    expect(pasteTextIntoTerminal({ paste, focus }, password)).toBe(true);
+    expect(paste).toHaveBeenCalledWith(password);
+    expect(focus).toHaveBeenCalledOnce();
+  });
+
+  it("does not paste or focus for an empty value or missing terminal", () => {
+    const paste = vi.fn();
+    const focus = vi.fn();
+
+    expect(pasteTextIntoTerminal({ paste, focus }, "")).toBe(false);
+    expect(pasteTextIntoTerminal(null, "secret")).toBe(false);
+    expect(paste).not.toHaveBeenCalled();
+    expect(focus).not.toHaveBeenCalled();
+  });
+});
 
 describe("resolveTerminalSelectionActionPosition", () => {
   it("prefers the selection rect over the last pointer position", () => {
