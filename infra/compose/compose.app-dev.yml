@@ -1,0 +1,111 @@
+# T3 Code app-dev stack for the homedev Kubernetes cluster.
+#
+# Consumed by the Stacks App Dev Stack controller (POST /api/app-dev-stacks/auto-create),
+# which renders this file into Kubernetes manifests and runs them through Tilt.
+# The selected worktree is bind-mounted into the pods, so hot reload happens
+# in-pod: Vite HMR for `frontend`, `node --watch` for `backend`. The shared dev
+# image is a node+pnpm shell with baked node_modules (built and pushed to
+# Harbor by the stack backend on first use); the entrypoint restores them into
+# the emptyDir overlays and re-links the workspace.
+#
+# IMPORTANT: do NOT add x-stacks-app-dev.namespace here. Each stack must get
+# its generated dev-<uuid> namespace — the standing code-dev / code-main
+# deployments own code-dev.nightingale-ai.com and code.nightingale-ai.com.
+
+x-stacks-app-dev:
+  harborProject: code
+
+services:
+  backend:
+    image: code-app-dev:latest
+    build:
+      context: ../..
+      dockerfile: infra/docker/app-dev/Dockerfile
+    labels:
+      # Reached only through the frontend's single-origin dev proxy.
+      stacks.appDevStack.expose: "false"
+    working_dir: /app
+    command: ["pnpm", "--filter", "t3", "dev"]
+    environment:
+      - NODE_ENV=development
+      - CI=true
+      - T3CODE_HOST=0.0.0.0
+      - T3CODE_PORT=13773
+    volumes:
+      - ../..:/app:rw
+      - /app/node_modules
+      - /app/apps/desktop/node_modules
+      - /app/apps/marketing/node_modules
+      - /app/apps/mobile/node_modules
+      - /app/apps/server/node_modules
+      - /app/apps/web/node_modules
+      - /app/packages/client-runtime/node_modules
+      - /app/packages/contracts/node_modules
+      - /app/packages/effect-acp/node_modules
+      - /app/packages/effect-codex-app-server/node_modules
+      - /app/packages/shared/node_modules
+      - /app/packages/ssh/node_modules
+      - /app/packages/tailscale/node_modules
+      - /app/oxlint-plugin-t3code/node_modules
+      - /app/scripts/node_modules
+      - /app/infra/relay/node_modules
+      # Server state (threads DB). emptyDir in K8s — previews are stateless.
+      - t3-data:/root/.t3
+    ports:
+      - "13773:13773"
+
+  frontend:
+    image: code-app-dev:latest
+    build:
+      context: ../..
+      dockerfile: infra/docker/app-dev/Dockerfile
+    labels:
+      stacks.appDevStack.expose: "true"
+    working_dir: /app
+    command: ["pnpm", "--filter", "@t3tools/web", "dev"]
+    environment:
+      - NODE_ENV=development
+      - CI=true
+      - HOST=0.0.0.0
+      - PORT=5733
+      # Single-origin browser dev: Vite proxies /api /oauth /.well-known /ws
+      # to the backend service, so the preview needs exactly one hostname.
+      - T3CODE_SINGLE_ORIGIN_DEV=1
+      - T3CODE_WEB_DEV_PROXY_TARGET=http://backend:13773/
+      - T3CODE_DEV_ALLOWED_HOSTS=.nightingale-ai.com
+      # The stack backend rewrites VITE_HMR_HOST to the real preview hostname;
+      # the placeholder value only marks the key for rewriting.
+      - VITE_HMR_HOST=placeholder.nightingale-ai.com
+      - VITE_HMR_PROTOCOL=wss
+      - VITE_HMR_CLIENT_PORT=443
+    volumes:
+      - ../..:/app:rw
+      - /app/node_modules
+      - /app/apps/desktop/node_modules
+      - /app/apps/marketing/node_modules
+      - /app/apps/mobile/node_modules
+      - /app/apps/server/node_modules
+      - /app/apps/web/node_modules
+      - /app/packages/client-runtime/node_modules
+      - /app/packages/contracts/node_modules
+      - /app/packages/effect-acp/node_modules
+      - /app/packages/effect-codex-app-server/node_modules
+      - /app/packages/shared/node_modules
+      - /app/packages/ssh/node_modules
+      - /app/packages/tailscale/node_modules
+      - /app/oxlint-plugin-t3code/node_modules
+      - /app/scripts/node_modules
+      - /app/infra/relay/node_modules
+    ports:
+      - "5733:5733"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:5733/"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 5
+    depends_on:
+      - backend
+
+volumes:
+  t3-data:

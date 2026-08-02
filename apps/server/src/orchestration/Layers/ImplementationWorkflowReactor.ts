@@ -460,29 +460,27 @@ function buildMergeGateFixPrompt(input: {
   ].join("\n");
 }
 
-function productIntentMarkdown(thread: OrchestrationThread): string {
-  const activity = thread.activities.findLast(
-    (candidate) => candidate.kind === "product-intent-locked",
+function findRunProposedPlan(input: {
+  readonly run: OrchestrationImplementationRun;
+  readonly sourceThread: OrchestrationThread;
+}) {
+  return input.sourceThread.proposedPlans.find(
+    (candidate) => candidate.id === input.run.sourceProposedPlan?.planId,
   );
-  if (!activity || !isRecord(activity.payload)) return "Locked product intent unavailable.";
-  const summary = activity.payload["summaryMarkdown"];
-  return typeof summary === "string" && summary.trim().length > 0 ? summary : activity.summary;
 }
 
+/**
+ * The plan is the whole handover. There is no locked-intent section: threads read from the command
+ * read model carry no activities, so the intent could only ever render as "unavailable" filler.
+ */
 function fastFeatureArtifactMarkdown(input: {
   readonly run: OrchestrationImplementationRun;
   readonly sourceThread: OrchestrationThread;
 }): string {
-  const plan = input.sourceThread.proposedPlans.find(
-    (candidate) => candidate.id === input.run.sourceProposedPlan?.planId,
+  const plan = findRunProposedPlan(input);
+  return ["## Canonical proposed plan", plan?.planMarkdown ?? "Proposed plan unavailable."].join(
+    "\n",
   );
-  return [
-    "## Locked product intent",
-    productIntentMarkdown(input.sourceThread),
-    "",
-    "## Canonical proposed plan",
-    plan?.planMarkdown ?? "Proposed plan unavailable.",
-  ].join("\n");
 }
 
 function fastFeatureExecutionContract(run: OrchestrationImplementationRun): ReadonlyArray<string> {
@@ -1427,11 +1425,11 @@ const make = Effect.gen(function* () {
             ? ensuringRun.appDevStack
             : {
                 status: "ready",
-                stackId: stack.stack.id,
-                stackStatus: stack.stack.status,
+                stackId: stack.stack?.id ?? null,
+                stackStatus: stack.stack?.status ?? null,
                 frontendUrl,
                 frontendServiceName: stack.frontendServiceName,
-                displayName: stack.stack.displayName,
+                displayName: stack.stack?.displayName ?? null,
                 lastErrorMarkdown: null,
                 requestedAt: ensuringRun.appDevStack.requestedAt || input.createdAt,
                 updatedAt: input.createdAt,
@@ -1896,78 +1894,152 @@ const make = Effect.gen(function* () {
         worktreePath: setupRun.orchestratorWorktreePath,
       });
 
+      // Hand the plan over before provisioning the app dev stack. Build needs only the branch,
+      // worktree, and pinned commit; the stack is for Dev Review, and `startBrowserReview`
+      // re-ensures it there. Provisioning first left the Build thread blank for minutes.
+      const refreshed = yield* projectionSnapshotQuery.getCommandReadModel();
+      // A miss in the refreshed model must not read as "already started" — that silently drops
+      // the handover and leaves an empty Build thread.
+      const currentImplementer =
+        findThread(refreshed, setupRun.orchestratorThreadId) ?? implementerThread;
+      // Threads in the command read model carry no messages, so ask for the detail: the seeded
+      // user message is the only thing that proves the handover already went out. `latestTurn`
+      // will not do — it appears only once a provider session exists.
+      const alreadyHandedOver = yield* projectionSnapshotQuery
+        .getThreadDetailById(setupRun.orchestratorThreadId)
+        .pipe(
+          Effect.map(
+            Option.match({
+              onNone: () => false,
+              onSome: (thread) => thread.messages.some((message) => message.role === "user"),
+            }),
+          ),
+        );
+      const shouldStart =
+        currentImplementer.latestTurn?.state !== "running" &&
+        (!alreadyHandedOver ||
+          setupRun.fastBuildResult?.status === "failed" ||
+          setupRun.fastBuildResult?.status === "blocked");
+      if (shouldStart) {
+        // A run that cannot resolve its plan has nothing to hand over. Block loudly rather than
+        // starting Build against a prompt that reads "Proposed plan unavailable."
+        if (findRunProposedPlan({ run: setupRun, sourceThread }) === undefined) {
+          yield* blockRun({
+            sourceThreadId: input.sourceThreadId,
+            run: setupRun,
+            retryableStage: "build",
+            humanBlocked: true,
+            reasonMarkdown:
+              "The proposed plan behind this Fast feature run is no longer available on the source thread, so there is nothing to hand over to Build. Re-run planning, then relaunch.",
+            updatedAt: input.createdAt,
+          });
+          return;
+        }
+        yield* orchestrationEngine.dispatch({
+          type: "thread.turn.start",
+          commandId: yield* serverCommandId("fast-feature-build-turn"),
+          threadId: setupRun.orchestratorThreadId,
+          message: {
+            messageId: yield* serverMessageId("fast-feature-build"),
+            role: "user",
+            text: buildFastFeaturePrompt({ run: setupRun, sourceThread }),
+            attachments: [],
+          },
+          titleSeed: implementerThread.title,
+          runtimeMode: implementerThread.runtimeMode,
+          interactionMode: "default",
+          ...(setupRun.sourceProposedPlan === null
+            ? {}
+            : { sourceProposedPlan: setupRun.sourceProposedPlan }),
+          createdAt: input.createdAt,
+        });
+      }
+
+      // Leaving `launch-pending` is the record that the handover went out. The command read model
+      // carries no thread messages and only exposes `latestTurn` once a provider session exists,
+      // so the run status is the one durable marker the recovery sweep can trust.
+      //
       // Keep `retryableFailure` while the stage re-runs. Clearing it here would
       // reset `blockRun`'s attempt counter on every resume, so a stage that
       // keeps failing would never exhaust `maxAttempts` and the 30s sweep in
       // `recoverRetryableRuns` would relaunch it forever. Success paths
       // (e.g. `handleFastBuildResult`) clear it once the stage actually passes.
-      let resumedRun: OrchestrationImplementationRun = {
+      const needsAppDevStack = setupRun.appDevStack.status !== "ready";
+      const resumedRun: OrchestrationImplementationRun = {
         ...setupRun,
         status: "running",
+        ...(needsAppDevStack
+          ? {
+              appDevStack: {
+                ...setupRun.appDevStack,
+                status: "ensuring" as const,
+                requestedAt: setupRun.appDevStack.requestedAt || input.createdAt,
+                updatedAt: input.createdAt,
+              },
+            }
+          : {}),
         updatedAt: input.createdAt,
       };
-      if (setupRun.appDevStack.status !== "ready") {
-        const stackResult = yield* appDevStackManager
-          .autoCreate({
-            worktreePath: setupRun.orchestratorWorktreePath,
-            displayName: `Fast feature ${setupRun.id}`,
-            gitBranch: setupRun.orchestratorBranch,
-          })
-          .pipe(Effect.result);
-        resumedRun = {
-          ...resumedRun,
-          appDevStack:
-            stackResult._tag === "Success"
-              ? {
-                  status: "ready",
-                  stackId: stackResult.success.stack.id,
-                  stackStatus: stackResult.success.stack.status,
-                  frontendUrl: stackResult.success.frontendUrl,
-                  frontendServiceName: stackResult.success.frontendServiceName,
-                  displayName: stackResult.success.stack.displayName,
-                  lastErrorMarkdown: null,
-                  requestedAt: setupRun.appDevStack.requestedAt || input.createdAt,
-                  updatedAt: input.createdAt,
-                }
-              : {
-                  ...setupRun.appDevStack,
-                  status: "failed",
-                  lastErrorMarkdown: errorDetail(stackResult.failure),
-                  requestedAt: setupRun.appDevStack.requestedAt || input.createdAt,
-                  updatedAt: input.createdAt,
-                },
-        };
-      }
       yield* updateRun({
         sourceThreadId: input.sourceThreadId,
         run: resumedRun,
         createdAt: input.createdAt,
       });
 
-      const refreshed = yield* projectionSnapshotQuery.getCommandReadModel();
-      const currentImplementer = findThread(refreshed, setupRun.orchestratorThreadId);
-      if (currentImplementer?.latestTurn?.state === "running") return;
-      const shouldStart =
-        currentImplementer?.latestTurn === null ||
-        resumedRun.fastBuildResult?.status === "failed" ||
-        resumedRun.fastBuildResult?.status === "blocked";
-      if (!shouldStart) return;
-      yield* orchestrationEngine.dispatch({
-        type: "thread.turn.start",
-        commandId: yield* serverCommandId("fast-feature-build-turn"),
-        threadId: setupRun.orchestratorThreadId,
-        message: {
-          messageId: yield* serverMessageId("fast-feature-build"),
-          role: "user",
-          text: buildFastFeaturePrompt({ run: resumedRun, sourceThread }),
-          attachments: [],
+      if (!needsAppDevStack) return;
+      const stackResult = yield* appDevStackManager
+        .autoCreate({
+          worktreePath: setupRun.orchestratorWorktreePath,
+          displayName: `Fast feature ${setupRun.id}`,
+          gitBranch: setupRun.orchestratorBranch,
+        })
+        .pipe(Effect.result);
+      // Build has been running throughout `autoCreate`, so re-read rather than writing back a
+      // snapshot taken before the turn started; only the stack is ours to update here.
+      const afterStack = yield* projectionSnapshotQuery.getCommandReadModel();
+      const latestRun = findRunById(afterStack, resumedRun.id);
+      if (latestRun === null) return;
+      yield* updateRun({
+        sourceThreadId: input.sourceThreadId,
+        run: {
+          ...latestRun,
+          appDevStack:
+            stackResult._tag === "Success"
+              ? {
+                  status: "ready",
+                  stackId: stackResult.success.stack?.id ?? null,
+                  stackStatus: stackResult.success.stack?.status ?? null,
+                  frontendUrl: stackResult.success.frontendUrl,
+                  frontendServiceName: stackResult.success.frontendServiceName,
+                  displayName: stackResult.success.stack?.displayName ?? null,
+                  lastErrorMarkdown: null,
+                  requestedAt: latestRun.appDevStack.requestedAt || input.createdAt,
+                  updatedAt: input.createdAt,
+                }
+              : {
+                  ...latestRun.appDevStack,
+                  status: "failed",
+                  lastErrorMarkdown: errorDetail(stackResult.failure),
+                  requestedAt: latestRun.appDevStack.requestedAt || input.createdAt,
+                  updatedAt: input.createdAt,
+                },
+          updatedAt: input.createdAt,
         },
-        titleSeed: implementerThread.title,
-        runtimeMode: implementerThread.runtimeMode,
-        interactionMode: "default",
-        ...(resumedRun.sourceProposedPlan === null
-          ? {}
-          : { sourceProposedPlan: resumedRun.sourceProposedPlan }),
+        createdAt: input.createdAt,
+      });
+      if (stackResult._tag === "Success") return;
+      // Say so on the Build thread, but do not block: Build does not need the stack, and
+      // `startBrowserReview` blocks on `app-dev-stack` if it still cannot come up for Dev Review.
+      // A re-entry that fails again finds the stack already marked failed and stays quiet, so the
+      // notice does not stack up (thread activities are not in the command read model, so the run
+      // is what we can dedupe against).
+      if (latestRun.appDevStack.status === "failed") return;
+      yield* appendActivity({
+        threadId: setupRun.orchestratorThreadId,
+        tone: "error",
+        kind: "fast-feature.app-dev-stack-failed",
+        summary: "App dev stack failed to start — the build continues; Dev Review retries it",
+        payload: { runId: resumedRun.id, reasonMarkdown: errorDetail(stackResult.failure) },
         createdAt: input.createdAt,
       });
     },
@@ -2045,11 +2117,11 @@ const make = Effect.gen(function* () {
             stackResult._tag === "Success"
               ? {
                   status: "ready",
-                  stackId: stackResult.success.stack.id,
-                  stackStatus: stackResult.success.stack.status,
+                  stackId: stackResult.success.stack?.id ?? null,
+                  stackStatus: stackResult.success.stack?.status ?? null,
                   frontendUrl: stackResult.success.frontendUrl,
                   frontendServiceName: stackResult.success.frontendServiceName,
-                  displayName: stackResult.success.stack.displayName,
+                  displayName: stackResult.success.stack?.displayName ?? null,
                   lastErrorMarkdown: null,
                   requestedAt: runningRun.appDevStack.requestedAt || event.occurredAt,
                   updatedAt: event.occurredAt,
@@ -3601,6 +3673,28 @@ const make = Effect.gen(function* () {
           (thread) => thread.session?.status === "starting" || thread.session?.status === "running",
         );
       };
+
+      // A Fast feature Build thread is created by the decider but seeded by `ensureFastFeatureRun`,
+      // so a restart or an early return between the two strands it with nothing to work on.
+      // Nothing else re-drives it: `recoverRetryableRuns` only looks at runs with a
+      // `retryableFailure`. `ensureFastFeatureRun` leaves `launch-pending` once the handover has
+      // gone out, so a run still sitting there never reached Build.
+      if (run.artifactSource === "proposed-plan" && run.status === "launch-pending") {
+        const implementer = findThread(readModel, run.orchestratorThreadId);
+        if (
+          implementer !== null &&
+          implementer.deletedAt === null &&
+          implementer.session?.status !== "starting" &&
+          implementer.session?.status !== "running"
+        ) {
+          yield* recoverRunStage(
+            run.id,
+            "fast-feature-handover",
+            ensureFastFeatureRun({ sourceThreadId, run, createdAt }),
+          );
+          continue;
+        }
+      }
 
       if (
         run.status === "needs-human-attention" &&

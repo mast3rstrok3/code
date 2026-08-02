@@ -33,6 +33,34 @@ function basenameFromPath(value: string): string {
   return separatorIndex === -1 ? trimmed : trimmed.slice(separatorIndex + 1);
 }
 
+function repoNameFromWorktreePath(worktreePath: string): string {
+  const trimmed = worktreePath.trim().replace(/[\\/]+$/gu, "");
+  const parts = trimmed.split(/[\\/]+/u).filter((part) => part.length > 0);
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    const part = parts[index]!;
+    // Sibling-worktree convention: <repo>.worktrees/<name>
+    if (part.endsWith(".worktrees") && part.length > ".worktrees".length) {
+      return part.slice(0, -".worktrees".length);
+    }
+    // Nested convention: <repo>/worktrees/<name>
+    if (part === "worktrees" && index > 0) {
+      return parts[index - 1]!;
+    }
+  }
+  return basenameFromPath(trimmed) || "app";
+}
+
+/**
+ * Display name driving the stack's preview hostnames: the controller slugs it
+ * into `<slug>-<service>-<shortuuid>` subdomains, so "code fix-auth" yields
+ * code-fix-auth-frontend-<uuid> URLs named after the app and branch.
+ */
+export function appDevStackDisplayName(worktreePath: string, branch?: string | null): string {
+  const repo = repoNameFromWorktreePath(worktreePath);
+  const trimmedBranch = branch?.trim();
+  return trimmedBranch ? `${repo} ${trimmedBranch}` : repo;
+}
+
 export function deriveAppDevStackNamespaceFromPath(worktreePath: string): string {
   const repoSlug = normalizeKubernetesNamespace(basenameFromPath(worktreePath), "app");
   const baseSlug = repoSlug.endsWith("-dev") ? repoSlug.slice(0, -4) : repoSlug;

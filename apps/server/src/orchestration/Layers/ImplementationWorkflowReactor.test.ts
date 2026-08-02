@@ -18,7 +18,9 @@ import {
   type VcsCreateWorktreeInput,
 } from "@t3tools/contracts";
 import { type DeepPartial } from "@t3tools/shared/Struct";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -74,6 +76,16 @@ interface ImplementationCalls {
   readonly localStatusCount: Ref.Ref<number>;
 }
 
+/**
+ * Holds `autoCreate` open so a test can observe what the reactor has already done by the time the
+ * app dev stack starts provisioning. `entered` resolves as the stack call begins; the reactor then
+ * parks on `release`.
+ */
+interface AutoCreateGate {
+  readonly entered: Deferred.Deferred<void>;
+  readonly release: Deferred.Deferred<void>;
+}
+
 interface ImplementationSystem extends ImplementationCalls {
   readonly engine: OrchestrationEngineShape;
   readonly query: ProjectionSnapshotQueryShape;
@@ -122,6 +134,7 @@ function makeTestLayer(
   dirtySourceStatusChecks = 0,
   autoCreateFrontendUrls?: ReadonlyArray<string | null>,
   sourceRefName = "main",
+  autoCreateGate?: AutoCreateGate,
 ) {
   const coreLayer = Layer.mergeAll(
     OrchestrationEngineLive.pipe(
@@ -273,6 +286,13 @@ function makeTestLayer(
         Layer.mock(AppDevStackManager)({
           autoCreate: (input) =>
             Ref.updateAndGet(calls.autoCreateInputs, (inputs) => [...inputs, input]).pipe(
+              Effect.tap(() =>
+                autoCreateGate === undefined
+                  ? Effect.void
+                  : Deferred.succeed(autoCreateGate.entered, undefined).pipe(
+                      Effect.andThen(Deferred.await(autoCreateGate.release)),
+                    ),
+              ),
               Effect.flatMap((inputs) => {
                 const configuredFrontendUrl = autoCreateFrontendUrls?.[inputs.length - 1];
                 const frontendUrl =
@@ -328,6 +348,9 @@ function withSystem<A, E>(
     readonly dirtySourceStatusChecks?: number;
     readonly autoCreateFrontendUrls?: ReadonlyArray<string | null>;
     readonly sourceRefName?: string;
+    readonly autoCreateGate?: AutoCreateGate;
+    /** Leave the reactor stopped so a test can dispatch events it must recover from on start. */
+    readonly startReactor?: boolean;
   },
 ) {
   return Effect.gen(function* () {
@@ -362,7 +385,7 @@ function withSystem<A, E>(
         const engine = yield* OrchestrationEngineService;
         const query = yield* ProjectionSnapshotQuery;
         const reactor = yield* ImplementationWorkflowReactor;
-        yield* reactor.start();
+        if (options?.startReactor !== false) yield* reactor.start();
         return yield* use({
           ...calls,
           engine,
@@ -383,6 +406,7 @@ function withSystem<A, E>(
           options?.dirtySourceStatusChecks,
           options?.autoCreateFrontendUrls,
           options?.sourceRefName,
+          options?.autoCreateGate,
         ),
       ),
     );
@@ -711,7 +735,7 @@ const claudeParentSelection: ModelSelection = {
   model: "claude-opus-4-8",
 };
 
-function launchFastFeatureRun(system: ImplementationSystem) {
+function dispatchFastFeatureLaunch(system: ImplementationSystem) {
   return Effect.gen(function* () {
     yield* system.engine.dispatch({
       type: "project.create",
@@ -784,6 +808,12 @@ function launchFastFeatureRun(system: ImplementationSystem) {
       validationCommands: ["vp check", "vp run typecheck"],
       createdAt: now,
     });
+  });
+}
+
+function launchFastFeatureRun(system: ImplementationSystem) {
+  return Effect.gen(function* () {
+    yield* dispatchFastFeatureLaunch(system);
     yield* system.reactor.drain;
     const snapshot = yield* system.query.getSnapshot();
     const run = snapshot.implementationRuns[0];
@@ -844,6 +874,165 @@ describe("ImplementationWorkflowReactor", () => {
         ).toHaveLength(1);
         expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(1);
       }),
+    ),
+  );
+
+  it.effect("hands the plan to Build before the app dev stack finishes provisioning", () =>
+    Effect.gen(function* () {
+      const gate: AutoCreateGate = {
+        entered: yield* Deferred.make<void>(),
+        release: yield* Deferred.make<void>(),
+      };
+      yield* withSystem(
+        (system) =>
+          Effect.gen(function* () {
+            yield* dispatchFastFeatureLaunch(system);
+            const drained = yield* Effect.forkChild(system.reactor.drain);
+            // Resolves the moment the stack starts provisioning; the reactor is parked inside
+            // `autoCreate` for the assertions below.
+            yield* Deferred.await(gate.entered);
+
+            const snapshot = yield* system.query.getSnapshot();
+            const implementer = snapshot.threads.find(
+              (thread) => thread.workflowRole === "fast-feature-implementer",
+            );
+            if (!implementer) throw new Error("Fast feature implementer missing.");
+            expect(implementer.messages.at(-1)?.text).toContain("# Fast checkout");
+            expect(implementer.messages.at(-1)?.role).toBe("user");
+            expect(snapshot.implementationRuns[0]?.appDevStack.status).toBe("ensuring");
+
+            yield* Deferred.succeed(gate.release, undefined);
+            yield* Fiber.join(drained);
+            const settled = yield* system.query.getSnapshot();
+            expect(settled.implementationRuns[0]?.appDevStack.status).toBe("ready");
+          }),
+        { autoCreateGate: gate },
+      );
+    }),
+  );
+
+  it.effect("reports a failed app dev stack on Build without blocking the run", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const run = yield* launchFastFeatureRun(system);
+          expect(run.status).toBe("running");
+          expect(run.appDevStack.status).toBe("failed");
+
+          let snapshot = yield* system.query.getSnapshot();
+          const implementer = snapshot.threads.find(
+            (thread) => thread.workflowRole === "fast-feature-implementer",
+          );
+          if (!implementer) throw new Error("Fast feature implementer missing.");
+          expect(implementer.messages.at(-1)?.text).toContain("# Fast checkout");
+          const failures = implementer.activities.filter(
+            (activity) => activity.kind === "fast-feature.app-dev-stack-failed",
+          );
+          expect(failures).toHaveLength(1);
+          expect(failures[0]?.tone).toBe("error");
+
+          // Startup recovery must leave a run that already reached Build alone — re-driving it
+          // would provision a second stack and repeat the notice.
+          yield* system.reactor.start();
+          yield* system.reactor.drain;
+          snapshot = yield* system.query.getSnapshot();
+          expect(
+            snapshot.threads
+              .find((thread) => thread.workflowRole === "fast-feature-implementer")
+              ?.activities.filter(
+                (activity) => activity.kind === "fast-feature.app-dev-stack-failed",
+              ),
+          ).toHaveLength(1);
+          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(1);
+        }),
+      { failAutoCreate: true },
+    ),
+  );
+
+  it.effect("re-seeds a Fast feature Build thread that was stranded without a turn", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          // The decider creates the Build thread and the run; the reactor seeds the turn. With the
+          // reactor stopped, only startup recovery can close that gap — the live event stream does
+          // not replay what was dispatched before `start`.
+          yield* dispatchFastFeatureLaunch(system);
+          let snapshot = yield* system.query.getSnapshot();
+          const stranded = snapshot.threads.find(
+            (thread) => thread.workflowRole === "fast-feature-implementer",
+          );
+          if (!stranded) throw new Error("Fast feature implementer missing.");
+          expect(stranded.messages).toHaveLength(0);
+          expect(stranded.latestTurn).toBeNull();
+          expect(snapshot.implementationRuns[0]?.status).toBe("launch-pending");
+
+          yield* system.reactor.start();
+          yield* system.reactor.drain;
+
+          snapshot = yield* system.query.getSnapshot();
+          const recovered = snapshot.threads.find(
+            (thread) => thread.workflowRole === "fast-feature-implementer",
+          );
+          expect(recovered?.id).toBe(stranded.id);
+          expect(recovered?.messages).toHaveLength(1);
+          expect(recovered?.messages.at(-1)?.text).toContain("# Fast checkout");
+          expect(snapshot.implementationRuns[0]?.status).toBe("running");
+        }),
+      { startReactor: false },
+    ),
+  );
+
+  it.effect("hands over a short instruction and the full plan, with no filler sections", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        yield* launchFastFeatureRun(system);
+        const snapshot = yield* system.query.getSnapshot();
+        const prompt = snapshot.threads.find(
+          (thread) => thread.workflowRole === "fast-feature-implementer",
+        )?.messages[0]?.text;
+        expect(prompt).toContain("Implement the canonical plan");
+        expect(prompt).toContain("## Canonical proposed plan");
+        expect(prompt).toContain("# Fast checkout\nImplement the focused checkout change.");
+        // Sections that could only ever render as "unavailable" have no business in the handover.
+        expect(prompt).not.toContain("unavailable");
+        expect(prompt).not.toContain("Locked product intent");
+      }),
+    ),
+  );
+
+  it.effect("blocks instead of starting Build when the proposed plan is gone", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          yield* dispatchFastFeatureLaunch(system);
+          // The plan is the whole payload of the handover. Point the run at one that is not on the
+          // source thread before the reactor gets a chance to seed Build.
+          const launched = (yield* system.query.getSnapshot()).implementationRuns[0];
+          if (!launched) throw new Error("Fast feature run missing.");
+          yield* system.engine.dispatch({
+            type: "thread.implementation-run.update",
+            commandId: commandId("fast-plan-detach"),
+            threadId: sourceThreadId,
+            run: {
+              ...launched,
+              sourceProposedPlan: { threadId: sourceThreadId, planId: "plan-missing" },
+            },
+            createdAt: now,
+          });
+          yield* system.reactor.start();
+          yield* system.reactor.drain;
+
+          const snapshot = yield* system.query.getSnapshot();
+          const implementer = snapshot.threads.find(
+            (thread) => thread.workflowRole === "fast-feature-implementer",
+          );
+          expect(implementer?.messages).toHaveLength(0);
+          const run = snapshot.implementationRuns[0];
+          expect(run?.status).toBe("needs-human-attention");
+          expect(run?.retryableFailure?.stage).toBe("build");
+          expect(run?.retryableFailure?.humanBlocked).toBe(true);
+        }),
+      { startReactor: false },
     ),
   );
 

@@ -120,7 +120,7 @@ App Dev Stack manifest requirements:
 3. Name the public frontend service web, frontend, or app. Prefer web for a single TanStack Start
    frontend.
 4. Name the public API service api or backend when it needs a public preview URL.
-5. Mark workers and private support services with cortex.appDevStack.expose: "false".
+5. Mark workers and private support services with stacks.appDevStack.expose: "false" (legacy cortex.appDevStack.* and rudi.appDevStack.* labels are still accepted).
 6. Include image for every service.
 7. Include build for services that should be built from this repo.
 8. Include ports for every service that must get a Kubernetes Service or preview route.
@@ -146,7 +146,7 @@ services:
     ports:
       - "3000:3000"
     labels:
-      cortex.appDevStack.expose: "true"
+      stacks.appDevStack.expose: "true"
 
 If the repo has an API service, add it like this and update commands/Dockerfile names to match the
 repo:
@@ -171,7 +171,7 @@ If the repo has workers, add them without preview routing:
       context: ../..
       dockerfile: Dockerfile.worker
     labels:
-      cortex.appDevStack.expose: "false"
+      stacks.appDevStack.expose: "false"
 
 URL and namespace contract:
 - T3 Code derives the Kubernetes namespace from the selected worktree basename.

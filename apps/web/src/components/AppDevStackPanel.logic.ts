@@ -1,4 +1,9 @@
-import type { AppDevStack, AppDevStackPod, AppDevStackService } from "@t3tools/contracts";
+import type {
+  AppDevStack,
+  AppDevStackAutoCreateResult,
+  AppDevStackPod,
+  AppDevStackService,
+} from "@t3tools/contracts";
 import { normalizePreviewUrl } from "@t3tools/shared/preview";
 
 export interface PreviewCandidate {
@@ -15,6 +20,36 @@ const TRANSITIONING_STACK_STATUSES = new Set<AppDevStack["status"]>([
 
 export function isTransitioningAppDevStackStatus(status: AppDevStack["status"]): boolean {
   return TRANSITIONING_STACK_STATUSES.has(status);
+}
+
+export interface AutoCreateNotice {
+  readonly kind: "reserved" | "already-running";
+  readonly message: string;
+  readonly url: string | null;
+  readonly stackId: string | null;
+}
+
+/** Informational (non-error) notice when auto-create returned an existing stack. */
+export function autoCreateNotice(result: AppDevStackAutoCreateResult): AutoCreateNotice | null {
+  if (result.created) return null;
+  const message = result.message?.trim();
+  if (result.reserved === true) {
+    return {
+      kind: "reserved",
+      message:
+        message || "This branch is served by the standing deployment; no dev stack was created.",
+      url: result.frontendUrl,
+      stackId: null,
+    };
+  }
+  return {
+    kind: "already-running",
+    message:
+      message ||
+      "An app dev stack for this worktree is already running; showing the existing stack.",
+    url: result.frontendUrl,
+    stackId: result.stack?.id ?? null,
+  };
 }
 
 export function shouldPollAppDevStacks(

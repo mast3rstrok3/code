@@ -444,6 +444,15 @@ export class AppDevStackManager extends Context.Service<
           displayName: displayNameForRestart(stack),
           gitBranch: stack.branchName ?? null,
         });
+        if (result.stack === null) {
+          return yield* new AppDevStackError({
+            operation: "restart",
+            reason: "invalid_response",
+            message:
+              result.message ??
+              "The controller did not return a stack (branch is served by a standing deployment).",
+          });
+        }
         return result.stack;
       });
 

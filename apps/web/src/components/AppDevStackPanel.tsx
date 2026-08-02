@@ -16,6 +16,7 @@ import {
   CornerLeftUpIcon,
   ExternalLinkIcon,
   FolderIcon,
+  InfoIcon,
   LoaderIcon,
   PanelRightIcon,
   PlayIcon,
@@ -45,16 +46,19 @@ import { useAtomCommand } from "~/state/use-atom-command";
 
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
+import { appDevStackDisplayName } from "@t3tools/shared/appDevStack";
+
 import {
+  autoCreateNotice,
   isTransitioningAppDevStackStatus,
   primaryPreviewForStack,
   previewForPod,
   previewUrlForService,
   shouldPollAppDevStacks,
+  type AutoCreateNotice,
   type PreviewCandidate,
 } from "./AppDevStackPanel.logic";
 import {
-  displayNameFromStackPath as displayNameFromPath,
   displayStackName,
   isSameOrChildStackPath,
   normalizeStackWorktreePath as normalizeWorktreePath,
@@ -416,6 +420,7 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
   const [manualPath, setManualPath] = useState(currentWorktreePath);
   const [manualNamespace, setManualNamespace] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<AutoCreateNotice | null>(null);
   const [pendingKey, setPendingKey] = useState<string | null>(null);
   const [inspectedStackId, setInspectedStackId] = useState<string | null>(null);
   const [selectedPodName, setSelectedPodName] = useState<string | null>(null);
@@ -621,15 +626,17 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
         nonEmpty(sourceStack?.namespace) ??
         (requestedNamespace ? normalizeKubernetesNamespace(requestedNamespace) : null);
       const key = `start:${sourceStack?.id ?? `${normalizedPath}:${namespace ?? ""}`}`;
+      const branch = sourceStack?.branchName ?? props.activeThread?.branch ?? null;
       setPendingKey(key);
       setActionError(null);
+      setActionNotice(null);
       try {
         const result = await autoCreateStack({
           environmentId: props.environmentId,
           input: {
             worktreePath: normalizedPath,
-            displayName: sourceStack?.displayName ?? displayNameFromPath(normalizedPath),
-            gitBranch: sourceStack?.branchName ?? props.activeThread?.branch ?? null,
+            displayName: sourceStack?.displayName ?? appDevStackDisplayName(normalizedPath, branch),
+            gitBranch: branch,
             namespace,
           },
         });
@@ -638,6 +645,11 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
             setActionError(actionErrorMessage(squashAtomCommandFailure(result)));
           }
           return;
+        }
+        const notice = autoCreateNotice(result.value);
+        setActionNotice(notice);
+        if (notice?.stackId) {
+          setInspectedStackId(notice.stackId);
         }
         refreshStacks();
         if (!sourceStack) {
@@ -1095,6 +1107,25 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
             <div className="flex gap-2 rounded-lg border border-destructive/25 bg-destructive/5 p-3 text-xs text-destructive">
               <TriangleAlertIcon className="mt-0.5 size-4 shrink-0" />
               <div>{actionError}</div>
+            </div>
+          ) : null}
+
+          {actionNotice ? (
+            <div className="flex gap-2 rounded-lg border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+              <InfoIcon className="mt-0.5 size-4 shrink-0" />
+              <div className="space-y-1">
+                <div>{actionNotice.message}</div>
+                {actionNotice.url ? (
+                  <a
+                    href={actionNotice.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="break-all underline"
+                  >
+                    {actionNotice.url}
+                  </a>
+                ) : null}
+              </div>
             </div>
           ) : null}
 

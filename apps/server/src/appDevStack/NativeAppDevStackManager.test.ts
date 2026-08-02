@@ -997,7 +997,7 @@ it.effect("scales deployments when auto-creating an existing native stack", () =
     });
 
     assert.equal(result.created, false);
-    assert.equal(result.stack.status, "running");
+    assert.equal(result.stack?.status, "running");
     assert.deepEqual(calls, [
       ["get", "namespace", "rudi-dev", "-o", "json"],
       ["-n", "rudi-dev", "get", "deployments", "-o", "json"],
@@ -1035,11 +1035,11 @@ it.effect("derives a native namespace for a different worktree instead of reject
     });
 
     assert.equal(result.created, false);
-    assert.equal(result.stack.id, "hero-dev");
-    assert.equal(result.stack.namespace, "hero-dev");
-    assert.equal(result.stack.worktreePath, tempDir);
-    assert.equal(result.stack.repoName, "hero");
-    assert.equal(result.stack.branchName, "main");
+    assert.equal(result.stack?.id, "hero-dev");
+    assert.equal(result.stack?.namespace, "hero-dev");
+    assert.equal(result.stack?.worktreePath, tempDir);
+    assert.equal(result.stack?.repoName, "hero");
+    assert.equal(result.stack?.branchName, "main");
     assert.equal(result.frontendUrl, "https://hero-dev.nightingale-ai.com");
     assert.equal(result.frontendServiceName, "frontend");
     assert.deepEqual(calls, [
@@ -1094,8 +1094,8 @@ it.effect("uses an explicit native namespace for a new worktree when provided", 
       namespace: "Hero Preview",
     });
 
-    assert.equal(result.stack.id, "hero-preview");
-    assert.equal(result.stack.namespace, "hero-preview");
+    assert.equal(result.stack?.id, "hero-preview");
+    assert.equal(result.stack?.namespace, "hero-preview");
     assert.deepEqual(calls, [
       ["get", "namespace", "hero-preview", "-o", "json"],
       ["-n", "hero-preview", "get", "deployments", "-o", "json"],
@@ -1165,7 +1165,7 @@ it.effect("provisions Kubernetes resources when auto-creating a missing native n
     });
 
     assert.equal(result.created, true);
-    assert.equal(result.stack.namespace, "hero-dev");
+    assert.equal(result.stack?.namespace, "hero-dev");
     assert.include(appliedManifest, "kind: Namespace");
     assert.include(appliedManifest, "name: hero-dev");
     assert.include(appliedManifest, "kind: Deployment");
@@ -1455,7 +1455,7 @@ it.effect("finds the app-dev compose file from a nested worktree path", () => {
     });
 
     assert.equal(result.created, true);
-    assert.equal(result.stack.namespace, "hero-dev");
+    assert.equal(result.stack?.namespace, "hero-dev");
     assert.include(appliedManifest, "image: hero-web:latest");
     assert.include(appliedManifest, "imagePullPolicy: Always");
     assert.include(appliedManifest, "kind: Deployment");
@@ -1555,7 +1555,7 @@ it.effect("restores Kubernetes resources when auto-creating an empty native name
     });
 
     assert.equal(result.created, true);
-    assert.equal(result.stack.status, "running");
+    assert.equal(result.stack?.status, "running");
     assert.include(appliedManifest, "kind: Deployment");
     assert.deepEqual(
       calls.map((args) => args.slice(0, 2)),

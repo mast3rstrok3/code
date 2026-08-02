@@ -5,6 +5,7 @@ import {
   type OrchestrationEvent,
   type OrchestrationThread,
   type OrchestrationPlanningReviewCycle,
+  type OrchestrationProposedPlan,
   PLANNING_REVIEW_MAX_CYCLES,
   type ProjectId,
   ThreadId,
@@ -143,17 +144,19 @@ const make = Effect.gen(function* () {
     );
   });
 
-  const hasActiveFixImplementerChild = Effect.fn(
-    "ProductWorkflowReactor.hasActiveFixImplementerChild",
-  )(function* (rootThreadId: ThreadId) {
-    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
-    return readModel.threads.some(
-      (thread) =>
-        thread.parentThreadId === rootThreadId &&
-        thread.workflowRole === "product-fix-implementer" &&
-        thread.deletedAt === null,
-    );
-  });
+  const findFixImplementerChild = Effect.fn("ProductWorkflowReactor.findFixImplementerChild")(
+    function* (rootThreadId: ThreadId) {
+      const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+      return (
+        readModel.threads.find(
+          (thread) =>
+            thread.parentThreadId === rootThreadId &&
+            thread.workflowRole === "product-fix-implementer" &&
+            thread.deletedAt === null,
+        ) ?? null
+      );
+    },
+  );
 
   const appendActivity = Effect.fn("ProductWorkflowReactor.appendActivity")(function* (input: {
     readonly threadId: ThreadId;
@@ -481,6 +484,112 @@ const make = Effect.gen(function* () {
     },
   );
 
+  /**
+   * Whether the plan handover already reached this thread. Threads in the command read model carry
+   * no messages, so this needs the thread detail; `latestTurn` is no substitute, as it only appears
+   * once a provider session exists.
+   */
+  const hasHandoverMessage = Effect.fn("ProductWorkflowReactor.hasHandoverMessage")(function* (
+    threadId: ThreadId,
+  ) {
+    const detail = yield* projectionSnapshotQuery.getThreadDetailById(threadId);
+    return Option.match(detail, {
+      onNone: () => false,
+      onSome: (thread) => thread.messages.some((message) => message.role === "user"),
+    });
+  });
+
+  /**
+   * Hands a fix plan to a Build-mode child thread. The thread and its seeding turn are two
+   * dispatches, so a restart between them leaves a child with no message at all — re-seed that
+   * child instead of treating its mere existence as "already handed over".
+   */
+  const ensureFixImplementation = Effect.fn("ProductWorkflowReactor.ensureFixImplementation")(
+    function* (input: {
+      readonly thread: OrchestrationThread;
+      readonly plan: OrchestrationProposedPlan;
+      readonly occurredAt: string;
+    }) {
+      const { thread, plan } = input;
+      const existingChild = yield* findFixImplementerChild(thread.id);
+      if (existingChild !== null && (yield* hasHandoverMessage(existingChild.id))) return;
+
+      const title = buildPlanImplementationThreadTitle(plan.planMarkdown);
+      const implementationThreadId =
+        existingChild?.id ?? (yield* serverThreadId("product-fix-implementer"));
+      if (existingChild === null) {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.create",
+          commandId: yield* serverCommandId("product-fix-implementer-create"),
+          threadId: implementationThreadId,
+          projectId: thread.projectId,
+          ownerUserId: thread.ownerUserId,
+          parentThreadId: thread.id,
+          workflowRole: "product-fix-implementer",
+          title,
+          modelSelection: thread.modelSelection,
+          runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
+          interactionMode: "default",
+          branch: thread.branch,
+          worktreePath: thread.worktreePath,
+          createdAt: input.occurredAt,
+        });
+      }
+      yield* orchestrationEngine.dispatch({
+        type: "thread.turn.start",
+        commandId: yield* serverCommandId("product-fix-implementer-turn"),
+        threadId: implementationThreadId,
+        message: {
+          messageId: yield* serverMessageId("product-fix-implementer"),
+          role: "user",
+          text: buildPlanImplementationPrompt(plan.planMarkdown),
+          attachments: [],
+        },
+        titleSeed: title,
+        runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
+        interactionMode: "default",
+        sourceProposedPlan: { threadId: thread.id, planId: plan.id },
+        createdAt: input.occurredAt,
+      });
+      if (existingChild !== null) return;
+      yield* appendActivity({
+        threadId: thread.id,
+        tone: "info",
+        kind: "product-fix-implementation-started",
+        summary: "Fix implementation started",
+        payload: { implementationThreadId, planId: plan.id },
+        createdAt: input.occurredAt,
+      });
+    },
+  );
+
+  /**
+   * Re-seeds fix handovers stranded by a restart between `thread.create` and `thread.turn.start`.
+   * `processEventSafely` only logs such a failure, and the upsert event never fires again.
+   */
+  const reconcileFixImplementations = Effect.fn(
+    "ProductWorkflowReactor.reconcileFixImplementations",
+  )(function* () {
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    // Narrow on the command read model — which does carry `proposedPlans` — then resolve the
+    // detail, because the fix intent lives in an activity and the command read model has none.
+    const candidates = readModel.threads.filter(
+      (thread) =>
+        thread.deletedAt === null &&
+        thread.workflowRole === null &&
+        thread.proposedPlans.some((plan) => plan.implementedAt === null),
+    );
+    for (const candidate of candidates) {
+      const thread = yield* resolveThread(candidate.id);
+      if (!thread) continue;
+      if (thread.workflowPreset !== "fix" && !hasFixIntentLockedActivity(thread)) continue;
+      for (const plan of thread.proposedPlans) {
+        if (plan.implementedAt !== null) continue;
+        yield* ensureFixImplementation({ thread, plan, occurredAt: thread.updatedAt });
+      }
+    }
+  });
+
   const handleFixPlanReady = Effect.fn("ProductWorkflowReactor.handleFixPlanReady")(function* (
     event: Extract<ProductWorkflowEvent, { type: "thread.proposed-plan-upserted" }>,
   ) {
@@ -533,50 +642,7 @@ const make = Effect.gen(function* () {
       });
       return;
     }
-    if (yield* hasActiveFixImplementerChild(thread.id)) return;
-
-    const implementationThreadId = yield* serverThreadId("product-fix-implementer");
-    const title = buildPlanImplementationThreadTitle(plan.planMarkdown);
-    yield* orchestrationEngine.dispatch({
-      type: "thread.create",
-      commandId: yield* serverCommandId("product-fix-implementer-create"),
-      threadId: implementationThreadId,
-      projectId: thread.projectId,
-      ownerUserId: thread.ownerUserId,
-      parentThreadId: thread.id,
-      workflowRole: "product-fix-implementer",
-      title,
-      modelSelection: thread.modelSelection,
-      runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
-      interactionMode: "default",
-      branch: thread.branch,
-      worktreePath: thread.worktreePath,
-      createdAt: event.occurredAt,
-    });
-    yield* orchestrationEngine.dispatch({
-      type: "thread.turn.start",
-      commandId: yield* serverCommandId("product-fix-implementer-turn"),
-      threadId: implementationThreadId,
-      message: {
-        messageId: yield* serverMessageId("product-fix-implementer"),
-        role: "user",
-        text: buildPlanImplementationPrompt(plan.planMarkdown),
-        attachments: [],
-      },
-      titleSeed: title,
-      runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
-      interactionMode: "default",
-      sourceProposedPlan: { threadId: thread.id, planId: plan.id },
-      createdAt: event.occurredAt,
-    });
-    yield* appendActivity({
-      threadId: thread.id,
-      tone: "info",
-      kind: "product-fix-implementation-started",
-      summary: "Fix implementation started",
-      payload: { implementationThreadId, planId: plan.id },
-      createdAt: event.occurredAt,
-    });
+    yield* ensureFixImplementation({ thread, plan, occurredAt: event.occurredAt });
   });
 
   const processEvent = Effect.fn("ProductWorkflowReactor.processEvent")(function* (
@@ -618,6 +684,13 @@ const make = Effect.gen(function* () {
     yield* reconcileImplementationLaunches().pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning("product workflow implementation reconciliation failed", {
+          cause: Cause.pretty(cause),
+        }),
+      ),
+    );
+    yield* reconcileFixImplementations().pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("product workflow fix handover reconciliation failed", {
           cause: Cause.pretty(cause),
         }),
       ),

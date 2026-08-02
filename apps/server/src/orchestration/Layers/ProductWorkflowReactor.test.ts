@@ -13,6 +13,7 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { describe } from "vite-plus/test";
 
@@ -92,13 +93,19 @@ function makeTestLayer() {
   );
 }
 
-function withSystem<A, E>(use: (system: ProductSystem) => Effect.Effect<A, E>) {
+function withSystem<A, E>(
+  use: (system: ProductSystem) => Effect.Effect<A, E, Scope.Scope>,
+  options?: {
+    /** Leave the reactor stopped so a test can dispatch events it must recover from on start. */
+    readonly startReactor?: boolean;
+  },
+) {
   return Effect.scoped(
     Effect.gen(function* () {
       const engine = yield* OrchestrationEngineService;
       const query = yield* ProjectionSnapshotQuery;
       const reactor = yield* ProductWorkflowReactor;
-      yield* reactor.start();
+      if (options?.startReactor !== false) yield* reactor.start();
       return yield* use({ engine, query, reactor });
     }),
   ).pipe(Effect.provide(makeTestLayer()));
@@ -683,6 +690,108 @@ describe("ProductWorkflowReactor", () => {
           ),
         ).toBe(true);
       }),
+    ),
+  );
+
+  it.effect("re-seeds a fix implementer thread that was created but never handed the plan", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        yield* seedProjectAndThread(system);
+        yield* lockProductFixIntent(system);
+
+        // What a restart between `thread.create` and `thread.turn.start` leaves behind: a titled
+        // Build-mode child with nothing in it.
+        const strandedId = ThreadId.make("thread-product-fix-implementer-stranded");
+        yield* system.engine.dispatch({
+          type: "thread.create",
+          commandId: commandId("stranded-fix-implementer"),
+          threadId: strandedId,
+          projectId,
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+          parentThreadId: productThreadId,
+          workflowRole: "product-fix-implementer",
+          title: "Implement Fix checkout",
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdAt: now,
+        });
+
+        yield* upsertProposedPlan(system, { planId: "plan-stranded" });
+        yield* system.reactor.drain;
+
+        const snapshot = yield* system.query.getSnapshot();
+        const implementers = snapshot.threads.filter(
+          (thread) => thread.workflowRole === "product-fix-implementer",
+        );
+        expect(implementers).toHaveLength(1);
+        expect(implementers[0]?.id).toBe(strandedId);
+        expect(
+          implementers[0]?.messages.filter((message) =>
+            message.text.startsWith("PLEASE IMPLEMENT THIS PLAN:"),
+          ),
+        ).toHaveLength(1);
+        expect(implementers[0]?.messages.at(-1)?.text).toContain("# Fix checkout");
+      }),
+    ),
+  );
+
+  it.effect("leaves an already handed over fix implementer alone", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        yield* seedProjectAndThread(system);
+        yield* lockProductFixIntent(system);
+        yield* upsertProposedPlan(system, { planId: "plan-1" });
+        yield* system.reactor.drain;
+
+        // Startup reconciliation runs over the same plan; the handover must not be sent twice.
+        yield* system.reactor.start();
+        yield* system.reactor.drain;
+
+        const snapshot = yield* system.query.getSnapshot();
+        const implementers = snapshot.threads.filter(
+          (thread) => thread.workflowRole === "product-fix-implementer",
+        );
+        expect(implementers).toHaveLength(1);
+        expect(
+          implementers[0]?.messages.filter((message) =>
+            message.text.startsWith("PLEASE IMPLEMENT THIS PLAN:"),
+          ),
+        ).toHaveLength(1);
+      }),
+    ),
+  );
+
+  it.effect("hands over a fix plan whose implementer thread was never created", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          // With the reactor stopped, `thread.proposed-plan-upserted` is never delivered — the
+          // live event stream does not replay. Only startup reconciliation can close the gap.
+          yield* seedProjectAndThread(system);
+          yield* lockProductFixIntent(system);
+          yield* upsertProposedPlan(system, { planId: "plan-missed" });
+
+          let snapshot = yield* system.query.getSnapshot();
+          expect(
+            snapshot.threads.some((thread) => thread.workflowRole === "product-fix-implementer"),
+          ).toBe(false);
+
+          yield* system.reactor.start();
+          yield* system.reactor.drain;
+
+          snapshot = yield* system.query.getSnapshot();
+          const implementers = snapshot.threads.filter(
+            (thread) => thread.workflowRole === "product-fix-implementer",
+          );
+          expect(implementers).toHaveLength(1);
+          expect(implementers[0]?.interactionMode).toBe("default");
+          expect(implementers[0]?.parentThreadId).toBe(productThreadId);
+          expect(implementers[0]?.messages.at(-1)?.text).toContain("# Fix checkout");
+        }),
+      { startReactor: false },
     ),
   );
 

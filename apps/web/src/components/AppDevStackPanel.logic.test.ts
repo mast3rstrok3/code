@@ -1,7 +1,8 @@
-import type { AppDevStack, AppDevStackPod } from "@t3tools/contracts";
+import type { AppDevStack, AppDevStackAutoCreateResult, AppDevStackPod } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  autoCreateNotice,
   normalizePreviewHref,
   previewForPod,
   primaryPreviewForStack,
@@ -108,5 +109,58 @@ describe("AppDevStackPanel URL helpers", () => {
 
     expect(normalizePreviewHref("javascript:alert(1)")).toBe(null);
     expect(previewForPod(makePod(), stack)).toBe(null);
+  });
+});
+
+describe("autoCreateNotice", () => {
+  const makeResult = (
+    input: Partial<AppDevStackAutoCreateResult> = {},
+  ): AppDevStackAutoCreateResult => ({
+    stack: makeStack(),
+    created: true,
+    frontendUrl: null,
+    frontendServiceName: null,
+    ...input,
+  });
+
+  it("returns null for fresh creates", () => {
+    expect(autoCreateNotice(makeResult())).toBe(null);
+  });
+
+  it("reports an already-running stack with its URL and id", () => {
+    const notice = autoCreateNotice(
+      makeResult({
+        created: false,
+        alreadyRunning: true,
+        message: "An app dev stack for this worktree/branch is already running.",
+        frontendUrl: "https://code-feat-x-frontend-a1b2c3d4-dev.example.test",
+      }),
+    );
+
+    expect(notice).toEqual({
+      kind: "already-running",
+      message: "An app dev stack for this worktree/branch is already running.",
+      url: "https://code-feat-x-frontend-a1b2c3d4-dev.example.test",
+      stackId: "hero-dev",
+    });
+  });
+
+  it("reports reserved branches without a stack", () => {
+    const notice = autoCreateNotice(
+      makeResult({
+        created: false,
+        reserved: true,
+        stack: null,
+        message: null,
+        frontendUrl: "https://code-dev.example.test",
+      }),
+    );
+
+    expect(notice).toEqual({
+      kind: "reserved",
+      message: "This branch is served by the standing deployment; no dev stack was created.",
+      url: "https://code-dev.example.test",
+      stackId: null,
+    });
   });
 });

@@ -1,0 +1,25 @@
+# Build context for infra/docker/app-dev/Dockerfile is the repo root and gets
+# uploaded to BuildKit — keep it lean.
+node_modules
+**/node_modules
+.git
+.repos
+caches
+assets
+experiments
+userdata
+.t3
+.claude
+.codex
+.cursor
+.devcontainer
+.macroscope
+.plans
+native/**/target
+**/dist
+**/dist-electron
+**/.vite-plus
+**/.expo
+.env
+.env.*
+!.env.example

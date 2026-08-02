@@ -122,8 +122,13 @@ export const AppDevStackAutoCreateInput = Schema.Struct({
 export type AppDevStackAutoCreateInput = typeof AppDevStackAutoCreateInput.Type;
 
 export const AppDevStackAutoCreateResult = Schema.Struct({
-  stack: AppDevStack,
+  // Null only for reserved branches, which are served by a standing
+  // deployment (frontendUrl) instead of a per-worktree stack.
+  stack: Schema.NullOr(AppDevStack),
   created: Schema.Boolean,
+  alreadyRunning: Schema.optional(Schema.Boolean),
+  reserved: Schema.optional(Schema.Boolean),
+  message: Schema.optional(Schema.NullOr(Schema.String)),
   frontendUrl: Schema.NullOr(TrimmedNonEmptyString),
   frontendServiceName: Schema.NullOr(TrimmedNonEmptyString),
 });
