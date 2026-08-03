@@ -18,6 +18,7 @@ import { serverEnvironment } from "../../state/server";
 import { Badge } from "../ui/badge";
 import { Switch } from "../ui/switch";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
+import { WorkflowCatalogContent } from "./WorkflowCatalogContent";
 
 type CatalogState =
   | { readonly status: "loading" }
@@ -284,9 +285,11 @@ export function SkillSettings({ focusedSkillId }: { focusedSkillId: string | und
                           <ChevronRightIcon className="size-3.5 transition-transform group-open:rotate-90" />
                           Prompt text
                         </summary>
-                        <pre className="mb-4 max-h-[26rem] overflow-auto rounded-lg border border-border/70 bg-muted/35 p-3 text-[11px] leading-relaxed whitespace-pre-wrap">
-                          <code>{skill.promptText}</code>
-                        </pre>
+                        <WorkflowCatalogContent
+                          text={skill.promptText}
+                          label={`${skill.title} prompt text`}
+                          maxHeightClassName="max-h-[26rem]"
+                        />
                       </details>
                     </SettingsRow>
                   </FocusedRow>
@@ -358,9 +361,11 @@ export function DocSettings({ focusedDocId }: { focusedDocId: string | undefined
                       <ChevronRightIcon className="size-3.5 transition-transform group-open:rotate-90" />
                       Document content
                     </summary>
-                    <pre className="mb-4 max-h-[28rem] overflow-auto rounded-lg border border-border/70 bg-muted/35 p-3 text-[11px] leading-relaxed whitespace-pre-wrap">
-                      <code>{doc.content}</code>
-                    </pre>
+                    <WorkflowCatalogContent
+                      text={doc.content}
+                      label={`${doc.title} document content`}
+                      maxHeightClassName="max-h-[28rem]"
+                    />
                   </details>
                 </SettingsRow>
               </FocusedRow>
