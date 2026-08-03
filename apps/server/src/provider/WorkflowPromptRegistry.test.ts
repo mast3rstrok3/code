@@ -78,12 +78,14 @@ describe("WorkflowPromptRegistry", () => {
       /The two branches produce very different artifacts/,
     );
     NodeAssert.match(prototype?.promptText ?? "", /Capture it when done/);
+    // Prototypes are full-fidelity: real-app worktree + app dev stack, no toy stand-ins.
+    NodeAssert.match(prototype?.promptText ?? "", /## Full fidelity on the real application/);
+    NodeAssert.match(prototype?.promptText ?? "", /app dev stack/);
+    NodeAssert.doesNotMatch(prototype?.promptText ?? "", /tiny interactive terminal app/);
     const prototypeLogic = resolveWorkflowDoc("prototype-logic");
     NodeAssert.match(prototypeLogic?.content ?? "", /Isolate the logic in a portable module/);
-    NodeAssert.match(
-      prototypeLogic?.content ?? "",
-      /Build the smallest TUI that exposes the state/,
-    );
+    NodeAssert.match(prototypeLogic?.content ?? "", /Wire it into the real application/);
+    NodeAssert.match(prototypeLogic?.content ?? "", /Don't downgrade to a toy/);
     const prototypeUi = resolveWorkflowDoc("prototype-ui");
     NodeAssert.match(prototypeUi?.content ?? "", /Two sub-shapes — strongly prefer sub-shape A/);
     NodeAssert.match(prototypeUi?.content ?? "", /Build the floating switcher/);

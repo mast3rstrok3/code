@@ -12,21 +12,21 @@ The built-in skills derive from [Matt Pocock's skills repo](https://github.com/m
 
 Provenance of the main skills:
 
-| Skill ID                                                                                                 | Upstream source                                                      |
-| -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| `product.fix.codex`, `product.fast-feature.codex`, `product.full-feature.codex`                          | `productivity/grilling`, restricted to product questions             |
-| `planning.grill-stage.codex`                                                                             | `engineering/grill-with-docs` = `grilling` + `domain-modeling` fused |
-| `planning.domain-modeling.codex`                                                                         | `engineering/domain-modeling`                                        |
-| `planning.wayfinder.codex`                                                                               | `engineering/wayfinder`                                              |
-| `planning.research.codex`                                                                                | `engineering/research`                                               |
-| `planning.prototype.codex`                                                                               | `engineering/prototype`                                              |
-| `planning.spec.codex`                                                                                    | `engineering/to-spec`                                                |
-| `planning.tickets.codex`                                                                                 | `engineering/to-tickets`                                             |
-| `planning.ticket-reviewer.codex`                                                                         | T3-native, assembled from `to-tickets` steps 4–5                     |
-| `implementation.orchestrator-planning.codex`                                                             | `engineering/implement`                                              |
-| `implementation.tdd.codex`                                                                               | `engineering/tdd` (+ `tests.md`, `mocking.md`)                       |
-| `implementation.code-review.codex`                                                                       | `engineering/code-review`                                            |
-| `implementation.merge-gate.codex`, `implementation.browser-dev-review.codex`, `implementation.fix.codex` | T3-native stages                                                     |
+| Skill ID                                                                                                 | Upstream source                                                                                         |
+| -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `product.fix.codex`, `product.fast-feature.codex`, `product.full-feature.codex`                          | `productivity/grilling`, restricted to product questions                                                |
+| `planning.grill-stage.codex`                                                                             | `engineering/grill-with-docs` = `grilling` + `domain-modeling` fused                                    |
+| `planning.domain-modeling.codex`                                                                         | `engineering/domain-modeling`                                                                           |
+| `planning.wayfinder.codex`                                                                               | `engineering/wayfinder`                                                                                 |
+| `planning.research.codex`                                                                                | `engineering/research`                                                                                  |
+| `planning.prototype.codex`                                                                               | `engineering/prototype`, adapted to full-fidelity prototyping on real-app worktrees with app dev stacks |
+| `planning.spec.codex`                                                                                    | `engineering/to-spec`                                                                                   |
+| `planning.tickets.codex`                                                                                 | `engineering/to-tickets`                                                                                |
+| `planning.ticket-reviewer.codex`                                                                         | T3-native, assembled from `to-tickets` steps 4–5                                                        |
+| `implementation.orchestrator-planning.codex`                                                             | `engineering/implement`                                                                                 |
+| `implementation.tdd.codex`                                                                               | `engineering/tdd` (+ `tests.md`, `mocking.md`)                                                          |
+| `implementation.code-review.codex`                                                                       | `engineering/code-review`                                                                               |
+| `implementation.merge-gate.codex`, `implementation.browser-dev-review.codex`, `implementation.fix.codex` | T3-native stages                                                                                        |
 
 Supporting documents (`context-format`, `adr-format`, `domain-docs`, `agent-brief`, `prototype-logic`, `prototype-ui`, `tdd-mocking`, `tdd-tests`, `tdd-logging`, `preview-browser-qa`) are deduplicated by global ID and back-linked to the skills that carry them.
 

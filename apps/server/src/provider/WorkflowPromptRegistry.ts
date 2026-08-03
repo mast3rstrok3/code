@@ -110,34 +110,38 @@ const PROTOTYPE_PROMPT = `<collaboration_mode># Prototype
 
 A prototype is **throwaway code that answers a question**. The question decides the shape.
 
+## Full fidelity on the real application
+
+T3 prototypes are built on the real application, not as low-fidelity stand-ins. Work in a dedicated prototype worktree and branch created from the current branch, and start the app dev stack for that worktree when none is running — the running app on the prototype branch *is* the prototype. Do not build toy terminal apps, mock pages, or sandboxes outside the repository: a branch of the real application answers the same question with more truth, and the app dev stack makes it just as easy to run and share.
+
 ## Pick a branch
 
 Identify which question is being answered — from the user's prompt, the surrounding code, or by asking if the user is around:
 
-- **"Does this logic / state model feel right?"** → the Logic Prototype document loaded with workflow_doc_get. Build a tiny interactive terminal app that pushes the state machine through cases that are hard to reason about on paper.
-- **"What should this look like?"** → the UI Prototype document loaded with workflow_doc_get. Generate several radically different UI variations on a single route, switchable via a URL search param and a floating bottom bar.
+- **"Does this logic / state model feel right?"** → the Logic Prototype document loaded with workflow_doc_get. Implement the candidate state model as a portable module in the real codebase and drive it through the application's real seams on the prototype branch.
+- **"What should this look like?"** → the UI Prototype document loaded with workflow_doc_get. Generate several radically different UI variations on the real route, switchable via a URL search param and a floating bottom bar, viewed through the app dev stack.
 
 The two branches produce very different artifacts — getting this wrong wastes the whole prototype. If the question is genuinely ambiguous and the user isn't reachable, default to whichever branch better matches the surrounding code (a backend module → logic; a page or component → UI) and state the assumption at the top of the prototype.
 
 ## Rules that apply to both
 
-1. **Throwaway from day one, and clearly marked as such.** Locate the prototype code close to where it will actually be used (next to the module or page it's prototyping for) so context is obvious — but name it so a casual reader can see it's a prototype, not production. For throwaway UI routes, obey whatever routing convention the project already uses; don't invent a new top-level structure.
-2. **One command to run.** Whatever the project's existing task runner supports — \`pnpm <name>\`, \`python <path>\`, \`bun <path>\`, etc. The user must be able to start it without thinking.
-3. **No persistence by default.** State lives in memory. Persistence is the thing the prototype is _checking_, not something it should depend on. If the question explicitly involves a database, hit a scratch DB or a local file with a clear "PROTOTYPE — wipe me" name.
+1. **Throwaway from day one, and clearly marked as such.** The prototype lives on its own worktree and branch, named so a casual reader can see it is a prototype (e.g. \`prototype/<question-slug>\`), and never merges to main. Within the branch, locate prototype code close to where it will actually be used and obey the project's existing conventions; don't invent a new top-level structure.
+2. **One step to run.** The app dev stack for the prototype worktree is the run command. Start it when none is running and hand over the preview URL; the user must be able to open the prototype without thinking.
+3. **No persistence changes by default.** The dev stack's state is isolated to the prototype worktree — keep it wipe-able. Don't run destructive migrations or touch shared state unless persistence is the thing the prototype is _checking_.
 4. **Skip the polish.** No tests, no error handling beyond what makes the prototype _runnable_, no abstractions. The point is to learn something fast.
-5. **Surface the state.** After every action (logic) or on every variant switch (UI), print or render the full relevant state so the user can see what changed.
-6. **Capture it when done.** Fold any validated decision into the real code, then capture the prototype itself as a **primary source**: commit it to a throwaway branch, out of main, and leave a context pointer to that branch on the implementation issue. Capture the answer too — the verdict and the question it settled — in the issue or a commit. The main branch keeps only the validated decision.
+5. **Surface the state.** After every action (logic) or on every variant switch (UI), render or log the full relevant state so the user can see what changed.
+6. **Capture it when done.** Fold any validated decision into the real code, then capture the prototype itself as a **primary source**: keep it committed on the prototype branch, out of main, and leave a context pointer to that branch on the implementation issue. Capture the answer too — the verdict and the question it settled — in the issue or a commit. The main branch keeps only the validated decision.
 
 ## T3 workflow adapter
 
-There is no external issue tracker. The "implementation issue" that captures the answer is T3's durable planning record: report the verdict, the question it settled, and the throwaway-branch pointer in your final workflow-subagent-result so the parent thread can store them on the relevant decision ticket or Spec.
+There is no external issue tracker. The "implementation issue" that captures the answer is T3's durable planning record: report the verdict, the question it settled, and the prototype-branch pointer in your final workflow-subagent-result so the parent thread can store them on the relevant decision ticket or Spec.
 
-These rules override only upstream issue-tracker mechanics; the prototype branches, rules, and capture discipline remain authoritative.
+These rules override upstream issue-tracker mechanics and upstream's low-fidelity prototype shapes (standalone terminal apps, isolated throwaway pages): T3 prototypes full-fidelity on worktrees of the real application with app dev stacks. The question-first discipline and capture rules remain authoritative.
 </collaboration_mode>`;
 
 const PROTOTYPE_LOGIC_DOC_CONTENT = `# Logic Prototype
 
-A tiny interactive terminal app that lets the user drive a state model by hand. Use this when the question is about **business logic, state transitions, or data shape** — the kind of thing that looks reasonable on paper but only feels wrong once you push it through real cases.
+Drive a candidate state model through the real application by hand. Use this when the question is about **business logic, state transitions, or data shape** — the kind of thing that looks reasonable on paper but only feels wrong once you push it through real cases.
 
 ## When this is the right shape
 
@@ -146,23 +150,21 @@ A tiny interactive terminal app that lets the user drive a state model by hand. 
 - "I want to feel out what the API should look like before writing it."
 - Anything where the user wants to **press buttons and watch state change**.
 
-If the question is "what should this look like" — wrong branch. Use [UI.md](UI.md).
+If the question is "what should this look like" — wrong branch. Use the UI Prototype document.
 
 ## Process
 
 ### 1. State the question
 
-Before writing code, write down what state model and what question you're prototyping. One paragraph, in the prototype's README or a comment at the top of the file. A logic prototype that answers the wrong question is pure waste — make the question explicit so it can be checked later, whether the user is watching now or returning to it AFK.
+Before writing code, write down what state model and what question you're prototyping. One paragraph, in a comment at the top of the module. A logic prototype that answers the wrong question is pure waste — make the question explicit so it can be checked later, whether the user is watching now or returning to it AFK.
 
-### 2. Pick the language
+### 2. Work on the prototype branch
 
-Use whatever the host project uses. If the project has no obvious runtime (e.g. a docs repo), ask.
-
-Match the project's existing conventions for tooling — don't add a new package manager or runtime just for the prototype.
+The prototype lives in the dedicated prototype worktree and branch of the real application. Use the host project's language, tooling, and conventions — never add a new package manager or runtime for a prototype.
 
 ### 3. Isolate the logic in a portable module
 
-Put the actual logic — the bit that's answering the question — behind a small, pure interface that could be lifted out and dropped into the real codebase later. The TUI around it is throwaway; the logic module shouldn't be.
+Put the actual logic — the bit that's answering the question — behind a small, pure interface that can stay in place when the prototype graduates. The wiring around it is throwaway; the logic module shouldn't be.
 
 The right shape depends on the question:
 
@@ -171,55 +173,44 @@ The right shape depends on the question:
 - **A small set of pure functions** over a plain data type. Good when there's no implicit current state — just transformations.
 - **A class or module with a clear method surface** when the logic genuinely owns ongoing internal state.
 
-Pick whichever shape best fits the question being asked, *not* whichever is easiest to wire to a TUI. Keep it pure: no I/O, no terminal code, no \`console.log\` for control flow. The TUI imports it and calls into it; nothing flows the other direction.
+Pick whichever shape best fits the question being asked, *not* whichever is easiest to wire up. Keep it pure: no I/O, no rendering, no \`console.log\` for control flow. The application wiring imports it and calls into it; nothing flows the other direction.
 
 This is what makes the prototype useful past its own lifetime: when the question's been answered, the validated reducer / machine / function set can be lifted into the real module on its own.
 
-### 4. Build the smallest TUI that exposes the state
+### 4. Wire it into the real application
 
-Build it as a **lightweight TUI** — on every tick, clear the screen (\`console.clear()\` / \`print("\\033[2J\\033[H")\` / equivalent) and re-render the whole frame. The user should always see one stable view, not an ever-growing scrollback.
+Mount the module at the real seam it would eventually serve on the prototype branch — the actual route, command handler, reducer slot, or service the real feature would use. Start the app dev stack for the prototype worktree when none is running, and drive the model through the running application.
 
-Each frame has two parts, in this order:
+Surface the full relevant state after every action so each transition is visible: a debug panel on the affected page, structured logs in the dev-stack console, or the app's existing state inspector — whichever the project already supports. The user should always see one stable, current view of the state, never have to reconstruct it from scattered output.
 
-1. **Current state**, pretty-printed and diff-friendly (one field per line, or formatted JSON). Use **bold** for field names or section headers and **dim** for less important context (timestamps, IDs, derived values). Native ANSI escape codes are fine — \`\\x1b[1m\` bold, \`\\x1b[2m\` dim, \`\\x1b[0m\` reset. No need to pull in a styling library unless one is already in the project.
-2. **Keyboard shortcuts**, listed at the bottom: \`[a] add user  [d] delete user  [t] tick clock  [q] quit\`. Bold the key, dim the description, or vice-versa — whatever reads cleanly.
+When the logic genuinely has no reachable surface in the app yet, add the smallest driver the repository already supports — a dev-only route, a scratch command, a focused script registered with the project's task runner — on the prototype branch. The driver is throwaway; the portable module is not. Do not build a standalone toy app outside the application to host the logic.
 
-Behaviour:
+### 5. Make it reachable in one step
 
-1. **Initialise state** — a single in-memory object/struct. Render the first frame on start.
-2. **Read one keystroke (or one line)** at a time, dispatch to a handler that mutates state.
-3. **Re-render** the full frame after every action — don't append, replace.
-4. **Loop until quit.**
-
-The whole frame should fit on one screen.
-
-### 5. Make it runnable in one command
-
-Add a script to the project's existing task runner (\`package.json\` scripts, \`Makefile\`, \`justfile\`, \`pyproject.toml\`). The user should run \`pnpm run <prototype-name>\` or equivalent — never need to remember a path.
-
-If the host project has no task runner, just put the command at the top of the prototype's README.
+The app dev stack is the run command. Hand over the preview URL and say exactly where to look — the route, the panel, the log stream. If a script driver was needed instead, register it with the project's existing task runner so one command starts it.
 
 ### 6. Hand it over
 
-Give the user the run command. They'll drive it themselves; the interesting moments are when they say "wait, that shouldn't be possible" or "huh, I assumed X would be different" — those are the bugs in the _idea_, which is the whole point. If they want new actions added, add them. Prototypes evolve.
+The user drives it themselves; the interesting moments are when they say "wait, that shouldn't be possible" or "huh, I assumed X would be different" — those are the bugs in the _idea_, which is the whole point. If they want new actions added, add them. Prototypes evolve.
 
 ### 7. Capture the answer and the prototype
 
-Once the prototype has answered its question, capture the answer, then capture the prototype the way the [SKILL](SKILL.md) describes. The logic-specific mapping: the validated reducer / machine / function set lifts into the real module (the decision, absorbed); the TUI shell rides along to the throwaway branch that keeps the prototype as a primary source.
+Once the prototype has answered its question, capture the answer, then capture the prototype the way the skill describes. The logic-specific mapping: the validated reducer / machine / function set lifts into the real module (the decision, absorbed); the throwaway wiring and drivers stay on the prototype branch that keeps the prototype as a primary source.
 
 ## Anti-patterns
 
 - **Don't add tests.** A prototype that needs tests is no longer a prototype.
-- **Don't wire it to the real database.** Use an in-memory store unless the question is specifically about persistence.
+- **Don't touch shared or production state.** The dev stack's state is isolated to the prototype worktree — keep it wipe-able. Persistence only becomes real when persistence is the question.
 - **Don't generalise.** No "what if we wanted to support X later." The prototype answers one question.
-- **Don't blur the logic and the TUI together.** If the reducer / state machine references \`console.log\`, prompts, or terminal escape codes, it's no longer portable. Keep the TUI as a thin shell over a pure module.
-- **Don't ship the TUI shell into production.** The shell is optimised for being driven by hand from a terminal. The logic module behind it is the bit worth keeping.`;
+- **Don't blur the logic and the wiring together.** If the reducer / state machine references rendering, transport, or logging concerns, it's no longer portable. Keep the application wiring as a thin shell over a pure module.
+- **Don't ship the prototype wiring into production.** The debug panels, scratch drivers, and dev-only routes were written under prototype constraints. The logic module behind them is the bit worth keeping.
+- **Don't downgrade to a toy.** A standalone terminal app or sandbox outside the repository answers a paper version of the question; the real application on the prototype branch answers the real one.`;
 
 const PROTOTYPE_UI_DOC_CONTENT = `# UI Prototype
 
-Generate **several radically different UI variations** on a single route, switchable from a floating bottom bar. The user flips between variants in the browser, picks one (or steals bits from each), then throws the rest away.
+Generate **several radically different UI variations** on a single route of the real application, switchable from a floating bottom bar. The variants live on the prototype branch and are viewed through the app dev stack for the prototype worktree — real header, real data, real density. The user flips between variants in the browser, picks one (or steals bits from each), then throws the rest away.
 
-If the question is about logic/state rather than what something looks like — wrong branch. Use [LOGIC.md](LOGIC.md).
+If the question is about logic/state rather than what something looks like — wrong branch. Use the Logic Prototype document.
 
 ## When this is the right shape
 
@@ -310,16 +301,16 @@ Put the switcher in a single shared component so both sub-shapes can reuse it. L
 
 ### 5. Hand it over
 
-Surface the URL (and the \`?variant=\` keys). The user will flip through whenever they get to it. The interesting feedback is usually **"I want the header from B with the sidebar from C"** — that's the actual design they want.
+Start the app dev stack for the prototype worktree when none is running, and surface the preview URL (and the \`?variant=\` keys). The user will flip through whenever they get to it. The interesting feedback is usually **"I want the header from B with the sidebar from C"** — that's the actual design they want.
 
 ### 6. Capture the answer and clean up
 
-Once a variant has won, capture the answer — which variant and why — then capture the prototype the way the [SKILL](SKILL.md) describes. Fold the winner into the real code and move the rest onto the throwaway branch, not into main:
+Once a variant has won, capture the answer — which variant and why — then capture the prototype the way the skill describes. Fold the winner into the real code and leave the rest on the prototype branch, not in main:
 
 - **Sub-shape A** — fold the winner into the existing page; drop the losing variants and the switcher from main.
 - **Sub-shape B** — promote the winning variant to a real route; drop the throwaway route and the switcher from main.
 
-The full set of variants is the primary source, so it lands on the throwaway branch, not the bin — variant components and the switcher left in the main branch rot fast and confuse the next reader.
+The full set of variants is the primary source, so it stays on the prototype branch, not the bin — variant components and the switcher left in the main branch rot fast and confuse the next reader.
 
 ## Anti-patterns
 
