@@ -23,6 +23,7 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import type * as Scope from "effect/Scope";
@@ -129,6 +130,15 @@ function makeTestLayer(
   const reactorLayer = ImplementationWorkflowReactorLive.pipe(
     Layer.provide(coreLayer),
     Layer.provide(serverSettingsLayerTest({})),
+    // The reactor probes the Dev Review frontend URL; answer it without real network I/O.
+    Layer.provide(
+      Layer.succeed(
+        HttpClient.HttpClient,
+        HttpClient.make((request) =>
+          Effect.succeed(HttpClientResponse.fromWeb(request, new Response("ok", { status: 200 }))),
+        ),
+      ),
+    ),
     Layer.provide(
       Layer.mock(GitWorkflowService)({
         createWorktree: (input) =>

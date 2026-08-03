@@ -22,6 +22,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import type * as Scope from "effect/Scope";
@@ -35,7 +36,10 @@ import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Lay
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
-import { ImplementationWorkflowReactorLive } from "./ImplementationWorkflowReactor.ts";
+import {
+  fastFeatureBuildContractProblems,
+  ImplementationWorkflowReactorLive,
+} from "./ImplementationWorkflowReactor.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
@@ -74,6 +78,7 @@ interface ImplementationCalls {
   readonly createWorktreeInputs: Ref.Ref<ReadonlyArray<VcsCreateWorktreeInput>>;
   readonly mergeRefInputs: Ref.Ref<ReadonlyArray<GitMergeRefInput>>;
   readonly localStatusCount: Ref.Ref<number>;
+  readonly frontendProbeUrls: Ref.Ref<ReadonlyArray<string>>;
 }
 
 /**
@@ -135,6 +140,8 @@ function makeTestLayer(
   autoCreateFrontendUrls?: ReadonlyArray<string | null>,
   sourceRefName = "main",
   autoCreateGate?: AutoCreateGate,
+  autoCreateStackStatus: "running" | "starting" | "error" = "running",
+  frontendProbeStatus = 200,
 ) {
   const coreLayer = Layer.mergeAll(
     OrchestrationEngineLive.pipe(
@@ -158,6 +165,22 @@ function makeTestLayer(
     ImplementationWorkflowReactorLive.pipe(
       Layer.provide(coreLayer),
       Layer.provide(serverSettingsLayerTest(serverSettings)),
+      // The reactor probes the frontend URL before Dev Review; answer it without real network I/O.
+      Layer.provide(
+        Layer.succeed(
+          HttpClient.HttpClient,
+          HttpClient.make((request) =>
+            Ref.update(calls.frontendProbeUrls, (urls) => [...urls, request.url]).pipe(
+              Effect.as(
+                HttpClientResponse.fromWeb(
+                  request,
+                  new Response("ok", { status: frontendProbeStatus }),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
       Layer.provide(
         Layer.mock(GitWorkflowService)({
           createWorktree: (input) =>
@@ -319,7 +342,7 @@ function makeTestLayer(
                         composePath: "/tmp/compose.yml",
                         displayName: input.displayName,
                         description: null,
-                        status: "running" as const,
+                        status: autoCreateStackStatus,
                         services: null,
                         serviceCount: 0,
                         lastError: null,
@@ -351,6 +374,10 @@ function withSystem<A, E>(
     readonly autoCreateGate?: AutoCreateGate;
     /** Leave the reactor stopped so a test can dispatch events it must recover from on start. */
     readonly startReactor?: boolean;
+    /** Stack status the controller reports from `autoCreate`; only "running" is actually serving. */
+    readonly autoCreateStackStatus?: "running" | "starting" | "error";
+    /** HTTP status the frontend URL answers with when the reactor probes it before Dev Review. */
+    readonly frontendProbeStatus?: number;
   },
 ) {
   return Effect.gen(function* () {
@@ -371,6 +398,7 @@ function withSystem<A, E>(
     const createWorktreeInputs = yield* Ref.make<ReadonlyArray<VcsCreateWorktreeInput>>([]);
     const mergeRefInputs = yield* Ref.make<ReadonlyArray<GitMergeRefInput>>([]);
     const localStatusCount = yield* Ref.make(0);
+    const frontendProbeUrls = yield* Ref.make<ReadonlyArray<string>>([]);
     const calls = {
       autoCreateInputs,
       createOrOpenChangeRequestCount,
@@ -378,6 +406,7 @@ function withSystem<A, E>(
       createWorktreeInputs,
       mergeRefInputs,
       localStatusCount,
+      frontendProbeUrls,
     } satisfies ImplementationCalls;
 
     return yield* Effect.scoped(
@@ -407,6 +436,8 @@ function withSystem<A, E>(
           options?.autoCreateFrontendUrls,
           options?.sourceRefName,
           options?.autoCreateGate,
+          options?.autoCreateStackStatus,
+          options?.frontendProbeStatus,
         ),
       ),
     );
@@ -877,6 +908,566 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
+  it.effect("accepts a Build result that lands after the run was blocked at Build", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const run = yield* launchFastFeatureRun(system);
+        const implementer = (yield* system.query.getSnapshot()).threads.find(
+          (thread) => thread.workflowRole === "fast-feature-implementer",
+        );
+        if (!implementer) throw new Error("Fast feature implementer missing.");
+
+        // The spurious "Build finished without a directive" that used to fire minutes into a
+        // build that was still running.
+        yield* system.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: commandId("fast-build-missing"),
+          threadId: implementer.id,
+          activity: {
+            id: eventId("fast-build-missing"),
+            tone: "error",
+            kind: "implementation-fast-build-result",
+            summary: "Fast feature Build result was missing or malformed",
+            payload: {
+              type: "implementation-fast-build-result",
+              runId: run.id,
+              status: "blocked",
+              validations: [],
+              notesMarkdown: "Fast feature Build completed without the required directive.",
+            },
+            turnId: null,
+            createdAt: "2026-01-01T00:00:01.000Z",
+          },
+          createdAt: "2026-01-01T00:00:01.000Z",
+        });
+        yield* system.reactor.drain;
+
+        let snapshot = yield* system.query.getSnapshot();
+        expect(snapshot.implementationRuns[0]?.status).toBe("needs-human-attention");
+        expect(snapshot.implementationRuns[0]?.retryableFailure?.stage).toBe("build");
+
+        // Build then finishes for real, long after the retry budget was spent.
+        yield* system.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: commandId("fast-build-late-success"),
+          threadId: implementer.id,
+          activity: {
+            id: eventId("fast-build-late-success"),
+            tone: "info",
+            kind: "implementation-fast-build-result",
+            summary: "Fast Build succeeded",
+            payload: {
+              type: "implementation-fast-build-result",
+              runId: run.id,
+              status: "succeeded",
+              commitSha: "def456",
+              validations: requiredValidations(),
+              notesMarkdown: "Implemented and committed.",
+            },
+            turnId: null,
+            createdAt: "2026-01-01T00:00:02.000Z",
+          },
+          createdAt: "2026-01-01T00:00:02.000Z",
+        });
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        const reviewingRun = snapshot.implementationRuns[0];
+        expect(reviewingRun?.status).toBe("qa-reviewing");
+        expect(reviewingRun?.fastBuildResult?.status).toBe("succeeded");
+        expect(reviewingRun?.fastBuildResult?.commitSha).toBe("def456");
+        expect(reviewingRun?.retryableFailure).toBeNull();
+        expect(
+          snapshot.threads.filter((thread) => thread.workflowRole === "implementation-qa-reviewer"),
+        ).toHaveLength(1);
+      }),
+    ),
+  );
+
+  it.effect("re-prompts Build on retry after a succeeded result was rejected", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const run = yield* launchFastFeatureRun(system);
+        const implementer = (yield* system.query.getSnapshot()).threads.find(
+          (thread) => thread.workflowRole === "fast-feature-implementer",
+        );
+        if (!implementer) throw new Error("Fast feature implementer missing.");
+        expect(implementer.messages).toHaveLength(1);
+
+        // Build reports success but names its validation commands differently, so the run is
+        // blocked at Build while `fastBuildResult.status` stays "succeeded".
+        yield* system.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: commandId("fast-build-mismatched-validations"),
+          threadId: implementer.id,
+          activity: {
+            id: eventId("fast-build-mismatched-validations"),
+            tone: "info",
+            kind: "implementation-fast-build-result",
+            summary: "Fast Build succeeded",
+            payload: {
+              type: "implementation-fast-build-result",
+              runId: run.id,
+              status: "succeeded",
+              commitSha: "def456",
+              validations: [
+                {
+                  command: "vp check (run as `pnpm check`)",
+                  status: "passed",
+                  outputMarkdown: "ok",
+                  completedAt: "2026-01-01T00:00:02.000Z",
+                },
+              ],
+              notesMarkdown: "Implemented and committed.",
+            },
+            turnId: null,
+            createdAt: "2026-01-01T00:00:02.000Z",
+          },
+          createdAt: "2026-01-01T00:00:02.000Z",
+        });
+        yield* system.reactor.drain;
+
+        let snapshot = yield* system.query.getSnapshot();
+        const blocked = snapshot.implementationRuns[0];
+        expect(blocked?.status).toBe("needs-human-attention");
+        expect(blocked?.retryableFailure?.stage).toBe("build");
+        expect(blocked?.fastBuildResult?.status).toBe("succeeded");
+
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.retry",
+          commandId: commandId("fast-build-retry"),
+          threadId: sourceThreadId,
+          runId: run.id,
+          createdAt: "2026-01-01T00:00:03.000Z",
+        });
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        const retried = snapshot.threads.find((thread) => thread.id === implementer.id);
+        expect(snapshot.implementationRuns[0]?.status).toBe("running");
+        // A retry that starts no turn is the bug: Build must actually be asked again, and told why.
+        expect(retried?.messages).toHaveLength(2);
+        expect(retried?.messages.at(-1)?.role).toBe("user");
+        expect(retried?.messages.at(-1)?.text).toContain("Your last result was rejected");
+        // The reason has to name the exact string that was expected and what arrived instead,
+        // otherwise Build cannot tell a naming problem from a real validation failure.
+        expect(retried?.messages.at(-1)?.text).toContain(
+          "Missing a passing result under this exact command string:",
+        );
+        expect(retried?.messages.at(-1)?.text).toContain("- `vp run typecheck`");
+        expect(retried?.messages.at(-1)?.text).toContain(
+          "- `vp check (run as `pnpm check`)` (passed)",
+        );
+      }),
+    ),
+  );
+
+  it.effect("keeps the Build contract and the Build gate in lockstep", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const run = yield* launchFastFeatureRun(system);
+        // The example directive the prompt tells Build to copy must itself pass the gate that
+        // judges the real one. If a prompt edit ever breaks that round trip, it fails here rather
+        // than by rejecting a finished build in production.
+        expect(fastFeatureBuildContractProblems(run)).toEqual([]);
+
+        const prompt = (yield* system.query.getSnapshot()).threads.find(
+          (thread) => thread.workflowRole === "fast-feature-implementer",
+        )?.messages[0]?.text;
+        if (prompt === undefined) throw new Error("Build handover missing.");
+        for (const command of run.launchSummary.validationCommands) {
+          expect(prompt).toContain(`- \`${command}\``);
+        }
+        expect(prompt).toContain("`validations[].command` **exactly** as written above");
+
+        // The embedded example is generated from the run's own commands, not hardcoded.
+        const fence = /```json\s*([\s\S]*?)```/.exec(prompt)?.[1] ?? "";
+        const example = JSON.parse(fence) as {
+          readonly validations: ReadonlyArray<{ readonly command: string }>;
+        };
+        expect(example.validations.map((validation) => validation.command)).toEqual([
+          ...run.launchSummary.validationCommands,
+        ]);
+      }),
+    ),
+  );
+
+  it.effect("blocks Dev Review instead of reviewing a stack that is not running", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const run = yield* launchFastFeatureRun(system);
+          expect(run.appDevStack.stackStatus).toBe("starting");
+          // A stack the controller reports as `starting` must not be cached as resolved.
+          expect(run.appDevStack.status).not.toBe("ready");
+
+          const implementer = (yield* system.query.getSnapshot()).threads.find(
+            (thread) => thread.workflowRole === "fast-feature-implementer",
+          );
+          if (!implementer) throw new Error("Fast feature implementer missing.");
+
+          yield* system.engine.dispatch({
+            type: "thread.activity.append",
+            commandId: commandId("fast-build-stack-starting"),
+            threadId: implementer.id,
+            activity: {
+              id: eventId("fast-build-stack-starting"),
+              tone: "info",
+              kind: "implementation-fast-build-result",
+              summary: "Fast Build succeeded",
+              payload: {
+                type: "implementation-fast-build-result",
+                runId: run.id,
+                status: "succeeded",
+                commitSha: "def456",
+                validations: requiredValidations(),
+                notesMarkdown: "Implemented and committed.",
+              },
+              turnId: null,
+              createdAt: "2026-01-01T00:00:02.000Z",
+            },
+            createdAt: "2026-01-01T00:00:02.000Z",
+          });
+          yield* system.reactor.drain;
+
+          const snapshot = yield* system.query.getSnapshot();
+          const blocked = snapshot.implementationRuns[0];
+          expect(blocked?.status).toBe("needs-human-attention");
+          expect(blocked?.retryableFailure?.stage).toBe("app-dev-stack");
+          expect(blocked?.retryableFailure?.detail).toContain("not 'running'");
+          // No reviewer is sent at a URL that cannot serve it.
+          expect(
+            snapshot.threads.filter(
+              (thread) => thread.workflowRole === "implementation-qa-reviewer",
+            ),
+          ).toHaveLength(0);
+          expect(blocked?.qaAttemptCount).toBe(0);
+        }),
+      { autoCreateStackStatus: "starting" },
+    ),
+  );
+
+  it.effect("blocks Dev Review when the stack reports running but the URL is down", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const run = yield* launchFastFeatureRun(system);
+          // The controller is happy: stack running, URL resolved, cached as ready. This is the
+          // state that used to skip every check and send reviewer after reviewer at a dead edge.
+          expect(run.appDevStack.status).toBe("ready");
+          expect(run.appDevStack.stackStatus).toBe("running");
+
+          const implementer = (yield* system.query.getSnapshot()).threads.find(
+            (thread) => thread.workflowRole === "fast-feature-implementer",
+          );
+          if (!implementer) throw new Error("Fast feature implementer missing.");
+
+          yield* system.engine.dispatch({
+            type: "thread.activity.append",
+            commandId: commandId("fast-build-edge-down"),
+            threadId: implementer.id,
+            activity: {
+              id: eventId("fast-build-edge-down"),
+              tone: "info",
+              kind: "implementation-fast-build-result",
+              summary: "Fast Build succeeded",
+              payload: {
+                type: "implementation-fast-build-result",
+                runId: run.id,
+                status: "succeeded",
+                commitSha: "def456",
+                validations: requiredValidations(),
+                notesMarkdown: "Implemented and committed.",
+              },
+              turnId: null,
+              createdAt: "2026-01-01T00:00:02.000Z",
+            },
+            createdAt: "2026-01-01T00:00:02.000Z",
+          });
+          yield* system.reactor.drain;
+
+          const snapshot = yield* system.query.getSnapshot();
+          const blocked = snapshot.implementationRuns[0];
+          expect(blocked?.status).toBe("needs-human-attention");
+          expect(blocked?.retryableFailure?.stage).toBe("app-dev-stack");
+          expect(blocked?.retryableFailure?.detail).toContain("returned HTTP 503");
+          // The probe has to actually have gone to the reviewer's URL.
+          expect(yield* Ref.get(system.frontendProbeUrls)).toContain("http://127.0.0.1:5173");
+          // No reviewer launched, no Dev Review attempt burned.
+          expect(
+            snapshot.threads.filter(
+              (thread) => thread.workflowRole === "implementation-qa-reviewer",
+            ),
+          ).toHaveLength(0);
+          expect(blocked?.qaAttemptCount).toBe(0);
+        }),
+      { frontendProbeStatus: 503 },
+    ),
+  );
+
+  it.effect("does not relaunch Dev Review while its reviewer is idle between turns", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const run = yield* launchFastFeatureRun(system);
+        const implementer = (yield* system.query.getSnapshot()).threads.find(
+          (thread) => thread.workflowRole === "fast-feature-implementer",
+        );
+        if (!implementer) throw new Error("Fast feature implementer missing.");
+
+        yield* system.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: commandId("fast-build-for-idle-reviewer"),
+          threadId: implementer.id,
+          activity: {
+            id: eventId("fast-build-for-idle-reviewer"),
+            tone: "info",
+            kind: "implementation-fast-build-result",
+            summary: "Fast Build succeeded",
+            payload: {
+              type: "implementation-fast-build-result",
+              runId: run.id,
+              status: "succeeded",
+              commitSha: "def456",
+              validations: requiredValidations(),
+              notesMarkdown: "Implemented and committed.",
+            },
+            turnId: null,
+            createdAt: "2026-01-01T00:00:02.000Z",
+          },
+          createdAt: "2026-01-01T00:00:02.000Z",
+        });
+        yield* system.reactor.drain;
+
+        let snapshot = yield* system.query.getSnapshot();
+        const reviewer = snapshot.threads.find(
+          (thread) => thread.workflowRole === "implementation-qa-reviewer",
+        );
+        if (!reviewer) throw new Error("Dev Review thread missing.");
+        expect(snapshot.implementationRuns[0]?.qaAttemptCount).toBe(1);
+
+        // The reviewer finishes a turn and its session falls back to `ready`. That is an idle
+        // reviewer, not a dead one.
+        yield* system.engine.dispatch({
+          type: "thread.session.set",
+          commandId: commandId("reviewer-session-ready"),
+          threadId: reviewer.id,
+          session: {
+            threadId: reviewer.id,
+            status: "ready",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: "2026-01-01T00:00:03.000Z",
+          },
+          createdAt: "2026-01-01T00:00:03.000Z",
+        });
+
+        yield* system.reactor.start();
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        expect(
+          snapshot.threads.filter((thread) => thread.workflowRole === "implementation-qa-reviewer"),
+        ).toHaveLength(1);
+        expect(snapshot.implementationRuns[0]?.qaAttemptCount).toBe(1);
+
+        // A reviewer whose session actually died is still recovered.
+        yield* system.engine.dispatch({
+          type: "thread.session.set",
+          commandId: commandId("reviewer-session-stopped"),
+          threadId: reviewer.id,
+          session: {
+            threadId: reviewer.id,
+            status: "stopped",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: "2026-01-01T00:00:04.000Z",
+          },
+          createdAt: "2026-01-01T00:00:04.000Z",
+        });
+        yield* system.reactor.start();
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        expect(
+          snapshot.threads.filter((thread) => thread.workflowRole === "implementation-qa-reviewer"),
+        ).toHaveLength(2);
+        expect(snapshot.implementationRuns[0]?.qaAttemptCount).toBe(2);
+      }),
+    ),
+  );
+
+  it.effect("ignores a Build result once the run has moved past Build", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const run = yield* launchFastFeatureRun(system);
+        const implementer = (yield* system.query.getSnapshot()).threads.find(
+          (thread) => thread.workflowRole === "fast-feature-implementer",
+        );
+        if (!implementer) throw new Error("Fast feature implementer missing.");
+
+        const reportBuild = (tag: string, createdAt: string) =>
+          system.engine.dispatch({
+            type: "thread.activity.append",
+            commandId: commandId(tag),
+            threadId: implementer.id,
+            activity: {
+              id: eventId(tag),
+              tone: "info",
+              kind: "implementation-fast-build-result",
+              summary: "Fast Build succeeded",
+              payload: {
+                type: "implementation-fast-build-result",
+                runId: run.id,
+                status: "succeeded",
+                commitSha: "def456",
+                validations: requiredValidations(),
+                notesMarkdown: "Implemented and committed.",
+              },
+              turnId: null,
+              createdAt,
+            },
+            createdAt,
+          });
+
+        yield* reportBuild("fast-build-first", "2026-01-01T00:00:02.000Z");
+        yield* system.reactor.drain;
+        const reviewing = (yield* system.query.getSnapshot()).implementationRuns[0];
+        expect(reviewing?.status).toBe("qa-reviewing");
+        expect(reviewing?.qaAttemptCount).toBe(1);
+
+        yield* reportBuild("fast-build-repeat", "2026-01-01T00:00:03.000Z");
+        yield* system.reactor.drain;
+        const snapshot = yield* system.query.getSnapshot();
+        expect(snapshot.implementationRuns[0]?.qaAttemptCount).toBe(1);
+        expect(snapshot.implementationRuns[0]?.updatedAt).toBe(reviewing?.updatedAt);
+        expect(
+          snapshot.threads.filter((thread) => thread.workflowRole === "implementation-qa-reviewer"),
+        ).toHaveLength(1);
+      }),
+    ),
+  );
+
+  it.effect("recovers a blocked run whose Build result was never consumed", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          // With the reactor stopped, the Build result lands on the thread with nobody to apply
+          // it — exactly what a spent retry budget or a restart mid-dispatch leaves behind.
+          yield* dispatchFastFeatureLaunch(system);
+          let snapshot = yield* system.query.getSnapshot();
+          const run = snapshot.implementationRuns[0];
+          const implementer = snapshot.threads.find(
+            (thread) => thread.workflowRole === "fast-feature-implementer",
+          );
+          if (!run || !implementer) throw new Error("Fast feature run missing.");
+
+          // Build ran to completion before the run was stranded, so its worktree exists.
+          yield* Ref.update(system.createWorktreeInputs, (inputs) => [
+            ...inputs,
+            {
+              cwd: "/tmp/implementation-reactor",
+              refName: "main",
+              newRefName: run.orchestratorBranch,
+              path: run.orchestratorWorktreePath,
+            },
+          ]);
+
+          yield* system.engine.dispatch({
+            type: "thread.implementation-run.update",
+            commandId: commandId("fast-run-blocked"),
+            threadId: sourceThreadId,
+            run: {
+              ...run,
+              status: "needs-human-attention",
+              retryableFailure: {
+                stage: "build",
+                detail: "Fast feature Build completed without the required directive.",
+                failedAt: "2026-01-01T00:00:01.000Z",
+                attemptCount: 3,
+                maxAttempts: 3,
+                humanBlocked: false,
+              },
+              updatedAt: "2026-01-01T00:00:01.000Z",
+            },
+            createdAt: "2026-01-01T00:00:01.000Z",
+          });
+          yield* system.engine.dispatch({
+            type: "thread.activity.append",
+            commandId: commandId("fast-build-unconsumed"),
+            threadId: implementer.id,
+            activity: {
+              id: eventId("fast-build-unconsumed"),
+              tone: "info",
+              kind: "implementation-fast-build-result",
+              summary: "Fast Build succeeded",
+              payload: {
+                type: "implementation-fast-build-result",
+                runId: run.id,
+                status: "succeeded",
+                commitSha: "def456",
+                validations: requiredValidations(),
+                notesMarkdown: "Implemented and committed.",
+              },
+              turnId: null,
+              createdAt: "2026-01-01T00:00:02.000Z",
+            },
+            createdAt: "2026-01-01T00:00:02.000Z",
+          });
+
+          yield* system.reactor.start();
+          yield* system.reactor.drain;
+
+          snapshot = yield* system.query.getSnapshot();
+          const recovered = snapshot.implementationRuns[0];
+          expect(recovered?.status).toBe("qa-reviewing");
+          expect(recovered?.fastBuildResult?.status).toBe("succeeded");
+          expect(recovered?.retryableFailure).toBeNull();
+          // The run is now stamped at the activity it consumed, so the sweep's
+          // `activity.createdAt > run.updatedAt` guard cannot match it again.
+          expect(recovered?.updatedAt).toBe("2026-01-01T00:00:02.000Z");
+          expect(
+            snapshot.threads.filter(
+              (thread) => thread.workflowRole === "implementation-qa-reviewer",
+            ),
+          ).toHaveLength(1);
+
+          // `activity.createdAt > run.updatedAt` is the whole termination argument: a run blocked
+          // again at or after the activity it already consumed must not have it re-applied.
+          if (!recovered) throw new Error("Recovered run missing.");
+          yield* system.engine.dispatch({
+            type: "thread.implementation-run.update",
+            commandId: commandId("fast-run-blocked-again"),
+            threadId: sourceThreadId,
+            run: {
+              ...recovered,
+              status: "needs-human-attention",
+              fastBuildResult: null,
+              retryableFailure: {
+                stage: "dev-review",
+                detail: "Dev Review could not run.",
+                failedAt: "2026-01-01T00:00:02.000Z",
+                attemptCount: 3,
+                maxAttempts: 3,
+                humanBlocked: false,
+              },
+              updatedAt: "2026-01-01T00:00:02.000Z",
+            },
+            createdAt: "2026-01-01T00:00:02.000Z",
+          });
+          yield* system.reactor.start();
+          yield* system.reactor.drain;
+          const settled = (yield* system.query.getSnapshot()).implementationRuns[0];
+          expect(settled?.status).toBe("needs-human-attention");
+          expect(settled?.fastBuildResult).toBeNull();
+        }),
+      { startReactor: false },
+    ),
+  );
+
   it.effect("hands the plan to Build before the app dev stack finishes provisioning", () =>
     Effect.gen(function* () {
       const gate: AutoCreateGate = {
@@ -1036,14 +1627,16 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("refreshes a ready stack with no URL before starting Browser Dev Review", () =>
+  it.effect("refreshes a stack with no URL before starting Browser Dev Review", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
           const run = yield* launchFastFeatureRun(system);
           let snapshot = yield* system.query.getSnapshot();
+          // A stack with no frontend URL is not serving, so it is not `ready` — it stays
+          // `ensuring` and gets re-provisioned before Dev Review.
           expect(snapshot.implementationRuns[0]?.appDevStack).toMatchObject({
-            status: "ready",
+            status: "ensuring",
             frontendUrl: null,
           });
 

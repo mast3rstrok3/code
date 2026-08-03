@@ -1,4 +1,5 @@
 import {
+  type AppDevStackAutoCreateResult,
   CommandId,
   DevReviewId,
   EventId,
@@ -22,6 +23,7 @@ import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
+import { HttpClient } from "effect/unstable/http";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -245,6 +247,39 @@ function requiredValidationsPassed(input: {
         validation.command.trim() === requiredCommand.trim() && validation.status === "passed",
     ),
   );
+}
+
+/**
+ * Names the exact strings expected against the exact strings received. The common failure is a
+ * command reported under a paraphrase, which reads as "not run" to `requiredValidationsPassed`; a
+ * reason that only lists what was required leaves Build guessing at what it did wrong.
+ */
+function validationMismatchReason(input: {
+  readonly requiredCommands: ReadonlyArray<string>;
+  readonly validations: ReadonlyArray<OrchestrationImplementationValidationResult>;
+  readonly preamble?: string;
+}): string {
+  const passed = new Set(
+    input.validations
+      .filter((validation) => validation.status === "passed")
+      .map((validation) => validation.command.trim()),
+  );
+  const missing = input.requiredCommands.filter((command) => !passed.has(command.trim()));
+  const reported = input.validations.map(
+    (validation) => `- \`${validation.command}\` (${validation.status})`,
+  );
+  return [
+    input.preamble ??
+      "Fast feature Build did not report a passing result for every required validation command.",
+    "",
+    "Missing a passing result under this exact command string:",
+    ...missing.map((command) => `- \`${command}\``),
+    "",
+    reported.length === 0 ? "No validations were reported." : "Reported instead:",
+    ...reported,
+    "",
+    "`validations[].command` is compared literally. Re-report the same runs using the exact strings above — do not annotate or rename them.",
+  ].join("\n");
 }
 
 function validationSummary(
@@ -483,6 +518,44 @@ function fastFeatureArtifactMarkdown(input: {
   );
 }
 
+/**
+ * Required when the change touches native mobile files. Shared by the Build contract and the gate
+ * in `applyFastBuildResult` so the command the agent is told to run is the command that is checked.
+ */
+const NATIVE_MOBILE_VALIDATION_COMMAND = "vp run lint:mobile";
+
+/**
+ * `ready` has to mean "the frontend is serving", not "the controller accepted the request".
+ * Recording a still-`starting` stack as ready froze that state on the run and made every later
+ * Dev Review skip provisioning, so reviewers were sent at a URL that never came up. A reserved
+ * branch has no stack of its own — a standing deployment serves it, so a URL is enough.
+ */
+function appDevStackReadiness(result: AppDevStackAutoCreateResult): "ready" | "ensuring" {
+  if (result.frontendUrl === null) return "ensuring";
+  return result.stack === null || result.stack.status === "running" ? "ready" : "ensuring";
+}
+
+/**
+ * The example directive embedded in the Build prompt. Derived from the run's own required commands
+ * rather than hardcoded, so what Build is shown to copy is exactly what `requiredValidationsPassed`
+ * accepts. `fastFeatureBuildContractHoldsForRun` asserts that round trip.
+ */
+function fastFeatureExampleDirective(run: OrchestrationImplementationRun) {
+  return {
+    type: "implementation-fast-build-result",
+    runId: run.id,
+    status: "succeeded",
+    commitSha: "HEAD commit SHA",
+    validations: run.launchSummary.validationCommands.map((command) => ({
+      command,
+      status: "passed",
+      outputMarkdown: "summary",
+      completedAt: "ISO timestamp",
+    })),
+    notesMarkdown: "Implementation notes",
+  } as const;
+}
+
 function fastFeatureExecutionContract(run: OrchestrationImplementationRun): ReadonlyArray<string> {
   return [
     "## Execution identity",
@@ -491,42 +564,103 @@ function fastFeatureExecutionContract(run: OrchestrationImplementationRun): Read
     `- fixed source commit: ${run.pinnedCommit}`,
     "",
     "## Required validation",
-    ...run.launchSummary.validationCommands.map((command) => `- ${command}`),
-    "- vp run lint:mobile when native mobile files changed",
+    ...run.launchSummary.validationCommands.map((command) => `- \`${command}\``),
+    `- \`${NATIVE_MOBILE_VALIDATION_COMMAND}\` when native mobile files changed`,
+    "",
+    // The gate is a literal string comparison. Saying so is the difference between a result that
+    // lands and one that is rejected for naming the same command a different way.
+    "Copy each command into `validations[].command` **exactly** as written above, character for character.",
+    "Do not annotate it, expand it, or substitute the underlying package-manager command — not `pnpm check`, not",
+    "``vp check (run as `pnpm check`)``. A command reported under any other string counts as not run, and the",
+    "whole result is rejected even when the work itself is complete. If a command cannot be run here, report",
+    'it with `"status": "failed"` and explain why in `notesMarkdown`; do not rename it.',
     "",
     "Finish with exactly one fenced JSON directive:",
     "```json",
-    JSON.stringify(
-      {
-        type: "implementation-fast-build-result",
-        runId: run.id,
-        status: "succeeded",
-        commitSha: "HEAD commit SHA",
-        validations: [
-          {
-            command: "vp check",
-            status: "passed",
-            outputMarkdown: "summary",
-            completedAt: "ISO timestamp",
-          },
-        ],
-        notesMarkdown: "Implementation notes",
-      },
-      null,
-      2,
-    ),
+    JSON.stringify(fastFeatureExampleDirective(run), null, 2),
     "```",
   ];
 }
 
+/**
+ * Programmatic guard that the Build prompt and the Build gate cannot drift apart. The example
+ * directive the prompt tells Build to copy has to satisfy the very check `applyFastBuildResult`
+ * runs, and every required command has to appear verbatim in the contract. Returns the problems so
+ * a focused test can assert there are none; a prompt edit that breaks the round trip fails there
+ * rather than silently rejecting a finished build in production.
+ */
+export function fastFeatureBuildContractProblems(
+  run: OrchestrationImplementationRun,
+): ReadonlyArray<string> {
+  const contract = fastFeatureExecutionContract(run).join("\n");
+  const problems: string[] = [];
+
+  for (const command of run.launchSummary.validationCommands) {
+    if (!contract.includes(`- \`${command}\``)) {
+      problems.push(`Required command '${command}' is not listed verbatim in the contract.`);
+    }
+  }
+  if (!contract.includes(`- \`${NATIVE_MOBILE_VALIDATION_COMMAND}\``)) {
+    problems.push(
+      `Native mobile command '${NATIVE_MOBILE_VALIDATION_COMMAND}' is not listed in the contract.`,
+    );
+  }
+
+  const fences = [...contract.matchAll(/```json\s*([\s\S]*?)```/g)];
+  if (fences.length !== 1) {
+    problems.push(`Contract must embed exactly one JSON directive, found ${fences.length}.`);
+    return problems;
+  }
+  let example: unknown;
+  try {
+    example = JSON.parse(fences[0]?.[1] ?? "");
+  } catch {
+    problems.push("Embedded directive is not valid JSON.");
+    return problems;
+  }
+  const directive = asFastBuildDirective(example);
+  if (directive === null) {
+    problems.push("Embedded directive is not an implementation-fast-build-result.");
+    return problems;
+  }
+  if (directive.runId !== run.id) {
+    problems.push("Embedded directive names a different run.");
+  }
+  if (
+    !requiredValidationsPassed({
+      requiredCommands: run.launchSummary.validationCommands,
+      validations: directive.validations,
+    })
+  ) {
+    problems.push(
+      "Embedded directive would be rejected by requiredValidationsPassed: the example Build is told to copy does not satisfy the gate.",
+    );
+  }
+  return problems;
+}
+
+/**
+ * `rejectionMarkdown` is set when Build is being re-prompted after its last result was rejected.
+ * Without it a retry re-sends the original handover, and Build reproduces the same rejection.
+ */
 function buildFastFeaturePrompt(input: {
   readonly run: OrchestrationImplementationRun;
   readonly sourceThread: OrchestrationThread;
+  readonly rejectionMarkdown?: string;
 }): string {
   return [
     `Implement Fast feature run ${input.run.id}.`,
     "",
     "Do not ask the user questions. Implement the canonical plan in the exact branch and worktree below, validate it, and commit all completed changes.",
+    ...(input.rejectionMarkdown === undefined
+      ? []
+      : [
+          "",
+          "## Your last result was rejected",
+          input.rejectionMarkdown,
+          "",
+          "Work already committed on this branch stands. Fix only what is called out above — re-running validations and re-reporting is often all that is needed — then finish with the directive below.",
+        ]),
     "",
     fastFeatureArtifactMarkdown(input),
     "",
@@ -590,6 +724,9 @@ function changeRequestFailure(input: {
   };
 }
 
+/** Dev Review is already slow; a hung edge must not hold the reactor's queue. */
+const FRONTEND_PROBE_TIMEOUT = Duration.seconds(10);
+
 function errorDetail(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
@@ -604,6 +741,28 @@ const make = Effect.gen(function* () {
   const gitWorkflow = yield* GitWorkflowService;
   const appDevStackManager = yield* AppDevStackManager;
   const serverSettingsService = yield* ServerSettingsService;
+  const httpClient = yield* HttpClient.HttpClient;
+
+  /**
+   * Asks the frontend URL itself whether a reviewer could load it. Deliberately cheap and
+   * fail-closed: anything other than a real answer below 400 blocks Dev Review on the retryable
+   * `app-dev-stack` stage, so a stack still coming up gets the sweep's retries before a human is
+   * involved. 4xx and 5xx both count as down — at an app root they mean Traefik has no route or no
+   * healthy backend, not a page worth reviewing.
+   */
+  const probeFrontend = Effect.fn("ImplementationWorkflowReactor.probeFrontend")(function* (
+    url: string,
+  ) {
+    const outcome = yield* httpClient
+      .get(url)
+      .pipe(Effect.timeout(FRONTEND_PROBE_TIMEOUT), Effect.result);
+    if (outcome._tag === "Failure") {
+      return { ok: false, detail: `could not be reached (${errorDetail(outcome.failure)})` };
+    }
+    return outcome.success.status < 400
+      ? { ok: true, detail: `answered HTTP ${outcome.success.status}` }
+      : { ok: false, detail: `returned HTTP ${outcome.success.status}` };
+  });
 
   const serverCommandId = (tag: string) =>
     crypto.randomUUIDv4.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
@@ -1358,8 +1517,15 @@ const make = Effect.gen(function* () {
         updatedAt: input.createdAt,
       };
 
+      // "The controller accepted the request" is not "the app is serving". A stack still `starting`
+      // was being cached as resolved, which skipped `autoCreate` on every later Dev Review and sent
+      // reviewer after reviewer at a URL that never came up. A null `stackStatus` is a reserved
+      // branch served by a standing deployment — there is no stack to wait on there.
       const hasResolvedFrontend =
-        input.run.appDevStack.status === "ready" && input.run.appDevStack.frontendUrl !== null;
+        input.run.appDevStack.status === "ready" &&
+        input.run.appDevStack.frontendUrl !== null &&
+        (input.run.appDevStack.stackStatus === null ||
+          input.run.appDevStack.stackStatus === "running");
       const stackResult = hasResolvedFrontend
         ? null
         : yield* appDevStackManager
@@ -1397,6 +1563,74 @@ const make = Effect.gen(function* () {
       const frontendUrl = hasResolvedFrontend
         ? input.run.appDevStack.frontendUrl
         : (stack?.frontendUrl ?? null);
+
+      // Dev Review is a browser session against `frontendUrl`. Launching one before the stack is
+      // actually running only produces a reviewer that correctly reports "no available server",
+      // burning a Dev Review attempt on an infrastructure problem it cannot fix. Blocking on the
+      // retryable `app-dev-stack` stage gives the stack the sweep's retries to finish coming up,
+      // then surfaces it as a stack failure instead of a review failure.
+      const pendingStackStatus =
+        stack !== null && stack.stack !== null && stack.stack.status !== "running"
+          ? stack.stack.status
+          : null;
+      if (!hasResolvedFrontend && (frontendUrl === null || pendingStackStatus !== null)) {
+        const detail =
+          frontendUrl === null
+            ? "the controller returned no frontend URL"
+            : `the stack is '${pendingStackStatus}', not 'running'`;
+        yield* blockRun({
+          sourceThreadId: input.sourceThreadId,
+          run: {
+            ...ensuringRun,
+            appDevStack: {
+              ...ensuringRun.appDevStack,
+              ...(stack === null
+                ? {}
+                : {
+                    stackId: stack.stack?.id ?? null,
+                    stackStatus: stack.stack?.status ?? null,
+                    frontendUrl,
+                    frontendServiceName: stack.frontendServiceName,
+                    displayName: stack.stack?.displayName ?? null,
+                  }),
+              status: "ensuring",
+              updatedAt: input.createdAt,
+            },
+          },
+          retryableStage: "app-dev-stack",
+          reasonMarkdown: `The app dev stack is not serving yet, so browser Dev Review cannot run: ${detail}.`,
+          updatedAt: input.createdAt,
+        });
+        return;
+      }
+
+      // The controller's own status is a claim about the stack, not about the edge. A frontend
+      // crash-looping behind a live Service reports as running and still answers 503, which is how
+      // five reviewers were sent at a URL that had been down for hours. Only the URL the reviewer
+      // will actually open settles it — so this probe runs on the cached path too, which otherwise
+      // skips every check above.
+      if (frontendUrl !== null) {
+        const serving = yield* probeFrontend(frontendUrl);
+        if (!serving.ok) {
+          yield* blockRun({
+            sourceThreadId: input.sourceThreadId,
+            run: {
+              ...ensuringRun,
+              appDevStack: {
+                ...ensuringRun.appDevStack,
+                status: "ensuring",
+                lastErrorMarkdown: serving.detail,
+                updatedAt: input.createdAt,
+              },
+            },
+            retryableStage: "app-dev-stack",
+            reasonMarkdown: `Browser Dev Review cannot run: ${frontendUrl} ${serving.detail}.`,
+            updatedAt: input.createdAt,
+          });
+          return;
+        }
+      }
+
       const reviewHead = yield* gitWorkflow.resolveCommit({
         cwd: input.run.orchestratorWorktreePath,
         ref: "HEAD",
@@ -1424,7 +1658,7 @@ const make = Effect.gen(function* () {
           : stack === null
             ? ensuringRun.appDevStack
             : {
-                status: "ready",
+                status: appDevStackReadiness(stack),
                 stackId: stack.stack?.id ?? null,
                 stackStatus: stack.stack?.status ?? null,
                 frontendUrl,
@@ -1915,9 +2149,16 @@ const make = Effect.gen(function* () {
             }),
           ),
         );
+      // A run blocked at Build has to go back to Build, whatever the last directive claimed. Build
+      // can report `succeeded` and still be rejected — mismatched validation commands, a dirty
+      // worktree, a HEAD that does not match the reported commit — and keying the re-prompt off
+      // the reported status alone left those runs with no way forward: Retry started no turn and
+      // silently marked the run `running`.
+      const blockedAtBuild = setupRun.retryableFailure?.stage === "build";
       const shouldStart =
         currentImplementer.latestTurn?.state !== "running" &&
         (!alreadyHandedOver ||
+          blockedAtBuild ||
           setupRun.fastBuildResult?.status === "failed" ||
           setupRun.fastBuildResult?.status === "blocked");
       if (shouldStart) {
@@ -1942,7 +2183,13 @@ const make = Effect.gen(function* () {
           message: {
             messageId: yield* serverMessageId("fast-feature-build"),
             role: "user",
-            text: buildFastFeaturePrompt({ run: setupRun, sourceThread }),
+            text: buildFastFeaturePrompt({
+              run: setupRun,
+              sourceThread,
+              ...(blockedAtBuild && setupRun.retryableFailure !== null
+                ? { rejectionMarkdown: setupRun.retryableFailure.detail }
+                : {}),
+            }),
             attachments: [],
           },
           titleSeed: implementerThread.title,
@@ -2006,7 +2253,7 @@ const make = Effect.gen(function* () {
           appDevStack:
             stackResult._tag === "Success"
               ? {
-                  status: "ready",
+                  status: appDevStackReadiness(stackResult.success),
                   stackId: stackResult.success.stack?.id ?? null,
                   stackStatus: stackResult.success.stack?.status ?? null,
                   frontendUrl: stackResult.success.frontendUrl,
@@ -2116,7 +2363,7 @@ const make = Effect.gen(function* () {
           appDevStack:
             stackResult._tag === "Success"
               ? {
-                  status: "ready",
+                  status: appDevStackReadiness(stackResult.success),
                   stackId: stackResult.success.stack?.id ?? null,
                   stackStatus: stackResult.success.stack?.status ?? null,
                   frontendUrl: stackResult.success.frontendUrl,
@@ -2343,26 +2590,36 @@ const make = Effect.gen(function* () {
     },
   );
 
-  const handleFastBuildResult = Effect.fn("ImplementationWorkflowReactor.handleFastBuildResult")(
-    function* (
-      event: Extract<ImplementationWorkflowEvent, { type: "thread.activity-appended" }>,
-      directive: FastBuildDirective,
-    ) {
+  const applyFastBuildResult = Effect.fn("ImplementationWorkflowReactor.applyFastBuildResult")(
+    function* (input: {
+      readonly threadId: ThreadId;
+      readonly directive: FastBuildDirective;
+      readonly updatedAt: string;
+    }) {
+      const { directive } = input;
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
       const run = findRunById(readModel, directive.runId);
       if (
         run === null ||
         run.artifactSource !== "proposed-plan" ||
-        run.orchestratorThreadId !== event.payload.threadId
+        run.orchestratorThreadId !== input.threadId
       ) {
         return;
       }
       // Build owns dev-review fixes too, so a run legitimately reports several successful builds.
       // Only ignore a repeat result once the branch has moved past Build into review or publication.
-      if (run.status !== "running" && run.status !== "launch-pending") return;
+      // A blocked Build has not moved past Build — it is stuck at it — so a real result that lands
+      // after the retry budget was spent must still be accepted, or the run is stranded for good.
+      if (
+        run.status !== "running" &&
+        run.status !== "launch-pending" &&
+        run.status !== "needs-human-attention"
+      ) {
+        return;
+      }
       const sourceThreadId = findRunSourceThreadId({ readModel, run });
       if (sourceThreadId === null) return;
-      const updatedAt = event.payload.activity.createdAt;
+      const updatedAt = input.updatedAt;
       const buildResult = {
         runId: run.id,
         status: directive.status,
@@ -2393,7 +2650,10 @@ const make = Effect.gen(function* () {
           sourceThreadId,
           run: { ...run, fastBuildResult: buildResult, updatedAt },
           retryableStage: "build",
-          reasonMarkdown: `Fast feature Build did not report passing results for every required validation command: ${run.launchSummary.validationCommands.join(", ")}.`,
+          reasonMarkdown: validationMismatchReason({
+            requiredCommands: run.launchSummary.validationCommands,
+            validations: directive.validations,
+          }),
           updatedAt,
         });
         return;
@@ -2446,7 +2706,7 @@ const make = Effect.gen(function* () {
       if (
         changedNativeMobileFiles &&
         !requiredValidationsPassed({
-          requiredCommands: ["vp run lint:mobile"],
+          requiredCommands: [NATIVE_MOBILE_VALIDATION_COMMAND],
           validations: directive.validations,
         })
       ) {
@@ -2454,8 +2714,11 @@ const make = Effect.gen(function* () {
           sourceThreadId,
           run: { ...run, fastBuildResult: buildResult, updatedAt },
           retryableStage: "build",
-          reasonMarkdown:
-            "Fast feature Build changed native mobile files without reporting a passing `vp run lint:mobile` validation.",
+          reasonMarkdown: validationMismatchReason({
+            requiredCommands: [NATIVE_MOBILE_VALIDATION_COMMAND],
+            validations: directive.validations,
+            preamble: "Fast feature Build changed native mobile files.",
+          }),
           updatedAt,
         });
         return;
@@ -2486,6 +2749,16 @@ const make = Effect.gen(function* () {
       yield* startBrowserReview({ sourceThreadId, run: succeededRun, createdAt: updatedAt });
     },
   );
+
+  const handleFastBuildResult = (
+    event: Extract<ImplementationWorkflowEvent, { type: "thread.activity-appended" }>,
+    directive: FastBuildDirective,
+  ) =>
+    applyFastBuildResult({
+      threadId: event.payload.threadId,
+      directive,
+      updatedAt: event.payload.activity.createdAt,
+    });
 
   const handleMergeGateResult = Effect.fn("ImplementationWorkflowReactor.handleMergeGateResult")(
     function* (
@@ -2636,7 +2909,7 @@ const make = Effect.gen(function* () {
     if (
       changedFiles.some((path) => path === "apps/mobile" || path.startsWith("apps/mobile/")) &&
       !requiredValidationsPassed({
-        requiredCommands: ["vp run lint:mobile"],
+        requiredCommands: [NATIVE_MOBILE_VALIDATION_COMMAND],
         validations: directive.validations,
       })
     ) {
@@ -3025,7 +3298,7 @@ const make = Effect.gen(function* () {
       if (
         changedFiles.some((path) => path === "apps/mobile" || path.startsWith("apps/mobile/")) &&
         !requiredValidationsPassed({
-          requiredCommands: ["vp run lint:mobile"],
+          requiredCommands: [NATIVE_MOBILE_VALIDATION_COMMAND],
           validations: directive.validations,
         })
       ) {
@@ -3696,6 +3969,45 @@ const make = Effect.gen(function* () {
         }
       }
 
+      // Build can report success after the run was already blocked — a spurious failure, an
+      // exhausted retry budget, a restart mid-dispatch. The result is durable on the thread, so
+      // re-drive it here rather than leaving a finished branch with nobody to review it.
+      // `createdAt > updatedAt` is what terminates this: applying the result advances the run past
+      // the activity, so the next sweep no longer matches.
+      if (
+        run.artifactSource === "proposed-plan" &&
+        run.status === "needs-human-attention" &&
+        run.fastBuildResult?.status !== "succeeded"
+      ) {
+        const orchestratorThread = yield* projectionSnapshotQuery
+          .getThreadDetailById(run.orchestratorThreadId)
+          .pipe(Effect.map(Option.getOrUndefined));
+        // Threads in the command read model carry no activities, so the detail is the only place
+        // the reported result can be read back.
+        const reported = [...(orchestratorThread?.activities ?? [])]
+          .filter((activity) => activity.kind === "implementation-fast-build-result")
+          .sort((left, right) => (left.createdAt < right.createdAt ? 1 : -1))[0];
+        const directive = reported ? asFastBuildDirective(reported.payload) : null;
+        if (
+          reported !== undefined &&
+          directive !== null &&
+          directive.status === "succeeded" &&
+          directive.runId === run.id &&
+          reported.createdAt > run.updatedAt
+        ) {
+          yield* recoverRunStage(
+            run.id,
+            "fast-feature-build-result",
+            applyFastBuildResult({
+              threadId: run.orchestratorThreadId,
+              directive,
+              updatedAt: reported.createdAt,
+            }),
+          );
+          continue;
+        }
+      }
+
       if (
         run.status === "needs-human-attention" &&
         run.retryableFailure === null &&
@@ -3857,12 +4169,23 @@ const make = Effect.gen(function* () {
         );
         continue;
       }
+      // A reviewer sitting at `ready` is idle between turns, not dead — it is still the live Dev
+      // Review. Reading idle as dead relaunched a fresh reviewer on every sweep and burned the
+      // whole attempt budget in minutes, so only a missing, errored, or stopped reviewer is
+      // relaunched here, and never past the attempt limit `recoverIncompleteBrowserReviews`
+      // already respects.
+      const activeReviewer =
+        run.activeDevReviewThreadId === null
+          ? undefined
+          : childThreads.find((thread) => thread.id === run.activeDevReviewThreadId);
+      const reviewerNeedsRelaunch =
+        activeReviewer === undefined ||
+        activeReviewer.session?.status === "error" ||
+        activeReviewer.session?.status === "stopped";
       if (
         run.status === "qa-reviewing" &&
-        !hasActiveChild({
-          threadId: run.activeDevReviewThreadId,
-          role: "implementation-qa-reviewer",
-        })
+        run.qaAttemptCount < IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS &&
+        reviewerNeedsRelaunch
       ) {
         yield* startBrowserReview({
           sourceThreadId,
