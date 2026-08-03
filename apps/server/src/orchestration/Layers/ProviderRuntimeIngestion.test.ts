@@ -4614,4 +4614,252 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.session?.status).toBe("error");
     expect(thread.session?.lastError).toBe("runtime still processed");
   });
+
+  async function seedFastFeatureRun(harness: Awaited<ReturnType<typeof createHarness>>) {
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    const fastSourceThreadId = asThreadId("thread-fast-source");
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-fast-source-create"),
+        threadId: fastSourceThreadId,
+        projectId: asProjectId("project-1"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+        parentThreadId: null,
+        workflowRole: null,
+        title: "Fast checkout",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: "plan",
+        workflowPreset: "fast-feature",
+        runtimeMode: "full-access",
+        branch: "main",
+        worktreePath: "/tmp/fast-feature-source",
+        createdAt,
+      }),
+    );
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.make("cmd-fast-intent"),
+        threadId: fastSourceThreadId,
+        activity: {
+          id: asEventId("evt-fast-intent"),
+          tone: "info",
+          kind: "product-intent-locked",
+          summary: "Fast checkout",
+          payload: {
+            intentKind: "feature",
+            title: "Fast checkout",
+            summaryMarkdown: "Add a fast checkout path.",
+          },
+          turnId: null,
+          createdAt,
+        },
+        createdAt,
+      }),
+    );
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.proposed-plan.upsert",
+        commandId: CommandId.make("cmd-fast-plan"),
+        threadId: fastSourceThreadId,
+        proposedPlan: {
+          id: "plan-fast",
+          turnId: null,
+          planMarkdown: "# Fast checkout\nImplement the focused checkout change.",
+          implementedAt: null,
+          implementationThreadId: null,
+          createdAt,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.fast-feature-run.launch",
+        commandId: CommandId.make("cmd-fast-launch"),
+        threadId: fastSourceThreadId,
+        proposedPlanId: "plan-fast",
+        baseBranch: "main",
+        pinnedCommit: "abc123",
+        orchestratorBranch: "fast-feature/fast-checkout",
+        orchestratorWorktreePath: "/tmp/fast-feature-worktree",
+        validationCommands: ["vp check"],
+        createdAt,
+      }),
+    );
+
+    const snapshot = await harness.readModel();
+    const implementer = snapshot.threads.find(
+      (thread) => thread.workflowRole === "fast-feature-implementer",
+    );
+    const run = snapshot.implementationRuns[0];
+    if (!implementer || !run) throw new Error("Fast feature run seeding failed.");
+    return { implementerThreadId: implementer.id, runId: run.id };
+  }
+
+  function emitFastBuildTurnStart(
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    implementerThreadId: ThreadId,
+    turnId: string,
+  ) {
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId(`evt-${turnId}-started`),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:01.000Z",
+      threadId: implementerThreadId,
+      turnId: asTurnId(turnId),
+    });
+  }
+
+  const fastBuildResults = (thread: ProviderRuntimeTestThread) =>
+    thread.activities.filter((activity) => activity.kind === "implementation-fast-build-result");
+
+  it("does not report a missing Build directive while the turn is still running", async () => {
+    const harness = await createHarness();
+    const { implementerThreadId } = await seedFastFeatureRun(harness);
+    emitFastBuildTurnStart(harness, implementerThreadId, "turn-fast-narration");
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-fast-narration"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:02.000Z",
+      threadId: implementerThreadId,
+      turnId: asTurnId("turn-fast-narration"),
+      itemId: asItemId("item-fast-narration"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail: "I'll start by exploring the repository structure.",
+      },
+    });
+
+    // The narration must land as an ordinary assistant message and nothing else.
+    const implementer = await waitForThread(
+      harness.readModel,
+      (thread) =>
+        thread.messages.some((message) =>
+          message.text.includes("I'll start by exploring the repository structure."),
+        ),
+      2_000,
+      implementerThreadId,
+    );
+    await harness.drain();
+    expect(fastBuildResults(implementer)).toHaveLength(0);
+    const afterDrain = (await harness.readModel()).threads.find(
+      (thread) => thread.id === implementerThreadId,
+    );
+    expect(fastBuildResults(afterDrain!)).toHaveLength(0);
+  });
+
+  it("reports a missing Build directive once the turn completes, exactly once", async () => {
+    const harness = await createHarness();
+    const { implementerThreadId, runId } = await seedFastFeatureRun(harness);
+    emitFastBuildTurnStart(harness, implementerThreadId, "turn-fast-missing");
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-fast-missing-item"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:02.000Z",
+      threadId: implementerThreadId,
+      turnId: asTurnId("turn-fast-missing"),
+      itemId: asItemId("item-fast-missing"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail: "Done exploring, but I forgot the directive.",
+      },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-fast-missing-turn"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:03.000Z",
+      threadId: implementerThreadId,
+      turnId: asTurnId("turn-fast-missing"),
+      payload: { state: "completed" },
+    });
+
+    const implementer = await waitForThread(
+      harness.readModel,
+      (thread) => fastBuildResults(thread).length > 0,
+      2_000,
+      implementerThreadId,
+    );
+    const blocked = fastBuildResults(implementer)[0];
+    expect(blocked?.tone).toBe("error");
+    expect(blocked?.payload).toMatchObject({
+      type: "implementation-fast-build-result",
+      runId,
+      status: "blocked",
+    });
+
+    // A re-delivered turn.completed is the same failure, not a second one.
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-fast-missing-turn-redelivered"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:04.000Z",
+      threadId: implementerThreadId,
+      turnId: asTurnId("turn-fast-missing"),
+      payload: { state: "completed" },
+    });
+    await harness.drain();
+    const settled = (await harness.readModel()).threads.find(
+      (thread) => thread.id === implementerThreadId,
+    );
+    expect(fastBuildResults(settled!)).toHaveLength(1);
+  });
+
+  it("still accepts a valid Build directive on an intermediate assistant message", async () => {
+    const harness = await createHarness();
+    const { implementerThreadId, runId } = await seedFastFeatureRun(harness);
+    emitFastBuildTurnStart(harness, implementerThreadId, "turn-fast-succeeded");
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-fast-succeeded"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:02.000Z",
+      threadId: implementerThreadId,
+      turnId: asTurnId("turn-fast-succeeded"),
+      itemId: asItemId("item-fast-succeeded"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail: `\`\`\`json
+{
+  "type": "implementation-fast-build-result",
+  "runId": "${runId}",
+  "status": "succeeded",
+  "commitSha": "def456",
+  "validations": [
+    { "command": "vp check", "status": "passed", "outputMarkdown": "ok", "completedAt": "2026-01-01T00:00:02.000Z" }
+  ],
+  "notesMarkdown": "Implemented and committed."
+}
+\`\`\``,
+      },
+    });
+
+    const implementer = await waitForThread(
+      harness.readModel,
+      (thread) => fastBuildResults(thread).length > 0,
+      2_000,
+      implementerThreadId,
+    );
+    expect(fastBuildResults(implementer)[0]?.payload).toMatchObject({
+      type: "implementation-fast-build-result",
+      runId,
+      status: "succeeded",
+      commitSha: "def456",
+    });
+  });
 });

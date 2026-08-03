@@ -193,6 +193,19 @@ function hasAssistantMessageForTurn(
   return false;
 }
 
+function findLastAssistantMessageForTurn(
+  messages: ReadonlyArray<OrchestrationMessage>,
+  turnId: TurnId,
+): OrchestrationMessage | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role === "assistant" && message.turnId === turnId) {
+      return message;
+    }
+  }
+  return undefined;
+}
+
 function findMessageById(
   messages: ReadonlyArray<OrchestrationMessage>,
   messageId: MessageId,
@@ -2233,6 +2246,12 @@ const make = Effect.gen(function* () {
     readonly messageId: MessageId;
     readonly detail: string;
     readonly createdAt: string;
+    /**
+     * Dedupe scope for the synthesized failure. A missing directive is a property of the whole
+     * turn, so callers pass the turn id: keying by message id would report the same stalled turn
+     * once per assistant segment.
+     */
+    readonly dedupeScope?: string;
   }) {
     const thread = yield* resolveThreadDetail(input.threadId);
     if (thread?.workflowRole !== "fast-feature-implementer") return;
@@ -2244,7 +2263,7 @@ const make = Effect.gen(function* () {
         candidate.status !== "canceled",
     );
     if (!run || run.fastBuildResult?.status === "succeeded") return;
-    const failureKey = `${input.threadId}:${input.messageId}:fast-feature-build-failure`;
+    const failureKey = `${input.threadId}:${input.dedupeScope ?? input.messageId}:fast-feature-build-failure`;
     const existing = yield* Cache.getOption(processedWorkflowDirectiveKeys, failureKey);
     if (Option.getOrElse(existing, () => false)) return;
     yield* Cache.set(processedWorkflowDirectiveKeys, failureKey, true);
@@ -2275,26 +2294,37 @@ const make = Effect.gen(function* () {
     event: ProviderRuntimeEvent;
     threadId: ThreadId;
     messageId: MessageId;
+    turnId?: TurnId;
     markdown: string;
     createdAt: string;
+    /**
+     * Only a turn that has ended without its directive is a failure. Agents narrate between tool
+     * calls, so synthesizing a failure per assistant message reports a build that is still running
+     * as blocked — and burns its whole retry budget in the first minute.
+     */
+    synthesizeMissingDirectiveFailure?: boolean;
   }) =>
     Effect.gen(function* () {
       const thread = yield* resolveThreadShell(input.threadId);
       if (!thread) {
         return;
       }
+      const synthesizeFailure = input.synthesizeMissingDirectiveFailure === true;
+      const failureInput = { ...input, dedupeScope: input.turnId ?? input.messageId };
 
       const parseResult = parseWorkflowDirectiveFromMarkdown(input.markdown);
       if (parseResult.kind === "none") {
-        yield* consumePlanningReviewerFailure({
-          ...input,
-          detail: "Reviewer completed without the required planning-reviewer-verdict directive.",
-        });
-        yield* consumeFastFeatureBuildFailure({
-          ...input,
-          detail:
-            "Fast feature Build completed without the required implementation-fast-build-result directive.",
-        });
+        if (synthesizeFailure) {
+          yield* consumePlanningReviewerFailure({
+            ...failureInput,
+            detail: "Reviewer completed without the required planning-reviewer-verdict directive.",
+          });
+          yield* consumeFastFeatureBuildFailure({
+            ...failureInput,
+            detail:
+              "Fast feature Build completed without the required implementation-fast-build-result directive.",
+          });
+        }
         return;
       }
       if (parseResult.kind === "error") {
@@ -2303,14 +2333,16 @@ const make = Effect.gen(function* () {
           messageId: input.messageId,
           detail: parseResult.message,
         });
-        yield* consumePlanningReviewerFailure({
-          ...input,
-          detail: `Reviewer directive was rejected: ${parseResult.message}`,
-        });
-        yield* consumeFastFeatureBuildFailure({
-          ...input,
-          detail: `Fast feature Build directive was rejected: ${parseResult.message}`,
-        });
+        if (synthesizeFailure) {
+          yield* consumePlanningReviewerFailure({
+            ...failureInput,
+            detail: `Reviewer directive was rejected: ${parseResult.message}`,
+          });
+          yield* consumeFastFeatureBuildFailure({
+            ...failureInput,
+            detail: `Fast feature Build directive was rejected: ${parseResult.message}`,
+          });
+        }
         return;
       }
 
@@ -2327,11 +2359,13 @@ const make = Effect.gen(function* () {
           run === undefined ||
           parseResult.directive.runId !== run.id
         ) {
-          yield* consumeFastFeatureBuildFailure({
-            ...input,
-            detail:
-              "Fast feature Build completed with a directive for the wrong workflow stage or run.",
-          });
+          if (synthesizeFailure) {
+            yield* consumeFastFeatureBuildFailure({
+              ...failureInput,
+              detail:
+                "Fast feature Build completed with a directive for the wrong workflow stage or run.",
+            });
+          }
           return;
         }
       }
@@ -2411,6 +2445,73 @@ const make = Effect.gen(function* () {
       });
     });
 
+  /**
+   * Settles a workflow turn that ended without the directive its role owes. Message finalization
+   * cannot carry this on its own: assistant message ids are forgotten as each item completes, so
+   * by `turn.completed` there is usually nothing left to finalize. Reading the turn's last
+   * assistant message straight from the projection keeps the check stateless and restart-safe.
+   */
+  const consumeMissingWorkflowDirectiveForTurn = Effect.fn(
+    "ProviderRuntimeIngestion.consumeMissingWorkflowDirectiveForTurn",
+  )(function* (input: {
+    readonly event: ProviderRuntimeEvent;
+    readonly threadId: ThreadId;
+    readonly turnId: TurnId;
+    readonly createdAt: string;
+  }) {
+    const thread = yield* resolveThreadDetail(input.threadId);
+    const expectedDirectiveType =
+      thread?.workflowRole === "fast-feature-implementer"
+        ? "implementation-fast-build-result"
+        : thread?.workflowRole === "planning-reviewer"
+          ? "planning-reviewer-verdict"
+          : null;
+    if (thread === undefined || expectedDirectiveType === null) return;
+
+    const lastAssistantMessage = findLastAssistantMessageForTurn(thread.messages, input.turnId);
+    const parseResult = parseWorkflowDirectiveFromMarkdown(lastAssistantMessage?.text ?? "");
+    if (parseResult.kind === "parsed" && parseResult.directive.type === expectedDirectiveType) {
+      if (parseResult.directive.type !== "implementation-fast-build-result") return;
+      const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+      const run = readModel.implementationRuns.find(
+        (candidate) =>
+          candidate.artifactSource === "proposed-plan" &&
+          candidate.orchestratorThreadId === thread.id &&
+          candidate.status !== "canceled",
+      );
+      // A directive naming some other run leaves this one just as stranded as no directive at all.
+      if (run !== undefined && parseResult.directive.runId === run.id) return;
+    }
+
+    const messageId = lastAssistantMessage?.id ?? MessageId.make(`assistant:${input.turnId}`);
+    if (expectedDirectiveType === "planning-reviewer-verdict") {
+      yield* consumePlanningReviewerFailure({
+        event: input.event,
+        threadId: input.threadId,
+        messageId,
+        createdAt: input.createdAt,
+        detail:
+          parseResult.kind === "error"
+            ? `Reviewer directive was rejected: ${parseResult.message}`
+            : "Reviewer completed without the required planning-reviewer-verdict directive.",
+      });
+      return;
+    }
+    yield* consumeFastFeatureBuildFailure({
+      event: input.event,
+      threadId: input.threadId,
+      messageId,
+      dedupeScope: input.turnId,
+      createdAt: input.createdAt,
+      detail:
+        parseResult.kind === "error"
+          ? `Fast feature Build directive was rejected: ${parseResult.message}`
+          : parseResult.kind === "parsed"
+            ? "Fast feature Build completed with a directive for the wrong workflow stage or run."
+            : "Fast feature Build completed without the required implementation-fast-build-result directive.",
+    });
+  });
+
   const flushBufferedAssistantMessage = (input: {
     event: ProviderRuntimeEvent;
     threadId: ThreadId;
@@ -2482,6 +2583,7 @@ const make = Effect.gen(function* () {
     existingText?: string;
     hasProjectedMessage?: boolean;
     processWorkflowDirective?: boolean;
+    synthesizeMissingDirectiveFailure?: boolean;
   }) =>
     Effect.gen(function* () {
       const bufferedText = yield* takeBufferedAssistantText(input.messageId);
@@ -2523,8 +2625,12 @@ const make = Effect.gen(function* () {
             event: input.event,
             threadId: input.threadId,
             messageId: input.messageId,
+            ...(input.turnId ? { turnId: input.turnId } : {}),
             markdown: directiveMarkdown,
             createdAt: input.createdAt,
+            ...(input.synthesizeMissingDirectiveFailure === true
+              ? { synthesizeMissingDirectiveFailure: true }
+              : {}),
           });
         }
       }
@@ -3095,6 +3201,8 @@ const make = Effect.gen(function* () {
             finalDeltaCommandTag: "assistant-delta-finalize",
             hasProjectedMessage: existingAssistantMessage !== undefined,
             processWorkflowDirective: true,
+            // One assistant item is a segment of a turn, not the end of it.
+            synthesizeMissingDirectiveFailure: false,
             ...(existingAssistantMessage?.text !== undefined
               ? { existingText: existingAssistantMessage.text }
               : {}),
@@ -3146,6 +3254,7 @@ const make = Effect.gen(function* () {
                 finalDeltaCommandTag: "assistant-delta-finalize-fallback",
                 hasProjectedMessage: findMessageById(messages, assistantMessageId) !== undefined,
                 processWorkflowDirective: true,
+                synthesizeMissingDirectiveFailure: true,
                 ...(findMessageById(messages, assistantMessageId)?.text !== undefined
                   ? { existingText: findMessageById(messages, assistantMessageId)!.text }
                   : {}),
@@ -3162,6 +3271,27 @@ const make = Effect.gen(function* () {
             planId: proposedPlanIdForTurn(thread.id, turnId),
             turnId,
             updatedAt: now,
+          });
+
+          yield* consumeMissingWorkflowDirectiveForTurn({
+            event,
+            threadId: thread.id,
+            turnId,
+            createdAt: now,
+          });
+        }
+      }
+
+      // A stopped turn still owes its workflow a result. Without this the run sits in `running`
+      // forever, waiting on an agent that is no longer there.
+      if (event.type === "turn.aborted") {
+        const turnId = toTurnId(event.turnId);
+        if (turnId) {
+          yield* consumeMissingWorkflowDirectiveForTurn({
+            event,
+            threadId: thread.id,
+            turnId,
+            createdAt: now,
           });
         }
       }
