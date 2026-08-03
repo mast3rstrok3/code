@@ -57,6 +57,56 @@ export type WorkflowPromptContract = typeof WorkflowPromptContract.Type;
 export const WorkflowPromptContracts = Schema.Array(WorkflowPromptContract);
 export type WorkflowPromptContracts = typeof WorkflowPromptContracts.Type;
 
+export const WorkflowCatalogStep = Schema.Struct({
+  label: TrimmedNonEmptyString,
+  skillId: Schema.optional(TrimmedNonEmptyString),
+  threadBoundary: Schema.optional(
+    Schema.Literals(["same thread", "new thread", "new child thread", "new review thread"]),
+  ),
+  note: Schema.optional(TrimmedNonEmptyString),
+});
+export type WorkflowCatalogStep = typeof WorkflowCatalogStep.Type;
+
+export const WorkflowCatalogWorkflow = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  order: PositiveInt,
+  title: TrimmedNonEmptyString,
+  description: TrimmedNonEmptyString,
+  interactionMode: TrimmedNonEmptyString,
+  steps: Schema.Array(WorkflowCatalogStep),
+});
+export type WorkflowCatalogWorkflow = typeof WorkflowCatalogWorkflow.Type;
+
+export const WorkflowSkillContract = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  order: PositiveInt,
+  workflow: WorkflowPromptWorkflow,
+  role: WorkflowPromptContract.fields.role,
+  stage: TrimmedNonEmptyString,
+  title: TrimmedNonEmptyString,
+  description: TrimmedNonEmptyString,
+  promptText: TrimmedNonEmptyString,
+  docIds: Schema.Array(TrimmedNonEmptyString),
+  workflowIds: Schema.Array(TrimmedNonEmptyString),
+});
+export type WorkflowSkillContract = typeof WorkflowSkillContract.Type;
+
+export const WorkflowDocContract = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  title: TrimmedNonEmptyString,
+  path: TrimmedNonEmptyString,
+  content: TrimmedNonEmptyString,
+  skillIds: Schema.Array(TrimmedNonEmptyString),
+});
+export type WorkflowDocContract = typeof WorkflowDocContract.Type;
+
+export const WorkflowCatalog = Schema.Struct({
+  workflows: Schema.Array(WorkflowCatalogWorkflow),
+  skills: Schema.Array(WorkflowSkillContract),
+  docs: Schema.Array(WorkflowDocContract),
+});
+export type WorkflowCatalog = typeof WorkflowCatalog.Type;
+
 const KeybindingsMalformedConfigTicket = Schema.Struct({
   kind: Schema.Literal("keybindings.malformed-config"),
   message: TrimmedNonEmptyString,

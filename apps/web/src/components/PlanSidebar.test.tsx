@@ -1,4 +1,4 @@
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId, ThreadId, WorkflowId } from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -77,6 +77,54 @@ describe("PlanSidebar Spec actions", () => {
 
     expect(withoutHandler).not.toContain("Create Spec");
     expect(automationOwned).not.toContain("Create Spec");
+  });
+
+  it("renders the Wayfinder Map and its decision tickets above Spec", () => {
+    const markup = renderToStaticMarkup(
+      <PlanSidebar
+        {...baseProps}
+        planningWorkflow={{
+          stage: "grill",
+          createTicketsAvailable: false,
+          spec: null,
+          wayfinderMap: {
+            id: "wayfinder-map-1",
+            title: "Remote roadmap",
+            summaryMarkdown: "## Destination\nShip remote workflows",
+            tenantId: null,
+            teamId: null,
+            sourceThreadId: ThreadId.make("thread-1"),
+            sourceMessageIds: [],
+            createdBy: null,
+            workflowId: WorkflowId.make("workflow-wayfinder-map-1"),
+            ticketCount: 1,
+            createdAt: "2026-07-19T00:00:00.000Z",
+            updatedAt: "2026-07-19T00:00:00.000Z",
+          },
+          tickets: [
+            {
+              id: "ticket-1",
+              key: "DECISION-1",
+              specId: "wayfinder-map-1",
+              ordinal: 1,
+              title: "Choose the relay boundary",
+              bodyMarkdown: "## Question\nWhere should relay state live?",
+              plannedFileChanges: [],
+              dependencies: [],
+              status: "open",
+              createdAt: "2026-07-19T00:00:00.000Z",
+              updatedAt: "2026-07-19T00:00:00.000Z",
+            },
+          ],
+          reviewCycles: [],
+          activeReview: null,
+        }}
+      />,
+    );
+
+    expect(markup.indexOf("Wayfinder Map")).toBeLessThan(markup.indexOf("Spec"));
+    expect(markup).toContain('aria-label="Expand Wayfinder Map"');
+    expect(markup).toContain(">1</span>");
   });
 });
 

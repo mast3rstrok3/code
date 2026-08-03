@@ -20,6 +20,7 @@ export const WorkflowArtifactsSnapshot = Schema.Struct({
   projectId: ProjectId,
   context: ThreadWorkflowContext,
   spec: Schema.NullOr(OrchestrationPlanningSpec),
+  wayfinderMap: Schema.NullOr(OrchestrationPlanningSpec),
   tickets: Schema.Array(OrchestrationPlanningTicket),
   reviewCycles: Schema.Array(OrchestrationPlanningReviewCycle),
   implementationRuns: Schema.Array(OrchestrationImplementationRun),

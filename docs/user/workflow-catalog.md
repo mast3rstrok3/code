@@ -1,0 +1,40 @@
+# Workflows, skills, and docs
+
+The Settings catalog separates workflow automation into three layers:
+
+- **Workflows** are complete orchestration paths such as Fix, Fast Feature, Full Feature, Wayfinder, Planning, and Implementation.
+- **Skills** are the focused instructions used for individual workflow steps, such as Spec authoring, TDD implementation, or Code Review.
+- **Docs** are supporting references used by those skills, such as ADR, context, testing, and browser-QA formats.
+
+All three catalogs are read-only and versioned with the T3 Code server. Project and user skills discovered by a provider are separate from these built-in workflow skills.
+
+## Choosing a workflow
+
+- **Fix** — a defect or small correction. Fastest path: plan, then build, no reviews.
+- **Fast Feature** — a feature small enough to skip the Spec-and-tickets pipeline but big enough to deserve a worktree and reviews.
+- **Full Feature** — the complete pipeline. One conversation up front; everything else is automatic.
+- **Planning** — just the planning half: interview, Spec, tickets, ticket review. Pair it with Implementation when you want a checkpoint between the two.
+- **Wayfinder** — the effort is too large or foggy to specify in one pass; chart the decisions first.
+- **Implementation** — you already have a Spec and reviewed tickets; execute them.
+
+Every product-routed workflow starts with a **product grill**: the agent interviews you one question at a time, each with a recommended answer, about product decisions only — the problem, the outcome, the audience, how it should feel, success criteria, scope, and non-goals. Facts it can look up in the codebase it looks up; decisions are yours. Implementation, architecture, and testing questions are resolved later by the automated stages without asking you.
+
+## What each workflow does
+
+**Fix** — grill, then the same thread switches to the CLI's plan mode. The proposed plan launches one Build child thread on the same worktree and branch you started from.
+
+**Fast Feature** — grill, then same-thread planning. The plan launches a Build child in a fresh worktree branched from your starting branch, and starts an app dev stack in parallel if that worktree doesn't have one. A Dev Review sub-thread exercises the result (feedback returns to the Build thread, up to five attempts), a Code Review sub-thread makes its own corrections, and the change request lands back in your starting branch.
+
+**Full Feature** — the grill is the only human gate. Afterwards the full Planning workflow runs, then the full Implementation workflow in its own worktree branched from your selected branch, with the app dev stack created in parallel when absent.
+
+**Planning** — Grill With Docs is a human-in-the-loop interview that also maintains your project's domain docs: glossary terms land in `CONTEXT.md` and durable decisions in ADRs as they crystallize. The Spec is then written as a durable artifact in the app — not a file in your repository — and appears in the Planning side panel. Tickets are drafted in the same thread, then reviewed in up to three cycles, each in its own sub-thread, with the reviewer editing tickets directly.
+
+**Implementation** — loads the Spec, creates a worktree from your chosen branch, and checks or starts the app dev stack. Tickets are implemented dependency-aware by TDD workers, each in its own sub-thread and worktree — a ticket that depends on another branches from that ticket's branch. Worker branches are merged back, then Browser Dev Review runs up to five cycles (a new thread each cycle, fixing what it finds; after the cap the run proceeds and flags the unresolved review). Code Review is a single pass that commits its own corrections, and the change request is filed into the branch you started from.
+
+**Wayfinder** — for efforts too large or uncertain to specify in one pass. Its durable Wayfinder Map appears above the Spec in the Planning side panel. Research, prototype, grilling, and task decisions are stored as normal Planning Tickets linked to the map, including their dependency edges. Its Grill With Docs step combines the interview and domain-modeling discipline while updating glossary and ADR documents as decisions crystallize. When the decision frontier is resolved, the map becomes the input to Spec authoring, and the flow continues through tickets, ticket review, and implementation.
+
+## Skills and docs
+
+Supporting docs are not placed in a skill's context automatically. The skill receives the available document names and loads a document only when it is relevant. This keeps routine workflow turns focused while preserving access to detailed guidance.
+
+The built-in skills are closely based on [Matt Pocock's engineering skills](https://github.com/mattpocock/skills/tree/main/skills/engineering), adapted to T3 Code: specs and tickets are durable app artifacts instead of tracker issues, the product grill is the grilling skill restricted to product questions, and Dev Review and the app dev stack are T3 additions. In Settings, each workflow step links to its skill, and each skill links to the docs it can load.

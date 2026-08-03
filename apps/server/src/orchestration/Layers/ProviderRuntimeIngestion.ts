@@ -1894,6 +1894,27 @@ const make = Effect.gen(function* () {
           return;
         }
 
+        case "wayfinder-map-artifact": {
+          if (!isPlanningArtifactThread(thread)) {
+            yield* Effect.logWarning("provider wayfinder map ignored for non-planning thread", {
+              threadId: thread.id,
+              workflowRole: thread.workflowRole,
+            });
+            return;
+          }
+          yield* orchestrationEngine.dispatch({
+            type: "thread.planning-spec.apply",
+            commandId: yield* providerCommandId(input.event, "workflow-wayfinder-map-apply"),
+            threadId: thread.id,
+            sourceMessageId: input.messageId,
+            title: input.directive.title,
+            summaryMarkdown: input.directive.summaryMarkdown,
+            artifactKind: "wayfinder-map",
+            createdAt: input.createdAt,
+          });
+          return;
+        }
+
         case "planning-tickets-artifact": {
           if (!isPlanningArtifactThread(thread)) {
             yield* Effect.logWarning(

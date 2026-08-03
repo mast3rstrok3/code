@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import { getWorkflowArtifactsForThread } from "../../../orchestration/workflowArtifacts.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { WorkflowArtifactsToolkit } from "./tools.ts";
+import { resolveWorkflowDoc } from "../../../provider/WorkflowPromptRegistry.ts";
 
 const resolve = Effect.fn("WorkflowArtifactsToolkit.resolve")(function* () {
   const scope = yield* McpInvocationContext.requireMcpCapability("workflow-artifacts");
@@ -16,6 +17,7 @@ const notFound = (threadId: ThreadId, message: string) =>
 export const handlers = {
   workflow_context_get: () => resolve().pipe(Effect.map((snapshot) => snapshot.context)),
   workflow_spec_get: () => resolve().pipe(Effect.map((snapshot) => snapshot.spec)),
+  workflow_wayfinder_map_get: () => resolve().pipe(Effect.map((snapshot) => snapshot.wayfinderMap)),
   workflow_tickets_list: () => resolve().pipe(Effect.map((snapshot) => snapshot.tickets)),
   workflow_ticket_get: (input) =>
     Effect.gen(function* () {
@@ -41,6 +43,15 @@ export const handlers = {
         );
       }
       return review;
+    }),
+  workflow_doc_get: (input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.requireMcpCapability("workflow-artifacts");
+      const doc = resolveWorkflowDoc(input.docId);
+      if (doc === undefined) {
+        return yield* notFound(scope.threadId, `Workflow document '${input.docId}' was not found.`);
+      }
+      return doc;
     }),
 } satisfies Parameters<typeof WorkflowArtifactsToolkit.toLayer>[0];
 

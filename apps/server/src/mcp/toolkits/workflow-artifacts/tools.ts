@@ -8,6 +8,7 @@ import {
   PreviewAutomationUnavailableError,
   ThreadWorkflowContext,
   WorkflowArtifactAccessError,
+  WorkflowDocContract,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/unstable/ai";
@@ -46,6 +47,16 @@ export const WorkflowSpecGetTool = readonlyTool(
     failure,
     dependencies,
   }).annotate(Tool.Title, "Get workflow Spec"),
+);
+
+export const WorkflowWayfinderMapGetTool = readonlyTool(
+  Tool.make("workflow_wayfinder_map_get", {
+    description: "Get the canonical Wayfinder Map for the calling thread's workflow.",
+    parameters: Tool.EmptyParams,
+    success: Schema.NullOr(OrchestrationPlanningSpec),
+    failure,
+    dependencies,
+  }).annotate(Tool.Title, "Get workflow Wayfinder Map"),
 );
 
 export const WorkflowTicketsListTool = readonlyTool(
@@ -89,11 +100,23 @@ export const WorkflowDevReviewGetTool = readonlyTool(
   }).annotate(Tool.Title, "Get workflow Dev Review"),
 );
 
+export const WorkflowDocGetTool = readonlyTool(
+  Tool.make("workflow_doc_get", {
+    description: "Load one built-in supporting document for a workflow skill by document ID.",
+    parameters: Schema.Struct({ docId: Schema.String }),
+    success: WorkflowDocContract,
+    failure,
+    dependencies,
+  }).annotate(Tool.Title, "Get workflow document"),
+);
+
 export const WorkflowArtifactsToolkit = Toolkit.make(
   WorkflowContextGetTool,
   WorkflowSpecGetTool,
+  WorkflowWayfinderMapGetTool,
   WorkflowTicketsListTool,
   WorkflowTicketGetTool,
   WorkflowDevReviewsListTool,
   WorkflowDevReviewGetTool,
+  WorkflowDocGetTool,
 );

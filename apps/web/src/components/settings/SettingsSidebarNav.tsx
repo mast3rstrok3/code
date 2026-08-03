@@ -3,6 +3,7 @@ import {
   ArchiveIcon,
   ArrowLeftIcon,
   BotIcon,
+  BookOpenIcon,
   FlaskConicalIcon,
   GitBranchIcon,
   KeyboardIcon,
@@ -11,6 +12,7 @@ import {
   Settings2Icon,
   UsersIcon,
   WorkflowIcon,
+  SparklesIcon,
 } from "lucide-react";
 import { useCanGoBack, useNavigate } from "@tanstack/react-router";
 
@@ -32,6 +34,8 @@ export type SettingsSectionPath =
   | "/settings/keybindings"
   | "/settings/providers"
   | "/settings/workflows"
+  | "/settings/skills"
+  | "/settings/docs"
   | "/settings/source-control"
   | "/settings/connections"
   | "/settings/beta"
@@ -47,7 +51,9 @@ export const SETTINGS_NAV_ITEMS: ReadonlyArray<{
   { label: "Appearance", to: "/settings/appearance", icon: PaletteIcon },
   { label: "Keybindings", to: "/settings/keybindings", icon: KeyboardIcon },
   { label: "Providers", to: "/settings/providers", icon: BotIcon },
-  { label: "Workflow", to: "/settings/workflows", icon: WorkflowIcon },
+  { label: "Workflows", to: "/settings/workflows", icon: WorkflowIcon },
+  { label: "Skills", to: "/settings/skills", icon: SparklesIcon },
+  { label: "Docs", to: "/settings/docs", icon: BookOpenIcon },
   { label: "Source Control", to: "/settings/source-control", icon: GitBranchIcon },
   { label: "Connections", to: "/settings/connections", icon: Link2Icon },
   { label: "Beta", to: "/settings/beta", icon: FlaskConicalIcon },

@@ -6,7 +6,9 @@ import {
   isDevReviewMcpWorkflowPromptId,
   isPreviewMcpWorkflowPromptId,
   isRegisteredWorkflowPromptId,
+  listWorkflowCatalog,
   listWorkflowPromptContracts,
+  resolveWorkflowDoc,
   resolveWorkflowPromptId,
   resolveWorkflowSystemInstructions,
   resolveWorkflowPromptText,
@@ -14,7 +16,117 @@ import {
 } from "./WorkflowPromptRegistry.ts";
 
 describe("WorkflowPromptRegistry", () => {
-  it("renders Planning Workflow Grill with fused domain-modeling instructions and docs", () => {
+  it("builds a validated, deduplicated workflow catalog", () => {
+    const catalog = listWorkflowCatalog();
+    NodeAssert.deepEqual(
+      catalog.workflows.map((workflow) => workflow.id),
+      ["fix", "fast-feature", "full-feature", "wayfinder", "planning", "implementation"],
+    );
+    NodeAssert.equal(
+      catalog.skills.some((skill) => skill.id === WORKFLOW_PROMPT_IDS.productWorkflowCodex),
+      false,
+    );
+    NodeAssert.equal(catalog.docs.filter((doc) => doc.id === "context-format").length, 1);
+    NodeAssert.deepEqual(resolveWorkflowDoc("context-format")?.skillIds, [
+      WORKFLOW_PROMPT_IDS.planningGrillStageCodex,
+      WORKFLOW_PROMPT_IDS.planningSpecCodex,
+    ]);
+    NodeAssert.equal(resolveWorkflowDoc("missing"), undefined);
+    const wayfinder = catalog.skills.find(
+      (skill) => skill.id === WORKFLOW_PROMPT_IDS.planningWayfinderCodex,
+    );
+    NodeAssert.deepEqual(wayfinder?.workflowIds, ["wayfinder"]);
+    NodeAssert.match(wayfinder?.promptText ?? "", /wayfinder-map-artifact/);
+    NodeAssert.match(wayfinder?.promptText ?? "", /## Fog of war/);
+    NodeAssert.match(wayfinder?.promptText ?? "", /never resolve more than one ticket per session/);
+    NodeAssert.ok((wayfinder?.promptText.length ?? 0) > 12_000);
+    const grillWithDocs = catalog.skills.find(
+      (skill) => skill.id === WORKFLOW_PROMPT_IDS.planningGrillStageCodex,
+    );
+    NodeAssert.equal(grillWithDocs?.title, "1. Grill With Docs");
+    NodeAssert.match(grillWithDocs?.promptText ?? "", /Challenge against the glossary/);
+    NodeAssert.match(grillWithDocs?.promptText ?? "", /Offer ADRs sparingly/);
+    NodeAssert.match(grillWithDocs?.promptText ?? "", /Most repos have a single context/);
+    NodeAssert.equal(
+      catalog.skills.some((skill) => skill.id === WORKFLOW_PROMPT_IDS.planningDomainModelingCodex),
+      false,
+    );
+    // The standalone Domain Modeling prompt carries the upstream skill verbatim.
+    const renderedDomainModeling = resolveWorkflowPromptText(
+      WORKFLOW_PROMPT_IDS.planningDomainModelingCodex,
+    );
+    NodeAssert.match(renderedDomainModeling, /Most repos have a single context/);
+    NodeAssert.match(renderedDomainModeling, /├── CONTEXT-MAP\.md/);
+    NodeAssert.match(
+      renderedDomainModeling,
+      /Your glossary defines 'cancellation' as X, but you seem to mean Y/,
+    );
+    NodeAssert.match(
+      renderedDomainModeling,
+      /do you mean the Customer or the User\? Those are different things/,
+    );
+    NodeAssert.match(
+      renderedDomainModeling,
+      /Your code cancels entire Orders, but you just said partial cancellation is possible/,
+    );
+    NodeAssert.match(renderedDomainModeling, /It is a glossary and nothing else/);
+    const prototype = catalog.skills.find(
+      (skill) => skill.id === WORKFLOW_PROMPT_IDS.planningPrototypeCodex,
+    );
+    NodeAssert.match(
+      prototype?.promptText ?? "",
+      /The two branches produce very different artifacts/,
+    );
+    NodeAssert.match(prototype?.promptText ?? "", /Capture it when done/);
+    const prototypeLogic = resolveWorkflowDoc("prototype-logic");
+    NodeAssert.match(prototypeLogic?.content ?? "", /Isolate the logic in a portable module/);
+    NodeAssert.match(
+      prototypeLogic?.content ?? "",
+      /Build the smallest TUI that exposes the state/,
+    );
+    const prototypeUi = resolveWorkflowDoc("prototype-ui");
+    NodeAssert.match(prototypeUi?.content ?? "", /Two sub-shapes — strongly prefer sub-shape A/);
+    NodeAssert.match(prototypeUi?.content ?? "", /Build the floating switcher/);
+    NodeAssert.ok((prototypeLogic?.content.length ?? 0) > 5_500);
+    NodeAssert.ok((prototypeUi?.content.length ?? 0) > 6_800);
+    const research = catalog.skills.find(
+      (skill) => skill.id === WORKFLOW_PROMPT_IDS.planningResearchCodex,
+    );
+    NodeAssert.match(research?.promptText ?? "", /Spin up a \*\*background agent\*\*/);
+    NodeAssert.match(research?.promptText ?? "", /primary sources/);
+    NodeAssert.match(research?.promptText ?? "", /workflow-subagent-result/);
+    NodeAssert.ok((resolveWorkflowDoc("context-format")?.content.length ?? 0) > 2_200);
+    NodeAssert.ok((resolveWorkflowDoc("adr-format")?.content.length ?? 0) > 2_700);
+    NodeAssert.deepEqual(resolveWorkflowDoc("domain-docs")?.skillIds, [
+      WORKFLOW_PROMPT_IDS.planningSpecCodex,
+      WORKFLOW_PROMPT_IDS.planningTicketsCodex,
+    ]);
+    NodeAssert.match(resolveWorkflowDoc("domain-docs")?.content ?? "", /proceed silently/);
+    NodeAssert.deepEqual(resolveWorkflowDoc("agent-brief")?.skillIds, [
+      WORKFLOW_PROMPT_IDS.planningTicketsCodex,
+      WORKFLOW_PROMPT_IDS.planningTicketReviewerCodex,
+    ]);
+    NodeAssert.match(resolveWorkflowDoc("agent-brief")?.content ?? "", /Durability over precision/);
+    NodeAssert.match(resolveWorkflowDoc("agent-brief")?.content ?? "", /T3 adaptation/);
+    NodeAssert.equal(
+      catalog.skills.some((skill) => skill.id === WORKFLOW_PROMPT_IDS.workflowAgentCommunications),
+      false,
+    );
+    NodeAssert.deepEqual(
+      catalog.skills.find((skill) => skill.id === WORKFLOW_PROMPT_IDS.implementationFixCodex)
+        ?.workflowIds,
+      ["fast-feature", "full-feature", "implementation"],
+    );
+    for (const workflow of catalog.workflows) {
+      for (const step of workflow.steps) {
+        if (step.skillId !== undefined) {
+          NodeAssert.ok(catalog.skills.some((skill) => skill.id === step.skillId));
+        }
+      }
+    }
+  });
+
+  it("renders Grill With Docs with fused domain-modeling instructions and docs", () => {
     const contracts = listWorkflowPromptContracts();
     const planningGrill = contracts.find(
       (contract) => contract.id === WORKFLOW_PROMPT_IDS.planningGrillStageCodex,
@@ -23,27 +135,26 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.ok(planningGrill);
     NodeAssert.equal(planningGrill.workflow, "planning");
     NodeAssert.equal(planningGrill.stage, "grill");
-    NodeAssert.equal(planningGrill.title, "1. Grill");
+    NodeAssert.equal(planningGrill.title, "1. Grill With Docs");
 
     const rendered = resolveWorkflowPromptText(WORKFLOW_PROMPT_IDS.planningGrillStageCodex);
-    NodeAssert.match(rendered, /Planning Workflow: Grill With Domain Modeling/);
+    NodeAssert.match(rendered, /# Grill With Docs/);
     NodeAssert.match(rendered, /Interview me relentlessly/);
     NodeAssert.match(rendered, /Ask the questions one at a time/);
     NodeAssert.match(rendered, /Asking multiple questions at once is bewildering/);
     NodeAssert.match(rendered, /recommended answer/);
-    NodeAssert.match(rendered, /exploring the codebase/);
+    NodeAssert.match(rendered, /exploring the environment/);
     NodeAssert.match(rendered, /It is a glossary and nothing else/);
     NodeAssert.match(rendered, /Only offer to create an ADR when all three are true/);
-    NodeAssert.match(rendered, /Planning artifact writes are allowed/);
+    NodeAssert.match(rendered, /Planning artifact writes during this stage are limited/);
     NodeAssert.match(rendered, /CONTEXT\.md Format/);
     NodeAssert.match(rendered, /CONTEXT-MAP\.md/);
-    NodeAssert.match(rendered, /_Avoid_/);
     NodeAssert.match(rendered, /ADR Format/);
     NodeAssert.match(rendered, /Hard to reverse/);
+    NodeAssert.match(rendered, /workflow_doc_get/);
+    NodeAssert.doesNotMatch(rendered, /_Avoid_: Purchase, transaction/);
 
-    const contextDoc = planningGrill.associatedDocs?.find(
-      (doc) => doc.id === "planning.grill-stage.context-format",
-    );
+    const contextDoc = planningGrill.associatedDocs?.find((doc) => doc.id === "context-format");
     NodeAssert.ok(contextDoc);
     NodeAssert.equal(contextDoc.path, "CONTEXT-FORMAT.md");
     NodeAssert.match(contextDoc.content, /# CONTEXT\.md Format/);
@@ -55,9 +166,7 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(contextDoc.content, /## Single vs multi-context repos/);
     NodeAssert.match(contextDoc.content, /# Context Map/);
 
-    const adrDoc = planningGrill.associatedDocs?.find(
-      (doc) => doc.id === "planning.grill-stage.adr-format",
-    );
+    const adrDoc = planningGrill.associatedDocs?.find((doc) => doc.id === "adr-format");
     NodeAssert.ok(adrDoc);
     NodeAssert.equal(adrDoc.path, "ADR-FORMAT.md");
     NodeAssert.match(adrDoc.content, /ADRs live in `docs\/adr\/`/);
@@ -80,7 +189,7 @@ describe("WorkflowPromptRegistry", () => {
 
     NodeAssert.ok(browserReview);
     const previewQaDoc = browserReview.associatedDocs?.find(
-      (doc) => doc.id === "implementation.browser-dev-review.preview-browser-qa",
+      (doc) => doc.id === "preview-browser-qa",
     );
     NodeAssert.ok(previewQaDoc);
     NodeAssert.equal(previewQaDoc.path, "preview-browser-qa.md");
@@ -98,34 +207,27 @@ describe("WorkflowPromptRegistry", () => {
 
     for (const contract of contracts.filter((entry) => entry.id !== browserReview.id)) {
       NodeAssert.equal(
-        Boolean(
-          contract.associatedDocs?.some(
-            (doc) => doc.id === "implementation.browser-dev-review.preview-browser-qa",
-          ),
-        ),
+        Boolean(contract.associatedDocs?.some((doc) => doc.id === "preview-browser-qa")),
         false,
       );
     }
   });
 
-  it("prepends shared workflow sub-agent instructions to workflow prompts", () => {
+  it("scopes system instructions to the selected workflow skill", () => {
     const rendered =
       resolveWorkflowSystemInstructions({
         workflowPromptId: WORKFLOW_PROMPT_IDS.planningSpecCodex,
       }) ?? "";
 
-    NodeAssert.match(rendered, /T3 Workflow Sub-Agent System/);
-    NodeAssert.match(rendered, /Workflow skills are SKILL\.md-backed instructions/);
-    NodeAssert.match(rendered, /\.codex\/skills\/\*\*\/SKILL\.md/);
-    NodeAssert.match(rendered, /\.agents\/skills\/\*\*\/SKILL\.md/);
-    NodeAssert.match(rendered, /product\.workflow\.codex/);
-    NodeAssert.match(rendered, /planning\.ticket-reviewer\.codex/);
-    NodeAssert.match(rendered, /implementation\.browser-dev-review\.codex/);
-    NodeAssert.match(rendered, /workflow-subagent-create/);
-    NodeAssert.match(rendered, /durable Dev Review record/);
-    NodeAssert.match(rendered, /dev-review-document/);
-    NodeAssert.match(rendered, /workflow-agent-message/);
+    NodeAssert.doesNotMatch(rendered, /T3 Workflow Sub-Agent System/);
+    NodeAssert.doesNotMatch(rendered, /workflow-agent-message/);
     NodeAssert.match(rendered, /Planning Workflow: Spec/);
+    NodeAssert.equal(
+      resolveWorkflowSystemInstructions({
+        workflowPromptId: WORKFLOW_PROMPT_IDS.workflowAgentCommunications,
+      }),
+      undefined,
+    );
   });
 
   it("renders Browser Dev Review around the preview_* and dev_review_* MCP tools", () => {
@@ -133,7 +235,7 @@ describe("WorkflowPromptRegistry", () => {
       WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
     );
 
-    NodeAssert.match(rendered, /<associated-doc/);
+    NodeAssert.match(rendered, /<available-workflow-docs>/);
     NodeAssert.match(rendered, /preview-browser-qa\.md/);
     NodeAssert.match(rendered, /preview_open/);
     NodeAssert.match(rendered, /dev_review_get/);
@@ -188,14 +290,10 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /tests\.md/);
     NodeAssert.match(rendered, /See \[logging\.md\]\(logging\.md\)/);
     NodeAssert.match(rendered, /Logging for TDD/);
-    NodeAssert.match(rendered, /wide event/);
-    NodeAssert.match(rendered, /canonical log line/);
-    NodeAssert.match(rendered, /high-cardinality/);
-    NodeAssert.match(rendered, /Effect\.annotateCurrentSpan/);
-    NodeAssert.match(rendered, /Effect\.log/);
-    NodeAssert.match(rendered, /Always keep errors/);
+    NodeAssert.match(rendered, /workflow_doc_get/);
+    NodeAssert.doesNotMatch(rendered, /canonical log line/);
 
-    const mockingDoc = tdd.associatedDocs?.find((doc) => doc.id === "implementation.tdd.mocking");
+    const mockingDoc = tdd.associatedDocs?.find((doc) => doc.id === "tdd-mocking");
     NodeAssert.ok(mockingDoc);
     NodeAssert.equal(mockingDoc.path, "mocking.md");
     NodeAssert.match(mockingDoc.content, /Mock at \*\*system boundaries\*\* only/);
@@ -206,7 +304,7 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(mockingDoc.content, /Prefer SDK-style interfaces over generic fetchers/);
     NodeAssert.match(mockingDoc.content, /No conditional logic in test setup/);
 
-    const testsDoc = tdd.associatedDocs?.find((doc) => doc.id === "implementation.tdd.tests");
+    const testsDoc = tdd.associatedDocs?.find((doc) => doc.id === "tdd-tests");
     NodeAssert.ok(testsDoc);
     NodeAssert.equal(testsDoc.path, "tests.md");
     NodeAssert.match(testsDoc.content, /# Good and Bad Tests/);
@@ -218,7 +316,7 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(testsDoc.content, /calculateTotal sums line items/);
     NodeAssert.match(testsDoc.content, /Expected value is an independent, known literal/);
 
-    const loggingDoc = tdd.associatedDocs?.find((doc) => doc.id === "implementation.tdd.logging");
+    const loggingDoc = tdd.associatedDocs?.find((doc) => doc.id === "tdd-logging");
     NodeAssert.ok(loggingDoc);
     NodeAssert.equal(loggingDoc.path, "logging.md");
     NodeAssert.match(loggingDoc.content, /# Logging for TDD Implementation/);
@@ -242,23 +340,47 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /## Problem Statement/);
     NodeAssert.match(rendered, /## User Stories/);
     NodeAssert.match(rendered, /## Testing Decisions/);
+    // The T3 adapter overrides upstream tracker publication with the durable artifact.
+    NodeAssert.match(rendered, /## T3 workflow adapter/);
+    NodeAssert.match(rendered, /durable artifact in T3's application state/);
+    NodeAssert.match(rendered, /planning-spec-artifact/);
+    NodeAssert.match(rendered, /workflow_wayfinder_map_get/);
+    NodeAssert.match(rendered, /there is no user to ask/);
+  });
+
+  it("renders Implementation Orchestrator with the upstream implement body and run adapter", () => {
+    const rendered = resolveWorkflowPromptText(
+      WORKFLOW_PROMPT_IDS.implementationOrchestratorPlanningCodex,
+    );
+
+    NodeAssert.match(rendered, /# Implementation Workflow: Orchestrator Start/);
+    NodeAssert.match(rendered, /name: implement/);
+    NodeAssert.match(rendered, /Use \/tdd where possible, at pre-agreed seams/);
+    NodeAssert.match(rendered, /use \/code-review to review the work/);
+    NodeAssert.match(rendered, /## T3 workflow adapter/);
+    NodeAssert.match(rendered, /worktree and branch created from the branch the user selected/);
+    NodeAssert.match(rendered, /app dev stack/);
+    NodeAssert.match(rendered, /worker branches from its blocker's worker branch/);
+    NodeAssert.match(rendered, /up to five cycles/);
+    NodeAssert.match(rendered, /single review-and-fix pass/);
+    NodeAssert.match(rendered, /never run repo-wide suites/);
   });
 
   it("renders Planning Tickets with to-tickets vertical-slice drafting instructions", () => {
     const rendered = resolveWorkflowPromptText(WORKFLOW_PROMPT_IDS.planningTicketsCodex);
 
-    NodeAssert.match(rendered, /name: to-tickets/);
-    NodeAssert.match(rendered, /tracer-bullet vertical slices/);
-    NodeAssert.match(rendered, /fetch it from the ticket tracker and read its full body/);
-    NodeAssert.match(rendered, /thin vertical slice that cuts through ALL integration layers/);
+    NodeAssert.match(rendered, /# To Tickets/);
+    NodeAssert.match(rendered, /tracer bullet/);
+    NodeAssert.match(rendered, /fetch it and read its full body and comments/);
+    NodeAssert.match(rendered, /narrow but COMPLETE path through every layer/);
     NodeAssert.match(rendered, /<vertical-slice-rules>/);
-    NodeAssert.match(rendered, /schema, API, UI, tests/);
-    NodeAssert.match(rendered, /Stop after drafting the proposed ticket set/);
-    NodeAssert.match(rendered, /Do not quiz the user and do not publish/);
-    NodeAssert.match(rendered, /The Ticket Review stage owns completeness review/);
-    NodeAssert.doesNotMatch(rendered, /Does the granularity feel right/);
-    NodeAssert.doesNotMatch(rendered, /Publish tickets in dependency order/);
-    NodeAssert.doesNotMatch(rendered, /<ticket-template>/);
+    NodeAssert.match(rendered, /Wide refactors are the exception to vertical slicing/);
+    NodeAssert.match(rendered, /expand–contract/);
+    NodeAssert.match(rendered, /Does the granularity feel right/);
+    NodeAssert.match(rendered, /<local-ticket-template>/);
+    NodeAssert.match(rendered, /<issue-template>/);
+    NodeAssert.match(rendered, /Store tickets through the planning-tickets-artifact/);
+    NodeAssert.match(rendered, /The separate Ticket Review stage owns completeness review/);
   });
 
   it("renders Planning Ticket Review with Spec completeness, vertical-slice review, and final quiz instructions", () => {
@@ -285,11 +407,17 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /Does the granularity feel right/);
     NodeAssert.match(rendered, /Are the dependency relationships correct/);
     NodeAssert.match(rendered, /Should any slices be merged or split further/);
-    NodeAssert.match(rendered, /Publish tickets in dependency order/);
-    NodeAssert.match(rendered, /<ticket-template>/);
-    NodeAssert.match(rendered, /## What to build/);
-    NodeAssert.match(rendered, /None - can start immediately/);
-    NodeAssert.match(rendered, /Do NOT close or modify any parent ticket/);
+    // The reviewer edits tickets directly through the verdict's ticketEdits array.
+    NodeAssert.match(rendered, /Apply corrections directly/);
+    NodeAssert.match(rendered, /`ticketEdits` array of your planning-reviewer-verdict/);
+    NodeAssert.match(rendered, /`replacesPlanningTicketIds` when splitting or replacing/);
+    NodeAssert.match(rendered, /at most three cycles/);
+    NodeAssert.match(rendered, /each cycle runs in its own reviewer sub-thread/);
+    // Publication happened at drafting time; approval finalizes the durable set.
+    NodeAssert.match(rendered, /already stored through planning-tickets-artifact/);
+    NodeAssert.match(rendered, /no separate publication step, external tracker, or triage label/);
+    NodeAssert.doesNotMatch(rendered, /Publish tickets in dependency order/);
+    NodeAssert.doesNotMatch(rendered, /<ticket-template>/);
   });
 
   it("renders Implementation Code Review with the two-axis parallel sub-agent process", () => {
@@ -361,6 +489,11 @@ describe("WorkflowPromptRegistry", () => {
       NodeAssert.ok(preset);
       NodeAssert.doesNotMatch(preset.promptText, /Fix-or-feature classification \(hard gate\)/);
       NodeAssert.match(preset.promptText, /Never ask whether the request is a feature or a fix/);
+      // Preset grills carry the upstream grilling skill verbatim, product-restricted.
+      NodeAssert.match(preset.promptText, /Interview me relentlessly/);
+      NodeAssert.match(preset.promptText, /Asking multiple questions at once is bewildering/);
+      NodeAssert.match(preset.promptText, /put each one to me and wait for my answer/);
+      NodeAssert.match(preset.promptText, /Grill product questions only/);
     }
     // Domain-model maintenance (CONTEXT.md/ADR) is owned by the Planning
     // Workflow: the product grill stays product-only and carries no format docs.
@@ -370,16 +503,12 @@ describe("WorkflowPromptRegistry", () => {
       (contract) => contract.id === WORKFLOW_PROMPT_IDS.planningSpecCodex,
     );
     NodeAssert.ok(planningSpec);
-    const specContextDoc = planningSpec.associatedDocs?.find(
-      (doc) => doc.id === "planning.spec.context-format",
-    );
+    const specContextDoc = planningSpec.associatedDocs?.find((doc) => doc.id === "context-format");
     NodeAssert.ok(specContextDoc);
     NodeAssert.equal(specContextDoc.path, "CONTEXT-FORMAT.md");
     NodeAssert.match(specContextDoc.content, /# CONTEXT\.md Format/);
 
-    const specAdrDoc = planningSpec.associatedDocs?.find(
-      (doc) => doc.id === "planning.spec.adr-format",
-    );
+    const specAdrDoc = planningSpec.associatedDocs?.find((doc) => doc.id === "adr-format");
     NodeAssert.ok(specAdrDoc);
     NodeAssert.equal(specAdrDoc.path, "ADR-FORMAT.md");
     NodeAssert.match(specAdrDoc.content, /# ADR Format/);

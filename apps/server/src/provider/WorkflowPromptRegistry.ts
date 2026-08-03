@@ -1,5 +1,12 @@
-import type { ProviderInteractionMode, WorkflowPromptContract } from "@t3tools/contracts";
+import type {
+  ProviderInteractionMode,
+  WorkflowCatalog,
+  WorkflowDocContract,
+  WorkflowPromptContract,
+  WorkflowSkillContract,
+} from "@t3tools/contracts";
 import { isPlanningWorkflowInteractionMode } from "@t3tools/contracts";
+import { WORKFLOW_PRESET_DEFINITIONS } from "@t3tools/shared/workflowPresets";
 
 import { PREVIEW_BROWSER_QA_ASSOCIATED_DOC_CONTENT } from "./PreviewBrowserQa.ts";
 import { WORKFLOW_SUBAGENT_INSTRUCTIONS_PROMPT } from "./WorkflowSubagentInstructions.ts";
@@ -20,9 +27,455 @@ export const WORKFLOW_PROMPT_IDS = {
   productFixCodex: "product.fix.codex",
   productFastFeatureCodex: "product.fast-feature.codex",
   productFullFeatureCodex: "product.full-feature.codex",
+  planningDomainModelingCodex: "planning.domain-modeling.codex",
+  planningPrototypeCodex: "planning.prototype.codex",
+  planningWayfinderCodex: "planning.wayfinder.codex",
+  planningResearchCodex: "planning.research.codex",
 } as const;
 
 const WORKFLOW_AGENT_COMMUNICATIONS_PROMPT = WORKFLOW_SUBAGENT_INSTRUCTIONS_PROMPT;
+
+const DOMAIN_MODELING_PROMPT = `<collaboration_mode># Domain Modeling
+
+Actively build and sharpen the project's domain model as you design. This is the *active* discipline — challenging terms, inventing edge-case scenarios, and writing the glossary and decisions down the moment they crystallise. (Merely *reading* \`CONTEXT.md\` for vocabulary is not this skill — that's a one-line habit any skill can do. This skill is for when you're changing the model, not just consuming it.)
+
+## File structure
+
+Most repos have a single context:
+
+\`\`\`
+/
+├── CONTEXT.md
+├── docs/
+│   └── adr/
+│       ├── 0001-event-sourced-orders.md
+│       └── 0002-postgres-for-write-model.md
+└── src/
+\`\`\`
+
+If a \`CONTEXT-MAP.md\` exists at the root, the repo has multiple contexts. The map points to where each one lives:
+
+\`\`\`
+/
+├── CONTEXT-MAP.md
+├── docs/
+│   └── adr/                          ← system-wide decisions
+├── src/
+│   ├── ordering/
+│   │   ├── CONTEXT.md
+│   │   └── docs/adr/                 ← context-specific decisions
+│   └── billing/
+│       ├── CONTEXT.md
+│       └── docs/adr/
+\`\`\`
+
+Create files lazily — only when you have something to write. If no \`CONTEXT.md\` exists, create one when the first term is resolved. If no \`docs/adr/\` exists, create it when the first ADR is needed.
+
+## During the session
+
+### Challenge against the glossary
+
+When the user uses a term that conflicts with the existing language in \`CONTEXT.md\`, call it out immediately. "Your glossary defines 'cancellation' as X, but you seem to mean Y — which is it?"
+
+### Sharpen fuzzy language
+
+When the user uses vague or overloaded terms, propose a precise canonical term. "You're saying 'account' — do you mean the Customer or the User? Those are different things."
+
+### Discuss concrete scenarios
+
+When domain relationships are being discussed, stress-test them with specific scenarios. Invent scenarios that probe edge cases and force the user to be precise about the boundaries between concepts.
+
+### Cross-reference with code
+
+When the user states how something works, check whether the code agrees. If you find a contradiction, surface it: "Your code cancels entire Orders, but you just said partial cancellation is possible — which is right?"
+
+### Update CONTEXT.md inline
+
+When a term is resolved, update \`CONTEXT.md\` right there. Don't batch these up — capture them as they happen. Use the format in the CONTEXT.md Format document, loaded with workflow_doc_get immediately before writing.
+
+\`CONTEXT.md\` should be totally devoid of implementation details. Do not treat \`CONTEXT.md\` as a spec, a scratch pad, or a repository for implementation decisions. It is a glossary and nothing else.
+
+### Offer ADRs sparingly
+
+Only offer to create an ADR when all three are true:
+
+1. **Hard to reverse** — the cost of changing your mind later is meaningful
+2. **Surprising without context** — a future reader will wonder "why did they do it this way?"
+3. **The result of a real trade-off** — there were genuine alternatives and you picked one for specific reasons
+
+If any of the three is missing, skip the ADR. Use the format in the ADR Format document, loaded with workflow_doc_get immediately before writing.
+</collaboration_mode>`;
+
+const PROTOTYPE_PROMPT = `<collaboration_mode># Prototype
+
+A prototype is **throwaway code that answers a question**. The question decides the shape.
+
+## Pick a branch
+
+Identify which question is being answered — from the user's prompt, the surrounding code, or by asking if the user is around:
+
+- **"Does this logic / state model feel right?"** → the Logic Prototype document loaded with workflow_doc_get. Build a tiny interactive terminal app that pushes the state machine through cases that are hard to reason about on paper.
+- **"What should this look like?"** → the UI Prototype document loaded with workflow_doc_get. Generate several radically different UI variations on a single route, switchable via a URL search param and a floating bottom bar.
+
+The two branches produce very different artifacts — getting this wrong wastes the whole prototype. If the question is genuinely ambiguous and the user isn't reachable, default to whichever branch better matches the surrounding code (a backend module → logic; a page or component → UI) and state the assumption at the top of the prototype.
+
+## Rules that apply to both
+
+1. **Throwaway from day one, and clearly marked as such.** Locate the prototype code close to where it will actually be used (next to the module or page it's prototyping for) so context is obvious — but name it so a casual reader can see it's a prototype, not production. For throwaway UI routes, obey whatever routing convention the project already uses; don't invent a new top-level structure.
+2. **One command to run.** Whatever the project's existing task runner supports — \`pnpm <name>\`, \`python <path>\`, \`bun <path>\`, etc. The user must be able to start it without thinking.
+3. **No persistence by default.** State lives in memory. Persistence is the thing the prototype is _checking_, not something it should depend on. If the question explicitly involves a database, hit a scratch DB or a local file with a clear "PROTOTYPE — wipe me" name.
+4. **Skip the polish.** No tests, no error handling beyond what makes the prototype _runnable_, no abstractions. The point is to learn something fast.
+5. **Surface the state.** After every action (logic) or on every variant switch (UI), print or render the full relevant state so the user can see what changed.
+6. **Capture it when done.** Fold any validated decision into the real code, then capture the prototype itself as a **primary source**: commit it to a throwaway branch, out of main, and leave a context pointer to that branch on the implementation issue. Capture the answer too — the verdict and the question it settled — in the issue or a commit. The main branch keeps only the validated decision.
+
+## T3 workflow adapter
+
+There is no external issue tracker. The "implementation issue" that captures the answer is T3's durable planning record: report the verdict, the question it settled, and the throwaway-branch pointer in your final workflow-subagent-result so the parent thread can store them on the relevant decision ticket or Spec.
+
+These rules override only upstream issue-tracker mechanics; the prototype branches, rules, and capture discipline remain authoritative.
+</collaboration_mode>`;
+
+const PROTOTYPE_LOGIC_DOC_CONTENT = `# Logic Prototype
+
+A tiny interactive terminal app that lets the user drive a state model by hand. Use this when the question is about **business logic, state transitions, or data shape** — the kind of thing that looks reasonable on paper but only feels wrong once you push it through real cases.
+
+## When this is the right shape
+
+- "I'm not sure if this state machine handles the edge case where X then Y."
+- "Does this data model actually let me represent the case where..."
+- "I want to feel out what the API should look like before writing it."
+- Anything where the user wants to **press buttons and watch state change**.
+
+If the question is "what should this look like" — wrong branch. Use [UI.md](UI.md).
+
+## Process
+
+### 1. State the question
+
+Before writing code, write down what state model and what question you're prototyping. One paragraph, in the prototype's README or a comment at the top of the file. A logic prototype that answers the wrong question is pure waste — make the question explicit so it can be checked later, whether the user is watching now or returning to it AFK.
+
+### 2. Pick the language
+
+Use whatever the host project uses. If the project has no obvious runtime (e.g. a docs repo), ask.
+
+Match the project's existing conventions for tooling — don't add a new package manager or runtime just for the prototype.
+
+### 3. Isolate the logic in a portable module
+
+Put the actual logic — the bit that's answering the question — behind a small, pure interface that could be lifted out and dropped into the real codebase later. The TUI around it is throwaway; the logic module shouldn't be.
+
+The right shape depends on the question:
+
+- **A pure reducer** — \`(state, action) => state\`. Good when actions are discrete events and state is a single value.
+- **A state machine** — explicit states and transitions. Good when "which actions are even legal right now" is part of the question.
+- **A small set of pure functions** over a plain data type. Good when there's no implicit current state — just transformations.
+- **A class or module with a clear method surface** when the logic genuinely owns ongoing internal state.
+
+Pick whichever shape best fits the question being asked, *not* whichever is easiest to wire to a TUI. Keep it pure: no I/O, no terminal code, no \`console.log\` for control flow. The TUI imports it and calls into it; nothing flows the other direction.
+
+This is what makes the prototype useful past its own lifetime: when the question's been answered, the validated reducer / machine / function set can be lifted into the real module on its own.
+
+### 4. Build the smallest TUI that exposes the state
+
+Build it as a **lightweight TUI** — on every tick, clear the screen (\`console.clear()\` / \`print("\\033[2J\\033[H")\` / equivalent) and re-render the whole frame. The user should always see one stable view, not an ever-growing scrollback.
+
+Each frame has two parts, in this order:
+
+1. **Current state**, pretty-printed and diff-friendly (one field per line, or formatted JSON). Use **bold** for field names or section headers and **dim** for less important context (timestamps, IDs, derived values). Native ANSI escape codes are fine — \`\\x1b[1m\` bold, \`\\x1b[2m\` dim, \`\\x1b[0m\` reset. No need to pull in a styling library unless one is already in the project.
+2. **Keyboard shortcuts**, listed at the bottom: \`[a] add user  [d] delete user  [t] tick clock  [q] quit\`. Bold the key, dim the description, or vice-versa — whatever reads cleanly.
+
+Behaviour:
+
+1. **Initialise state** — a single in-memory object/struct. Render the first frame on start.
+2. **Read one keystroke (or one line)** at a time, dispatch to a handler that mutates state.
+3. **Re-render** the full frame after every action — don't append, replace.
+4. **Loop until quit.**
+
+The whole frame should fit on one screen.
+
+### 5. Make it runnable in one command
+
+Add a script to the project's existing task runner (\`package.json\` scripts, \`Makefile\`, \`justfile\`, \`pyproject.toml\`). The user should run \`pnpm run <prototype-name>\` or equivalent — never need to remember a path.
+
+If the host project has no task runner, just put the command at the top of the prototype's README.
+
+### 6. Hand it over
+
+Give the user the run command. They'll drive it themselves; the interesting moments are when they say "wait, that shouldn't be possible" or "huh, I assumed X would be different" — those are the bugs in the _idea_, which is the whole point. If they want new actions added, add them. Prototypes evolve.
+
+### 7. Capture the answer and the prototype
+
+Once the prototype has answered its question, capture the answer, then capture the prototype the way the [SKILL](SKILL.md) describes. The logic-specific mapping: the validated reducer / machine / function set lifts into the real module (the decision, absorbed); the TUI shell rides along to the throwaway branch that keeps the prototype as a primary source.
+
+## Anti-patterns
+
+- **Don't add tests.** A prototype that needs tests is no longer a prototype.
+- **Don't wire it to the real database.** Use an in-memory store unless the question is specifically about persistence.
+- **Don't generalise.** No "what if we wanted to support X later." The prototype answers one question.
+- **Don't blur the logic and the TUI together.** If the reducer / state machine references \`console.log\`, prompts, or terminal escape codes, it's no longer portable. Keep the TUI as a thin shell over a pure module.
+- **Don't ship the TUI shell into production.** The shell is optimised for being driven by hand from a terminal. The logic module behind it is the bit worth keeping.`;
+
+const PROTOTYPE_UI_DOC_CONTENT = `# UI Prototype
+
+Generate **several radically different UI variations** on a single route, switchable from a floating bottom bar. The user flips between variants in the browser, picks one (or steals bits from each), then throws the rest away.
+
+If the question is about logic/state rather than what something looks like — wrong branch. Use [LOGIC.md](LOGIC.md).
+
+## When this is the right shape
+
+- "What should this page look like?"
+- "I want to see a few options for this dashboard before committing."
+- "Try a different layout for the settings screen."
+- Any time the user would otherwise spend a day picking between three vague mockups in their head.
+
+## Two sub-shapes — strongly prefer sub-shape A
+
+A UI prototype is much easier to judge when it's **butting up against the rest of the app** — real header, real sidebar, real data, real density. A throwaway route on its own is a vacuum: every variant looks fine in isolation. Default to sub-shape A whenever there's a plausible existing page to host the variants. Only reach for sub-shape B if the prototype genuinely has no nearby home.
+
+### Sub-shape A — adjustment to an existing page (preferred)
+
+The route already exists. Variants are rendered **on the same route**, gated by a \`?variant=\` URL search param. The existing data fetching, params, and auth all stay — only the rendering swaps. This is the default; pick it unless there's a specific reason not to.
+
+If the prototype is for something that doesn't yet have a page but *would naturally live inside one* (a new section of the dashboard, a new card on the settings screen, a new step in an existing flow) — that's still sub-shape A. Mount the variants inside the host page.
+
+### Sub-shape B — a new page (last resort)
+
+Only use this when the thing being prototyped genuinely has no existing page to live inside — e.g. an entirely new top-level surface, or a flow that can't be embedded anywhere sensible.
+
+Create a **throwaway route** following whatever routing convention the project already uses — don't invent a new top-level structure. Name it so it's obviously a prototype (e.g. include the word \`prototype\` in the path or filename). Same \`?variant=\` pattern.
+
+Before committing to sub-shape B, sanity-check: is there really no existing page this could be embedded in? An empty route hides design problems that a populated one would expose.
+
+In both sub-shapes the floating bottom bar is identical.
+
+## Process
+
+### 1. State the question and pick N
+
+Default to **3 variants**. More than 5 stops being radically different and starts being noise — cap there.
+
+Write down the plan in one line, in the prototype's location or a top-of-file comment:
+
+> "Three variants of the settings page, switchable via \`?variant=\`, on the existing \`/settings\` route."
+
+This works whether the user is here to push back or not.
+
+### 2. Generate radically different variants
+
+Draft each variant. Hold each one to:
+
+- The page's purpose and the data it has access to.
+- The project's component library / styling system (TailwindCSS, shadcn, MUI, plain CSS, whatever).
+- A clear exported component name, e.g. \`VariantA\`, \`VariantB\`, \`VariantC\`.
+
+Variants must be **structurally different** — different layout, different information hierarchy, different primary affordance, not just different colours. Three slightly-tweaked card grids isn't a UI prototype, it's wallpaper. If two drafts come out too similar, redo one with explicit "do not use a card grid" guidance.
+
+### 3. Wire them together
+
+Create a single switcher component on the route:
+
+\`\`\`tsx
+// pseudo-code — adapt to the project's framework
+const variant = searchParams.get('variant') ?? 'A';
+return (
+  <>
+    {variant === 'A' && <VariantA {...data} />}
+    {variant === 'B' && <VariantB {...data} />}
+    {variant === 'C' && <VariantC {...data} />}
+    <PrototypeSwitcher variants={['A','B','C']} current={variant} />
+  </>
+);
+\`\`\`
+
+For sub-shape A (existing page): keep all the existing data fetching above the switcher; only the rendered subtree changes per variant.
+
+For sub-shape B (new page): the throwaway route under \`/prototype/<name>\` mounts the same switcher.
+
+### 4. Build the floating switcher
+
+A small fixed-position bar at the bottom-centre of the screen with three pieces:
+
+- **Left arrow** — cycles to the previous variant (wraps around).
+- **Variant label** — shows the current variant key and, if the variant exports a name, that name too. e.g. \`B — Sidebar layout\`.
+- **Right arrow** — cycles forward (wraps around).
+
+Behaviour:
+
+- Clicking an arrow updates the URL search param (use the framework's router — \`router.replace\` on Next, \`navigate\` on React Router, etc) so the variant is shareable and reload-stable.
+- Keyboard: \`←\` and \`→\` arrow keys also cycle. Don't intercept arrow keys when an \`<input>\`, \`<textarea>\`, or \`[contenteditable]\` is focused.
+- Visually distinct from the page (e.g. high-contrast pill, subtle shadow) so it's obviously not part of the design being evaluated.
+- Hidden in production builds — gate on \`process.env.NODE_ENV !== 'production'\` or an equivalent check, so a stray prototype merge can't ship the bar to users.
+
+Put the switcher in a single shared component so both sub-shapes can reuse it. Locate it wherever shared UI lives in the project.
+
+### 5. Hand it over
+
+Surface the URL (and the \`?variant=\` keys). The user will flip through whenever they get to it. The interesting feedback is usually **"I want the header from B with the sidebar from C"** — that's the actual design they want.
+
+### 6. Capture the answer and clean up
+
+Once a variant has won, capture the answer — which variant and why — then capture the prototype the way the [SKILL](SKILL.md) describes. Fold the winner into the real code and move the rest onto the throwaway branch, not into main:
+
+- **Sub-shape A** — fold the winner into the existing page; drop the losing variants and the switcher from main.
+- **Sub-shape B** — promote the winning variant to a real route; drop the throwaway route and the switcher from main.
+
+The full set of variants is the primary source, so it lands on the throwaway branch, not the bin — variant components and the switcher left in the main branch rot fast and confuse the next reader.
+
+## Anti-patterns
+
+- **Variants that differ only in colour or copy.** That's a tweak, not a prototype. Real variants disagree about structure.
+- **Sharing too much code between variants.** A shared \`<Header>\` is fine; a shared \`<Layout>\` defeats the point. Each variant should be free to throw out the layout.
+- **Wiring variants to real mutations.** Read-only prototypes are fine. If a variant needs to mutate, point it at a stub — the question is "what should this look like", not "does the backend work".
+- **Promoting the prototype directly to production.** The variant code was written under prototype constraints (no tests, minimal error handling). Rewrite it properly when you fold it in.`;
+
+const WAYFINDER_PROMPT = `<collaboration_mode>A loose idea has arrived — too big for one agent session, and wrapped in fog: the way from here to the **destination** isn't visible yet. Wayfinding is about finding that way, not charging at the destination. This skill charts the way as a **shared map** on the repo's issue tracker, then works its **decision tickets** — questions whose resolution is a decision, not slices of a build to execute — one at a time until the route is clear.
+
+The destination varies per effort, and naming it is the first act of charting — it shapes every ticket. It might be a spec to hand off and iterate on, a decision to lock before planning starts, or a change made in place like a data-structure migration. The map is domain-agnostic — engineering work, course content, whatever fits the shape.
+
+## Plan, don't do
+
+Wayfinder is **planning** by default: each ticket resolves a decision, and the map is done when the way is clear — nothing left to decide before someone goes and does the thing. The pull to just do the work is usually the signal you've reached the edge of the map and it's time to hand off. An effort can override this in its **Notes** — carrying execution into the map itself — but absent that, produce decisions, not deliverables.
+
+## Refer by name
+
+Every map and ticket is an issue, so it has a **name** — its title. In everything the human reads — narration, the map's Decisions-so-far — refer to it by that name, never by a bare id, number, or slug. A wall of \`#42, #43, #44\` is illegible; names read at a glance. The id and URL don't vanish — a name wraps its link — but they ride *inside* the name, never stand in for it.
+
+## The Map
+
+The map is a single issue on this repo's issue tracker, labelled \`wayfinder:map\` — the canonical artifact. Its tickets are child issues of the map.
+
+The map is an **index**, not a store. It lists the decisions made and points at the tickets that hold their detail; a decision lives in exactly one place — its ticket — so the map never restates it, only gists it and links.
+
+**Where the map, its child tickets, blocking, and frontier queries physically live is tracker-specific.** The issue tracker should have been provided to you — run \`/setup-matt-pocock-skills\` if not. Consult the tracker doc's "Wayfinding operations" section for how _this_ repo expresses them. If no tracker has been provided, default to the local-markdown tracker.
+
+### The map body
+
+The whole map at low resolution, loaded once per session. Open tickets are **not** listed — they are open child issues, found by query.
+
+\`\`\`markdown
+## Destination
+
+<what reaching the end of this map looks like — the spec, decision, or change this effort is finding its way to. One or two lines; every session orients to it before choosing a ticket.>
+
+## Notes
+
+<domain; skills every session should consult; standing preferences for this effort>
+
+## Decisions so far
+
+<!-- the index — one line per closed ticket: enough to judge relevance, then zoom the link for the detail the ticket holds -->
+
+- [<closed ticket title>](link) — <one-line gist of the answer>
+
+## Not yet specified
+
+<!-- see "Fog of war": in-scope fog you can't ticket yet; graduates as the frontier advances -->
+
+## Out of scope
+
+<!-- see "Out of scope": work ruled beyond the destination; closed, never graduates -->
+\`\`\`
+
+### Tickets
+
+Each ticket is a **child issue** of the map; the tracker's issue id is its identity. Its body is the question, sized to one 100K token agent session:
+
+\`\`\`markdown
+## Question
+
+<the decision or investigation this ticket resolves>
+\`\`\`
+
+Each ticket carries a \`wayfinder:<type>\` label — one of \`research\`, \`prototype\`, \`grilling\`, \`task\` (see [Ticket Types](#ticket-types)).
+
+A session **claims** a ticket by assigning it to the dev driving the map, **first**, before any work, so concurrent sessions skip it. That assignee _is_ the claim: an open, unassigned ticket is unclaimed.
+
+Blocking uses the tracker's **native** dependency relationship — essential because it renders the frontier _visually_ in the tracker's own UI, so the human sees what's takeable without opening the map. Only a tracker that lacks native blocking falls back to a body convention. A ticket is **unblocked** when every ticket blocking it is closed; the **frontier** is the open, unblocked, unclaimed children — the edge of the known.
+
+The answer isn't part of the body — it's recorded on resolution (see [Work through the map](#work-through-the-map)). Assets created while resolving a ticket are linked from the issue, not pasted in.
+
+## Ticket Types
+
+Every ticket is either **HITL** — human in the loop, worked *with* a human who speaks for themselves — or **AFK**, driven by the agent alone. A HITL ticket only resolves through that live exchange; the agent never stands in for the human's side of it (a grilling agent that answers its own questions has broken this).
+
+- **Research** (AFK): Reading documentation, third-party APIs, or local resources like knowledge bases to surface a fact a decision waits on. Resolved by a \`/research\` **subagent**. Use when knowledge outside the current working directory is required.
+- **Prototype** (HITL): Raise the fidelity of the discussion by making a cheap, rough, concrete artifact to react to — an outline, a rough take, a stub, or UI/logic code via the /prototype skill. Links the prototype as an asset. Use when "how should it look" or "how should it behave" is the key question.
+- **Grilling** (HITL): Conversation via the /grilling and /domain-modeling skills, one question at a time. The default case.
+- **Task** (HITL or AFK): Manual work that must happen before a *decision* can be made — nothing to decide, prototype, or research, but the discussion is blocked until it's done. Signing up for a service so its API can be judged, provisioning access, moving data so its shape can be seen. This is the one type that *does* rather than decides — and it earns its place by unblocking a decision, not by delivering the destination. The agent drives it alone where it can (AFK); otherwise it hands the human a precise checklist (HITL). Resolved when the work is done; the answer records what was done and any resulting facts (credentials location, new URLs, row counts) later tickets depend on.
+
+## Fog of war
+
+The map is _deliberately_ incomplete: don't chart what you can't yet see. Beyond the live tickets lies the **fog of war** — the dim view of decisions and investigations you can tell are coming but can't yet pin down, because they hang on questions still open. Resolving a ticket clears the fog ahead of it, graduating whatever's now specifiable into fresh tickets — one at a time, until the way to the destination is clear and no tickets remain.
+
+The map's **Not yet specified** section is where that dim view is written down: the suspected question, the area to revisit later. It's the undiscovered frontier _toward_ the destination — everything here is in scope, just not sharp enough to ticket. Write as loosely or as fully as the view allows; it doubles as a signpost for collaborators reading where the effort is headed.
+
+**Fog or ticket?** The test is whether you can state the question precisely now — _not_ whether you can answer it now.
+
+- **Ticket when** the question is already sharp — even if it's blocked and you can't act on it yet.
+- **Not yet specified when** you can't yet phrase it that sharply. Don't pre-slice the fog into ticket-sized pieces: it's coarser than a ticket, and one patch may graduate into several tickets, or none, once the frontier reaches it.
+
+**Not yet specified** excludes what's already decided (Decisions so far), what's already a live ticket, and what's out of scope (the next section).
+
+## Out of scope
+
+Fog only ever gathers _toward_ the destination. The destination fixes the scope, so work beyond it is **out of scope** — it isn't fog, and it doesn't belong in **Not yet specified**. It gets its own **Out of scope** section on the map: work you've consciously ruled out of _this_ effort. Scope, not sharpness, lands it here.
+
+Out-of-scope work never graduates — the frontier stops at the destination — so it returns only if the destination is redrawn, and then as a fresh effort, not a resumption.
+
+Ruling something out of scope is a scoping act, not a step on the route. When a ticket that already exists turns out to sit past the destination — mis-scoped in while charting, or exposed by a resolution — **close it** (a closed ticket is unambiguously off the frontier) and leave one line in the **Out of scope** section: the gist plus why it's out of scope, linking the closed ticket. It stays out of **Decisions so far**, which records the route actually walked — a scope boundary isn't a step on it.
+
+## Invocation
+
+Two modes. Either way, **never resolve more than one ticket per session** — with the exception of research tickets.
+
+### Chart the map
+
+User invokes with a loose idea.
+
+1. **Name the destination.** Run a \`/grilling\` and \`/domain-modeling\` session to pin down what this map is finding its way to — the spec, decision, or change. The destination fixes the scope, so it's settled first.
+2. **Map the frontier.** Grill again, **breadth-first** this time: fan out across the whole space rather than deep on any one thread, surfacing the open decisions and the first steps takeable now. **If this surfaces no fog** — the way to the destination is already clear, the whole journey small enough for one session — you don't need a map. Stop and ask the user how they'd like to proceed.
+3. **Create the map** (label \`wayfinder:map\`): Destination and Notes filled in, Decisions-so-far empty, the fog sketched into **Not yet specified**.
+4. **Create the tickets you can specify now** as child issues of the map — then wire blocking edges in a **second pass** (issues need ids before they can reference each other). Wiring sorts them into the frontier and the blocked; everything you can't yet specify stays in the fog — the **Not yet specified** section.
+5. **Fire the research subagents.** For each \`research\` ticket you just created, spin up a \`/research\` subagent to resolve it in parallel, capturing its findings on a throwaway \`research/<name>\` branch with a context pointer from the ticket.
+6. Stop — charting is one session's work; it hand-resolves nothing.
+
+### Work through the map
+
+User invokes with a map (URL or number). A ticket is **optional** — without one, you pick the next decision, not the user.
+
+1. Load the **map** — the low-res view, not every ticket body.
+2. Choose the ticket. If the user named one, use it. Otherwise take the first frontier ticket in order. **Claim it**: assign it to yourself before any work.
+3. Resolve it — **zoom as needed**: fetch the full body of any related or closed ticket on demand; invoke the skills the \`## Notes\` block names. If in doubt, use \`/grilling\` and \`/domain-modeling\`.
+4. Record the resolution: post the answer as a **resolution comment**, **close** the issue, and **append a context pointer** to the map's Decisions-so-far.
+5. Add newly-surfaced tickets (create-then-wire); graduate any fog the answer has made specifiable, clearing each graduated patch from **Not yet specified** so it lives only as its new ticket. If the answer reveals a ticket — this one or another — sits beyond the destination, **rule it out of scope** rather than resolving it on the route. If the decision invalidates other parts of the map, update or delete those tickets.
+
+The user may run unblocked tickets in parallel, so expect other sessions to be editing the tracker concurrently.
+
+## T3 workflow adapter
+
+T3 replaces the upstream issue-tracker storage operations while preserving the map and ticket semantics:
+
+- The durable Wayfinder Map is stored in the Planning side panel above Spec, not as an issue.
+- Decision tickets use T3 Planning Tickets. The map id is their specId, and native ticket dependencies represent blocking edges.
+- Use Grill With Docs wherever the upstream text invokes /grilling plus /domain-modeling.
+- Load the canonical map with workflow_wayfinder_map_get. Use only workflow-subagent-create and workflow-subagent-result for focused child handoffs; do not use conversational agent messaging.
+- A map write ends with one wayfinder-map-artifact JSON directive containing title and summaryMarkdown. A decision-ticket write uses planning-tickets-artifact with the map id as specId.
+
+These storage and handoff mappings override only the upstream tracker-specific mechanics; its destination, map, frontier, fog, ticket-type, claiming, one-ticket-per-session, and resolution rules remain authoritative.
+</collaboration_mode>`;
+
+const RESEARCH_PROMPT = `<collaboration_mode>Spin up a **background agent** to do the research, so you keep working while it reads.
+
+Its job:
+
+1. Investigate the question against **primary sources** — official docs, source code, specs, first-party APIs — not a secondary write-up of them. Follow every claim back to the source that owns it.
+2. Write the findings to a single Markdown file, citing each claim's source.
+3. Save it where the repo already keeps such notes; match the existing convention, and if there is none, put it somewhere sensible and say where.
+
+## T3 workflow adapter
+
+When this prompt is already running in a focused Research child thread, the current thread is the upstream background agent: do not create another nested researcher. Return the result through the small workflow-subagent-result handoff API. Do not use conversational agent messaging.
+</collaboration_mode>`;
 
 const CONTEXT_FORMAT_ASSOCIATED_DOC_CONTENT = `# CONTEXT.md Format
 
@@ -66,9 +519,9 @@ _Avoid_: Client, buyer, account
 
 ## Contexts
 
-- [Ordering](./src/ordering/CONTEXT.md) - receives and tracks customer orders
-- [Billing](./src/billing/CONTEXT.md) - generates invoices and processes payments
-- [Fulfillment](./src/fulfillment/CONTEXT.md) - manages warehouse picking and shipping
+- [Ordering](./src/ordering/CONTEXT.md) — receives and tracks customer orders
+- [Billing](./src/billing/CONTEXT.md) — generates invoices and processes payments
+- [Fulfillment](./src/fulfillment/CONTEXT.md) — manages warehouse picking and shipping
 
 ## Relationships
 
@@ -80,50 +533,98 @@ _Avoid_: Client, buyer, account
 The skill infers which structure applies:
 
 - If \`CONTEXT-MAP.md\` exists, read it to find contexts
-- If only a root \`CONTEXT.md\` exists, use the single context
-- If neither exists, create a root \`CONTEXT.md\` lazily when the first term is resolved.
+- If only a root \`CONTEXT.md\` exists, single context
+- If neither exists, create a root \`CONTEXT.md\` lazily when the first term is resolved
 
 When multiple contexts exist, infer which one the current topic relates to. If unclear, ask.`;
 
-const PLANNING_GRILL_PROMPT = `<collaboration_mode># Planning Workflow: Grill With Domain Modeling
+const PLANNING_GRILL_PROMPT = `<collaboration_mode># Grill With Docs
 
-Interview me relentlessly about every aspect of this plan until we reach a shared understanding. Walk down each branch of the design tree, resolving dependencies between decisions one-by-one. For each question, provide your recommended answer.
+Interview me relentlessly about every aspect of this until we reach a shared understanding. Walk down each branch of the decision tree, resolving dependencies between decisions one-by-one. For each question, provide your recommended answer.
 
 Ask the questions one at a time, waiting for feedback on each question before continuing. Asking multiple questions at once is bewildering.
 
-If a *fact* can be found by exploring the codebase, look it up rather than asking me. The *decisions*, though, are mine — put each one to me and wait for my answer.
+If a *fact* can be found by exploring the environment (filesystem, tools, etc.), look it up rather than asking me. The *decisions*, though, are mine — put each one to me and wait for my answer.
 
-Do not enact the plan until I confirm we have reached a shared understanding.
+Do not act on it until I confirm we have reached a shared understanding.
 
-Actively build and sharpen the project's domain model as you design. Actively maintain the domain model while grilling:
+# Domain Modeling
 
-1. **Resolve the context structure** before relying on domain terms. If \`CONTEXT-MAP.md\` exists, read it to find contexts. If only a root \`CONTEXT.md\` exists, use the single context. If neither exists, create a root \`CONTEXT.md\` lazily when the first term is resolved. When multiple contexts exist, infer which one the current topic relates to. If unclear, ask.
-2. **Challenge against the glossary.** When the user uses a term that conflicts with the existing language in \`CONTEXT.md\`, call it out immediately. "Your glossary defines 'cancellation' as X, but you seem to mean Y — which is it?"
-3. **Sharpen fuzzy language.** When the user uses vague or overloaded terms, propose a precise canonical term. "You're saying 'account' — do you mean the Customer or the User? Those are different things."
-4. **Discuss concrete scenarios.** When domain relationships are being discussed, stress-test them with specific scenarios. Invent scenarios that probe edge cases and force the user to be precise about the boundaries between concepts.
-5. **Cross-reference with code.** When the user states how something works, check whether the code agrees. If you find a contradiction, surface it: "Your code cancels entire Orders, but you just said partial cancellation is possible — which is right?"
-6. **Update CONTEXT.md inline.** When a term is resolved, update \`CONTEXT.md\` right there. Don't batch these up — capture them as they happen. Use the format in CONTEXT-FORMAT.md. \`CONTEXT.md\` should be totally devoid of implementation details. Do not treat \`CONTEXT.md\` as a spec, a scratch pad, or a repository for implementation decisions. It is a glossary and nothing else.
-7. **Offer ADRs sparingly.** Only offer to create an ADR when all three are true: 1. **Hard to reverse** — the cost of changing your mind later is meaningful 2. **Surprising without context** — a future reader will wonder "why did they do it this way?" 3. **The result of a real trade-off** — there were genuine alternatives and you picked one for specific reasons. If any of the three is missing, skip the ADR. Use the format in ADR-FORMAT.md.
+Actively build and sharpen the project's domain model as you design. This is the *active* discipline — challenging terms, inventing edge-case scenarios, and writing the glossary and decisions down the moment they crystallise. (Merely *reading* \`CONTEXT.md\` for vocabulary is not this skill — that's a one-line habit any skill can do. This skill is for when you're changing the model, not just consuming it.)
 
-Create files lazily — only when you have something to write. If no \`CONTEXT.md\` exists, create one when the first term is resolved. If no \`docs/adr/\` exists, create it when the first ADR is needed. If a \`CONTEXT-MAP.md\` exists at the root, the repo has multiple contexts. The map points to where each one lives.
+## File structure
 
-## Workflow stage constraints
+Most repos have a single context:
 
-Planning artifact writes are allowed for this workflow only when they are glossary or ADR updates produced by the grilling session. Do not make implementation changes during the grill.
-
-Finish the grill only when the goal, audience, success criteria, scope, non-goals, terminology, key decisions, risks, edge cases, failure modes, and acceptance criteria are clear enough that the Spec stage can proceed without reopening product intent.
-
-## Finishing the grill
-
-When the user explicitly confirms shared understanding is reached, end that turn with exactly one fenced JSON block — and no other fenced JSON block anywhere in the same message — to advance the workflow to the Spec stage:
-
-\`\`\`json
-{
-  "type": "planning-grill-complete"
-}
+\`\`\`
+/
+├── CONTEXT.md
+├── docs/
+│   └── adr/
+│       ├── 0001-event-sourced-orders.md
+│       └── 0002-postgres-for-write-model.md
+└── src/
 \`\`\`
 
-Do not emit this directive before the user confirms. The Spec stage starts automatically once it is accepted, so do not write the Spec yourself during the grill.
+If a \`CONTEXT-MAP.md\` exists at the root, the repo has multiple contexts. The map points to where each one lives:
+
+\`\`\`
+/
+├── CONTEXT-MAP.md
+├── docs/
+│   └── adr/                          ← system-wide decisions
+├── src/
+│   ├── ordering/
+│   │   ├── CONTEXT.md
+│   │   └── docs/adr/                 ← context-specific decisions
+│   └── billing/
+│       ├── CONTEXT.md
+│       └── docs/adr/
+\`\`\`
+
+Create files lazily — only when you have something to write. If no \`CONTEXT.md\` exists, create one when the first term is resolved. If no \`docs/adr/\` exists, create it when the first ADR is needed.
+
+## During the session
+
+### Challenge against the glossary
+
+When the user uses a term that conflicts with the existing language in \`CONTEXT.md\`, call it out immediately. "Your glossary defines 'cancellation' as X, but you seem to mean Y — which is it?"
+
+### Sharpen fuzzy language
+
+When the user uses vague or overloaded terms, propose a precise canonical term. "You're saying 'account' — do you mean the Customer or the User? Those are different things."
+
+### Discuss concrete scenarios
+
+When domain relationships are being discussed, stress-test them with specific scenarios. Invent scenarios that probe edge cases and force the user to be precise about the boundaries between concepts.
+
+### Cross-reference with code
+
+When the user states how something works, check whether the code agrees. If you find a contradiction, surface it: "Your code cancels entire Orders, but you just said partial cancellation is possible — which is right?"
+
+### Update CONTEXT.md inline
+
+When a term is resolved, update \`CONTEXT.md\` right there. Don't batch these up — capture them as they happen. Use the format in [CONTEXT-FORMAT.md](./CONTEXT-FORMAT.md).
+
+\`CONTEXT.md\` should be totally devoid of implementation details. Do not treat \`CONTEXT.md\` as a spec, a scratch pad, or a repository for implementation decisions. It is a glossary and nothing else.
+
+### Offer ADRs sparingly
+
+Only offer to create an ADR when all three are true:
+
+1. **Hard to reverse** — the cost of changing your mind later is meaningful
+2. **Surprising without context** — a future reader will wonder "why did they do it this way?"
+3. **The result of a real trade-off** — there were genuine alternatives and you picked one for specific reasons
+
+If any of the three is missing, skip the ADR. Use the format in [ADR-FORMAT.md](./ADR-FORMAT.md).
+
+## T3 workflow adapter
+
+The upstream Grill With Docs composition is represented above by the complete Grilling and Domain Modeling instructions. Load CONTEXT-FORMAT.md or ADR-FORMAT.md with workflow_doc_get only immediately before writing that artifact.
+
+Planning artifact writes during this stage are limited to glossary and ADR updates. Do not make implementation changes. Finish only when the goal, audience, success criteria, scope, non-goals, terminology, decisions, risks, edge cases, failure modes, and acceptance criteria are clear enough for Spec authoring.
+
+After the user explicitly confirms shared understanding, end with exactly one fenced JSON block containing { "type": "planning-grill-complete" }. Do not write the Spec in this stage.
 </collaboration_mode>`;
 
 const PLANNING_SPEC_PROMPT = `<collaboration_mode># Planning Workflow: Spec
@@ -208,28 +709,28 @@ Any further notes about the feature.
 
 Maintain the project's domain model as part of Spec authoring. When the Spec resolves terminology, capture it in the CONTEXT.md glossary (format in CONTEXT-FORMAT.md): tight definitions, rejected synonyms under _Avoid_, project-specific domain concepts only, no implementation details. Record an ADR in docs/adr/ (format in ADR-FORMAT.md) only when a decision is hard to reverse, surprising without context, and the result of a real trade-off. Create these files lazily — only when you have something to write.
 
-When this stage runs from a locked Product Workflow intent, there is no user to ask: resolve glossary and ADR updates yourself from the locked intent and the codebase.
+## T3 workflow adapter
+
+The Spec is a durable artifact in T3's application state, not a repository file or tracker issue — a deliberate deviation from upstream. Do not write the Spec to the repository, \`.scratch/\` files, or an external tracker, and ignore \`/setup-matt-pocock-skills\` and triage labels. Publish the Spec through the planning-spec-artifact directive requested by the stage launch prompt, finishing with exactly one fenced JSON block.
+
+When a Wayfinder Map exists for this workflow, load it with workflow_wayfinder_map_get and treat the map's linked decisions as the conversation context to synthesize from.
+
+Seam confirmation ("Check with the user") applies only when a user is present in this planning thread. When this stage runs from a locked Product Workflow intent, there is no user to ask: resolve seams, glossary updates, and ADR updates yourself from the locked intent and the codebase.
+
+These rules override only upstream tracker publication and interview mechanics; the spec template and synthesis process remain authoritative.
 </collaboration_mode>`;
 
-const PLANNING_TICKETS_PROMPT = `<collaboration_mode># Planning Workflow: Tickets
+const PLANNING_TICKETS_PROMPT = `<collaboration_mode># To Tickets
 
----
-name: to-tickets
-description: Break a plan, spec, or Spec into independently-grabbable tickets on the project ticket tracker using tracer-bullet vertical slices.
-disable-model-invocation: true
----
+Break a plan, spec, or conversation into a set of **tickets** — tracer-bullet vertical slices, each declaring the tickets that **block** it.
 
-# To Tickets
-
-Break a plan into independently-grabbable tickets using vertical slices (tracer bullets).
-
-The ticket tracker and triage label vocabulary should have been provided to you - run \`/setup-matt-pocock-skills\` if not.
+The issue tracker and triage label vocabulary should have been provided to you — run \`/setup-matt-pocock-skills\` if not.
 
 ## Process
 
 ### 1. Gather context
 
-Work from whatever is already in the conversation context. If the user passes an ticket reference (ticket number, URL, or path) as an argument, fetch it from the ticket tracker and read its full body and comments.
+Work from whatever is already in the conversation context. If the user passes a reference (a spec path, an issue number or URL) as an argument, fetch it and read its full body and comments.
 
 ### 2. Explore the codebase (optional)
 
@@ -239,21 +740,97 @@ Look for opportunities to prefactor the code to make the implementation easier. 
 
 ### 3. Draft vertical slices
 
-Break the plan into **tracer bullet** tickets. Each ticket is a thin vertical slice that cuts through ALL integration layers end-to-end, NOT a horizontal slice of one layer.
+Break the work into **tracer bullet** tickets.
 
 <vertical-slice-rules>
 
-- Each slice delivers a narrow but COMPLETE path through every layer (schema, API, UI, tests)
+- Each slice cuts a narrow but COMPLETE path through every layer (schema, API, UI, tests) — vertical, NOT a horizontal slice of one layer
 - A completed slice is demoable or verifiable on its own
+- Each slice is sized to fit in a single fresh context window
 - Any prefactoring should be done first
 
 </vertical-slice-rules>
 
-### 4. Hand off for ticket review
+Give each ticket its **blocking edges** — the other tickets that must complete before it can start. A ticket with no blockers can start immediately.
 
-Stop after drafting the proposed ticket set. Do not quiz the user and do not publish the tickets from this stage.
+**Wide refactors are the exception to vertical slicing.** A **wide refactor** is one mechanical change — rename a column, retype a shared symbol — whose **blast radius** fans across the whole codebase, so a single edit breaks thousands of call sites at once and no vertical slice can land green. Don't force it into a tracer bullet; sequence it as **expand–contract**. First expand: add the new form beside the old so nothing breaks. Then migrate the call sites over in batches sized by blast radius (per package, per directory), each batch its own ticket blocked by the expand, keeping CI green batch to batch because the old form still exists. Finally contract: delete the old form once no caller remains, in a ticket blocked by every migrate batch. When even the batches can't stay green alone, keep the sequence but let them share an integration branch that all block a final integrate-and-verify ticket — green is promised only there.
 
-The Ticket Review stage owns completeness review against the Spec and context, adjustment cycles, final user quiz, and ticket tracker publishing.
+### 4. Quiz the user
+
+Present the proposed breakdown as a numbered list. For each ticket, show:
+
+- **Title**: short descriptive name
+- **Blocked by**: which other tickets (if any) must complete first
+- **What it delivers**: the end-to-end behaviour this ticket makes work
+
+Ask the user:
+
+- Does the granularity feel right? (too coarse / too fine)
+- Are the blocking edges correct — does each ticket only depend on tickets that genuinely gate it?
+- Should any tickets be merged or split further?
+
+Iterate until the user approves the breakdown.
+
+### 5. Publish the tickets to the configured tracker
+
+Publish the approved tickets. **How** depends on the tracker \`/setup-matt-pocock-skills\` configured — the tickets are the same either way, only the shape of the blocking edges changes:
+
+- **Local files** → write one file per ticket under \`.scratch/<feature-slug>/issues/<NN>-<slug>.md\`, numbered from \`01\` in dependency order (blockers first). Each file's "Blocked by" lists the numbers/titles it depends on. Use the per-ticket file template below — one ticket per file, never a single combined file.
+- **A real issue tracker (GitHub, Linear, …)** → publish one issue per ticket in dependency order (blockers first) so each ticket's blocking edges can reference real identifiers. Use the platform's native blocking / sub-issue relationship where it has one; otherwise set each ticket's "Blocked by" to the blocking issues. Apply the \`ready-for-agent\` triage label unless instructed otherwise — the tickets are agent-grabbable by construction.
+
+Work the **frontier**: any ticket whose blockers are all done. For a purely linear chain that means top to bottom.
+
+Do NOT close or modify any parent issue.
+
+<local-ticket-template>
+
+# <NN> — <Ticket title>
+
+**What to build:** the end-to-end behaviour this ticket makes work, from the user's perspective — not a layer-by-layer implementation list.
+
+**Blocked by:** the numbers/titles of the tickets that gate this one, or "None — can start immediately".
+
+**Status:** ready-for-agent
+
+- [ ] Acceptance criterion 1
+- [ ] Acceptance criterion 2
+
+</local-ticket-template>
+
+<issue-template>
+
+## Parent
+
+A reference to the parent issue on the tracker (if the source was an existing issue, otherwise omit this section).
+
+## What to build
+
+The end-to-end behaviour this ticket makes work, from the user's perspective — not layer-by-layer implementation.
+
+## Acceptance criteria
+
+- [ ] Criterion 1
+- [ ] Criterion 2
+
+## Blocked by
+
+- A reference to each blocking ticket, or "None — can start immediately".
+
+</issue-template>
+
+In either form, avoid specific file paths or code snippets — they go stale fast. Exception: if a prototype produced a snippet that encodes a decision more precisely than prose can (state machine, reducer, schema, type shape), inline it and note briefly that it came from a prototype. Trim to the decision-rich parts — not a working demo, just the important bits.
+
+## T3 workflow adapter
+
+T3's Planning workflow owns publication and approval:
+
+- Treat the current durable Spec as the upstream source reference.
+- Draft the complete tracer-bullet set and blocking graph using the upstream process and templates.
+- Store tickets through the planning-tickets-artifact requested by the stage launch prompt; do not create local files or external tracker issues.
+- Stop after drafting. The separate Ticket Review stage owns completeness review, adjustment cycles, the user quiz, and final approval.
+- Use the repository glossary and ADRs, loading supporting documents through workflow_doc_get only when needed.
+
+These rules override only upstream tracker publication and quiz ownership. Vertical slicing, blocker edges, wide-refactor expand–contract sequencing, frontier ordering, ticket sizing, and ticket content remain authoritative.
 </collaboration_mode>`;
 
 const PLANNING_REVIEW_PROMPT = `<collaboration_mode># Planning Workflow: Ticket Review
@@ -272,10 +849,11 @@ Review the Spec, conversation context, durable project context, and drafted plan
 ## Review cycle
 
 1. In cycle 1, read the Spec and all available context, call \`workflow_tickets_list\`, retrieve every ticket with \`workflow_ticket_get\`, and review the complete ticket set before judging it.
-2. Return feedback for every targeted ticket and identify every ticket that needs rework in \`failingPlanningTicketIds\`.
-3. If anything is missing, too broad, too narrow, horizontally sliced, incorrectly blocked, or vague, return concrete corrections. Do not quiz the user while the ticket set still needs review corrections.
-4. In later cycles, retrieve and review only the failed, reworked, or replacement tickets named in the target scope. Previously passed tickets stay out of scope.
-5. Repeat targeted review until those tickets pass. A clean targeted pass completes ticket review; do not request another full-review cycle.
+2. Apply corrections directly. When a ticket needs rework you can perform yourself, edit it through the \`ticketEdits\` array of your planning-reviewer-verdict: \`update\` to correct a ticket's title, body, planned file changes, or dependencies; \`create\` (with \`replacesPlanningTicketIds\` when splitting or replacing) to add missing slices; \`delete\` to remove redundant ones; \`update-dependencies\` to fix blocking edges alone.
+3. Return one \`perTicketFeedback\` entry per targeted ticket, and name every ticket that still needs authoring-thread rework in \`failingPlanningTicketIds\`. Prefer direct ticket edits over bouncing feedback; reserve failures for corrections that genuinely need the authoring thread.
+4. If anything is missing, too broad, too narrow, horizontally sliced, incorrectly blocked, or vague, correct it or return concrete corrections. Do not quiz the user while the ticket set still needs review corrections.
+5. In later cycles, retrieve and review only the failed, reworked, or replacement tickets named in the target scope. Previously passed tickets stay out of scope.
+6. Repeat targeted review until those tickets pass. Ticket review runs at most three cycles, and each cycle runs in its own reviewer sub-thread. A clean targeted pass completes ticket review; do not request another full-review cycle.
 
 ## User quiz
 
@@ -293,45 +871,14 @@ Ask the user:
 
 Iterate until the user approves the breakdown.
 
-## Publish approved tickets
-
-For each approved slice, publish a new ticket to the ticket tracker. Use the ticket body template below. These tickets are considered ready for AFK agents, so publish them with the correct triage label unless instructed otherwise.
-
-Publish tickets in dependency order (blockers first) so you can reference real ticket identifiers in the "Blocked by" field.
-
-<ticket-template>
-## Parent
-
-A reference to the parent ticket on the ticket tracker (if the source was an existing ticket, otherwise omit this section).
-
-## What to build
-
-A concise description of this vertical slice. Describe the end-to-end behavior, not layer-by-layer implementation.
-
-Avoid specific file paths or code snippets - they go stale fast. Exception: if a prototype produced a snippet that encodes a decision more precisely than prose can (state machine, reducer, schema, type shape), inline it here and note briefly that it came from a prototype. Trim to the decision-rich parts - not a working demo, just the important bits.
-
-## Acceptance criteria
-
-- [ ] Criterion 1
-- [ ] Criterion 2
-- [ ] Criterion 3
-
-## Blocked by
-
-- A reference to the blocking ticket (if any)
-
-Or "None - can start immediately" if no blockers.
-
-</ticket-template>
-
-Do NOT close or modify any parent ticket.
+Approval finalizes the durable ticket set already stored through planning-tickets-artifact and the review cycles' ticket edits. There is no separate publication step, external tracker, or triage label.
 </collaboration_mode>`;
 
 const PLANNING_ADR_FORMAT_ASSOCIATED_DOC_CONTENT = `# ADR Format
 
 ADRs live in \`docs/adr/\` and use sequential numbering: \`0001-slug.md\`, \`0002-slug.md\`, etc.
 
-Create the \`docs/adr/\` directory lazily - only when the first ADR is needed.
+Create the \`docs/adr/\` directory lazily — only when the first ADR is needed.
 
 ## Template
 
@@ -341,15 +888,15 @@ Create the \`docs/adr/\` directory lazily - only when the first ADR is needed.
 {1-3 sentences: what's the context, what did we decide, and why.}
 \`\`\`
 
-That's it. An ADR can be a single paragraph. The value is in recording *that* a decision was made and *why* - not in filling out sections.
+That's it. An ADR can be a single paragraph. The value is in recording *that* a decision was made and *why* — not in filling out sections.
 
 ## Optional sections
 
 Only include these when they add genuine value. Most ADRs won't need them.
 
-- **Status** frontmatter (\`proposed | accepted | deprecated | superseded by ADR-NNNN\`) - useful when decisions are revisited
-- **Considered Options** - only when the rejected alternatives are worth remembering
-- **Consequences** - only when non-obvious downstream effects need to be called out
+- **Status** frontmatter (\`proposed | accepted | deprecated | superseded by ADR-NNNN\`) — useful when decisions are revisited
+- **Considered Options** — only when the rejected alternatives are worth remembering
+- **Consequences** — only when non-obvious downstream effects need to be called out
 
 ## Numbering
 
@@ -359,25 +906,235 @@ Scan \`docs/adr/\` for the highest existing number and increment by one.
 
 All three of these must be true:
 
-1. **Hard to reverse** - the cost of changing your mind later is meaningful
-2. **Surprising without context** - a future reader will look at the code and wonder "why on earth did they do it this way?"
-3. **The result of a real trade-off** - there were genuine alternatives and you picked one for specific reasons
+1. **Hard to reverse** — the cost of changing your mind later is meaningful
+2. **Surprising without context** — a future reader will look at the code and wonder "why on earth did they do it this way?"
+3. **The result of a real trade-off** — there were genuine alternatives and you picked one for specific reasons
 
-If a decision is easy to reverse, skip it - you'll just reverse it. If it's not surprising, nobody will wonder why. If there was no real alternative, there's nothing to record beyond "we did the obvious thing."
+If a decision is easy to reverse, skip it — you'll just reverse it. If it's not surprising, nobody will wonder why. If there was no real alternative, there's nothing to record beyond "we did the obvious thing."
 
 ### What qualifies
 
 - **Architectural shape.** "We're using a monorepo." "The write model is event-sourced, the read model is projected into Postgres."
 - **Integration patterns between contexts.** "Ordering and Billing communicate via domain events, not synchronous HTTP."
-- **Technology choices that carry lock-in.** Database, message bus, auth provider, deployment target. Not every library - just the ones that would take a quarter to swap out.
+- **Technology choices that carry lock-in.** Database, message bus, auth provider, deployment target. Not every library — just the ones that would take a quarter to swap out.
 - **Boundary and scope decisions.** "Customer data is owned by the Customer context; other contexts reference it by ID only." The explicit no-s are as valuable as the yes-s.
 - **Deliberate deviations from the obvious path.** "We're using manual SQL instead of an ORM because X." Anything where a reasonable reader would assume the opposite. These stop the next engineer from "fixing" something that was deliberate.
 - **Constraints not visible in the code.** "We can't use AWS because of compliance requirements." "Response times must be under 200ms because of the partner API contract."
-- **Rejected alternatives when the rejection is non-obvious.** If you considered GraphQL and picked REST for subtle reasons, record it - otherwise someone will suggest GraphQL again in six months.`;
+- **Rejected alternatives when the rejection is non-obvious.** If you considered GraphQL and picked REST for subtle reasons, record it — otherwise someone will suggest GraphQL again in six months.`;
 
+const DOMAIN_DOCS_ASSOCIATED_DOC_CONTENT = `# Domain Docs
+
+How the engineering skills should consume this repo's domain documentation when exploring the codebase.
+
+## Before exploring, read these
+
+- **\`CONTEXT.md\`** at the repo root, or
+- **\`CONTEXT-MAP.md\`** at the repo root if it exists — it points at one \`CONTEXT.md\` per context. Read each one relevant to the topic.
+- **\`docs/adr/\`** — read ADRs that touch the area you're about to work in. In multi-context repos, also check \`src/<context>/docs/adr/\` for context-scoped decisions.
+
+If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The Domain Modeling skill (run inside Grill With Docs) creates them lazily when terms or decisions actually get resolved.
+
+## File structure
+
+Single-context repo (most repos):
+
+\`\`\`
+/
+├── CONTEXT.md
+├── docs/adr/
+│   ├── 0001-event-sourced-orders.md
+│   └── 0002-postgres-for-write-model.md
+└── src/
+\`\`\`
+
+Multi-context repo (presence of \`CONTEXT-MAP.md\` at the root):
+
+\`\`\`
+/
+├── CONTEXT-MAP.md
+├── docs/adr/                          ← system-wide decisions
+└── src/
+    ├── ordering/
+    │   ├── CONTEXT.md
+    │   └── docs/adr/                  ← context-specific decisions
+    └── billing/
+        ├── CONTEXT.md
+        └── docs/adr/
+\`\`\`
+
+## Use the glossary's vocabulary
+
+When your output names a domain concept (in a ticket title, a refactor proposal, a hypothesis, a test name), use the term as defined in \`CONTEXT.md\`. Don't drift to synonyms the glossary explicitly avoids.
+
+If the concept you need isn't in the glossary yet, that's a signal — either you're inventing language the project doesn't use (reconsider) or there's a real gap (note it for Domain Modeling).
+
+## Flag ADR conflicts
+
+If your output contradicts an existing ADR, surface it explicitly rather than silently overriding:
+
+> _Contradicts ADR-0007 (event-sourced orders) — but worth reopening because…_`;
+
+const AGENT_BRIEF_ASSOCIATED_DOC_CONTENT = `# Writing Agent Briefs
+
+> **T3 adaptation:** In T3's workflows this document describes the body of a durable planning ticket, not a comment on a GitHub issue or PR. Tickets produced by the Tickets and Ticket Review stages are agent-ready by construction — the \`ready-for-agent\` state is implicit and there are no tracker labels.
+
+An agent brief is a structured comment posted on a GitHub issue or PR when it moves to \`ready-for-agent\`. It is the authoritative specification that an AFK agent will work from. The original body and discussion are context — the agent brief is the contract.
+
+The brief states **what the agent should do**, which stretches to both surfaces: for an issue, that's building the change from nothing; for a PR, it's what's left to do *to the existing diff* — finish it, close gaps, address review points. Same principles either way.
+
+## Principles
+
+### Durability over precision
+
+The ticket may sit ready for days or weeks. The codebase will change in the meantime. Write the brief so it stays useful even as files are renamed, moved, or refactored.
+
+- **Do** describe interfaces, types, and behavioral contracts
+- **Do** name specific types, function signatures, or config shapes that the agent should look for or modify
+- **Don't** reference file paths — they go stale
+- **Don't** reference line numbers
+- **Don't** assume the current implementation structure will remain the same
+
+### Behavioral, not procedural
+
+Describe **what** the system should do, not **how** to implement it. The agent will explore the codebase fresh and make its own implementation decisions.
+
+- **Good:** "The \`SkillConfig\` type should accept an optional \`schedule\` field of type \`CronExpression\`"
+- **Bad:** "Open src/types/skill.ts and add a schedule field on line 42"
+- **Good:** "When a user runs \`/triage\` with no arguments, they should see a summary of issues needing attention"
+- **Bad:** "Add a switch statement in the main handler function"
+
+### Complete acceptance criteria
+
+The agent needs to know when it's done. Every agent brief must have concrete, testable acceptance criteria. Each criterion should be independently verifiable.
+
+- **Good:** "Running \`gh issue list --label needs-triage\` returns issues that have been through initial classification"
+- **Bad:** "Triage should work correctly"
+
+### Explicit scope boundaries
+
+State what is out of scope. This prevents the agent from gold-plating or making assumptions about adjacent features.
+
+## Template
+
+\`\`\`markdown
+## Agent Brief
+
+**Category:** bug / enhancement
+**Summary:** one-line description of what needs to happen
+
+**Current behavior:**
+Describe what happens now. For bugs, this is the broken behavior.
+For enhancements, this is the status quo the feature builds on.
+
+**Desired behavior:**
+Describe what should happen after the agent's work is complete.
+Be specific about edge cases and error conditions.
+
+**Key interfaces:**
+- \`TypeName\` — what needs to change and why
+- \`functionName()\` return type — what it currently returns vs what it should return
+- Config shape — any new configuration options needed
+
+**Acceptance criteria:**
+- [ ] Specific, testable criterion 1
+- [ ] Specific, testable criterion 2
+- [ ] Specific, testable criterion 3
+
+**Out of scope:**
+- Thing that should NOT be changed or addressed in this issue
+- Adjacent feature that might seem related but is separate
+\`\`\`
+
+## Example: good agent brief
+
+\`\`\`markdown
+## Agent Brief
+
+**Category:** bug
+**Summary:** Skill description truncation drops mid-word, producing broken output
+
+**Current behavior:**
+When a skill description exceeds 1024 characters, it is truncated at exactly
+1024 characters regardless of word boundaries. This produces descriptions
+that end mid-word (e.g. "Use when the user wants to confi").
+
+**Desired behavior:**
+Truncation should break at the last word boundary before 1024 characters
+and append "..." to indicate truncation.
+
+**Key interfaces:**
+- The \`SkillMetadata\` type's \`description\` field — no type change needed,
+  but the validation/processing logic that populates it needs to respect
+  word boundaries
+- Any function that reads SKILL.md frontmatter and extracts the description
+
+**Acceptance criteria:**
+- [ ] Descriptions under 1024 chars are unchanged
+- [ ] Descriptions over 1024 chars are truncated at the last word boundary
+      before 1024 chars
+- [ ] Truncated descriptions end with "..."
+- [ ] The total length including "..." does not exceed 1024 chars
+
+**Out of scope:**
+- Changing the 1024 char limit itself
+- Multi-line description support
+\`\`\`
+
+## Example: bad agent brief
+
+\`\`\`markdown
+## Agent Brief
+
+**Summary:** Fix the triage bug
+
+**What to do:**
+The triage thing is broken. Look at the main file and fix it.
+The function around line 150 has the issue.
+
+**Files to change:**
+- src/triage/handler.ts (line 150)
+- src/types.ts (line 42)
+\`\`\`
+
+This is bad because:
+- No category
+- Vague description ("the triage thing is broken")
+- References file paths and line numbers that will go stale
+- No acceptance criteria
+- No scope boundaries
+- No description of current vs desired behavior`;
 const IMPLEMENTATION_ORCHESTRATOR_PROMPT = `<collaboration_mode># Implementation Workflow: Orchestrator Start
 
-Plan the implementation run from the Spec and planning tickets. Identify worktree strategy, ticket order, validation commands, required app-dev/browser review surfaces, merge gates, and how progress will be reported.
+---
+name: implement
+description: "Implement a piece of work based on a spec or set of tickets."
+disable-model-invocation: true
+---
+
+Implement the work described by the user in the spec or tickets.
+
+Use /tdd where possible, at pre-agreed seams.
+
+Run typechecking regularly, single test files regularly, and the full test suite once at the end.
+
+Once done, use /code-review to review the work.
+
+Commit your work to the current branch.
+
+## T3 workflow adapter
+
+This stage orchestrates the upstream implement loop across sub-threads instead of doing the work inline:
+
+- Load the durable Spec with workflow_spec_get and the tickets with workflow_tickets_list and workflow_ticket_get. The Spec is the node that binds the tickets and later dev reviews together.
+- The run works in a dedicated worktree and branch created from the branch the user selected, and the finished change request is filed back into that branch.
+- The app dev stack for this worktree is checked at the start of the run and, when absent, started in parallel with implementation.
+- Tickets are implemented dependency-aware by TDD worker sub-threads (the TDD Implementation skill), each in its own worktree and branch. A dependent ticket's worker branches from its blocker's worker branch so chained tickets build on each other, and every worker commits to its own branch.
+- Worker branches are merged programmatically back into the orchestrator worktree; the Merge Gate stage runs only when programmatic integration stops on a real conflict.
+- Browser Dev Review runs after the merge, up to five cycles. Each cycle is a new thread and its findings are fixed before the next cycle; after the cap the run proceeds with the review still failing, flagged in the change request.
+- Code Review is a single review-and-fix pass that commits its own corrections and precedes change-request publication.
+- "The full test suite once at the end" is replaced by the validation commands named in the launch message; never run repo-wide suites.
+
+Plan the implementation run from the Spec and planning tickets. Identify worktree strategy, ticket order, validation commands, required app-dev/browser review surfaces, merge gates, and how progress will be reported. These rules override only upstream single-thread mechanics; TDD at pre-agreed seams, regular typechecking, review before publication, and committed work remain authoritative.
 </collaboration_mode>`;
 
 const IMPLEMENTATION_TDD_MOCKING_ASSOCIATED_DOC_CONTENT = `# When to Mock
@@ -623,7 +1380,7 @@ Do not add scattered string logs as a debugging diary. Add logging when the new 
 
 ## Orchestrated Worker Result
 
-When this prompt is run by an automatic implementation-worker thread, do not ask the user questions. Implement the assigned planning ticket, run focused validation, and finish with exactly one fenced JSON block using this shape:
+When this prompt is run by an automatic implementation-worker thread, do not ask the user questions. In an orchestrated worker thread the Spec's Testing Decisions and the assigned ticket's acceptance criteria *are* the pre-agreed seams — never ask the user to confirm them. Implement the assigned planning ticket, run focused validation, and finish with exactly one fenced JSON block using this shape:
 
 \`\`\`json
 {
@@ -817,6 +1574,8 @@ Reporting them separately stops one axis from masking the other.
 
 When this prompt is run by an automatic implementation run, do not ask the user questions. The launch message provides the fixed point, the diff command, the worktree, the change request, and the Spec source — use those instead of asking or searching the issue tracker.
 
+Run the two axes as parallel feedback sub-agents by emitting one workflow-subagents-create directive with two children that return workflow-subagent-result, instead of upstream's \`Agent\` tool calls. If child creation is unavailable in this thread, run the two axis briefs sequentially yourself. Aggregation, fixes, validation, the commit, and the final result directive always stay in this thread.
+
 **This is a single review-and-fix pass.** You are the last automated reviewer: nothing re-reviews your work, and the change request is published from the commit you leave at HEAD. So run both axes, aggregate the report, then act on it yourself:
 
 1. Run both axes and aggregate the two-axis report.
@@ -903,11 +1662,17 @@ This is the workflow's single human gate. The workflow classification is already
 
 ${input.downstream}
 
-Interview the user relentlessly about every aspect of the product intent until you reach a shared understanding. Walk down each branch of the decision tree and resolve dependent decisions one at a time. For every question, provide your recommended answer. Ask exactly one question per message and wait for the answer before continuing.
+Interview me relentlessly about every aspect of this product intent until we reach a shared understanding. Walk down each branch of the decision tree, resolving dependencies between decisions one-by-one. For each question, provide your recommended answer.
 
-Look up facts in the codebase instead of asking. Product decisions belong to the user: cover the problem, desired outcome, audience, user-visible behavior and feel, success criteria, scope, and non-goals. Do not grill implementation, architecture, or testing decisions.
+Ask the questions one at a time, waiting for feedback on each question before continuing. Asking multiple questions at once is bewildering.
 
-Do not lock intent until the user confirms the intent is sufficiently locked. Do not create or edit product context, Specs, tickets, or implementation files during this grill.
+If a *fact* can be found by exploring the codebase, look it up rather than asking me. The *decisions*, though, are mine — put each one to me and wait for my answer.
+
+Do not lock intent until I confirm we have reached a shared understanding.
+
+Grill product questions only: the problem, the desired outcome, the audience, how the product should feel and behave for the user, success criteria, scope, and non-goals. Do not grill implementation, architecture, or testing decisions.
+
+Do not create or edit product context, Specs, tickets, or implementation files during this grill.
 
 Your final response must contain exactly one fenced JSON directive and no other fenced JSON blocks:
 
@@ -928,13 +1693,13 @@ const PRODUCT_FAST_FEATURE_WORKFLOW_PROMPT = buildPresetProductWorkflowPrompt({
   title: "Fast feature workflow",
   intentKind: "feature",
   downstream:
-    "After intent locks, this same thread switches automatically to CLI Plan mode. Its proposed plan launches a dedicated worktree, app dev stack, and Build child, followed by Dev Review and Code Review with automatic fix loops and change-request publication.",
+    "After intent locks, this same thread switches automatically to CLI Plan mode. Its proposed plan launches a Build child thread in a dedicated worktree branched from the branch this workflow started on, starting the app dev stack in parallel when none exists for that worktree. Dev Review and Code Review sub-threads follow with automatic fix loops, and the change request is published into the starting branch.",
 });
 const PRODUCT_FULL_FEATURE_WORKFLOW_PROMPT = buildPresetProductWorkflowPrompt({
   title: "Full feature workflow",
   intentKind: "feature",
   downstream:
-    "After intent locks, the complete Planning workflow runs in its own thread and then launches the complete Implementation workflow in its own thread.",
+    "After intent locks, the complete Planning workflow runs in its own thread and then launches the complete Implementation workflow in its own sub-thread and worktree branched from the branch this workflow started on, creating the app dev stack in parallel when none exists. This grill is the only human gate.",
 });
 
 export const WORKFLOW_PROMPT_REGISTRY = [
@@ -955,23 +1720,92 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     workflow: "planning",
     role: "planning-thread",
     stage: "grill",
-    title: "1. Grill",
-    description: "Challenges the plan against repo language and constraints before Spec authoring.",
+    title: "1. Grill With Docs",
+    description:
+      "Relentlessly sharpens the plan while maintaining its glossary and qualifying ADRs.",
     promptText: PLANNING_GRILL_PROMPT,
     associatedDocs: [
       {
-        id: "planning.grill-stage.context-format",
+        id: "context-format",
         title: "CONTEXT.md Format",
         path: "CONTEXT-FORMAT.md",
         content: CONTEXT_FORMAT_ASSOCIATED_DOC_CONTENT,
       },
       {
-        id: "planning.grill-stage.adr-format",
+        id: "adr-format",
         title: "ADR Format",
         path: "ADR-FORMAT.md",
         content: PLANNING_ADR_FORMAT_ASSOCIATED_DOC_CONTENT,
       },
     ],
+  },
+  {
+    id: WORKFLOW_PROMPT_IDS.planningDomainModelingCodex,
+    order: 2,
+    workflow: "planning",
+    role: "planning-thread",
+    stage: "domain-modeling",
+    title: "Domain Modeling",
+    description: "Sharpens repository language, contexts, scenarios, and durable decisions.",
+    promptText: DOMAIN_MODELING_PROMPT,
+    associatedDocs: [
+      {
+        id: "context-format",
+        title: "CONTEXT.md Format",
+        path: "CONTEXT-FORMAT.md",
+        content: CONTEXT_FORMAT_ASSOCIATED_DOC_CONTENT,
+      },
+      {
+        id: "adr-format",
+        title: "ADR Format",
+        path: "ADR-FORMAT.md",
+        content: PLANNING_ADR_FORMAT_ASSOCIATED_DOC_CONTENT,
+      },
+    ],
+  },
+  {
+    id: WORKFLOW_PROMPT_IDS.planningPrototypeCodex,
+    order: 3,
+    workflow: "planning",
+    role: "planning-thread",
+    stage: "prototype",
+    title: "Prototype",
+    description: "Builds throwaway logic or UI artifacts to answer one design question.",
+    promptText: PROTOTYPE_PROMPT,
+    associatedDocs: [
+      {
+        id: "prototype-logic",
+        title: "Logic Prototype",
+        path: "LOGIC.md",
+        content: PROTOTYPE_LOGIC_DOC_CONTENT,
+      },
+      {
+        id: "prototype-ui",
+        title: "UI Prototype",
+        path: "UI.md",
+        content: PROTOTYPE_UI_DOC_CONTENT,
+      },
+    ],
+  },
+  {
+    id: WORKFLOW_PROMPT_IDS.planningWayfinderCodex,
+    order: 4,
+    workflow: "planning",
+    role: "planning-thread",
+    stage: "wayfinding",
+    title: "Wayfinder",
+    description: "Maps large, uncertain work into dependency-aware decision tickets.",
+    promptText: WAYFINDER_PROMPT,
+  },
+  {
+    id: WORKFLOW_PROMPT_IDS.planningResearchCodex,
+    order: 5,
+    workflow: "planning",
+    role: "planning-thread",
+    stage: "research",
+    title: "Research",
+    description: "Resolves bounded questions from primary sources into cited repository notes.",
+    promptText: RESEARCH_PROMPT,
   },
   {
     id: WORKFLOW_PROMPT_IDS.planningSpecCodex,
@@ -984,16 +1818,22 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     promptText: PLANNING_SPEC_PROMPT,
     associatedDocs: [
       {
-        id: "planning.spec.context-format",
+        id: "context-format",
         title: "CONTEXT.md Format",
         path: "CONTEXT-FORMAT.md",
         content: CONTEXT_FORMAT_ASSOCIATED_DOC_CONTENT,
       },
       {
-        id: "planning.spec.adr-format",
+        id: "adr-format",
         title: "ADR Format",
         path: "ADR-FORMAT.md",
         content: PLANNING_ADR_FORMAT_ASSOCIATED_DOC_CONTENT,
+      },
+      {
+        id: "domain-docs",
+        title: "Domain Docs",
+        path: "domain.md",
+        content: DOMAIN_DOCS_ASSOCIATED_DOC_CONTENT,
       },
     ],
   },
@@ -1007,6 +1847,20 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     description:
       "Decomposes the Spec into implementation-ready planning tickets with dependencies and tests.",
     promptText: PLANNING_TICKETS_PROMPT,
+    associatedDocs: [
+      {
+        id: "domain-docs",
+        title: "Domain Docs",
+        path: "domain.md",
+        content: DOMAIN_DOCS_ASSOCIATED_DOC_CONTENT,
+      },
+      {
+        id: "agent-brief",
+        title: "Writing Agent Briefs",
+        path: "AGENT-BRIEF.md",
+        content: AGENT_BRIEF_ASSOCIATED_DOC_CONTENT,
+      },
+    ],
   },
   {
     id: WORKFLOW_PROMPT_IDS.planningTicketReviewerCodex,
@@ -1018,6 +1872,14 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     description:
       "Reviews planning tickets for dependency correctness, readiness, and Spec alignment.",
     promptText: PLANNING_REVIEW_PROMPT,
+    associatedDocs: [
+      {
+        id: "agent-brief",
+        title: "Writing Agent Briefs",
+        path: "AGENT-BRIEF.md",
+        content: AGENT_BRIEF_ASSOCIATED_DOC_CONTENT,
+      },
+    ],
   },
   {
     id: WORKFLOW_PROMPT_IDS.implementationOrchestratorPlanningCodex,
@@ -1041,19 +1903,19 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     promptText: IMPLEMENTATION_TDD_PROMPT,
     associatedDocs: [
       {
-        id: "implementation.tdd.mocking",
+        id: "tdd-mocking",
         title: "When to Mock",
         path: "mocking.md",
         content: IMPLEMENTATION_TDD_MOCKING_ASSOCIATED_DOC_CONTENT,
       },
       {
-        id: "implementation.tdd.tests",
+        id: "tdd-tests",
         title: "Good and Bad Tests",
         path: "tests.md",
         content: IMPLEMENTATION_TDD_GOOD_AND_BAD_TESTS_ASSOCIATED_DOC_CONTENT,
       },
       {
-        id: "implementation.tdd.logging",
+        id: "tdd-logging",
         title: "Logging for TDD",
         path: "logging.md",
         content: IMPLEMENTATION_TDD_LOGGING_ASSOCIATED_DOC_CONTENT,
@@ -1081,7 +1943,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     promptText: IMPLEMENTATION_BROWSER_DEV_REVIEW_PROMPT,
     associatedDocs: [
       {
-        id: "implementation.browser-dev-review.preview-browser-qa",
+        id: "preview-browser-qa",
         path: "preview-browser-qa.md",
         title: "Preview Browser QA",
         content: PREVIEW_BROWSER_QA_ASSOCIATED_DOC_CONTENT,
@@ -1164,6 +2026,144 @@ export function listWorkflowPromptContracts(): WorkflowPromptContract[] {
   return WORKFLOW_PROMPT_REGISTRY.map(cloneWorkflowPromptContract);
 }
 
+const VISIBLE_SKILL_IDS = new Set<string>([
+  WORKFLOW_PROMPT_IDS.productFixCodex,
+  WORKFLOW_PROMPT_IDS.productFastFeatureCodex,
+  WORKFLOW_PROMPT_IDS.productFullFeatureCodex,
+  WORKFLOW_PROMPT_IDS.planningGrillStageCodex,
+  WORKFLOW_PROMPT_IDS.planningSpecCodex,
+  WORKFLOW_PROMPT_IDS.planningTicketsCodex,
+  WORKFLOW_PROMPT_IDS.planningTicketReviewerCodex,
+  WORKFLOW_PROMPT_IDS.planningPrototypeCodex,
+  WORKFLOW_PROMPT_IDS.planningWayfinderCodex,
+  WORKFLOW_PROMPT_IDS.planningResearchCodex,
+  WORKFLOW_PROMPT_IDS.implementationOrchestratorPlanningCodex,
+  WORKFLOW_PROMPT_IDS.implementationTddCodex,
+  WORKFLOW_PROMPT_IDS.implementationMergeGateCodex,
+  WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
+  WORKFLOW_PROMPT_IDS.implementationFixCodex,
+  WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+]);
+
+function buildWorkflowCatalog(): WorkflowCatalog {
+  const promptContracts: ReadonlyArray<WorkflowPromptContract> = WORKFLOW_PROMPT_REGISTRY;
+  const workflowOrder = [
+    "fix",
+    "fast-feature",
+    "full-feature",
+    "wayfinder",
+    "planning",
+    "implementation",
+  ];
+  const workflows = WORKFLOW_PRESET_DEFINITIONS.toSorted(
+    (left, right) => workflowOrder.indexOf(left.id) - workflowOrder.indexOf(right.id),
+  ).map((definition, workflowIndex) => ({
+    id: definition.id,
+    order: workflowIndex + 1,
+    title: definition.label,
+    description: definition.description,
+    interactionMode: definition.interactionMode,
+    steps: definition.helpSteps.map((step) => ({
+      label: step.label,
+      ...(step.skillId ? { skillId: step.skillId } : {}),
+      ...(step.threadBoundary ? { threadBoundary: step.threadBoundary } : {}),
+      ...(step.note ? { note: step.note } : {}),
+    })),
+  }));
+
+  const workflowIdsBySkill = new Map<string, string[]>();
+  for (const workflow of workflows) {
+    for (const step of workflow.steps) {
+      if (step.skillId === undefined) continue;
+      const ids = workflowIdsBySkill.get(step.skillId) ?? [];
+      if (!ids.includes(workflow.id)) ids.push(workflow.id);
+      workflowIdsBySkill.set(step.skillId, ids);
+    }
+  }
+  const implicitWorkflowIdsBySkill: Readonly<Record<string, readonly string[]>> = {
+    [WORKFLOW_PROMPT_IDS.planningGrillStageCodex]: ["full-feature", "planning"],
+    [WORKFLOW_PROMPT_IDS.planningPrototypeCodex]: ["wayfinder"],
+    [WORKFLOW_PROMPT_IDS.planningWayfinderCodex]: ["wayfinder"],
+    [WORKFLOW_PROMPT_IDS.planningResearchCodex]: ["wayfinder"],
+    [WORKFLOW_PROMPT_IDS.implementationOrchestratorPlanningCodex]: [
+      "full-feature",
+      "implementation",
+    ],
+    [WORKFLOW_PROMPT_IDS.implementationFixCodex]: [
+      "fast-feature",
+      "full-feature",
+      "implementation",
+    ],
+  };
+  for (const [skillId, workflowIds] of Object.entries(implicitWorkflowIdsBySkill)) {
+    const ids = workflowIdsBySkill.get(skillId) ?? [];
+    for (const workflowId of workflowIds) {
+      if (!ids.includes(workflowId)) ids.push(workflowId);
+    }
+    workflowIdsBySkill.set(skillId, ids);
+  }
+
+  const skills: WorkflowSkillContract[] = promptContracts
+    .filter((contract) => VISIBLE_SKILL_IDS.has(contract.id))
+    .map((contract) => ({
+      id: contract.id,
+      order: contract.order,
+      workflow: contract.workflow,
+      role: contract.role,
+      stage: contract.stage,
+      title: contract.title,
+      description: contract.description,
+      promptText: contract.promptText,
+      docIds: contract.associatedDocs?.map((doc) => doc.id) ?? [],
+      workflowIds: workflowIdsBySkill.get(contract.id) ?? [],
+    }));
+
+  const docsById = new Map<
+    string,
+    Omit<WorkflowDocContract, "skillIds"> & { skillIds: string[] }
+  >();
+  for (const skill of skills) {
+    const contract = promptContracts.find((candidate) => candidate.id === skill.id);
+    for (const doc of contract?.associatedDocs ?? []) {
+      const existing = docsById.get(doc.id);
+      if (existing !== undefined) {
+        if (
+          existing.title !== doc.title ||
+          existing.path !== doc.path ||
+          existing.content !== doc.content
+        ) {
+          throw new Error(`Conflicting workflow doc '${doc.id}'`);
+        }
+        existing.skillIds.push(skill.id);
+      } else {
+        docsById.set(doc.id, { ...doc, skillIds: [skill.id] });
+      }
+    }
+  }
+
+  const skillIds = new Set(skills.map((skill) => skill.id));
+  for (const workflow of workflows) {
+    for (const step of workflow.steps) {
+      if (step.skillId !== undefined && !skillIds.has(step.skillId)) {
+        throw new Error(`Unknown workflow skill '${step.skillId}' in '${workflow.id}'`);
+      }
+    }
+  }
+
+  return { workflows, skills, docs: [...docsById.values()] };
+}
+
+const WORKFLOW_CATALOG = buildWorkflowCatalog();
+
+export function listWorkflowCatalog(): WorkflowCatalog {
+  return structuredClone(WORKFLOW_CATALOG);
+}
+
+export function resolveWorkflowDoc(docId: string): WorkflowDocContract | undefined {
+  const doc = WORKFLOW_CATALOG.docs.find((candidate) => candidate.id === docId);
+  return doc === undefined ? undefined : structuredClone(doc);
+}
+
 export function resolveWorkflowPromptContract(id: string): WorkflowPromptContract {
   const contract = WORKFLOW_PROMPT_REGISTRY.find((entry) => entry.id === id);
   if (contract === undefined) {
@@ -1196,10 +2196,10 @@ export function isDevReviewMcpWorkflowPromptId(
   return isBrowserDevReviewWorkflowPromptId(workflowPromptId);
 }
 
-function renderAssociatedDoc(doc: NonNullable<WorkflowPromptContract["associatedDocs"]>[number]) {
-  return `<associated-doc id="${doc.id}" path="${doc.path}" title="${doc.title}">
-${doc.content}
-</associated-doc>`;
+function renderAssociatedDocReference(
+  doc: NonNullable<WorkflowPromptContract["associatedDocs"]>[number],
+) {
+  return `<doc id="${doc.id}" path="${doc.path}" title="${doc.title}" />`;
 }
 
 export function resolveWorkflowPromptText(id: string): string {
@@ -1208,8 +2208,8 @@ export function resolveWorkflowPromptText(id: string): string {
     return contract.promptText;
   }
 
-  const docs = contract.associatedDocs.map(renderAssociatedDoc).join("\n\n");
-  return `${contract.promptText}\n\n${docs}`;
+  const docs = contract.associatedDocs.map(renderAssociatedDocReference).join("\n");
+  return `${contract.promptText}\n\n<available-workflow-docs>\nLoad a supporting document only when relevant by calling workflow_doc_get with its id.\n${docs}\n</available-workflow-docs>`;
 }
 
 /**
@@ -1269,12 +2269,9 @@ export function resolveWorkflowSystemInstructions(input: {
   }
 
   if (workflowPromptId === WORKFLOW_PROMPT_IDS.workflowAgentCommunications) {
-    return resolveWorkflowPromptText(workflowPromptId);
+    return undefined;
   }
-
-  return `${resolveWorkflowPromptText(
-    WORKFLOW_PROMPT_IDS.workflowAgentCommunications,
-  )}\n\n${resolveWorkflowPromptText(workflowPromptId)}`;
+  return resolveWorkflowPromptText(workflowPromptId);
 }
 
 export function isWorkflowInteractionMode(

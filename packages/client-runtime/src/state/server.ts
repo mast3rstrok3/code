@@ -302,6 +302,10 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:workflow-prompts",
       tag: WS_METHODS.serverGetWorkflowPrompts,
     }),
+    workflowCatalog: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:workflow-catalog",
+      tag: WS_METHODS.serverGetWorkflowCatalog,
+    }),
     resourceTelemetry: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:resource-telemetry",
       tag: WS_METHODS.subscribeResourceTelemetry,

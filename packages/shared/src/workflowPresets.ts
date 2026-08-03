@@ -4,6 +4,7 @@ export type WorkflowPresetRoute = "product" | "implementation" | "planning";
 
 export interface WorkflowPresetHelpStep {
   readonly label: string;
+  readonly skillId?: string;
   readonly threadBoundary?: "same thread" | "new thread" | "new child thread" | "new review thread";
   readonly note?: string;
 }
@@ -27,7 +28,12 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
     interactionMode: "product-workflow",
     workflowPromptId: "product.fix.codex",
     helpSteps: [
-      { label: "Product direction grill", threadBoundary: "same thread", note: "human-guided" },
+      {
+        label: "Product direction grill",
+        skillId: "product.fix.codex",
+        threadBoundary: "same thread",
+        note: "human-guided",
+      },
       { label: "CLI Plan mode", threadBoundary: "same thread", note: "automatic" },
       { label: "CLI Build mode", threadBoundary: "new child thread", note: "automatic" },
     ],
@@ -40,19 +46,26 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
     interactionMode: "product-workflow",
     workflowPromptId: "product.fast-feature.codex",
     helpSteps: [
-      { label: "Product direction grill", threadBoundary: "same thread" },
+      {
+        label: "Product direction grill",
+        skillId: "product.fast-feature.codex",
+        threadBoundary: "same thread",
+      },
       { label: "CLI Plan mode", threadBoundary: "same thread" },
       {
         label: "Worktree, app dev stack, and CLI Build",
+        skillId: "implementation.tdd.codex",
         threadBoundary: "new child thread",
       },
       {
         label: "Dev Review",
+        skillId: "implementation.browser-dev-review.codex",
         threadBoundary: "new review thread",
-        note: "up to three attempts, feedback returns to Build",
+        note: "up to five attempts, feedback returns to Build",
       },
       {
         label: "Code Review",
+        skillId: "implementation.code-review.codex",
         threadBoundary: "new review thread",
         note: "single pass, applies fixes and commits",
       },
@@ -67,15 +80,45 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
     interactionMode: "product-workflow",
     workflowPromptId: "product.full-feature.codex",
     helpSteps: [
-      { label: "Product direction grill" },
-      { label: "Spec authoring" },
-      { label: "Planning tickets" },
-      { label: "Ticket review and revision cycles", note: "repeats until approved" },
-      { label: "TDD implementation workers" },
-      { label: "Merge gate and required validation" },
-      { label: "Dev Review and automatic fixes", note: "up to three attempts" },
-      { label: "Code Review", note: "single pass, applies fixes and commits" },
+      { label: "Product direction grill", skillId: "product.full-feature.codex" },
+      { label: "Spec authoring", skillId: "planning.spec.codex" },
+      { label: "Planning tickets", skillId: "planning.tickets.codex" },
+      {
+        label: "Ticket review and revision cycles",
+        skillId: "planning.ticket-reviewer.codex",
+        note: "repeats until approved",
+      },
+      { label: "TDD implementation workers", skillId: "implementation.tdd.codex" },
+      { label: "Merge gate and required validation", skillId: "implementation.merge-gate.codex" },
+      {
+        label: "Dev Review and automatic fixes",
+        skillId: "implementation.browser-dev-review.codex",
+        note: "up to five attempts",
+      },
+      {
+        label: "Code Review",
+        skillId: "implementation.code-review.codex",
+        note: "single pass, applies fixes and commits",
+      },
       { label: "Change request publication" },
+    ],
+  },
+  {
+    id: "wayfinder",
+    label: "Wayfinder",
+    description:
+      "Map a large, uncertain effort into durable decision tickets before writing a Spec.",
+    route: "planning",
+    interactionMode: "planning-workflow",
+    workflowPromptId: "planning.wayfinder.codex",
+    helpSteps: [
+      { label: "Name the destination", skillId: "planning.wayfinder.codex" },
+      { label: "Grill with docs", skillId: "planning.grill-stage.codex" },
+      { label: "Create the Wayfinder Map", skillId: "planning.wayfinder.codex" },
+      { label: "Resolve research tickets", skillId: "planning.research.codex" },
+      { label: "Resolve prototype tickets", skillId: "planning.prototype.codex" },
+      { label: "Advance the decision frontier", skillId: "planning.wayfinder.codex" },
+      { label: "Hand off the resolved map to Spec authoring", skillId: "planning.spec.codex" },
     ],
   },
   {
@@ -85,11 +128,28 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
     route: "implementation",
     interactionMode: "implementation-workflow",
     helpSteps: [
-      { label: "Load the selected Spec and initialize orchestration" },
-      { label: "Run dependency-aware TDD implementation workers" },
-      { label: "Integrate worker branches and run the merge gate" },
-      { label: "Run Dev Review and automatic fixes", note: "up to three attempts" },
-      { label: "Run Code Review", note: "single pass, applies fixes and commits" },
+      {
+        label: "Load the selected Spec and initialize orchestration",
+        skillId: "implementation.orchestrator-planning.codex",
+      },
+      {
+        label: "Run dependency-aware TDD implementation workers",
+        skillId: "implementation.tdd.codex",
+      },
+      {
+        label: "Integrate worker branches and run the merge gate",
+        skillId: "implementation.merge-gate.codex",
+      },
+      {
+        label: "Run Dev Review and automatic fixes",
+        skillId: "implementation.browser-dev-review.codex",
+        note: "up to five attempts",
+      },
+      {
+        label: "Run Code Review",
+        skillId: "implementation.code-review.codex",
+        note: "single pass, applies fixes and commits",
+      },
       { label: "Publish the change request" },
     ],
   },
@@ -100,10 +160,14 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
     route: "planning",
     interactionMode: "planning-workflow",
     helpSteps: [
-      { label: "Grill and domain modeling" },
-      { label: "Spec authoring" },
-      { label: "Planning-ticket authoring" },
-      { label: "Ticket review and revision cycles", note: "repeats until approved" },
+      { label: "Grill and domain modeling", skillId: "planning.grill-stage.codex" },
+      { label: "Spec authoring", skillId: "planning.spec.codex" },
+      { label: "Planning-ticket authoring", skillId: "planning.tickets.codex" },
+      {
+        label: "Ticket review and revision cycles",
+        skillId: "planning.ticket-reviewer.codex",
+        note: "repeats until approved",
+      },
     ],
   },
 ];

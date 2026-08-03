@@ -235,6 +235,7 @@ function emptyPlanningWorkflow(): OrchestrationPlanningWorkflow {
     stage: "grill",
     createTicketsAvailable: false,
     spec: null,
+    wayfinderMap: null,
     tickets: [],
     reviewCycles: [],
     activeReview: null,
@@ -571,7 +572,9 @@ export function projectEvent(
             threads: updateThread(nextBase.threads, payload.threadId, {
               planningWorkflow: {
                 ...workflow,
-                spec: payload.spec,
+                ...(payload.artifactKind === "wayfinder-map"
+                  ? { wayfinderMap: payload.spec }
+                  : { spec: payload.spec }),
                 stage,
                 createTicketsAvailable: stage === "tickets-authoring",
               },
@@ -600,7 +603,10 @@ export function projectEvent(
                 ...workflow,
                 stage,
                 createTicketsAvailable: false,
-                tickets: payload.tickets,
+                tickets: [
+                  ...workflow.tickets.filter((ticket) => ticket.specId !== payload.specId),
+                  ...payload.tickets,
+                ],
               },
               updatedAt: event.occurredAt,
             }),

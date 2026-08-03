@@ -246,7 +246,9 @@ export function applyThreadDetailEvent(
           ...thread,
           planningWorkflow: {
             ...workflow,
-            spec: event.payload.spec,
+            ...(event.payload.artifactKind === "wayfinder-map"
+              ? { wayfinderMap: event.payload.spec }
+              : { spec: event.payload.spec }),
             stage,
             createTicketsAvailable: stage === "tickets-authoring",
           },
@@ -266,7 +268,10 @@ export function applyThreadDetailEvent(
             ...workflow,
             stage,
             createTicketsAvailable: false,
-            tickets: event.payload.tickets,
+            tickets: [
+              ...workflow.tickets.filter((ticket) => ticket.specId !== event.payload.specId),
+              ...event.payload.tickets,
+            ],
           },
           updatedAt: event.occurredAt,
         },
@@ -877,6 +882,7 @@ function emptyPlanningWorkflow(): OrchestrationPlanningWorkflow {
     stage: "grill",
     createTicketsAvailable: false,
     spec: null,
+    wayfinderMap: null,
     tickets: [],
     reviewCycles: [],
   };

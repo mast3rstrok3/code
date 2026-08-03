@@ -48,8 +48,13 @@ export const getWorkflowArtifactsForThread = Effect.fn("getWorkflowArtifactsForT
     );
     const planningWorkflow = workflowThreads
       .map((candidate) => candidate.planningWorkflow)
-      .find((workflow) => workflow?.spec !== null && workflow?.spec !== undefined);
+      .find(
+        (workflow) =>
+          (workflow?.spec !== null && workflow?.spec !== undefined) ||
+          (workflow?.wayfinderMap !== null && workflow?.wayfinderMap !== undefined),
+      );
     const spec = planningWorkflow?.spec ?? null;
+    const wayfinderMap = planningWorkflow?.wayfinderMap ?? null;
     const implementationRuns = readModel.implementationRuns.filter(
       (run) =>
         (spec !== null && run.specId === spec.id) ||
@@ -65,6 +70,7 @@ export const getWorkflowArtifactsForThread = Effect.fn("getWorkflowArtifactsForT
       projectId: thread.projectId,
       context: thread.workflowContext,
       spec,
+      wayfinderMap,
       tickets: planningWorkflow?.tickets ?? [],
       reviewCycles: planningWorkflow?.reviewCycles ?? [],
       implementationRuns,

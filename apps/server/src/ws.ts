@@ -84,7 +84,10 @@ import {
 } from "./observability/RpcInstrumentation.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
-import { listWorkflowPromptContracts } from "./provider/WorkflowPromptRegistry.ts";
+import {
+  listWorkflowCatalog,
+  listWorkflowPromptContracts,
+} from "./provider/WorkflowPromptRegistry.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
@@ -1764,6 +1767,12 @@ const makeWsRpcLayer = (
             {
               "rpc.aggregate": "server",
             },
+          ),
+        [WS_METHODS.serverGetWorkflowCatalog]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.serverGetWorkflowCatalog,
+            Effect.succeed(listWorkflowCatalog()),
+            { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.serverDiscoverSourceControl]: (_input) =>
           observeRpcEffect(

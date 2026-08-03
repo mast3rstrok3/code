@@ -9,6 +9,7 @@ This is a living glossary for T3 Code. It explains what common terms mean in thi
 - [Orchestration](#orchestration)
 - [Provider runtime](#provider-runtime)
 - [Checkpointing](#checkpointing)
+- [Workflows](#workflows)
 
 ## Concepts
 
@@ -139,6 +140,58 @@ The patch difference between two checkpoints. Query logic lives in [CheckpointDi
 
 The file patch and changed-file summary for one turn. It is usually computed in [CheckpointDiffQuery.ts][20], represented in [the contracts][1], and recorded into thread state by [projector.ts][4].
 
+### Workflows
+
+Workflows are the server-orchestrated automation paths that chain planning and implementation stages across threads and worktrees. The presets live in [workflowPresets.ts][25], the built-in skills and docs in [WorkflowPromptRegistry.ts][26], and the stage handoffs in [workflowDirectives.ts][27]. See [workflow-catalog.md][28].
+
+#### Workflow (preset)
+
+One of the six orchestration paths — Fix, Fast Feature, Full Feature, Wayfinder, Planning, Implementation — defined in [workflowPresets.ts][25]. Each preset maps to an interaction mode and an ordered list of skill-backed steps.
+
+#### Skill (workflow prompt)
+
+The focused built-in instructions for one workflow step, identified by a stable prompt ID such as `planning.spec.codex`. Skills are inline constants in [WorkflowPromptRegistry.ts][26], derived near-verbatim from Matt Pocock's skills with a T3 adapter section.
+
+#### Workflow doc
+
+A supporting reference a skill can load on demand with `workflow_doc_get` — for example the CONTEXT.md and ADR formats. Docs are deduplicated by global ID in [WorkflowPromptRegistry.ts][26] and only their metadata is injected into prompts.
+
+#### Product grill
+
+The single human gate of the product workflows: a one-question-at-a-time interview about product decisions only, ending in a `product-intent-locked` directive parsed by [workflowDirectives.ts][27].
+
+#### Spec
+
+The durable planning artifact synthesized after the grill — a PRD stored in the projection, not the repository. It is the node that binds planning tickets and dev reviews together. Typed in [the contracts][1].
+
+#### Planning ticket
+
+A tracer-bullet vertical slice of a Spec (or a Wayfinder decision), with dependency edges to the tickets that block it. Stored through the `planning-tickets-artifact` directive in [workflowDirectives.ts][27].
+
+#### Ticket review
+
+The planning stage where reviewer sub-threads check the ticket set against the Spec for up to three cycles, editing tickets directly through the `planning-reviewer-verdict` directive's `ticketEdits`. The cap is `PLANNING_REVIEW_MAX_CYCLES` in [the contracts][1].
+
+#### Wayfinder map
+
+The durable map of decision tickets for efforts too large to specify in one pass. Written by the `wayfinder-map-artifact` directive, read through `workflow_wayfinder_map_get`, and shown above the Spec in the Planning side panel.
+
+#### Dev review
+
+The browser-based QA stage of an implementation run. Each cycle is a new thread whose findings are fixed before the next, up to `IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS` (5) cycles in [the contracts][1]; after the cap the run proceeds with the failure flagged.
+
+#### Code review
+
+The final automated stage: a single review-and-fix pass along the Standards and Spec axes that commits its own corrections before the change request is published. Prompted by `implementation.code-review.codex` in [WorkflowPromptRegistry.ts][26].
+
+#### Implementation run
+
+One orchestrated execution of a Spec's tickets: a dedicated worktree, dependency-chained TDD workers, programmatic merges, dev review, and code review, driven by [ImplementationWorkflowReactor.ts][29].
+
+#### App dev stack
+
+The per-worktree development stack (dev servers, preview) that implementation runs check and start in parallel with the build, so dev review has a live surface to test against. See [app-dev-stacks.md][30].
+
 ## Practical Shortcuts
 
 - If you see `requested`, think "intent recorded".
@@ -153,6 +206,8 @@ The file patch and changed-file summary for one turn. It is usually computed in 
 - [provider-architecture.md][16]
 - [runtime-modes.md][18]
 - [workspace-layout.md][2]
+- [workflow-catalog.md][28]
+- [Workflows, skills, and docs (user guide)][31]
 
 [1]: ../packages/contracts/src/orchestration.ts
 [2]: ./workspace-layout.md
@@ -178,3 +233,10 @@ The file patch and changed-file summary for one turn. It is usually computed in 
 [22]: ../apps/server/src/checkpointing/Utils.ts
 [23]: ../apps/server/src/checkpointing/Diffs.ts
 [24]: ./architecture.md
+[25]: ../packages/shared/src/workflowPresets.ts
+[26]: ../apps/server/src/provider/WorkflowPromptRegistry.ts
+[27]: ../apps/server/src/orchestration/workflowDirectives.ts
+[28]: ../architecture/workflow-catalog.md
+[29]: ../apps/server/src/orchestration/Layers/ImplementationWorkflowReactor.ts
+[30]: ../integrations/app-dev-stacks.md
+[31]: ../user/workflow-catalog.md

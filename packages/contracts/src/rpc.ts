@@ -166,6 +166,7 @@ import {
   ServerUpsertKeybindingInput,
   ServerUpsertKeybindingResult,
   WorkflowPromptContracts,
+  WorkflowCatalog,
 } from "./server.ts";
 import {
   ResourceTelemetryHistory,
@@ -281,6 +282,7 @@ export const WS_METHODS = {
   serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
   serverGetWorkflowPrompts: "server.getWorkflowPrompts",
+  serverGetWorkflowCatalog: "server.getWorkflowCatalog",
   serverDiscoverSourceControl: "server.discoverSourceControl",
   serverGetTraceDiagnostics: "server.getTraceDiagnostics",
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
@@ -379,6 +381,12 @@ export const WsServerUpdateSettingsRpc = Rpc.make(WS_METHODS.serverUpdateSetting
 export const WsServerGetWorkflowPromptsRpc = Rpc.make(WS_METHODS.serverGetWorkflowPrompts, {
   payload: Schema.Struct({}),
   success: WorkflowPromptContracts,
+  error: EnvironmentAuthorizationError,
+});
+
+export const WsServerGetWorkflowCatalogRpc = Rpc.make(WS_METHODS.serverGetWorkflowCatalog, {
+  payload: Schema.Struct({}),
+  success: WorkflowCatalog,
   error: EnvironmentAuthorizationError,
 });
 
@@ -958,6 +966,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetSettingsRpc,
   WsServerUpdateSettingsRpc,
   WsServerGetWorkflowPromptsRpc,
+  WsServerGetWorkflowCatalogRpc,
   WsServerDiscoverSourceControlRpc,
   WsServerGetTraceDiagnosticsRpc,
   WsServerGetProcessDiagnosticsRpc,

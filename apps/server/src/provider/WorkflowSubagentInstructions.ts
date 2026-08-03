@@ -29,13 +29,13 @@ Find workflow skills in this order:
 
 Built-in workflow stages:
 
-- Product: \`product.workflow.codex\`.
-- Planning: \`planning.grill-stage.codex\`, \`planning.spec.codex\`, \`planning.tickets.codex\`, \`planning.ticket-reviewer.codex\`.
+- Product: \`product.fix.codex\`, \`product.fast-feature.codex\`, \`product.full-feature.codex\` (\`product.workflow.codex\` is legacy).
+- Planning: \`planning.grill-stage.codex\`, \`planning.domain-modeling.codex\`, \`planning.wayfinder.codex\`, \`planning.research.codex\`, \`planning.prototype.codex\`, \`planning.spec.codex\`, \`planning.tickets.codex\`, \`planning.ticket-reviewer.codex\`.
 - Implementation: \`implementation.orchestrator-planning.codex\`, \`implementation.tdd.codex\`, \`implementation.merge-gate.codex\`, \`implementation.browser-dev-review.codex\`, \`implementation.fix.codex\`, \`implementation.code-review.codex\`.
 
 Workflow thread relationships use \`parentThreadId\`, \`workflowRole\`, \`interactionMode\`, and \`workflowPromptId\`. Parent agents start child agents with a focused first message. Child agents send durable results back to parents with final-result workflow directives, not informal prose.
 
-Workflow prompts carry artifact identifiers and ticket scope, not copied artifact bodies. Use the read-only \`workflow_context_get\`, \`workflow_spec_get\`, \`workflow_tickets_list\`, \`workflow_ticket_get\`, \`workflow_dev_reviews_list\`, and \`workflow_dev_review_get\` tools to retrieve canonical workflow artifacts on demand. Never treat prompt text as a writable artifact copy.
+Workflow prompts carry artifact identifiers and ticket scope, not copied artifact bodies. Use the read-only \`workflow_context_get\`, \`workflow_spec_get\`, \`workflow_wayfinder_map_get\`, \`workflow_tickets_list\`, \`workflow_ticket_get\`, \`workflow_dev_reviews_list\`, \`workflow_dev_review_get\`, and \`workflow_doc_get\` tools to retrieve canonical workflow artifacts and supporting documents on demand. Never treat prompt text as a writable artifact copy.
 
 To create a child sub-agent, emit exactly one fenced JSON block:
 
@@ -80,6 +80,7 @@ Use existing final-result directives for durable handoffs:
 
 - \`product-intent-locked\`
 - \`planning-spec-artifact\`
+- \`wayfinder-map-artifact\`
 - \`planning-tickets-artifact\`
 - \`planning-reviewer-verdict\`
 - \`implementation-worker-result\`

@@ -30,6 +30,7 @@ import {
   GitMergeIcon,
   EllipsisIcon,
   LoaderIcon,
+  MapIcon,
   PlayIcon,
   RefreshCwIcon,
   RotateCcwIcon,
@@ -482,10 +483,20 @@ const PlanSidebar = memo(function PlanSidebar({
   const displayedPlanMarkdown = planMarkdown ? stripDisplayedPlanMarkdown(planMarkdown) : null;
   const planTitle = planMarkdown ? proposedPlanTitle(planMarkdown) : null;
   const spec = planningWorkflow?.spec ?? null;
+  const wayfinderMap = planningWorkflow?.wayfinderMap ?? null;
   const tickets = useMemo(
     () =>
-      [...(planningWorkflow?.tickets ?? [])].sort((left, right) => left.ordinal - right.ordinal),
-    [planningWorkflow?.tickets],
+      (planningWorkflow?.tickets ?? [])
+        .filter((ticket) => spec !== null && ticket.specId === spec.id)
+        .toSorted((left, right) => left.ordinal - right.ordinal),
+    [planningWorkflow?.tickets, spec],
+  );
+  const wayfinderTickets = useMemo(
+    () =>
+      (planningWorkflow?.tickets ?? [])
+        .filter((ticket) => wayfinderMap !== null && ticket.specId === wayfinderMap.id)
+        .toSorted((left, right) => left.ordinal - right.ordinal),
+    [planningWorkflow?.tickets, wayfinderMap],
   );
   const ticketPresentationById = useMemo(() => buildPlanningTicketPresentation(tickets), [tickets]);
   const reviewCycles = useMemo(
@@ -731,6 +742,89 @@ const PlanSidebar = memo(function PlanSidebar({
                   threadRef={threadRef}
                   isStreaming={false}
                 />
+              </div>
+            </DisclosureSection>
+          ) : null}
+
+          {wayfinderMap ? (
+            <DisclosureSection
+              title="Wayfinder Map"
+              count={wayfinderTickets.length}
+              open={sectionExpanded("wayfinder-map")}
+              onOpenChange={(open) => setSectionExpanded("wayfinder-map", open)}
+            >
+              <div className="space-y-3">
+                <div className="space-y-1">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <MapIcon className="size-3.5 shrink-0 text-muted-foreground/45" />
+                    <h3 className="min-w-0 truncate text-sm font-medium">{wayfinderMap.title}</h3>
+                    <Badge variant="secondary" size="sm">
+                      Wayfinding
+                    </Badge>
+                  </div>
+                  <MetadataLine label="Map ID" value={wayfinderMap.id} />
+                  <MetadataLine
+                    label="Updated"
+                    value={formatCompactTimestamp(wayfinderMap.updatedAt, timestampFormat)}
+                  />
+                </div>
+                <div className="rounded-md border border-border/50 bg-background/45 p-2">
+                  <ChatMarkdown
+                    text={wayfinderMap.summaryMarkdown}
+                    cwd={markdownCwd}
+                    threadRef={threadRef}
+                    isStreaming={false}
+                  />
+                </div>
+                <div className="space-y-1 border-t border-border/45 pt-2">
+                  <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground/55">
+                    Decision tickets
+                  </div>
+                  {wayfinderTickets.length > 0 ? (
+                    wayfinderTickets.map((ticket) => (
+                      <ItemDisclosure
+                        key={ticket.id}
+                        label={`wayfinder ticket ${ticket.title}`}
+                        open={expandedTicketIds.has(ticket.id)}
+                        onOpenChange={() => toggleTicket(ticket.id)}
+                        summary={
+                          <>
+                            <span className="min-w-0 flex-1 text-[13px]">{ticket.title}</span>
+                            <Badge variant={statusVariant(ticket.status)} size="sm">
+                              {ticket.status}
+                            </Badge>
+                          </>
+                        }
+                      >
+                        <div className="space-y-2 pl-5">
+                          {ticket.dependencies.length > 0 ? (
+                            <div className="flex flex-wrap gap-1">
+                              {ticket.dependencies.map((dependency) => (
+                                <Badge
+                                  key={`${ticket.id}:${dependency.ticketId}`}
+                                  variant="outline"
+                                  size="sm"
+                                >
+                                  Depends on {dependency.ticketId}
+                                </Badge>
+                              ))}
+                            </div>
+                          ) : null}
+                          <ChatMarkdown
+                            text={ticket.bodyMarkdown}
+                            cwd={markdownCwd}
+                            threadRef={threadRef}
+                            isStreaming={false}
+                          />
+                        </div>
+                      </ItemDisclosure>
+                    ))
+                  ) : (
+                    <p className="text-[12px] text-muted-foreground/45">
+                      No decision tickets have been mapped yet.
+                    </p>
+                  )}
+                </div>
               </div>
             </DisclosureSection>
           ) : null}
@@ -1210,7 +1304,11 @@ const PlanSidebar = memo(function PlanSidebar({
           </DisclosureSection>
 
           {/* Empty state */}
-          {!activePlan && !planMarkdown && !spec && activeSpecImplementationRuns.length === 0 ? (
+          {!activePlan &&
+          !planMarkdown &&
+          !wayfinderMap &&
+          !spec &&
+          activeSpecImplementationRuns.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-12 text-center">
               <p className="text-[13px] text-muted-foreground/40">No active plan yet.</p>
               <p className="mt-1 text-[11px] text-muted-foreground/30">

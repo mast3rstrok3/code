@@ -38,6 +38,17 @@ const readModel = {
         stage: "completed",
         createTicketsAvailable: false,
         activeReview: null,
+        wayfinderMap: {
+          id: "wayfinder-map-1",
+          workflowId: "workflow-artifacts-1",
+          title: "Canonical Wayfinder Map",
+          summaryMarkdown: "Map body",
+          sourceThreadId: rootThreadId,
+          sourceMessageIds: [],
+          ticketCount: 0,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
         spec: {
           id: "spec-1",
           workflowId: "workflow-artifacts-1",
@@ -127,6 +138,7 @@ describe("workflow-artifacts toolkit handlers", () => {
   it.effect("resolves canonical artifacts and many-to-many Dev Review links from a child", () =>
     Effect.gen(function* () {
       const context = yield* handlers.workflow_context_get();
+      const wayfinderMap = yield* handlers.workflow_wayfinder_map_get();
       const spec = yield* handlers.workflow_spec_get();
       const tickets = yield* handlers.workflow_tickets_list();
       const review = yield* handlers.workflow_dev_review_get({
@@ -134,6 +146,7 @@ describe("workflow-artifacts toolkit handlers", () => {
       });
 
       assert.strictEqual(context.workflowId, workflowId);
+      assert.strictEqual(wayfinderMap?.title, "Canonical Wayfinder Map");
       assert.strictEqual(spec?.title, "Canonical Spec");
       assert.deepStrictEqual(
         tickets.map((ticket) => ticket.id),
@@ -157,5 +170,17 @@ describe("workflow-artifacts toolkit handlers", () => {
       assert.strictEqual(projectError._tag, "WorkflowArtifactAccessError");
       assert.match(projectError.message, /different project/);
     }).pipe(Effect.provide(Layer.mergeAll(queryLayer, invocationLayer))),
+  );
+
+  it.effect("loads built-in workflow docs and rejects unknown IDs", () =>
+    Effect.gen(function* () {
+      const doc = yield* handlers.workflow_doc_get({ docId: "context-format" });
+      assert.strictEqual(doc.path, "CONTEXT-FORMAT.md");
+      assert.match(doc.content, /# CONTEXT\.md Format/);
+
+      const error = yield* handlers.workflow_doc_get({ docId: "missing" }).pipe(Effect.flip);
+      assert.strictEqual(error._tag, "WorkflowArtifactAccessError");
+      assert.match(error.message, /was not found/);
+    }).pipe(Effect.provide(invocationLayer)),
   );
 });

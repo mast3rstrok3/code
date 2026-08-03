@@ -367,8 +367,8 @@ describe("Codex workflow prompt browser scoping", () => {
       });
 
       const instructions = params.collaborationMode?.settings.developer_instructions ?? "";
-      NodeAssert.match(instructions, /T3 Workflow Sub-Agent System/);
-      NodeAssert.match(instructions, /workflow-subagent-create/);
+      NodeAssert.doesNotMatch(instructions, /T3 Workflow Sub-Agent System/);
+      NodeAssert.doesNotMatch(instructions, /workflow-agent-message/);
       NodeAssert.match(instructions, /Implementation Workflow: Orchestrator Start/);
       NodeAssert.doesNotMatch(instructions, /Chrome DevTools MCP/);
       NodeAssert.doesNotMatch(instructions, /Agent Browser CLI/);

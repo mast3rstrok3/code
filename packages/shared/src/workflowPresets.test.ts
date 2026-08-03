@@ -12,6 +12,7 @@ describe("workflow presets", () => {
       "fix",
       "fast-feature",
       "full-feature",
+      "wayfinder",
       "implementation",
       "planning",
     ]);

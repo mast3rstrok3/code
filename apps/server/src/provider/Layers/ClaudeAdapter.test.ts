@@ -798,7 +798,7 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("wraps workflow turns with shared sub-agent instructions", () => {
+  it.effect("wraps workflow turns with only the selected skill instructions", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -819,8 +819,8 @@ describe("ClaudeAdapterLive", () => {
       const createInput = harness.getLastCreateQueryInput();
       const promptText = (yield* Effect.promise(() => readFirstPromptText(createInput))) ?? "";
       assert.match(promptText, /<workflow-instructions>/);
-      assert.match(promptText, /T3 Workflow Sub-Agent System/);
-      assert.match(promptText, /workflow-subagent-create/);
+      assert.isFalse(/T3 Workflow Sub-Agent System/.test(promptText));
+      assert.isFalse(/workflow-agent-message/.test(promptText));
       assert.match(promptText, /Planning Workflow: Spec/);
       assert.match(promptText, /<user-message>\nStart planning\n<\/user-message>/);
     }).pipe(

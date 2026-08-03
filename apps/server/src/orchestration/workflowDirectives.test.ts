@@ -5,6 +5,17 @@ import { describe, it } from "vite-plus/test";
 import { parseWorkflowDirectiveFromMarkdown } from "./workflowDirectives.ts";
 
 describe("workflowDirectives", () => {
+  it("parses Wayfinder Map artifacts", () => {
+    const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
+{ "type": "wayfinder-map-artifact", "title": "Remote roadmap", "summaryMarkdown": "## Destination\\nShip remote workflows" }
+\`\`\``);
+
+    NodeAssert.equal(result.kind, "parsed");
+    if (result.kind !== "parsed" || result.directive.type !== "wayfinder-map-artifact") return;
+    NodeAssert.equal(result.directive.title, "Remote roadmap");
+    NodeAssert.equal(result.directive.summaryMarkdown, "## Destination\nShip remote workflows");
+  });
+
   it("parses product intent locked directives without an intent kind as null (fail closed)", () => {
     const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
 { "type": "product-intent-locked", "title": "Checkout", "summaryMarkdown": "Locked intent." }

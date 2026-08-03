@@ -1,6 +1,7 @@
 export const PLAN_SIDEBAR_SECTION_IDS = [
   "steps",
   "proposed-plan",
+  "wayfinder-map",
   "spec",
   "tickets",
   "review-cycles",

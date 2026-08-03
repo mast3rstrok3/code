@@ -1,12 +1,52 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { ServerProvider, WorkflowPromptContract } from "./server.ts";
+import { ServerProvider, WorkflowCatalog, WorkflowPromptContract } from "./server.ts";
 
 const decodeServerProvider = Schema.decodeUnknownSync(ServerProvider);
 const decodeWorkflowPromptContract = Schema.decodeUnknownSync(WorkflowPromptContract);
+const decodeWorkflowCatalog = Schema.decodeUnknownSync(WorkflowCatalog);
 
 describe("ServerProvider", () => {
+  it("decodes workflow catalogs with linked skills and docs", () => {
+    const parsed = decodeWorkflowCatalog({
+      workflows: [
+        {
+          id: "fix",
+          order: 1,
+          title: "Fix",
+          description: "Fix it.",
+          interactionMode: "product-workflow",
+          steps: [{ label: "Intent", skillId: "product.fix.codex" }],
+        },
+      ],
+      skills: [
+        {
+          id: "product.fix.codex",
+          order: 1,
+          workflow: "product",
+          role: "planning-thread",
+          stage: "intent",
+          title: "Fix",
+          description: "Fix intent.",
+          promptText: "Prompt.",
+          docIds: ["context"],
+          workflowIds: ["fix"],
+        },
+      ],
+      docs: [
+        {
+          id: "context",
+          title: "Context",
+          path: "CONTEXT.md",
+          content: "# Context",
+          skillIds: ["product.fix.codex"],
+        },
+      ],
+    });
+    expect(parsed.workflows[0]?.steps[0]?.skillId).toBe("product.fix.codex");
+  });
+
   it("rejects legacy YOLO workflow prompt contracts", () => {
     expect(() =>
       decodeWorkflowPromptContract({

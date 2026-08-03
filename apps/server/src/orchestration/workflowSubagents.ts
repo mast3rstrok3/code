@@ -80,6 +80,20 @@ const WORKFLOW_SUBAGENT_SPAWN_DEFINITIONS: ReadonlyArray<WorkflowSubagentSpawnDe
     expectedResult: "planning-reviewer-verdict",
     allowedParentWorkflowRoles: [null, "planning-orchestrator"],
   },
+  ...[
+    [WORKFLOW_PROMPT_IDS.planningDomainModelingCodex, "Domain Modeling", "domain-modeling"],
+    [WORKFLOW_PROMPT_IDS.planningPrototypeCodex, "Prototype", "prototype"],
+    [WORKFLOW_PROMPT_IDS.planningWayfinderCodex, "Wayfinder", "wayfinder"],
+    [WORKFLOW_PROMPT_IDS.planningResearchCodex, "Research", "research"],
+  ].map(([workflowPromptId, title, tag]) => ({
+    workflowPromptId: workflowPromptId!,
+    interactionMode: "planning-workflow" as const,
+    workflowRole: "planning-reviewer" as const,
+    threadIdTag: `workflow-planning-${tag}`,
+    defaultTitlePrefix: title!,
+    expectedResult: "workflow-subagent-result",
+    allowedParentWorkflowRoles: "any" as const,
+  })),
   {
     workflowPromptId: WORKFLOW_PROMPT_IDS.implementationOrchestratorPlanningCodex,
     interactionMode: "implementation-workflow",

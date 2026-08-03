@@ -42,6 +42,11 @@ export type WorkflowDirective =
       readonly summaryMarkdown: string;
     }
   | {
+      readonly type: "wayfinder-map-artifact";
+      readonly title: string;
+      readonly summaryMarkdown: string;
+    }
+  | {
       readonly type: "planning-tickets-artifact";
       readonly specId: string;
       readonly tickets: ReadonlyArray<{
@@ -582,6 +587,13 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
       if (title.startsWith("Directive field")) return title;
       if (summaryMarkdown.startsWith("Directive field")) return summaryMarkdown;
       return { type: "planning-spec-artifact", title, summaryMarkdown };
+    }
+    case "wayfinder-map-artifact": {
+      const title = requiredString(record, "title");
+      const summaryMarkdown = requiredString(record, "summaryMarkdown");
+      if (title.startsWith("Directive field")) return title;
+      if (summaryMarkdown.startsWith("Directive field")) return summaryMarkdown;
+      return { type: "wayfinder-map-artifact", title, summaryMarkdown };
     }
     case "planning-tickets-artifact": {
       const specId = requiredString(record, "specId");

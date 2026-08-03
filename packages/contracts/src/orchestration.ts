@@ -144,6 +144,7 @@ export const WorkflowPreset = Schema.Literals([
   "fix",
   "fast-feature",
   "full-feature",
+  "wayfinder",
   "implementation",
   "planning",
 ]);
@@ -443,6 +444,7 @@ export const OrchestrationPlanningWorkflow = Schema.Struct({
   stage: OrchestrationPlanningWorkflowStage,
   createTicketsAvailable: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   spec: Schema.NullOr(OrchestrationPlanningSpec),
+  wayfinderMap: Schema.optionalKey(Schema.NullOr(OrchestrationPlanningSpec)),
   tickets: Schema.Array(OrchestrationPlanningTicket).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
@@ -464,7 +466,7 @@ export const OrchestrationPlanningSpecBundle = Schema.Struct({
 });
 export type OrchestrationPlanningSpecBundle = typeof OrchestrationPlanningSpecBundle.Type;
 
-export const IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS = 3;
+export const IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS = 5;
 
 export const OrchestrationImplementationRunId = TrimmedNonEmptyString;
 export type OrchestrationImplementationRunId = typeof OrchestrationImplementationRunId.Type;
@@ -1555,6 +1557,7 @@ const ThreadPlanningSpecApplyCommand = Schema.Struct({
   sourceMessageId: MessageId,
   title: TrimmedNonEmptyString,
   summaryMarkdown: TrimmedNonEmptyString,
+  artifactKind: Schema.optional(Schema.Literals(["spec", "wayfinder-map"])),
   tenantId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   teamId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   createdBy: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
@@ -2313,6 +2316,7 @@ export const ThreadPlanningStageStartedPayload = Schema.Struct({
 export const ThreadPlanningSpecCreatedPayload = Schema.Struct({
   threadId: ThreadId,
   spec: OrchestrationPlanningSpec,
+  artifactKind: Schema.optional(Schema.Literals(["spec", "wayfinder-map"])),
   stage: Schema.optional(OrchestrationPlanningWorkflowStage),
 });
 

@@ -1635,7 +1635,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Thread '${command.threadId}' is not in Planning Workflow mode.`,
         });
       }
-      if (thread.planningWorkflow?.spec !== null && thread.planningWorkflow?.spec !== undefined) {
+      const artifactKind = command.artifactKind ?? "spec";
+      const existingArtifact =
+        artifactKind === "wayfinder-map"
+          ? (thread.planningWorkflow?.wayfinderMap ?? null)
+          : (thread.planningWorkflow?.spec ?? null);
+      if (artifactKind === "spec" && existingArtifact !== null) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: `Thread '${command.threadId}' already has a Spec for this Planning Workflow.`,
@@ -1645,10 +1650,27 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const specUuid = yield* crypto.randomUUIDv4;
       const ticketMessageUuid = yield* crypto.randomUUIDv4;
       const spec = buildPlanningSpecFromArtifact({
-        specId: `spec-${specUuid}`,
+        specId:
+          existingArtifact?.id ??
+          (artifactKind === "wayfinder-map" ? `wayfinder-map-${specUuid}` : `spec-${specUuid}`),
         threadId: thread.id,
         command,
       });
+      const resolvedArtifact =
+        existingArtifact === null
+          ? spec
+          : {
+              ...spec,
+              sourceMessageIds: [
+                ...existingArtifact.sourceMessageIds,
+                ...spec.sourceMessageIds.filter(
+                  (messageId) => !existingArtifact.sourceMessageIds.includes(messageId),
+                ),
+              ],
+              workflowId: existingArtifact.workflowId,
+              ticketCount: existingArtifact.ticketCount,
+              createdAt: existingArtifact.createdAt,
+            };
       const ticketMessageId = MessageId.make(`message-planning-tickets-stage-${ticketMessageUuid}`);
       const specCreatedEvent: PlannedOrchestrationEvent = {
         ...(yield* withEventBase({
@@ -1660,10 +1682,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "thread.planning-spec-created",
         payload: {
           threadId: thread.id,
-          spec,
-          stage: "tickets-authoring",
+          spec: resolvedArtifact,
+          artifactKind,
+          stage: artifactKind === "wayfinder-map" ? "grill" : "tickets-authoring",
         },
       };
+      if (artifactKind === "wayfinder-map") {
+        return specCreatedEvent;
+      }
       const ticketsPromptEvent: PlannedOrchestrationEvent = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -1677,7 +1703,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: thread.id,
           messageId: ticketMessageId,
           role: "user",
-          text: buildPlanningTicketsStagePrompt(spec),
+          text: buildPlanningTicketsStagePrompt(resolvedArtifact),
           turnId: null,
           streaming: false,
           createdAt: command.createdAt,
@@ -1714,22 +1740,29 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       });
       const workflow = thread.planningWorkflow;
       const spec = workflow?.spec ?? null;
+      const wayfinderMap = workflow?.wayfinderMap ?? null;
       if (thread.interactionMode !== "planning-workflow") {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: `Thread '${command.threadId}' is not in Planning Workflow mode.`,
         });
       }
-      if (workflow === null || workflow === undefined || spec === null) {
+      if (workflow === null || workflow === undefined || (spec === null && wayfinderMap === null)) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: `Planning Thread '${thread.id}' does not have a Spec for Planning Tickets.`,
         });
       }
-      if (spec.id !== command.specId) {
+      const targetArtifact =
+        spec?.id === command.specId
+          ? spec
+          : wayfinderMap?.id === command.specId
+            ? wayfinderMap
+            : null;
+      if (targetArtifact === null) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Planning Tickets artifact targets Spec '${command.specId}', expected '${spec.id}'.`,
+          detail: `Planning Tickets artifact targets unknown planning artifact '${command.specId}'.`,
         });
       }
       const crypto = yield* Crypto.Crypto;
@@ -1737,7 +1770,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         crypto.randomUUIDv4.pipe(Effect.map((uuid) => `planning-ticket-${uuid}`)),
       );
       const tickets = buildPlanningTicketsFromArtifact({
-        specId: spec.id,
+        specId: targetArtifact.id,
         command,
         generatedTicketIds,
       });
@@ -1747,7 +1780,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: tickets,
         });
       }
-      const validationError = validatePlanningTicketGraph(spec.id, tickets);
+      const validationError = validatePlanningTicketGraph(targetArtifact.id, tickets);
       if (validationError !== null) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -1769,16 +1802,16 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           workflow.stage === "ticket-revision"
             ? {
                 threadId: thread.id,
-                specId: spec.id,
+                specId: targetArtifact.id,
                 tickets,
-                stage: "ticket-review",
+                stage: targetArtifact === wayfinderMap ? "grill" : "ticket-review",
                 revisedAt: command.createdAt,
               }
             : {
                 threadId: thread.id,
-                specId: spec.id,
+                specId: targetArtifact.id,
                 tickets,
-                stage: "ticket-review",
+                stage: targetArtifact === wayfinderMap ? "grill" : "ticket-review",
               },
       } satisfies PlannedOrchestrationEvent;
     }
