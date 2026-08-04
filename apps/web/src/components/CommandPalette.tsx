@@ -70,7 +70,6 @@ import { useProjects, useThreadShells } from "../state/entities";
 import { useThreadSearch } from "../state/queries";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import {
-  appendBrowsePathSegment,
   ensureBrowseDirectoryPath,
   findProjectByPath,
   getBrowseDirectoryPath,
@@ -111,6 +110,7 @@ import {
   ITEM_ICON_CLASS,
   RECENT_THREAD_LIMIT,
   reduceCommandPaletteUiState,
+  resolveBrowseDirectoryQuery,
   type SearchOverlayMode,
 } from "./CommandPalette.logic";
 import { orderItemsByPreferredIds, sortLogicalProjectsForSidebar } from "./Sidebar.logic";
@@ -1800,7 +1800,7 @@ function OpenCommandPaletteDialog(props: {
 
   const browseTo = useCallback(
     async (entry: { readonly fullPath: string }): Promise<void> => {
-      const nextQuery = entry.fullPath;
+      const nextQuery = resolveBrowseDirectoryQuery(entry.fullPath);
       await browseNavigation.run(
         () => prefetchBrowsePath(getBrowseDirectoryPath(nextQuery)),
         () => {

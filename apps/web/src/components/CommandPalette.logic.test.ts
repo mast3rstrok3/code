@@ -13,8 +13,16 @@ import {
   enumerateCommandPaletteItems,
   filterCommandPaletteGroups,
   reduceCommandPaletteUiState,
+  resolveBrowseDirectoryQuery,
   type CommandPaletteGroup,
 } from "./CommandPalette.logic";
+
+describe("resolveBrowseDirectoryQuery", () => {
+  it("enters selected Unix and Windows directories", () => {
+    expect(resolveBrowseDirectoryQuery("/home/nils/repos/nils")).toBe("/home/nils/repos/nils/");
+    expect(resolveBrowseDirectoryQuery("C:\\Users\\nils\\repos")).toBe("C:\\Users\\nils\\repos\\");
+  });
+});
 
 describe("reduceCommandPaletteUiState", () => {
   const closedState = { open: false, mode: "command", openIntent: null } as const;

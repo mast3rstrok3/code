@@ -7,6 +7,7 @@ import type { SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
 import { type ReactNode } from "react";
+import { ensureBrowseDirectoryPath } from "../lib/projectPaths";
 import { sortThreads } from "../lib/threadSort";
 import { formatRelativeTimeLabel } from "../timestampFormat";
 import { type Project, type SidebarThreadSummary, type Thread } from "../types";
@@ -14,6 +15,13 @@ import { type Project, type SidebarThreadSummary, type Thread } from "../types";
 export const RECENT_THREAD_LIMIT = 12;
 export const ITEM_ICON_CLASS = "size-4 text-muted-foreground/80";
 export const ADDON_ICON_CLASS = "size-4";
+
+/** Directory entries arrive as normalized paths without a trailing separator.
+    The palette uses that separator to distinguish entering a directory from
+    filtering its parent by a partial leaf name. */
+export function resolveBrowseDirectoryQuery(fullPath: string): string {
+  return ensureBrowseDirectoryPath(fullPath);
+}
 
 /**
  * The global search overlay hosts three mutually exclusive surfaces: the
