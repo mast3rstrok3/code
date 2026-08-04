@@ -3,8 +3,10 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
   pasteTextIntoTerminal,
   resolveTerminalSelectionActionPosition,
+  shouldHandleTerminalExit,
   shouldHandleTerminalSelectionMouseUp,
   terminalSelectionActionDelayForClickCount,
+  terminalSelectionLineRange,
 } from "./ThreadTerminalDrawer";
 
 describe("pasteTextIntoTerminal", () => {
@@ -94,5 +96,20 @@ describe("resolveTerminalSelectionActionPosition", () => {
     expect(shouldHandleTerminalSelectionMouseUp(true, 0)).toBe(true);
     expect(shouldHandleTerminalSelectionMouseUp(false, 0)).toBe(false);
     expect(shouldHandleTerminalSelectionMouseUp(true, 1)).toBe(false);
+  });
+
+  it("uses Ghostty's physical screen range for visually wrapped selections", () => {
+    expect(
+      terminalSelectionLineRange({
+        start: { y: 4 },
+        end: { y: 6 },
+      }),
+    ).toEqual({ lineStart: 5, lineEnd: 7 });
+  });
+
+  it("handles an exit that lands while the terminal surface is still loading", () => {
+    expect(shouldHandleTerminalExit("exited", "running", false)).toBe(true);
+    expect(shouldHandleTerminalExit("exited", "exited", false)).toBe(false);
+    expect(shouldHandleTerminalExit("closed", "running", true)).toBe(false);
   });
 });

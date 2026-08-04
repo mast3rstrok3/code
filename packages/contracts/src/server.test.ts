@@ -1,11 +1,19 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { ServerProvider, WorkflowCatalog, WorkflowPromptContract } from "./server.ts";
+import {
+  ServerConfig,
+  ServerProvider,
+  ServerUpsertKeybindingResult,
+  WorkflowCatalog,
+  WorkflowPromptContract,
+} from "./server.ts";
 
 const decodeServerProvider = Schema.decodeUnknownSync(ServerProvider);
 const decodeWorkflowPromptContract = Schema.decodeUnknownSync(WorkflowPromptContract);
 const decodeWorkflowCatalog = Schema.decodeUnknownSync(WorkflowCatalog);
+const decodeUpsertKeybindingResult = Schema.decodeUnknownSync(ServerUpsertKeybindingResult);
+const decodeAvailableEditors = Schema.decodeUnknownSync(ServerConfig.fields.availableEditors);
 
 describe("ServerProvider", () => {
   it("decodes workflow catalogs with linked skills and docs", () => {
@@ -126,5 +134,51 @@ describe("ServerProvider", () => {
     });
 
     expect(parsed.continuation?.groupKey).toBe("codex:home:/Users/julius/.codex");
+  });
+
+  it("decodes optional legacy model metadata", () => {
+    const parsed = decodeServerProvider({
+      instanceId: "codex",
+      driver: "codex",
+      enabled: true,
+      installed: true,
+      version: "1.0.0",
+      status: "ready",
+      auth: { status: "authenticated" },
+      checkedAt: "2026-04-10T00:00:00.000Z",
+      models: [
+        {
+          slug: "gpt-5.4",
+          name: "GPT-5.4",
+          isCustom: false,
+          isLegacy: true,
+          capabilities: null,
+        },
+      ],
+    });
+
+    expect(parsed.models[0]?.isLegacy).toBe(true);
+  });
+});
+
+describe("server config forward compatibility", () => {
+  it("drops config tickets with kinds this build does not know", () => {
+    const parsed = decodeUpsertKeybindingResult({
+      keybindings: [],
+      tickets: [
+        { kind: "keybindings.invalid-entry", message: "Bad entry", index: 2 },
+        { kind: "keybindings.future-issue", message: "From a newer server" },
+      ],
+    });
+
+    expect(parsed.tickets).toEqual([
+      { kind: "keybindings.invalid-entry", message: "Bad entry", index: 2 },
+    ]);
+  });
+
+  it("drops editor ids this build does not know", () => {
+    const parsed = decodeAvailableEditors(["zed", "some-future-editor", "vscode"]);
+
+    expect(parsed).toEqual(["zed", "vscode"]);
   });
 });

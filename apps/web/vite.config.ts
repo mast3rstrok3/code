@@ -125,6 +125,7 @@ export default defineConfig(({ command }) => {
 
   return {
     envPrefix: "T3CODE_WEB_PUBLIC_",
+    assetsInclude: ["**/*.wasm"],
     plugins: [
       viteInternalModuleFallbackGuardPlugin(),
       tanstackRouter(),

@@ -20,6 +20,7 @@ import {
 import { type DeepPartial } from "@t3tools/shared/Struct";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
@@ -1082,9 +1083,13 @@ describe("ImplementationWorkflowReactor", () => {
 
         // The embedded example is generated from the run's own commands, not hardcoded.
         const fence = /```json\s*([\s\S]*?)```/.exec(prompt)?.[1] ?? "";
-        const example = JSON.parse(fence) as {
-          readonly validations: ReadonlyArray<{ readonly command: string }>;
-        };
+        const example = yield* Schema.decodeUnknownEffect(
+          Schema.fromJsonString(
+            Schema.Struct({
+              validations: Schema.Array(Schema.Struct({ command: Schema.String })),
+            }),
+          ),
+        )(fence);
         expect(example.validations.map((validation) => validation.command)).toEqual([
           ...run.launchSummary.validationCommands,
         ]);
