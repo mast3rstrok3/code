@@ -18,6 +18,7 @@
 - [App Dev stack integration](./integrations/app-dev-stacks.md)
 - [Copy/paste App Dev stack agent prompt](./integrations/app-dev-stack-agent-prompt.md)
 - [Mobile](./mobile/app.md)
+- [Remote access](./user/remote-access.md)
 - [Operations](./operations/ci.md)
 - [Providers](./providers/codex.md)
 - [Reference](./reference/encyclopedia.md)
