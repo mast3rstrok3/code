@@ -23,6 +23,7 @@ import {
   orderItemsByPreferredIds,
   partitionSidebarV2ThreadGroups,
   resolveHighestPrioritySidebarV2Status,
+  resolveSidebarV2GroupSettlePlan,
   resolveProjectStatusIndicator,
   resolveSidebarStageBadgeLabel,
   resolveThreadRowClassName,
@@ -2046,6 +2047,78 @@ describe("partitionSidebarV2ThreadGroups", () => {
       "soon",
       "late",
     ]);
+  });
+});
+
+describe("resolveSidebarV2GroupSettlePlan", () => {
+  const buildGroups = (
+    entries: readonly {
+      id: string;
+      parentThreadId?: string;
+      settled?: boolean;
+      blocked?: boolean;
+    }[],
+  ) => {
+    const rows = buildSidebarV2ThreadTreeRows(
+      entries.map((entry, index) => ({
+        ...entry,
+        id: ThreadId.make(entry.id),
+        parentThreadId:
+          entry.parentThreadId === undefined ? null : ThreadId.make(entry.parentThreadId),
+        createdAt: `2026-03-09T10:${String(index).padStart(2, "0")}:00.000Z`,
+      })),
+    );
+    return partitionSidebarV2ThreadGroups({
+      rows,
+      classifyThread: () => "active",
+      resolveSnoozeSortMs: () => 0,
+      resolveSettledSortMs: () => 0,
+    }).groupsBySection.active;
+  };
+
+  it("includes every nested descendant and skips members already settled", () => {
+    const groups = buildGroups([
+      { id: "root" },
+      { id: "child", parentThreadId: "root", settled: true },
+      { id: "grandchild", parentThreadId: "child" },
+    ]);
+    const plan = resolveSidebarV2GroupSettlePlan({
+      groups,
+      rootThreadKey: "root",
+      isSettled: (_key, thread) => thread.settled === true,
+      canSettle: (thread) => thread.blocked !== true,
+    });
+
+    expect(plan?.rows.map((row) => row.threadKey)).toEqual(["root", "child", "grandchild"]);
+    expect(plan?.targetRows.map((row) => row.threadKey)).toEqual(["root", "grandchild"]);
+    expect(plan?.canSettle).toBe(true);
+  });
+
+  it("blocks the whole plan when any unsettled member cannot settle", () => {
+    const groups = buildGroups([
+      { id: "root" },
+      { id: "child", parentThreadId: "root", blocked: true },
+    ]);
+    const plan = resolveSidebarV2GroupSettlePlan({
+      groups,
+      rootThreadKey: "root",
+      isSettled: (_key, thread) => thread.settled === true,
+      canSettle: (thread) => thread.blocked !== true,
+    });
+
+    expect(plan?.targetRows.map((row) => row.threadKey)).toEqual(["root", "child"]);
+    expect(plan?.canSettle).toBe(false);
+  });
+
+  it("keeps a plain root as a one-thread settle plan", () => {
+    const plan = resolveSidebarV2GroupSettlePlan({
+      groups: buildGroups([{ id: "root" }]),
+      rootThreadKey: "root",
+      isSettled: () => false,
+      canSettle: () => true,
+    });
+
+    expect(plan?.targetRows.map((row) => row.threadKey)).toEqual(["root"]);
   });
 });
 

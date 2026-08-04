@@ -1,6 +1,7 @@
 import { autoAnimate } from "@formkit/auto-animate";
 import { useAtomValue } from "@effect/atom-react";
 import {
+  canSettle,
   canSnooze,
   effectiveSettled,
   effectiveSnoozed,
@@ -117,6 +118,7 @@ import {
   partitionSidebarV2ThreadGroups,
   resolveAdjacentThreadId,
   resolveHighestPrioritySidebarV2Status,
+  resolveSidebarV2GroupSettlePlan,
   resolveSettledTimestamp,
   resolveSidebarV2Status,
   resolveWorkingStartedAt,
@@ -1698,6 +1700,13 @@ export default function SidebarV2() {
     [renderedSettledGroups, selectVisibleRows],
   );
 
+  const allThreadGroups = useMemo(
+    () => [...activeGroups, ...snoozedGroups, ...settledGroups],
+    [activeGroups, settledGroups, snoozedGroups],
+  );
+  const threadGroupsRef = useRef(allThreadGroups);
+  threadGroupsRef.current = allThreadGroups;
+
   const toggleThreadTreeExpansion = useCallback(
     (threadKey: string) => setThreadTreeExpanded(threadKey, !expandedThreadKeys.has(threadKey)),
     [expandedThreadKeys, setThreadTreeExpanded],
@@ -1939,6 +1948,62 @@ export default function SidebarV2() {
       })();
     },
     [planForwardNavigation, settleThread],
+  );
+  const attemptSettleGroup = useCallback(
+    (threadRef: ScopedThreadRef) => {
+      void (async () => {
+        const rootThreadKey = scopedThreadKey(threadRef);
+        const now = new Date().toISOString();
+        const plan = resolveSidebarV2GroupSettlePlan({
+          groups: threadGroupsRef.current,
+          rootThreadKey,
+          isSettled: (threadKey) => settledThreadKeysRef.current.has(threadKey),
+          canSettle: (thread) => canSettle(thread, { now }),
+        });
+        if (plan === null) {
+          attemptSettle(threadRef);
+          return;
+        }
+        if (!plan.canSettle || plan.targetRows.length === 0) return;
+
+        const groupKeys = new Set(plan.rows.map((row) => row.threadKey));
+        if ([...groupKeys].some((key) => settlingThreadKeysRef.current.has(key))) return;
+        for (const key of groupKeys) settlingThreadKeysRef.current.add(key);
+
+        const currentRouteKey = routeThreadKeyRef.current;
+        const navigateAfterSettle =
+          currentRouteKey !== null && groupKeys.has(currentRouteKey)
+            ? planForwardNavigation(currentRouteKey, groupKeys)
+            : null;
+        try {
+          const results = await Promise.all(
+            plan.targetRows.map((row) =>
+              settleThread(scopeThreadRef(row.thread.environmentId, row.thread.id)),
+            ),
+          );
+          const failure = results.find((result) => result._tag === "Failure");
+          if (failure !== undefined) {
+            if (!isAtomCommandInterrupted(failure)) {
+              const error = squashAtomCommandFailure(failure);
+              toastManager.add(
+                stackedThreadToast({
+                  type: "error",
+                  title: "Failed to settle thread group",
+                  description: error instanceof Error ? error.message : "An error occurred.",
+                }),
+              );
+            }
+            return;
+          }
+          if (currentRouteKey !== null && routeThreadKeyRef.current === currentRouteKey) {
+            navigateAfterSettle?.();
+          }
+        } finally {
+          for (const key of groupKeys) settlingThreadKeysRef.current.delete(key);
+        }
+      })();
+    },
+    [attemptSettle, planForwardNavigation, settleThread],
   );
   const attemptUnsettle = useCallback(
     (threadRef: ScopedThreadRef) => {
@@ -2678,7 +2743,7 @@ export default function SidebarV2() {
                       isRenaming={renamingThreadKey === threadKey}
                       renamingTitle={renamingThreadKey === threadKey ? renamingTitle : ""}
                       onContextMenu={handleThreadContextMenu}
-                      onSettle={attemptSettle}
+                      onSettle={row.depth === 0 ? attemptSettleGroup : attemptSettle}
                       onUnsettle={attemptUnsettle}
                       onSnooze={attemptSnooze}
                       onUnsnooze={attemptUnsnooze}

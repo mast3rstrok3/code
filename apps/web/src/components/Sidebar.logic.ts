@@ -976,6 +976,26 @@ export function findSidebarV2ThreadGroupIndex<TThread>(
   return groups.findIndex((group) => group.rows.some((row) => row.threadKey === threadKey));
 }
 
+export function resolveSidebarV2GroupSettlePlan<TThread>(input: {
+  groups: readonly SidebarV2ThreadGroup<TThread>[];
+  rootThreadKey: string;
+  isSettled: (threadKey: string, thread: TThread) => boolean;
+  canSettle: (thread: TThread) => boolean;
+}): {
+  readonly rows: readonly SidebarThreadTreeRow<TThread>[];
+  readonly targetRows: readonly SidebarThreadTreeRow<TThread>[];
+  readonly canSettle: boolean;
+} | null {
+  const group = input.groups.find((entry) => entry.rootThreadKey === input.rootThreadKey);
+  if (group === undefined) return null;
+  const targetRows = group.rows.filter((row) => !input.isSettled(row.threadKey, row.thread));
+  return {
+    rows: group.rows,
+    targetRows,
+    canSettle: targetRows.every((row) => input.canSettle(row.thread)),
+  };
+}
+
 const SIDEBAR_V2_STATUS_PRIORITY: Record<SidebarV2Status, number> = {
   approval: 5,
   input: 4,
