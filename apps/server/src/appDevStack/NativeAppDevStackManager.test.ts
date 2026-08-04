@@ -1634,3 +1634,146 @@ it.effect("scales native deployments down and back up when restarting", () => {
     ]);
   });
 });
+
+const documentName = (document: Record<string, unknown>): string | undefined =>
+  (document.metadata as { readonly name?: string } | undefined)?.name;
+
+it.effect("wires the backend's OpenBao-backed Google OAuth credentials", () => {
+  const tempDir = makeTempHeroComposeWorktree([
+    "    image: hero-web:latest",
+    "    environment:",
+    "      PORT: '3000'",
+    "  backend:",
+    "    image: rudi-backend-dev:latest",
+    "    environment:",
+    "      PORT: '8000'",
+  ]);
+
+  return Effect.gen(function* () {
+    const documents = yield* Effect.promise(() =>
+      generateNativeAppDevStackManifests({
+        id: "rudi-dev",
+        namespace: "rudi-dev",
+        worktreePath: tempDir,
+        composePath: "infra/compose/compose.app-dev.yml",
+        displayName: "rudi",
+        displaySlug: undefined,
+        repoName: "rudi",
+        branchName: "dev",
+        dockerPath: "docker",
+        buildctlPath: "buildctl",
+        imageBuilder: "docker",
+        imageRegistry: undefined,
+        imagePushRegistry: undefined,
+        imageProject: undefined,
+        buildkitAddr: undefined,
+        buildkitDockerConfig: undefined,
+        buildkitDockerConfigsDir: undefined,
+        buildkitHarborCaCert: undefined,
+        frontendUrl: undefined,
+        backendUrl: undefined,
+        keycloakUrl: undefined,
+        minioUrl: undefined,
+        preferStackScopedUrls: true,
+      }),
+    );
+
+    const externalSecrets = documents.filter((document) => document.kind === "ExternalSecret");
+    assert.equal(externalSecrets.length, 1);
+    const externalSecret = externalSecrets[0];
+    assert.equal(
+      externalSecret === undefined ? undefined : documentName(externalSecret),
+      "rudi-backend-credentials",
+    );
+    assert.deepEqual(externalSecret?.spec, {
+      refreshInterval: "1h",
+      secretStoreRef: { kind: "ClusterSecretStore", name: "openbao-backend" },
+      target: {
+        name: "rudi-backend-secrets",
+        creationPolicy: "Owner",
+        deletionPolicy: "Retain",
+      },
+      data: [
+        {
+          secretKey: "GOOGLE_CLIENT_ID",
+          remoteRef: { key: "rudi/api-keys/google", property: "client_id" },
+        },
+        {
+          secretKey: "GOOGLE_CLIENT_SECRET",
+          remoteRef: { key: "rudi/api-keys/google", property: "client_secret" },
+        },
+      ],
+    });
+
+    // The ExternalSecret has to be applied before the Deployment that reads it.
+    assert.isBelow(
+      documents.findIndex((document) => document.kind === "ExternalSecret"),
+      documents.findIndex((document) => document.kind === "Deployment"),
+    );
+
+    const envFromFor = (serviceName: string) => {
+      const deployment = documents.find(
+        (document) => document.kind === "Deployment" && documentName(document) === serviceName,
+      );
+      const spec = deployment?.spec as
+        | {
+            readonly template: {
+              readonly spec: {
+                readonly containers: ReadonlyArray<{ readonly envFrom?: unknown }>;
+              };
+            };
+          }
+        | undefined;
+      return spec?.template.spec.containers[0]?.envFrom;
+    };
+
+    assert.deepEqual(envFromFor("backend"), [
+      { configMapRef: { name: "backend-env" } },
+      { secretRef: { name: "rudi-backend-secrets", optional: true } },
+    ]);
+    assert.deepEqual(envFromFor("web"), [{ configMapRef: { name: "web-env" } }]);
+  }).pipe(
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { force: true, recursive: true }))),
+  );
+});
+
+it.effect("omits the credential wiring for stacks without a backend service", () => {
+  const tempDir = makeTempHeroComposeWorktree();
+
+  return Effect.gen(function* () {
+    const documents = yield* Effect.promise(() =>
+      generateNativeAppDevStackManifests({
+        id: "hero-dev",
+        namespace: "hero-dev",
+        worktreePath: tempDir,
+        composePath: "infra/compose/compose.app-dev.yml",
+        displayName: "hero",
+        displaySlug: undefined,
+        repoName: "hero",
+        branchName: "main",
+        dockerPath: "docker",
+        buildctlPath: "buildctl",
+        imageBuilder: "docker",
+        imageRegistry: undefined,
+        imagePushRegistry: undefined,
+        imageProject: undefined,
+        buildkitAddr: undefined,
+        buildkitDockerConfig: undefined,
+        buildkitDockerConfigsDir: undefined,
+        buildkitHarborCaCert: undefined,
+        frontendUrl: undefined,
+        backendUrl: undefined,
+        keycloakUrl: undefined,
+        minioUrl: undefined,
+        preferStackScopedUrls: true,
+      }),
+    );
+
+    assert.deepEqual(
+      documents.filter((document) => document.kind === "ExternalSecret"),
+      [],
+    );
+  }).pipe(
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { force: true, recursive: true }))),
+  );
+});

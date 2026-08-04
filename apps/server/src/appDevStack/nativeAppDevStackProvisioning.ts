@@ -87,6 +87,17 @@ export type NativeCommandRunner = (
 
 const APP_LABEL_PREFIXES = ["cortex.appDevStack", "rudi.appDevStack"] as const;
 
+/**
+ * Shared credentials the backend of an app-dev stack reads from OpenBao through
+ * External Secrets. The names match the ExternalSecret already deployed in the
+ * rudi-dev namespace, so re-provisioning adopts it in place rather than adding a
+ * second one.
+ */
+const OPENBAO_CLUSTER_SECRET_STORE = "openbao-backend";
+const BACKEND_EXTERNAL_SECRET_NAME = "rudi-backend-credentials";
+const BACKEND_SECRETS_NAME = "rudi-backend-secrets";
+const GOOGLE_OAUTH_OPENBAO_PATH = "rudi/api-keys/google";
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -118,6 +129,37 @@ const makeLabels = (stackId: string, serviceName?: string): Record<string, strin
   }
   return labels;
 };
+
+const isBackendService = (serviceName: string): boolean =>
+  sanitizeKubernetesName(serviceName).includes("backend");
+
+const buildBackendExternalSecret = (namespace: string, stackId: string): KubernetesDocument => ({
+  apiVersion: "external-secrets.io/v1",
+  kind: "ExternalSecret",
+  metadata: {
+    name: BACKEND_EXTERNAL_SECRET_NAME,
+    namespace,
+    labels: {
+      ...makeLabels(stackId, "backend"),
+      "app.kubernetes.io/name": BACKEND_EXTERNAL_SECRET_NAME,
+    },
+  },
+  spec: {
+    refreshInterval: "1h",
+    secretStoreRef: { kind: "ClusterSecretStore", name: OPENBAO_CLUSTER_SECRET_STORE },
+    target: { name: BACKEND_SECRETS_NAME, creationPolicy: "Owner", deletionPolicy: "Retain" },
+    data: [
+      {
+        secretKey: "GOOGLE_CLIENT_ID",
+        remoteRef: { key: GOOGLE_OAUTH_OPENBAO_PATH, property: "client_id" },
+      },
+      {
+        secretKey: "GOOGLE_CLIENT_SECRET",
+        remoteRef: { key: GOOGLE_OAUTH_OPENBAO_PATH, property: "client_secret" },
+      },
+    ],
+  },
+});
 
 const expandEnv = (value: string): string =>
   value.replace(
@@ -1236,9 +1278,17 @@ const buildDeployment = (
     protocol: port.protocol.toUpperCase(),
   }));
   if (ports.length > 0) container.ports = ports;
+  // The Secret is listed after the ConfigMap so an OpenBao-backed value wins over
+  // an empty placeholder of the same name, and marked optional because External
+  // Secrets has not materialized it yet in a freshly created namespace.
+  const envFrom: Array<Record<string, unknown>> = [];
   if (service.environment.size > 0) {
-    container.envFrom = [{ configMapRef: { name: `${name}-env` } }];
+    envFrom.push({ configMapRef: { name: `${name}-env` } });
   }
+  if (isBackendService(service.name)) {
+    envFrom.push({ secretRef: { name: BACKEND_SECRETS_NAME, optional: true } });
+  }
+  if (envFrom.length > 0) container.envFrom = envFrom;
   const command = commandArray(service.entrypoint);
   if (command !== undefined) container.command = command;
   const args = commandArray(service.command);
@@ -1357,6 +1407,11 @@ export const generateNativeAppDevStackManifests = async (
     buildNamespace(namespace, stackId),
     buildForwardedProtoMiddleware(namespace, stackId),
   ];
+  // Ahead of the Deployments: the backend reads the Secret this produces via
+  // envFrom, so External Secrets should be working on it first.
+  if (services.some((service) => isBackendService(service.name))) {
+    documents.push(buildBackendExternalSecret(namespace, stackId));
+  }
 
   for (const service of services) {
     const configMap = buildConfigMap(namespace, stackId, service);
