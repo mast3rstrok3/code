@@ -316,8 +316,6 @@ export function buildThreadListV2Items(input: {
   }> | null;
   readonly searchQuery: string;
   readonly matchedThreadKeys?: ReadonlySet<string>;
-  /** Per-row PR state reported up by visible rows ("env:threadId" keys). */
-  readonly changeRequestStateByKey?: ReadonlyMap<string, "open" | "closed" | "merged">;
   /** Environments whose server supports thread.settle/unsettle. Threads on
       other environments never classify as settled — the user could neither
       un-settle nor pin them. Absent = no gating (tests). */
@@ -376,8 +374,6 @@ export function buildThreadListV2Items(input: {
     }
     const supportsSettlement = input.settlementEnvironmentIds?.has(thread.environmentId) ?? true;
     const supportsSnooze = input.snoozeEnvironmentIds?.has(thread.environmentId) ?? true;
-    const changeRequestState =
-      input.changeRequestStateByKey?.get(`${thread.environmentId}:${thread.id}`) ?? null;
     // Visibility parity with web: a snoozed thread leaves the list until it
     // wakes (or raises its hand — effectiveSnoozed refuses blocked/failed
     // work). Snooze outranks settled classification, same as web.
@@ -392,10 +388,7 @@ export function buildThreadListV2Items(input: {
       }
       continue;
     }
-    if (
-      supportsSettlement &&
-      effectiveSettled(thread, { now, autoSettleAfterDays, changeRequestState })
-    ) {
+    if (supportsSettlement && effectiveSettled(thread, { now, autoSettleAfterDays })) {
       settled.push(thread);
     } else {
       active.push(thread);

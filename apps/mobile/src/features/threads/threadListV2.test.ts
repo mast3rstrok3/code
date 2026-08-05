@@ -263,6 +263,48 @@ describe("sortThreadsForListV2", () => {
 });
 
 describe("buildThreadListV2Items", () => {
+  it("keeps stale failed and plan-ready threads active", () => {
+    const failed = makeThread({
+      id: ThreadId.make("failed"),
+      title: "Failed",
+      latestUserMessageAt: "2026-06-01T00:00:00.000Z",
+      session: {
+        threadId: ThreadId.make("failed"),
+        status: "error",
+        providerName: "Codex",
+        runtimeMode: "full-access",
+        activeTurnId: null,
+        lastError: "Failed",
+        updatedAt: "2026-06-01T00:00:00.000Z",
+      },
+    });
+    const layout = buildThreadListV2Items({
+      threads: [
+        failed,
+        makeThread({
+          id: ThreadId.make("plan-ready"),
+          title: "Plan ready",
+          latestUserMessageAt: "2026-06-01T00:00:00.000Z",
+          hasActionableProposedPlan: true,
+        }),
+        makeThread({
+          id: ThreadId.make("ordinary"),
+          title: "Ordinary",
+          latestUserMessageAt: "2026-06-01T00:00:00.000Z",
+        }),
+      ],
+      environmentId: null,
+      searchQuery: "",
+      now: "2026-06-10T00:00:00.000Z",
+    });
+
+    expect(layout.items.map((item) => [item.thread.id, item.variant])).toEqual([
+      ["failed", "card"],
+      ["plan-ready", "card"],
+      ["ordinary", "slim"],
+    ]);
+  });
+
   it("hides snoozed threads and counts them — visibility parity with web", () => {
     const layout = buildThreadListV2Items({
       threads: [

@@ -87,7 +87,7 @@ export function BetaSettingsPanel() {
           <>
             <SettingsRow
               title={searchableSetting("auto-settle-inactive-threads").title}
-              description="Threads with no activity for this long settle automatically. Threads on merged or closed PRs always settle."
+              description="Threads with no activity for this long settle automatically. Actionable threads stay active until you review them."
               control={
                 <Switch
                   checked={sidebarAutoSettleAfterDays !== null}
