@@ -482,20 +482,43 @@ describe("WorkflowPromptRegistry", () => {
         WORKFLOW_PROMPT_IDS.productFullFeatureCodex,
       ],
     );
-    for (const id of [
-      WORKFLOW_PROMPT_IDS.productFixCodex,
-      WORKFLOW_PROMPT_IDS.productFastFeatureCodex,
-      WORKFLOW_PROMPT_IDS.productFullFeatureCodex,
-    ]) {
+    for (const [id, intentKind] of [
+      [WORKFLOW_PROMPT_IDS.productFixCodex, "fix"],
+      [WORKFLOW_PROMPT_IDS.productFastFeatureCodex, "feature"],
+      [WORKFLOW_PROMPT_IDS.productFullFeatureCodex, "feature"],
+    ] as const) {
       const preset = contracts.find((contract) => contract.id === id);
       NodeAssert.ok(preset);
       NodeAssert.doesNotMatch(preset.promptText, /Fix-or-feature classification \(hard gate\)/);
-      NodeAssert.match(preset.promptText, /Never ask whether the request is a feature or a fix/);
-      // Preset grills carry the upstream grilling skill verbatim, product-restricted.
-      NodeAssert.match(preset.promptText, /Interview me relentlessly/);
-      NodeAssert.match(preset.promptText, /Asking multiple questions at once is bewildering/);
-      NodeAssert.match(preset.promptText, /put each one to me and wait for my answer/);
-      NodeAssert.match(preset.promptText, /Grill product questions only/);
+      NodeAssert.match(preset.promptText, /ground yourself in the codebase/);
+      NodeAssert.match(preset.promptText, /resolve facts and answer anything already clear/);
+      NodeAssert.match(
+        preset.promptText,
+        /only where product clarity, preference, or alignment is needed/,
+      );
+      NodeAssert.match(preset.promptText, /Interview the user relentlessly/);
+      NodeAssert.match(preset.promptText, /one question at a time/);
+      NodeAssert.match(preset.promptText, /give your recommended answer with every question/);
+      NodeAssert.match(preset.promptText, /Cover product direction only/);
+      NodeAssert.match(preset.promptText, /Do not ask about implementation, architecture, testing/);
+      NodeAssert.match(preset.promptText, /until the user confirms/);
+      NodeAssert.match(preset.promptText, new RegExp(`intentKind.*"${intentKind}"`));
+      NodeAssert.match(preset.promptText, /"type": "product-intent-locked"/);
+      NodeAssert.equal(preset.associatedDocs, undefined);
+      for (const downstreamOverview of [
+        /single human gate/i,
+        /CLI Plan/i,
+        /Build child/i,
+        /worktree/i,
+        /app dev stack/i,
+        /Dev Review/i,
+        /Code Review/i,
+        /Planning workflow/i,
+        /Implementation workflow/i,
+        /change request/i,
+      ]) {
+        NodeAssert.doesNotMatch(preset.promptText, downstreamOverview);
+      }
     }
     // Domain-model maintenance (CONTEXT.md/ADR) is owned by the Planning
     // Workflow: the product grill stays product-only and carries no format docs.

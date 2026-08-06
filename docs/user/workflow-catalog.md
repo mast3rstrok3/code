@@ -17,7 +17,7 @@ All three catalogs are read-only and versioned with the T3 Code server. Project 
 - **Wayfinder** — the effort is too large or foggy to specify in one pass; chart the decisions first.
 - **Implementation** — you already have a Spec and reviewed tickets; execute them.
 
-Every product-routed workflow starts with a **product grill**: the agent interviews you one question at a time, each with a recommended answer, about product decisions only — the problem, the outcome, the audience, how it should feel, success criteria, scope, and non-goals. Facts it can look up in the codebase it looks up; decisions are yours. Implementation, architecture, and testing questions are resolved later by the automated stages without asking you.
+Every product-routed workflow starts with a **product grill**. Before asking anything, the agent grounds itself in the codebase and existing product context, resolves discoverable facts, and answers what is already clear. It then asks only the product-alignment questions that remain, one at a time with a recommended answer — the problem, the outcome, the audience, how it should feel, success criteria, scope, and non-goals. Implementation, architecture, and testing questions are resolved later by the automated stages without asking you.
 
 ## What each workflow does
 

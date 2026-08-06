@@ -1644,53 +1644,35 @@ Your final response for this stage must contain exactly one JSON directive and n
 </collaboration_mode>`;
 
 const buildPresetProductWorkflowPrompt = (input: {
-  readonly title: string;
   readonly intentKind: "feature" | "fix";
-  readonly downstream: string;
-}) => `<collaboration_mode># ${input.title}: Product Direction Grill
+}) => `<collaboration_mode># Product Direction Grill
 
-This is the workflow's single human gate. The workflow classification is already authoritative: this is a **${input.intentKind}**. Never ask whether the request is a feature or a fix, and never emit a product-intent-classification-asked directive.
+Before asking questions, ground yourself in the codebase and existing product context. Use that knowledge to resolve facts and answer anything already clear; ask the user only where product clarity, preference, or alignment is needed.
 
-${input.downstream}
+Interview the user relentlessly until you reach a shared understanding. Map the product direction as a design tree: every decision branches into the decisions that hang off it. Work through the tree one question at a time, waiting for the user's answer before continuing, and give your recommended answer with every question.
 
-Interview me relentlessly about every aspect of this product intent until we reach a shared understanding. Walk down each branch of the decision tree, resolving dependencies between decisions one-by-one. For each question, provide your recommended answer.
+Cover product direction only: the problem, audience, desired outcome, user-visible behavior and experience, success criteria, scope, and non-goals. Do not ask about implementation, architecture, testing, workflow sequencing, or operations.
 
-Ask the questions one at a time, waiting for feedback on each question before continuing. Asking multiple questions at once is bewildering.
+The session is done when every product branch has been visited and nothing remains silently assumed. Do not lock the intent until the user confirms you have reached a shared understanding.
 
-If a *fact* can be found by exploring the codebase, look it up rather than asking me. The *decisions*, though, are mine — put each one to me and wait for my answer.
+The intent kind is fixed as "${input.intentKind}". Do not ask the user to classify it.
 
-Do not lock intent until I confirm we have reached a shared understanding.
-
-Grill product questions only: the problem, the desired outcome, the audience, how the product should feel and behave for the user, success criteria, scope, and non-goals. Do not grill implementation, architecture, or testing decisions.
-
-Do not create or edit product context, Specs, tickets, or implementation files during this grill.
-
-Your final response must contain exactly one fenced JSON directive and no other fenced JSON blocks:
+After confirmation, finish with exactly one fenced JSON directive and no other fenced JSON blocks:
 
 \`\`\`json
 { "type": "product-intent-locked", "intentKind": "${input.intentKind}", "title": "...", "summaryMarkdown": "..." }
 \`\`\`
 
-The intentKind is fixed by this workflow preset and must be "${input.intentKind}".
 </collaboration_mode>`;
 
 const PRODUCT_FIX_WORKFLOW_PROMPT = buildPresetProductWorkflowPrompt({
-  title: "Fix workflow",
   intentKind: "fix",
-  downstream:
-    "After intent locks, this same thread switches automatically to CLI Plan mode. Its proposed plan launches one CLI Build child thread. No dedicated worktree, app dev stack, Dev Review, or Code Review is added.",
 });
 const PRODUCT_FAST_FEATURE_WORKFLOW_PROMPT = buildPresetProductWorkflowPrompt({
-  title: "Fast feature workflow",
   intentKind: "feature",
-  downstream:
-    "After intent locks, this same thread switches automatically to CLI Plan mode. Its proposed plan launches a Build child thread in a dedicated worktree branched from the branch this workflow started on, starting the app dev stack in parallel when none exists for that worktree. Dev Review and Code Review sub-threads follow with automatic fix loops, and the change request is published into the starting branch.",
 });
 const PRODUCT_FULL_FEATURE_WORKFLOW_PROMPT = buildPresetProductWorkflowPrompt({
-  title: "Full feature workflow",
   intentKind: "feature",
-  downstream:
-    "After intent locks, the complete Planning workflow runs in its own thread and then launches the complete Implementation workflow in its own sub-thread and worktree branched from the branch this workflow started on, creating the app dev stack in parallel when none exists. This grill is the only human gate.",
 });
 
 export const WORKFLOW_PROMPT_REGISTRY = [

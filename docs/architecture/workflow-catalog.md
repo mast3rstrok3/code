@@ -28,6 +28,8 @@ Provenance of the main skills:
 | `implementation.code-review.codex`                                                                       | `engineering/code-review`                                                                               |
 | `implementation.merge-gate.codex`, `implementation.browser-dev-review.codex`, `implementation.fix.codex` | T3-native stages                                                                                        |
 
+The three product prompts contain only the product-direction interview and the minimal `product-intent-locked` handoff. They ground themselves in the codebase before questioning, resolve discoverable facts themselves, and ask one product-alignment question at a time with a recommendation. This is a deliberate one-question adaptation of the upstream Grilling discipline. Downstream sequencing is owned by the reactors and is intentionally absent from these prompts.
+
 Supporting documents (`context-format`, `adr-format`, `domain-docs`, `agent-brief`, `prototype-logic`, `prototype-ui`, `tdd-mocking`, `tdd-tests`, `tdd-logging`, `preview-browser-qa`) are deduplicated by global ID and back-linked to the skills that carry them.
 
 At runtime, prompt rendering includes only document metadata in an `available-workflow-docs` block. Registered workflow sessions receive the existing `workflow-artifacts` MCP capability and can call the read-only `workflow_doc_get` tool to retrieve a built-in document by ID. Document content is static server data and contains no project or user state.
