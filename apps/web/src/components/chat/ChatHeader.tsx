@@ -210,51 +210,86 @@ export const ChatHeader = memo(function ChatHeader({
   });
   const progressLabel = workflowProgressLabel(workflowProgress);
   return (
-    <div className="@container/header-actions flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
-      <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden sm:gap-3">
-        {/* The project always leads the header: knowing which project a
-            thread lives in is priority zero, and the thread title alone
-            doesn't answer it. */}
-        {activeProjectName ? (
-          <span className="inline-flex shrink-0 items-center gap-2">
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <button
-                    type="button"
-                    aria-label={`New thread in ${activeProjectName}`}
-                    onClick={onNewThreadInProject}
-                    className="inline-flex min-w-0 cursor-pointer items-center gap-1.5 rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+    <div
+      className={cn(
+        "@container/header-actions flex min-w-0 flex-1 items-center gap-2 sm:gap-3",
+        rightPanelOpen ? "pr-0" : "pr-16",
+      )}
+    >
+      <div className="flex min-w-0 flex-1 flex-col justify-center gap-0.5 overflow-hidden">
+        <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+          {/* The project always leads the header: knowing which project a
+              thread lives in is priority zero, and the thread title alone
+              doesn't answer it. */}
+          {activeProjectName ? (
+            <span className="inline-flex shrink-0 items-center gap-2">
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      aria-label={`New thread in ${activeProjectName}`}
+                      onClick={onNewThreadInProject}
+                      className="inline-flex min-w-0 cursor-pointer items-center gap-1.5 rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+                    />
+                  }
+                >
+                  <ProjectFavicon
+                    environmentId={activeThreadEnvironmentId}
+                    cwd={activeProjectCwd ?? ""}
+                    className="size-3.5"
                   />
-                }
-              >
-                <ProjectFavicon
-                  environmentId={activeThreadEnvironmentId}
-                  cwd={activeProjectCwd ?? ""}
-                  className="size-3.5"
-                />
-                <span className="max-w-40 truncate text-sm font-medium">{activeProjectName}</span>
-              </TooltipTrigger>
-              <TooltipPopup side="top">New thread in {activeProjectName}</TooltipPopup>
-            </Tooltip>
-            <span aria-hidden className="text-muted-foreground/40">
-              /
+                  <span className="max-w-40 truncate text-sm font-medium">{activeProjectName}</span>
+                </TooltipTrigger>
+                <TooltipPopup side="top">New thread in {activeProjectName}</TooltipPopup>
+              </Tooltip>
+              <span aria-hidden className="text-muted-foreground/40">
+                /
+              </span>
             </span>
-          </span>
-        ) : null}
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <h2
-                aria-label={activeThreadTitle}
-                className="min-w-20 flex-1 truncate text-sm font-medium text-foreground"
+          ) : null}
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <h2
+                  aria-label={activeThreadTitle}
+                  className="min-w-20 flex-1 truncate text-sm font-medium text-foreground"
+                >
+                  {activeThreadTitle}
+                </h2>
+              }
+            />
+            <TooltipPopup side="top">{activeThreadTitle}</TooltipPopup>
+          </Tooltip>
+          {workspaceUsers.length > 1 ? (
+            <Select
+              value={activeThreadOwnerUserId}
+              onValueChange={(value) => {
+                if (value === null) {
+                  return;
+                }
+                onOwnerUserIdChange(WorkspaceUserId.make(value));
+              }}
+            >
+              <SelectTrigger
+                className="h-7 max-w-32 shrink-0 px-2 text-xs text-muted-foreground @max-sm/header-actions:hidden"
+                aria-label="Thread owner"
               >
-                {activeThreadTitle}
-              </h2>
-            }
-          />
-          <TooltipPopup side="top">{activeThreadTitle}</TooltipPopup>
-        </Tooltip>
+                <SelectValue>
+                  {workspaceUsers.find((user) => user.id === activeThreadOwnerUserId)
+                    ?.displayName ?? activeThreadOwnerUserId}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                {workspaceUsers.map((user) => (
+                  <SelectItem key={user.id} hideIndicator value={user.id}>
+                    {user.displayName}
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
+          ) : null}
+        </div>
         {progressLabel === null ? null : (
           <Tooltip>
             <TooltipTrigger
@@ -263,7 +298,7 @@ export const ChatHeader = memo(function ChatHeader({
                   variant="secondary"
                   size="sm"
                   aria-label={progressLabel}
-                  className="min-w-0 max-w-[55%] shrink truncate"
+                  className="min-w-0 max-w-full self-start truncate"
                 >
                   <span className="truncate">{progressLabel}</span>
                 </Badge>
@@ -272,41 +307,10 @@ export const ChatHeader = memo(function ChatHeader({
             <TooltipPopup side="top">{progressLabel}</TooltipPopup>
           </Tooltip>
         )}
-        {workspaceUsers.length > 1 ? (
-          <Select
-            value={activeThreadOwnerUserId}
-            onValueChange={(value) => {
-              if (value === null) {
-                return;
-              }
-              onOwnerUserIdChange(WorkspaceUserId.make(value));
-            }}
-          >
-            <SelectTrigger
-              className="h-7 max-w-32 shrink-0 px-2 text-xs text-muted-foreground @max-sm/header-actions:hidden"
-              aria-label="Thread owner"
-            >
-              <SelectValue>
-                {workspaceUsers.find((user) => user.id === activeThreadOwnerUserId)?.displayName ??
-                  activeThreadOwnerUserId}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectPopup align="end" alignItemWithTrigger={false}>
-              {workspaceUsers.map((user) => (
-                <SelectItem key={user.id} hideIndicator value={user.id}>
-                  {user.displayName}
-                </SelectItem>
-              ))}
-            </SelectPopup>
-          </Select>
-        ) : null}
       </div>
       <div
         data-chat-header-actions
-        className={cn(
-          "flex shrink-0 items-center justify-end gap-2 @max-sm/header-actions:hidden @3xl/header-actions:gap-3",
-          rightPanelOpen ? "pr-0" : "pr-16",
-        )}
+        className="flex shrink-0 items-center justify-end gap-2 @max-sm/header-actions:hidden @3xl/header-actions:gap-3"
       >
         {activeProjectScripts && (
           <ProjectScriptsControl
