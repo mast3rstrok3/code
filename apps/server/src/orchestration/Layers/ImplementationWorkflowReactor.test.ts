@@ -1507,6 +1507,97 @@ describe("ImplementationWorkflowReactor", () => {
     }),
   );
 
+  it.effect("starts planning-spec workers before the app dev stack finishes provisioning", () =>
+    Effect.gen(function* () {
+      const gate: AutoCreateGate = {
+        entered: yield* Deferred.make<void>(),
+        release: yield* Deferred.make<void>(),
+      };
+      yield* withSystem(
+        (system) =>
+          Effect.gen(function* () {
+            const { spec } = yield* seedPlanning(system);
+            yield* system.engine.dispatch({
+              type: "thread.implementation-run.launch",
+              commandId: commandId("implementation-concurrent-stack-launch"),
+              threadId: sourceThreadId,
+              specId: spec.id,
+              baseBranch: "main",
+              pinnedCommit: "abc123",
+              orchestratorBranch: "implementation/checkout",
+              orchestratorWorktreePath: "/tmp/implementation-reactor.worktrees/checkout",
+              validationCommands: ["vp check", "vp run typecheck"],
+              createdAt: now,
+            });
+            const drained = yield* Effect.forkChild(system.reactor.drain);
+            yield* Deferred.await(gate.entered);
+
+            const snapshot = yield* system.query.getSnapshot();
+            const worker = snapshot.threads.find(
+              (thread) => thread.workflowRole === "implementation-worker",
+            );
+            expect(worker?.messages.at(-1)?.role).toBe("user");
+            expect(snapshot.implementationRuns[0]?.status).toBe("running");
+            expect(snapshot.implementationRuns[0]?.appDevStack.status).toBe("ensuring");
+
+            yield* Deferred.succeed(gate.release, undefined);
+            yield* Fiber.join(drained);
+            const settled = yield* system.query.getSnapshot();
+            expect(settled.implementationRuns[0]?.appDevStack.status).toBe("ready");
+          }),
+        { autoCreateGate: gate },
+      );
+    }),
+  );
+
+  it.effect("preserves cancellation that lands while the app dev stack is provisioning", () =>
+    Effect.gen(function* () {
+      const gate: AutoCreateGate = {
+        entered: yield* Deferred.make<void>(),
+        release: yield* Deferred.make<void>(),
+      };
+      yield* withSystem(
+        (system) =>
+          Effect.gen(function* () {
+            const { spec } = yield* seedPlanning(system);
+            yield* system.engine.dispatch({
+              type: "thread.implementation-run.launch",
+              commandId: commandId("implementation-cancel-during-stack-launch"),
+              threadId: sourceThreadId,
+              specId: spec.id,
+              baseBranch: "main",
+              pinnedCommit: "abc123",
+              orchestratorBranch: "implementation/checkout",
+              orchestratorWorktreePath: "/tmp/implementation-reactor.worktrees/checkout",
+              validationCommands: ["vp check", "vp run typecheck"],
+              createdAt: now,
+            });
+            const drained = yield* Effect.forkChild(system.reactor.drain);
+            yield* Deferred.await(gate.entered);
+            const running = (yield* system.query.getSnapshot()).implementationRuns[0];
+            if (!running) throw new Error("Implementation run missing.");
+
+            yield* system.engine.dispatch({
+              type: "thread.implementation-run.cancel",
+              commandId: commandId("implementation-cancel-during-stack"),
+              threadId: sourceThreadId,
+              runId: running.id,
+              reason: "Stop while provisioning.",
+              createdAt: "2026-01-01T00:00:01.000Z",
+            });
+            yield* Deferred.succeed(gate.release, undefined);
+            yield* Fiber.join(drained);
+
+            const settled = (yield* system.query.getSnapshot()).implementationRuns[0];
+            expect(settled?.status).toBe("canceled");
+            expect(settled?.appDevStack.status).toBe("ready");
+            expect(settled?.updatedAt).toBe("2026-01-01T00:00:01.000Z");
+          }),
+        { autoCreateGate: gate },
+      );
+    }),
+  );
+
   it.effect("reports a failed app dev stack on Build without blocking the run", () =>
     withSystem(
       (system) =>
@@ -1801,7 +1892,15 @@ describe("ImplementationWorkflowReactor", () => {
         yield* retry(3);
         const third = yield* failBuild(4);
         expect(third?.retryableFailure?.attemptCount).toBe(3);
-        expect(third?.retryableFailure?.maxAttempts).toBe(3);
+
+        yield* retry(4);
+        const fourth = yield* failBuild(5);
+        expect(fourth?.retryableFailure?.attemptCount).toBe(4);
+
+        yield* retry(5);
+        const fifth = yield* failBuild(6);
+        expect(fifth?.retryableFailure?.attemptCount).toBe(5);
+        expect(fifth?.retryableFailure?.maxAttempts).toBe(5);
       }),
     ),
   );
@@ -2457,7 +2556,7 @@ describe("ImplementationWorkflowReactor", () => {
             snapshot.threads.some((thread) => thread.workflowRole === "implementation-qa-reviewer"),
           ).toBe(false);
 
-          for (let attempt = 2; attempt <= 4; attempt += 1) {
+          for (let attempt = 2; attempt <= 5; attempt += 1) {
             yield* system.engine.dispatch({
               type: "thread.implementation-run.retry",
               commandId: commandId(`app-stack-retry-${attempt}`),
@@ -2471,19 +2570,19 @@ describe("ImplementationWorkflowReactor", () => {
           expect(
             snapshot.implementationRuns.find((entry) => entry.id === run.id)?.retryableFailure
               ?.attemptCount,
-          ).toBe(4);
+          ).toBe(5);
           // One provisioning attempt at launch plus one per browser-review ensure.
-          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(5);
+          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(6);
 
           yield* system.engine.dispatch({
             type: "thread.implementation-run.retry",
             commandId: commandId("app-stack-retry-exhausted"),
             threadId: sourceThreadId,
             runId: run.id,
-            createdAt: "2026-01-01T00:00:06.000Z",
+            createdAt: "2026-01-01T00:00:07.000Z",
           });
           yield* system.reactor.drain;
-          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(5);
+          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(6);
         }),
       { failAutoCreate: true },
     ),
