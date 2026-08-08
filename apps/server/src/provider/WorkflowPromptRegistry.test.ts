@@ -15,16 +15,37 @@ import {
   WORKFLOW_PROMPT_IDS,
 } from "./WorkflowPromptRegistry.ts";
 
+const GRILLING_BLUEPRINT = [
+  "---",
+  "name: grilling",
+  "description: Grill the user relentlessly about a plan, decision, or idea. Use when the user wants to stress-test their thinking, or uses any 'grill' trigger phrases.",
+  "---",
+  "",
+  "Interview the user relentlessly until you reach a shared understanding. Map this as a **design tree**: every decision branches into the decisions that hang off it.",
+  "",
+  "Work the tree in **rounds**. The **frontier** is every decision whose prerequisites are already settled — the questions you can ask _now_ without guessing at answers you haven't heard yet. Ask the whole frontier in one round: number each question and give your recommended answer. Then wait for the user's answers before the next round.",
+  "",
+  "Each question should be formatted like so:",
+  "",
+  "```",
+  "❓ **Q1** - **<question title>**: <question body, might be multiple paragraphs, including multiple choices>",
+  "",
+  "➡️ <your recommended answer>",
+  "```",
+  "",
+  "Each round the user answers reshapes the tree — settled decisions push the frontier outward and unblock questions that depended on them. Recompute the frontier and ask the next round. A question whose answer depends on another question still open in this round belongs to a _later_ round, not this one.",
+  "",
+  "Finding _facts_ is your job, never the user's. When a frontier question needs a fact from the environment (filesystem, tools, etc.), dispatch a sub-agent to find it — don't ask the user for anything you could look up yourself. Don't block on it: a running exploration is an unsettled prerequisite, so only the questions downstream of it wait for the sub-agent to report — ask the rest of the frontier now. The _decisions_ are the user's — put each to them and wait.",
+  "",
+  "The session is done when the frontier is empty: every branch of the design tree visited, nothing left silently assumed. Do not act on it until the user confirms you have reached a shared understanding.",
+].join("\n");
+
 describe("WorkflowPromptRegistry", () => {
   it("builds a validated, deduplicated workflow catalog", () => {
     const catalog = listWorkflowCatalog();
     NodeAssert.deepEqual(
       catalog.workflows.map((workflow) => workflow.id),
       ["fix", "fast-feature", "full-feature", "wayfinder", "planning", "implementation"],
-    );
-    NodeAssert.equal(
-      catalog.skills.some((skill) => skill.id === WORKFLOW_PROMPT_IDS.productWorkflowCodex),
-      false,
     );
     NodeAssert.equal(catalog.docs.filter((doc) => doc.id === "context-format").length, 1);
     NodeAssert.deepEqual(resolveWorkflowDoc("context-format")?.skillIds, [
@@ -43,7 +64,7 @@ describe("WorkflowPromptRegistry", () => {
     const grillWithDocs = catalog.skills.find(
       (skill) => skill.id === WORKFLOW_PROMPT_IDS.planningGrillStageCodex,
     );
-    NodeAssert.equal(grillWithDocs?.title, "1. Grill With Docs");
+    NodeAssert.equal(grillWithDocs?.title, "1. Engineering Grill");
     NodeAssert.match(grillWithDocs?.promptText ?? "", /Challenge against the glossary/);
     NodeAssert.match(grillWithDocs?.promptText ?? "", /Offer ADRs sparingly/);
     NodeAssert.match(grillWithDocs?.promptText ?? "", /Most repos have a single context/);
@@ -128,7 +149,22 @@ describe("WorkflowPromptRegistry", () => {
     }
   });
 
-  it("renders Grill With Docs with fused domain-modeling instructions and docs", () => {
+  it("registers the independent Grilling primitive outside the workflow catalog", () => {
+    const grilling = listWorkflowPromptContracts().find(
+      (contract) => contract.id === WORKFLOW_PROMPT_IDS.sharedGrillingCodex,
+    );
+    NodeAssert.ok(grilling);
+    NodeAssert.equal(grilling.title, "Grilling");
+    NodeAssert.equal(grilling.promptText, GRILLING_BLUEPRINT);
+    NodeAssert.equal(
+      listWorkflowCatalog().skills.some(
+        (skill) => skill.id === WORKFLOW_PROMPT_IDS.sharedGrillingCodex,
+      ),
+      false,
+    );
+  });
+
+  it("renders the Engineering Grill from Grilling plus domain modeling", () => {
     const contracts = listWorkflowPromptContracts();
     const planningGrill = contracts.find(
       (contract) => contract.id === WORKFLOW_PROMPT_IDS.planningGrillStageCodex,
@@ -137,18 +173,24 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.ok(planningGrill);
     NodeAssert.equal(planningGrill.workflow, "planning");
     NodeAssert.equal(planningGrill.stage, "grill");
-    NodeAssert.equal(planningGrill.title, "1. Grill With Docs");
+    NodeAssert.equal(planningGrill.title, "1. Engineering Grill");
 
     const rendered = resolveWorkflowPromptText(WORKFLOW_PROMPT_IDS.planningGrillStageCodex);
-    NodeAssert.match(rendered, /# Grill With Docs/);
-    NodeAssert.match(rendered, /Interview me relentlessly/);
-    NodeAssert.match(rendered, /Ask the questions one at a time/);
-    NodeAssert.match(rendered, /Asking multiple questions at once is bewildering/);
-    NodeAssert.match(rendered, /recommended answer/);
-    NodeAssert.match(rendered, /exploring the environment/);
+    NodeAssert.match(rendered, /# Engineering Grill/);
+    NodeAssert.ok(rendered.includes(GRILLING_BLUEPRINT));
+    NodeAssert.match(rendered, /name: grilling/);
+    NodeAssert.match(rendered, /Map this as a \*\*design tree\*\*/);
+    NodeAssert.match(rendered, /Ask the whole frontier in one round/);
+    NodeAssert.match(rendered, /❓ \*\*Q1\*\* - \*\*<question title>\*\*/);
+    NodeAssert.match(rendered, /➡️ <your recommended answer>/);
+    NodeAssert.match(rendered, /dispatch a sub-agent to find it/);
+    NodeAssert.match(rendered, /frontier is empty/);
+    NodeAssert.doesNotMatch(rendered, /one question at a time/);
     NodeAssert.match(rendered, /It is a glossary and nothing else/);
     NodeAssert.match(rendered, /Only offer to create an ADR when all three are true/);
     NodeAssert.match(rendered, /Planning artifact writes during this stage are limited/);
+    NodeAssert.match(rendered, /only exception to the Grilling blueprint/);
+    NodeAssert.match(rendered, /frontier-round mechanics remain authoritative/);
     NodeAssert.match(rendered, /CONTEXT\.md Format/);
     NodeAssert.match(rendered, /CONTEXT-MAP\.md/);
     NodeAssert.match(rendered, /ADR Format/);
@@ -464,22 +506,13 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /do not use it to hand unfixed findings back/);
   });
 
-  it("registers the legacy Product prompt and all authoritative preset grills", () => {
+  it("registers only the authoritative preset Product grills", () => {
     const contracts = listWorkflowPromptContracts();
-    const product = contracts.find(
-      (contract) => contract.id === WORKFLOW_PROMPT_IDS.productWorkflowCodex,
-    );
-
-    NodeAssert.ok(product);
-    NodeAssert.equal(product.workflow, "product");
-    NodeAssert.equal(product.stage, "intent");
-    NodeAssert.equal(product.title, "Full feature workflow (legacy)");
     NodeAssert.deepEqual(
       contracts
         .filter((contract) => contract.workflow === "product")
         .map((contract) => contract.id),
       [
-        WORKFLOW_PROMPT_IDS.productWorkflowCodex,
         WORKFLOW_PROMPT_IDS.productFixCodex,
         WORKFLOW_PROMPT_IDS.productFastFeatureCodex,
         WORKFLOW_PROMPT_IDS.productFullFeatureCodex,
@@ -492,6 +525,8 @@ describe("WorkflowPromptRegistry", () => {
     ] as const) {
       const preset = contracts.find((contract) => contract.id === id);
       NodeAssert.ok(preset);
+      NodeAssert.ok(preset.promptText.includes(GRILLING_BLUEPRINT));
+      NodeAssert.match(preset.promptText, /# Product Grill/);
       NodeAssert.doesNotMatch(preset.promptText, /Fix-or-feature classification \(hard gate\)/);
       NodeAssert.match(preset.promptText, /ground yourself in the codebase/);
       NodeAssert.match(preset.promptText, /resolve facts and answer anything already clear/);
@@ -500,14 +535,27 @@ describe("WorkflowPromptRegistry", () => {
         /only where product clarity, preference, or alignment is needed/,
       );
       NodeAssert.match(preset.promptText, /Interview the user relentlessly/);
-      NodeAssert.match(preset.promptText, /one question at a time/);
-      NodeAssert.match(preset.promptText, /give your recommended answer with every question/);
+      NodeAssert.match(preset.promptText, /Ask the whole frontier in one round/);
+      NodeAssert.match(preset.promptText, /❓ \*\*Q1\*\* - \*\*<question title>\*\*/);
+      NodeAssert.match(preset.promptText, /➡️ <your recommended answer>/);
+      NodeAssert.match(preset.promptText, /dispatch a sub-agent to find it/);
+      NodeAssert.match(preset.promptText, /frontier is empty/);
+      NodeAssert.doesNotMatch(preset.promptText, /one question at a time/);
       NodeAssert.match(preset.promptText, /Cover product direction only/);
+      NodeAssert.match(preset.promptText, /only adaptation to the Grilling blueprint/);
+      NodeAssert.match(preset.promptText, /frontier-round mechanics remain authoritative/);
       NodeAssert.match(preset.promptText, /Do not ask about implementation, architecture, testing/);
       NodeAssert.match(preset.promptText, /until the user confirms/);
       NodeAssert.match(preset.promptText, new RegExp(`intentKind.*"${intentKind}"`));
       NodeAssert.match(preset.promptText, /"type": "product-intent-locked"/);
       NodeAssert.equal(preset.associatedDocs, undefined);
+      NodeAssert.equal(
+        resolveWorkflowPromptId({
+          interactionMode: "product-workflow",
+          workflowPromptId: id,
+        }),
+        id,
+      );
       for (const downstreamOverview of [
         /single human gate/i,
         /CLI Plan/i,
@@ -523,10 +571,6 @@ describe("WorkflowPromptRegistry", () => {
         NodeAssert.doesNotMatch(preset.promptText, downstreamOverview);
       }
     }
-    // Domain-model maintenance (CONTEXT.md/ADR) is owned by the Planning
-    // Workflow: the product grill stays product-only and carries no format docs.
-    NodeAssert.equal(product.associatedDocs, undefined);
-
     const planningSpec = contracts.find(
       (contract) => contract.id === WORKFLOW_PROMPT_IDS.planningSpecCodex,
     );
@@ -545,30 +589,8 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(renderedSpec, /Domain model maintenance/);
     NodeAssert.match(renderedSpec, /locked Product Workflow intent, there is no user to ask/);
 
-    const renderedProduct = resolveWorkflowPromptText(WORKFLOW_PROMPT_IDS.productWorkflowCodex);
-    NodeAssert.match(renderedProduct, /single human gate/);
-    NodeAssert.match(
-      renderedProduct,
-      /Interview me relentlessly about every aspect of this product intent/,
-    );
-    NodeAssert.match(renderedProduct, /Ask the questions one at a time/);
-    NodeAssert.match(renderedProduct, /recommended answer/);
-    NodeAssert.match(renderedProduct, /look it up rather than asking me/);
-    NodeAssert.match(renderedProduct, /Do not lock intent until I confirm/);
-    NodeAssert.match(renderedProduct, /Grill product questions only/);
-    NodeAssert.match(
-      renderedProduct,
-      /Do not grill implementation, architecture, or testing decisions/,
-    );
-    NodeAssert.doesNotMatch(renderedProduct, /Create or update CONTEXT\.md lazily/);
-    NodeAssert.doesNotMatch(renderedProduct, /docs\/adr\/000N-slug\.md lazily/);
-    NodeAssert.match(
-      renderedProduct,
-      /Do not create or edit CONTEXT\.md glossaries, CONTEXT-MAP\.md, or ADR files during the grill/,
-    );
-    NodeAssert.match(renderedProduct, /"type": "product-intent-locked"/);
-
-    NodeAssert.equal(resolveWorkflowPromptId({ interactionMode: "product-workflow" }), product.id);
+    NodeAssert.equal(resolveWorkflowPromptId({ interactionMode: "product-workflow" }), undefined);
+    NodeAssert.equal(isRegisteredWorkflowPromptId("product.workflow.codex"), false);
     NodeAssert.equal(isRegisteredWorkflowPromptId("yolo.grill-stage.codex"), false);
     NodeAssert.equal(isRegisteredWorkflowPromptId("implementation.qna-dev-review.codex"), false);
     NodeAssert.equal(

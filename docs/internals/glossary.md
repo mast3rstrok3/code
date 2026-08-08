@@ -159,7 +159,11 @@ A supporting reference a skill can load on demand with `workflow_doc_get` — fo
 
 #### Product grill
 
-The single human gate of the product workflows: a one-question-at-a-time interview about product decisions only, ending in a `product-intent-locked` directive parsed by [workflowDirectives.ts][27].
+The codebase-grounded, product-only composition of the shared Grilling primitive. It asks every currently unblocked product-decision question in numbered frontier rounds and ends in a `product-intent-locked` directive parsed by [workflowDirectives.ts][27]. Fix, Fast Feature, and Full Feature all begin here.
+
+#### Engineering grill
+
+The Planning composition of the shared Grilling primitive and the full domain-modeling discipline. It interviews across the engineering-decision frontier while updating glossary terms and warranted ADRs, then ends in a `planning-grill-complete` directive. Planning begins here; Full Feature enters it after Product Grill.
 
 #### Spec
 

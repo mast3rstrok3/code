@@ -27,9 +27,11 @@ Find workflow skills in this order:
 5. \`$HOME/.agents/skills/**/SKILL.md\`.
 6. Plugin-provided skill paths shown in session context.
 
+The shared \`shared.grilling.codex\` primitive is composed into the Product and Engineering grills; it is not launched as a standalone workflow child.
+
 Built-in workflow stages:
 
-- Product: \`product.fix.codex\`, \`product.fast-feature.codex\`, \`product.full-feature.codex\` (\`product.workflow.codex\` is legacy).
+- Product: \`product.fix.codex\`, \`product.fast-feature.codex\`, \`product.full-feature.codex\`.
 - Planning: \`planning.grill-stage.codex\`, \`planning.domain-modeling.codex\`, \`planning.wayfinder.codex\`, \`planning.research.codex\`, \`planning.prototype.codex\`, \`planning.spec.codex\`, \`planning.tickets.codex\`, \`planning.ticket-reviewer.codex\`.
 - Implementation: \`implementation.orchestrator-planning.codex\`, \`implementation.tdd.codex\`, \`implementation.merge-gate.codex\`, \`implementation.browser-dev-review.codex\`, \`implementation.fix.codex\`, \`implementation.code-review.codex\`.
 

@@ -50,6 +50,22 @@ function settingsWith(input: {
 }
 
 describe("resolveWorkflowSubagentSpawnDefinition", () => {
+  it("registers only the explicit Product workflow presets", () => {
+    for (const workflowPromptId of [
+      WORKFLOW_PROMPT_IDS.productFixCodex,
+      WORKFLOW_PROMPT_IDS.productFastFeatureCodex,
+      WORKFLOW_PROMPT_IDS.productFullFeatureCodex,
+    ]) {
+      expect(resolveWorkflowSubagentSpawnDefinition(workflowPromptId)).toMatchObject({
+        workflowPromptId,
+        interactionMode: "product-workflow",
+        workflowRole: null,
+        expectedResult: "product-intent-locked",
+      });
+    }
+    expect(resolveWorkflowSubagentSpawnDefinition("product.workflow.codex")).toBeUndefined();
+  });
+
   it("registers the implementation code reviewer sub-agent", () => {
     const definition = resolveWorkflowSubagentSpawnDefinition(
       WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,

@@ -14,8 +14,9 @@ Provenance of the main skills:
 
 | Skill ID                                                                                                 | Upstream source                                                                                         |
 | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `product.fix.codex`, `product.fast-feature.codex`, `product.full-feature.codex`                          | `productivity/grilling`, restricted to product questions                                                |
-| `planning.grill-stage.codex`                                                                             | `engineering/grill-with-docs` = `grilling` + `domain-modeling` fused                                    |
+| `shared.grilling.codex`                                                                                  | `productivity/grilling`, the verbatim shared interview primitive                                        |
+| `product.fix.codex`, `product.fast-feature.codex`, `product.full-feature.codex`                          | shared `grilling`, plus a short codebase-grounded product-only adapter                                  |
+| `planning.grill-stage.codex`                                                                             | shared `grilling`, plus the complete `domain-modeling` discipline                                       |
 | `planning.domain-modeling.codex`                                                                         | `engineering/domain-modeling`                                                                           |
 | `planning.wayfinder.codex`                                                                               | `engineering/wayfinder`                                                                                 |
 | `planning.research.codex`                                                                                | `engineering/research`                                                                                  |
@@ -28,7 +29,7 @@ Provenance of the main skills:
 | `implementation.code-review.codex`                                                                       | `engineering/code-review`                                                                               |
 | `implementation.merge-gate.codex`, `implementation.browser-dev-review.codex`, `implementation.fix.codex` | T3-native stages                                                                                        |
 
-The three product prompts contain only the product-direction interview and the minimal `product-intent-locked` handoff. They ground themselves in the codebase before questioning, resolve discoverable facts themselves, and ask one product-alignment question at a time with a recommendation. This is a deliberate one-question adaptation of the upstream Grilling discipline. Downstream sequencing is owned by the reactors and is intentionally absent from these prompts.
+The registry contains one independent Grilling primitive and two compositions. Product Grill adds only codebase grounding, product-decision scope, and the minimal `product-intent-locked` handoff; its three preset prompt IDs fix the intent kind up front. Engineering Grill adds the complete domain-modeling discipline and the Planning handoff. Both compositions preserve the primitive's design tree, frontier rounds, question format, fact-finding, and confirmation gate verbatim.
 
 Supporting documents (`context-format`, `adr-format`, `domain-docs`, `agent-brief`, `prototype-logic`, `prototype-ui`, `tdd-mocking`, `tdd-tests`, `tdd-logging`, `preview-browser-qa`) are deduplicated by global ID and back-linked to the skills that carry them.
 
@@ -40,8 +41,8 @@ Specs, planning tickets, Wayfinder Maps, and dev reviews are durable artifacts i
 
 Workflow stages hand results to the orchestration by ending a message with exactly one fenced JSON directive, parsed in `apps/server/src/orchestration/workflowDirectives.ts`:
 
-- `product-intent-locked` and `product-intent-classification-asked` — the product grill's hard gate.
-- `planning-grill-complete` — Grill With Docs finished.
+- `product-intent-locked` — Product Grill finished with the intent kind fixed by its workflow preset.
+- `planning-grill-complete` — Engineering Grill finished.
 - `planning-spec-artifact` / `wayfinder-map-artifact` — write the durable Spec or Wayfinder Map.
 - `planning-tickets-artifact` — store the drafted ticket set against a Spec or map.
 - `planning-reviewer-verdict` — the ticket reviewer's per-cycle verdict, including a `ticketEdits` array (update / create / delete / update-dependencies) through which the reviewer edits tickets directly.
@@ -56,25 +57,25 @@ Workflows appear in catalog order: Fix, Fast Feature, Full Feature, Wayfinder, P
 
 ### Fix
 
-Product grill (the single human gate, classification fixed to `fix`) → the same thread switches to CLI Plan mode → the proposed plan launches one CLI Build child thread on the same worktree and branch the workflow started on. No dedicated worktree, app dev stack, Dev Review, or Code Review.
+Product Grill (intent kind fixed to `fix`) → the same thread switches to CLI Plan mode → the proposed plan launches one CLI Build child thread on the same worktree and branch the workflow started on. No dedicated worktree, app dev stack, Dev Review, or Code Review.
 
 ### Fast Feature
 
-Product grill (classification fixed to `feature`) → same-thread CLI Plan mode → the proposed plan launches a Build child thread in a dedicated worktree branched from the starting branch, starting the app dev stack in parallel → up to ten shared AppDevStack/Dev Review QA cycles, with every failure repaired by a fresh TDD child and every review performed by a fresh reviewer → Code Review sub-thread (single pass) → the change request is published into the starting branch. Exhausted QA continues best-effort and is flagged in the change request.
+Product Grill (intent kind fixed to `feature`) → same-thread CLI Plan mode → the proposed plan launches a Build child thread in a dedicated worktree branched from the starting branch, starting the app dev stack in parallel → up to ten shared AppDevStack/Dev Review QA cycles, with every failure repaired by a fresh TDD child and every review performed by a fresh reviewer → Code Review sub-thread (single pass) → the change request is published into the starting branch. Exhausted QA continues best-effort and is flagged in the change request.
 
 ### Full Feature
 
-Product grill (the only human gate) → the complete Planning workflow runs → the complete Implementation workflow runs in its own sub-thread and worktree branched from the branch the user selected, with the app dev stack created in parallel when absent. Everything after the grill is automatic.
+Product Grill → the same thread enters the complete Planning workflow at Engineering Grill → Spec authoring, tickets, and ticket review → the complete Implementation workflow runs in its own sub-thread and worktree branched from the branch the user selected, with the app dev stack created in parallel when absent. Product Grill settles product intent; Engineering Grill then settles engineering and domain decisions without reopening product questions.
 
 ### Wayfinder
 
-For efforts too large or uncertain to specify in one pass. Wayfinder replaces Grill With Docs at the head of the planning flow: name the destination → grill breadth-first → write the durable Wayfinder Map (`wayfinder-map-artifact`) → resolve research and prototype decision tickets (stored as normal planning tickets linked to the map, with dependency edges) → advance the decision frontier → hand off to Spec authoring, then tickets, ticket review, and implementation.
+For efforts too large or uncertain to specify in one pass. Wayfinder replaces the normal Engineering Grill at the head of the planning flow: name the destination → grill breadth-first with the same engineering/domain discipline → write the durable Wayfinder Map (`wayfinder-map-artifact`) → resolve research and prototype decision tickets (stored as normal planning tickets linked to the map, with dependency edges) → advance the decision frontier → hand off to Spec authoring, then tickets, ticket review, and implementation.
 
 Wayfinder reuses the Planning Workflow projection. `wayfinder-map-artifact` writes a separate durable map on the planning workflow, while `planning-tickets-artifact` targets the map ID to store decision tickets through the existing ticket schema and dependency graph. `workflow_wayfinder_map_get` exposes the canonical map to focused workflow turns. A later Spec and its implementation tickets coexist with the map and its decision tickets; the client groups each ticket set by its parent artifact.
 
 ### Planning
 
-Grill With Docs (human-in-the-loop; domain modeling writes `CONTEXT.md`, ADRs, and — in multi-context repos — a `CONTEXT-MAP.md` as decisions crystallize) → Spec authoring in the same thread (durable artifact, `planning-spec-artifact`) → ticket drafting in the same thread (`planning-tickets-artifact`) → ticket review in sub-threads: up to `PLANNING_REVIEW_MAX_CYCLES` (3) cycles, each cycle its own reviewer sub-thread, the reviewer editing tickets directly through `ticketEdits`.
+Engineering Grill (human-in-the-loop; domain modeling writes `CONTEXT.md`, ADRs, and — in multi-context repos — a `CONTEXT-MAP.md` as decisions crystallize) → Spec authoring in the same thread (durable artifact, `planning-spec-artifact`) → ticket drafting in the same thread (`planning-tickets-artifact`) → ticket review in sub-threads: up to `PLANNING_REVIEW_MAX_CYCLES` (3) cycles, each cycle its own reviewer sub-thread, the reviewer editing tickets directly through `ticketEdits`.
 
 ### Implementation
 

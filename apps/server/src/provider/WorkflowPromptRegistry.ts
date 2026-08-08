@@ -13,6 +13,7 @@ import { WORKFLOW_SUBAGENT_INSTRUCTIONS_PROMPT } from "./WorkflowSubagentInstruc
 
 export const WORKFLOW_PROMPT_IDS = {
   workflowAgentCommunications: "workflow.agent-communications",
+  sharedGrillingCodex: "shared.grilling.codex",
   planningGrillStageCodex: "planning.grill-stage.codex",
   planningSpecCodex: "planning.spec.codex",
   planningTicketsCodex: "planning.tickets.codex",
@@ -23,7 +24,6 @@ export const WORKFLOW_PROMPT_IDS = {
   implementationBrowserDevReviewCodex: "implementation.browser-dev-review.codex",
   implementationFixCodex: "implementation.fix.codex",
   implementationCodeReviewCodex: "implementation.code-review.codex",
-  productWorkflowCodex: "product.workflow.codex",
   productFixCodex: "product.fix.codex",
   productFastFeatureCodex: "product.fast-feature.codex",
   productFullFeatureCodex: "product.full-feature.codex",
@@ -34,6 +34,30 @@ export const WORKFLOW_PROMPT_IDS = {
 } as const;
 
 const WORKFLOW_AGENT_COMMUNICATIONS_PROMPT = WORKFLOW_SUBAGENT_INSTRUCTIONS_PROMPT;
+
+// Keep this shared block verbatim; workflow-specific behavior belongs in trailing adapters.
+const GRILLING_BLUEPRINT = `---
+name: grilling
+description: Grill the user relentlessly about a plan, decision, or idea. Use when the user wants to stress-test their thinking, or uses any 'grill' trigger phrases.
+---
+
+Interview the user relentlessly until you reach a shared understanding. Map this as a **design tree**: every decision branches into the decisions that hang off it.
+
+Work the tree in **rounds**. The **frontier** is every decision whose prerequisites are already settled — the questions you can ask _now_ without guessing at answers you haven't heard yet. Ask the whole frontier in one round: number each question and give your recommended answer. Then wait for the user's answers before the next round.
+
+Each question should be formatted like so:
+
+\`\`\`
+❓ **Q1** - **<question title>**: <question body, might be multiple paragraphs, including multiple choices>
+
+➡️ <your recommended answer>
+\`\`\`
+
+Each round the user answers reshapes the tree — settled decisions push the frontier outward and unblock questions that depended on them. Recompute the frontier and ask the next round. A question whose answer depends on another question still open in this round belongs to a _later_ round, not this one.
+
+Finding _facts_ is your job, never the user's. When a frontier question needs a fact from the environment (filesystem, tools, etc.), dispatch a sub-agent to find it — don't ask the user for anything you could look up yourself. Don't block on it: a running exploration is an unsettled prerequisite, so only the questions downstream of it wait for the sub-agent to report — ask the rest of the frontier now. The _decisions_ are the user's — put each to them and wait.
+
+The session is done when the frontier is empty: every branch of the design tree visited, nothing left silently assumed. Do not act on it until the user confirms you have reached a shared understanding.`;
 
 const DOMAIN_MODELING_PROMPT = `<collaboration_mode># Domain Modeling
 
@@ -448,7 +472,7 @@ T3 replaces the upstream issue-tracker storage operations while preserving the m
 
 - The durable Wayfinder Map is stored in the Planning side panel above Spec, not as an issue.
 - Decision tickets use T3 Planning Tickets. The map id is their specId, and native ticket dependencies represent blocking edges.
-- Use Grill With Docs wherever the upstream text invokes /grilling plus /domain-modeling.
+- Use the Engineering Grill wherever the upstream text invokes /grilling plus /domain-modeling.
 - Load the canonical map with workflow_wayfinder_map_get. Use only workflow-subagent-create and workflow-subagent-result for focused child handoffs; do not use conversational agent messaging.
 - A map write ends with one wayfinder-map-artifact JSON directive containing title and summaryMarkdown. A decision-ticket write uses planning-tickets-artifact with the map id as specId.
 
@@ -529,15 +553,9 @@ The skill infers which structure applies:
 
 When multiple contexts exist, infer which one the current topic relates to. If unclear, ask.`;
 
-const PLANNING_GRILL_PROMPT = `<collaboration_mode># Grill With Docs
+const ENGINEERING_GRILL_PROMPT = `<collaboration_mode># Engineering Grill
 
-Interview me relentlessly about every aspect of this until we reach a shared understanding. Walk down each branch of the decision tree, resolving dependencies between decisions one-by-one. For each question, provide your recommended answer.
-
-Ask the questions one at a time, waiting for feedback on each question before continuing. Asking multiple questions at once is bewildering.
-
-If a *fact* can be found by exploring the environment (filesystem, tools, etc.), look it up rather than asking me. The *decisions*, though, are mine — put each one to me and wait for my answer.
-
-Do not act on it until I confirm we have reached a shared understanding.
+${GRILLING_BLUEPRINT}
 
 # Domain Modeling
 
@@ -611,9 +629,11 @@ If any of the three is missing, skip the ADR. Use the format in [ADR-FORMAT.md](
 
 ## T3 workflow adapter
 
-The upstream Grill With Docs composition is represented above by the complete Grilling and Domain Modeling instructions. Load CONTEXT-FORMAT.md or ADR-FORMAT.md with workflow_doc_get only immediately before writing that artifact.
+The Engineering Grill is represented above by the complete Grilling and Domain Modeling instructions. Load CONTEXT-FORMAT.md or ADR-FORMAT.md with workflow_doc_get only immediately before writing that artifact.
 
 Planning artifact writes during this stage are limited to glossary and ADR updates. Do not make implementation changes. Finish only when the goal, audience, success criteria, scope, non-goals, terminology, decisions, risks, edge cases, failure modes, and acceptance criteria are clear enough for Spec authoring.
+
+Updating domain documentation as decisions crystallize is the only exception to the Grilling blueprint's instruction not to act before confirmation. The frontier-round mechanics remain authoritative.
 
 After the user explicitly confirms shared understanding, end with exactly one fenced JSON block containing { "type": "planning-grill-complete" }. Do not write the Spec in this stage.
 </collaboration_mode>`;
@@ -923,7 +943,7 @@ How the engineering skills should consume this repo's domain documentation when 
 - **\`CONTEXT-MAP.md\`** at the repo root if it exists — it points at one \`CONTEXT.md\` per context. Read each one relevant to the topic.
 - **\`docs/adr/\`** — read ADRs that touch the area you're about to work in. In multi-context repos, also check \`src/<context>/docs/adr/\` for context-scoped decisions.
 
-If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The Domain Modeling skill (run inside Grill With Docs) creates them lazily when terms or decisions actually get resolved.
+If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The Domain Modeling discipline (run inside the Engineering Grill) creates them lazily when terms or decisions actually get resolved.
 
 ## File structure
 
@@ -1613,60 +1633,19 @@ Finish with exactly one fenced JSON block using this shape:
 Use status "clean" when neither axis has findings that require code changes — omit \`commitSha\` and leave HEAD untouched. Use "findings" when code changes were required: include every finding in reportMarkdown, set \`commitSha\` to the HEAD you committed, and report each required validation in \`validations\`. Use "blocked" when the review cannot be performed at all (say why in reportMarkdown); do not use it to hand unfixed findings back.
 </collaboration_mode>`;
 
-const PRODUCT_WORKFLOW_PROMPT = `<collaboration_mode># Product Workflow: Intent Grill
-
-This is the workflow's single human gate. After intent is locked, everything downstream is automatic. For a feature, all later planning, review, implementation, merge, browser review, and PR filing transitions run automatically. For a fix, the planning workflow is skipped: this thread switches to plan mode, you produce an implementation plan, and implementation launches automatically from the proposed plan.
-
-Interview me relentlessly about every aspect of this product intent until we reach a shared understanding. Walk down each branch of the decision tree, resolving dependencies between decisions one-by-one. For each question, provide your recommended answer.
-
-Ask the questions one at a time, waiting for feedback on each question before continuing. Asking multiple questions at once is bewildering.
-
-If a *fact* can be found by exploring the codebase, look it up rather than asking me. The *decisions*, though, are mine — put each one to me and wait for my answer.
-
-Do not lock intent until I confirm we have reached a shared understanding.
-
-Grill product questions only: the problem, the desired outcome, the audience, how the product should feel and behave for the user, success criteria, scope, and non-goals. Do not grill implementation, architecture, or testing decisions — after intent locks, the automated Planning and Implementation workflows resolve those without asking the user.
-
-## Fix-or-feature classification (hard gate)
-
-Once your product understanding is sufficient, you must ask — in its own dedicated message — whether this request is a **feature** (new or changed product behavior that warrants the full Spec, planning tickets, and ticket review pipeline) or a **fix** (a defect or small correction where a lightweight implementation plan is enough). State your recommended classification and why, then ask the user to confirm feature or fix. The decision is the user's, never inferred.
-
-That classification message must end with exactly one fenced JSON directive (and no other fenced JSON blocks):
-
-\`\`\`json
-{ "type": "product-intent-classification-asked", "recommendedIntentKind": "feature", "questionMarkdown": "Is this a feature or a fix? I recommend ..." }
-\`\`\`
-
-After emitting it, stop and wait for the user's reply. The server rejects any product-intent-locked directive unless this classification question was asked and the user replied afterwards, and rejects locks without an explicit "intentKind".
-
-Do not create or edit CONTEXT.md glossaries, CONTEXT-MAP.md, or ADR files during the grill. Domain terminology and architecture decision records are owned by the automated Planning Workflow, which captures them after intent locks. Read existing project context freely; if an existing glossary term or ADR conflicts with the user's intent, surface the conflict and ask which should become authoritative before locking intent.
-
-## Workflow stage constraints
-
-Do not make implementation changes or planning artifact writes during the grill.
-
-Finish only when the product intent is locked enough that the Planning Workflow sub-agent can create the Spec, planning tickets, and ticket review, and the Implementation Workflow sub-agent can proceed without further user questions.
-
-This stage uses two JSON directives: the classification ask (mid-grill, see above) and the intent lock (your final response). Each message may contain at most one fenced JSON block.
-
-Your final response for this stage must contain exactly one JSON directive and no other fenced JSON blocks:
-
-\`\`\`json
-{ "type": "product-intent-locked", "intentKind": "feature", "title": "...", "summaryMarkdown": "..." }
-\`\`\`
-
-"intentKind" is required and must be "feature" or "fix" — the user's confirmed answer to the classification question, never inferred. The server rejects the lock otherwise.
-</collaboration_mode>`;
-
 const buildPresetProductWorkflowPrompt = (input: {
   readonly intentKind: "feature" | "fix";
-}) => `<collaboration_mode># Product Direction Grill
+}) => `<collaboration_mode># Product Grill
+
+${GRILLING_BLUEPRINT}
+
+## Product-only adapter
 
 Before asking questions, ground yourself in the codebase and existing product context. Use that knowledge to resolve facts and answer anything already clear; ask the user only where product clarity, preference, or alignment is needed.
 
-Interview the user relentlessly until you reach a shared understanding. Map the product direction as a design tree: every decision branches into the decisions that hang off it. Work through the tree one question at a time, waiting for the user's answer before continuing, and give your recommended answer with every question.
-
 Cover product direction only: the problem, audience, desired outcome, user-visible behavior and experience, success criteria, scope, and non-goals. Do not ask about implementation, architecture, testing, workflow sequencing, or operations.
+
+Restricting the design tree to product decisions is the only adaptation to the Grilling blueprint. Its frontier-round mechanics remain authoritative.
 
 The session is done when every product branch has been visited and nothing remains silently assumed. Do not lock the intent until the user confirms you have reached a shared understanding.
 
@@ -1703,15 +1682,25 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     promptText: WORKFLOW_AGENT_COMMUNICATIONS_PROMPT,
   },
   {
+    id: WORKFLOW_PROMPT_IDS.sharedGrillingCodex,
+    order: 2,
+    workflow: "shared",
+    role: "workflow-communications",
+    stage: "grilling",
+    title: "Grilling",
+    description: "The shared design-tree and frontier-round interview primitive.",
+    promptText: GRILLING_BLUEPRINT,
+  },
+  {
     id: WORKFLOW_PROMPT_IDS.planningGrillStageCodex,
     order: 1,
     workflow: "planning",
     role: "planning-thread",
     stage: "grill",
-    title: "1. Grill With Docs",
+    title: "1. Engineering Grill",
     description:
-      "Relentlessly sharpens the plan while maintaining its glossary and qualifying ADRs.",
-    promptText: PLANNING_GRILL_PROMPT,
+      "Grills engineering decisions while maintaining the domain glossary and qualifying ADRs.",
+    promptText: ENGINEERING_GRILL_PROMPT,
     associatedDocs: [
       {
         id: "context-format",
@@ -1960,23 +1949,12 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     promptText: IMPLEMENTATION_CODE_REVIEW_PROMPT,
   },
   {
-    id: WORKFLOW_PROMPT_IDS.productWorkflowCodex,
-    order: 1,
-    workflow: "product",
-    role: "planning-thread",
-    stage: "intent",
-    title: "Full feature workflow (legacy)",
-    description:
-      "Gathers and locks product intent before automatically running Planning and Implementation.",
-    promptText: PRODUCT_WORKFLOW_PROMPT,
-  },
-  {
     id: WORKFLOW_PROMPT_IDS.productFixCodex,
     order: 1,
     workflow: "product",
     role: "planning-thread",
     stage: "intent",
-    title: "Fix workflow",
+    title: "Product Grill — Fix",
     description: "Locks a fix intent before same-thread planning and one Build child.",
     promptText: PRODUCT_FIX_WORKFLOW_PROMPT,
   },
@@ -1986,7 +1964,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     workflow: "product",
     role: "planning-thread",
     stage: "intent",
-    title: "Fast feature workflow",
+    title: "Product Grill — Fast Feature",
     description: "Locks feature intent before lightweight Plan, Build, and review orchestration.",
     promptText: PRODUCT_FAST_FEATURE_WORKFLOW_PROMPT,
   },
@@ -1996,7 +1974,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     workflow: "product",
     role: "planning-thread",
     stage: "intent",
-    title: "Full feature workflow",
+    title: "Product Grill — Full Feature",
     description: "Locks feature intent before complete Planning and Implementation workflows.",
     promptText: PRODUCT_FULL_FEATURE_WORKFLOW_PROMPT,
   },
@@ -2242,8 +2220,6 @@ export function resolveWorkflowPromptId(input: {
   switch (input.interactionMode) {
     case "planning-workflow":
       return WORKFLOW_PROMPT_IDS.planningGrillStageCodex;
-    case "product-workflow":
-      return WORKFLOW_PROMPT_IDS.productWorkflowCodex;
     case "implementation-workflow":
       return WORKFLOW_PROMPT_IDS.implementationOrchestratorPlanningCodex;
     default:

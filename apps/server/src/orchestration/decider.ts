@@ -362,34 +362,20 @@ function buildPlanningSpecStagePrompt(): string {
   ].join("\n");
 }
 
-function buildProductPlanningSpecStagePrompt(
+function buildProductEngineeringGrillStagePrompt(
   command: Extract<OrchestrationCommand, { type: "thread.planning-workflow.launch" }>,
 ): string {
   return [
-    "Run the Planning Workflow Spec authoring stage from this locked Product Workflow intent.",
+    "Run the Planning Workflow Engineering Grill from this locked Product Grill intent.",
     "",
-    "Use this locked product intent as the authoritative source. Do not ask the user questions or reopen product intent.",
+    "Use the locked product intent as the authoritative source for product decisions. Do not reopen or repeat Product Grill questions.",
     "",
-    "The Planning Workflow owns the project's domain model: while authoring the Spec, capture resolved terminology in the CONTEXT.md glossary and record warranted ADRs (formats in CONTEXT-FORMAT.md and ADR-FORMAT.md) without asking the user.",
+    "Ask the user the Engineering Grill's frontier of engineering and domain questions. Maintain the domain glossary and warranted ADRs as those answers crystallize.",
     "",
     `Intent title: ${command.intentTitle}`,
     "",
     "Intent summary:",
     command.intentSummaryMarkdown,
-    "",
-    "When ready, finish with exactly one fenced JSON block using this shape:",
-    "```json",
-    JSON.stringify(
-      {
-        type: "planning-spec-artifact",
-        title: "Short Spec title",
-        summaryMarkdown:
-          "Full Spec markdown with goals, non-goals, workflows, data, risks, and acceptance criteria.",
-      },
-      null,
-      2,
-    ),
-    "```",
   ].join("\n");
 }
 
@@ -1473,7 +1459,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       // thread still reads as a product root once its interaction mode flips.
       const crypto = yield* Crypto.Crypto;
       const messageUuid = yield* crypto.randomUUIDv4;
-      const messageId = MessageId.make(`message-product-spec-stage-${messageUuid}`);
+      const messageId = MessageId.make(`message-product-engineering-grill-${messageUuid}`);
       const modeSetEvent: PlannedOrchestrationEvent = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -1520,7 +1506,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             rootThreadId: productRootThread.id,
             ticketScope: [],
           },
-          stage: "spec-authoring",
+          stage: "grill",
           startedAt: command.createdAt,
         },
       };
@@ -1537,7 +1523,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: productRootThread.id,
           messageId,
           role: "user",
-          text: buildProductPlanningSpecStagePrompt(command),
+          text: buildProductEngineeringGrillStagePrompt(command),
           turnId: null,
           streaming: false,
           createdAt: command.createdAt,
@@ -1559,7 +1545,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           modelSelection: productRootThread.modelSelection,
           runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
           interactionMode: "planning-workflow",
-          workflowPromptId: WORKFLOW_PROMPT_IDS.planningSpecCodex,
+          workflowPromptId: WORKFLOW_PROMPT_IDS.planningGrillStageCodex,
           createdAt: command.createdAt,
         },
       };

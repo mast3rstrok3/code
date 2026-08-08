@@ -125,7 +125,6 @@ export const MAX_PRODUCT_INTENT_LOCK_REJECTION_BOUNCES = 3;
  * UUIDs (web `newMessageId`, mobile `commandMetadata`). The product intent gate relies on this
  * convention to tell a real human reply apart from server-authored prompts.
  */
-const isServerSynthesizedMessageId = (messageId: string) => messageId.startsWith("message-");
 const STRICT_PROVIDER_LIFECYCLE_GUARD = process.env.T3CODE_STRICT_PROVIDER_LIFECYCLE_GUARD !== "0";
 
 type IngestionDomainEvent = Extract<
@@ -1682,56 +1681,6 @@ const make = Effect.gen(function* () {
           return;
         }
 
-        case "product-intent-classification-asked": {
-          if (!isProductWorkflowRoot(thread)) {
-            yield* Effect.logWarning(
-              "provider workflow product intent directive ignored for non-product root thread",
-              {
-                directiveType: input.directive.type,
-                threadId: thread.id,
-                interactionMode: thread.interactionMode,
-                workflowRole: thread.workflowRole,
-              },
-            );
-            return;
-          }
-          if (expectedIntentKindForWorkflowPreset(thread.workflowPreset) !== null) {
-            yield* appendWorkflowDirectiveRejectedActivity({
-              event: input.event,
-              threadId: thread.id,
-              directiveType: input.directive.type,
-              summary: "Preset classification question rejected",
-              detail:
-                "The selected workflow preset already fixes the feature-or-fix classification.",
-              createdAt: input.createdAt,
-            });
-            return;
-          }
-
-          yield* orchestrationEngine.dispatch({
-            type: "thread.activity.append",
-            commandId: yield* providerCommandId(
-              input.event,
-              "workflow-product-intent-classification-asked",
-            ),
-            threadId: thread.id,
-            activity: {
-              id: EventId.make(yield* crypto.randomUUIDv4),
-              tone: "info",
-              kind: "product-intent-classification-asked",
-              summary: "Fix-or-feature classification question asked",
-              payload: {
-                recommendedIntentKind: input.directive.recommendedIntentKind,
-                questionMarkdown: input.directive.questionMarkdown,
-              },
-              turnId: null,
-              createdAt: input.createdAt,
-            },
-            createdAt: input.createdAt,
-          });
-          return;
-        }
-
         case "product-intent-locked": {
           if (!isProductWorkflowRoot(thread)) {
             yield* Effect.logWarning(
@@ -1749,33 +1698,14 @@ const make = Effect.gen(function* () {
           const intentKind = input.directive.intentKind;
           const presetIntentKind = expectedIntentKindForWorkflowPreset(thread.workflowPreset);
           const detail = yield* resolveThreadDetail(thread.id);
-          const askActivity = detail?.activities.findLast(
-            (activity) => activity.kind === "product-intent-classification-asked",
-          );
-          const hasHumanReplyAfterAsk =
-            askActivity !== undefined &&
-            (detail?.messages.some(
-              (message) =>
-                message.role === "user" &&
-                !isServerSynthesizedMessageId(message.id) &&
-                message.createdAt > askActivity.createdAt,
-            ) ??
-              false);
-
           const gateFailureDetail =
-            presetIntentKind !== null
-              ? intentKind === null
+            presetIntentKind === null
+              ? "Product intent cannot lock without an explicit Fix, Fast Feature, or Full Feature workflow preset."
+              : intentKind === null
                 ? `product-intent-locked requires intentKind "${presetIntentKind}" for the selected workflow preset.`
                 : intentKind !== presetIntentKind
                   ? `product-intent-locked intentKind "${intentKind}" conflicts with the selected workflow preset, which requires "${presetIntentKind}".`
-                  : null
-              : intentKind === null
-                ? 'product-intent-locked requires an explicit "intentKind" of "feature" or "fix" — the user\'s confirmed answer.'
-                : askActivity === undefined
-                  ? "The fix-or-feature classification question was never asked (no product-intent-classification-asked directive was emitted)."
-                  : !hasHumanReplyAfterAsk
-                    ? "The user has not replied since the fix-or-feature classification question was asked."
-                    : null;
+                  : null;
 
           if (gateFailureDetail !== null) {
             yield* appendWorkflowDirectiveRejectedActivity({
@@ -1804,10 +1734,7 @@ const make = Effect.gen(function* () {
                   kind: "product-workflow.needs-human-attention",
                   summary: "Product Workflow needs human attention",
                   payload: {
-                    reasonMarkdown:
-                      presetIntentKind === null
-                        ? `Product intent lock was rejected ${priorRejections + 1} times without a confirmed fix-or-feature answer. Reply in this thread to answer the classification question.`
-                        : `Product intent lock was rejected ${priorRejections + 1} times because it did not match the authoritative ${thread.workflowPreset} preset.`,
+                    reasonMarkdown: `Product intent lock was rejected ${priorRejections + 1} times because it did not match the authoritative ${thread.workflowPreset ?? "missing"} preset.`,
                   },
                   turnId: null,
                   createdAt: input.createdAt,
@@ -1823,13 +1750,7 @@ const make = Effect.gen(function* () {
               message: {
                 messageId: yield* serverMessageId("product-intent-gate"),
                 role: "user",
-                text:
-                  presetIntentKind === null
-                    ? [
-                        `Your product-intent-locked directive was rejected: ${gateFailureDetail}`,
-                        "Before locking intent you must ask whether this is a feature or fix, emit product-intent-classification-asked, and wait for the user's reply.",
-                      ].join("\n\n")
-                    : `Your product-intent-locked directive was rejected: ${gateFailureDetail}\n\nDo not ask for classification. Emit the lock again with intentKind "${presetIntentKind}" after the user confirms the product intent is sufficiently locked.`,
+                text: `Your product-intent-locked directive was rejected: ${gateFailureDetail}\n\nDo not ask for classification. Emit the lock again with intentKind "${presetIntentKind ?? "the selected preset's intent kind"}" after the user confirms the product intent is sufficiently locked.`,
                 attachments: [],
               },
               runtimeMode: thread.runtimeMode,

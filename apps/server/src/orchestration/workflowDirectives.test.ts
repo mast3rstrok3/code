@@ -64,55 +64,6 @@ describe("workflowDirectives", () => {
     );
   });
 
-  it("parses product intent classification asked directives", () => {
-    const withRecommendation = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
-{ "type": "product-intent-classification-asked", "recommendedIntentKind": "fix", "questionMarkdown": "Is this a feature or a fix? I recommend fix." }
-\`\`\``);
-    const withoutRecommendation = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
-{ "type": "product-intent-classification-asked", "questionMarkdown": "Is this a feature or a fix?" }
-\`\`\``);
-
-    NodeAssert.equal(withRecommendation.kind, "parsed");
-    if (
-      withRecommendation.kind === "parsed" &&
-      withRecommendation.directive.type === "product-intent-classification-asked"
-    ) {
-      NodeAssert.equal(withRecommendation.directive.recommendedIntentKind, "fix");
-      NodeAssert.equal(
-        withRecommendation.directive.questionMarkdown,
-        "Is this a feature or a fix? I recommend fix.",
-      );
-    }
-    NodeAssert.equal(withoutRecommendation.kind, "parsed");
-    if (
-      withoutRecommendation.kind === "parsed" &&
-      withoutRecommendation.directive.type === "product-intent-classification-asked"
-    ) {
-      NodeAssert.equal(withoutRecommendation.directive.recommendedIntentKind, null);
-    }
-  });
-
-  it("rejects product intent classification asked directives with invalid fields", () => {
-    const invalidKind = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
-{ "type": "product-intent-classification-asked", "recommendedIntentKind": "refactor", "questionMarkdown": "Feature or fix?" }
-\`\`\``);
-    const missingQuestion = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
-{ "type": "product-intent-classification-asked", "recommendedIntentKind": "fix" }
-\`\`\``);
-
-    NodeAssert.equal(invalidKind.kind, "error");
-    if (invalidKind.kind === "error") {
-      NodeAssert.equal(
-        invalidKind.message,
-        'product-intent-classification-asked.recommendedIntentKind must be "feature" or "fix" when provided.',
-      );
-    }
-    NodeAssert.equal(missingQuestion.kind, "error");
-    if (missingQuestion.kind === "error") {
-      NodeAssert.match(missingQuestion.message, /questionMarkdown/);
-    }
-  });
-
   it("parses planning grill complete directives", () => {
     const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
 { "type": "planning-grill-complete" }

@@ -55,10 +55,10 @@ describe("ServerProvider", () => {
     expect(parsed.workflows[0]?.steps[0]?.skillId).toBe("product.fix.codex");
   });
 
-  it("rejects legacy YOLO workflow prompt contracts", () => {
+  it("rejects unknown workflow discriminators", () => {
     expect(() =>
       decodeWorkflowPromptContract({
-        id: "product.workflow.codex",
+        id: "yolo.grill-stage.codex",
         order: 1,
         workflow: "yolo",
         role: "planning-thread",

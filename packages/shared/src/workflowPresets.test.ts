@@ -42,10 +42,20 @@ describe("workflow presets", () => {
     expect(expectedIntentKindForWorkflowPreset("full-feature")).toBe("feature");
   });
 
-  it("infers legacy workflow modes for display without making them explicit presets", () => {
+  it("runs Product Grill before Engineering Grill for Full Feature", () => {
+    const fullFeature = WORKFLOW_PRESET_DEFINITIONS.find(
+      (definition) => definition.id === "full-feature",
+    );
+    expect(fullFeature?.helpSteps.slice(0, 2).map((step) => step.skillId)).toEqual([
+      "product.full-feature.codex",
+      "planning.grill-stage.codex",
+    ]);
+  });
+
+  it("requires Product workflows to carry an explicit preset", () => {
     expect(
       inferDisplayedWorkflowPreset({ interactionMode: "product-workflow", workflowPreset: null }),
-    ).toBe("full-feature");
+    ).toBe(null);
     expect(inferDisplayedWorkflowPreset({ interactionMode: "plan", workflowPreset: null })).toBe(
       null,
     );

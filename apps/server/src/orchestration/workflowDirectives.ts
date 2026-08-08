@@ -29,11 +29,6 @@ export type WorkflowDirective =
       readonly summaryMarkdown: string;
     }
   | {
-      readonly type: "product-intent-classification-asked";
-      readonly recommendedIntentKind: "feature" | "fix" | null;
-      readonly questionMarkdown: string;
-    }
-  | {
       readonly type: "planning-grill-complete";
     }
   | {
@@ -556,28 +551,6 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
       const intentKind =
         rawIntentKind === "fix" || rawIntentKind === "feature" ? rawIntentKind : null;
       return { type: "product-intent-locked", intentKind, title, summaryMarkdown };
-    }
-    case "product-intent-classification-asked": {
-      const questionMarkdown = requiredString(record, "questionMarkdown");
-      if (questionMarkdown.startsWith("Directive field")) return questionMarkdown;
-      const rawRecommendedIntentKind = record["recommendedIntentKind"];
-      if (
-        rawRecommendedIntentKind !== undefined &&
-        rawRecommendedIntentKind !== null &&
-        rawRecommendedIntentKind !== "feature" &&
-        rawRecommendedIntentKind !== "fix"
-      ) {
-        return 'product-intent-classification-asked.recommendedIntentKind must be "feature" or "fix" when provided.';
-      }
-      const recommendedIntentKind =
-        rawRecommendedIntentKind === "fix" || rawRecommendedIntentKind === "feature"
-          ? rawRecommendedIntentKind
-          : null;
-      return {
-        type: "product-intent-classification-asked",
-        recommendedIntentKind,
-        questionMarkdown,
-      };
     }
     case "planning-grill-complete":
       return { type: "planning-grill-complete" };

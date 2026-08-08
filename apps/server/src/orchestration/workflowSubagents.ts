@@ -35,15 +35,23 @@ export interface WorkflowSubagentSpawnDefinition {
 }
 
 const WORKFLOW_SUBAGENT_SPAWN_DEFINITIONS: ReadonlyArray<WorkflowSubagentSpawnDefinition> = [
-  {
-    workflowPromptId: WORKFLOW_PROMPT_IDS.productWorkflowCodex,
-    interactionMode: "product-workflow",
-    workflowRole: null,
-    threadIdTag: "workflow-product-workflow",
-    defaultTitlePrefix: "Product Workflow",
-    expectedResult: "product-intent-locked",
-    allowedParentWorkflowRoles: "any",
-  },
+  ...(
+    [
+      [WORKFLOW_PROMPT_IDS.productFixCodex, "Product Fix", "product-fix"],
+      [WORKFLOW_PROMPT_IDS.productFastFeatureCodex, "Product Fast Feature", "product-fast-feature"],
+      [WORKFLOW_PROMPT_IDS.productFullFeatureCodex, "Product Full Feature", "product-full-feature"],
+    ] as const
+  ).map(
+    ([workflowPromptId, title, threadIdTag]): WorkflowSubagentSpawnDefinition => ({
+      workflowPromptId,
+      interactionMode: "product-workflow",
+      workflowRole: null,
+      threadIdTag: `workflow-${threadIdTag}`,
+      defaultTitlePrefix: title,
+      expectedResult: "product-intent-locked",
+      allowedParentWorkflowRoles: "any",
+    }),
+  ),
   {
     workflowPromptId: WORKFLOW_PROMPT_IDS.planningGrillStageCodex,
     interactionMode: "planning-workflow",

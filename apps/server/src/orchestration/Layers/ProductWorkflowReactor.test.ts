@@ -311,14 +311,27 @@ describe("ProductWorkflowReactor", () => {
         expect(rootThread?.workflowPreset).toBe("full-feature");
         expect(rootThread?.runtimeMode).toBe("full-access");
         expect(rootThread?.workflowContext?.rootThreadId).toBe(productThreadId);
-        expect(rootThread?.planningWorkflow?.stage).toBe("spec-authoring");
-        const specStageTurnRequests = events.filter(
+        expect(rootThread?.planningWorkflow?.stage).toBe("grill");
+        const engineeringGrillTurnRequests = events.filter(
           (event) =>
             event.type === "thread.turn-start-requested" &&
             event.payload.threadId === productThreadId &&
-            event.payload.workflowPromptId === WORKFLOW_PROMPT_IDS.planningSpecCodex,
+            event.payload.workflowPromptId === WORKFLOW_PROMPT_IDS.planningGrillStageCodex,
         );
-        expect(specStageTurnRequests).toHaveLength(1);
+        expect(engineeringGrillTurnRequests).toHaveLength(1);
+        const engineeringGrillPrompt = events.find(
+          (event) =>
+            event.type === "thread.message-sent" && event.payload.threadId === productThreadId,
+        );
+        expect(engineeringGrillPrompt?.type).toBe("thread.message-sent");
+        if (engineeringGrillPrompt?.type === "thread.message-sent") {
+          expect(engineeringGrillPrompt.payload.text).toContain(
+            "Run the Planning Workflow Engineering Grill",
+          );
+          expect(engineeringGrillPrompt.payload.text).toContain(
+            "Do not reopen or repeat Product Grill questions",
+          );
+        }
       }),
     ),
   );

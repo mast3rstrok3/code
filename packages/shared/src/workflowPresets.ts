@@ -29,7 +29,7 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
     workflowPromptId: "product.fix.codex",
     helpSteps: [
       {
-        label: "Product direction grill",
+        label: "Product Grill",
         skillId: "product.fix.codex",
         threadBoundary: "same thread",
         note: "human-guided",
@@ -47,7 +47,7 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
     workflowPromptId: "product.fast-feature.codex",
     helpSteps: [
       {
-        label: "Product direction grill",
+        label: "Product Grill",
         skillId: "product.fast-feature.codex",
         threadBoundary: "same thread",
       },
@@ -80,7 +80,8 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
     interactionMode: "product-workflow",
     workflowPromptId: "product.full-feature.codex",
     helpSteps: [
-      { label: "Product direction grill", skillId: "product.full-feature.codex" },
+      { label: "Product Grill", skillId: "product.full-feature.codex" },
+      { label: "Engineering Grill", skillId: "planning.grill-stage.codex" },
       { label: "Spec authoring", skillId: "planning.spec.codex" },
       { label: "Planning tickets", skillId: "planning.tickets.codex" },
       {
@@ -113,7 +114,7 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
     workflowPromptId: "planning.wayfinder.codex",
     helpSteps: [
       { label: "Name the destination", skillId: "planning.wayfinder.codex" },
-      { label: "Grill with docs", skillId: "planning.grill-stage.codex" },
+      { label: "Engineering Grill", skillId: "planning.grill-stage.codex" },
       { label: "Create the Wayfinder Map", skillId: "planning.wayfinder.codex" },
       { label: "Resolve research tickets", skillId: "planning.research.codex" },
       { label: "Resolve prototype tickets", skillId: "planning.prototype.codex" },
@@ -160,7 +161,7 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
     route: "planning",
     interactionMode: "planning-workflow",
     helpSteps: [
-      { label: "Grill and domain modeling", skillId: "planning.grill-stage.codex" },
+      { label: "Engineering Grill", skillId: "planning.grill-stage.codex" },
       { label: "Spec authoring", skillId: "planning.spec.codex" },
       { label: "Planning-ticket authoring", skillId: "planning.tickets.codex" },
       {
@@ -192,8 +193,6 @@ export function inferDisplayedWorkflowPreset(input: {
 }): WorkflowPreset | null {
   if (input.workflowPreset) return input.workflowPreset;
   switch (input.interactionMode) {
-    case "product-workflow":
-      return "full-feature";
     case "implementation-workflow":
       return "implementation";
     case "planning-workflow":
