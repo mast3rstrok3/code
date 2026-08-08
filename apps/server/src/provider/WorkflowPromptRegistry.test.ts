@@ -198,6 +198,19 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /Planning artifact writes during this stage are limited/);
     NodeAssert.match(rendered, /only exception to the Grilling blueprint/);
     NodeAssert.match(rendered, /frontier-round mechanics remain authoritative/);
+    NodeAssert.match(rendered, /## T3 structured-question adapter/);
+    NodeAssert.match(rendered, /request_user_input.*every interview round/);
+    NodeAssert.match(rendered, /at most three currently unblocked frontier questions/);
+    NodeAssert.match(rendered, /natural A\/B\/C order/);
+    NodeAssert.match(rendered, /Exactly one recommended choice/);
+    NodeAssert.match(rendered, /Never omit the recommendation from any question/);
+    NodeAssert.match(rendered, /\(Recommended\).*exactly once/);
+    NodeAssert.match(rendered, /Why that\? /);
+    NodeAssert.match(rendered, /impact or tradeoff text in every choice's description/);
+    NodeAssert.match(rendered, /Lock it in \(Recommended\)/);
+    NodeAssert.match(rendered, /Keep grilling/);
+    NodeAssert.match(rendered, /overrides the Grilling blueprint's Markdown question format/);
+    NodeAssert.match(rendered, /Do not duplicate or summarize the questions/);
     NodeAssert.match(rendered, /CONTEXT\.md Format/);
     NodeAssert.match(rendered, /CONTEXT-MAP\.md/);
     NodeAssert.match(rendered, /ADR Format/);
@@ -254,6 +267,8 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /choose the recommended answer for every engineering decision/);
     NodeAssert.match(rendered, /recompute the frontier until it is empty/);
     NodeAssert.match(rendered, /overrides the Grilling blueprint's user-question/);
+    NodeAssert.doesNotMatch(rendered, /## T3 structured-question adapter/);
+    NodeAssert.doesNotMatch(rendered, /request_user_input/);
     NodeAssert.match(rendered, /"type": "planning-grill-complete"/);
     NodeAssert.doesNotMatch(rendered, /After the user explicitly confirms shared understanding/);
     NodeAssert.ok(automaticGrill.associatedDocs?.some((doc) => doc.id === "context-format"));
@@ -579,8 +594,25 @@ describe("WorkflowPromptRegistry", () => {
       NodeAssert.match(preset.promptText, /frontier is empty/);
       NodeAssert.doesNotMatch(preset.promptText, /one question at a time/);
       NodeAssert.match(preset.promptText, /Cover product direction only/);
-      NodeAssert.match(preset.promptText, /only adaptation to the Grilling blueprint/);
-      NodeAssert.match(preset.promptText, /frontier-round mechanics remain authoritative/);
+      NodeAssert.match(preset.promptText, /product-scope adaptation to the Grilling blueprint/);
+      NodeAssert.match(preset.promptText, /dependency-frontier mechanics remain authoritative/);
+      NodeAssert.match(preset.promptText, /## T3 structured-question adapter/);
+      NodeAssert.match(preset.promptText, /request_user_input.*every interview round/);
+      NodeAssert.match(preset.promptText, /at most three currently unblocked frontier questions/);
+      NodeAssert.match(preset.promptText, /preserve their stable design-tree order/);
+      NodeAssert.match(preset.promptText, /natural A\/B\/C order/);
+      NodeAssert.match(preset.promptText, /Exactly one recommended choice/);
+      NodeAssert.match(preset.promptText, /Never omit the recommendation from any question/);
+      NodeAssert.match(preset.promptText, /\(Recommended\).*exactly once/);
+      NodeAssert.match(preset.promptText, /Why that\? /);
+      NodeAssert.match(preset.promptText, /impact or tradeoff text in every choice's description/);
+      NodeAssert.match(preset.promptText, /Lock it in \(Recommended\)/);
+      NodeAssert.match(preset.promptText, /Keep grilling/);
+      NodeAssert.match(
+        preset.promptText,
+        /overrides the Grilling blueprint's Markdown question format/,
+      );
+      NodeAssert.match(preset.promptText, /Do not duplicate or summarize the questions/);
       NodeAssert.match(preset.promptText, /Do not ask about implementation, architecture, testing/);
       NodeAssert.match(preset.promptText, /until the user confirms/);
       NodeAssert.match(preset.promptText, new RegExp(`intentKind.*"${intentKind}"`));

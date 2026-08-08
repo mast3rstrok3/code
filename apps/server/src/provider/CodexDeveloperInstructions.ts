@@ -1,5 +1,3 @@
-import type { ProviderInteractionMode } from "@t3tools/contracts";
-
 import { BROWSER_DEV_REVIEW_LAUNCH_DIRECTIVE_INSTRUCTIONS } from "./WorkflowSubagentInstructions.ts";
 
 export const CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS = `
@@ -148,6 +146,17 @@ In Default mode, strongly prefer making reasonable assumptions and executing the
 ${BROWSER_DEV_REVIEW_LAUNCH_DIRECTIVE_INSTRUCTIONS}
 </collaboration_mode>`;
 
+export const CODEX_INTERACTIVE_GRILL_DEVELOPER_INSTRUCTIONS = `<collaboration_mode># Collaboration Mode: Interactive T3 Grill
+
+Codex's native Plan collaboration transport is active only so this turn can call \`request_user_input\`. The turn remains governed by its Product Grill or Engineering Grill workflow prompt, whose scope, design-tree semantics, structured-question adapter, completion gate, and final workflow directive are authoritative.
+
+Do not apply ordinary CLI Plan Mode requirements. In particular, do not switch to a three-phase planning workflow, do not treat the user's request as plan-only, and do not produce a \`<proposed_plan>\` block.
+
+Use \`request_user_input\` exactly as the workflow prompt directs. Product Grill retains its product-only scope. Interactive Engineering Grill retains its narrow authorization to update \`CONTEXT.md\`, \`CONTEXT-MAP.md\`, and qualifying ADRs as decisions crystallize; it must not make implementation changes. Preserve every other workflow instruction and required completion directive.
+</collaboration_mode>`;
+
+type CodexDeveloperInstructionMode = "default" | "plan" | "interactive-grill";
+
 export interface CodexRuntimeInfo {
   readonly model: string;
   readonly reasoningEffort: string;
@@ -159,13 +168,15 @@ function toSingleLine(value: string): string {
 }
 
 export function buildCodexDeveloperInstructions(
-  interactionMode: ProviderInteractionMode,
+  interactionMode: CodexDeveloperInstructionMode,
   runtime: CodexRuntimeInfo,
 ): string {
   const base =
     interactionMode === "plan"
       ? CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS
-      : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS;
+      : interactionMode === "interactive-grill"
+        ? CODEX_INTERACTIVE_GRILL_DEVELOPER_INSTRUCTIONS
+        : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS;
   return `${base}
 
 <runtime_info>In case you're asked: you are running in T3 Code through the Codex harness, as ${toSingleLine(runtime.model)} with ${toSingleLine(runtime.reasoningEffort)} reasoning effort. No need to mention this otherwise.</runtime_info>`;

@@ -30,6 +30,11 @@ export interface PendingUserInputDraftAnswer {
   readonly customAnswer?: string;
 }
 
+export interface PendingUserInputOptionSelection {
+  readonly drafts: Record<string, PendingUserInputDraftAnswer>;
+  readonly immediateAnswers: Record<string, string> | null;
+}
+
 export interface ThreadFeedActivity {
   readonly id: string;
   readonly createdAt: string;
@@ -1357,6 +1362,28 @@ export function buildPendingUserInputAnswers(
   }
 
   return answers;
+}
+
+export function selectPendingUserInputOption(
+  questions: ReadonlyArray<UserInputQuestion>,
+  draftAnswers: Record<string, PendingUserInputDraftAnswer>,
+  questionId: string,
+  optionLabel: string,
+): PendingUserInputOptionSelection {
+  const drafts: Record<string, PendingUserInputDraftAnswer> = {
+    ...draftAnswers,
+    [questionId]: {
+      selectedOptionLabel: optionLabel,
+    },
+  };
+  const canSubmitImmediately =
+    questions.every((question) => !question.multiSelect) &&
+    questions.every((question) => !normalizeDraftAnswer(drafts[question.id]?.customAnswer));
+
+  return {
+    drafts,
+    immediateAnswers: canSubmitImmediately ? buildPendingUserInputAnswers(questions, drafts) : null,
+  };
 }
 
 export function buildThreadFeed(

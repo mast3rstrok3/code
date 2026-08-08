@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
 import { ApprovalRequestId, type ProviderApprovalDecision } from "@t3tools/contracts";
 import { Atom } from "effect/unstable/reactivity";
@@ -10,6 +10,7 @@ import {
   buildPendingUserInputAnswers,
   derivePendingApprovals,
   derivePendingUserInputs,
+  selectPendingUserInputOption,
   setPendingUserInputCustomAnswer,
   sortThreadActivities,
   type PendingUserInputDraftAnswer,
@@ -22,19 +23,6 @@ import { useAtomCommand } from "./use-atom-command";
 const userInputDraftsByRequestKeyAtom = Atom.make<
   Record<string, Record<string, PendingUserInputDraftAnswer>>
 >({}).pipe(Atom.keepAlive, Atom.withLabel("mobile:user-input-drafts"));
-
-function setUserInputDraftOption(requestKey: string, questionId: string, label: string): void {
-  const current = appAtomRegistry.get(userInputDraftsByRequestKeyAtom);
-  appAtomRegistry.set(userInputDraftsByRequestKeyAtom, {
-    ...current,
-    [requestKey]: {
-      ...current[requestKey],
-      [questionId]: {
-        selectedOptionLabel: label,
-      },
-    },
-  });
-}
 
 function setUserInputDraftCustomAnswer(
   requestKey: string,
@@ -70,6 +58,7 @@ export function useSelectedThreadRequests() {
   const [respondingUserInputId, setRespondingUserInputId] = useState<ApprovalRequestId | null>(
     null,
   );
+  const respondingUserInputRequestKeysRef = useRef(new Set<string>());
 
   // Sort once; both derivations expect the same lifecycle ordering.
   const sortedActivities = useMemo(
@@ -95,18 +84,6 @@ export function useSelectedThreadRequests() {
   const activePendingUserInputAnswers = activePendingUserInput
     ? buildPendingUserInputAnswers(activePendingUserInput.questions, activePendingUserInputDrafts)
     : null;
-
-  const onSelectUserInputOption = useCallback(
-    (requestId: ApprovalRequestId, questionId: string, label: string) => {
-      if (!selectedThreadShell) {
-        return;
-      }
-
-      const requestKey = scopedRequestKey(selectedThreadShell.environmentId, requestId);
-      setUserInputDraftOption(requestKey, questionId, label);
-    },
-    [selectedThreadShell],
-  );
 
   const onChangeUserInputCustomAnswer = useCallback(
     (requestId: ApprovalRequestId, questionId: string, customAnswer: string) => {
@@ -141,30 +118,70 @@ export function useSelectedThreadRequests() {
     [respondToApproval, selectedThreadShell],
   );
 
+  const submitUserInput = useCallback(
+    async (requestId: ApprovalRequestId, answers: Record<string, string>) => {
+      if (!selectedThreadShell) {
+        return;
+      }
+
+      const requestKey = scopedRequestKey(selectedThreadShell.environmentId, requestId);
+      if (respondingUserInputRequestKeysRef.current.has(requestKey)) {
+        return;
+      }
+      respondingUserInputRequestKeysRef.current.add(requestKey);
+      setRespondingUserInputId(requestId);
+      try {
+        return await respondToUserInput({
+          environmentId: selectedThreadShell.environmentId,
+          input: {
+            threadId: selectedThreadShell.id,
+            requestId,
+            answers,
+          },
+        });
+      } finally {
+        respondingUserInputRequestKeysRef.current.delete(requestKey);
+        setRespondingUserInputId((current) => (current === requestId ? null : current));
+      }
+    },
+    [respondToUserInput, selectedThreadShell],
+  );
+
+  const onSelectUserInputOption = useCallback(
+    (requestId: ApprovalRequestId, questionId: string, label: string) => {
+      if (!selectedThreadShell || activePendingUserInput?.requestId !== requestId) {
+        return;
+      }
+
+      const requestKey = scopedRequestKey(selectedThreadShell.environmentId, requestId);
+      if (respondingUserInputRequestKeysRef.current.has(requestKey)) {
+        return;
+      }
+      const current = appAtomRegistry.get(userInputDraftsByRequestKeyAtom);
+      const selection = selectPendingUserInputOption(
+        activePendingUserInput.questions,
+        current[requestKey] ?? {},
+        questionId,
+        label,
+      );
+      appAtomRegistry.set(userInputDraftsByRequestKeyAtom, {
+        ...current,
+        [requestKey]: selection.drafts,
+      });
+      if (selection.immediateAnswers) {
+        void submitUserInput(requestId, selection.immediateAnswers);
+      }
+    },
+    [activePendingUserInput, selectedThreadShell, submitUserInput],
+  );
+
   const onSubmitUserInput = useCallback(async () => {
     if (!selectedThreadShell || !activePendingUserInput || !activePendingUserInputAnswers) {
       return;
     }
 
-    setRespondingUserInputId(activePendingUserInput.requestId);
-    const result = await respondToUserInput({
-      environmentId: selectedThreadShell.environmentId,
-      input: {
-        threadId: selectedThreadShell.id,
-        requestId: activePendingUserInput.requestId,
-        answers: activePendingUserInputAnswers,
-      },
-    });
-    setRespondingUserInputId((current) =>
-      current === activePendingUserInput.requestId ? null : current,
-    );
-    return result;
-  }, [
-    activePendingUserInput,
-    activePendingUserInputAnswers,
-    respondToUserInput,
-    selectedThreadShell,
-  ]);
+    return submitUserInput(activePendingUserInput.requestId, activePendingUserInputAnswers);
+  }, [activePendingUserInput, activePendingUserInputAnswers, selectedThreadShell, submitUserInput]);
 
   return {
     activePendingApproval,

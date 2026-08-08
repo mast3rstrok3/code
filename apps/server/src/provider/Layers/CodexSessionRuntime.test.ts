@@ -12,6 +12,7 @@ import {
   CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS,
   buildCodexDeveloperInstructions,
   CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
+  CODEX_INTERACTIVE_GRILL_DEVELOPER_INSTRUCTIONS,
   CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
 } from "../CodexDeveloperInstructions.ts";
 import { WORKFLOW_PROMPT_IDS } from "../WorkflowPromptRegistry.ts";
@@ -132,29 +133,101 @@ describe("buildTurnStartParams", () => {
     });
   });
 
-  it.effect("runs planning and product workflow turns in build mode", () =>
+  it.effect("uses native plan transport for every Product Grill prompt", () =>
     Effect.gen(function* () {
-      for (const interactionMode of ["planning-workflow", "product-workflow"] as const) {
+      for (const workflowPromptId of [
+        WORKFLOW_PROMPT_IDS.productFixCodex,
+        WORKFLOW_PROMPT_IDS.productFastFeatureCodex,
+        WORKFLOW_PROMPT_IDS.productFullFeatureCodex,
+      ]) {
         const params = yield* buildTurnStartParams({
           threadId: "provider-thread-1",
           runtimeMode: "full-access",
-          prompt: "Start planning",
+          prompt: "Start the Product Grill",
           model: "gpt-5.3-codex",
           effort: "medium",
-          interactionMode,
+          interactionMode: "product-workflow",
+          workflowPromptId,
         });
 
-        NodeAssert.equal(params.collaborationMode?.mode, "default");
+        NodeAssert.equal(params.collaborationMode?.mode, "plan");
         const instructions = params.collaborationMode?.settings.developer_instructions ?? "";
         NodeAssert.ok(
           instructions.startsWith(
-            buildCodexDeveloperInstructions("default", {
+            buildCodexDeveloperInstructions("interactive-grill", {
               model: "gpt-5.3-codex",
               reasoningEffort: "medium",
             }),
           ),
         );
+        NodeAssert.match(instructions, /Product Grill/);
+        NodeAssert.match(instructions, /do not produce a `<proposed_plan>` block/);
+        NodeAssert.doesNotMatch(instructions, /When you present the official plan/);
       }
+    }),
+  );
+
+  it.effect("uses native plan transport for interactive Engineering Grill", () =>
+    Effect.gen(function* () {
+      const params = yield* buildTurnStartParams({
+        threadId: "provider-thread-1",
+        runtimeMode: "full-access",
+        prompt: "Start planning",
+        interactionMode: "planning-workflow",
+        workflowPromptId: WORKFLOW_PROMPT_IDS.planningGrillStageCodex,
+      });
+
+      NodeAssert.equal(params.collaborationMode?.mode, "plan");
+      const instructions = params.collaborationMode?.settings.developer_instructions ?? "";
+      NodeAssert.match(instructions, /native Plan collaboration transport/);
+      NodeAssert.match(instructions, /CONTEXT\.md/);
+      NodeAssert.match(instructions, /CONTEXT-MAP\.md/);
+      NodeAssert.match(instructions, /qualifying ADRs/);
+      NodeAssert.match(instructions, /planning-grill-complete/);
+      NodeAssert.match(instructions, /do not produce a `<proposed_plan>` block/);
+      NodeAssert.doesNotMatch(instructions, /When you present the official plan/);
+    }),
+  );
+
+  it.effect("keeps non-interactive workflow stages in native default mode", () =>
+    Effect.gen(function* () {
+      for (const [interactionMode, workflowPromptId] of [
+        ["planning-workflow", WORKFLOW_PROMPT_IDS.planningAutomaticEngineeringGrillCodex],
+        ["planning-workflow", WORKFLOW_PROMPT_IDS.planningSpecCodex],
+        ["planning-workflow", WORKFLOW_PROMPT_IDS.planningWayfinderCodex],
+        ["implementation-workflow", WORKFLOW_PROMPT_IDS.implementationTddCodex],
+      ] as const) {
+        const params = yield* buildTurnStartParams({
+          threadId: "provider-thread-1",
+          runtimeMode: "full-access",
+          prompt: "Continue workflow",
+          interactionMode,
+          workflowPromptId,
+        });
+
+        NodeAssert.equal(params.collaborationMode?.mode, "default");
+        const instructions = params.collaborationMode?.settings.developer_instructions ?? "";
+        NodeAssert.ok(instructions.startsWith(CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS));
+      }
+    }),
+  );
+
+  it.effect("preserves explicit CLI Plan mode when a stale Product Grill prompt remains", () =>
+    Effect.gen(function* () {
+      const params = yield* buildTurnStartParams({
+        threadId: "provider-thread-1",
+        runtimeMode: "full-access",
+        prompt: "Plan the implementation",
+        interactionMode: "plan",
+        workflowPromptId: WORKFLOW_PROMPT_IDS.productFastFeatureCodex,
+      });
+
+      NodeAssert.equal(params.collaborationMode?.mode, "plan");
+      const instructions = params.collaborationMode?.settings.developer_instructions ?? "";
+      NodeAssert.ok(instructions.startsWith(CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS));
+      NodeAssert.match(instructions, /<proposed_plan>/);
+      NodeAssert.doesNotMatch(instructions, /Interactive T3 Grill/);
+      NodeAssert.doesNotMatch(instructions, /# Product Grill/);
     }),
   );
 
@@ -295,6 +368,23 @@ describe("buildCodexDeveloperInstructions", () => {
 
     NodeAssert.ok(instructions.startsWith(CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS));
     NodeAssert.match(instructions, /as gpt-5\.3-codex with medium reasoning effort/);
+  });
+
+  it("uses workflow-specific instructions for interactive structured-input turns", () => {
+    const instructions = buildCodexDeveloperInstructions("interactive-grill", {
+      model: "gpt-5.3-codex",
+      reasoningEffort: "medium",
+    });
+
+    NodeAssert.ok(instructions.startsWith(CODEX_INTERACTIVE_GRILL_DEVELOPER_INSTRUCTIONS));
+    NodeAssert.match(instructions, /solely|only so/);
+    NodeAssert.match(instructions, /request_user_input/);
+    NodeAssert.match(instructions, /Product Grill or Engineering Grill workflow prompt/);
+    NodeAssert.match(instructions, /CONTEXT\.md/);
+    NodeAssert.match(instructions, /CONTEXT-MAP\.md/);
+    NodeAssert.match(instructions, /qualifying ADRs/);
+    NodeAssert.match(instructions, /do not produce a `<proposed_plan>` block/);
+    NodeAssert.doesNotMatch(instructions, /When you present the official plan/);
   });
 
   it("varies with the model and effort of each turn", () => {

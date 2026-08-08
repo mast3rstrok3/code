@@ -42,7 +42,7 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
             <Text className="font-sans text-base leading-snug text-neutral-950 dark:text-neutral-50">
               {question.question}
             </Text>
-            <View className="flex-row flex-wrap gap-2.5">
+            <View className="gap-2.5">
               {question.options.map((option) => {
                 const selected =
                   draft?.selectedOptionLabel === option.label && !draft.customAnswer?.trim().length;
@@ -50,7 +50,7 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
                   <Pressable
                     key={option.label}
                     className={cn(
-                      "rounded-full border px-3 py-2.5 ",
+                      "w-full rounded-2xl border px-3.5 py-3",
                       selected
                         ? "border-blue-300/50 bg-blue-50 dark:border-blue-400/28 dark:bg-blue-400/14"
                         : "border-neutral-200 bg-white dark:border-white/6 dark:bg-neutral-950/70",
@@ -62,6 +62,7 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
                         option.label,
                       )
                     }
+                    disabled={props.respondingUserInputId === props.pendingUserInput.requestId}
                   >
                     <Text
                       className={cn(
@@ -73,6 +74,11 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
                     >
                       {option.label}
                     </Text>
+                    {option.description && option.description !== option.label ? (
+                      <Text className="mt-1 font-sans text-sm leading-snug text-neutral-500 dark:text-neutral-400">
+                        {option.description}
+                      </Text>
+                    ) : null}
                   </Pressable>
                 );
               })}

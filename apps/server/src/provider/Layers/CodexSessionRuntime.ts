@@ -44,6 +44,7 @@ import {
 } from "../CodexDeveloperInstructions.ts";
 import {
   isBrowserDevReviewWorkflowPromptId,
+  isInteractiveStructuredInputWorkflow,
   resolveWorkflowPromptId,
   resolveWorkflowSystemInstructions,
 } from "../WorkflowPromptRegistry.ts";
@@ -358,22 +359,34 @@ function buildCodexCollaborationMode(input: {
     return undefined;
   }
   const model = normalizeCodexModelSlug(input.model) ?? DEFAULT_MODEL;
-  // Only the explicit plan interaction mode maps to Codex plan mode. Workflow
-  // modes (planning/product/implementation) run in build mode: their agents
-  // grill, author Specs, and publish artifacts instead of proposing plans.
-  const mode: "default" | "plan" = input.interactionMode === "plan" ? "plan" : "default";
+  const usesInteractiveStructuredInput =
+    input.interactionMode !== "plan" &&
+    isInteractiveStructuredInputWorkflow({
+      interactionMode: input.interactionMode,
+      workflowPromptId,
+    });
+  // Interactive grills use native plan transport only to expose request_user_input.
+  // Their developer and workflow instructions keep them out of ordinary CLI Plan Mode.
+  const mode: "default" | "plan" =
+    input.interactionMode === "plan" || usesInteractiveStructuredInput ? "plan" : "default";
   const reasoningEffort = input.effort ?? "medium";
-  const baseDeveloperInstructions = buildCodexDeveloperInstructions(mode, {
-    model,
-    reasoningEffort,
-  });
+  const baseDeveloperInstructions = buildCodexDeveloperInstructions(
+    usesInteractiveStructuredInput ? "interactive-grill" : mode,
+    {
+      model,
+      reasoningEffort,
+    },
+  );
   const scopedDeveloperInstructions = isBrowserDevReviewWorkflowPromptId(workflowPromptId)
     ? `${baseDeveloperInstructions}\n\n${CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS}`
     : baseDeveloperInstructions;
-  const workflowInstructions = resolveWorkflowSystemInstructions({
-    interactionMode: input.interactionMode,
-    ...(workflowPromptId !== undefined ? { workflowPromptId } : {}),
-  });
+  const workflowInstructions =
+    input.interactionMode === "plan"
+      ? undefined
+      : resolveWorkflowSystemInstructions({
+          interactionMode: input.interactionMode,
+          ...(workflowPromptId !== undefined ? { workflowPromptId } : {}),
+        });
   const developerInstructions =
     workflowInstructions === undefined
       ? scopedDeveloperInstructions

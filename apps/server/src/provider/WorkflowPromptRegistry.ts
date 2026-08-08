@@ -60,6 +60,25 @@ Finding _facts_ is your job, never the user's. When a frontier question needs a 
 
 The session is done when the frontier is empty: every branch of the design tree visited, nothing left silently assumed. Do not act on it until the user confirms you have reached a shared understanding.`;
 
+const STRUCTURED_GRILL_QUESTION_ADAPTER = `## T3 structured-question adapter
+
+Use the native \`request_user_input\` tool for every interview round and for the final shared-understanding confirmation. This adapter overrides the Grilling blueprint's Markdown question format, separate recommendation line, and instruction to place an arbitrarily large frontier in one round. Do not duplicate or summarize the questions, choices, or recommendations in Markdown before or after the tool call.
+
+For each call, send at most three currently unblocked frontier questions. If more than three questions are ready, preserve their stable design-tree order and continue with the remaining questions in one or more subsequent calls after the current answers resolve.
+
+Each question must have:
+
+- A compact header.
+- Two or three meaningful, mutually exclusive choices.
+- Exactly one recommended choice. Never omit the recommendation from any question in a multi-question call.
+- A custom-answer path through T3's existing composer input; do not add a synthetic custom choice.
+- Choices in their natural A/B/C order. Never move the recommendation to the first position.
+- Concise impact or tradeoff text in every choice's description.
+
+Encode the recommendation in its original choice row. Preserve that option's answer text and append \`(Recommended)\` exactly once to its label. Start its description with \`Why that? \` followed by a concise recommendation rationale. Selecting this row directly answers the question; never emit a separate recommendation response.
+
+When the frontier is empty, use \`request_user_input\` for the final shared-understanding confirmation too. Offer two choices equivalent to \`Lock it in (Recommended)\` and \`Keep grilling\`, following the same description and recommendation rules. Only the structured response to that confirmation may lock or continue the grill.`;
+
 const DOMAIN_MODELING_PROMPT = `<collaboration_mode># Domain Modeling
 
 Actively build and sharpen the project's domain model as you design. This is the *active* discipline — challenging terms, inventing edge-case scenarios, and writing the glossary and decisions down the moment they crystallise. (Merely *reading* \`CONTEXT.md\` for vocabulary is not this skill — that's a one-line habit any skill can do. This skill is for when you're changing the model, not just consuming it.)
@@ -559,6 +578,8 @@ const buildEngineeringGrillPrompt = (input: {
 }) => `<collaboration_mode># Engineering Grill${input.automatic ? " (Automatic)" : ""}
 
 ${GRILLING_BLUEPRINT}
+
+${input.automatic ? "" : STRUCTURED_GRILL_QUESTION_ADAPTER}
 
 # Domain Modeling
 
@@ -1644,13 +1665,15 @@ const buildPresetProductWorkflowPrompt = (input: {
 
 ${GRILLING_BLUEPRINT}
 
+${STRUCTURED_GRILL_QUESTION_ADAPTER}
+
 ## Product-only adapter
 
 Before asking questions, ground yourself in the codebase and existing product context. Use that knowledge to resolve facts and answer anything already clear; ask the user only where product clarity, preference, or alignment is needed.
 
 Cover product direction only: the problem, audience, desired outcome, user-visible behavior and experience, success criteria, scope, and non-goals. Do not ask about implementation, architecture, testing, workflow sequencing, or operations.
 
-Restricting the design tree to product decisions is the only adaptation to the Grilling blueprint. Its frontier-round mechanics remain authoritative.
+Restricting the design tree to product decisions is the product-scope adaptation to the Grilling blueprint. Its dependency-frontier mechanics remain authoritative, subject to the structured-question adapter's three-question batches.
 
 The session is done when every product branch has been visited and nothing remains silently assumed. Do not lock the intent until the user confirms you have reached a shared understanding.
 
@@ -2184,6 +2207,23 @@ export function isBrowserDevReviewWorkflowPromptId(
     workflowPromptId !== null &&
     workflowPromptId !== undefined &&
     workflowPromptId === WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex
+  );
+}
+
+export function isInteractiveStructuredInputWorkflow(input: {
+  readonly interactionMode?: ProviderInteractionMode | undefined;
+  readonly workflowPromptId?: string | undefined;
+}): boolean {
+  if (input.interactionMode === "planning-workflow") {
+    return input.workflowPromptId === WORKFLOW_PROMPT_IDS.planningGrillStageCodex;
+  }
+  if (input.interactionMode !== "product-workflow") {
+    return false;
+  }
+  return (
+    input.workflowPromptId === WORKFLOW_PROMPT_IDS.productFixCodex ||
+    input.workflowPromptId === WORKFLOW_PROMPT_IDS.productFastFeatureCodex ||
+    input.workflowPromptId === WORKFLOW_PROMPT_IDS.productFullFeatureCodex
   );
 }
 

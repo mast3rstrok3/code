@@ -8,6 +8,7 @@ import {
   ProviderInstanceId,
   ThreadId,
   TurnId,
+  type UserInputQuestion,
   type OrchestrationThread,
   type OrchestrationThreadActivity,
 } from "@t3tools/contracts";
@@ -15,9 +16,105 @@ import {
 import {
   buildThreadFeed,
   deriveThreadFeedPresentation,
+  selectPendingUserInputOption,
   type ThreadFeedActivity,
   type ThreadFeedEntry,
 } from "./threadActivity";
+
+const singleSelectQuestions = [
+  {
+    id: "audience",
+    header: "Audience",
+    question: "Who is this for?",
+    options: [
+      { label: "Teams", description: "Optimize for collaboration." },
+      { label: "Individuals", description: "Optimize for a solo workflow." },
+    ],
+    multiSelect: false,
+  },
+  {
+    id: "scope",
+    header: "Scope",
+    question: "How broad should it be?",
+    options: [
+      { label: "Focused", description: "Ship the narrow path." },
+      { label: "Broad", description: "Cover every path." },
+    ],
+    multiSelect: false,
+  },
+] satisfies UserInputQuestion[];
+
+describe("selectPendingUserInputOption", () => {
+  it("returns immediate answers for a one-question single-select request", () => {
+    const selection = selectPendingUserInputOption(
+      singleSelectQuestions.slice(0, 1),
+      {},
+      "audience",
+      "Teams",
+    );
+
+    expect(selection.immediateAnswers).toEqual({ audience: "Teams" });
+  });
+
+  it("returns immediate answers when the last single-select question is answered", () => {
+    const selection = selectPendingUserInputOption(
+      singleSelectQuestions,
+      { audience: { selectedOptionLabel: "Individuals" } },
+      "scope",
+      "Focused",
+    );
+
+    expect(selection.immediateAnswers).toEqual({
+      audience: "Individuals",
+      scope: "Focused",
+    });
+  });
+
+  it("does not submit while another single-select question is unanswered", () => {
+    const selection = selectPendingUserInputOption(singleSelectQuestions, {}, "audience", "Teams");
+
+    expect(selection.immediateAnswers).toBeNull();
+    expect(selection.drafts).toEqual({ audience: { selectedOptionLabel: "Teams" } });
+  });
+
+  it("does not submit immediately for multi-select or custom-answer flows", () => {
+    const multiSelectQuestions = [
+      {
+        ...singleSelectQuestions[0],
+        multiSelect: true,
+      },
+    ] satisfies UserInputQuestion[];
+    expect(
+      selectPendingUserInputOption(multiSelectQuestions, {}, "audience", "Teams").immediateAnswers,
+    ).toBeNull();
+
+    const customSelection = selectPendingUserInputOption(
+      singleSelectQuestions,
+      { audience: { customAnswer: "Design partners" } },
+      "scope",
+      "Focused",
+    );
+    expect(customSelection.immediateAnswers).toBeNull();
+    expect(customSelection.drafts.audience).toEqual({ customAnswer: "Design partners" });
+  });
+
+  it("preserves completed drafts so a failed submission can be retried", () => {
+    const originalDrafts = { audience: { selectedOptionLabel: "Teams" } };
+    const selection = selectPendingUserInputOption(
+      singleSelectQuestions,
+      originalDrafts,
+      "scope",
+      "Broad",
+    );
+
+    expect(originalDrafts).toEqual({ audience: { selectedOptionLabel: "Teams" } });
+    expect(selection.drafts).toEqual({
+      audience: { selectedOptionLabel: "Teams" },
+      scope: { selectedOptionLabel: "Broad" },
+    });
+    expect(selection.immediateAnswers).toEqual({ audience: "Teams", scope: "Broad" });
+  });
+});
 
 function makeActivity(
   input: Partial<OrchestrationThreadActivity> &
