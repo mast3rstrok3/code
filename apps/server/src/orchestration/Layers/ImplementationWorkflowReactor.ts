@@ -4,7 +4,7 @@ import {
   DevReviewId,
   EventId,
   GitCommandError,
-  IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS,
+  IMPLEMENTATION_RUN_MAX_QA_CYCLES,
   MessageId,
   ThreadId,
   type OrchestrationEvent,
@@ -397,14 +397,15 @@ function buildBrowserDevReviewPrompt(input: {
 function buildFixPrompt(input: {
   readonly run: OrchestrationImplementationRun;
   readonly reviewId: DevReviewId;
+  readonly artifactMarkdown?: string;
 }): string {
   return [
     `Fix browser dev-review failures for implementation run ${input.run.id}.`,
     "",
-    "Do not ask the user questions. Make the smallest implementation changes needed in the orchestrator worktree, run focused validation, and report the fix result.",
+    `This is shared QA cycle ${input.run.qaCycleCount} of ${IMPLEMENTATION_RUN_MAX_QA_CYCLES}. Do not ask the user questions. Use a focused red-green TDD loop, make the smallest implementation changes needed in the orchestrator worktree, run focused validation, and report the fix result.`,
     "",
     input.run.artifactSource === "proposed-plan"
-      ? `Retrieve Dev Review ${input.reviewId} with workflow_dev_review_get before applying its findings. Review against the proposed-plan context already provided to this Fast feature run; do not load a missing Spec or tickets.`
+      ? `Retrieve Dev Review ${input.reviewId} with workflow_dev_review_get before applying its findings. Review against the proposed-plan context below; do not load a missing Spec or tickets.\n\n${input.artifactMarkdown ?? "Proposed-plan context unavailable."}`
       : `Retrieve Dev Review ${input.reviewId} with workflow_dev_review_get before applying its findings. Use workflow_tickets_list and workflow_ticket_get for the linked tickets.`,
     "",
     "Before reporting success, run every required validation command:",
@@ -412,6 +413,28 @@ function buildFixPrompt(input: {
     `If git diff ${input.run.pinnedCommit}...HEAD includes apps/mobile, also run vp run lint:mobile, even when the current fix did not touch those files.`,
     "",
     "Finish with exactly one fenced JSON directive of type implementation-fix-result for this runId.",
+  ].join("\n");
+}
+
+function buildAppDevStackFixPrompt(input: {
+  readonly run: OrchestrationImplementationRun;
+  readonly diagnosticsMarkdown: string;
+}): string {
+  return [
+    `Repair the AppDevStack failure for implementation run ${input.run.id}.`,
+    "",
+    `This is shared QA cycle ${input.run.qaCycleCount} of ${IMPLEMENTATION_RUN_MAX_QA_CYCLES}. Treat the supplied failure as a code problem in this worktree, even when it looks like controller, authentication, configuration, or deployment infrastructure. Do not ask the user questions.`,
+    "",
+    "Use a focused red-green TDD loop at the failing application or stack-contract seam. Make the smallest reliable code or configuration change that can make the AppDevStack start and its frontend serve.",
+    "",
+    "Programmatic AppDevStack diagnostics:",
+    input.diagnosticsMarkdown,
+    "",
+    "Before reporting success, run every required validation command:",
+    ...input.run.launchSummary.validationCommands.map((command) => `- ${command}`),
+    `If git diff ${input.run.pinnedCommit}...HEAD includes apps/mobile, also run vp run lint:mobile.`,
+    "",
+    "Commit all completed changes and leave the orchestrator worktree clean. Finish with exactly one fenced JSON directive of type implementation-fix-result for this runId.",
   ].join("\n");
 }
 
@@ -426,9 +449,9 @@ function buildCodeReviewPrompt(input: {
     "",
     "Do not ask the user questions. Review the change along the Standards and Spec axes as described in your workflow instructions, then apply the fixes yourself and commit them.",
     "",
-    input.run.devReviewExhaustedAt === null
+    input.run.qaExhaustedAt === null && input.run.devReviewExhaustedAt === null
       ? "Dev Review passed at this commit."
-      : "Dev Review did not pass within its attempt budget for this run. Treat unresolved user-visible defects as review findings and fix what you reasonably can.",
+      : `Automated QA did not pass within ${IMPLEMENTATION_RUN_MAX_QA_CYCLES} cycles. Last unsatisfied gate: ${input.run.qaExhaustionReason ?? "dev-review"}. Treat unresolved stack or user-visible defects as review findings and fix what you reasonably can.`,
     "",
     "Review scope:",
     `- worktree: ${input.run.orchestratorWorktreePath}`,
@@ -669,41 +692,27 @@ function buildFastFeaturePrompt(input: {
 }
 
 /**
- * Dev Review findings are sent back into the Build thread rather than a separate fixer thread, so
- * Build owns every commit on the orchestrator branch. The turn ends in the same
- * implementation-fast-build-result directive as the initial build, which re-enters Dev Review.
- */
-function buildFastFeatureDevReviewFixPrompt(input: {
-  readonly run: OrchestrationImplementationRun;
-  readonly sourceThread: OrchestrationThread;
-  readonly reviewId: DevReviewId;
-  readonly attempt: number;
-}): string {
-  return [
-    `Dev Review found problems with Fast feature run ${input.run.id}. Fix them in this same Build thread (Dev Review attempt ${input.attempt} of ${IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS}).`,
-    "",
-    `Do not ask the user questions. Retrieve Dev Review ${input.reviewId} with workflow_dev_review_get, apply its findings with the smallest reliable changes, validate, and commit them on the branch below. Dev Review re-runs automatically against your new commit.`,
-    "",
-    "Review against the proposed-plan context already provided to this Fast feature run; do not load a missing Spec or tickets.",
-    "",
-    fastFeatureArtifactMarkdown(input),
-    "",
-    ...fastFeatureExecutionContract(input.run),
-  ].join("\n");
-}
-
-/**
  * Automated-review provenance for the published change request. A run that exhausted Dev Review is
  * still published, so the unpassed review has to be visible on the change request itself.
  */
 function changeRequestReviewNote(run: OrchestrationImplementationRun): string {
   const lines = ["## Automated review"];
-  if (run.devReviewExhaustedAt === null) {
-    lines.push(`- Dev Review: passed after ${run.qaAttemptCount} attempt(s).`);
-  } else {
+  const exhaustedAt = run.qaExhaustedAt ?? run.devReviewExhaustedAt;
+  if (exhaustedAt === null) {
     lines.push(
-      `- ⚠️ Dev Review: **did not pass** after ${run.qaAttemptCount} attempt(s) (limit ${IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS}). This change request was published with the browser dev review still failing — verify the affected flow manually before merging.`,
+      `- QA: passed after ${run.qaCycleCount || run.qaAttemptCount} cycle(s) and ${run.qaAttemptCount} Browser Dev Review attempt(s).`,
     );
+  } else {
+    const gate = run.qaExhaustionReason ?? "dev-review";
+    lines.push(
+      `- ⚠️ Automated QA: **did not pass** after ${run.qaCycleCount || run.qaAttemptCount}/${IMPLEMENTATION_RUN_MAX_QA_CYCLES} cycles. Last unsatisfied gate: ${gate === "app-dev-stack" ? "AppDevStack" : "Browser Dev Review"}. This change request was published best-effort; manually verify the affected flow before merging.`,
+    );
+    if (run.lastQaFailure !== null) {
+      lines.push(`- Last QA failure: ${run.lastQaFailure.detailMarkdown.slice(0, 1_000)}`);
+      if (run.lastQaFailure.reviewId !== null) {
+        lines.push(`- Dev Review: ${run.lastQaFailure.reviewId}`);
+      }
+    }
   }
   lines.push(
     run.latestCodeReviewReportMarkdown === null
@@ -726,6 +735,7 @@ function changeRequestFailure(input: {
 
 /** Dev Review is already slow; a hung edge must not hold the reactor's queue. */
 const FRONTEND_PROBE_TIMEOUT = Duration.seconds(10);
+const APP_DEV_STACK_DIAGNOSTIC_LIMIT = 24 * 1_024;
 
 function errorDetail(error: unknown): string {
   if (error instanceof Error) {
@@ -764,6 +774,76 @@ const make = Effect.gen(function* () {
       : { ok: false, detail: `returned HTTP ${outcome.success.status}` };
   });
 
+  const appDevStackDiagnostics = Effect.fn("ImplementationWorkflowReactor.appDevStackDiagnostics")(
+    function* (input: {
+      readonly run: OrchestrationImplementationRun;
+      readonly stackId: string | null;
+      readonly detail: string;
+    }) {
+      const stackResult =
+        input.stackId === null
+          ? null
+          : yield* appDevStackManager.get({ stackId: input.stackId }).pipe(Effect.result);
+      const logsResult =
+        input.stackId === null
+          ? null
+          : yield* appDevStackManager
+              .getStackPodLogs({ stackId: input.stackId, tailLines: 300 })
+              .pipe(Effect.result);
+      const stack = stackResult?._tag === "Success" ? stackResult.success : null;
+      const services =
+        stack?.services?.flatMap((service) => [
+          `- service ${service.name}: status=${service.status}; health=${service.health ?? "unknown"}; error=${service.error ?? "none"}`,
+        ]) ?? [];
+      const pods =
+        logsResult?._tag === "Success"
+          ? logsResult.success.pods.map(
+              (pod) =>
+                `- pod ${pod.name}: phase=${pod.phase}; ready=${pod.readyContainerCount}/${pod.totalContainerCount}; restarts=${pod.restartCount}`,
+            )
+          : [];
+      const logEntries =
+        logsResult?._tag === "Success"
+          ? logsResult.success.entries.flatMap((entry) => [
+              `### ${entry.podName}/${entry.containerName}`,
+              entry.error === null ? entry.logs : `Log read failed: ${entry.error}`,
+            ])
+          : [];
+      const diagnostics = [
+        `- cycle: ${input.run.qaCycleCount}/${IMPLEMENTATION_RUN_MAX_QA_CYCLES}`,
+        `- worktree: ${input.run.orchestratorWorktreePath}`,
+        `- branch: ${input.run.orchestratorBranch}`,
+        `- stack id: ${input.stackId ?? "unavailable"}`,
+        `- stack status: ${stack?.status ?? input.run.appDevStack.stackStatus ?? "unavailable"}`,
+        `- frontend URL: ${stack === null ? (input.run.appDevStack.frontendUrl ?? "unavailable") : (input.run.appDevStack.frontendUrl ?? "unavailable")}`,
+        `- failure: ${input.detail}`,
+        ...(stackResult?._tag === "Failure"
+          ? [`- stack inspection failed: ${errorDetail(stackResult.failure)}`]
+          : []),
+        ...services,
+        ...pods,
+        ...(logsResult?._tag === "Failure"
+          ? [`- pod log collection failed: ${errorDetail(logsResult.failure)}`]
+          : []),
+        ...logEntries,
+      ].join("\n");
+      const redacted = diagnostics
+        .replace(/((?:authorization|password|secret|token)\s*[:=]\s*)(\S+)/giu, "$1[redacted]")
+        .replace(/(bearer\s+)(\S+)/giu, "$1[redacted]");
+      return redacted.length <= APP_DEV_STACK_DIAGNOSTIC_LIMIT
+        ? redacted
+        : `[earlier diagnostics truncated]\n${redacted.slice(-APP_DEV_STACK_DIAGNOSTIC_LIMIT)}`;
+    },
+  );
+
+  const resolveQaHeadSha = (run: OrchestrationImplementationRun) =>
+    gitWorkflow.resolveCommit({ cwd: run.orchestratorWorktreePath, ref: "HEAD" }).pipe(
+      Effect.map(({ commitSha }) => commitSha),
+      Effect.orElseSucceed(
+        () => run.validatedHeadSha ?? run.integrationHeadSha ?? run.pinnedCommit,
+      ),
+    );
+
   const serverCommandId = (tag: string) =>
     crypto.randomUUIDv4.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
   const serverEventId = () => crypto.randomUUIDv4.pipe(Effect.map(EventId.make));
@@ -783,7 +863,12 @@ const make = Effect.gen(function* () {
     // recovery sweep already past its guard) must not resurrect a run the user
     // stopped, so drop any write that would move it out of `canceled`.
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
-    if (findRunById(readModel, input.run.id)?.status === "canceled") return;
+    if (
+      findRunById(readModel, input.run.id)?.status === "canceled" &&
+      input.run.status !== "canceled"
+    ) {
+      return;
+    }
     yield* orchestrationEngine.dispatch({
       type: "thread.implementation-run.update",
       commandId: yield* serverCommandId("implementation-run-update"),
@@ -820,6 +905,22 @@ const make = Effect.gen(function* () {
     },
   );
 
+  const requestRunRetry = Effect.fn("ImplementationWorkflowReactor.requestRunRetry")(
+    function* (input: {
+      readonly sourceThreadId: ThreadId;
+      readonly runId: string;
+      readonly createdAt: string;
+    }) {
+      yield* orchestrationEngine.dispatch({
+        type: "thread.implementation-run.retry",
+        commandId: yield* serverCommandId("implementation-auto-retry"),
+        threadId: input.sourceThreadId,
+        runId: input.runId,
+        createdAt: input.createdAt,
+      });
+    },
+  );
+
   const blockRun = Effect.fn("ImplementationWorkflowReactor.blockRun")(function* (input: {
     readonly sourceThreadId: ThreadId;
     readonly run: OrchestrationImplementationRun;
@@ -838,6 +939,7 @@ const make = Effect.gen(function* () {
       | "fixer"
       | "build"
       | "change-request";
+    readonly automaticRecovery?: boolean;
     /**
      * Set when only a human can clear the condition (a moved source branch, a
      * conflicting worktree). `recoverRetryableRuns` skips these, so the attempt
@@ -874,8 +976,14 @@ const make = Effect.gen(function* () {
     yield* appendActivity({
       threadId: input.run.orchestratorThreadId,
       tone: "error",
-      kind: "implementation-workflow.needs-human-attention",
-      summary: "Implementation workflow needs human attention",
+      kind:
+        input.automaticRecovery === true
+          ? "implementation-qa-remediation-requested"
+          : "implementation-workflow.needs-human-attention",
+      summary:
+        input.automaticRecovery === true
+          ? "Automated QA remediation requested"
+          : "Implementation workflow needs human attention",
       payload: { runId: input.run.id, reasonMarkdown: input.reasonMarkdown },
       createdAt: input.updatedAt,
     });
@@ -1549,23 +1657,29 @@ const make = Effect.gen(function* () {
       readonly sourceThreadId: ThreadId;
       readonly run: OrchestrationImplementationRun;
       readonly createdAt: string;
+      readonly continueCycle?: boolean;
     }) {
+      const cycleRun: OrchestrationImplementationRun = {
+        ...input.run,
+        qaCycleCount:
+          input.continueCycle === true ? input.run.qaCycleCount : input.run.qaCycleCount + 1,
+      };
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
-      const orchestratorThread = findThread(readModel, input.run.orchestratorThreadId);
+      const orchestratorThread = findThread(readModel, cycleRun.orchestratorThreadId);
       if (orchestratorThread === null) return;
       const artifactSourceThread = findThread(readModel, input.sourceThreadId);
       const artifactMarkdown =
-        input.run.artifactSource === "proposed-plan" && artifactSourceThread !== null
-          ? fastFeatureArtifactMarkdown({ run: input.run, sourceThread: artifactSourceThread })
+        cycleRun.artifactSource === "proposed-plan" && artifactSourceThread !== null
+          ? fastFeatureArtifactMarkdown({ run: cycleRun, sourceThread: artifactSourceThread })
           : undefined;
 
       const ensuringRun: OrchestrationImplementationRun = {
-        ...input.run,
+        ...cycleRun,
         status: "qa-reviewing",
         appDevStack: {
-          ...input.run.appDevStack,
+          ...cycleRun.appDevStack,
           status: "ensuring",
-          requestedAt: input.run.appDevStack.requestedAt || input.createdAt,
+          requestedAt: cycleRun.appDevStack.requestedAt || input.createdAt,
           updatedAt: input.createdAt,
         },
         updatedAt: input.createdAt,
@@ -1575,29 +1689,31 @@ const make = Effect.gen(function* () {
       // was being cached as resolved, which skipped `autoCreate` on every later Dev Review and sent
       // reviewer after reviewer at a URL that never came up. A null `stackStatus` is a reserved
       // branch served by a standing deployment — there is no stack to wait on there.
-      const hasResolvedFrontend =
-        input.run.appDevStack.status === "ready" &&
-        input.run.appDevStack.frontendUrl !== null &&
-        (input.run.appDevStack.stackStatus === null ||
-          input.run.appDevStack.stackStatus === "running");
-      const stackResult = hasResolvedFrontend
-        ? null
-        : yield* appDevStackManager
-            .autoCreate({
-              worktreePath: input.run.orchestratorWorktreePath,
-              displayName:
-                input.run.artifactSource === "proposed-plan"
-                  ? `Fast feature ${input.run.id}`
-                  : `Implementation ${input.run.id}`,
-              gitBranch: input.run.orchestratorBranch,
-            })
-            .pipe(Effect.result);
+      // Every QA cycle re-ensures the stack. This is intentionally idempotent at the manager
+      // boundary and prevents a cached `running` result from hiding service failures or code that
+      // changed during the previous TDD repair.
+      const stackResult = yield* appDevStackManager
+        .autoCreate({
+          worktreePath: cycleRun.orchestratorWorktreePath,
+          displayName:
+            cycleRun.artifactSource === "proposed-plan"
+              ? `Fast feature ${cycleRun.id}`
+              : `Implementation ${cycleRun.id}`,
+          gitBranch: cycleRun.orchestratorBranch,
+        })
+        .pipe(Effect.result);
 
       const stackFailureDetail =
         stackResult?._tag === "Failure" ? errorDetail(stackResult.failure) : null;
       const stack = stackResult?._tag === "Success" ? stackResult.success : null;
       if (stackFailureDetail !== null) {
-        yield* blockRun({
+        const diagnostics = yield* appDevStackDiagnostics({
+          run: ensuringRun,
+          stackId: ensuringRun.appDevStack.stackId,
+          detail: stackFailureDetail,
+        });
+        const headSha = yield* resolveQaHeadSha(ensuringRun);
+        const blocked = yield* blockRun({
           sourceThreadId: input.sourceThreadId,
           run: {
             ...ensuringRun,
@@ -1607,16 +1723,28 @@ const make = Effect.gen(function* () {
               lastErrorMarkdown: stackFailureDetail,
               updatedAt: input.createdAt,
             },
+            lastQaFailure: {
+              kind: "app-dev-stack",
+              status: "provisioning-failed",
+              detailMarkdown: diagnostics,
+              reviewId: null,
+              headSha,
+              occurredAt: input.createdAt,
+            },
           },
           retryableStage: "app-dev-stack",
-          reasonMarkdown: `App dev stack failed before browser Dev Review: ${stackFailureDetail}`,
+          automaticRecovery: true,
+          reasonMarkdown: diagnostics,
           updatedAt: input.createdAt,
+        });
+        yield* requestRunRetry({
+          sourceThreadId: input.sourceThreadId,
+          runId: blocked.id,
+          createdAt: input.createdAt,
         });
         return;
       }
-      const frontendUrl = hasResolvedFrontend
-        ? input.run.appDevStack.frontendUrl
-        : (stack?.frontendUrl ?? null);
+      const frontendUrl = stack?.frontendUrl ?? null;
 
       // Dev Review is a browser session against `frontendUrl`. Launching one before the stack is
       // actually running only produces a reviewer that correctly reports "no available server",
@@ -1627,12 +1755,31 @@ const make = Effect.gen(function* () {
         stack !== null && stack.stack !== null && stack.stack.status !== "running"
           ? stack.stack.status
           : null;
-      if (!hasResolvedFrontend && (frontendUrl === null || pendingStackStatus !== null)) {
+      const failedService = stack?.stack?.services?.find(
+        (service) =>
+          (service.error !== null && service.error !== undefined) ||
+          service.health === "unhealthy" ||
+          service.status === "error" ||
+          service.status === "stopped",
+      );
+      if (frontendUrl === null || pendingStackStatus !== null || failedService !== undefined) {
         const detail =
-          frontendUrl === null
-            ? "the controller returned no frontend URL"
-            : `the stack is '${pendingStackStatus}', not 'running'`;
-        yield* blockRun({
+          failedService !== undefined
+            ? `service '${failedService.name}' is unhealthy (${failedService.error ?? failedService.health ?? failedService.status})`
+            : frontendUrl === null
+              ? "the controller returned no frontend URL"
+              : `the stack is '${pendingStackStatus}', not 'running'`;
+        const stackId = stack?.stack?.id ?? ensuringRun.appDevStack.stackId;
+        const transitioning =
+          failedService === undefined &&
+          (pendingStackStatus === "pending" || pendingStackStatus === "starting");
+        const diagnostics = yield* appDevStackDiagnostics({
+          run: ensuringRun,
+          stackId,
+          detail,
+        });
+        const headSha = yield* resolveQaHeadSha(ensuringRun);
+        const blocked = yield* blockRun({
           sourceThreadId: input.sourceThreadId,
           run: {
             ...ensuringRun,
@@ -1650,23 +1797,48 @@ const make = Effect.gen(function* () {
               status: "ensuring",
               updatedAt: input.createdAt,
             },
+            lastQaFailure: transitioning
+              ? null
+              : {
+                  kind: "app-dev-stack",
+                  status: pendingStackStatus ?? "missing-frontend-url",
+                  detailMarkdown: diagnostics,
+                  reviewId: null,
+                  headSha,
+                  occurredAt: input.createdAt,
+                },
           },
           retryableStage: "app-dev-stack",
-          reasonMarkdown: `The app dev stack is not serving yet, so browser Dev Review cannot run: ${detail}.`,
+          automaticRecovery: true,
+          reasonMarkdown: diagnostics,
           updatedAt: input.createdAt,
         });
+        if (!transitioning) {
+          yield* requestRunRetry({
+            sourceThreadId: input.sourceThreadId,
+            runId: blocked.id,
+            createdAt: input.createdAt,
+          });
+        }
         return;
       }
 
       // The controller's own status is a claim about the stack, not about the edge. A frontend
-      // crash-looping behind a live Service reports as running and still answers 503, which is how
-      // five reviewers were sent at a URL that had been down for hours. Only the URL the reviewer
+      // crash-looping behind a live Service reports as running and still answers 503, which can
+      // send repeated reviewers at a URL that has been down for hours. Only the URL the reviewer
       // will actually open settles it — so this probe runs on the cached path too, which otherwise
       // skips every check above.
       if (frontendUrl !== null) {
         const serving = yield* probeFrontend(frontendUrl);
         if (!serving.ok) {
-          yield* blockRun({
+          const detail = `${frontendUrl} ${serving.detail}`;
+          const diagnostics = yield* appDevStackDiagnostics({
+            run: ensuringRun,
+            stackId: stack?.stack?.id ?? ensuringRun.appDevStack.stackId,
+            detail,
+          });
+          const headSha = yield* resolveQaHeadSha(ensuringRun);
+          const blocked = yield* blockRun({
             sourceThreadId: input.sourceThreadId,
             run: {
               ...ensuringRun,
@@ -1676,28 +1848,42 @@ const make = Effect.gen(function* () {
                 lastErrorMarkdown: serving.detail,
                 updatedAt: input.createdAt,
               },
+              lastQaFailure: {
+                kind: "app-dev-stack",
+                status: "frontend-unreachable",
+                detailMarkdown: diagnostics,
+                reviewId: null,
+                headSha,
+                occurredAt: input.createdAt,
+              },
             },
             retryableStage: "app-dev-stack",
-            reasonMarkdown: `Browser Dev Review cannot run: ${frontendUrl} ${serving.detail}.`,
+            automaticRecovery: true,
+            reasonMarkdown: diagnostics,
             updatedAt: input.createdAt,
+          });
+          yield* requestRunRetry({
+            sourceThreadId: input.sourceThreadId,
+            runId: blocked.id,
+            createdAt: input.createdAt,
           });
           return;
         }
       }
 
       const reviewHead = yield* gitWorkflow.resolveCommit({
-        cwd: input.run.orchestratorWorktreePath,
+        cwd: cycleRun.orchestratorWorktreePath,
         ref: "HEAD",
       });
       if (
-        input.run.validatedHeadSha === null ||
-        input.run.validatedHeadSha !== reviewHead.commitSha
+        cycleRun.validatedHeadSha === null ||
+        cycleRun.validatedHeadSha !== reviewHead.commitSha
       ) {
         yield* blockRun({
           sourceThreadId: input.sourceThreadId,
-          run: input.run,
+          run: cycleRun,
           retryableStage: "dev-review",
-          reasonMarkdown: `Dev Review requires a merge-gate pass for current HEAD '${reviewHead.commitSha}', but the validated HEAD is '${input.run.validatedHeadSha ?? "missing"}'.`,
+          reasonMarkdown: `Dev Review requires a merge-gate pass for current HEAD '${reviewHead.commitSha}', but the validated HEAD is '${cycleRun.validatedHeadSha ?? "missing"}'.`,
           updatedAt: input.createdAt,
         });
         return;
@@ -1707,9 +1893,8 @@ const make = Effect.gen(function* () {
       const reviewThreadId = yield* serverThreadId("implementation-qa-reviewer");
       const reviewRun: OrchestrationImplementationRun = {
         ...ensuringRun,
-        appDevStack: hasResolvedFrontend
-          ? input.run.appDevStack
-          : stack === null
+        appDevStack:
+          stack === null
             ? ensuringRun.appDevStack
             : {
                 status: appDevStackReadiness(stack),
@@ -1726,6 +1911,7 @@ const make = Effect.gen(function* () {
         activeDevReviewHeadSha: reviewHead.commitSha,
         activeDevReviewThreadId: reviewThreadId,
         qaAttemptCount: ensuringRun.qaAttemptCount + 1,
+        lastQaFailure: null,
         retryableFailure: null,
         updatedAt: input.createdAt,
       };
@@ -1749,12 +1935,12 @@ const make = Effect.gen(function* () {
       });
       if (resolved.fallbackDetail !== null) {
         yield* appendActivity({
-          threadId: input.run.orchestratorThreadId,
+          threadId: cycleRun.orchestratorThreadId,
           tone: "info",
           kind: "implementation-workflow.model-hardlock-fallback",
           summary: "Browser dev review model hardlock not honored",
           payload: {
-            runId: input.run.id,
+            runId: cycleRun.id,
             detail: resolved.fallbackDetail,
             requestedDriver: spawnDefinition?.modelOverride?.driver ?? null,
             requestedModel: spawnDefinition?.modelOverride?.model ?? null,
@@ -1766,16 +1952,16 @@ const make = Effect.gen(function* () {
       yield* orchestrationEngine.dispatch({
         type: "thread.dev-review.launch",
         commandId: yield* serverCommandId("implementation-browser-review-launch"),
-        sourceThreadId: input.run.orchestratorThreadId,
+        sourceThreadId: cycleRun.orchestratorThreadId,
         reviewThreadId,
         reviewId,
-        planningTicketIds: [...input.run.planningTicketIds],
+        planningTicketIds: [...cycleRun.planningTicketIds],
         message: {
           messageId: yield* serverMessageId("implementation-browser-review"),
           role: "user",
           text: appendWorkflowSkillCommandSection(
             buildBrowserDevReviewPrompt({
-              run: input.run,
+              run: reviewRun,
               frontendUrl,
               ...(artifactMarkdown === undefined ? {} : { artifactMarkdown }),
             }),
@@ -1790,12 +1976,12 @@ const make = Effect.gen(function* () {
       });
 
       yield* appendActivity({
-        threadId: input.run.orchestratorThreadId,
+        threadId: cycleRun.orchestratorThreadId,
         tone: "info",
         kind: "implementation-browser-review-started",
         summary: `Browser dev review started (attempt ${reviewRun.qaAttemptCount})`,
         payload: {
-          runId: input.run.id,
+          runId: cycleRun.id,
           reviewId,
           reviewThreadId,
           attempt: reviewRun.qaAttemptCount,
@@ -1835,7 +2021,7 @@ const make = Effect.gen(function* () {
       // Code Review normally requires a passing Dev Review at this exact HEAD. When Dev Review used
       // every attempt without passing, the run still continues — but only from a build-validated,
       // clean commit, so the reviewer never starts from unvalidated work.
-      if (input.run.devReviewExhaustedAt === null) {
+      if (input.run.qaExhaustedAt === null && input.run.devReviewExhaustedAt === null) {
         if (
           input.run.devReviewedHeadSha === null ||
           input.run.devReviewedHeadSha !== reviewHead.commitSha
@@ -3006,7 +3192,7 @@ const make = Effect.gen(function* () {
     readonly sourceThreadId: ThreadId;
     readonly run: OrchestrationImplementationRun;
     readonly status: "fixing" | "code-review-fixing";
-    readonly origin: "merge-gate" | "dev-review" | "code-review";
+    readonly origin: "merge-gate" | "app-dev-stack" | "dev-review" | "code-review";
     readonly title: string;
     readonly promptText: string;
     readonly createdAt: string;
@@ -3015,6 +3201,7 @@ const make = Effect.gen(function* () {
     const orchestratorThread = findThread(readModel, input.run.orchestratorThreadId);
     if (orchestratorThread === null) return;
     const fixerThreadId = yield* serverThreadId("implementation-fixer");
+    const usesTdd = input.origin === "app-dev-stack" || input.origin === "dev-review";
     const fixingRun: OrchestrationImplementationRun = {
       ...input.run,
       status: input.status,
@@ -3023,6 +3210,15 @@ const make = Effect.gen(function* () {
       validatedHeadSha: null,
       devReviewedHeadSha: null,
       codeReviewedHeadSha: null,
+      ...(usesTdd
+        ? {
+            appDevStack: {
+              ...input.run.appDevStack,
+              status: "ensuring" as const,
+              updatedAt: input.createdAt,
+            },
+          }
+        : {}),
       updatedAt: input.createdAt,
     };
     yield* updateRun({
@@ -3057,11 +3253,15 @@ const make = Effect.gen(function* () {
         role: "user",
         text: appendWorkflowSkillCommandSection(
           input.promptText,
-          WORKFLOW_PROMPT_IDS.implementationFixCodex,
+          usesTdd
+            ? WORKFLOW_PROMPT_IDS.implementationTddCodex
+            : WORKFLOW_PROMPT_IDS.implementationFixCodex,
         ),
         attachments: [],
       },
-      workflowPromptId: WORKFLOW_PROMPT_IDS.implementationFixCodex,
+      workflowPromptId: usesTdd
+        ? WORKFLOW_PROMPT_IDS.implementationTddCodex
+        : WORKFLOW_PROMPT_IDS.implementationFixCodex,
       runtimeMode: orchestratorThread.runtimeMode,
       interactionMode: "implementation-workflow",
       createdAt: input.createdAt,
@@ -3096,76 +3296,23 @@ const make = Effect.gen(function* () {
     readonly reviewId: DevReviewId;
     readonly createdAt: string;
   }) {
-    if (input.run.artifactSource !== "proposed-plan") {
-      yield* startFixer({
-        sourceThreadId: input.sourceThreadId,
-        run: input.run,
-        status: "fixing",
-        origin: "dev-review",
-        title: "Fix browser dev review",
-        promptText: buildFixPrompt({ run: input.run, reviewId: input.reviewId }),
-        createdAt: input.createdAt,
-      });
-      return;
-    }
-
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
-    const buildThread = findThread(readModel, input.run.orchestratorThreadId);
     const sourceThread = findThread(readModel, input.sourceThreadId);
-    if (buildThread === null || sourceThread === null) return;
-    if (buildThread.latestTurn?.state === "running") return;
-
-    const rebuildingRun: OrchestrationImplementationRun = {
-      ...input.run,
-      status: "running",
-      activeDevReviewHeadSha: null,
-      activeDevReviewThreadId: null,
-      validatedHeadSha: null,
-      devReviewedHeadSha: null,
-      codeReviewedHeadSha: null,
-      retryableFailure: null,
-      updatedAt: input.createdAt,
-    };
-    yield* updateRun({
+    const artifactMarkdown =
+      input.run.artifactSource === "proposed-plan" && sourceThread !== null
+        ? fastFeatureArtifactMarkdown({ run: input.run, sourceThread })
+        : undefined;
+    yield* startFixer({
       sourceThreadId: input.sourceThreadId,
-      run: rebuildingRun,
-      createdAt: input.createdAt,
-    });
-
-    yield* orchestrationEngine.dispatch({
-      type: "thread.turn.start",
-      commandId: yield* serverCommandId("fast-feature-dev-review-fix-turn"),
-      threadId: rebuildingRun.orchestratorThreadId,
-      message: {
-        messageId: yield* serverMessageId("fast-feature-dev-review-fix"),
-        role: "user",
-        text: buildFastFeatureDevReviewFixPrompt({
-          run: rebuildingRun,
-          sourceThread,
-          reviewId: input.reviewId,
-          attempt: rebuildingRun.qaAttemptCount,
-        }),
-        attachments: [],
-      },
-      titleSeed: buildThread.title,
-      runtimeMode: buildThread.runtimeMode,
-      interactionMode: "default",
-      ...(rebuildingRun.sourceProposedPlan === null
-        ? {}
-        : { sourceProposedPlan: rebuildingRun.sourceProposedPlan }),
-      createdAt: input.createdAt,
-    });
-
-    yield* appendActivity({
-      threadId: rebuildingRun.orchestratorThreadId,
-      tone: "info",
-      kind: "implementation-build-dev-review-fix-started",
-      summary: `Build resumed to fix dev review findings (attempt ${rebuildingRun.qaAttemptCount})`,
-      payload: {
-        runId: rebuildingRun.id,
+      run: input.run,
+      status: "fixing",
+      origin: "dev-review",
+      title: `TDD repair ${input.run.qaCycleCount}/${IMPLEMENTATION_RUN_MAX_QA_CYCLES} · Dev Review`,
+      promptText: buildFixPrompt({
+        run: input.run,
         reviewId: input.reviewId,
-        attempt: rebuildingRun.qaAttemptCount,
-      },
+        ...(artifactMarkdown === undefined ? {} : { artifactMarkdown }),
+      }),
       createdAt: input.createdAt,
     });
   });
@@ -3403,6 +3550,7 @@ const make = Effect.gen(function* () {
             devReviewedHeadSha: head.commitSha,
             activeDevReviewHeadSha: null,
             activeDevReviewThreadId: null,
+            lastQaFailure: null,
             retryableFailure: null,
             updatedAt: event.payload.updatedAt,
           },
@@ -3415,9 +3563,26 @@ const make = Effect.gen(function* () {
 
       // Exhausting every Dev Review attempt no longer stops the run: the unpassed review is recorded
       // and carried into Code Review, change-request publication, and the change-request body.
-      if (run.qaAttemptCount >= IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS) {
+      const failedRun: OrchestrationImplementationRun = {
+        ...run,
+        lastQaFailure: {
+          kind: "dev-review",
+          status: event.payload.status,
+          detailMarkdown:
+            findThread(readModel, run.orchestratorThreadId)?.devReviews.find(
+              (review) => review.id === event.payload.reviewId,
+            )?.document.summary ?? `Browser Dev Review ${event.payload.status}.`,
+          reviewId: event.payload.reviewId,
+          headSha: head.commitSha,
+          occurredAt: event.payload.updatedAt,
+        },
+      };
+
+      if (run.qaCycleCount >= IMPLEMENTATION_RUN_MAX_QA_CYCLES) {
         const exhaustedRun: OrchestrationImplementationRun = {
-          ...run,
+          ...failedRun,
+          qaExhaustedAt: run.qaExhaustedAt ?? event.payload.updatedAt,
+          qaExhaustionReason: "dev-review",
           devReviewExhaustedAt: run.devReviewExhaustedAt ?? event.payload.updatedAt,
           devReviewedHeadSha: null,
           activeDevReviewHeadSha: null,
@@ -3429,11 +3594,12 @@ const make = Effect.gen(function* () {
           threadId: run.orchestratorThreadId,
           tone: "error",
           kind: "implementation-browser-review-exhausted",
-          summary: `Browser dev review did not pass after ${run.qaAttemptCount} attempts; continuing to code review`,
+          summary: `Automated QA did not pass after ${run.qaCycleCount} cycles; continuing to code review`,
           payload: {
             runId: run.id,
             reviewId: event.payload.reviewId,
-            attempts: run.qaAttemptCount,
+            cycles: run.qaCycleCount,
+            reviewAttempts: run.qaAttemptCount,
             lastStatus: event.payload.status,
           },
           createdAt: event.payload.updatedAt,
@@ -3446,24 +3612,10 @@ const make = Effect.gen(function* () {
         return;
       }
 
-      if (event.payload.status === "blocked") {
-        yield* startBrowserReview({
-          sourceThreadId,
-          run: {
-            ...run,
-            activeDevReviewHeadSha: null,
-            activeDevReviewThreadId: null,
-            updatedAt: event.payload.updatedAt,
-          },
-          createdAt: event.payload.updatedAt,
-        });
-        return;
-      }
-
       yield* restartAfterDevReviewFindings({
         sourceThreadId,
         run: {
-          ...run,
+          ...failedRun,
           activeDevReviewHeadSha: null,
           activeDevReviewThreadId: null,
         },
@@ -3554,7 +3706,7 @@ const make = Effect.gen(function* () {
             : findThread(readModel, input.run.orchestratorThreadId)?.devReviews.find(
                 (review) => review.id === reviewId,
               );
-        if (latestReview?.status === "failed") {
+        if (latestReview?.status === "failed" || latestReview?.status === "blocked") {
           yield* restartAfterDevReviewFindings({
             sourceThreadId: input.sourceThreadId,
             run: {
@@ -3579,13 +3731,58 @@ const make = Effect.gen(function* () {
         return;
       }
       if (failure.stage === "app-dev-stack") {
-        yield* startBrowserReview({
-          sourceThreadId: input.sourceThreadId,
-          run: {
-            ...input.run,
-            activeDevReviewThreadId: null,
-            activeDevReviewHeadSha: null,
+        if (input.run.lastQaFailure === null && failure.attemptCount < failure.maxAttempts) {
+          yield* startBrowserReview({
+            sourceThreadId: input.sourceThreadId,
+            run: {
+              ...input.run,
+              activeDevReviewThreadId: null,
+              activeDevReviewHeadSha: null,
+            },
+            createdAt: input.createdAt,
+            continueCycle: true,
+          });
+          return;
+        }
+        const failureDetail = input.run.lastQaFailure?.detailMarkdown ?? failure.detail;
+        const failureHeadSha = yield* resolveQaHeadSha(input.run);
+        const failedRun: OrchestrationImplementationRun = {
+          ...input.run,
+          lastQaFailure: input.run.lastQaFailure ?? {
+            kind: "app-dev-stack",
+            status: "startup-timeout",
+            detailMarkdown: failureDetail,
+            reviewId: null,
+            headSha: failureHeadSha,
+            occurredAt: input.createdAt,
           },
+        };
+        if (failedRun.qaCycleCount >= IMPLEMENTATION_RUN_MAX_QA_CYCLES) {
+          yield* startCodeReview({
+            sourceThreadId: input.sourceThreadId,
+            run: {
+              ...failedRun,
+              qaExhaustedAt: failedRun.qaExhaustedAt ?? input.createdAt,
+              qaExhaustionReason: "app-dev-stack",
+              activeDevReviewThreadId: null,
+              activeDevReviewHeadSha: null,
+              retryableFailure: null,
+              updatedAt: input.createdAt,
+            },
+            createdAt: input.createdAt,
+          });
+          return;
+        }
+        yield* startFixer({
+          sourceThreadId: input.sourceThreadId,
+          run: failedRun,
+          status: "fixing",
+          origin: "app-dev-stack",
+          title: `TDD repair ${failedRun.qaCycleCount}/${IMPLEMENTATION_RUN_MAX_QA_CYCLES} · AppDevStack`,
+          promptText: buildAppDevStackFixPrompt({
+            run: failedRun,
+            diagnosticsMarkdown: failureDetail,
+          }),
           createdAt: input.createdAt,
         });
         return;
@@ -3625,24 +3822,31 @@ const make = Effect.gen(function* () {
           title:
             origin === "merge-gate"
               ? "Fix merge gate failures"
-              : origin === "dev-review"
-                ? "Fix browser dev review"
-                : "Fix code review findings",
+              : origin === "app-dev-stack"
+                ? `TDD repair ${input.run.qaCycleCount}/${IMPLEMENTATION_RUN_MAX_QA_CYCLES} · AppDevStack`
+                : origin === "dev-review"
+                  ? `TDD repair ${input.run.qaCycleCount}/${IMPLEMENTATION_RUN_MAX_QA_CYCLES} · Dev Review`
+                  : "Fix code review findings",
           promptText:
             origin === "merge-gate"
               ? buildMergeGateFixPrompt({
                   run: input.run,
                   reportMarkdown: failure.detail,
                 })
-              : origin === "dev-review"
-                ? buildFixPrompt({
+              : origin === "app-dev-stack"
+                ? buildAppDevStackFixPrompt({
                     run: input.run,
-                    reviewId: DevReviewId.make(reviewId as string),
+                    diagnosticsMarkdown: input.run.lastQaFailure?.detailMarkdown ?? failure.detail,
                   })
-                : buildCodeReviewFixPrompt({
-                    run: input.run,
-                    reportMarkdown: input.run.latestCodeReviewReportMarkdown ?? failure.detail,
-                  }),
+                : origin === "dev-review"
+                  ? buildFixPrompt({
+                      run: input.run,
+                      reviewId: DevReviewId.make(reviewId as string),
+                    })
+                  : buildCodeReviewFixPrompt({
+                      run: input.run,
+                      reportMarkdown: input.run.latestCodeReviewReportMarkdown ?? failure.detail,
+                    }),
           createdAt: input.createdAt,
         });
         return;
@@ -3871,13 +4075,15 @@ const make = Effect.gen(function* () {
       const recoverInterruptedReview =
         run.status === "qa-reviewing" &&
         run.devReviewIds.length > 0 &&
-        run.qaAttemptCount < IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS &&
+        run.qaCycleCount < IMPLEMENTATION_RUN_MAX_QA_CYCLES &&
         (latestReviewThread?.session?.status === "error" ||
           latestReviewThread?.session?.status === "stopped");
       if (!recoverStackFailure && !recoverInterruptedReview) continue;
       const sourceThreadId = findRunSourceThreadId({ readModel, run });
       if (sourceThreadId === null) continue;
-      yield* startBrowserReview({ sourceThreadId, run, createdAt }).pipe(
+      // A process restart or provider interruption did not produce a QA verdict, so resume the
+      // current cycle instead of consuming another one from the shared ten-cycle budget.
+      yield* startBrowserReview({ sourceThreadId, run, createdAt, continueCycle: true }).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("implementation workflow stack-failure recovery failed", {
             runId: run.id,
@@ -4193,7 +4399,7 @@ const make = Effect.gen(function* () {
         activeReviewer.session?.status === "stopped";
       if (
         run.status === "qa-reviewing" &&
-        run.qaAttemptCount < IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS &&
+        run.qaCycleCount < IMPLEMENTATION_RUN_MAX_QA_CYCLES &&
         reviewerNeedsRelaunch
       ) {
         yield* startBrowserReview({
@@ -4246,23 +4452,32 @@ const make = Effect.gen(function* () {
             title:
               origin === "merge-gate"
                 ? "Fix merge gate failures"
-                : origin === "dev-review"
-                  ? "Fix browser dev review"
-                  : "Fix code review findings",
+                : origin === "app-dev-stack"
+                  ? `TDD repair ${run.qaCycleCount}/${IMPLEMENTATION_RUN_MAX_QA_CYCLES} · AppDevStack`
+                  : origin === "dev-review"
+                    ? `TDD repair ${run.qaCycleCount}/${IMPLEMENTATION_RUN_MAX_QA_CYCLES} · Dev Review`
+                    : "Fix code review findings",
             promptText:
               origin === "merge-gate"
                 ? buildMergeGateFixPrompt({
                     run,
                     reportMarkdown: "The previous merge-gate fixer was interrupted.",
                   })
-                : origin === "dev-review" && reviewId !== undefined
-                  ? buildFixPrompt({ run, reviewId: DevReviewId.make(reviewId) })
-                  : buildCodeReviewFixPrompt({
+                : origin === "app-dev-stack"
+                  ? buildAppDevStackFixPrompt({
                       run,
-                      reportMarkdown:
-                        run.latestCodeReviewReportMarkdown ??
-                        "The previous code-review fixer was interrupted.",
-                    }),
+                      diagnosticsMarkdown:
+                        run.lastQaFailure?.detailMarkdown ??
+                        "The previous AppDevStack TDD repair was interrupted.",
+                    })
+                  : origin === "dev-review" && reviewId !== undefined
+                    ? buildFixPrompt({ run, reviewId: DevReviewId.make(reviewId) })
+                    : buildCodeReviewFixPrompt({
+                        run,
+                        reportMarkdown:
+                          run.latestCodeReviewReportMarkdown ??
+                          "The previous code-review fixer was interrupted.",
+                      }),
             createdAt,
           }),
         );
@@ -4290,7 +4505,12 @@ const make = Effect.gen(function* () {
           // repeated sweeps against a condition that cannot change on its own,
           // leaving nothing for the explicit Retry once the user has fixed it.
           run.retryableFailure.humanBlocked ||
-          run.retryableFailure.attemptCount >= run.retryableFailure.maxAttempts
+          (run.retryableFailure.attemptCount >= run.retryableFailure.maxAttempts &&
+            !(
+              run.retryableFailure.stage === "app-dev-stack" &&
+              run.lastQaFailure === null &&
+              run.retryableFailure.attemptCount === run.retryableFailure.maxAttempts
+            ))
         ) {
           continue;
         }

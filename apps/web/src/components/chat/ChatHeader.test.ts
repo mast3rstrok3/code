@@ -1,4 +1,9 @@
-import { EnvironmentId, ThreadId, WorkflowId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  type OrchestrationImplementationRun,
+  ThreadId,
+  WorkflowId,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { shouldShowOpenInPicker, workflowProgressLabel } from "./ChatHeader";
@@ -116,5 +121,25 @@ describe("workflowProgressLabel", () => {
         }),
       ).toBe(expected);
     }
+  });
+
+  it("labels fresh QA repair threads with their shared cycle", () => {
+    expect(
+      workflowProgressLabel({
+        interactionMode: "implementation-workflow",
+        workflowRole: "fast-feature-implementer",
+        workflowContext,
+        planningWorkflow: null,
+        implementationRuns: [
+          {
+            artifactSource: "proposed-plan",
+            status: "fixing",
+            fixOrigin: "dev-review",
+            qaCycleCount: 3,
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          } as OrchestrationImplementationRun,
+        ],
+      }),
+    ).toBe("Fast feature · TDD repair · 3/10");
   });
 });

@@ -60,7 +60,7 @@ Product grill (the single human gate, classification fixed to `fix`) → the sam
 
 ### Fast Feature
 
-Product grill (classification fixed to `feature`) → same-thread CLI Plan mode → the proposed plan launches a Build child thread in a dedicated worktree branched from the starting branch, starting the app dev stack in parallel when none exists for that worktree → Dev Review sub-thread (feedback returns to the Build thread, up to five attempts) → Code Review sub-thread (single pass) → the change request is published into the starting branch.
+Product grill (classification fixed to `feature`) → same-thread CLI Plan mode → the proposed plan launches a Build child thread in a dedicated worktree branched from the starting branch, starting the app dev stack in parallel → up to ten shared AppDevStack/Dev Review QA cycles, with every failure repaired by a fresh TDD child and every review performed by a fresh reviewer → Code Review sub-thread (single pass) → the change request is published into the starting branch. Exhausted QA continues best-effort and is flagged in the change request.
 
 ### Full Feature
 
@@ -81,12 +81,12 @@ Grill With Docs (human-in-the-loop; domain modeling writes `CONTEXT.md`, ADRs, a
 Loads the Spec and tickets via the MCP tools, then:
 
 1. Creates a dedicated worktree and branch from the branch the user selected; the finished change request is filed back into that branch.
-2. Checks the app dev stack for that worktree at the start and, when absent, starts it in parallel (`implementation.autoStartAppDevStack` setting, `AppDevStackManager`).
+2. Starts the app dev stack for that worktree in parallel with implementation (`AppDevStackManager`).
 3. Runs dependency-aware TDD workers, each a sub-thread with its own worktree and branch. A dependent ticket's worker branches from its blocker's worker branch, so chained tickets build on each other; every worker commits to its own branch.
 4. Merges worker branches programmatically back into the orchestrator worktree; the Merge Gate stage runs only when programmatic integration stops on a real conflict.
-5. Runs Browser Dev Review for up to `IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS` (5) cycles — each cycle a new thread whose findings are fixed before the next. After the cap the run proceeds with the review still failing, flagged in the change request.
+5. Runs up to `IMPLEMENTATION_RUN_MAX_QA_CYCLES` (10) shared QA cycles. Each cycle ensures and probes AppDevStack, then launches a fresh Browser Dev Review when the stack is healthy. Any stack failure or failed/blocked review launches a fresh TDD repair thread before the next cycle. After the cap the run proceeds best-effort and flags the unresolved gate in the change request.
 6. Runs Code Review as a single review-and-fix pass (Standards and Spec axes) that commits its own corrections, then publishes the change request into the original branch.
 
 ## Orchestration
 
-`ProductWorkflowReactor.ts` drives Fix, Fast Feature, and Full Feature from the locked intent; `ImplementationWorkflowReactor.ts` owns worktrees, the merge pipeline, app dev stack provisioning, dev-review loops, and change-request publication. Cycle caps live in `packages/contracts/src/orchestration.ts` (`PLANNING_REVIEW_MAX_CYCLES`, `IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS`). Shared sub-agent conventions (stage IDs, MCP tools, directives) are in `apps/server/src/provider/WorkflowSubagentInstructions.ts`.
+`ProductWorkflowReactor.ts` drives Fix, Fast Feature, and Full Feature from the locked intent; `ImplementationWorkflowReactor.ts` owns worktrees, the merge pipeline, app dev stack provisioning, QA cycles, and change-request publication. Cycle caps live in `packages/contracts/src/orchestration.ts` (`PLANNING_REVIEW_MAX_CYCLES`, `IMPLEMENTATION_RUN_MAX_QA_CYCLES`). Shared sub-agent conventions (stage IDs, MCP tools, directives) are in `apps/server/src/provider/WorkflowSubagentInstructions.ts`.

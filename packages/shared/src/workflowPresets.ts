@@ -58,10 +58,10 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         threadBoundary: "new child thread",
       },
       {
-        label: "Dev Review",
+        label: "AppDevStack, Dev Review, and fresh TDD repair cycles",
         skillId: "implementation.browser-dev-review.codex",
         threadBoundary: "new review thread",
-        note: "up to five attempts, feedback returns to Build",
+        note: "up to ten shared cycles; every repair and review uses a fresh thread",
       },
       {
         label: "Code Review",
@@ -91,9 +91,9 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
       { label: "TDD implementation workers", skillId: "implementation.tdd.codex" },
       { label: "Merge gate and required validation", skillId: "implementation.merge-gate.codex" },
       {
-        label: "Dev Review and automatic fixes",
+        label: "AppDevStack, Dev Review, and fresh TDD repairs",
         skillId: "implementation.browser-dev-review.codex",
-        note: "up to five attempts",
+        note: "up to ten shared cycles",
       },
       {
         label: "Code Review",
@@ -141,9 +141,9 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         skillId: "implementation.merge-gate.codex",
       },
       {
-        label: "Run Dev Review and automatic fixes",
+        label: "Run AppDevStack, Dev Review, and fresh TDD repair cycles",
         skillId: "implementation.browser-dev-review.codex",
-        note: "up to five attempts",
+        note: "up to ten shared cycles",
       },
       {
         label: "Run Code Review",

@@ -293,6 +293,8 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /See \[logging\.md\]\(logging\.md\)/);
     NodeAssert.match(rendered, /Logging for TDD/);
     NodeAssert.match(rendered, /workflow_doc_get/);
+    NodeAssert.match(rendered, /Orchestrated QA Repair Result/);
+    NodeAssert.match(rendered, /implementation-fix-result/);
     NodeAssert.doesNotMatch(rendered, /canonical log line/);
 
     const mockingDoc = tdd.associatedDocs?.find((doc) => doc.id === "tdd-mocking");
@@ -363,7 +365,8 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /worktree and branch created from the branch the user selected/);
     NodeAssert.match(rendered, /app dev stack/);
     NodeAssert.match(rendered, /worker branches from its blocker's worker branch/);
-    NodeAssert.match(rendered, /up to five cycles/);
+    NodeAssert.match(rendered, /up to ten QA cycles/);
+    NodeAssert.match(rendered, /fresh TDD repair thread/);
     NodeAssert.match(rendered, /single review-and-fix pass/);
     NodeAssert.match(rendered, /never run repo-wide suites/);
   });

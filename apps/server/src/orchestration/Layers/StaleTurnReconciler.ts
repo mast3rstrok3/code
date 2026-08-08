@@ -175,7 +175,10 @@ function resolveResumeTarget(
       );
       if (run === undefined) return null;
       return {
-        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationFixCodex,
+        workflowPromptId:
+          run.fixOrigin === "app-dev-stack" || run.fixOrigin === "dev-review"
+            ? WORKFLOW_PROMPT_IDS.implementationTddCodex
+            : WORKFLOW_PROMPT_IDS.implementationFixCodex,
         interactionMode: "implementation-workflow",
       };
     }

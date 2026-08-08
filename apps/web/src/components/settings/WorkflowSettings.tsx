@@ -11,12 +11,10 @@ import type { WorkflowCatalog } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
 
-import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
 import { usePrimaryEnvironment } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { Badge } from "../ui/badge";
-import { Switch } from "../ui/switch";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { WorkflowCatalogContent } from "./WorkflowCatalogContent";
 
@@ -88,31 +86,6 @@ function CatalogBoundary({ state, noun }: { state: CatalogState; noun: string })
   );
 }
 
-function ImplementationWorkflowSettingsSection() {
-  const autoStartAppDevStack = usePrimarySettings(
-    (settings) => settings.implementation.autoStartAppDevStack,
-  );
-  const updateSettings = useUpdatePrimarySettings();
-  return (
-    <SettingsSection title="Implementation Workflow" icon={<WorkflowIcon className="size-3.5" />}>
-      <SettingsRow
-        title="Auto-start app-dev stack"
-        description="Start the orchestrator worktree app-dev stack automatically when an Implementation Workflow run launches."
-        status="The Browser Dev Review QA stage still blocks completion if the stack or Chrome tooling is unavailable."
-        control={
-          <Switch
-            checked={autoStartAppDevStack}
-            onCheckedChange={(checked) =>
-              updateSettings({ implementation: { autoStartAppDevStack: Boolean(checked) } })
-            }
-            aria-label="Auto-start app-dev stack for Implementation Workflow"
-          />
-        }
-      />
-    </SettingsSection>
-  );
-}
-
 function FocusedRow({ focused, children }: { focused: boolean; children: React.ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -133,7 +106,6 @@ export function WorkflowSettings() {
         title="Workflows"
         description="Built-in orchestration paths and the skills each step uses."
       />
-      <ImplementationWorkflowSettingsSection />
       <CatalogBoundary state={state} noun="Workflows" />
       {state.status === "loaded" ? (
         <SettingsSection title="Workflow Catalog" icon={<WorkflowIcon className="size-3.5" />}>

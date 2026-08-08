@@ -1121,7 +1121,7 @@ This stage orchestrates the upstream implement loop across sub-threads instead o
 - The app dev stack for this worktree is checked at the start of the run and, when absent, started in parallel with implementation.
 - Tickets are implemented dependency-aware by TDD worker sub-threads (the TDD Implementation skill), each in its own worktree and branch. A dependent ticket's worker branches from its blocker's worker branch so chained tickets build on each other, and every worker commits to its own branch.
 - Worker branches are merged programmatically back into the orchestrator worktree; the Merge Gate stage runs only when programmatic integration stops on a real conflict.
-- Browser Dev Review runs after the merge, up to five cycles. Each cycle is a new thread and its findings are fixed before the next cycle; after the cap the run proceeds with the review still failing, flagged in the change request.
+- AppDevStack health and Browser Dev Review share up to ten QA cycles after the merge. Every unsatisfied stack or review result gets a fresh TDD repair thread, and every browser review gets a fresh reviewer thread. After the cap the run proceeds best-effort with the unresolved gate flagged in the change request.
 - Code Review is a single review-and-fix pass that commits its own corrections and precedes change-request publication.
 - "The full test suite once at the end" is replaced by the validation commands named in the launch message; never run repo-wide suites.
 
@@ -1392,6 +1392,21 @@ When this prompt is run by an automatic implementation-worker thread, do not ask
   ],
   "notesMarkdown": "What changed and remaining risks.",
   "reportedAt": "2026-01-01T00:00:00.000Z"
+}
+\`\`\`
+
+## Orchestrated QA Repair Result
+
+When the launch message identifies an AppDevStack or Browser Dev Review failure, this is a QA repair thread rather than a planning-ticket worker. The programmatic diagnostics, original Spec/tickets or proposed plan, and the failed review are the pre-agreed seams. Do not ask the user to confirm them. Work red then green in the orchestrator worktree, run every required validation, commit the repair, leave the worktree clean, and finish with exactly one fenced JSON block using this shape:
+
+\`\`\`json
+{
+  "type": "implementation-fix-result",
+  "runId": "implementation-run-id",
+  "status": "succeeded",
+  "commitSha": "commit-sha",
+  "validations": [],
+  "notesMarkdown": "What failed, the red-green repair, and remaining risks."
 }
 \`\`\`
 </collaboration_mode>`;
@@ -1930,8 +1945,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     role: "implementation-fixer",
     stage: "fix",
     title: "5. Fix",
-    description:
-      "Fixes merge-gate, browser-review, or code-review failures before rerunning validation.",
+    description: "Fixes merge-gate and code-review failures before rerunning validation.",
     promptText: IMPLEMENTATION_FIX_PROMPT,
   },
   {
@@ -2063,6 +2077,11 @@ function buildWorkflowCatalog(): WorkflowCatalog {
       "implementation",
     ],
     [WORKFLOW_PROMPT_IDS.implementationFixCodex]: [
+      "fast-feature",
+      "full-feature",
+      "implementation",
+    ],
+    [WORKFLOW_PROMPT_IDS.implementationTddCodex]: [
       "fast-feature",
       "full-feature",
       "implementation",

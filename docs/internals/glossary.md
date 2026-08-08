@@ -179,7 +179,7 @@ The durable map of decision tickets for efforts too large to specify in one pass
 
 #### Dev review
 
-The browser-based QA stage of an implementation run. Each cycle is a new thread whose findings are fixed before the next, up to `IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS` (5) cycles in [the contracts][1]; after the cap the run proceeds with the failure flagged.
+The bounded QA stage of an implementation run. AppDevStack health and Browser Dev Review share up to `IMPLEMENTATION_RUN_MAX_QA_CYCLES` (10) cycles in [the contracts][1]. Every unsatisfied stack or review result gets a fresh TDD repair thread, every browser review gets a fresh reviewer thread, and exhaustion proceeds best-effort with the unresolved gate flagged.
 
 #### Code review
 

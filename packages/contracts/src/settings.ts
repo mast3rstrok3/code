@@ -417,9 +417,7 @@ export const ObservabilitySettings = Schema.Struct({
 });
 export type ObservabilitySettings = typeof ObservabilitySettings.Type;
 
-export const ImplementationWorkflowSettings = Schema.Struct({
-  autoStartAppDevStack: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
-});
+export const ImplementationWorkflowSettings = Schema.Struct({});
 export type ImplementationWorkflowSettings = typeof ImplementationWorkflowSettings.Type;
 
 export const SourceControlWritingStyleMode = Schema.Literals([
@@ -686,11 +684,6 @@ export const ServerSettingsPatch = Schema.Struct({
     Schema.Struct({
       otlpTracesUrl: Schema.optionalKey(TrimmedString),
       otlpMetricsUrl: Schema.optionalKey(TrimmedString),
-    }),
-  ),
-  implementation: Schema.optionalKey(
-    Schema.Struct({
-      autoStartAppDevStack: Schema.optionalKey(Schema.Boolean),
     }),
   ),
   providers: Schema.optionalKey(

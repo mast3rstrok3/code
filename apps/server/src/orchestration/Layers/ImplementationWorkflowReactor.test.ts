@@ -7,7 +7,7 @@ import {
   DevReviewId,
   EventId,
   GitCommandError,
-  IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS,
+  IMPLEMENTATION_RUN_MAX_QA_CYCLES,
   MessageId,
   ProviderInstanceId,
   ProjectId,
@@ -308,6 +308,32 @@ function makeTestLayer(
       ),
       Layer.provide(
         Layer.mock(AppDevStackManager)({
+          get: (input) =>
+            Effect.succeed({
+              id: input.stackId,
+              uuid: "stack-uuid-1",
+              userId: "user-1",
+              worktreePath: "/tmp/implementation-reactor.worktrees/checkout",
+              composePath: "/tmp/compose.yml",
+              displayName: "Implementation test",
+              description: null,
+              status: autoCreateStackStatus,
+              services: null,
+              serviceCount: 0,
+              lastError: null,
+              errorCount: 0,
+              createdAt: now,
+              updatedAt: now,
+            }),
+          getStackPodLogs: (input) =>
+            Effect.succeed({
+              stackId: input.stackId,
+              namespace: "test",
+              tailLines: input.tailLines ?? 300,
+              pods: [],
+              entries: [],
+              fetchedAt: now,
+            }),
           autoCreate: (input) =>
             Ref.updateAndGet(calls.autoCreateInputs, (inputs) => [...inputs, input]).pipe(
               Effect.tap(() =>
@@ -648,7 +674,11 @@ function passDevReview(system: ImplementationSystem, run: OrchestrationImplement
   });
 }
 
-function failDevReview(system: ImplementationSystem, run: OrchestrationImplementationRun) {
+function failDevReview(
+  system: ImplementationSystem,
+  run: OrchestrationImplementationRun,
+  status: "failed" | "blocked" = "failed",
+) {
   return Effect.gen(function* () {
     const snapshot = yield* system.query.getSnapshot();
     const reviewingRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
@@ -656,10 +686,10 @@ function failDevReview(system: ImplementationSystem, run: OrchestrationImplement
     if (reviewId === undefined) throw new Error("Dev review missing.");
     yield* system.engine.dispatch({
       type: "thread.dev-review.update",
-      commandId: commandId(`dev-review-fail-${reviewId}`),
+      commandId: commandId(`dev-review-${status}-${reviewId}`),
       threadId: run.orchestratorThreadId,
       reviewId: DevReviewId.make(reviewId),
-      status: "failed",
+      status,
       updatedAt: "2026-01-01T00:00:03.000Z",
       createdAt: "2026-01-01T00:00:03.000Z",
     });
@@ -904,7 +934,59 @@ describe("ImplementationWorkflowReactor", () => {
         expect(
           snapshot.threads.filter((thread) => thread.workflowRole === "implementation-qa-reviewer"),
         ).toHaveLength(1);
-        expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(1);
+        expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(2);
+      }),
+    ),
+  );
+
+  it.effect("uses a fresh TDD child for Fast feature Dev Review findings", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const run = yield* launchFastFeatureRun(system);
+        let snapshot = yield* system.query.getSnapshot();
+        const implementer = snapshot.threads.find(
+          (thread) => thread.workflowRole === "fast-feature-implementer",
+        );
+        if (!implementer) throw new Error("Fast feature implementer missing.");
+        yield* system.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: commandId("fast-build-before-review-failure"),
+          threadId: implementer.id,
+          activity: {
+            id: eventId("fast-build-before-review-failure"),
+            tone: "info",
+            kind: "implementation-fast-build-result",
+            summary: "Fast Build succeeded",
+            payload: {
+              type: "implementation-fast-build-result",
+              runId: run.id,
+              status: "succeeded",
+              commitSha: "def456",
+              validations: requiredValidations(),
+              notesMarkdown: "Implemented and committed.",
+            },
+            turnId: null,
+            createdAt: "2026-01-01T00:00:02.000Z",
+          },
+          createdAt: "2026-01-01T00:00:02.000Z",
+        });
+        yield* system.reactor.drain;
+        yield* failDevReview(system, run);
+
+        snapshot = yield* system.query.getSnapshot();
+        const repairingRun = snapshot.implementationRuns[0];
+        const repair = snapshot.threads.find(
+          (thread) => thread.workflowRole === "implementation-fixer",
+        );
+        expect(repairingRun?.status).toBe("fixing");
+        expect(repairingRun?.fixOrigin).toBe("dev-review");
+        expect(repairingRun?.qaCycleCount).toBe(1);
+        expect(repair?.parentThreadId).toBe(run.orchestratorThreadId);
+        expect(repair?.messages.at(-1)?.text).toContain("Orchestrated QA Repair Result");
+        expect(repair?.messages.at(-1)?.text).toContain("Canonical proposed plan");
+        expect(
+          snapshot.threads.find((thread) => thread.id === implementer.id)?.messages,
+        ).toHaveLength(1);
       }),
     ),
   );
@@ -1152,7 +1234,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("blocks Dev Review when the stack reports running but the URL is down", () =>
+  it.effect("starts TDD repair when the stack reports running but the URL is down", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
@@ -1192,10 +1274,11 @@ describe("ImplementationWorkflowReactor", () => {
           yield* system.reactor.drain;
 
           const snapshot = yield* system.query.getSnapshot();
-          const blocked = snapshot.implementationRuns[0];
-          expect(blocked?.status).toBe("needs-human-attention");
-          expect(blocked?.retryableFailure?.stage).toBe("app-dev-stack");
-          expect(blocked?.retryableFailure?.detail).toContain("returned HTTP 503");
+          const repairing = snapshot.implementationRuns[0];
+          expect(repairing?.status).toBe("fixing");
+          expect(repairing?.fixOrigin).toBe("app-dev-stack");
+          expect(repairing?.lastQaFailure?.detailMarkdown).toContain("returned HTTP 503");
+          expect(repairing?.qaCycleCount).toBe(1);
           // The probe has to actually have gone to the reviewer's URL.
           expect(yield* Ref.get(system.frontendProbeUrls)).toContain("http://127.0.0.1:5173");
           // No reviewer launched, no Dev Review attempt burned.
@@ -1204,7 +1287,7 @@ describe("ImplementationWorkflowReactor", () => {
               (thread) => thread.workflowRole === "implementation-qa-reviewer",
             ),
           ).toHaveLength(0);
-          expect(blocked?.qaAttemptCount).toBe(0);
+          expect(repairing?.qaAttemptCount).toBe(0);
         }),
       { frontendProbeStatus: 503 },
     ),
@@ -1782,7 +1865,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("blocks Fast feature before Dev Review when both dev-stack attempts fail", () =>
+  it.effect("starts a fresh TDD repair when Fast feature dev-stack startup fails", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
@@ -1818,10 +1901,17 @@ describe("ImplementationWorkflowReactor", () => {
           });
           yield* system.reactor.drain;
 
-          const blocked = (yield* system.query.getSnapshot()).implementationRuns[0];
-          expect(blocked?.status).toBe("needs-human-attention");
-          expect(blocked?.retryableFailure?.stage).toBe("app-dev-stack");
-          expect(blocked?.devReviewIds).toHaveLength(0);
+          const afterFailure = yield* system.query.getSnapshot();
+          const repairing = afterFailure.implementationRuns[0];
+          expect(repairing?.status).toBe("fixing");
+          expect(repairing?.fixOrigin).toBe("app-dev-stack");
+          expect(repairing?.qaCycleCount).toBe(1);
+          expect(repairing?.devReviewIds).toHaveLength(0);
+          const repair = afterFailure.threads.find(
+            (thread) => thread.workflowRole === "implementation-fixer",
+          );
+          expect(repair?.messages.at(-1)?.text).toContain("Orchestrated QA Repair Result");
+          expect(repair?.messages.at(-1)?.text).toContain("Programmatic AppDevStack diagnostics");
           expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(2);
         }),
       { failAutoCreate: true },
@@ -2416,7 +2506,7 @@ describe("ImplementationWorkflowReactor", () => {
         snapshot = yield* system.query.getSnapshot();
         const reviewingRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
         const autoCreateInputs = yield* Ref.get(system.autoCreateInputs);
-        expect(autoCreateInputs).toHaveLength(1);
+        expect(autoCreateInputs).toHaveLength(2);
         expect(reviewingRun?.status).toBe("qa-reviewing");
         expect(reviewingRun?.devReviewIds).toHaveLength(1);
         const reviewThread = snapshot.threads.find(
@@ -2505,7 +2595,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("blocks browser review for retry when app stack creation fails", () =>
+  it.effect("starts a fresh TDD repair when app stack creation fails", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
@@ -2541,48 +2631,28 @@ describe("ImplementationWorkflowReactor", () => {
 
           snapshot = yield* system.query.getSnapshot();
           const reviewingRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
-          expect(reviewingRun?.status).toBe("needs-human-attention");
-          expect(reviewingRun?.retryableFailure?.stage).toBe("app-dev-stack");
+          expect(reviewingRun?.status).toBe("fixing");
+          expect(reviewingRun?.fixOrigin).toBe("app-dev-stack");
+          expect(reviewingRun?.qaCycleCount).toBe(1);
           expect(reviewingRun?.devReviewIds).toHaveLength(0);
           const orchestrator = snapshot.threads.find(
             (thread) => thread.id === run.orchestratorThreadId,
           );
           expect(
             orchestrator?.activities.some(
-              (activity) => activity.kind === "implementation-workflow.needs-human-attention",
+              (activity) => activity.kind === "implementation-fixer-started",
             ),
           ).toBe(true);
           expect(
             snapshot.threads.some((thread) => thread.workflowRole === "implementation-qa-reviewer"),
           ).toBe(false);
 
-          for (let attempt = 2; attempt <= 5; attempt += 1) {
-            yield* system.engine.dispatch({
-              type: "thread.implementation-run.retry",
-              commandId: commandId(`app-stack-retry-${attempt}`),
-              threadId: sourceThreadId,
-              runId: run.id,
-              createdAt: `2026-01-01T00:00:0${attempt}.000Z`,
-            });
-            yield* system.reactor.drain;
-          }
-          snapshot = yield* system.query.getSnapshot();
-          expect(
-            snapshot.implementationRuns.find((entry) => entry.id === run.id)?.retryableFailure
-              ?.attemptCount,
-          ).toBe(5);
-          // One provisioning attempt at launch plus one per browser-review ensure.
-          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(6);
-
-          yield* system.engine.dispatch({
-            type: "thread.implementation-run.retry",
-            commandId: commandId("app-stack-retry-exhausted"),
-            threadId: sourceThreadId,
-            runId: run.id,
-            createdAt: "2026-01-01T00:00:07.000Z",
-          });
-          yield* system.reactor.drain;
-          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(6);
+          const repair = snapshot.threads.find(
+            (thread) => thread.workflowRole === "implementation-fixer",
+          );
+          expect(repair?.workflowRole).toBe("implementation-fixer");
+          expect(repair?.messages.at(-1)?.text).toContain("Orchestrated QA Repair Result");
+          expect(repair?.messages.at(-1)?.text).toContain("Programmatic AppDevStack diagnostics");
         }),
       { failAutoCreate: true },
     ),
@@ -2611,6 +2681,27 @@ describe("ImplementationWorkflowReactor", () => {
         expect(
           snapshot.implementationRuns.find((candidate) => candidate.id === run.id)?.status,
         ).toBe("qa-reviewing");
+      }),
+    ),
+  );
+
+  it.effect("routes a blocked Dev Review through a fresh TDD repair thread", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+        yield* passMergeGate(system, run);
+        yield* failDevReview(system, run, "blocked");
+
+        const snapshot = yield* system.query.getSnapshot();
+        const repairing = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(repairing?.status).toBe("fixing");
+        expect(repairing?.fixOrigin).toBe("dev-review");
+        expect(repairing?.lastQaFailure?.status).toBe("blocked");
+        expect(repairing?.qaCycleCount).toBe(1);
+        expect(
+          snapshot.threads.filter((thread) => thread.workflowRole === "implementation-fixer"),
+        ).toHaveLength(1);
       }),
     ),
   );
@@ -2773,7 +2864,7 @@ describe("ImplementationWorkflowReactor", () => {
           type: "thread.implementation-run.update",
           commandId: commandId("exhaust-browser-review-attempts"),
           threadId: sourceThreadId,
-          run: { ...reviewingRun, qaAttemptCount: IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS },
+          run: { ...reviewingRun, qaCycleCount: IMPLEMENTATION_RUN_MAX_QA_CYCLES },
           createdAt: "2026-01-01T00:00:03.000Z",
         });
         yield* failDevReview(system, run);
@@ -2782,6 +2873,8 @@ describe("ImplementationWorkflowReactor", () => {
         const exhausted = snapshot.implementationRuns.find((entry) => entry.id === run.id);
         // The unpassed dev review is recorded, but the run proceeds instead of blocking.
         expect(exhausted?.devReviewExhaustedAt).not.toBeNull();
+        expect(exhausted?.qaExhaustedAt).not.toBeNull();
+        expect(exhausted?.qaExhaustionReason).toBe("dev-review");
         expect(exhausted?.status).toBe("code-reviewing");
         expect(exhausted?.retryableFailure).toBeNull();
         expect(
@@ -2817,6 +2910,62 @@ describe("ImplementationWorkflowReactor", () => {
         expect(publishInputs.at(-1)?.pullRequestBodyNote).toMatch(/did not pass/);
         expect(publishInputs.at(-1)?.commitMessage).toMatch(/did not pass/);
       }),
+    ),
+  );
+
+  it.effect("publishes best-effort when AppDevStack exhausts the shared QA cycles", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          yield* appendWorkerResult(system, { run, status: "succeeded" });
+
+          let snapshot = yield* system.query.getSnapshot();
+          const validating = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+          if (validating === undefined) throw new Error("Validating run missing.");
+          yield* system.engine.dispatch({
+            type: "thread.implementation-run.update",
+            commandId: commandId("exhaust-app-stack-cycles"),
+            threadId: sourceThreadId,
+            run: {
+              ...validating,
+              qaCycleCount: IMPLEMENTATION_RUN_MAX_QA_CYCLES - 1,
+            },
+            createdAt: "2026-01-01T00:00:02.500Z",
+          });
+          yield* passMergeGate(system, run);
+
+          snapshot = yield* system.query.getSnapshot();
+          const exhausted = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+          expect(exhausted?.status).toBe("code-reviewing");
+          expect(exhausted?.qaCycleCount).toBe(IMPLEMENTATION_RUN_MAX_QA_CYCLES);
+          expect(exhausted?.qaExhaustedAt).not.toBeNull();
+          expect(exhausted?.qaExhaustionReason).toBe("app-dev-stack");
+          expect(exhausted?.devReviewExhaustedAt).toBeNull();
+          expect(exhausted?.devReviewIds).toHaveLength(0);
+          expect(
+            snapshot.threads.filter((thread) => thread.workflowRole === "implementation-fixer"),
+          ).toHaveLength(0);
+
+          const reviewer = yield* nextThreadForRole(
+            system,
+            "implementation-code-reviewer",
+            new Set<string>(),
+          );
+          yield* appendCodeReviewResult(system, {
+            run,
+            threadId: reviewer.id,
+            status: "clean",
+            tag: "after-exhausted-app-stack",
+          });
+
+          const changeRequests = yield* Ref.get(system.createOrOpenChangeRequestInputs);
+          expect(changeRequests.at(-1)?.pullRequestBodyNote).toContain(
+            "Last unsatisfied gate: AppDevStack",
+          );
+          expect(changeRequests.at(-1)?.pullRequestBodyNote).toContain("published best-effort");
+        }),
+      { failAutoCreate: true },
     ),
   );
 

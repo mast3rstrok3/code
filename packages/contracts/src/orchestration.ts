@@ -468,7 +468,9 @@ export const OrchestrationPlanningSpecBundle = Schema.Struct({
 });
 export type OrchestrationPlanningSpecBundle = typeof OrchestrationPlanningSpecBundle.Type;
 
-export const IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS = 5;
+export const IMPLEMENTATION_RUN_MAX_QA_CYCLES = 10;
+/** @deprecated Use IMPLEMENTATION_RUN_MAX_QA_CYCLES. */
+export const IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS = IMPLEMENTATION_RUN_MAX_QA_CYCLES;
 
 export const OrchestrationImplementationRunId = TrimmedNonEmptyString;
 export type OrchestrationImplementationRunId = typeof OrchestrationImplementationRunId.Type;
@@ -581,7 +583,7 @@ export const OrchestrationImplementationFinalDevReviewPlan = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed("agent-browser" as const)),
   ),
   maxAttempts: NonNegativeInt.pipe(
-    Schema.withDecodingDefault(Effect.succeed(IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS)),
+    Schema.withDecodingDefault(Effect.succeed(IMPLEMENTATION_RUN_MAX_QA_CYCLES)),
   ),
 });
 export type OrchestrationImplementationFinalDevReviewPlan =
@@ -774,6 +776,18 @@ export const OrchestrationImplementationDevReviewArtifact = Schema.Struct({
 export type OrchestrationImplementationDevReviewArtifact =
   typeof OrchestrationImplementationDevReviewArtifact.Type;
 
+export const OrchestrationImplementationQaFailure = Schema.Struct({
+  kind: Schema.Literals(["app-dev-stack", "dev-review"]),
+  status: TrimmedNonEmptyString,
+  detailMarkdown: Schema.String,
+  reviewId: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  headSha: TrimmedNonEmptyString,
+  occurredAt: IsoDateTime,
+});
+export type OrchestrationImplementationQaFailure = typeof OrchestrationImplementationQaFailure.Type;
+
 const OrchestrationImplementationWorkerResultBase = {
   ticketId: OrchestrationPlanningTicketId,
   workerThreadId: ThreadId,
@@ -922,7 +936,15 @@ export const OrchestrationImplementationRun = Schema.Struct({
   activeDevReviewThreadId: Schema.NullOr(ThreadId).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  qaCycleCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
   qaAttemptCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+  qaExhaustedAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  qaExhaustionReason: Schema.NullOr(Schema.Literals(["app-dev-stack", "dev-review"])).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  lastQaFailure: Schema.NullOr(OrchestrationImplementationQaFailure).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   // Set when Dev Review used every allowed attempt without passing. The run still continues to
   // Code Review and change-request publication; the unpassed review is surfaced instead of blocking.
   devReviewExhaustedAt: Schema.NullOr(IsoDateTime).pipe(
@@ -941,9 +963,9 @@ export const OrchestrationImplementationRun = Schema.Struct({
   activeFixerThreadId: Schema.NullOr(ThreadId).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
-  fixOrigin: Schema.NullOr(Schema.Literals(["merge-gate", "dev-review", "code-review"])).pipe(
-    Schema.withDecodingDefault(Effect.succeed(null)),
-  ),
+  fixOrigin: Schema.NullOr(
+    Schema.Literals(["merge-gate", "app-dev-stack", "dev-review", "code-review"]),
+  ).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   latestCodeReviewReportMarkdown: Schema.NullOr(Schema.String).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),

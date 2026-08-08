@@ -14,6 +14,7 @@ import type {
   ScopedThreadRef,
   ThreadId,
 } from "@t3tools/contracts";
+import { IMPLEMENTATION_RUN_MAX_QA_CYCLES } from "@t3tools/contracts";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -1209,9 +1210,20 @@ const PlanSidebar = memo(function PlanSidebar({
                                 : ""}
                             </div>
                             <div>
-                              Browser review: {run.qaTooling.status}; QA attempts{" "}
-                              {run.qaAttemptCount}
+                              QA cycles: {run.qaCycleCount}/{IMPLEMENTATION_RUN_MAX_QA_CYCLES};
+                              Browser reviews: {run.qaAttemptCount}
                             </div>
+                            {run.lastQaFailure ? (
+                              <div className="text-destructive">
+                                Last QA failure ({run.lastQaFailure.kind}):{" "}
+                                {run.lastQaFailure.status}
+                              </div>
+                            ) : null}
+                            {run.qaExhaustedAt ? (
+                              <div className="text-destructive">
+                                QA exhausted; Code Review and publication continue best-effort.
+                              </div>
+                            ) : null}
                             <div>
                               Change request:{" "}
                               {run.changeRequest
