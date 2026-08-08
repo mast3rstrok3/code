@@ -312,13 +312,14 @@ describe("ProductWorkflowReactor", () => {
         expect(rootThread?.runtimeMode).toBe("full-access");
         expect(rootThread?.workflowContext?.rootThreadId).toBe(productThreadId);
         expect(rootThread?.planningWorkflow?.stage).toBe("grill");
-        const engineeringGrillTurnRequests = events.filter(
+        const automaticEngineeringGrillTurnRequests = events.filter(
           (event) =>
             event.type === "thread.turn-start-requested" &&
             event.payload.threadId === productThreadId &&
-            event.payload.workflowPromptId === WORKFLOW_PROMPT_IDS.planningGrillStageCodex,
+            event.payload.workflowPromptId ===
+              WORKFLOW_PROMPT_IDS.planningAutomaticEngineeringGrillCodex,
         );
-        expect(engineeringGrillTurnRequests).toHaveLength(1);
+        expect(automaticEngineeringGrillTurnRequests).toHaveLength(1);
         const engineeringGrillPrompt = events.find(
           (event) =>
             event.type === "thread.message-sent" && event.payload.threadId === productThreadId,
@@ -326,10 +327,13 @@ describe("ProductWorkflowReactor", () => {
         expect(engineeringGrillPrompt?.type).toBe("thread.message-sent");
         if (engineeringGrillPrompt?.type === "thread.message-sent") {
           expect(engineeringGrillPrompt.payload.text).toContain(
-            "Run the Planning Workflow Engineering Grill",
+            "Run the Planning Workflow's automatic Engineering Grill",
           );
           expect(engineeringGrillPrompt.payload.text).toContain(
             "Do not reopen or repeat Product Grill questions",
+          );
+          expect(engineeringGrillPrompt.payload.text).toContain(
+            "Do not ask the user questions or wait for confirmation",
           );
         }
       }),

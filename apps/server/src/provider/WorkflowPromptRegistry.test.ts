@@ -50,6 +50,7 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.equal(catalog.docs.filter((doc) => doc.id === "context-format").length, 1);
     NodeAssert.deepEqual(resolveWorkflowDoc("context-format")?.skillIds, [
       WORKFLOW_PROMPT_IDS.planningGrillStageCodex,
+      WORKFLOW_PROMPT_IDS.planningAutomaticEngineeringGrillCodex,
       WORKFLOW_PROMPT_IDS.planningSpecCodex,
     ]);
     NodeAssert.equal(resolveWorkflowDoc("missing"), undefined);
@@ -68,6 +69,12 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(grillWithDocs?.promptText ?? "", /Challenge against the glossary/);
     NodeAssert.match(grillWithDocs?.promptText ?? "", /Offer ADRs sparingly/);
     NodeAssert.match(grillWithDocs?.promptText ?? "", /Most repos have a single context/);
+    NodeAssert.deepEqual(grillWithDocs?.workflowIds, ["wayfinder", "planning"]);
+    const automaticGrill = catalog.skills.find(
+      (skill) => skill.id === WORKFLOW_PROMPT_IDS.planningAutomaticEngineeringGrillCodex,
+    );
+    NodeAssert.equal(automaticGrill?.title, "Engineering Grill (Automatic)");
+    NodeAssert.deepEqual(automaticGrill?.workflowIds, ["full-feature"]);
     NodeAssert.equal(
       catalog.skills.some((skill) => skill.id === WORKFLOW_PROMPT_IDS.planningDomainModelingCodex),
       false,
@@ -223,6 +230,34 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(adrDoc.content, /Rejected alternatives when the rejection is non-obvious/);
     NodeAssert.doesNotMatch(adrDoc.content, /# ADR NNNN: Title/);
     NodeAssert.doesNotMatch(adrDoc.content, /## Validation/);
+  });
+
+  it("renders an automatic Engineering Grill for Full Feature", () => {
+    const automaticGrill = listWorkflowPromptContracts().find(
+      (contract) => contract.id === WORKFLOW_PROMPT_IDS.planningAutomaticEngineeringGrillCodex,
+    );
+
+    NodeAssert.ok(automaticGrill);
+    NodeAssert.equal(automaticGrill.workflow, "planning");
+    NodeAssert.equal(automaticGrill.stage, "grill");
+    NodeAssert.equal(automaticGrill.title, "Engineering Grill (Automatic)");
+
+    const rendered = resolveWorkflowPromptText(
+      WORKFLOW_PROMPT_IDS.planningAutomaticEngineeringGrillCodex,
+    );
+    NodeAssert.match(rendered, /# Engineering Grill \(Automatic\)/);
+    NodeAssert.ok(rendered.includes(GRILLING_BLUEPRINT));
+    NodeAssert.match(rendered, /Challenge against the glossary/);
+    NodeAssert.match(rendered, /Only offer to create an ADR when all three are true/);
+    NodeAssert.match(rendered, /Product Grill is the Full Feature workflow's only user gate/);
+    NodeAssert.match(rendered, /Do not ask the user questions, emit interview rounds/);
+    NodeAssert.match(rendered, /choose the recommended answer for every engineering decision/);
+    NodeAssert.match(rendered, /recompute the frontier until it is empty/);
+    NodeAssert.match(rendered, /overrides the Grilling blueprint's user-question/);
+    NodeAssert.match(rendered, /"type": "planning-grill-complete"/);
+    NodeAssert.doesNotMatch(rendered, /After the user explicitly confirms shared understanding/);
+    NodeAssert.ok(automaticGrill.associatedDocs?.some((doc) => doc.id === "context-format"));
+    NodeAssert.ok(automaticGrill.associatedDocs?.some((doc) => doc.id === "adr-format"));
   });
 
   it("scopes the Preview Browser QA doc to Browser Dev Review", () => {
@@ -391,7 +426,8 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /durable artifact in T3's application state/);
     NodeAssert.match(rendered, /planning-spec-artifact/);
     NodeAssert.match(rendered, /workflow_wayfinder_map_get/);
-    NodeAssert.match(rendered, /there is no user to ask/);
+    NodeAssert.match(rendered, /Engineering Grill is Planning's only user-interactive stage/);
+    NodeAssert.match(rendered, /Do not ask the user to confirm seams during Spec authoring/);
   });
 
   it("renders Implementation Orchestrator with the upstream implement body and run adapter", () => {
@@ -427,10 +463,14 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /<local-ticket-template>/);
     NodeAssert.match(rendered, /<issue-template>/);
     NodeAssert.match(rendered, /Store tickets through the planning-tickets-artifact/);
-    NodeAssert.match(rendered, /The separate Ticket Review stage owns completeness review/);
+    NodeAssert.match(
+      rendered,
+      /The separate automatic Ticket Review stage owns completeness review/,
+    );
+    NodeAssert.match(rendered, /Do not quiz or ask the user/);
   });
 
-  it("renders Planning Ticket Review with Spec completeness, vertical-slice review, and final quiz instructions", () => {
+  it("renders Planning Ticket Review with automatic completeness and vertical-slice approval", () => {
     const rendered = resolveWorkflowPromptText(WORKFLOW_PROMPT_IDS.planningTicketReviewerCodex);
 
     NodeAssert.match(rendered, /Review the Spec, conversation context, durable project context/);
@@ -446,14 +486,11 @@ describe("WorkflowPromptRegistry", () => {
       rendered,
       /Do not quiz the user while the ticket set still needs review corrections/,
     );
-    NodeAssert.match(rendered, /The reviewer subagent should not quiz the user/);
-    NodeAssert.match(
-      rendered,
-      /After the subagent tickets reviewer has completed all review cycles/,
-    );
-    NodeAssert.match(rendered, /Does the granularity feel right/);
-    NodeAssert.match(rendered, /Are the dependency relationships correct/);
-    NodeAssert.match(rendered, /Should any slices be merged or split further/);
+    NodeAssert.match(rendered, /## Automatic approval/);
+    NodeAssert.match(rendered, /Do not quiz or ask the user/);
+    NodeAssert.match(rendered, /A clean reviewer verdict automatically finalizes/);
+    NodeAssert.doesNotMatch(rendered, /## User quiz/);
+    NodeAssert.doesNotMatch(rendered, /Iterate until the user approves/);
     // The reviewer edits tickets directly through the verdict's ticketEdits array.
     NodeAssert.match(rendered, /Apply corrections directly/);
     NodeAssert.match(rendered, /`ticketEdits` array of your planning-reviewer-verdict/);
@@ -587,7 +624,7 @@ describe("WorkflowPromptRegistry", () => {
 
     const renderedSpec = resolveWorkflowPromptText(WORKFLOW_PROMPT_IDS.planningSpecCodex);
     NodeAssert.match(renderedSpec, /Domain model maintenance/);
-    NodeAssert.match(renderedSpec, /locked Product Workflow intent, there is no user to ask/);
+    NodeAssert.match(renderedSpec, /Do not ask the user to confirm seams during Spec authoring/);
 
     NodeAssert.equal(resolveWorkflowPromptId({ interactionMode: "product-workflow" }), undefined);
     NodeAssert.equal(isRegisteredWorkflowPromptId("product.workflow.codex"), false);

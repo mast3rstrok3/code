@@ -362,15 +362,15 @@ function buildPlanningSpecStagePrompt(): string {
   ].join("\n");
 }
 
-function buildProductEngineeringGrillStagePrompt(
+function buildProductAutomaticEngineeringGrillStagePrompt(
   command: Extract<OrchestrationCommand, { type: "thread.planning-workflow.launch" }>,
 ): string {
   return [
-    "Run the Planning Workflow Engineering Grill from this locked Product Grill intent.",
+    "Run the Planning Workflow's automatic Engineering Grill from this locked Product Grill intent.",
     "",
     "Use the locked product intent as the authoritative source for product decisions. Do not reopen or repeat Product Grill questions.",
     "",
-    "Ask the user the Engineering Grill's frontier of engineering and domain questions. Maintain the domain glossary and warranted ADRs as those answers crystallize.",
+    "Resolve the Engineering Grill's full frontier of engineering and domain decisions yourself. Do not ask the user questions or wait for confirmation. Maintain the domain glossary and warranted ADRs as decisions crystallize.",
     "",
     `Intent title: ${command.intentTitle}`,
     "",
@@ -1523,7 +1523,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: productRootThread.id,
           messageId,
           role: "user",
-          text: buildProductEngineeringGrillStagePrompt(command),
+          text: buildProductAutomaticEngineeringGrillStagePrompt(command),
           turnId: null,
           streaming: false,
           createdAt: command.createdAt,
@@ -1545,7 +1545,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           modelSelection: productRootThread.modelSelection,
           runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
           interactionMode: "planning-workflow",
-          workflowPromptId: WORKFLOW_PROMPT_IDS.planningGrillStageCodex,
+          workflowPromptId: WORKFLOW_PROMPT_IDS.planningAutomaticEngineeringGrillCodex,
           createdAt: command.createdAt,
         },
       };

@@ -32,7 +32,7 @@ The shared \`shared.grilling.codex\` primitive is composed into the Product and 
 Built-in workflow stages:
 
 - Product: \`product.fix.codex\`, \`product.fast-feature.codex\`, \`product.full-feature.codex\`.
-- Planning: \`planning.grill-stage.codex\`, \`planning.domain-modeling.codex\`, \`planning.wayfinder.codex\`, \`planning.research.codex\`, \`planning.prototype.codex\`, \`planning.spec.codex\`, \`planning.tickets.codex\`, \`planning.ticket-reviewer.codex\`.
+- Planning: \`planning.grill-stage.codex\` (interactive), \`planning.engineering-grill-automatic.codex\` (Full Feature automation), \`planning.domain-modeling.codex\`, \`planning.wayfinder.codex\`, \`planning.research.codex\`, \`planning.prototype.codex\`, \`planning.spec.codex\`, \`planning.tickets.codex\`, \`planning.ticket-reviewer.codex\`.
 - Implementation: \`implementation.orchestrator-planning.codex\`, \`implementation.tdd.codex\`, \`implementation.merge-gate.codex\`, \`implementation.browser-dev-review.codex\`, \`implementation.fix.codex\`, \`implementation.code-review.codex\`.
 
 Workflow thread relationships use \`parentThreadId\`, \`workflowRole\`, \`interactionMode\`, and \`workflowPromptId\`. Parent agents start child agents with a focused first message. Child agents send durable results back to parents with final-result workflow directives, not informal prose.

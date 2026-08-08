@@ -163,7 +163,7 @@ The codebase-grounded, product-only composition of the shared Grilling primitive
 
 #### Engineering grill
 
-The Planning composition of the shared Grilling primitive and the full domain-modeling discipline. It interviews across the engineering-decision frontier while updating glossary terms and warranted ADRs, then ends in a `planning-grill-complete` directive. Planning begins here; Full Feature enters it after Product Grill.
+The Planning composition of the shared Grilling primitive and the full domain-modeling discipline. Standalone Planning interviews across the engineering-decision frontier while updating glossary terms and warranted ADRs. Full Feature uses the automatic variant after Product Grill: the model resolves that same frontier from the locked product intent and codebase without another user gate. Both variants end in a `planning-grill-complete` directive.
 
 #### Spec
 

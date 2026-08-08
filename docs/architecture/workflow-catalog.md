@@ -17,6 +17,7 @@ Provenance of the main skills:
 | `shared.grilling.codex`                                                                                  | `productivity/grilling`, the verbatim shared interview primitive                                        |
 | `product.fix.codex`, `product.fast-feature.codex`, `product.full-feature.codex`                          | shared `grilling`, plus a short codebase-grounded product-only adapter                                  |
 | `planning.grill-stage.codex`                                                                             | shared `grilling`, plus the complete `domain-modeling` discipline                                       |
+| `planning.engineering-grill-automatic.codex`                                                             | the Engineering Grill composition, plus the Full Feature autonomous adapter                             |
 | `planning.domain-modeling.codex`                                                                         | `engineering/domain-modeling`                                                                           |
 | `planning.wayfinder.codex`                                                                               | `engineering/wayfinder`                                                                                 |
 | `planning.research.codex`                                                                                | `engineering/research`                                                                                  |
@@ -29,7 +30,7 @@ Provenance of the main skills:
 | `implementation.code-review.codex`                                                                       | `engineering/code-review`                                                                               |
 | `implementation.merge-gate.codex`, `implementation.browser-dev-review.codex`, `implementation.fix.codex` | T3-native stages                                                                                        |
 
-The registry contains one independent Grilling primitive and two compositions. Product Grill adds only codebase grounding, product-decision scope, and the minimal `product-intent-locked` handoff; its three preset prompt IDs fix the intent kind up front. Engineering Grill adds the complete domain-modeling discipline and the Planning handoff. Both compositions preserve the primitive's design tree, frontier rounds, question format, fact-finding, and confirmation gate verbatim.
+The registry contains one independent Grilling primitive and two compositions. Product Grill adds only codebase grounding, product-decision scope, and the minimal `product-intent-locked` handoff; its three preset prompt IDs fix the intent kind up front. Engineering Grill adds the complete domain-modeling discipline and the Planning handoff. Standalone Planning uses the interactive composition verbatim. Full Feature uses a separate automatic adapter that keeps the design tree, dependency frontier, fact-finding, domain-modeling, and completeness requirements, but resolves every engineering decision internally from the locked Product Grill intent instead of asking another round of user questions.
 
 Supporting documents (`context-format`, `adr-format`, `domain-docs`, `agent-brief`, `prototype-logic`, `prototype-ui`, `tdd-mocking`, `tdd-tests`, `tdd-logging`, `preview-browser-qa`) are deduplicated by global ID and back-linked to the skills that carry them.
 
@@ -65,7 +66,7 @@ Product Grill (intent kind fixed to `feature`) → same-thread CLI Plan mode →
 
 ### Full Feature
 
-Product Grill → the same thread enters the complete Planning workflow at Engineering Grill → Spec authoring, tickets, and ticket review → the complete Implementation workflow runs in its own sub-thread and worktree branched from the branch the user selected, with the app dev stack created in parallel when absent. Product Grill settles product intent; Engineering Grill then settles engineering and domain decisions without reopening product questions.
+Product Grill is the only user-interactive gate. After the user confirms the product intent, the same thread enters the complete Planning workflow at the automatic Engineering Grill, where the model resolves the engineering and domain design tree from the locked intent and codebase without asking the user. Spec authoring, tickets, ticket review, and the complete Implementation workflow then continue automatically. Implementation runs in its own sub-thread and worktree branched from the branch the user selected, with the app dev stack created in parallel when absent.
 
 ### Wayfinder
 
@@ -75,7 +76,7 @@ Wayfinder reuses the Planning Workflow projection. `wayfinder-map-artifact` writ
 
 ### Planning
 
-Engineering Grill (human-in-the-loop; domain modeling writes `CONTEXT.md`, ADRs, and — in multi-context repos — a `CONTEXT-MAP.md` as decisions crystallize) → Spec authoring in the same thread (durable artifact, `planning-spec-artifact`) → ticket drafting in the same thread (`planning-tickets-artifact`) → ticket review in sub-threads: up to `PLANNING_REVIEW_MAX_CYCLES` (3) cycles, each cycle its own reviewer sub-thread, the reviewer editing tickets directly through `ticketEdits`.
+Engineering Grill is the only user-interactive stage: it works the engineering and domain frontier in rounds, while domain modeling writes `CONTEXT.md`, ADRs, and — in multi-context repos — a `CONTEXT-MAP.md` as decisions crystallize. Once the user confirms shared understanding, Spec authoring in the same thread (`planning-spec-artifact`), ticket drafting (`planning-tickets-artifact`), and ticket review continue automatically without another user gate. Ticket review runs in sub-threads for up to `PLANNING_REVIEW_MAX_CYCLES` (3), with each reviewer editing tickets directly through `ticketEdits`; a clean verdict automatically finalizes the set.
 
 ### Implementation
 

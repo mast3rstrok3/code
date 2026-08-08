@@ -48,8 +48,21 @@ describe("workflow presets", () => {
     );
     expect(fullFeature?.helpSteps.slice(0, 2).map((step) => step.skillId)).toEqual([
       "product.full-feature.codex",
-      "planning.grill-stage.codex",
+      "planning.engineering-grill-automatic.codex",
     ]);
+    expect(fullFeature?.helpSteps.slice(0, 2).map((step) => step.note)).toEqual([
+      "human-guided",
+      "automatic",
+    ]);
+    expect(fullFeature?.helpSteps.slice(1).every((step) => step.note?.includes("automatic"))).toBe(
+      true,
+    );
+  });
+
+  it("keeps the standalone Planning Engineering Grill interactive", () => {
+    const planning = WORKFLOW_PRESET_DEFINITIONS.find((definition) => definition.id === "planning");
+    expect(planning?.helpSteps[0]?.skillId).toBe("planning.grill-stage.codex");
+    expect(planning?.helpSteps[0]?.note).toBe("human-guided");
   });
 
   it("requires Product workflows to carry an explicit preset", () => {

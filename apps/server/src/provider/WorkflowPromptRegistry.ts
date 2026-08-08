@@ -15,6 +15,7 @@ export const WORKFLOW_PROMPT_IDS = {
   workflowAgentCommunications: "workflow.agent-communications",
   sharedGrillingCodex: "shared.grilling.codex",
   planningGrillStageCodex: "planning.grill-stage.codex",
+  planningAutomaticEngineeringGrillCodex: "planning.engineering-grill-automatic.codex",
   planningSpecCodex: "planning.spec.codex",
   planningTicketsCodex: "planning.tickets.codex",
   planningTicketReviewerCodex: "planning.ticket-reviewer.codex",
@@ -553,7 +554,9 @@ The skill infers which structure applies:
 
 When multiple contexts exist, infer which one the current topic relates to. If unclear, ask.`;
 
-const ENGINEERING_GRILL_PROMPT = `<collaboration_mode># Engineering Grill
+const buildEngineeringGrillPrompt = (input: {
+  readonly automatic: boolean;
+}) => `<collaboration_mode># Engineering Grill${input.automatic ? " (Automatic)" : ""}
 
 ${GRILLING_BLUEPRINT}
 
@@ -635,8 +638,23 @@ Planning artifact writes during this stage are limited to glossary and ADR updat
 
 Updating domain documentation as decisions crystallize is the only exception to the Grilling blueprint's instruction not to act before confirmation. The frontier-round mechanics remain authoritative.
 
-After the user explicitly confirms shared understanding, end with exactly one fenced JSON block containing { "type": "planning-grill-complete" }. Do not write the Spec in this stage.
+${
+  input.automatic
+    ? `## Full Feature automation adapter
+
+The Product Grill is the Full Feature workflow's only user gate. Treat its locked product intent as the authoritative user decision set.
+
+Do not ask the user questions, emit interview rounds, wait for answers, or request confirmation. Walk the engineering and domain design tree internally: resolve discoverable facts from the codebase and project context, choose the recommended answer for every engineering decision, recompute the frontier until it is empty, and update domain documentation as decisions crystallize. Do not reopen product decisions.
+
+Finish in this turn with exactly one fenced JSON block containing { "type": "planning-grill-complete" }. Do not write the Spec in this stage.
+
+This automation adapter overrides the Grilling blueprint's user-question, user-decision, waiting, and confirmation mechanics. The design tree, dependency frontier, fact-finding, domain-modeling, and completeness requirements remain authoritative.`
+    : `After the user explicitly confirms shared understanding, end with exactly one fenced JSON block containing { "type": "planning-grill-complete" }. Do not write the Spec in this stage.`
+}
 </collaboration_mode>`;
+
+const ENGINEERING_GRILL_PROMPT = buildEngineeringGrillPrompt({ automatic: false });
+const AUTOMATIC_ENGINEERING_GRILL_PROMPT = buildEngineeringGrillPrompt({ automatic: true });
 
 const PLANNING_SPEC_PROMPT = `<collaboration_mode># Planning Workflow: Spec
 
@@ -726,9 +744,9 @@ The Spec is a durable artifact in T3's application state, not a repository file 
 
 When a Wayfinder Map exists for this workflow, load it with workflow_wayfinder_map_get and treat the map's linked decisions as the conversation context to synthesize from.
 
-Seam confirmation ("Check with the user") applies only when a user is present in this planning thread. When this stage runs from a locked Product Workflow intent, there is no user to ask: resolve seams, glossary updates, and ADR updates yourself from the locked intent and the codebase.
+The Engineering Grill is Planning's only user-interactive stage. Do not ask the user to confirm seams during Spec authoring. Resolve seams, glossary updates, and ADR updates yourself from the confirmed Engineering Grill, locked Product Grill intent when present, and the codebase.
 
-These rules override only upstream tracker publication and interview mechanics; the spec template and synthesis process remain authoritative.
+These rules override upstream tracker publication and interview mechanics; the spec template and synthesis process remain authoritative.
 </collaboration_mode>`;
 
 const PLANNING_TICKETS_PROMPT = `<collaboration_mode># To Tickets
@@ -838,7 +856,8 @@ T3's Planning workflow owns publication and approval:
 - Treat the current durable Spec as the upstream source reference.
 - Draft the complete tracer-bullet set and blocking graph using the upstream process and templates.
 - Store tickets through the planning-tickets-artifact requested by the stage launch prompt; do not create local files or external tracker issues.
-- Stop after drafting. The separate Ticket Review stage owns completeness review, adjustment cycles, the user quiz, and final approval.
+- Stop after drafting. The separate automatic Ticket Review stage owns completeness review, adjustment cycles, and final approval.
+- Do not quiz or ask the user. The preceding Product Grill or interactive Engineering Grill is the workflow's only user gate.
 - Use the repository glossary and ADRs, loading supporting documents through workflow_doc_get only when needed.
 
 These rules override only upstream tracker publication and quiz ownership. Vertical slicing, blocker edges, wide-refactor expand–contract sequencing, frontier ordering, ticket sizing, and ticket content remain authoritative.
@@ -866,23 +885,9 @@ Review the Spec, conversation context, durable project context, and drafted plan
 5. In later cycles, retrieve and review only the failed, reworked, or replacement tickets named in the target scope. Previously passed tickets stay out of scope.
 6. Repeat targeted review until those tickets pass. Ticket review runs at most three cycles, and each cycle runs in its own reviewer sub-thread. A clean targeted pass completes ticket review; do not request another full-review cycle.
 
-## User quiz
+## Automatic approval
 
-The reviewer subagent should not quiz the user; it should return review verdicts and concrete corrections. After the subagent tickets reviewer has completed all review cycles and the requested ticket adjustments are done, the planning thread should present the proposed breakdown to the user as a numbered list. For each slice, show:
-
-- **Title**: short descriptive name
-- **Blocked by**: which other slices (if any) must complete first
-- **User stories covered**: which user stories this addresses (if the source material has them)
-
-Ask the user:
-
-- Does the granularity feel right? (too coarse / too fine)
-- Are the dependency relationships correct?
-- Should any slices be merged or split further?
-
-Iterate until the user approves the breakdown.
-
-Approval finalizes the durable ticket set already stored through planning-tickets-artifact and the review cycles' ticket edits. There is no separate publication step, external tracker, or triage label.
+Do not quiz or ask the user. The preceding Product Grill or interactive Engineering Grill is the workflow's only user gate. A clean reviewer verdict automatically finalizes the durable ticket set already stored through planning-tickets-artifact and the review cycles' ticket edits. If the review cap is exhausted, orchestration records warnings and continues according to the workflow policy. There is no separate publication step, external tracker, or triage label.
 </collaboration_mode>`;
 
 const PLANNING_ADR_FORMAT_ASSOCIATED_DOC_CONTENT = `# ADR Format
@@ -1741,6 +1746,31 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     ],
   },
   {
+    id: WORKFLOW_PROMPT_IDS.planningAutomaticEngineeringGrillCodex,
+    order: 2,
+    workflow: "planning",
+    role: "planning-thread",
+    stage: "grill",
+    title: "Engineering Grill (Automatic)",
+    description:
+      "Resolves engineering and domain decisions autonomously from locked Product Grill intent.",
+    promptText: AUTOMATIC_ENGINEERING_GRILL_PROMPT,
+    associatedDocs: [
+      {
+        id: "context-format",
+        title: "CONTEXT.md Format",
+        path: "CONTEXT-FORMAT.md",
+        content: CONTEXT_FORMAT_ASSOCIATED_DOC_CONTENT,
+      },
+      {
+        id: "adr-format",
+        title: "ADR Format",
+        path: "ADR-FORMAT.md",
+        content: PLANNING_ADR_FORMAT_ASSOCIATED_DOC_CONTENT,
+      },
+    ],
+  },
+  {
     id: WORKFLOW_PROMPT_IDS.planningPrototypeCodex,
     order: 3,
     workflow: "planning",
@@ -1996,6 +2026,7 @@ const VISIBLE_SKILL_IDS = new Set<string>([
   WORKFLOW_PROMPT_IDS.productFastFeatureCodex,
   WORKFLOW_PROMPT_IDS.productFullFeatureCodex,
   WORKFLOW_PROMPT_IDS.planningGrillStageCodex,
+  WORKFLOW_PROMPT_IDS.planningAutomaticEngineeringGrillCodex,
   WORKFLOW_PROMPT_IDS.planningSpecCodex,
   WORKFLOW_PROMPT_IDS.planningTicketsCodex,
   WORKFLOW_PROMPT_IDS.planningTicketReviewerCodex,
@@ -2046,7 +2077,7 @@ function buildWorkflowCatalog(): WorkflowCatalog {
     }
   }
   const implicitWorkflowIdsBySkill: Readonly<Record<string, readonly string[]>> = {
-    [WORKFLOW_PROMPT_IDS.planningGrillStageCodex]: ["full-feature", "planning"],
+    [WORKFLOW_PROMPT_IDS.planningGrillStageCodex]: ["planning"],
     [WORKFLOW_PROMPT_IDS.planningPrototypeCodex]: ["wayfinder"],
     [WORKFLOW_PROMPT_IDS.planningWayfinderCodex]: ["wayfinder"],
     [WORKFLOW_PROMPT_IDS.planningResearchCodex]: ["wayfinder"],
