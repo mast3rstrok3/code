@@ -1000,6 +1000,39 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         getId: (thread) => thread.id,
         getParentId: (thread) => thread.parentThreadId,
       }).filter((thread) => thread.id === command.threadId || thread.deletedAt === null);
+      const targetIds = new Set(targets.map((thread) => thread.id));
+      for (const run of readModel.implementationRuns) {
+        if (
+          run.status === "completed" ||
+          run.status === "canceled" ||
+          !targetIds.has(run.orchestratorThreadId)
+        ) {
+          continue;
+        }
+        const sourceThreadId = readModel.threads.find(
+          (thread) => thread.id === run.orchestratorThreadId,
+        )?.parentThreadId;
+        if (sourceThreadId === null || sourceThreadId === undefined) continue;
+        events.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: sourceThreadId,
+            occurredAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.implementation-run-cancel-requested",
+          payload: {
+            sourceThreadId,
+            run: {
+              ...run,
+              status: "canceled",
+              retryableFailure: null,
+              updatedAt: occurredAt,
+            },
+            reason: "Workflow thread deleted.",
+          },
+        });
+      }
       for (const thread of targets) {
         events.push({
           ...(yield* withEventBase({

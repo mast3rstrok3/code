@@ -46,6 +46,7 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
 import { useParams, useRouter } from "@tanstack/react-router";
@@ -112,6 +113,8 @@ import {
   flattenSidebarV2ThreadGroups,
   formatWorkingDurationLabel,
   firstValidTimestampMs,
+  getMultiThreadDeleteConfirmationText,
+  getThreadDeleteConfirmationText,
   hasUnseenCompletion,
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
@@ -169,6 +172,7 @@ import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrom
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { useComposerDraftStore } from "../composerDraftStore";
+import { createLongPressContextMenuController } from "./longPressContextMenu";
 
 // Settled-tail paging: recent history is the common lookup; the deep tail
 // stays behind an explicit Show more.
@@ -560,18 +564,52 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
     />
   );
 
+  const longPressContextMenu = useMemo(
+    () =>
+      createLongPressContextMenuController({
+        onLongPress: (position) => onContextMenu(threadRef, position),
+      }),
+    [onContextMenu, threadRef],
+  );
+  useEffect(() => () => longPressContextMenu.dispose(), [longPressContextMenu]);
+
   const handleClick = useCallback(
     (event: ReactMouseEvent) => {
+      if (longPressContextMenu.consumeClick()) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       onThreadClick(event, threadRef);
     },
-    [onThreadClick, threadRef],
+    [longPressContextMenu, onThreadClick, threadRef],
   );
   const handleContextMenu = useCallback(
     (event: ReactMouseEvent) => {
       event.preventDefault();
+      if (longPressContextMenu.consumeContextMenu()) return;
       onContextMenu(threadRef, { x: event.clientX, y: event.clientY });
     },
-    [onContextMenu, threadRef],
+    [longPressContextMenu, onContextMenu, threadRef],
+  );
+  const handlePointerDown = useCallback(
+    (event: ReactPointerEvent) => {
+      if ((event.target as HTMLElement).closest("button, a, input, textarea, select")) return;
+      longPressContextMenu.start(event);
+    },
+    [longPressContextMenu],
+  );
+  const handlePointerMove = useCallback(
+    (event: ReactPointerEvent) => {
+      longPressContextMenu.move(event);
+    },
+    [longPressContextMenu],
+  );
+  const handlePointerEnd = useCallback(
+    (event: ReactPointerEvent) => {
+      longPressContextMenu.end(event.pointerId);
+    },
+    [longPressContextMenu],
   );
   const handleKeyDown = useCallback(
     (event: ReactKeyboardEvent) => {
@@ -855,11 +893,18 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                 tabIndex={0}
                 data-testid="sidebar-v2-row-slim"
                 style={indentStyle}
-                className={cn(rowSurfaceClassName, "flex h-9 items-center gap-2.5 px-2.5")}
+                className={cn(
+                  rowSurfaceClassName,
+                  "flex h-9 items-center gap-2.5 px-2.5 select-none [touch-action:pan-y]",
+                )}
                 onClick={handleClick}
                 onDoubleClick={handleDoubleClick}
                 onKeyDown={handleKeyDown}
                 onContextMenu={handleContextMenu}
+                onPointerDown={handlePointerDown}
+                onPointerMove={handlePointerMove}
+                onPointerUp={handlePointerEnd}
+                onPointerCancel={handlePointerEnd}
               />
             }
           >
@@ -967,11 +1012,15 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
               role="button"
               tabIndex={0}
               data-testid="sidebar-v2-row-card"
-              className={rowSurfaceClassName}
+              className={cn(rowSurfaceClassName, "select-none [touch-action:pan-y]")}
               onClick={handleClick}
               onDoubleClick={handleDoubleClick}
               onKeyDown={handleKeyDown}
               onContextMenu={handleContextMenu}
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerEnd}
+              onPointerCancel={handlePointerEnd}
             />
           }
         >
@@ -2147,12 +2196,7 @@ export default function SidebarV2() {
       if (clicked.value !== "delete") return;
       if (confirmThreadDelete) {
         const confirmed = await settlePromise(() =>
-          api.dialogs.confirm(
-            [
-              `Delete ${count} thread${count === 1 ? "" : "s"}?`,
-              "This permanently clears conversation history for these threads.",
-            ].join("\n"),
-          ),
+          api.dialogs.confirm(getMultiThreadDeleteConfirmationText(count)),
         );
         if (confirmed._tag === "Failure" || !confirmed.value) return;
       }
@@ -2312,12 +2356,7 @@ export default function SidebarV2() {
           case "delete": {
             if (confirmThreadDelete) {
               const confirmed = await settlePromise(() =>
-                api.dialogs.confirm(
-                  [
-                    `Delete thread "${thread.title}"?`,
-                    "This permanently clears conversation history for this thread.",
-                  ].join("\n"),
-                ),
+                api.dialogs.confirm(getThreadDeleteConfirmationText(thread.title)),
               );
               if (confirmed._tag === "Failure" || !confirmed.value) return;
             }

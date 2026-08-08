@@ -1276,6 +1276,7 @@ export function getSelectedHierarchyRootIds<TNode, TId>(input: {
 export function getThreadDeleteConfirmationText(title: string): string {
   return [
     `Delete thread "${title}"?`,
+    "Any running work in this thread or its sub-threads is canceled.",
     "This permanently clears this thread, all sub-threads, and their conversation history.",
   ].join("\n");
 }
@@ -1283,6 +1284,7 @@ export function getThreadDeleteConfirmationText(title: string): string {
 export function getMultiThreadDeleteConfirmationText(count: number): string {
   return [
     `Delete ${count} thread${count === 1 ? "" : "s"}?`,
+    "Any running work in the selected threads or their descendants is canceled.",
     "This permanently clears the selected threads, all their descendants, and their conversation history.",
   ].join("\n");
 }
