@@ -12,6 +12,7 @@ import {
 import {
   BoxesIcon,
   CheckIcon,
+  ChevronRightIcon,
   CopyIcon,
   CornerLeftUpIcon,
   ExternalLinkIcon,
@@ -45,15 +46,21 @@ import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 
 import { Button } from "./ui/button";
+import { Checkbox } from "./ui/checkbox";
 import { Input } from "./ui/input";
 import { appDevStackDisplayName } from "@t3tools/shared/appDevStack";
 
 import {
+  appDevStackBulkDeleteConfirmation,
+  appDevStackBulkDeleteFailureMessage,
+  appDevStackSelectionState,
   autoCreateNotice,
   isTransitioningAppDevStackStatus,
+  orderAppDevStacksForPanel,
   primaryPreviewForStack,
   previewForPod,
   previewUrlForService,
+  reconcileAppDevStackIds,
   shouldPollAppDevStacks,
   type AutoCreateNotice,
   type PreviewCandidate,
@@ -88,6 +95,8 @@ interface StartPathChoice {
   readonly label: string;
   readonly path: string;
 }
+
+type StackPendingAction = "start" | "stop" | "restart" | "delete";
 
 function nonEmpty(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
@@ -124,11 +133,6 @@ function deriveAppDevStackNamespaceFromPath(worktreePath: string): string {
   return `${boundedBase}-dev`;
 }
 
-function stackUpdatedTime(stack: AppDevStack): number {
-  const timestamp = Date.parse(stack.updatedAt);
-  return Number.isFinite(timestamp) ? timestamp : 0;
-}
-
 function stackRepoBranchLabel(stack: AppDevStack): string | null {
   const repo = nonEmpty(stack.repoName);
   const branch = nonEmpty(stack.branchName);
@@ -140,6 +144,10 @@ function actionErrorMessage(error: unknown): string {
   return error instanceof Error && error.message.trim().length > 0
     ? error.message
     : "The App Dev Stack action failed.";
+}
+
+function sameStringSet(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
+  return left.size === right.size && [...left].every((value) => right.has(value));
 }
 
 function StatusBadge({ status }: { readonly status: AppDevStack["status"] }) {
@@ -421,7 +429,12 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
   const [manualNamespace, setManualNamespace] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState<AutoCreateNotice | null>(null);
-  const [pendingKey, setPendingKey] = useState<string | null>(null);
+  const [pendingActions, setPendingActions] = useState<ReadonlyMap<string, StackPendingAction>>(
+    () => new Map(),
+  );
+  const [expandedStackIds, setExpandedStackIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [selectedStackIds, setSelectedStackIds] = useState<ReadonlySet<string>>(() => new Set());
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [inspectedStackId, setInspectedStackId] = useState<string | null>(null);
   const [selectedPodName, setSelectedPodName] = useState<string | null>(null);
   const [selectedContainerName, setSelectedContainerName] = useState<string | null>(null);
@@ -468,7 +481,7 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
       : deriveAppDevStackNamespaceFromPath(submittedPath)
     : null;
   const submittedPathStartKey = submittedPath
-    ? `start:${submittedPath}:${submittedNamespace ?? ""}`
+    ? `create:${submittedPath}:${submittedNamespace ?? ""}`
     : null;
   const startPathChoices = useMemo(() => {
     const choices: StartPathChoice[] = [];
@@ -599,20 +612,45 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
     return () => window.clearInterval(interval);
   }, [pollTransitioningStacks, refreshStacks]);
 
-  const stacks = useMemo(() => {
-    const currentNormalized = normalizeWorktreePath(currentPath);
-    return [...(listQuery.data?.stacks ?? [])].sort((left, right) => {
-      const leftCurrent = normalizeWorktreePath(left.worktreePath) === currentNormalized;
-      const rightCurrent = normalizeWorktreePath(right.worktreePath) === currentNormalized;
-      if (leftCurrent !== rightCurrent) return leftCurrent ? -1 : 1;
-      return stackUpdatedTime(right) - stackUpdatedTime(left);
-    });
-  }, [currentPath, listQuery.data?.stacks]);
-
+  const listedStacks = useMemo(() => listQuery.data?.stacks ?? [], [listQuery.data?.stacks]);
   const currentStack =
     currentStackQuery.data?.stack ??
-    stacks.find((stack) => normalizeWorktreePath(stack.worktreePath) === currentPath) ??
+    listedStacks.find((stack) => normalizeWorktreePath(stack.worktreePath) === currentPath) ??
     null;
+  const stacks = useMemo(
+    () =>
+      orderAppDevStacksForPanel({
+        currentStack,
+        listedStacks,
+        currentWorktreePath: currentPath,
+      }),
+    [currentPath, currentStack, listedStacks],
+  );
+  const selectionState = appDevStackSelectionState(selectedStackIds, stacks);
+  const selectedStacks = stacks.filter((stack) => selectedStackIds.has(stack.id));
+  const selectedStackHasPendingAction = selectedStacks.some((stack) =>
+    pendingActions.has(stack.id),
+  );
+
+  useEffect(() => {
+    setSelectedStackIds((current) => {
+      const reconciled = reconcileAppDevStackIds(current, stacks);
+      return sameStringSet(current, reconciled) ? current : reconciled;
+    });
+    setExpandedStackIds((current) => {
+      const reconciled = reconcileAppDevStackIds(current, stacks);
+      return sameStringSet(current, reconciled) ? current : reconciled;
+    });
+  }, [stacks]);
+
+  const setPendingAction = useCallback((key: string, action: StackPendingAction | null) => {
+    setPendingActions((current) => {
+      const next = new Map(current);
+      if (action === null) next.delete(key);
+      else next.set(key, action);
+      return next;
+    });
+  }, []);
 
   const runStart = useCallback(
     async (
@@ -625,9 +663,9 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
       const namespace =
         nonEmpty(sourceStack?.namespace) ??
         (requestedNamespace ? normalizeKubernetesNamespace(requestedNamespace) : null);
-      const key = `start:${sourceStack?.id ?? `${normalizedPath}:${namespace ?? ""}`}`;
+      const key = sourceStack?.id ?? `create:${normalizedPath}:${namespace ?? ""}`;
       const branch = sourceStack?.branchName ?? props.activeThread?.branch ?? null;
-      setPendingKey(key);
+      setPendingAction(key, "start");
       setActionError(null);
       setActionNotice(null);
       try {
@@ -648,24 +686,31 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
         }
         const notice = autoCreateNotice(result.value);
         setActionNotice(notice);
-        if (notice?.stackId) {
-          setInspectedStackId(notice.stackId);
+        const noticeStackId = notice?.stackId;
+        if (noticeStackId) {
+          setInspectedStackId(noticeStackId);
+          setExpandedStackIds((current) => new Set(current).add(noticeStackId));
         }
         refreshStacks();
         if (!sourceStack) {
           setIsCreateOpen(false);
         }
       } finally {
-        setPendingKey((current) => (current === key ? null : current));
+        setPendingAction(key, null);
       }
     },
-    [autoCreateStack, props.activeThread?.branch, props.environmentId, refreshStacks],
+    [
+      autoCreateStack,
+      props.activeThread?.branch,
+      props.environmentId,
+      refreshStacks,
+      setPendingAction,
+    ],
   );
 
   const runStop = useCallback(
     async (stack: AppDevStack) => {
-      const key = `stop:${stack.id}`;
-      setPendingKey(key);
+      setPendingAction(stack.id, "stop");
       setActionError(null);
       try {
         const result = await stopStack({
@@ -680,16 +725,15 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
         }
         refreshStacks();
       } finally {
-        setPendingKey((current) => (current === key ? null : current));
+        setPendingAction(stack.id, null);
       }
     },
-    [props.environmentId, refreshStacks, stopStack],
+    [props.environmentId, refreshStacks, setPendingAction, stopStack],
   );
 
   const runRestart = useCallback(
     async (stack: AppDevStack) => {
-      const key = `restart:${stack.id}`;
-      setPendingKey(key);
+      setPendingAction(stack.id, "restart");
       setActionError(null);
       try {
         const result = await restartStack({
@@ -704,10 +748,33 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
         }
         refreshStacks();
       } finally {
-        setPendingKey((current) => (current === key ? null : current));
+        setPendingAction(stack.id, null);
       }
     },
-    [props.environmentId, refreshStacks, restartStack],
+    [props.environmentId, refreshStacks, restartStack, setPendingAction],
+  );
+
+  const executeDelete = useCallback(
+    async (stack: AppDevStack): Promise<string | null> => {
+      setPendingAction(stack.id, "delete");
+      try {
+        const result = await deleteStack({
+          environmentId: props.environmentId,
+          input: { stackId: stack.id },
+        });
+        if (result._tag === "Failure") {
+          return isAtomCommandInterrupted(result)
+            ? "The delete action was interrupted."
+            : actionErrorMessage(squashAtomCommandFailure(result));
+        }
+        return null;
+      } catch (error) {
+        return actionErrorMessage(error);
+      } finally {
+        setPendingAction(stack.id, null);
+      }
+    },
+    [deleteStack, props.environmentId, setPendingAction],
   );
 
   const runDelete = useCallback(
@@ -719,27 +786,65 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
       ) {
         return;
       }
-      const key = `delete:${stack.id}`;
-      setPendingKey(key);
       setActionError(null);
-      try {
-        const result = await deleteStack({
-          environmentId: props.environmentId,
-          input: { stackId: stack.id },
-        });
-        if (result._tag === "Failure") {
-          if (!isAtomCommandInterrupted(result)) {
-            setActionError(actionErrorMessage(squashAtomCommandFailure(result)));
-          }
-          return;
-        }
-        refreshStacks();
-      } finally {
-        setPendingKey((current) => (current === key ? null : current));
+      const failure = await executeDelete(stack);
+      if (failure) {
+        setActionError(failure);
+        return;
       }
+      setSelectedStackIds((current) => {
+        const next = new Set(current);
+        next.delete(stack.id);
+        return next;
+      });
+      setExpandedStackIds((current) => {
+        const next = new Set(current);
+        next.delete(stack.id);
+        return next;
+      });
+      if (inspectedStackId === stack.id) setInspectedStackId(null);
+      refreshStacks();
     },
-    [deleteStack, props.environmentId, refreshStacks],
+    [executeDelete, inspectedStackId, refreshStacks],
   );
+
+  const runBulkDelete = useCallback(async () => {
+    if (selectedStacks.length === 0 || selectedStackHasPendingAction || isBulkDeleting) return;
+    if (!window.confirm(appDevStackBulkDeleteConfirmation(selectedStacks.length))) return;
+
+    setIsBulkDeleting(true);
+    setActionError(null);
+    try {
+      const results = await Promise.all(
+        selectedStacks.map(async (stack) => ({ stack, message: await executeDelete(stack) })),
+      );
+      const failures = results.flatMap((result) =>
+        result.message === null ? [] : [{ stack: result.stack, message: result.message }],
+      );
+      const failedIds = new Set(failures.map(({ stack }) => stack.id));
+      const succeededIds = new Set(
+        selectedStacks.filter((stack) => !failedIds.has(stack.id)).map((stack) => stack.id),
+      );
+      setSelectedStackIds(failedIds);
+      setExpandedStackIds((current) => {
+        const next = new Set(current);
+        for (const id of succeededIds) next.delete(id);
+        return next;
+      });
+      if (inspectedStackId && succeededIds.has(inspectedStackId)) setInspectedStackId(null);
+      setActionError(appDevStackBulkDeleteFailureMessage(failures, selectedStacks.length));
+      refreshStacks();
+    } finally {
+      setIsBulkDeleting(false);
+    }
+  }, [
+    executeDelete,
+    inspectedStackId,
+    isBulkDeleting,
+    refreshStacks,
+    selectedStackHasPendingAction,
+    selectedStacks,
+  ]);
 
   const openPreview = useCallback(
     async (candidate: PreviewCandidate) => {
@@ -758,9 +863,17 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
   );
 
   const runCreateStart = useCallback(() => {
-    if (!stackBackendEnabled || !submittedPath || pendingKey !== null) return;
+    if (!stackBackendEnabled || !submittedPath || submittedPathStartKey === null) return;
+    if (pendingActions.has(submittedPathStartKey)) return;
     void runStart(submittedPath, null, submittedNamespace);
-  }, [pendingKey, runStart, stackBackendEnabled, submittedNamespace, submittedPath]);
+  }, [
+    pendingActions,
+    runStart,
+    stackBackendEnabled,
+    submittedNamespace,
+    submittedPath,
+    submittedPathStartKey,
+  ]);
 
   const browseToPath = useCallback((path: string) => {
     setManualPath(ensureBrowseDirectoryPath(path));
@@ -777,91 +890,94 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
     setSelectedContainerName(pod.containers[0]?.name ?? null);
   }, []);
 
+  const toggleStackExpanded = useCallback(
+    (stack: AppDevStack) => {
+      const collapsing = expandedStackIds.has(stack.id);
+      setExpandedStackIds((current) => {
+        const next = new Set(current);
+        if (collapsing) next.delete(stack.id);
+        else next.add(stack.id);
+        return next;
+      });
+      if (collapsing && inspectedStackId === stack.id) setInspectedStackId(null);
+    },
+    [expandedStackIds, inspectedStackId],
+  );
+
+  const toggleStackSelected = useCallback((stackId: string, selected: boolean) => {
+    setSelectedStackIds((current) => {
+      const next = new Set(current);
+      if (selected) next.add(stackId);
+      else next.delete(stackId);
+      return next;
+    });
+  }, []);
+
   const renderStackRow = (stack: AppDevStack) => {
     const preview = primaryPreviewForStack(stack);
-    const startKey = `start:${stack.id}`;
-    const stopKey = `stop:${stack.id}`;
-    const restartKey = `restart:${stack.id}`;
-    const deleteKey = `delete:${stack.id}`;
+    const pendingAction = pendingActions.get(stack.id);
     const inspectSelected = inspectedStackId === stack.id;
-    const startPending = pendingKey === startKey;
-    const stopPending = pendingKey === stopKey;
-    const restartPending = pendingKey === restartKey;
-    const deletePending = pendingKey === deleteKey;
+    const expanded = expandedStackIds.has(stack.id);
+    const selected = selectedStackIds.has(stack.id);
+    const isCurrent = normalizeWorktreePath(stack.worktreePath) === currentPath;
     const repoBranch = stackRepoBranchLabel(stack);
+    const stackName = displayStackName(stack);
 
     return (
-      <div key={stack.id} className="rounded-lg border border-border bg-card/35 p-3">
-        <div className="flex min-w-0 items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex min-w-0 items-center gap-2">
-              <div className="truncate text-sm font-medium">{displayStackName(stack)}</div>
-              <StatusBadge status={stack.status} />
-            </div>
-            <div className="mt-1 truncate text-xs text-muted-foreground">
-              {repoBranch ? `${repoBranch} · ` : ""}
-              {stack.namespace ? `namespace ${stack.namespace}` : "namespace pending"}
-            </div>
-          </div>
-          <div className="flex shrink-0 items-center gap-1">
-            {preview ? (
-              <>
-                <Button
-                  size="icon-xs"
-                  variant="ghost"
-                  render={<a href={preview.url} target="_blank" rel="noreferrer" />}
-                  title={preview.url}
-                  aria-label={`Open ${preview.serviceName} externally`}
-                >
-                  <ExternalLinkIcon className="size-3.5" />
-                </Button>
-                {previewSupported ? (
-                  <Button
-                    size="icon-xs"
-                    variant="ghost"
-                    onClick={() => void openPreview(preview)}
-                    aria-label={`Open ${preview.serviceName} in the browser panel`}
-                  >
-                    <PanelRightIcon className="size-3.5" />
-                  </Button>
+      <div
+        key={stack.id}
+        className={cn(
+          "rounded-lg border bg-card/35 p-3",
+          selected ? "border-primary/45 bg-primary/5" : "border-border",
+        )}
+        data-app-stack-state={expanded ? "expanded" : "collapsed"}
+      >
+        <div className="flex min-w-0 items-start gap-2">
+          <Checkbox
+            checked={selected}
+            onCheckedChange={(checked) => toggleStackSelected(stack.id, Boolean(checked))}
+            disabled={pendingAction !== undefined || isBulkDeleting}
+            aria-label={`Select ${stackName}`}
+            className="mt-0.5"
+          />
+          <button
+            type="button"
+            className="flex min-w-0 flex-1 items-start gap-1.5 rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={() => toggleStackExpanded(stack)}
+            aria-expanded={expanded}
+            aria-label={`${expanded ? "Collapse" : "Expand"} ${stackName}`}
+          >
+            <ChevronRightIcon
+              className={cn(
+                "mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform",
+                expanded && "rotate-90",
+              )}
+            />
+            <span className="min-w-0 flex-1">
+              <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+                <span className="min-w-0 truncate text-sm font-medium">{stackName}</span>
+                {isCurrent ? (
+                  <span className="inline-flex h-5 items-center rounded-full border border-primary/25 bg-primary/10 px-2 text-[11px] font-medium text-primary">
+                    Current
+                  </span>
                 ) : null}
-              </>
-            ) : null}
-            <Button
-              size="icon-xs"
-              variant="ghost"
-              onClick={() => toggleInspectStack(stack)}
-              data-pressed={inspectSelected ? "" : undefined}
-              aria-label="Inspect Kubernetes pods and logs"
-            >
-              <Rows3Icon className="size-3.5" />
-            </Button>
-            <Button
-              size="icon-xs"
-              variant="ghost"
-              onClick={() => void runStart(stack.worktreePath, stack)}
-              disabled={pendingKey !== null}
-              aria-label="Start stack"
-            >
-              {startPending ? <LoaderIcon className="size-3.5 animate-spin" /> : <PlayIcon />}
-            </Button>
-            <Button
-              size="icon-xs"
-              variant="ghost"
-              onClick={() => void runStop(stack)}
-              disabled={stack.status === "stopped" || pendingKey !== null}
-              aria-label="Stop stack"
-            >
-              {stopPending ? <LoaderIcon className="size-3.5 animate-spin" /> : <PowerIcon />}
-            </Button>
+                <StatusBadge status={stack.status} />
+              </span>
+              <span className="mt-1 block truncate text-xs text-muted-foreground">
+                {repoBranch ? `${repoBranch} · ` : ""}
+                {stack.namespace ? `namespace ${stack.namespace}` : "namespace pending"}
+              </span>
+            </span>
+          </button>
+          <div className="flex shrink-0 items-center gap-1">
             <Button
               size="icon-xs"
               variant="ghost"
               onClick={() => void runRestart(stack)}
-              disabled={pendingKey !== null}
-              aria-label="Restart stack"
+              disabled={pendingAction !== undefined}
+              aria-label={`Restart ${stackName}`}
             >
-              {restartPending ? (
+              {pendingAction === "restart" ? (
                 <LoaderIcon className="size-3.5 animate-spin" />
               ) : (
                 <RotateCcwIcon />
@@ -871,40 +987,115 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
               size="icon-xs"
               variant="ghost"
               onClick={() => void runDelete(stack)}
-              disabled={pendingKey !== null}
-              aria-label="Delete stack"
+              disabled={pendingAction !== undefined}
+              aria-label={`Delete ${stackName}`}
+              className="text-muted-foreground hover:text-destructive"
             >
-              {deletePending ? <LoaderIcon className="size-3.5 animate-spin" /> : <Trash2Icon />}
+              {pendingAction === "delete" ? (
+                <LoaderIcon className="size-3.5 animate-spin" />
+              ) : (
+                <Trash2Icon />
+              )}
             </Button>
           </div>
         </div>
-        <div className="mt-2 truncate text-xs text-muted-foreground">{stack.worktreePath}</div>
-        {stack.lastError ? (
-          <div className="mt-2 rounded-md border border-destructive/20 bg-destructive/5 p-2 text-xs text-destructive">
-            {stack.lastError}
+
+        {expanded ? (
+          <div className="mt-3 border-t border-border/70 pt-3">
+            <div className="flex flex-wrap items-center gap-1">
+              {preview ? (
+                <>
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    render={<a href={preview.url} target="_blank" rel="noreferrer" />}
+                    title={preview.url}
+                    aria-label={`Open ${preview.serviceName} for ${stackName} externally`}
+                  >
+                    <ExternalLinkIcon className="size-3.5" />
+                    Preview
+                  </Button>
+                  {previewSupported ? (
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      onClick={() => void openPreview(preview)}
+                      aria-label={`Open ${preview.serviceName} for ${stackName} in the browser panel`}
+                    >
+                      <PanelRightIcon className="size-3.5" />
+                      Browser
+                    </Button>
+                  ) : null}
+                </>
+              ) : null}
+              <Button
+                size="xs"
+                variant="ghost"
+                onClick={() => toggleInspectStack(stack)}
+                data-pressed={inspectSelected ? "" : undefined}
+                aria-label={`Inspect Kubernetes pods and logs for ${stackName}`}
+              >
+                <Rows3Icon className="size-3.5" />
+                Inspect
+              </Button>
+              <Button
+                size="xs"
+                variant="ghost"
+                onClick={() => void runStart(stack.worktreePath, stack)}
+                disabled={pendingAction !== undefined}
+                aria-label={`Start ${stackName}`}
+              >
+                {pendingAction === "start" ? (
+                  <LoaderIcon className="size-3.5 animate-spin" />
+                ) : (
+                  <PlayIcon />
+                )}
+                Start
+              </Button>
+              <Button
+                size="xs"
+                variant="ghost"
+                onClick={() => void runStop(stack)}
+                disabled={stack.status === "stopped" || pendingAction !== undefined}
+                aria-label={`Stop ${stackName}`}
+              >
+                {pendingAction === "stop" ? (
+                  <LoaderIcon className="size-3.5 animate-spin" />
+                ) : (
+                  <PowerIcon />
+                )}
+                Stop
+              </Button>
+            </div>
+            <div className="mt-2 truncate text-xs text-muted-foreground">{stack.worktreePath}</div>
+            {stack.lastError ? (
+              <div className="mt-2 rounded-md border border-destructive/20 bg-destructive/5 p-2 text-xs text-destructive">
+                {stack.lastError}
+              </div>
+            ) : null}
+            <div className="mt-3">
+              <StackServices stack={stack} />
+            </div>
+            {inspectSelected ? (
+              <StackKubernetesInspect
+                stack={stack}
+                pods={podsQuery.data?.pods ?? []}
+                podsError={podsQuery.error}
+                podsPending={podsQuery.isPending}
+                logs={podLogsQuery.data}
+                logsError={podLogsQuery.error}
+                logsPending={podLogsQuery.isPending}
+                selectedPodName={selectedPod?.name ?? selectedPodName}
+                selectedContainerName={selectedLogContainerName}
+                onSelectPod={selectPod}
+                onSelectContainer={setSelectedContainerName}
+                onRefresh={() => {
+                  podsQuery.refresh();
+                  podLogsQuery.refresh();
+                }}
+              />
+            ) : null}
           </div>
-        ) : null}
-        <div className="mt-3">
-          <StackServices stack={stack} />
-        </div>
-        {inspectSelected ? (
-          <StackKubernetesInspect
-            stack={stack}
-            pods={podsQuery.data?.pods ?? []}
-            podsError={podsQuery.error}
-            podsPending={podsQuery.isPending}
-            logs={podLogsQuery.data}
-            logsError={podLogsQuery.error}
-            logsPending={podLogsQuery.isPending}
-            selectedPodName={selectedPod?.name ?? selectedPodName}
-            selectedContainerName={selectedLogContainerName}
-            onSelectPod={selectPod}
-            onSelectContainer={setSelectedContainerName}
-            onRefresh={() => {
-              podsQuery.refresh();
-              podLogsQuery.refresh();
-            }}
-          />
         ) : null}
       </div>
     );
@@ -1014,9 +1205,14 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
                   <Button
                     size="sm"
                     type="submit"
-                    disabled={!stackBackendEnabled || !submittedPath || pendingKey !== null}
+                    disabled={
+                      !stackBackendEnabled ||
+                      !submittedPath ||
+                      (submittedPathStartKey !== null && pendingActions.has(submittedPathStartKey))
+                    }
                   >
-                    {pendingKey === submittedPathStartKey ? (
+                    {submittedPathStartKey !== null &&
+                    pendingActions.get(submittedPathStartKey) === "start" ? (
                       <LoaderIcon className="animate-spin" />
                     ) : (
                       <PlayIcon />
@@ -1135,47 +1331,72 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
               description="Enable native app-dev stack handling on the server or set T3CODE_APP_DEV_STACK_BACKEND_URL to a controller API that serves /api/app-dev-stacks."
             />
           ) : (
-            <>
-              <section className="space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                    Current Worktree
-                  </div>
-                  {currentStackQuery.isPending ? (
-                    <LoaderIcon className="size-3.5 animate-spin text-muted-foreground" />
+            <section className="space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <label className="flex min-w-0 cursor-pointer items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  <Checkbox
+                    checked={selectionState.checked}
+                    indeterminate={selectionState.indeterminate}
+                    onCheckedChange={(checked) => {
+                      setSelectedStackIds(
+                        checked ? new Set(stacks.map((stack) => stack.id)) : new Set(),
+                      );
+                    }}
+                    disabled={stacks.length === 0 || isBulkDeleting}
+                    aria-label="Select all App Stacks"
+                  />
+                  <span>All Stacks</span>
+                </label>
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  {(listQuery.isPending || currentStackQuery.isPending) && stacks.length === 0 ? (
+                    <LoaderIcon className="size-3.5 animate-spin" />
                   ) : null}
+                  <span>{stacks.length}</span>
                 </div>
-                {currentStack ? (
-                  renderStackRow(currentStack)
-                ) : (
-                  <EmptyPanelState
-                    title="No stack for this worktree"
-                    description="Start a stack to create an isolated Kubernetes namespace for the current branch or worktree."
-                  />
-                )}
-              </section>
+              </div>
 
-              <section className="space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                    All Stacks
+              {selectedStacks.length > 0 ? (
+                <div className="flex items-center justify-between gap-2 rounded-md border border-primary/25 bg-primary/5 px-2 py-1.5">
+                  <span className="text-xs text-muted-foreground">
+                    {selectedStacks.length} selected
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      onClick={() => setSelectedStackIds(new Set())}
+                      disabled={isBulkDeleting}
+                    >
+                      <XIcon />
+                      Clear
+                    </Button>
+                    <Button
+                      size="xs"
+                      variant="destructive-outline"
+                      onClick={() => void runBulkDelete()}
+                      disabled={isBulkDeleting || selectedStackHasPendingAction}
+                    >
+                      {isBulkDeleting ? <LoaderIcon className="animate-spin" /> : <Trash2Icon />}
+                      Delete {selectedStacks.length}
+                    </Button>
                   </div>
-                  <div className="text-xs text-muted-foreground">{stacks.length}</div>
                 </div>
-                {listQuery.error ? (
-                  <div className="rounded-lg border border-destructive/25 bg-destructive/5 p-3 text-xs text-destructive">
-                    {listQuery.error}
-                  </div>
-                ) : stacks.length > 0 ? (
-                  <div className="space-y-2">{stacks.map(renderStackRow)}</div>
-                ) : (
-                  <EmptyPanelState
-                    title="No app stacks"
-                    description="Start stacks from one or more worktrees to run them in parallel namespaces."
-                  />
-                )}
-              </section>
-            </>
+              ) : null}
+
+              {listQuery.error ? (
+                <div className="rounded-lg border border-destructive/25 bg-destructive/5 p-3 text-xs text-destructive">
+                  {listQuery.error}
+                </div>
+              ) : null}
+              {stacks.length > 0 ? (
+                <div className="space-y-2">{stacks.map(renderStackRow)}</div>
+              ) : (
+                <EmptyPanelState
+                  title="No app stacks"
+                  description="Start stacks from one or more worktrees to run them in parallel namespaces."
+                />
+              )}
+            </section>
           )}
         </div>
       </div>

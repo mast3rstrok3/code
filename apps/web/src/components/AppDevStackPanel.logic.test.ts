@@ -2,10 +2,15 @@ import type { AppDevStack, AppDevStackAutoCreateResult, AppDevStackPod } from "@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  appDevStackBulkDeleteConfirmation,
+  appDevStackBulkDeleteFailureMessage,
+  appDevStackSelectionState,
   autoCreateNotice,
   normalizePreviewHref,
+  orderAppDevStacksForPanel,
   previewForPod,
   primaryPreviewForStack,
+  reconcileAppDevStackIds,
   shouldPollAppDevStacks,
 } from "./AppDevStackPanel.logic";
 
@@ -109,6 +114,79 @@ describe("AppDevStackPanel URL helpers", () => {
 
     expect(normalizePreviewHref("javascript:alert(1)")).toBe(null);
     expect(previewForPod(makePod(), stack)).toBe(null);
+  });
+});
+
+describe("AppDevStackPanel list management", () => {
+  it("shows the current stack once and orders remaining stacks by update time", () => {
+    const current = makeStack({ id: "current", worktreePath: "/repo/current" });
+    const older = makeStack({
+      id: "older",
+      worktreePath: "/repo/older",
+      updatedAt: "2026-06-24T00:00:00.000Z",
+    });
+    const newer = makeStack({
+      id: "newer",
+      worktreePath: "/repo/newer",
+      updatedAt: "2026-06-26T00:00:00.000Z",
+    });
+
+    expect(
+      orderAppDevStacksForPanel({
+        currentStack: current,
+        listedStacks: [older, current, newer],
+        currentWorktreePath: "/repo/current/",
+      }).map((stack) => stack.id),
+    ).toEqual(["current", "newer", "older"]);
+  });
+
+  it("includes current-query data when the general list is stale", () => {
+    const current = makeStack({ id: "current", worktreePath: "/repo/current" });
+    const other = makeStack({ id: "other", worktreePath: "/repo/other" });
+
+    expect(
+      orderAppDevStacksForPanel({
+        currentStack: current,
+        listedStacks: [other],
+        currentWorktreePath: "/repo/current",
+      }).map((stack) => stack.id),
+    ).toEqual(["current", "other"]);
+  });
+
+  it("reconciles stale selection and derives tri-state select-all state", () => {
+    const first = makeStack({ id: "first" });
+    const second = makeStack({ id: "second" });
+    const reconciled = reconcileAppDevStackIds(new Set(["first", "missing"]), [first, second]);
+
+    expect(reconciled).toEqual(new Set(["first"]));
+    expect(appDevStackSelectionState(reconciled, [first, second])).toEqual({
+      checked: false,
+      indeterminate: true,
+    });
+    expect(appDevStackSelectionState(new Set(["first", "second"]), [first, second])).toEqual({
+      checked: true,
+      indeterminate: false,
+    });
+    expect(appDevStackSelectionState(new Set(), [first, second])).toEqual({
+      checked: false,
+      indeterminate: false,
+    });
+  });
+
+  it("builds bulk-delete confirmation and partial failure copy", () => {
+    expect(appDevStackBulkDeleteConfirmation(2)).toBe(
+      "Delete 2 App Stacks?\nThis will remove their Kubernetes namespaces.",
+    );
+    expect(appDevStackBulkDeleteConfirmation(1)).toBe(
+      "Delete 1 App Stack?\nThis will remove its Kubernetes namespace.",
+    );
+    expect(
+      appDevStackBulkDeleteFailureMessage(
+        [{ stack: makeStack({ id: "broken", displayName: "Broken stack" }), message: "Denied" }],
+        3,
+      ),
+    ).toBe("Failed to delete 1 of 3 App Stacks. Broken stack: Denied");
+    expect(appDevStackBulkDeleteFailureMessage([], 2)).toBeNull();
   });
 });
 

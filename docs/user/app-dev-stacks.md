@@ -28,6 +28,17 @@ Conventional URLs:
 | `keycloak`               | `https://<namespace>-keycloak.nightingale-ai.com` |
 | `minio`                  | `https://minio-<namespace>.nightingale-ai.com`    |
 
+## Managing stacks
+
+Open **App Stack** in the right sidebar to see every stack reported by the active environment. The
+current worktree is marked and appears first. Stack cards start collapsed so the list stays compact;
+expand a card to access previews, start and stop controls, service details, and Kubernetes pod logs.
+
+Restart and delete remain available on every collapsed card. To clean up several stacks, select
+their checkboxes (or use **Select all**) and choose **Delete** in the selection toolbar. T3 Code asks
+for confirmation once, deletes the selected Kubernetes namespaces in parallel, and leaves any stack
+that failed selected so you can retry it.
+
 ## TanStack Start
 
 For TanStack Start repositories, the App Dev Stack should run the built server, not a Vite dev

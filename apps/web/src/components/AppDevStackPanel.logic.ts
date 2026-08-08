@@ -29,6 +29,102 @@ export interface AutoCreateNotice {
   readonly stackId: string | null;
 }
 
+export interface AppDevStackSelectionState {
+  readonly checked: boolean;
+  readonly indeterminate: boolean;
+}
+
+export interface AppDevStackDeleteFailure {
+  readonly stack: AppDevStack;
+  readonly message: string;
+}
+
+function stackUpdatedTime(stack: AppDevStack): number {
+  const timestamp = Date.parse(stack.updatedAt);
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function normalizeWorktreePath(value: string): string {
+  const normalized = value.trim().replace(/\\/gu, "/").replace(/\/+$/gu, "");
+  return normalized === "" ? "/" : normalized;
+}
+
+export function orderAppDevStacksForPanel(input: {
+  readonly currentStack: AppDevStack | null | undefined;
+  readonly listedStacks: ReadonlyArray<AppDevStack>;
+  readonly currentWorktreePath: string;
+}): AppDevStack[] {
+  const currentPath = normalizeWorktreePath(input.currentWorktreePath);
+  const ordered: AppDevStack[] = [];
+  const seenIds = new Set<string>();
+
+  if (input.currentStack) {
+    ordered.push(input.currentStack);
+    seenIds.add(input.currentStack.id);
+  }
+
+  for (const stack of input.listedStacks) {
+    if (seenIds.has(stack.id)) continue;
+    if (
+      input.currentStack &&
+      normalizeWorktreePath(stack.worktreePath) ===
+        normalizeWorktreePath(input.currentStack.worktreePath)
+    ) {
+      continue;
+    }
+    ordered.push(stack);
+    seenIds.add(stack.id);
+  }
+
+  return ordered.sort((left, right) => {
+    const leftCurrent = normalizeWorktreePath(left.worktreePath) === currentPath;
+    const rightCurrent = normalizeWorktreePath(right.worktreePath) === currentPath;
+    if (leftCurrent !== rightCurrent) return leftCurrent ? -1 : 1;
+    return stackUpdatedTime(right) - stackUpdatedTime(left);
+  });
+}
+
+export function reconcileAppDevStackIds(
+  ids: ReadonlySet<string>,
+  stacks: ReadonlyArray<AppDevStack>,
+): Set<string> {
+  const availableIds = new Set(stacks.map((stack) => stack.id));
+  return new Set([...ids].filter((id) => availableIds.has(id)));
+}
+
+export function appDevStackSelectionState(
+  selectedIds: ReadonlySet<string>,
+  stacks: ReadonlyArray<AppDevStack>,
+): AppDevStackSelectionState {
+  if (stacks.length === 0) return { checked: false, indeterminate: false };
+  const selectedCount = stacks.reduce(
+    (count, stack) => count + (selectedIds.has(stack.id) ? 1 : 0),
+    0,
+  );
+  return {
+    checked: selectedCount === stacks.length,
+    indeterminate: selectedCount > 0 && selectedCount < stacks.length,
+  };
+}
+
+export function appDevStackBulkDeleteConfirmation(count: number): string {
+  return [
+    `Delete ${count} App Stack${count === 1 ? "" : "s"}?`,
+    `This will remove ${count === 1 ? "its" : "their"} Kubernetes namespace${count === 1 ? "" : "s"}.`,
+  ].join("\n");
+}
+
+export function appDevStackBulkDeleteFailureMessage(
+  failures: ReadonlyArray<AppDevStackDeleteFailure>,
+  totalCount: number,
+): string | null {
+  if (failures.length === 0) return null;
+  const details = failures
+    .map(({ stack, message }) => `${stack.displayName?.trim() || stack.id}: ${message}`)
+    .join("; ");
+  return `Failed to delete ${failures.length} of ${totalCount} App Stack${totalCount === 1 ? "" : "s"}. ${details}`;
+}
+
 /** Informational (non-error) notice when auto-create returned an existing stack. */
 export function autoCreateNotice(result: AppDevStackAutoCreateResult): AutoCreateNotice | null {
   if (result.created) return null;
