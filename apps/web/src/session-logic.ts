@@ -446,11 +446,25 @@ function parseUserInputQuestions(
       if (options.length === 0) {
         return null;
       }
+      const recommendationRecord =
+        question.recommendation && typeof question.recommendation === "object"
+          ? (question.recommendation as Record<string, unknown>)
+          : null;
+      const recommendation =
+        recommendationRecord &&
+        typeof recommendationRecord.optionLabel === "string" &&
+        typeof recommendationRecord.rationale === "string"
+          ? {
+              optionLabel: recommendationRecord.optionLabel,
+              rationale: recommendationRecord.rationale,
+            }
+          : undefined;
       return {
         id: question.id,
         header: question.header,
         question: question.question,
         options,
+        ...(recommendation ? { recommendation } : {}),
         multiSelect: question.multiSelect === true,
       };
     })

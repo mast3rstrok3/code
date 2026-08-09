@@ -1187,6 +1187,57 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       }),
   );
 
+  it.effect("preserves workflow recommendation metadata in canonical user-input events", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const eventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      yield* runtime.emit({
+        id: asEventId("evt-workflow-user-input-requested"),
+        kind: "request",
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        method: "workflow/requestUserInput",
+        requestId: ApprovalRequestId.make("req-workflow-user-input-1"),
+        payload: {
+          questions: [
+            {
+              id: "release_shape",
+              header: "Release",
+              question: "How should this ship?",
+              options: [
+                { label: "Complete", description: "Ship every path together." },
+                { label: "Incremental", description: "Ship the core path first." },
+              ],
+              recommendation: {
+                optionLabel: "Incremental",
+                rationale: "It creates the fastest useful feedback loop.",
+              },
+              multiSelect: false,
+            },
+          ],
+        },
+      } satisfies ProviderEvent);
+
+      const event = yield* Fiber.join(eventFiber);
+      NodeAssert.equal(event._tag, "Some");
+      if (event._tag === "Some" && event.value.type === "user-input.requested") {
+        NodeAssert.deepStrictEqual(event.value.payload.questions[0]?.options, [
+          { label: "Complete", description: "Ship every path together." },
+          { label: "Incremental", description: "Ship the core path first." },
+        ]);
+        NodeAssert.deepStrictEqual(event.value.payload.questions[0]?.recommendation, {
+          optionLabel: "Incremental",
+          rationale: "It creates the fastest useful feedback loop.",
+        });
+      } else {
+        NodeAssert.fail("Expected workflow user-input.requested event");
+      }
+    }),
+  );
+
   it.effect("unwraps Codex token usage payloads for context window events", () =>
     Effect.gen(function* () {
       const { adapter, runtime } = yield* startLifecycleRuntime();

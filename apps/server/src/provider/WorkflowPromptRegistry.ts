@@ -62,22 +62,24 @@ The session is done when the frontier is empty: every branch of the design tree 
 
 const STRUCTURED_GRILL_QUESTION_ADAPTER = `## T3 structured-question adapter
 
-Use the native \`request_user_input\` tool for every interview round and for the final shared-understanding confirmation. This adapter overrides the Grilling blueprint's Markdown question format, separate recommendation line, and instruction to place an arbitrarily large frontier in one round. Do not duplicate or summarize the questions, choices, or recommendations in Markdown before or after the tool call.
+Use T3's \`workflow_request_user_input\` tool for every interview round and for the final shared-understanding confirmation. Do not duplicate or summarize structured questions, choices, or recommendations in Markdown before or after the tool call.
 
-For each call, send at most three currently unblocked frontier questions. If more than three questions are ready, preserve their stable design-tree order and continue with the remaining questions in one or more subsequent calls after the current answers resolve.
+Recompute the currently unblocked frontier before every round. When it contains one through seven questions, submit the entire frontier at its natural size. Seven is a maximum, never a target: do not aim for three, seven, or any other fixed batch size, and do not pad a round. If more than seven questions are independently ready, send the first seven in stable design-tree order and continue with the remainder after those answers resolve. Never put questions in the same call when one answer depends on another question in that call.
 
 Each question must have:
 
 - A compact header.
 - Two or three meaningful, mutually exclusive choices.
-- Exactly one recommended choice. Never omit the recommendation from any question in a multi-question call.
+- A neutral, useful impact or tradeoff description for every choice.
+- Exactly one separate recommendation object naming one option by its unchanged label and explaining why it is preferred.
 - A custom-answer path through T3's existing composer input; do not add a synthetic custom choice.
 - Choices in their natural A/B/C order. Never move the recommendation to the first position.
-- Concise impact or tradeoff text in every choice's description.
 
-Encode the recommendation in its original choice row. Preserve that option's answer text and append \`(Recommended)\` exactly once to its label. Start its description with \`Why that? \` followed by a concise recommendation rationale. Selecting this row directly answers the question; never emit a separate recommendation response.
+Put recommendation data only in the separate \`{ optionLabel, rationale }\` object. Do not append \`(Recommended)\` to an option label, do not replace or prefix an option description with \`Why that?\`, and do not reorder options to surface the recommendation.
 
-When the frontier is empty, use \`request_user_input\` for the final shared-understanding confirmation too. Offer two choices equivalent to \`Lock it in (Recommended)\` and \`Keep grilling\`, following the same description and recommendation rules. Only the structured response to that confirmation may lock or continue the grill.`;
+When the frontier is empty, use one \`workflow_request_user_input\` question for the final shared-understanding confirmation. Offer two choices equivalent to \`Lock it in\` and \`Keep grilling\`, recommend \`Lock it in\` in the separate recommendation object, and follow every rule above. Only that structured response may lock or continue the grill.
+
+Compatibility fallback: if and only if \`workflow_request_user_input\` is unavailable on this provider thread, use native \`request_user_input\` in chunks of at most three questions. Keep its option labels and descriptions neutral and unchanged. This fallback exists only for threads created before T3 registered the workflow tool.`;
 
 const DOMAIN_MODELING_PROMPT = `<collaboration_mode># Domain Modeling
 
@@ -1167,7 +1169,7 @@ This stage orchestrates the upstream implement loop across sub-threads instead o
 - The app dev stack for this worktree is checked at the start of the run and, when absent, started in parallel with implementation.
 - Tickets are implemented dependency-aware by TDD worker sub-threads (the TDD Implementation skill), each in its own worktree and branch. A dependent ticket's worker branches from its blocker's worker branch so chained tickets build on each other, and every worker commits to its own branch.
 - Worker branches are merged programmatically back into the orchestrator worktree; the Merge Gate stage runs only when programmatic integration stops on a real conflict.
-- AppDevStack health and Browser Dev Review share up to ten QA cycles after the merge. Every unsatisfied stack or review result gets a fresh TDD repair thread, and every browser review gets a fresh reviewer thread. After the cap the run proceeds best-effort with the unresolved gate flagged in the change request.
+- Automated QA has one global budget of ten fresh AppDevStack/Dev Review repair agents after the merge. Initial stack probes and Browser Dev Review launches do not consume repair slots; replacing a malformed, failed, blocked, or interrupted repair does. After the cap, a clean merge-gate-validated HEAD proceeds through best-effort Code Review with the unresolved gate flagged in the change request. Unsafe or unvalidated worktrees require human attention.
 - Code Review is a single review-and-fix pass that commits its own corrections and precedes change-request publication.
 - "The full test suite once at the end" is replaced by the validation commands named in the launch message; never run repo-wide suites.
 
@@ -1451,7 +1453,14 @@ When the launch message identifies an AppDevStack or Browser Dev Review failure,
   "runId": "implementation-run-id",
   "status": "succeeded",
   "commitSha": "commit-sha",
-  "validations": [],
+  "validations": [
+    {
+      "command": "vp test targeted-test",
+      "status": "passed",
+      "outputMarkdown": "Important output or empty string.",
+      "completedAt": "2026-01-01T00:00:00.000Z"
+    }
+  ],
   "notesMarkdown": "What failed, the red-green repair, and remaining risks."
 }
 \`\`\`
@@ -1486,6 +1495,8 @@ When ready, finish with exactly one fenced JSON block using this shape:
 const IMPLEMENTATION_BROWSER_DEV_REVIEW_PROMPT = `<collaboration_mode># Implementation Workflow: Browser Dev Review
 
 Exercise the app-dev stack from the implementation worktree. Verify the relevant UI flows in-browser, capture concrete failures with reproduction steps, and create Dev Review findings before marking the implementation complete.
+
+This thread is already the Browser Dev Review agent. Use the linked preview_* and dev_review_* tools directly. Never delegate to or launch another Browser Dev Review.
 
 When this Browser Dev Review is linked to a durable Dev Review record:
 
@@ -1673,7 +1684,7 @@ Before asking questions, ground yourself in the codebase and existing product co
 
 Cover product direction only: the problem, audience, desired outcome, user-visible behavior and experience, success criteria, scope, and non-goals. Do not ask about implementation, architecture, testing, workflow sequencing, or operations.
 
-Restricting the design tree to product decisions is the product-scope adaptation to the Grilling blueprint. Its dependency-frontier mechanics remain authoritative, subject to the structured-question adapter's three-question batches.
+Restricting the design tree to product decisions is the product-scope adaptation to the Grilling blueprint. Its dependency-frontier mechanics remain authoritative, subject to the structured-question adapter's seven-question maximum.
 
 The session is done when every product branch has been visited and nothing remains silently assumed. Do not lock the intent until the user confirms you have reached a shared understanding.
 
@@ -2210,6 +2221,17 @@ export function isBrowserDevReviewWorkflowPromptId(
   );
 }
 
+export function isInteractiveStructuredInputWorkflowPromptId(
+  workflowPromptId: string | null | undefined,
+): boolean {
+  return (
+    workflowPromptId === WORKFLOW_PROMPT_IDS.planningGrillStageCodex ||
+    workflowPromptId === WORKFLOW_PROMPT_IDS.productFixCodex ||
+    workflowPromptId === WORKFLOW_PROMPT_IDS.productFastFeatureCodex ||
+    workflowPromptId === WORKFLOW_PROMPT_IDS.productFullFeatureCodex
+  );
+}
+
 export function isInteractiveStructuredInputWorkflow(input: {
   readonly interactionMode?: ProviderInteractionMode | undefined;
   readonly workflowPromptId?: string | undefined;
@@ -2220,11 +2242,7 @@ export function isInteractiveStructuredInputWorkflow(input: {
   if (input.interactionMode !== "product-workflow") {
     return false;
   }
-  return (
-    input.workflowPromptId === WORKFLOW_PROMPT_IDS.productFixCodex ||
-    input.workflowPromptId === WORKFLOW_PROMPT_IDS.productFastFeatureCodex ||
-    input.workflowPromptId === WORKFLOW_PROMPT_IDS.productFullFeatureCodex
-  );
+  return isInteractiveStructuredInputWorkflowPromptId(input.workflowPromptId);
 }
 
 export function isPreviewMcpWorkflowPromptId(workflowPromptId: string | null | undefined): boolean {

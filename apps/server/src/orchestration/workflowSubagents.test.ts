@@ -10,6 +10,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { WORKFLOW_PROMPT_IDS } from "../provider/WorkflowPromptRegistry.ts";
 import {
+  isWorkflowSubagentParentRoleAllowed,
   resolveWorkflowSubagentModelSelection,
   resolveWorkflowSubagentSpawnDefinition,
 } from "./workflowSubagents.ts";
@@ -50,6 +51,23 @@ function settingsWith(input: {
 }
 
 describe("resolveWorkflowSubagentSpawnDefinition", () => {
+  it("rejects nested Browser Dev Review launches from implementation QA reviewers", () => {
+    expect(browserDevReviewDefinition).toBeDefined();
+    expect(
+      isWorkflowSubagentParentRoleAllowed(
+        browserDevReviewDefinition!,
+        "implementation-qa-reviewer",
+      ),
+    ).toBe(false);
+    expect(isWorkflowSubagentParentRoleAllowed(browserDevReviewDefinition!, null)).toBe(true);
+    expect(
+      isWorkflowSubagentParentRoleAllowed(
+        browserDevReviewDefinition!,
+        "implementation-orchestrator",
+      ),
+    ).toBe(true);
+  });
+
   it("registers only the explicit Product workflow presets", () => {
     for (const workflowPromptId of [
       WORKFLOW_PROMPT_IDS.productFixCodex,

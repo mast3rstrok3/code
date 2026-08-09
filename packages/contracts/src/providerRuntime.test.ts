@@ -105,6 +105,48 @@ describe("ProviderRuntimeEvent", () => {
     }
     expect(parsed.payload.questions[0]?.id).toBe("sandbox_mode");
     expect(parsed.payload.questions[0]?.options).toHaveLength(2);
+    expect(parsed.payload.questions[0]?.recommendation).toBeUndefined();
+  });
+
+  it("decodes workflow questions with separate recommendation metadata", () => {
+    const parsed = decodeRuntimeEvent({
+      type: "user-input.requested",
+      eventId: "event-recommendation",
+      provider: "codex",
+      createdAt: "2026-02-28T00:00:01.000Z",
+      threadId: "thread-2",
+      requestId: "request-recommendation",
+      payload: {
+        questions: [
+          {
+            id: "release_shape",
+            header: "Release",
+            question: "How should this ship?",
+            options: [
+              { label: "Incremental", description: "Ship the core path first." },
+              { label: "Complete", description: "Ship every path together." },
+            ],
+            recommendation: {
+              optionLabel: "Incremental",
+              rationale: "It creates the fastest useful feedback loop.",
+            },
+          },
+        ],
+      },
+    });
+
+    expect(parsed.type).toBe("user-input.requested");
+    if (parsed.type !== "user-input.requested") {
+      throw new Error("expected user-input.requested");
+    }
+    expect(parsed.payload.questions[0]?.options[0]).toEqual({
+      label: "Incremental",
+      description: "Ship the core path first.",
+    });
+    expect(parsed.payload.questions[0]?.recommendation).toEqual({
+      optionLabel: "Incremental",
+      rationale: "It creates the fastest useful feedback loop.",
+    });
   });
 
   it("decodes user-input.resolved with answer map", () => {

@@ -183,7 +183,7 @@ The durable map of decision tickets for efforts too large to specify in one pass
 
 #### Dev review
 
-The bounded QA stage of an implementation run. AppDevStack health and Browser Dev Review share up to `IMPLEMENTATION_RUN_MAX_QA_CYCLES` (10) cycles in [the contracts][1]. Every unsatisfied stack or review result gets a fresh TDD repair thread, every browser review gets a fresh reviewer thread, and exhaustion proceeds best-effort with the unresolved gate flagged.
+The bounded QA stage of an implementation run. AppDevStack and Dev Review failures share up to `IMPLEMENTATION_RUN_MAX_QA_REPAIRS` (10) fresh automated repair agents in [the contracts][1]. Initial probes and Browser Dev Reviews do not consume slots; replacing a malformed, failed, blocked, or interrupted repair does. Exhaustion proceeds through best-effort Code Review and flagged publication only from a clean, merge-gate-validated HEAD. A clean legacy HEAD without a validation receipt reruns the merge gate; dirty, wrong-branch, or non-repository worktrees require human attention. The persisted `qaCycleCount` name remains for compatibility but records consumed repair slots; `qaAttemptCount` records Browser Dev Review launches.
 
 #### Code review
 

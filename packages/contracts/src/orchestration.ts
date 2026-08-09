@@ -468,9 +468,12 @@ export const OrchestrationPlanningSpecBundle = Schema.Struct({
 });
 export type OrchestrationPlanningSpecBundle = typeof OrchestrationPlanningSpecBundle.Type;
 
-export const IMPLEMENTATION_RUN_MAX_QA_CYCLES = 10;
-/** @deprecated Use IMPLEMENTATION_RUN_MAX_QA_CYCLES. */
-export const IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS = IMPLEMENTATION_RUN_MAX_QA_CYCLES;
+/** Maximum number of fresh automated AppDevStack/Dev Review repair agents per run. */
+export const IMPLEMENTATION_RUN_MAX_QA_REPAIRS = 10;
+/** @deprecated Use IMPLEMENTATION_RUN_MAX_QA_REPAIRS. */
+export const IMPLEMENTATION_RUN_MAX_QA_CYCLES = IMPLEMENTATION_RUN_MAX_QA_REPAIRS;
+/** @deprecated Use IMPLEMENTATION_RUN_MAX_QA_REPAIRS. */
+export const IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS = IMPLEMENTATION_RUN_MAX_QA_REPAIRS;
 
 export const OrchestrationImplementationRunId = TrimmedNonEmptyString;
 export type OrchestrationImplementationRunId = typeof OrchestrationImplementationRunId.Type;
@@ -583,7 +586,7 @@ export const OrchestrationImplementationFinalDevReviewPlan = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed("agent-browser" as const)),
   ),
   maxAttempts: NonNegativeInt.pipe(
-    Schema.withDecodingDefault(Effect.succeed(IMPLEMENTATION_RUN_MAX_QA_CYCLES)),
+    Schema.withDecodingDefault(Effect.succeed(IMPLEMENTATION_RUN_MAX_QA_REPAIRS)),
   ),
 });
 export type OrchestrationImplementationFinalDevReviewPlan =
@@ -936,6 +939,7 @@ export const OrchestrationImplementationRun = Schema.Struct({
   activeDevReviewThreadId: Schema.NullOr(ThreadId).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  // Wire-compatible legacy name: this counts consumed fresh QA repair-agent slots.
   qaCycleCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
   qaAttemptCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
   qaExhaustedAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
@@ -945,7 +949,7 @@ export const OrchestrationImplementationRun = Schema.Struct({
   lastQaFailure: Schema.NullOr(OrchestrationImplementationQaFailure).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
-  // Set when Dev Review used every allowed attempt without passing. The run still continues to
+  // Set when automated QA used every allowed repair without passing. The run still continues to
   // Code Review and change-request publication; the unpassed review is surfaced instead of blocking.
   devReviewExhaustedAt: Schema.NullOr(IsoDateTime).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),

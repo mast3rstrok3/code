@@ -23,6 +23,7 @@ import {
   ProviderApprovalDecision,
   ThreadId,
   ProviderSendTurnInput,
+  UserInputRequestedPayload,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Crypto from "effect/Crypto";
@@ -517,7 +518,23 @@ function mapToRuntimeEvents(
   }
 
   if (event.kind === "request") {
-    if (event.method === "item/tool/requestUserInput") {
+    if (
+      event.method === "item/tool/requestUserInput" ||
+      event.method === "workflow/requestUserInput"
+    ) {
+      if (event.method === "workflow/requestUserInput") {
+        const payload = readPayload(UserInputRequestedPayload, event.payload);
+        if (!payload) {
+          return [];
+        }
+        return [
+          {
+            ...runtimeEventBase(event, canonicalThreadId),
+            type: "user-input.requested",
+            payload,
+          },
+        ];
+      }
       const payload =
         readPayload(EffectCodexSchema.ServerRequest__ToolRequestUserInputParams, event.payload) ??
         readPayload(EffectCodexSchema.ToolRequestUserInputParams, event.payload);
@@ -1433,6 +1450,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
               }
             : {}),
           ...(appServerArgs ? { appServerArgs } : {}),
+          ...(input.workflowPromptId ? { workflowPromptId: input.workflowPromptId } : {}),
         };
         const sessionScope = yield* Scope.make("sequential");
         let sessionScopeTransferred = false;

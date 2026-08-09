@@ -199,18 +199,20 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /only exception to the Grilling blueprint/);
     NodeAssert.match(rendered, /frontier-round mechanics remain authoritative/);
     NodeAssert.match(rendered, /## T3 structured-question adapter/);
-    NodeAssert.match(rendered, /request_user_input.*every interview round/);
-    NodeAssert.match(rendered, /at most three currently unblocked frontier questions/);
+    NodeAssert.match(rendered, /workflow_request_user_input.*every interview round/);
+    NodeAssert.match(rendered, /one through seven questions.*entire frontier/);
+    NodeAssert.match(rendered, /Seven is a maximum, never a target/);
+    NodeAssert.match(rendered, /first seven in stable design-tree order/);
+    NodeAssert.match(rendered, /Never put questions in the same call when one answer depends/);
     NodeAssert.match(rendered, /natural A\/B\/C order/);
-    NodeAssert.match(rendered, /Exactly one recommended choice/);
-    NodeAssert.match(rendered, /Never omit the recommendation from any question/);
-    NodeAssert.match(rendered, /\(Recommended\).*exactly once/);
-    NodeAssert.match(rendered, /Why that\? /);
-    NodeAssert.match(rendered, /impact or tradeoff text in every choice's description/);
-    NodeAssert.match(rendered, /Lock it in \(Recommended\)/);
+    NodeAssert.match(rendered, /Exactly one separate recommendation object/);
+    NodeAssert.match(rendered, /neutral, useful impact or tradeoff description/);
+    NodeAssert.match(rendered, /Do not append.*\(Recommended\)/);
+    NodeAssert.match(rendered, /do not replace or prefix.*Why that\?/);
+    NodeAssert.match(rendered, /one.*workflow_request_user_input.*final shared-understanding/);
     NodeAssert.match(rendered, /Keep grilling/);
-    NodeAssert.match(rendered, /overrides the Grilling blueprint's Markdown question format/);
-    NodeAssert.match(rendered, /Do not duplicate or summarize the questions/);
+    NodeAssert.match(rendered, /Do not duplicate or summarize structured questions/);
+    NodeAssert.match(rendered, /if and only if.*unavailable.*native.*request_user_input/);
     NodeAssert.match(rendered, /CONTEXT\.md Format/);
     NodeAssert.match(rendered, /CONTEXT-MAP\.md/);
     NodeAssert.match(rendered, /ADR Format/);
@@ -458,8 +460,8 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /worktree and branch created from the branch the user selected/);
     NodeAssert.match(rendered, /app dev stack/);
     NodeAssert.match(rendered, /worker branches from its blocker's worker branch/);
-    NodeAssert.match(rendered, /up to ten QA cycles/);
-    NodeAssert.match(rendered, /fresh TDD repair thread/);
+    NodeAssert.match(rendered, /global budget of ten fresh .* repair agents/);
+    NodeAssert.match(rendered, /do not consume repair slots/);
     NodeAssert.match(rendered, /single review-and-fix pass/);
     NodeAssert.match(rendered, /never run repo-wide suites/);
   });
@@ -597,22 +599,25 @@ describe("WorkflowPromptRegistry", () => {
       NodeAssert.match(preset.promptText, /product-scope adaptation to the Grilling blueprint/);
       NodeAssert.match(preset.promptText, /dependency-frontier mechanics remain authoritative/);
       NodeAssert.match(preset.promptText, /## T3 structured-question adapter/);
-      NodeAssert.match(preset.promptText, /request_user_input.*every interview round/);
-      NodeAssert.match(preset.promptText, /at most three currently unblocked frontier questions/);
-      NodeAssert.match(preset.promptText, /preserve their stable design-tree order/);
+      NodeAssert.match(preset.promptText, /workflow_request_user_input.*every interview round/);
+      NodeAssert.match(preset.promptText, /one through seven questions.*entire frontier/);
+      NodeAssert.match(preset.promptText, /Seven is a maximum, never a target/);
+      NodeAssert.match(preset.promptText, /first seven in stable design-tree order/);
       NodeAssert.match(preset.promptText, /natural A\/B\/C order/);
-      NodeAssert.match(preset.promptText, /Exactly one recommended choice/);
-      NodeAssert.match(preset.promptText, /Never omit the recommendation from any question/);
-      NodeAssert.match(preset.promptText, /\(Recommended\).*exactly once/);
-      NodeAssert.match(preset.promptText, /Why that\? /);
-      NodeAssert.match(preset.promptText, /impact or tradeoff text in every choice's description/);
-      NodeAssert.match(preset.promptText, /Lock it in \(Recommended\)/);
-      NodeAssert.match(preset.promptText, /Keep grilling/);
+      NodeAssert.match(preset.promptText, /Exactly one separate recommendation object/);
+      NodeAssert.match(preset.promptText, /neutral, useful impact or tradeoff description/);
+      NodeAssert.match(preset.promptText, /Do not append.*\(Recommended\)/);
+      NodeAssert.match(preset.promptText, /do not replace or prefix.*Why that\?/);
       NodeAssert.match(
         preset.promptText,
-        /overrides the Grilling blueprint's Markdown question format/,
+        /one.*workflow_request_user_input.*final shared-understanding/,
       );
-      NodeAssert.match(preset.promptText, /Do not duplicate or summarize the questions/);
+      NodeAssert.match(preset.promptText, /Keep grilling/);
+      NodeAssert.match(preset.promptText, /Do not duplicate or summarize structured questions/);
+      NodeAssert.match(
+        preset.promptText,
+        /if and only if.*unavailable.*native.*request_user_input/,
+      );
       NodeAssert.match(preset.promptText, /Do not ask about implementation, architecture, testing/);
       NodeAssert.match(preset.promptText, /until the user confirms/);
       NodeAssert.match(preset.promptText, new RegExp(`intentKind.*"${intentKind}"`));

@@ -281,6 +281,27 @@ function stripNullDefaults(value: Schema.Json): Schema.Json {
   ) as Schema.Json;
 }
 
+function extendExperimentalProtocolSchemas(schemas: Record<string, Schema.Json>): void {
+  const threadStart = schemas.V2ThreadStartParams;
+  if (threadStart === null || typeof threadStart !== "object" || Array.isArray(threadStart)) {
+    throw new Error("V2ThreadStartParams schema is unavailable for experimental extension");
+  }
+  const properties = (threadStart as Record<string, Schema.Json>).properties;
+  if (properties === null || typeof properties !== "object" || Array.isArray(properties)) {
+    throw new Error("V2ThreadStartParams properties are unavailable for experimental extension");
+  }
+
+  (properties as Record<string, Schema.Json>).dynamicTools = {
+    anyOf: [
+      {
+        type: "array",
+        items: { $ref: "#/definitions/V2ThreadStartParams__DynamicToolSpec" },
+      },
+      { type: "null" },
+    ],
+  };
+}
+
 function toPascalCaseMethod(method: string) {
   return method
     .split("/")
@@ -592,6 +613,12 @@ const generateFiles = Effect.fn("generateFiles")(function* () {
       aggregateSchemas[name] = stripNullDefaults(normalizeNullableTypes(schema));
     }
   }
+
+  // Codex currently marks dynamic tools as experimental and omits this field from the
+  // versioned ThreadStartParams JSON schema even though its referenced definitions are
+  // generated. T3 uses the supported app-server wire field, so extend the fetched schema
+  // here to keep the generated encoder deterministic and prevent it from stripping the field.
+  extendExperimentalProtocolSchemas(aggregateSchemas);
 
   const generator = makeJsonSchemaGenerator();
   for (const [name, schema] of Object.entries(aggregateSchemas).toSorted(([left], [right]) =>

@@ -148,11 +148,11 @@ ${BROWSER_DEV_REVIEW_LAUNCH_DIRECTIVE_INSTRUCTIONS}
 
 export const CODEX_INTERACTIVE_GRILL_DEVELOPER_INSTRUCTIONS = `<collaboration_mode># Collaboration Mode: Interactive T3 Grill
 
-Codex's native Plan collaboration transport is active only so this turn can call \`request_user_input\`. The turn remains governed by its Product Grill or Engineering Grill workflow prompt, whose scope, design-tree semantics, structured-question adapter, completion gate, and final workflow directive are authoritative.
+This provider thread predates T3's \`workflow_request_user_input\` registration. Codex's native Plan collaboration transport is active only as a compatibility fallback so this turn can call \`request_user_input\`. The turn remains governed by its Product Grill or Engineering Grill workflow prompt, whose scope, design-tree semantics, structured-question adapter, completion gate, and final workflow directive are authoritative.
 
 Do not apply ordinary CLI Plan Mode requirements. In particular, do not switch to a three-phase planning workflow, do not treat the user's request as plan-only, and do not produce a \`<proposed_plan>\` block.
 
-Use \`request_user_input\` exactly as the workflow prompt directs. Product Grill retains its product-only scope. Interactive Engineering Grill retains its narrow authorization to update \`CONTEXT.md\`, \`CONTEXT-MAP.md\`, and qualifying ADRs as decisions crystallize; it must not make implementation changes. Preserve every other workflow instruction and required completion directive.
+Use native \`request_user_input\` only in chunks of at most three questions, as the workflow prompt's compatibility fallback directs. Product Grill retains its product-only scope. Interactive Engineering Grill retains its narrow authorization to update \`CONTEXT.md\`, \`CONTEXT-MAP.md\`, and qualifying ADRs as decisions crystallize; it must not make implementation changes. Preserve every other workflow instruction and required completion directive.
 </collaboration_mode>`;
 
 type CodexDeveloperInstructionMode = "default" | "plan" | "interactive-grill";

@@ -1,7 +1,10 @@
 import * as NodeAssert from "node:assert/strict";
 
 import { it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import { describe } from "vite-plus/test";
 import { DEFAULT_MODEL, ThreadId } from "@t3tools/contracts";
@@ -19,9 +22,12 @@ import { WORKFLOW_PROMPT_IDS } from "../WorkflowPromptRegistry.ts";
 import { codexSessionAppServerArgs } from "./codexLaunchArgs.ts";
 import {
   buildTurnStartParams,
+  decodeWorkflowRequestUserInputArguments,
   hasConfiguredMcpServer,
+  handleWorkflowRequestUserInputToolCall,
   isRecoverableThreadResumeError,
   openCodexThread,
+  WORKFLOW_REQUEST_USER_INPUT_TOOL,
 } from "./CodexSessionRuntime.ts";
 const isCodexAppServerRequestError = Schema.is(CodexErrors.CodexAppServerRequestError);
 
@@ -163,6 +169,31 @@ describe("buildTurnStartParams", () => {
         NodeAssert.match(instructions, /Product Grill/);
         NodeAssert.match(instructions, /do not produce a `<proposed_plan>` block/);
         NodeAssert.doesNotMatch(instructions, /When you present the official plan/);
+      }
+    }),
+  );
+
+  it.effect("uses default transport when the T3 workflow input tool is available", () =>
+    Effect.gen(function* () {
+      for (const [interactionMode, workflowPromptId] of [
+        ["product-workflow", WORKFLOW_PROMPT_IDS.productFixCodex],
+        ["product-workflow", WORKFLOW_PROMPT_IDS.productFastFeatureCodex],
+        ["product-workflow", WORKFLOW_PROMPT_IDS.productFullFeatureCodex],
+        ["planning-workflow", WORKFLOW_PROMPT_IDS.planningGrillStageCodex],
+      ] as const) {
+        const params = yield* buildTurnStartParams({
+          threadId: "provider-thread-1",
+          runtimeMode: "full-access",
+          prompt: "Start grilling",
+          interactionMode,
+          workflowPromptId,
+          workflowUserInputToolAvailable: true,
+        });
+
+        NodeAssert.equal(params.collaborationMode?.mode, "default");
+        const instructions = params.collaborationMode?.settings.developer_instructions ?? "";
+        NodeAssert.match(instructions, /workflow_request_user_input/);
+        NodeAssert.doesNotMatch(instructions, /predates T3's/);
       }
     }),
   );
@@ -347,6 +378,167 @@ describe("buildTurnStartParams", () => {
   });
 });
 
+function workflowQuestion(index: number) {
+  return {
+    id: `question_${index}`,
+    header: `Question ${index}`,
+    question: `Which direction should question ${index} take?`,
+    options: [
+      { label: "Focused", description: "Keep the surface narrow." },
+      { label: "Broad", description: "Cover the wider surface." },
+    ],
+    recommendation: {
+      optionLabel: "Focused",
+      rationale: "It creates a faster feedback loop.",
+    },
+  };
+}
+
+describe("workflow_request_user_input validation", () => {
+  for (const questionCount of [1, 2, 3, 4, 5, 6, 7]) {
+    it.effect(`accepts a natural ${questionCount}-question frontier`, () =>
+      Effect.gen(function* () {
+        const decoded = yield* decodeWorkflowRequestUserInputArguments({
+          questions: Array.from({ length: questionCount }, (_, index) => workflowQuestion(index)),
+        });
+        NodeAssert.equal(decoded.questions.length, questionCount);
+      }),
+    );
+  }
+
+  for (const questionCount of [0, 8]) {
+    it.effect(`rejects a ${questionCount}-question frontier`, () =>
+      Effect.gen(function* () {
+        const error = yield* decodeWorkflowRequestUserInputArguments({
+          questions: Array.from({ length: questionCount }, (_, index) => workflowQuestion(index)),
+        }).pipe(Effect.flip);
+        NodeAssert.match(error.message, /questions|length/i);
+      }),
+    );
+  }
+
+  it.effect("rejects duplicate question IDs", () =>
+    Effect.gen(function* () {
+      const error = yield* decodeWorkflowRequestUserInputArguments({
+        questions: [workflowQuestion(1), { ...workflowQuestion(2), id: "question_1" }],
+      }).pipe(Effect.flip);
+      NodeAssert.match(error.message, /unique/i);
+    }),
+  );
+
+  it.effect("rejects duplicate option labels", () =>
+    Effect.gen(function* () {
+      const question = workflowQuestion(1);
+      const error = yield* decodeWorkflowRequestUserInputArguments({
+        questions: [
+          {
+            ...question,
+            options: [question.options[0], { ...question.options[1], label: "Focused" }],
+          },
+        ],
+      }).pipe(Effect.flip);
+      NodeAssert.match(error.message, /unique option labels/i);
+    }),
+  );
+
+  it.effect("rejects recommendations that target a missing option", () =>
+    Effect.gen(function* () {
+      const error = yield* decodeWorkflowRequestUserInputArguments({
+        questions: [
+          {
+            ...workflowQuestion(1),
+            recommendation: {
+              optionLabel: "Missing",
+              rationale: "This must not decode.",
+            },
+          },
+        ],
+      }).pipe(Effect.flip);
+      NodeAssert.match(error.message, /must match one of its option labels/i);
+    }),
+  );
+});
+
+describe("workflow_request_user_input handling", () => {
+  const payload = {
+    tool: "workflow_request_user_input",
+    callId: "call-1",
+    threadId: "provider-thread-1",
+    turnId: "turn-1",
+    arguments: {
+      questions: [workflowQuestion(1), workflowQuestion(2)],
+    },
+  } as const;
+
+  it.effect("emits one complete request, waits, and returns every answer", () =>
+    Effect.gen(function* () {
+      const requested = yield* Deferred.make<ReadonlyArray<unknown>>();
+      const answers = yield* Deferred.make<Record<string, string>>();
+      const callFiber = yield* handleWorkflowRequestUserInputToolCall({
+        registered: true,
+        payload,
+        requestUserInput: ({ questions }) =>
+          Deferred.succeed(requested, questions).pipe(Effect.andThen(Deferred.await(answers))),
+      }).pipe(Effect.forkChild);
+
+      const questions = yield* Deferred.await(requested);
+      NodeAssert.equal(questions.length, 2);
+      NodeAssert.equal((questions[0] as { readonly multiSelect?: boolean }).multiSelect, false);
+      yield* Deferred.succeed(answers, {
+        question_1: "Focused",
+        question_2: "A custom answer",
+      });
+      const response = yield* Fiber.join(callFiber);
+      NodeAssert.deepStrictEqual(response, {
+        success: true,
+        contentItems: [
+          {
+            type: "inputText",
+            text: '{"question_1":"Focused","question_2":"A custom answer"}',
+          },
+        ],
+      });
+    }),
+  );
+
+  it.effect("runs pending-request cleanup when the tool call is interrupted", () =>
+    Effect.gen(function* () {
+      const requested = yield* Deferred.make<void>();
+      const answers = yield* Deferred.make<Record<string, string>>();
+      const cleanedUp = yield* Ref.make(false);
+      const callFiber = yield* handleWorkflowRequestUserInputToolCall({
+        registered: true,
+        payload,
+        requestUserInput: () =>
+          Deferred.succeed(requested, undefined).pipe(
+            Effect.andThen(Deferred.await(answers)),
+            Effect.ensuring(Ref.set(cleanedUp, true)),
+          ),
+      }).pipe(Effect.forkChild);
+
+      yield* Deferred.await(requested);
+      yield* Fiber.interrupt(callFiber);
+      NodeAssert.equal(yield* Ref.get(cleanedUp), true);
+    }),
+  );
+
+  it.effect("rejects an unregistered or differently named dynamic tool", () =>
+    Effect.gen(function* () {
+      for (const invalidPayload of [
+        { registered: false, payload },
+        { registered: true, payload: { ...payload, tool: "another_tool" } },
+      ]) {
+        const error = yield* handleWorkflowRequestUserInputToolCall({
+          ...invalidPayload,
+          requestUserInput: () => Effect.succeed({}),
+        }).pipe(Effect.flip);
+        NodeAssert.equal(error.code, -32602);
+        NodeAssert.match(error.message, /Only the registered/);
+      }
+    }),
+  );
+});
+
 describe("buildCodexDeveloperInstructions", () => {
   it("appends runtime info after the mode instructions", () => {
     const instructions = buildCodexDeveloperInstructions("default", {
@@ -377,7 +569,7 @@ describe("buildCodexDeveloperInstructions", () => {
     });
 
     NodeAssert.ok(instructions.startsWith(CODEX_INTERACTIVE_GRILL_DEVELOPER_INSTRUCTIONS));
-    NodeAssert.match(instructions, /solely|only so/);
+    NodeAssert.match(instructions, /only as a compatibility fallback/);
     NodeAssert.match(instructions, /request_user_input/);
     NodeAssert.match(instructions, /Product Grill or Engineering Grill workflow prompt/);
     NodeAssert.match(instructions, /CONTEXT\.md/);
@@ -580,6 +772,39 @@ describe("isRecoverableThreadResumeError", () => {
 });
 
 describe("openCodexThread", () => {
+  it.effect("registers the workflow user-input tool on a fresh grill thread", () =>
+    Effect.gen(function* () {
+      const payloads: Array<unknown> = [];
+      const client = {
+        request: <M extends "thread/start" | "thread/resume">(
+          _method: M,
+          payload: CodexRpc.ClientRequestParamsByMethod[M],
+        ) => {
+          payloads.push(payload);
+          return Effect.succeed(
+            makeThreadOpenResponse("fresh-thread") as CodexRpc.ClientRequestResponsesByMethod[M],
+          );
+        },
+      };
+
+      yield* openCodexThread({
+        client,
+        threadId: ThreadId.make("thread-1"),
+        runtimeMode: "full-access",
+        cwd: "/tmp/project",
+        requestedModel: "gpt-5.3-codex",
+        serviceTier: undefined,
+        resumeThreadId: undefined,
+        enableWorkflowUserInputTool: true,
+      });
+
+      NodeAssert.deepStrictEqual(
+        (payloads[0] as { readonly dynamicTools?: ReadonlyArray<unknown> }).dynamicTools,
+        [WORKFLOW_REQUEST_USER_INPUT_TOOL],
+      );
+    }),
+  );
+
   it.effect("falls back to thread/start when resume fails recoverably", () =>
     Effect.gen(function* () {
       const calls: Array<{ method: "thread/start" | "thread/resume"; payload: unknown }> = [];

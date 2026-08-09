@@ -1016,6 +1016,63 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const settleCanonicalDevReviewAfterTermination = Effect.fn(
+    "ProviderRuntimeIngestion.settleCanonicalDevReviewAfterTermination",
+  )(function* (input: {
+    readonly event: ProviderRuntimeEvent;
+    readonly thread: OrchestrationThreadShell;
+    readonly completedAt: string;
+  }) {
+    if (
+      input.thread.workflowRole !== "implementation-qa-reviewer" ||
+      input.thread.parentThreadId === null
+    ) {
+      return;
+    }
+    const [reviewer, parent] = yield* Effect.all([
+      resolveThreadDetail(input.thread.id),
+      resolveThreadDetail(input.thread.parentThreadId),
+    ]);
+    const canonical = parent?.devReviews.find(
+      (review) => review.reviewThreadId === input.thread.id && review.status === "running",
+    );
+    if (reviewer === undefined || parent === undefined || canonical === undefined) return;
+
+    const nestedTerminal = [...reviewer.devReviews]
+      .filter(
+        (review) =>
+          review.status === "passed" || review.status === "failed" || review.status === "blocked",
+      )
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
+    if (nestedTerminal !== undefined) {
+      yield* orchestrationEngine.dispatch({
+        type: "thread.dev-review.evidence.update",
+        commandId: yield* providerCommandId(input.event, "canonical-review-adopt-evidence"),
+        threadId: parent.id,
+        reviewId: canonical.id,
+        evidence: nestedTerminal.evidence,
+        updatedAt: input.completedAt,
+        createdAt: input.completedAt,
+      });
+    }
+    yield* orchestrationEngine.dispatch({
+      type: "thread.dev-review.update",
+      commandId: yield* providerCommandId(input.event, "canonical-review-settle"),
+      threadId: parent.id,
+      reviewId: canonical.id,
+      status: nestedTerminal?.status ?? "blocked",
+      document: nestedTerminal?.document ?? {
+        ...canonical.document,
+        verdict: "blocked",
+        summary:
+          canonical.document.summary ||
+          "Browser Dev Review agent completed without terminally updating its canonical review.",
+      },
+      updatedAt: input.completedAt,
+      createdAt: input.completedAt,
+    });
+  });
+
   const appendWorkflowDirectiveRejectedActivity = Effect.fn(
     "ProviderRuntimeIngestion.appendWorkflowDirectiveRejectedActivity",
   )(function* (input: {
@@ -2212,6 +2269,52 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const consumeImplementationFixerFailure = Effect.fn(
+    "ProviderRuntimeIngestion.consumeImplementationFixerFailure",
+  )(function* (input: {
+    readonly event: ProviderRuntimeEvent;
+    readonly threadId: ThreadId;
+    readonly messageId: MessageId;
+    readonly detail: string;
+    readonly createdAt: string;
+    readonly dedupeScope?: string;
+  }) {
+    const thread = yield* resolveThreadDetail(input.threadId);
+    if (thread?.workflowRole !== "implementation-fixer") return;
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    const run = readModel.implementationRuns.find(
+      (candidate) =>
+        (candidate.status === "fixing" || candidate.status === "code-review-fixing") &&
+        candidate.activeFixerThreadId === thread.id,
+    );
+    if (run === undefined) return;
+    const failureKey = `${input.threadId}:${input.dedupeScope ?? input.messageId}:implementation-fix-failure`;
+    const existing = yield* Cache.getOption(processedWorkflowDirectiveKeys, failureKey);
+    if (Option.getOrElse(existing, () => false)) return;
+    yield* Cache.set(processedWorkflowDirectiveKeys, failureKey, true);
+    yield* orchestrationEngine.dispatch({
+      type: "thread.activity.append",
+      commandId: yield* providerCommandId(input.event, "workflow-fix-failure"),
+      threadId: thread.id,
+      activity: {
+        id: EventId.make(yield* crypto.randomUUIDv4),
+        tone: "error",
+        kind: "implementation-fix-result",
+        summary: "Implementation fix result was missing or malformed",
+        payload: {
+          type: "implementation-fix-result",
+          runId: run.id,
+          status: "blocked",
+          validations: [],
+          notesMarkdown: input.detail,
+        },
+        turnId: null,
+        createdAt: input.createdAt,
+      },
+      createdAt: input.createdAt,
+    });
+  });
+
   const maybeProcessWorkflowDirective = (input: {
     event: ProviderRuntimeEvent;
     threadId: ThreadId;
@@ -2246,6 +2349,10 @@ const make = Effect.gen(function* () {
             detail:
               "Fast feature Build completed without the required implementation-fast-build-result directive.",
           });
+          yield* consumeImplementationFixerFailure({
+            ...failureInput,
+            detail: "QA fixer completed without the required implementation-fix-result directive.",
+          });
         }
         return;
       }
@@ -2263,6 +2370,10 @@ const make = Effect.gen(function* () {
           yield* consumeFastFeatureBuildFailure({
             ...failureInput,
             detail: `Fast feature Build directive was rejected: ${parseResult.message}`,
+          });
+          yield* consumeImplementationFixerFailure({
+            ...failureInput,
+            detail: `QA fixer directive was rejected: ${parseResult.message}`,
           });
         }
         return;
@@ -2286,6 +2397,29 @@ const make = Effect.gen(function* () {
               ...failureInput,
               detail:
                 "Fast feature Build completed with a directive for the wrong workflow stage or run.",
+            });
+          }
+          return;
+        }
+      }
+
+      if (thread.workflowRole === "implementation-fixer") {
+        const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+        const run = readModel.implementationRuns.find(
+          (candidate) =>
+            (candidate.status === "fixing" || candidate.status === "code-review-fixing") &&
+            candidate.activeFixerThreadId === thread.id,
+        );
+        if (
+          parseResult.directive.type !== "implementation-fix-result" ||
+          run === undefined ||
+          parseResult.directive.runId !== run.id
+        ) {
+          if (synthesizeFailure) {
+            yield* consumeImplementationFixerFailure({
+              ...failureInput,
+              detail:
+                "QA fixer completed with a directive for the wrong workflow stage or active run.",
             });
           }
           return;
@@ -2320,6 +2454,10 @@ const make = Effect.gen(function* () {
         yield* consumePlanningReviewerFailure({
           ...input,
           detail: `Reviewer directive was rejected: ${detail}`,
+        });
+        yield* consumeImplementationFixerFailure({
+          ...input,
+          detail: `QA fixer directive was rejected: ${detail}`,
         });
         return;
       }
@@ -2387,7 +2525,9 @@ const make = Effect.gen(function* () {
         ? "implementation-fast-build-result"
         : thread?.workflowRole === "planning-reviewer"
           ? "planning-reviewer-verdict"
-          : null;
+          : thread?.workflowRole === "implementation-fixer"
+            ? "implementation-fix-result"
+            : null;
     if (thread === undefined || expectedDirectiveType === null) return;
 
     const lastAssistantMessage = findLastAssistantMessageForTurn(thread.messages, input.turnId);
@@ -2416,6 +2556,22 @@ const make = Effect.gen(function* () {
           parseResult.kind === "error"
             ? `Reviewer directive was rejected: ${parseResult.message}`
             : "Reviewer completed without the required planning-reviewer-verdict directive.",
+      });
+      return;
+    }
+    if (expectedDirectiveType === "implementation-fix-result") {
+      yield* consumeImplementationFixerFailure({
+        event: input.event,
+        threadId: input.threadId,
+        messageId,
+        dedupeScope: input.turnId,
+        createdAt: input.createdAt,
+        detail:
+          parseResult.kind === "error"
+            ? `QA fixer directive was rejected: ${parseResult.message}`
+            : parseResult.kind === "parsed"
+              ? "QA fixer completed with a directive for the wrong workflow stage or active run."
+              : "QA fixer completed without the required implementation-fix-result directive.",
       });
       return;
     }
@@ -3311,6 +3467,7 @@ const make = Effect.gen(function* () {
             ? (event.payload.errorMessage ?? "Workflow sub-agent turn failed.")
             : "Workflow sub-agent turn completed without its required result directive.",
         );
+        yield* settleCanonicalDevReviewAfterTermination({ event, thread, completedAt: now });
       } else if (event.type === "session.exited") {
         yield* settleRunningBatchChildAfterTermination(
           thread,
@@ -3318,6 +3475,7 @@ const make = Effect.gen(function* () {
           "canceled",
           "Workflow sub-agent session exited before producing its required result.",
         );
+        yield* settleCanonicalDevReviewAfterTermination({ event, thread, completedAt: now });
       } else if (event.type === "runtime.error") {
         yield* settleRunningBatchChildAfterTermination(
           thread,
@@ -3325,6 +3483,7 @@ const make = Effect.gen(function* () {
           "failed",
           event.payload.message,
         );
+        yield* settleCanonicalDevReviewAfterTermination({ event, thread, completedAt: now });
       }
 
       if (event.type === "task.started" || event.type === "task.progress") {

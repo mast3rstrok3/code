@@ -4,6 +4,8 @@ import {
   EventId,
   ProviderDriverKind,
   ProviderItemId,
+  TrimmedNonEmptyString,
+  type UserInputQuestion,
   type ProviderInstanceId,
   type ProviderApprovalDecision,
   type ProviderEvent,
@@ -45,10 +47,12 @@ import {
 import {
   isBrowserDevReviewWorkflowPromptId,
   isInteractiveStructuredInputWorkflow,
+  isInteractiveStructuredInputWorkflowPromptId,
   resolveWorkflowPromptId,
   resolveWorkflowSystemInstructions,
 } from "../WorkflowPromptRegistry.ts";
 const decodeV2TurnStartResponse = Schema.decodeUnknownEffect(EffectCodexSchema.V2TurnStartResponse);
+const encodeUnknownJsonString = Schema.encodeUnknownSync(Schema.UnknownFromJsonString);
 
 const PROVIDER = ProviderDriverKind.make("codex");
 
@@ -81,6 +85,104 @@ const CodexUserInputAnswerObject = Schema.Struct({
 });
 const isCodexResumeCursorSchema = Schema.is(CodexResumeCursorSchema);
 const isCodexUserInputAnswerObject = Schema.is(CodexUserInputAnswerObject);
+
+export const WORKFLOW_REQUEST_USER_INPUT_TOOL_NAME = "workflow_request_user_input";
+
+const WorkflowUserInputOption = Schema.Struct({
+  label: TrimmedNonEmptyString,
+  description: TrimmedNonEmptyString,
+});
+const WorkflowUserInputRecommendation = Schema.Struct({
+  optionLabel: TrimmedNonEmptyString,
+  rationale: TrimmedNonEmptyString,
+});
+const WorkflowUserInputQuestion = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  header: TrimmedNonEmptyString,
+  question: TrimmedNonEmptyString,
+  options: Schema.Array(WorkflowUserInputOption).check(
+    Schema.isMinLength(2),
+    Schema.isMaxLength(3),
+  ),
+  recommendation: WorkflowUserInputRecommendation,
+}).check(
+  Schema.makeFilter((question) => {
+    const optionLabels = question.options.map((option) => option.label);
+    if (new Set(optionLabels).size !== optionLabels.length) {
+      return `Question '${question.id}' must use unique option labels.`;
+    }
+    if (!optionLabels.includes(question.recommendation.optionLabel)) {
+      return `Question '${question.id}' recommendation.optionLabel must match one of its option labels.`;
+    }
+    return true;
+  }),
+);
+export const WorkflowRequestUserInputArguments = Schema.Struct({
+  questions: Schema.Array(WorkflowUserInputQuestion)
+    .check(Schema.isMinLength(1), Schema.isMaxLength(7))
+    .check(
+      Schema.makeFilter((questions) => {
+        const questionIds = questions.map((question) => question.id);
+        return new Set(questionIds).size === questionIds.length || "Question IDs must be unique.";
+      }),
+    ),
+});
+export type WorkflowRequestUserInputArguments = typeof WorkflowRequestUserInputArguments.Type;
+export const decodeWorkflowRequestUserInputArguments = Schema.decodeUnknownEffect(
+  WorkflowRequestUserInputArguments,
+);
+
+export const WORKFLOW_REQUEST_USER_INPUT_TOOL = {
+  type: "function",
+  name: WORKFLOW_REQUEST_USER_INPUT_TOOL_NAME,
+  description:
+    "Ask one through seven currently unblocked workflow questions and wait for the user's answers.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["questions"],
+    properties: {
+      questions: {
+        type: "array",
+        minItems: 1,
+        maxItems: 7,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["id", "header", "question", "options", "recommendation"],
+          properties: {
+            id: { type: "string", minLength: 1 },
+            header: { type: "string", minLength: 1 },
+            question: { type: "string", minLength: 1 },
+            options: {
+              type: "array",
+              minItems: 2,
+              maxItems: 3,
+              items: {
+                type: "object",
+                additionalProperties: false,
+                required: ["label", "description"],
+                properties: {
+                  label: { type: "string", minLength: 1 },
+                  description: { type: "string", minLength: 1 },
+                },
+              },
+            },
+            recommendation: {
+              type: "object",
+              additionalProperties: false,
+              required: ["optionLabel", "rationale"],
+              properties: {
+                optionLabel: { type: "string", minLength: 1 },
+                rationale: { type: "string", minLength: 1 },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+} as const satisfies EffectCodexSchema.V2ThreadStartParams__DynamicToolSpec;
 
 // TODO: Verify `packages/effect-codex-app-server/scripts/generate.ts` so the generated
 // `V2TurnStartParams` schema includes `collaborationMode` directly.
@@ -115,6 +217,7 @@ export interface CodexSessionRuntimeOptions {
   readonly serviceTier?: CodexServiceTier | undefined;
   readonly resumeCursor?: CodexResumeCursor;
   readonly appServerArgs?: ReadonlyArray<string>;
+  readonly workflowPromptId?: string;
 }
 
 export interface CodexSessionRuntimeSendTurnInput {
@@ -237,6 +340,65 @@ interface PendingUserInput {
   readonly answers: Deferred.Deferred<ProviderUserInputAnswers>;
 }
 
+export const handleWorkflowRequestUserInputToolCall = Effect.fn(
+  "handleWorkflowRequestUserInputToolCall",
+)(function* <E, R>(input: {
+  readonly registered: boolean;
+  readonly payload: EffectCodexSchema.ServerRequest__DynamicToolCallParams;
+  readonly requestUserInput: (input: {
+    readonly questions: ReadonlyArray<UserInputQuestion>;
+    readonly turnId: string;
+    readonly callId: string;
+  }) => Effect.Effect<ProviderUserInputAnswers, E, R>;
+}): Effect.fn.Return<
+  EffectCodexSchema.DynamicToolCallResponse,
+  CodexErrors.CodexAppServerRequestError | E,
+  R
+> {
+  const payload = input.payload;
+  if (
+    !input.registered ||
+    payload.tool !== WORKFLOW_REQUEST_USER_INPUT_TOOL_NAME ||
+    (payload.namespace !== undefined && payload.namespace !== null)
+  ) {
+    return yield* CodexErrors.CodexAppServerRequestError.invalidParams(
+      `Only the registered '${WORKFLOW_REQUEST_USER_INPUT_TOOL_NAME}' dynamic tool is accepted for this session.`,
+      { tool: payload.tool },
+    );
+  }
+
+  const decoded = yield* decodeWorkflowRequestUserInputArguments(payload.arguments).pipe(
+    Effect.mapError((error) =>
+      CodexErrors.CodexAppServerRequestError.invalidParams(
+        `Invalid ${WORKFLOW_REQUEST_USER_INPUT_TOOL_NAME} arguments: ${error.message}`,
+        { tool: payload.tool },
+      ),
+    ),
+  );
+  const questions = decoded.questions.map(
+    (question) =>
+      ({
+        ...question,
+        multiSelect: false,
+      }) satisfies UserInputQuestion,
+  );
+  const resolvedAnswers = yield* input.requestUserInput({
+    questions,
+    turnId: payload.turnId,
+    callId: payload.callId,
+  });
+
+  return {
+    success: true,
+    contentItems: [
+      {
+        type: "inputText",
+        text: encodeUnknownJsonString(resolvedAnswers),
+      },
+    ],
+  } satisfies EffectCodexSchema.DynamicToolCallResponse;
+});
+
 type CodexServerNotification = {
   readonly [M in CodexRpc.ServerNotificationMethod]: {
     readonly method: M;
@@ -312,6 +474,7 @@ function buildThreadStartParams(input: {
   readonly runtimeMode: RuntimeMode;
   readonly model: string | undefined;
   readonly serviceTier: CodexServiceTier | undefined;
+  readonly enableWorkflowUserInputTool?: boolean;
 }): EffectCodexSchema.V2ThreadStartParams {
   const config = runtimeModeToThreadConfig(input.runtimeMode);
   return {
@@ -321,6 +484,9 @@ function buildThreadStartParams(input: {
     approvalsReviewer: config.approvalsReviewer,
     ...(input.model ? { model: input.model } : {}),
     ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
+    ...(input.enableWorkflowUserInputTool
+      ? { dynamicTools: [WORKFLOW_REQUEST_USER_INPUT_TOOL] }
+      : {}),
   };
 }
 
@@ -350,6 +516,7 @@ function buildCodexCollaborationMode(input: {
   readonly workflowPromptId?: string;
   readonly model?: string;
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort;
+  readonly workflowUserInputToolAvailable?: boolean;
 }): EffectCodexSchema.V2TurnStartParams__CollaborationMode | undefined {
   const workflowPromptId = resolveWorkflowPromptId({
     interactionMode: input.interactionMode,
@@ -365,13 +532,15 @@ function buildCodexCollaborationMode(input: {
       interactionMode: input.interactionMode,
       workflowPromptId,
     });
-  // Interactive grills use native plan transport only to expose request_user_input.
-  // Their developer and workflow instructions keep them out of ordinary CLI Plan Mode.
+  // Resumed grill threads created before T3 registered its dynamic tool retain native
+  // Plan transport as a compatibility fallback for request_user_input.
+  const usesNativeUserInputFallback =
+    usesInteractiveStructuredInput && input.workflowUserInputToolAvailable !== true;
   const mode: "default" | "plan" =
-    input.interactionMode === "plan" || usesInteractiveStructuredInput ? "plan" : "default";
+    input.interactionMode === "plan" || usesNativeUserInputFallback ? "plan" : "default";
   const reasoningEffort = input.effort ?? "medium";
   const baseDeveloperInstructions = buildCodexDeveloperInstructions(
-    usesInteractiveStructuredInput ? "interactive-grill" : mode,
+    usesNativeUserInputFallback ? "interactive-grill" : mode,
     {
       model,
       reasoningEffort,
@@ -414,6 +583,7 @@ export function buildTurnStartParams(input: {
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort;
   readonly interactionMode?: ProviderInteractionMode;
   readonly workflowPromptId?: string;
+  readonly workflowUserInputToolAvailable?: boolean;
 }): Effect.Effect<
   CodexTurnStartParamsWithCollaborationMode,
   CodexErrors.CodexAppServerProtocolParseError
@@ -435,6 +605,9 @@ export function buildTurnStartParams(input: {
     ...(input.workflowPromptId ? { workflowPromptId: input.workflowPromptId } : {}),
     ...(input.model ? { model: input.model } : {}),
     ...(input.effort ? { effort: input.effort } : {}),
+    ...(input.workflowUserInputToolAvailable !== undefined
+      ? { workflowUserInputToolAvailable: input.workflowUserInputToolAvailable }
+      : {}),
   });
 
   return decodeCodexTurnStartParamsWithCollaborationMode({
@@ -507,6 +680,7 @@ export const openCodexThread = (input: {
   readonly requestedModel: string | undefined;
   readonly serviceTier: CodexServiceTier | undefined;
   readonly resumeThreadId: string | undefined;
+  readonly enableWorkflowUserInputTool?: boolean;
 }): Effect.Effect<CodexThreadOpenResponse, CodexErrors.CodexAppServerError> => {
   const resumeThreadId = input.resumeThreadId;
   const startParams = buildThreadStartParams({
@@ -514,6 +688,9 @@ export const openCodexThread = (input: {
     runtimeMode: input.runtimeMode,
     model: input.requestedModel,
     serviceTier: input.serviceTier,
+    ...(input.enableWorkflowUserInputTool !== undefined
+      ? { enableWorkflowUserInputTool: input.enableWorkflowUserInputTool }
+      : {}),
   });
 
   if (resumeThreadId === undefined) {
@@ -769,6 +946,9 @@ export const makeCodexSessionRuntime = (
     const pendingUserInputsRef = yield* Ref.make(new Map<ApprovalRequestId, PendingUserInput>());
     const collabReceiverTurnsRef = yield* Ref.make(new Map<string, TurnId>());
     const closedRef = yield* Ref.make(false);
+    const workflowUserInputToolAvailable =
+      options.resumeCursor === undefined &&
+      isInteractiveStructuredInputWorkflowPromptId(options.workflowPromptId);
 
     // `~` is not shell-expanded when env vars are set via
     // `child_process.spawn`; `expandHomePath` lets a configured
@@ -872,8 +1052,8 @@ export const makeCodexSessionRuntime = (
         ),
       );
 
-    const settlePendingUserInputs = (answers: ProviderUserInputAnswers) =>
-      Ref.get(pendingUserInputsRef).pipe(
+    const settleAndClearPendingUserInputs = (answers: ProviderUserInputAnswers) =>
+      Ref.getAndSet(pendingUserInputsRef, new Map()).pipe(
         Effect.flatMap((pendingUserInputs) =>
           Effect.forEach(
             Array.from(pendingUserInputs.values()),
@@ -1173,6 +1353,51 @@ export const makeCodexSessionRuntime = (
       }),
     );
 
+    yield* client.handleServerRequest("item/tool/call", (payload) =>
+      handleWorkflowRequestUserInputToolCall({
+        registered: workflowUserInputToolAvailable,
+        payload,
+        requestUserInput: ({ questions, turnId: rawTurnId, callId }) =>
+          Effect.gen(function* () {
+            const requestId = ApprovalRequestId.make(yield* randomUUIDv4("user-input-request"));
+            const turnId = TurnId.make(rawTurnId);
+            const itemId = ProviderItemId.make(callId);
+            const answers = yield* Deferred.make<ProviderUserInputAnswers>();
+
+            yield* Ref.update(pendingUserInputsRef, (current) => {
+              const next = new Map(current);
+              next.set(requestId, {
+                requestId,
+                turnId,
+                itemId,
+                answers,
+              });
+              return next;
+            });
+
+            yield* emitEvent({
+              kind: "request",
+              threadId: options.threadId,
+              method: "workflow/requestUserInput",
+              requestId,
+              turnId,
+              itemId,
+              payload: { questions },
+            });
+
+            return yield* Deferred.await(answers).pipe(
+              Effect.ensuring(
+                Ref.update(pendingUserInputsRef, (current) => {
+                  const next = new Map(current);
+                  next.delete(requestId);
+                  return next;
+                }),
+              ),
+            );
+          }),
+      }),
+    );
+
     yield* client.handleUnknownServerRequest((method) =>
       Effect.fail(CodexErrors.CodexAppServerRequestError.methodNotFound(method)),
     );
@@ -1238,10 +1463,13 @@ export const makeCodexSessionRuntime = (
               return Effect.void;
             }
             const nextStatus = exitCode === 0 ? "closed" : "error";
-            return updateSession(sessionRef, {
-              status: nextStatus,
-              activeTurnId: undefined,
-            }).pipe(
+            return settleAndClearPendingUserInputs({}).pipe(
+              Effect.andThen(
+                updateSession(sessionRef, {
+                  status: nextStatus,
+                  activeTurnId: undefined,
+                }),
+              ),
               Effect.andThen(
                 emitSessionEvent(
                   "session/exited",
@@ -1272,6 +1500,7 @@ export const makeCodexSessionRuntime = (
         requestedModel,
         serviceTier: options.serviceTier,
         resumeThreadId: readResumeCursorThreadId(options.resumeCursor),
+        enableWorkflowUserInputTool: workflowUserInputToolAvailable,
       });
 
       const providerThreadId = opened.thread.id;
@@ -1304,7 +1533,7 @@ export const makeCodexSessionRuntime = (
         return;
       }
       yield* settlePendingApprovals("cancel");
-      yield* settlePendingUserInputs({});
+      yield* settleAndClearPendingUserInputs({});
       yield* updateSession(sessionRef, {
         status: "closed",
         activeTurnId: undefined,
@@ -1347,6 +1576,7 @@ export const makeCodexSessionRuntime = (
             ...(input.effort ? { effort: input.effort } : {}),
             ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
             ...(input.workflowPromptId ? { workflowPromptId: input.workflowPromptId } : {}),
+            workflowUserInputToolAvailable,
           });
           const rawResponse = yield* client.raw.request("turn/start", params);
           const response = yield* decodeV2TurnStartResponse(rawResponse).pipe(
@@ -1381,10 +1611,12 @@ export const makeCodexSessionRuntime = (
           if (!effectiveTurnId) {
             return;
           }
-          yield* client.request("turn/interrupt", {
-            threadId: providerThreadId,
-            turnId: effectiveTurnId,
-          });
+          yield* client
+            .request("turn/interrupt", {
+              threadId: providerThreadId,
+              turnId: effectiveTurnId,
+            })
+            .pipe(Effect.ensuring(settleAndClearPendingUserInputs({})));
         }),
       readThread: Effect.gen(function* () {
         const providerThreadId = yield* readProviderThreadId;

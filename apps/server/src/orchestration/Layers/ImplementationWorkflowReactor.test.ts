@@ -7,7 +7,7 @@ import {
   DevReviewId,
   EventId,
   GitCommandError,
-  IMPLEMENTATION_RUN_MAX_QA_CYCLES,
+  IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
   MessageId,
   ProviderInstanceId,
   ProjectId,
@@ -1293,99 +1293,82 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("does not relaunch Dev Review while its reviewer is idle between turns", () =>
-    withSystem((system) =>
-      Effect.gen(function* () {
-        const run = yield* launchFastFeatureRun(system);
-        const implementer = (yield* system.query.getSnapshot()).threads.find(
-          (thread) => thread.workflowRole === "fast-feature-implementer",
-        );
-        if (!implementer) throw new Error("Fast feature implementer missing.");
+  it.effect(
+    "terminally blocks a canonical review when its reviewer completes without updating it",
+    () =>
+      withSystem((system) =>
+        Effect.gen(function* () {
+          const run = yield* launchFastFeatureRun(system);
+          const implementer = (yield* system.query.getSnapshot()).threads.find(
+            (thread) => thread.workflowRole === "fast-feature-implementer",
+          );
+          if (!implementer) throw new Error("Fast feature implementer missing.");
 
-        yield* system.engine.dispatch({
-          type: "thread.activity.append",
-          commandId: commandId("fast-build-for-idle-reviewer"),
-          threadId: implementer.id,
-          activity: {
-            id: eventId("fast-build-for-idle-reviewer"),
-            tone: "info",
-            kind: "implementation-fast-build-result",
-            summary: "Fast Build succeeded",
-            payload: {
-              type: "implementation-fast-build-result",
-              runId: run.id,
-              status: "succeeded",
-              commitSha: "def456",
-              validations: requiredValidations(),
-              notesMarkdown: "Implemented and committed.",
+          yield* system.engine.dispatch({
+            type: "thread.activity.append",
+            commandId: commandId("fast-build-for-idle-reviewer"),
+            threadId: implementer.id,
+            activity: {
+              id: eventId("fast-build-for-idle-reviewer"),
+              tone: "info",
+              kind: "implementation-fast-build-result",
+              summary: "Fast Build succeeded",
+              payload: {
+                type: "implementation-fast-build-result",
+                runId: run.id,
+                status: "succeeded",
+                commitSha: "def456",
+                validations: requiredValidations(),
+                notesMarkdown: "Implemented and committed.",
+              },
+              turnId: null,
+              createdAt: "2026-01-01T00:00:02.000Z",
             },
-            turnId: null,
             createdAt: "2026-01-01T00:00:02.000Z",
-          },
-          createdAt: "2026-01-01T00:00:02.000Z",
-        });
-        yield* system.reactor.drain;
+          });
+          yield* system.reactor.drain;
 
-        let snapshot = yield* system.query.getSnapshot();
-        const reviewer = snapshot.threads.find(
-          (thread) => thread.workflowRole === "implementation-qa-reviewer",
-        );
-        if (!reviewer) throw new Error("Dev Review thread missing.");
-        expect(snapshot.implementationRuns[0]?.qaAttemptCount).toBe(1);
+          let snapshot = yield* system.query.getSnapshot();
+          const reviewer = snapshot.threads.find(
+            (thread) => thread.workflowRole === "implementation-qa-reviewer",
+          );
+          if (!reviewer) throw new Error("Dev Review thread missing.");
+          expect(snapshot.implementationRuns[0]?.qaAttemptCount).toBe(1);
 
-        // The reviewer finishes a turn and its session falls back to `ready`. That is an idle
-        // reviewer, not a dead one.
-        yield* system.engine.dispatch({
-          type: "thread.session.set",
-          commandId: commandId("reviewer-session-ready"),
-          threadId: reviewer.id,
-          session: {
+          // The reviewer completed without terminally updating its canonical record.
+          yield* system.engine.dispatch({
+            type: "thread.session.set",
+            commandId: commandId("reviewer-session-ready"),
             threadId: reviewer.id,
-            status: "ready",
-            providerName: "codex",
-            runtimeMode: "full-access",
-            activeTurnId: null,
-            lastError: null,
-            updatedAt: "2026-01-01T00:00:03.000Z",
-          },
-          createdAt: "2026-01-01T00:00:03.000Z",
-        });
+            session: {
+              threadId: reviewer.id,
+              status: "ready",
+              providerName: "codex",
+              runtimeMode: "full-access",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: "2026-01-01T00:00:03.000Z",
+            },
+            createdAt: "2026-01-01T00:00:03.000Z",
+          });
 
-        yield* system.reactor.start();
-        yield* system.reactor.drain;
+          yield* system.reactor.start();
+          yield* system.reactor.drain;
 
-        snapshot = yield* system.query.getSnapshot();
-        expect(
-          snapshot.threads.filter((thread) => thread.workflowRole === "implementation-qa-reviewer"),
-        ).toHaveLength(1);
-        expect(snapshot.implementationRuns[0]?.qaAttemptCount).toBe(1);
-
-        // A reviewer whose session actually died is still recovered.
-        yield* system.engine.dispatch({
-          type: "thread.session.set",
-          commandId: commandId("reviewer-session-stopped"),
-          threadId: reviewer.id,
-          session: {
-            threadId: reviewer.id,
-            status: "stopped",
-            providerName: "codex",
-            runtimeMode: "full-access",
-            activeTurnId: null,
-            lastError: null,
-            updatedAt: "2026-01-01T00:00:04.000Z",
-          },
-          createdAt: "2026-01-01T00:00:04.000Z",
-        });
-        yield* system.reactor.start();
-        yield* system.reactor.drain;
-
-        snapshot = yield* system.query.getSnapshot();
-        expect(
-          snapshot.threads.filter((thread) => thread.workflowRole === "implementation-qa-reviewer"),
-        ).toHaveLength(2);
-        expect(snapshot.implementationRuns[0]?.qaAttemptCount).toBe(2);
-      }),
-    ),
+          snapshot = yield* system.query.getSnapshot();
+          expect(
+            snapshot.threads.filter(
+              (thread) => thread.workflowRole === "implementation-qa-reviewer",
+            ),
+          ).toHaveLength(1);
+          expect(snapshot.implementationRuns[0]?.qaAttemptCount).toBe(1);
+          expect(snapshot.implementationRuns[0]?.qaCycleCount).toBe(1);
+          expect(snapshot.implementationRuns[0]?.status).toBe("fixing");
+          expect(
+            snapshot.threads.filter((thread) => thread.workflowRole === "implementation-fixer"),
+          ).toHaveLength(1);
+        }),
+      ),
   );
 
   it.effect("ignores a Build result once the run has moved past Build", () =>
@@ -1435,6 +1418,182 @@ describe("ImplementationWorkflowReactor", () => {
         expect(
           snapshot.threads.filter((thread) => thread.workflowRole === "implementation-qa-reviewer"),
         ).toHaveLength(1);
+      }),
+    ),
+  );
+
+  it.effect("reconciles an earlier running canonical review after a later attempt terminated", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const run = yield* launchFastFeatureRun(system);
+        const implementer = (yield* system.query.getSnapshot()).threads.find(
+          (thread) => thread.workflowRole === "fast-feature-implementer",
+        );
+        if (!implementer) throw new Error("Fast feature implementer missing.");
+
+        yield* system.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: commandId("fast-build-for-legacy-running-review"),
+          threadId: implementer.id,
+          activity: {
+            id: eventId("fast-build-for-legacy-running-review"),
+            tone: "info",
+            kind: "implementation-fast-build-result",
+            summary: "Fast Build succeeded",
+            payload: {
+              type: "implementation-fast-build-result",
+              runId: run.id,
+              status: "succeeded",
+              commitSha: "def456",
+              validations: requiredValidations(),
+              notesMarkdown: "Implemented and committed.",
+            },
+            turnId: null,
+            createdAt: "2026-01-01T00:00:02.000Z",
+          },
+          createdAt: "2026-01-01T00:00:02.000Z",
+        });
+        yield* system.reactor.drain;
+
+        let snapshot = yield* system.query.getSnapshot();
+        const reviewingRun = snapshot.implementationRuns[0];
+        const canonicalReviewId = reviewingRun?.devReviewIds[0];
+        const canonicalReviewer = snapshot.threads.find(
+          (thread) => thread.workflowRole === "implementation-qa-reviewer",
+        );
+        if (!reviewingRun || canonicalReviewId === undefined || !canonicalReviewer) {
+          throw new Error("Canonical Dev Review missing.");
+        }
+
+        const nestedReviewId = DevReviewId.make("dev-review-legacy-nested");
+        const nestedReviewerId = ThreadId.make("thread-dev-review-legacy-nested");
+        yield* system.engine.dispatch({
+          type: "thread.dev-review.launch",
+          commandId: commandId("legacy-nested-review-launch"),
+          sourceThreadId: canonicalReviewer.id,
+          reviewThreadId: nestedReviewerId,
+          reviewId: nestedReviewId,
+          message: {
+            messageId: messageId("legacy-nested-review-launch"),
+            role: "user",
+            text: "Run the nested full review.",
+            attachments: [],
+          },
+          modelSelection: canonicalReviewer.modelSelection,
+          runtimeMode: "full-access",
+          workflowPromptId: "implementation.browser-dev-review.codex",
+          createdAt: "2026-01-01T00:00:03.000Z",
+        });
+        const nestedEvidence = {
+          recording: {
+            status: "failed" as const,
+            path: null,
+            mimeType: null,
+            sizeBytes: null,
+            startedAt: null,
+            completedAt: null,
+            error: "Mailbox fixtures unavailable.",
+          },
+          screenshots: [],
+        };
+        yield* system.engine.dispatch({
+          type: "thread.dev-review.evidence.update",
+          commandId: commandId("legacy-nested-review-evidence"),
+          threadId: canonicalReviewer.id,
+          reviewId: nestedReviewId,
+          evidence: nestedEvidence,
+          updatedAt: "2026-01-01T00:00:04.000Z",
+          createdAt: "2026-01-01T00:00:04.000Z",
+        });
+        yield* system.engine.dispatch({
+          type: "thread.dev-review.update",
+          commandId: commandId("legacy-nested-review-blocked"),
+          threadId: canonicalReviewer.id,
+          reviewId: nestedReviewId,
+          status: "blocked",
+          document: {
+            verdict: "blocked",
+            summary: "Connected-account and mailbox fixtures are unavailable.",
+            checks: [],
+            findings: [],
+            questions: [],
+            nextSteps: ["Seed the missing fixtures."],
+          },
+          updatedAt: "2026-01-01T00:00:04.000Z",
+          createdAt: "2026-01-01T00:00:04.000Z",
+        });
+
+        const laterReviewId = DevReviewId.make("dev-review-later-terminal");
+        const laterReviewerId = ThreadId.make("thread-dev-review-later-terminal");
+        yield* system.engine.dispatch({
+          type: "thread.dev-review.launch",
+          commandId: commandId("later-terminal-review-launch"),
+          sourceThreadId: run.orchestratorThreadId,
+          reviewThreadId: laterReviewerId,
+          reviewId: laterReviewId,
+          message: {
+            messageId: messageId("later-terminal-review-launch"),
+            role: "user",
+            text: "Run the later review attempt.",
+            attachments: [],
+          },
+          modelSelection: canonicalReviewer.modelSelection,
+          runtimeMode: "full-access",
+          workflowPromptId: "implementation.browser-dev-review.codex",
+          createdAt: "2026-01-01T00:00:05.000Z",
+        });
+        yield* system.engine.dispatch({
+          type: "thread.dev-review.update",
+          commandId: commandId("later-terminal-review-failed"),
+          threadId: run.orchestratorThreadId,
+          reviewId: laterReviewId,
+          status: "failed",
+          updatedAt: "2026-01-01T00:00:06.000Z",
+          createdAt: "2026-01-01T00:00:06.000Z",
+        });
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("record-later-terminal-review"),
+          threadId: sourceThreadId,
+          run: {
+            ...reviewingRun,
+            devReviewIds: [...reviewingRun.devReviewIds, laterReviewId],
+            updatedAt: "2026-01-01T00:00:06.000Z",
+          },
+          createdAt: "2026-01-01T00:00:06.000Z",
+        });
+        yield* system.engine.dispatch({
+          type: "thread.session.set",
+          commandId: commandId("legacy-canonical-reviewer-ready"),
+          threadId: canonicalReviewer.id,
+          session: {
+            threadId: canonicalReviewer.id,
+            status: "ready",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: "2026-01-01T00:00:07.000Z",
+          },
+          createdAt: "2026-01-01T00:00:07.000Z",
+        });
+
+        yield* system.reactor.start();
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        const orchestrator = snapshot.threads.find(
+          (thread) => thread.id === run.orchestratorThreadId,
+        );
+        const canonicalReview = orchestrator?.devReviews.find(
+          (review) => review.id === canonicalReviewId,
+        );
+        expect(canonicalReview?.status).toBe("blocked");
+        expect(canonicalReview?.document.summary).toContain("mailbox fixtures");
+        expect(canonicalReview?.evidence).toEqual(nestedEvidence);
+        expect(orchestrator?.devReviews.find((review) => review.id === laterReviewId)?.status).toBe(
+          "failed",
+        );
       }),
     ),
   );
@@ -2706,28 +2865,34 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("makes browser fixes with missing validation results retryable", () =>
-    withSystem((system) =>
-      Effect.gen(function* () {
-        const { run } = yield* launchRun(system);
-        yield* appendWorkerResult(system, { run, status: "succeeded" });
-        yield* passMergeGate(system, run);
-        yield* failDevReview(system, run);
-        yield* appendBrowserFixResult(system, { run, validations: [] });
+  it.effect(
+    "replaces browser fixes with missing validation results using the next repair slot",
+    () =>
+      withSystem((system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          yield* appendWorkerResult(system, { run, status: "succeeded" });
+          yield* passMergeGate(system, run);
+          yield* failDevReview(system, run);
+          yield* appendBrowserFixResult(system, { run, validations: [] });
 
-        const snapshot = yield* system.query.getSnapshot();
-        const updated = snapshot.implementationRuns.find((candidate) => candidate.id === run.id);
-        expect(updated?.status).toBe("needs-human-attention");
-        expect(updated?.retryableFailure?.stage).toBe("fixer");
-        expect(updated?.devReviewIds).toHaveLength(1);
-        expect(
-          snapshot.threads.filter((thread) => thread.workflowRole === "implementation-validator"),
-        ).toHaveLength(1);
-      }),
-    ),
+          const snapshot = yield* system.query.getSnapshot();
+          const updated = snapshot.implementationRuns.find((candidate) => candidate.id === run.id);
+          expect(updated?.status).toBe("fixing");
+          expect(updated?.retryableFailure).toBeNull();
+          expect(updated?.qaCycleCount).toBe(2);
+          expect(updated?.devReviewIds).toHaveLength(1);
+          expect(
+            snapshot.threads.filter((thread) => thread.workflowRole === "implementation-validator"),
+          ).toHaveLength(1);
+          expect(
+            snapshot.threads.filter((thread) => thread.workflowRole === "implementation-fixer"),
+          ).toHaveLength(2);
+        }),
+      ),
   );
 
-  it.effect("retries an interrupted browser fixer instead of terminally blocking the run", () =>
+  it.effect("counts a fresh replacement for an interrupted browser fixer", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         const { run } = yield* launchRun(system);
@@ -2766,26 +2931,10 @@ describe("ImplementationWorkflowReactor", () => {
 
         snapshot = yield* system.query.getSnapshot();
         const interrupted = snapshot.implementationRuns.find((entry) => entry.id === run.id);
-        expect(interrupted?.status).toBe("needs-human-attention");
-        expect(interrupted?.retryableFailure?.stage).toBe("fixer");
-
-        yield* system.engine.dispatch({
-          type: "thread.implementation-run.retry",
-          commandId: commandId("browser-fix-interrupted-retry"),
-          threadId: sourceThreadId,
-          runId: run.id,
-          createdAt: "2026-01-01T00:00:05.000Z",
-        });
-        yield* system.reactor.drain;
-
-        snapshot = yield* system.query.getSnapshot();
-        const retried = snapshot.implementationRuns.find((entry) => entry.id === run.id);
-        expect(retried?.status).toBe("fixing");
-        // The failure record survives the resume so repeat failures accumulate
-        // toward maxAttempts; only a stage success clears it.
-        expect(retried?.retryableFailure?.stage).toBe("fixer");
-        expect(retried?.retryableFailure?.attemptCount).toBe(1);
-        expect(retried?.activeFixerThreadId).not.toBe(firstFixer.id);
+        expect(interrupted?.status).toBe("fixing");
+        expect(interrupted?.retryableFailure).toBeNull();
+        expect(interrupted?.qaCycleCount).toBe(2);
+        expect(interrupted?.activeFixerThreadId).not.toBe(firstFixer.id);
         expect(
           snapshot.threads.filter((thread) => thread.workflowRole === "implementation-fixer"),
         ).toHaveLength(2);
@@ -2850,6 +2999,213 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
+  it.effect("normalizes legacy runs with 24 QA fixers and advances without creating a 25th", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+        yield* passMergeGate(system, run);
+        yield* failDevReview(system, run, "blocked");
+
+        for (let index = 2; index <= 24; index += 1) {
+          yield* system.engine.dispatch({
+            type: "thread.create",
+            commandId: commandId(`legacy-qa-fixer-${index}`),
+            threadId: ThreadId.make(`thread-legacy-qa-fixer-${index}`),
+            projectId,
+            ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+            parentThreadId: run.orchestratorThreadId,
+            workflowRole: "implementation-fixer",
+            title: `TDD repair ${Math.min(index, 10)}/10 · Dev Review`,
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("codex"),
+              model: "gpt-5.6-sol",
+            },
+            runtimeMode: "full-access",
+            interactionMode: "implementation-workflow",
+            branch: run.orchestratorBranch,
+            worktreePath: run.orchestratorWorktreePath,
+            createdAt: `2026-01-01T00:01:${String(index).padStart(2, "0")}.000Z`,
+          });
+        }
+        yield* system.reactor.start();
+        yield* system.reactor.drain;
+
+        const snapshot = yield* system.query.getSnapshot();
+        const recovered = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(recovered?.qaCycleCount).toBe(IMPLEMENTATION_RUN_MAX_QA_REPAIRS);
+        expect(recovered?.qaExhaustedAt).not.toBeNull();
+        expect(recovered?.status).toBe("code-reviewing");
+        expect(
+          snapshot.threads.filter((thread) => thread.workflowRole === "implementation-fixer"),
+        ).toHaveLength(24);
+      }),
+    ),
+  );
+
+  it.effect("numbers malformed QA replacements monotonically and never launches an eleventh", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+        yield* passMergeGate(system, run);
+        yield* failDevReview(system, run);
+
+        for (let repair = 1; repair <= IMPLEMENTATION_RUN_MAX_QA_REPAIRS; repair += 1) {
+          const snapshot = yield* system.query.getSnapshot();
+          const activeFixerThreadId = snapshot.implementationRuns.find(
+            (entry) => entry.id === run.id,
+          )?.activeFixerThreadId;
+          if (activeFixerThreadId === null || activeFixerThreadId === undefined) {
+            throw new Error(`Repair ${repair} missing.`);
+          }
+          yield* system.engine.dispatch({
+            type: "thread.activity.append",
+            commandId: commandId(`malformed-repair-${repair}`),
+            threadId: activeFixerThreadId,
+            activity: {
+              id: eventId(`malformed-repair-${repair}`),
+              tone: "error",
+              kind: "implementation-fix-result",
+              summary: "Implementation fix result was malformed",
+              payload: {
+                type: "implementation-fix-result",
+                runId: run.id,
+                status: "blocked",
+                validations: [],
+                notesMarkdown: `Repair ${repair} omitted required validation timestamps.`,
+              },
+              turnId: null,
+              createdAt: `2026-01-01T00:00:${String(10 + repair).padStart(2, "0")}.000Z`,
+            },
+            createdAt: `2026-01-01T00:00:${String(10 + repair).padStart(2, "0")}.000Z`,
+          });
+          yield* system.reactor.drain;
+        }
+
+        const snapshot = yield* system.query.getSnapshot();
+        const exhausted = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        const fixers = snapshot.threads.filter(
+          (thread) => thread.workflowRole === "implementation-fixer",
+        );
+        expect(exhausted?.qaCycleCount).toBe(IMPLEMENTATION_RUN_MAX_QA_REPAIRS);
+        expect(exhausted?.status).toBe("code-reviewing");
+        expect(fixers).toHaveLength(IMPLEMENTATION_RUN_MAX_QA_REPAIRS);
+        expect(fixers.map((thread) => thread.title)).toEqual(
+          Array.from(
+            { length: IMPLEMENTATION_RUN_MAX_QA_REPAIRS },
+            (_, index) => `TDD repair ${index + 1}/10 · Dev Review`,
+          ),
+        );
+      }),
+    ),
+  );
+
+  it.effect("revalidates a clean unvalidated HEAD before exhausted QA enters Code Review", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+        yield* passMergeGate(system, run);
+        let snapshot = yield* system.query.getSnapshot();
+        const reviewing = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        if (reviewing === undefined) throw new Error("Reviewing run missing.");
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("clean-unvalidated-exhaustion-state"),
+          threadId: sourceThreadId,
+          run: {
+            ...reviewing,
+            qaCycleCount: IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
+            validatedHeadSha: null,
+          },
+          createdAt: "2026-01-01T00:00:03.000Z",
+        });
+        yield* failDevReview(system, run, "blocked");
+
+        snapshot = yield* system.query.getSnapshot();
+        const validating = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(validating?.qaExhaustedAt).not.toBeNull();
+        expect(validating?.status).toBe("validating");
+        expect(validating?.validatedHeadSha).toBeNull();
+        expect(validating?.qaAttemptCount).toBe(1);
+        expect(validating?.codeReviewAttemptCount).toBe(0);
+
+        yield* passMergeGate(system, run);
+
+        snapshot = yield* system.query.getSnapshot();
+        const exhausted = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(exhausted?.status).toBe("code-reviewing");
+        expect(exhausted?.validatedHeadSha).toBe("def456");
+        expect(exhausted?.qaAttemptCount).toBe(1);
+        expect(exhausted?.codeReviewAttemptCount).toBe(1);
+        expect(
+          snapshot.threads.filter((thread) => thread.workflowRole === "implementation-qa-reviewer"),
+        ).toHaveLength(1);
+      }),
+    ),
+  );
+
+  it.effect("keeps an unsafe exhausted run human-blocked without repeating exhaustion", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+        yield* passMergeGate(system, run);
+        const snapshot = yield* system.query.getSnapshot();
+        const reviewing = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        if (reviewing === undefined) throw new Error("Reviewing run missing.");
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("unsafe-exhausted-recovery-state"),
+          threadId: sourceThreadId,
+          run: {
+            ...reviewing,
+            status: "needs-human-attention",
+            orchestratorBranch: "implementation/unexpected",
+            qaCycleCount: IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
+            qaExhaustedAt: "2026-01-01T00:00:03.000Z",
+            devReviewExhaustedAt: "2026-01-01T00:00:03.000Z",
+            validatedHeadSha: null,
+            retryableFailure: {
+              stage: "dev-review",
+              detail: "Legacy exhausted run needs validation.",
+              failedAt: "2026-01-01T00:00:03.000Z",
+              attemptCount: 1,
+              maxAttempts: 5,
+              humanBlocked: false,
+            },
+            updatedAt: "2026-01-01T00:00:03.000Z",
+          },
+          createdAt: "2026-01-01T00:00:03.000Z",
+        });
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.retry",
+          commandId: commandId("unsafe-exhausted-retry"),
+          threadId: sourceThreadId,
+          runId: run.id,
+          createdAt: "2026-01-01T00:00:04.000Z",
+        });
+        yield* system.reactor.drain;
+
+        const recoveredSnapshot = yield* system.query.getSnapshot();
+        const blocked = recoveredSnapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(blocked?.status).toBe("needs-human-attention");
+        expect(blocked?.retryableFailure?.stage).toBe("dev-review");
+        expect(blocked?.retryableFailure?.humanBlocked).toBe(true);
+        expect(blocked?.codeReviewAttemptCount).toBe(0);
+        const orchestrator = recoveredSnapshot.threads.find(
+          (thread) => thread.id === run.orchestratorThreadId,
+        );
+        expect(
+          orchestrator?.activities.filter(
+            (activity) => activity.kind === "implementation-qa-exhausted",
+          ),
+        ).toHaveLength(0);
+      }),
+    ),
+  );
+
   it.effect("continues to code review when the browser review exhausts every attempt", () =>
     withSystem((system) =>
       Effect.gen(function* () {
@@ -2864,7 +3220,7 @@ describe("ImplementationWorkflowReactor", () => {
           type: "thread.implementation-run.update",
           commandId: commandId("exhaust-browser-review-attempts"),
           threadId: sourceThreadId,
-          run: { ...reviewingRun, qaCycleCount: IMPLEMENTATION_RUN_MAX_QA_CYCLES },
+          run: { ...reviewingRun, qaCycleCount: IMPLEMENTATION_RUN_MAX_QA_REPAIRS },
           createdAt: "2026-01-01T00:00:03.000Z",
         });
         yield* failDevReview(system, run);
@@ -2885,7 +3241,7 @@ describe("ImplementationWorkflowReactor", () => {
           (thread) => thread.id === run.orchestratorThreadId,
         );
         const exhaustedActivity = orchestratorThread?.activities.find(
-          (activity) => activity.kind === "implementation-browser-review-exhausted",
+          (activity) => activity.kind === "implementation-qa-exhausted",
         );
         expect(exhaustedActivity?.tone).toBe("error");
 
@@ -2913,7 +3269,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("publishes best-effort when AppDevStack exhausts the shared QA cycles", () =>
+  it.effect("publishes best-effort when AppDevStack exhausts ten QA repairs", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
@@ -2929,23 +3285,55 @@ describe("ImplementationWorkflowReactor", () => {
             threadId: sourceThreadId,
             run: {
               ...validating,
-              qaCycleCount: IMPLEMENTATION_RUN_MAX_QA_CYCLES - 1,
+              qaCycleCount: IMPLEMENTATION_RUN_MAX_QA_REPAIRS - 1,
             },
             createdAt: "2026-01-01T00:00:02.500Z",
           });
           yield* passMergeGate(system, run);
 
           snapshot = yield* system.query.getSnapshot();
+          const tenthRepair = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+          expect(tenthRepair?.status).toBe("fixing");
+          expect(tenthRepair?.qaCycleCount).toBe(IMPLEMENTATION_RUN_MAX_QA_REPAIRS);
+          if (
+            tenthRepair?.activeFixerThreadId === null ||
+            tenthRepair?.activeFixerThreadId === undefined
+          ) {
+            throw new Error("Tenth repair missing.");
+          }
+          yield* system.engine.dispatch({
+            type: "thread.activity.append",
+            commandId: commandId("app-stack-tenth-repair-blocked"),
+            threadId: tenthRepair.activeFixerThreadId,
+            activity: {
+              id: eventId("app-stack-tenth-repair-blocked"),
+              tone: "error",
+              kind: "implementation-fix-result",
+              summary: "Implementation fix blocked",
+              payload: {
+                type: "implementation-fix-result",
+                runId: run.id,
+                status: "blocked",
+                validations: [],
+                notesMarkdown: "AppDevStack remains unavailable.",
+              },
+              turnId: null,
+              createdAt: "2026-01-01T00:00:04.000Z",
+            },
+            createdAt: "2026-01-01T00:00:04.000Z",
+          });
+          yield* system.reactor.drain;
+          snapshot = yield* system.query.getSnapshot();
           const exhausted = snapshot.implementationRuns.find((entry) => entry.id === run.id);
           expect(exhausted?.status).toBe("code-reviewing");
-          expect(exhausted?.qaCycleCount).toBe(IMPLEMENTATION_RUN_MAX_QA_CYCLES);
+          expect(exhausted?.qaCycleCount).toBe(IMPLEMENTATION_RUN_MAX_QA_REPAIRS);
           expect(exhausted?.qaExhaustedAt).not.toBeNull();
           expect(exhausted?.qaExhaustionReason).toBe("app-dev-stack");
           expect(exhausted?.devReviewExhaustedAt).toBeNull();
           expect(exhausted?.devReviewIds).toHaveLength(0);
           expect(
             snapshot.threads.filter((thread) => thread.workflowRole === "implementation-fixer"),
-          ).toHaveLength(0);
+          ).toHaveLength(1);
 
           const reviewer = yield* nextThreadForRole(
             system,

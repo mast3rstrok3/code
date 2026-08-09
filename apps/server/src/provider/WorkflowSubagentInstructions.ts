@@ -12,7 +12,9 @@ If the user explicitly asks to run or launch a Browser DevReview for the current
 }
 \`\`\`
 
-The default \`feedback\` mode creates an ordinary Browser Dev Review child without a durable Dev Review record or evidence requirement. Use \`"devReviewMode": "full"\` only when a structured durable review with recording, screenshots, checks, findings, and verdict is explicitly required. Do not perform browser automation in the parent thread.`;
+The default \`feedback\` mode creates an ordinary Browser Dev Review child without a durable Dev Review record or evidence requirement. Use \`"devReviewMode": "full"\` only when a structured durable review with recording, screenshots, checks, findings, and verdict is explicitly required. Do not perform browser automation in the parent thread.
+
+Exception: a thread already acting as an \`implementation-qa-reviewer\` is the Browser Dev Review. It must use its linked preview_* and dev_review_* tools directly and must never launch a nested Browser Dev Review. The server rejects that nested launch.`;
 
 export const WORKFLOW_SUBAGENT_INSTRUCTIONS_PROMPT = `## T3 Workflow Sub-Agent System
 

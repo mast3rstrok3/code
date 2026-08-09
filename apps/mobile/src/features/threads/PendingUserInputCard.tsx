@@ -83,6 +83,16 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
                 );
               })}
             </View>
+            {question.recommendation ? (
+              <View className="rounded-2xl border border-blue-300/35 bg-blue-50/80 px-3.5 py-3 dark:border-blue-400/20 dark:bg-blue-400/10">
+                <Text className="font-t3-bold text-xs uppercase tracking-[0.8px] text-sky-700 dark:text-sky-300">
+                  Recommended: {question.recommendation.optionLabel}
+                </Text>
+                <Text className="mt-1 font-sans text-sm leading-snug text-neutral-600 dark:text-neutral-300">
+                  {question.recommendation.rationale}
+                </Text>
+              </View>
+            ) : null}
             <TextInput
               value={draft?.customAnswer ?? ""}
               onChangeText={(value) =>

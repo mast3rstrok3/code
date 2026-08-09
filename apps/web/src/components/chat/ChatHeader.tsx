@@ -1,5 +1,5 @@
 import {
-  IMPLEMENTATION_RUN_MAX_QA_CYCLES,
+  IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
   type EnvironmentId,
   type EditorId,
   type ProjectScript,
@@ -62,7 +62,7 @@ export function workflowProgressLabel(input: {
         return "Implementation · Browser Dev Review";
       case "fixing":
         if (run.fixOrigin === "app-dev-stack" || run.fixOrigin === "dev-review") {
-          return `${run.artifactSource === "proposed-plan" ? "Fast feature" : "Implementation"} · TDD repair · ${run.qaCycleCount}/${IMPLEMENTATION_RUN_MAX_QA_CYCLES}`;
+          return `${run.artifactSource === "proposed-plan" ? "Fast feature" : "Implementation"} · TDD repair · ${run.qaCycleCount}/${IMPLEMENTATION_RUN_MAX_QA_REPAIRS}`;
         }
         return "Implementation · Fix";
       case "code-review-fixing":

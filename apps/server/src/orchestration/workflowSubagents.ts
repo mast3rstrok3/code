@@ -21,6 +21,7 @@ export interface WorkflowSubagentSpawnDefinition {
   readonly defaultTitlePrefix: string;
   readonly expectedResult: string;
   readonly allowedParentWorkflowRoles: "any" | ReadonlyArray<WorkflowSubagentParentWorkflowRole>;
+  readonly disallowedParentWorkflowRoles?: ReadonlyArray<WorkflowSubagentParentWorkflowRole>;
   /**
    * Hardlock this sub-agent to a specific driver/model regardless of the
    * parent thread's selection. Applied at spawn time by
@@ -137,6 +138,7 @@ const WORKFLOW_SUBAGENT_SPAWN_DEFINITIONS: ReadonlyArray<WorkflowSubagentSpawnDe
     defaultTitlePrefix: "Browser Dev Review",
     expectedResult: "dev-review-document",
     allowedParentWorkflowRoles: "any",
+    disallowedParentWorkflowRoles: ["implementation-qa-reviewer"],
     modelOverride: {
       driver: ProviderDriverKind.make("codex"),
       model: "gpt-5.6-sol",
@@ -180,6 +182,7 @@ export function isWorkflowSubagentParentRoleAllowed(
   definition: WorkflowSubagentSpawnDefinition,
   workflowRole: WorkflowSubagentParentWorkflowRole,
 ): boolean {
+  if (definition.disallowedParentWorkflowRoles?.includes(workflowRole)) return false;
   return (
     definition.allowedParentWorkflowRoles === "any" ||
     definition.allowedParentWorkflowRoles.includes(workflowRole)

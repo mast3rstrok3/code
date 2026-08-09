@@ -15,6 +15,7 @@ import {
 
 import {
   buildThreadFeed,
+  derivePendingUserInputs,
   deriveThreadFeedPresentation,
   selectPendingUserInputOption,
   type ThreadFeedActivity,
@@ -157,6 +158,47 @@ function makeThread(
     settledAt: input.settledAt ?? null,
   };
 }
+
+describe("derivePendingUserInputs", () => {
+  it("preserves recommendation metadata and option order for a seven-question workflow round", () => {
+    const questions = Array.from({ length: 7 }, (_, index) => ({
+      id: `question_${index + 1}`,
+      header: `Question ${index + 1}`,
+      question: `Which direction should question ${index + 1} take?`,
+      options: [
+        { label: "Complete", description: "Ship every path together." },
+        { label: "Incremental", description: "Ship the core path first." },
+      ],
+      recommendation: {
+        optionLabel: "Incremental",
+        rationale: "It creates the fastest useful feedback loop.",
+      },
+      multiSelect: false,
+    }));
+    const pending = derivePendingUserInputs([
+      makeActivity({
+        id: EventId.make("activity-user-input"),
+        kind: "user-input.requested",
+        summary: "User input requested",
+        createdAt: "2026-04-01T00:00:00.000Z",
+        payload: {
+          requestId: "request-1",
+          questions,
+        },
+      }),
+    ]);
+
+    expect(pending[0]?.questions).toHaveLength(7);
+    expect(pending[0]?.questions[6]?.options).toEqual([
+      { label: "Complete", description: "Ship every path together." },
+      { label: "Incremental", description: "Ship the core path first." },
+    ]);
+    expect(pending[0]?.questions[6]?.recommendation).toEqual({
+      optionLabel: "Incremental",
+      rationale: "It creates the fastest useful feedback loop.",
+    });
+  });
+});
 
 describe("buildThreadFeed", () => {
   it("keeps historic work entries attributed to their turns", () => {

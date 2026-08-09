@@ -61,7 +61,7 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         label: "AppDevStack, Dev Review, and fresh TDD repair cycles",
         skillId: "implementation.browser-dev-review.codex",
         threadBoundary: "new review thread",
-        note: "up to ten shared cycles; every repair and review uses a fresh thread",
+        note: "up to ten fresh QA repairs; probes and browser reviews are counted separately",
       },
       {
         label: "Code Review",
@@ -110,7 +110,7 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
       {
         label: "AppDevStack, Dev Review, and fresh TDD repairs",
         skillId: "implementation.browser-dev-review.codex",
-        note: "automatic; up to ten shared cycles",
+        note: "automatic; up to ten fresh QA repairs",
       },
       {
         label: "Code Review",
@@ -160,7 +160,7 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
       {
         label: "Run AppDevStack, Dev Review, and fresh TDD repair cycles",
         skillId: "implementation.browser-dev-review.codex",
-        note: "up to ten shared cycles",
+        note: "up to ten fresh QA repairs",
       },
       {
         label: "Run Code Review",

@@ -438,18 +438,25 @@ const UserInputQuestionOption = Schema.Struct({
 });
 export type UserInputQuestionOption = typeof UserInputQuestionOption.Type;
 
+const UserInputQuestionRecommendation = Schema.Struct({
+  optionLabel: TrimmedNonEmptyStringSchema,
+  rationale: TrimmedNonEmptyStringSchema,
+});
+export type UserInputQuestionRecommendation = typeof UserInputQuestionRecommendation.Type;
+
 export const UserInputQuestion = Schema.Struct({
   id: TrimmedNonEmptyStringSchema,
   header: TrimmedNonEmptyStringSchema,
   question: TrimmedNonEmptyStringSchema,
   options: Schema.Array(UserInputQuestionOption),
+  recommendation: Schema.optional(UserInputQuestionRecommendation),
   multiSelect: Schema.optional(Schema.Boolean).pipe(
     Schema.withConstructorDefault(Effect.succeed(false)),
   ),
 });
 export type UserInputQuestion = typeof UserInputQuestion.Type;
 
-const UserInputRequestedPayload = Schema.Struct({
+export const UserInputRequestedPayload = Schema.Struct({
   questions: Schema.Array(UserInputQuestion),
 });
 export type UserInputRequestedPayload = typeof UserInputRequestedPayload.Type;

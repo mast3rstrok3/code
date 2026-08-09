@@ -32,8 +32,31 @@ const decodeConsumeRateLimitResetCreditParams = Schema.decodeUnknownEffect(
 const decodeConsumeRateLimitResetCreditResponse = Schema.decodeUnknownEffect(
   CodexRpc.CLIENT_REQUEST_RESPONSES["account/rateLimitResetCredit/consume"],
 );
+const encodeV2ThreadStartParams = Schema.encodeSync(CodexSchema.V2ThreadStartParams);
 
 it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
+  it("encodes experimental dynamic tools in thread/start params", () => {
+    const encoded = encodeV2ThreadStartParams({
+      dynamicTools: [
+        {
+          type: "function",
+          name: "workflow_request_user_input",
+          description: "Ask structured workflow questions.",
+          inputSchema: { type: "object" },
+        },
+      ],
+    });
+
+    assert.deepEqual(encoded.dynamicTools, [
+      {
+        type: "function",
+        name: "workflow_request_user_input",
+        description: "Ask structured workflow questions.",
+        inputSchema: { type: "object" },
+      },
+    ]);
+  });
+
   it.effect("maps account usage responses to the upstream token usage schema", () =>
     Effect.gen(function* () {
       assert.strictEqual(

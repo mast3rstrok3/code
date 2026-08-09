@@ -15,6 +15,7 @@ import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_WORKSPACE_USER_ID,
+  DevReviewId,
   EventId,
   MessageId,
   ProjectId,
@@ -3883,6 +3884,192 @@ describe("ProviderRuntimeIngestion", () => {
     expect(childThread?.messages[0]?.text).toContain("Run Browser Dev Review");
     expect(childThread?.messages[0]?.text).toContain("Exercise the checkout flow in the browser.");
     expect(childThread?.messages[0]?.text).not.toContain("Expected result directive");
+  });
+
+  it("blocks a canonical Dev Review when its reviewer completes without a terminal update", async () => {
+    const harness = await createHarness();
+    const sourceThreadId = asThreadId("thread-1");
+    const reviewerThreadId = asThreadId("thread-canonical-reviewer");
+    const reviewId = DevReviewId.make("review-canonical");
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.dev-review.launch",
+        commandId: CommandId.make("cmd-canonical-review-launch"),
+        sourceThreadId,
+        reviewThreadId: reviewerThreadId,
+        reviewId,
+        message: {
+          messageId: asMessageId("message-canonical-review"),
+          role: "user",
+          text: "Review the current implementation.",
+          attachments: [],
+        },
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.6-sol",
+        },
+        runtimeMode: "full-access",
+        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-canonical-review-started"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:01.000Z",
+      threadId: reviewerThreadId,
+      turnId: asTurnId("turn-canonical-review"),
+    });
+    await waitForThread(
+      harness.readModel,
+      (thread) => thread.session?.activeTurnId === "turn-canonical-review",
+      10_000,
+      reviewerThreadId,
+    );
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-canonical-review-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:02.000Z",
+      threadId: reviewerThreadId,
+      turnId: asTurnId("turn-canonical-review"),
+      payload: { state: "completed" },
+    });
+    const source = await waitForThread(
+      harness.readModel,
+      (thread) =>
+        thread.devReviews.some((review) => review.id === reviewId && review.status === "blocked"),
+      10_000,
+      sourceThreadId,
+    );
+    expect(source.devReviews.find((review) => review.id === reviewId)?.document.summary).toContain(
+      "without terminally updating",
+    );
+  });
+
+  it("adopts a terminal nested review document and evidence into the canonical review", async () => {
+    const harness = await createHarness();
+    const sourceThreadId = asThreadId("thread-1");
+    const reviewerThreadId = asThreadId("thread-legacy-canonical-reviewer");
+    const nestedReviewerThreadId = asThreadId("thread-legacy-nested-reviewer");
+    const canonicalId = DevReviewId.make("review-legacy-canonical");
+    const nestedId = DevReviewId.make("review-legacy-nested");
+    const modelSelection = {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5.6-sol",
+    };
+    for (const launch of [
+      {
+        sourceThreadId,
+        reviewThreadId: reviewerThreadId,
+        reviewId: canonicalId,
+        tag: "canonical",
+      },
+      {
+        sourceThreadId: reviewerThreadId,
+        reviewThreadId: nestedReviewerThreadId,
+        reviewId: nestedId,
+        tag: "nested",
+      },
+    ]) {
+      await runtime!.runPromise(
+        harness.engine.dispatch({
+          type: "thread.dev-review.launch",
+          commandId: CommandId.make(`cmd-legacy-${launch.tag}-launch`),
+          sourceThreadId: launch.sourceThreadId,
+          reviewThreadId: launch.reviewThreadId,
+          reviewId: launch.reviewId,
+          message: {
+            messageId: asMessageId(`message-legacy-${launch.tag}`),
+            role: "user",
+            text: "Review the current implementation.",
+            attachments: [],
+          },
+          modelSelection,
+          runtimeMode: "full-access",
+          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
+          createdAt: "2026-01-01T00:00:00.000Z",
+        }),
+      );
+    }
+    const evidence = {
+      recording: {
+        status: "failed" as const,
+        path: null,
+        mimeType: null,
+        sizeBytes: null,
+        startedAt: null,
+        completedAt: null,
+        error: "Fixtures unavailable",
+      },
+      screenshots: [],
+    };
+    await runtime!.runPromise(
+      Effect.all([
+        harness.engine.dispatch({
+          type: "thread.dev-review.evidence.update",
+          commandId: CommandId.make("cmd-legacy-nested-evidence"),
+          threadId: reviewerThreadId,
+          reviewId: nestedId,
+          evidence,
+          updatedAt: "2026-01-01T00:00:01.000Z",
+          createdAt: "2026-01-01T00:00:01.000Z",
+        }),
+        harness.engine.dispatch({
+          type: "thread.dev-review.update",
+          commandId: CommandId.make("cmd-legacy-nested-blocked"),
+          threadId: reviewerThreadId,
+          reviewId: nestedId,
+          status: "blocked",
+          document: {
+            verdict: "blocked",
+            summary: "Connected-account and mailbox fixtures are unavailable.",
+            checks: [],
+            findings: [],
+            questions: [],
+            nextSteps: ["Seed the missing fixtures."],
+          },
+          updatedAt: "2026-01-01T00:00:01.000Z",
+          createdAt: "2026-01-01T00:00:01.000Z",
+        }),
+      ]),
+    );
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-legacy-canonical-started"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:02.000Z",
+      threadId: reviewerThreadId,
+      turnId: asTurnId("turn-legacy-canonical"),
+    });
+    await waitForThread(
+      harness.readModel,
+      (thread) => thread.session?.activeTurnId === "turn-legacy-canonical",
+      10_000,
+      reviewerThreadId,
+    );
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-legacy-canonical-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:03.000Z",
+      threadId: reviewerThreadId,
+      turnId: asTurnId("turn-legacy-canonical"),
+      payload: { state: "completed" },
+    });
+    const source = await waitForThread(
+      harness.readModel,
+      (thread) =>
+        thread.devReviews.some(
+          (review) => review.id === canonicalId && review.status === "blocked",
+        ),
+      10_000,
+      sourceThreadId,
+    );
+    const canonical = source.devReviews.find((review) => review.id === canonicalId);
+    expect(canonical?.document.summary).toContain("mailbox fixtures");
+    expect(canonical?.evidence).toEqual(evidence);
   });
 
   it("falls back to the parent selection for browser dev review when codex is disabled", async () => {

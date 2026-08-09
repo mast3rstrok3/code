@@ -265,6 +265,45 @@ describe("derivePendingUserInputs", () => {
     ]);
   });
 
+  it("preserves separate recommendation metadata without changing options", () => {
+    const pending = derivePendingUserInputs([
+      makeActivity({
+        id: "workflow-user-input-open",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "user-input.requested",
+        summary: "User input requested",
+        tone: "info",
+        payload: {
+          requestId: "req-workflow-user-input-1",
+          questions: [
+            {
+              id: "release_shape",
+              header: "Release",
+              question: "How should this ship?",
+              options: [
+                { label: "Complete", description: "Ship every path together." },
+                { label: "Incremental", description: "Ship the core path first." },
+              ],
+              recommendation: {
+                optionLabel: "Incremental",
+                rationale: "It creates the fastest useful feedback loop.",
+              },
+            },
+          ],
+        },
+      }),
+    ]);
+
+    expect(pending[0]?.questions[0]?.options).toEqual([
+      { label: "Complete", description: "Ship every path together." },
+      { label: "Incremental", description: "Ship the core path first." },
+    ]);
+    expect(pending[0]?.questions[0]?.recommendation).toEqual({
+      optionLabel: "Incremental",
+      rationale: "It creates the fastest useful feedback loop.",
+    });
+  });
+
   it("clears stale pending user-input prompts when the provider reports an orphaned request", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
