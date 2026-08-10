@@ -389,6 +389,11 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /workflow_doc_get/);
     NodeAssert.match(rendered, /Orchestrated QA Repair Result/);
     NodeAssert.match(rendered, /implementation-fix-result/);
+    NodeAssert.match(rendered, /one focused failing test before implementation/);
+    NodeAssert.match(rendered, /After each behavioral slice, run the relevant focused test/);
+    NodeAssert.match(rendered, /affected-file formatting, linting, typing/);
+    NodeAssert.match(rendered, /sub-minute fast check/);
+    NodeAssert.match(rendered, /final gate after Code Review owns complete validation/);
     NodeAssert.doesNotMatch(rendered, /canonical log line/);
 
     const mockingDoc = tdd.associatedDocs?.find((doc) => doc.id === "tdd-mocking");
@@ -463,7 +468,13 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /global budget of ten fresh .* repair agents/);
     NodeAssert.match(rendered, /do not consume repair slots/);
     NodeAssert.match(rendered, /single review-and-fix pass/);
-    NodeAssert.match(rendered, /never run repo-wide suites/);
+    NodeAssert.match(rendered, /fresh TDD repair thread on the already-integrated orchestrator/);
+    NodeAssert.match(rendered, /start the next Browser Dev Review directly/);
+    NodeAssert.match(rendered, /do not rerun the Merge Gate between review cycles/);
+    NodeAssert.match(rendered, /never run launch-level complete validation commands/);
+    NodeAssert.match(rendered, /sub-minute fast checks/);
+    NodeAssert.match(rendered, /final gate runs each launch validation command once/);
+    NodeAssert.match(rendered, /after Code Review/);
   });
 
   it("renders Planning Tickets with to-tickets vertical-slice drafting instructions", () => {
@@ -480,6 +491,12 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /<local-ticket-template>/);
     NodeAssert.match(rendered, /<issue-template>/);
     NodeAssert.match(rendered, /Store tickets through the planning-tickets-artifact/);
+    NodeAssert.match(rendered, /actual compile-time, data, or behavioral prerequisites/);
+    NodeAssert.match(rendered, /dependency frontier as wide as correctness allows/);
+    NodeAssert.match(rendered, /extension-point\/foundation ticket/);
+    NodeAssert.match(rendered, /parallel feature-module tickets with isolated tests/);
+    NodeAssert.match(rendered, /one small final assembly ticket/);
+    NodeAssert.match(rendered, /justify every edge/);
     NodeAssert.match(
       rendered,
       /The separate automatic Ticket Review stage owns completeness review/,
@@ -495,6 +512,10 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /vertical slices are correct tracer bullets/);
     NodeAssert.match(rendered, /cover the Spec's user stories/);
     NodeAssert.match(rendered, /not a horizontal layer-only task/);
+    NodeAssert.match(rendered, /dependency frontier and planned-file overlap/);
+    NodeAssert.match(rendered, /Remove serial edges/);
+    NodeAssert.match(rendered, /central registry or service seam/);
+    NodeAssert.match(rendered, /Reject any remaining long serial chain/);
     NodeAssert.match(rendered, /call `workflow_tickets_list`/);
     NodeAssert.match(rendered, /retrieve every ticket with `workflow_ticket_get`/);
     NodeAssert.match(rendered, /review only the failed, reworked, or replacement tickets/);

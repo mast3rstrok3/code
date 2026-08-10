@@ -12,6 +12,7 @@ import {
   WORKFLOW_AUTOMATION_RUNTIME_MODE,
 } from "@t3tools/contracts";
 import { resolveImplementationBranchIdentity } from "@t3tools/shared/orchestrationImplementation";
+import { resolveImplementationValidationCommands } from "@t3tools/shared/t3ProjectFile";
 import {
   buildPlanImplementationPrompt,
   buildPlanImplementationThreadTitle,
@@ -29,6 +30,7 @@ import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
+import { T3ProjectFileLoader } from "../../project/T3ProjectFileLoader.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   ProductWorkflowReactor,
@@ -89,6 +91,7 @@ const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const gitWorkflow = yield* GitWorkflowService;
+  const projectFileLoader = yield* T3ProjectFileLoader;
 
   const serverCommandId = (tag: string) =>
     crypto.randomUUIDv4.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
@@ -267,6 +270,7 @@ const make = Effect.gen(function* () {
     const project = yield* resolveProject(context.productRootThread.projectId);
     if (!project) return;
     const sourceCwd = context.productRootThread.worktreePath ?? project.workspaceRoot;
+    const projectFile = Option.getOrUndefined(yield* projectFileLoader.load(sourceCwd));
     const pinnedCommit = yield* gitWorkflow
       .resolveCommit({ cwd: sourceCwd, ref: "HEAD" })
       .pipe(Effect.map((result) => result.commitSha));
@@ -287,7 +291,7 @@ const make = Effect.gen(function* () {
       pinnedCommit,
       orchestratorBranch: identity.orchestratorBranch,
       orchestratorWorktreePath: identity.orchestratorWorktreePath,
-      validationCommands: ["vp check", "vp run typecheck"],
+      validationCommands: [...resolveImplementationValidationCommands({ projectFile })],
       createdAt: input.occurredAt,
     });
   });
@@ -617,6 +621,7 @@ const make = Effect.gen(function* () {
       const project = yield* resolveProject(thread.projectId);
       if (!project) return;
       const sourceCwd = thread.worktreePath ?? project.workspaceRoot;
+      const projectFile = Option.getOrUndefined(yield* projectFileLoader.load(sourceCwd));
       const pinnedCommit = (yield* gitWorkflow.resolveCommit({ cwd: sourceCwd, ref: "HEAD" }))
         .commitSha;
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
@@ -637,7 +642,7 @@ const make = Effect.gen(function* () {
         pinnedCommit,
         orchestratorBranch: identity.orchestratorBranch,
         orchestratorWorktreePath: identity.orchestratorWorktreePath,
-        validationCommands: ["vp check", "vp run typecheck"],
+        validationCommands: [...resolveImplementationValidationCommands({ projectFile })],
         createdAt: event.occurredAt,
       });
       return;

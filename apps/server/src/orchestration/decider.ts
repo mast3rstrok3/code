@@ -40,6 +40,7 @@ import {
 import { WORKFLOW_PROMPT_IDS } from "../provider/WorkflowPromptRegistry.ts";
 import { validatePlanningTicketFileChanges } from "./planningTicketFiles.ts";
 import { buildPlanImplementationThreadTitle } from "@t3tools/shared/orchestrationPlanning";
+import { resolveImplementationValidationCommands } from "@t3tools/shared/t3ProjectFile";
 import { isProductWorkflowPreset, isProductWorkflowRoot } from "@t3tools/shared/workflowPresets";
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -52,8 +53,6 @@ const EMPTY_DEV_REVIEW_DOCUMENT: DevReviewDocument = {
   questions: [],
   nextSteps: [],
 };
-
-const DEFAULT_IMPLEMENTATION_VALIDATION_COMMANDS = ["vp check", "vp run typecheck"] as const;
 
 function optionalScopeMatches(
   requested: string | null | undefined,
@@ -494,10 +493,9 @@ function buildImplementationRun(input: {
       updatedAt: input.command.createdAt,
     };
   });
-  const validationCommands =
-    input.command.validationCommands !== undefined && input.command.validationCommands.length > 0
-      ? input.command.validationCommands
-      : [...DEFAULT_IMPLEMENTATION_VALIDATION_COMMANDS];
+  const validationCommands = resolveImplementationValidationCommands({
+    explicitCommands: input.command.validationCommands,
+  });
   const plannedWorkers = input.tickets.map((ticket) => ({
     ticketId: ticket.id,
     dependencyTicketIds: ticket.dependencies.map((dependency) => dependency.ticketId),
@@ -558,6 +556,7 @@ function buildImplementationRun(input: {
     finalValidationResults: [],
     validatedHeadSha: null,
     activeValidationHeadSha: null,
+    activeValidationKind: null,
     activeValidatorThreadId: null,
     mergeGateAttemptCount: 0,
     appDevStack: {
@@ -2340,10 +2339,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const runUuid = yield* crypto.randomUUIDv4;
       const threadUuid = yield* crypto.randomUUIDv4;
       const orchestratorThreadId = ThreadId.make(`thread-fast-feature-implementer-${threadUuid}`);
-      const validationCommands =
-        command.validationCommands && command.validationCommands.length > 0
-          ? command.validationCommands
-          : [...DEFAULT_IMPLEMENTATION_VALIDATION_COMMANDS];
+      const validationCommands = resolveImplementationValidationCommands({
+        explicitCommands: command.validationCommands,
+      });
       const run: OrchestrationImplementationRun = {
         id: `implementation-run-${runUuid}`,
         artifactSource: "proposed-plan",
@@ -2385,6 +2383,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         finalValidationResults: [],
         validatedHeadSha: null,
         activeValidationHeadSha: null,
+        activeValidationKind: null,
         activeValidatorThreadId: null,
         mergeGateAttemptCount: 0,
         appDevStack: {

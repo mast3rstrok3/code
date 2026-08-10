@@ -4,6 +4,24 @@ import { T3ProjectFile, T3_PROJECT_FILE_SCHEMA_URL } from "@t3tools/contracts";
 
 import { fromLenientJson } from "./schemaJson.ts";
 
+export const DEFAULT_IMPLEMENTATION_VALIDATION_COMMANDS = ["vp check", "vp run typecheck"] as const;
+
+export function resolveImplementationValidationCommands(input: {
+  readonly explicitCommands?: ReadonlyArray<string> | undefined;
+  readonly projectFile?: T3ProjectFile | null | undefined;
+}): ReadonlyArray<string> {
+  if (input.explicitCommands !== undefined && input.explicitCommands.length > 0) {
+    return input.explicitCommands;
+  }
+  if (
+    input.projectFile?.validationCommands !== undefined &&
+    input.projectFile.validationCommands.length > 0
+  ) {
+    return input.projectFile.validationCommands;
+  }
+  return DEFAULT_IMPLEMENTATION_VALIDATION_COMMANDS;
+}
+
 /**
  * Codec between the raw `t3.json` file contents (lenient JSONC string) and the
  * decoded {@link T3ProjectFile}.

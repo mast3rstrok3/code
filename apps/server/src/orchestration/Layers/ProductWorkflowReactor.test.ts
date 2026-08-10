@@ -13,6 +13,7 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { describe } from "vite-plus/test";
@@ -23,6 +24,7 @@ import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Lay
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
+import { T3ProjectFileLoader } from "../../project/T3ProjectFileLoader.ts";
 import { WORKFLOW_PROMPT_IDS } from "../../provider/WorkflowPromptRegistry.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
@@ -64,7 +66,7 @@ function eventId(value: string) {
   return EventId.make(`event-${value}`);
 }
 
-function makeTestLayer() {
+function makeTestLayer(validationCommands?: ReadonlyArray<string>) {
   const coreLayer = Layer.mergeAll(
     OrchestrationEngineLive.pipe(
       Layer.provide(OrchestrationProjectionSnapshotQueryLive),
@@ -89,6 +91,16 @@ function makeTestLayer() {
           resolveCommit: () => Effect.succeed({ commitSha: "abc123" }),
         }),
       ),
+      Layer.provide(
+        Layer.mock(T3ProjectFileLoader)({
+          load: () =>
+            Effect.succeed(
+              validationCommands === undefined
+                ? Option.none()
+                : Option.some({ validationCommands: [...validationCommands] }),
+            ),
+        }),
+      ),
     ),
   );
 }
@@ -98,6 +110,7 @@ function withSystem<A, E>(
   options?: {
     /** Leave the reactor stopped so a test can dispatch events it must recover from on start. */
     readonly startReactor?: boolean;
+    readonly validationCommands?: ReadonlyArray<string>;
   },
 ) {
   return Effect.scoped(
@@ -108,7 +121,7 @@ function withSystem<A, E>(
       if (options?.startReactor !== false) yield* reactor.start();
       return yield* use({ engine, query, reactor });
     }),
-  ).pipe(Effect.provide(makeTestLayer()));
+  ).pipe(Effect.provide(makeTestLayer(options?.validationCommands)));
 }
 
 function seedProjectAndThread(
@@ -438,38 +451,45 @@ describe("ProductWorkflowReactor", () => {
   it.effect(
     "launches implementation from the Product Workflow root after passed product review",
     () =>
-      withSystem((system) =>
-        Effect.gen(function* () {
-          yield* seedProjectAndThread(system);
-          const planningThread = yield* lockProductIntent(system);
-          const spec = yield* seedProductSpecAndTickets(system, planningThread.id);
-          const beforeVerdict = yield* system.query.getSnapshot();
-          const activeReview = beforeVerdict.threads.find(
-            (thread) => thread.id === planningThread.id,
-          )?.planningWorkflow?.activeReview;
-          if (activeReview == null) throw new Error("Review was not active.");
-          yield* system.engine.dispatch({
-            type: "thread.planning-reviewer-verdict.apply",
-            commandId: commandId("passed-verdict"),
-            threadId: planningThread.id,
-            reviewerThreadId: activeReview.reviewerThreadId,
-            reviewerMessageId: messageId("reviewer-pass"),
-            cycleNumber: activeReview.cycleNumber,
-            mode: activeReview.mode,
-            targetPlanningTicketIds: [...activeReview.targetPlanningTicketIds],
-            verdictMarkdown: "passed",
-            passed: true,
-            createdAt: "2026-01-01T00:00:10.000Z",
-          });
-          yield* system.reactor.drain;
+      withSystem(
+        (system) =>
+          Effect.gen(function* () {
+            yield* seedProjectAndThread(system);
+            const planningThread = yield* lockProductIntent(system);
+            const spec = yield* seedProductSpecAndTickets(system, planningThread.id);
+            const beforeVerdict = yield* system.query.getSnapshot();
+            const activeReview = beforeVerdict.threads.find(
+              (thread) => thread.id === planningThread.id,
+            )?.planningWorkflow?.activeReview;
+            if (activeReview == null) throw new Error("Review was not active.");
+            yield* system.engine.dispatch({
+              type: "thread.planning-reviewer-verdict.apply",
+              commandId: commandId("passed-verdict"),
+              threadId: planningThread.id,
+              reviewerThreadId: activeReview.reviewerThreadId,
+              reviewerMessageId: messageId("reviewer-pass"),
+              cycleNumber: activeReview.cycleNumber,
+              mode: activeReview.mode,
+              targetPlanningTicketIds: [...activeReview.targetPlanningTicketIds],
+              verdictMarkdown: "passed",
+              passed: true,
+              createdAt: "2026-01-01T00:00:10.000Z",
+            });
+            yield* system.reactor.drain;
 
-          const snapshot = yield* system.query.getSnapshot();
-          expect(snapshot.implementationRuns.some((run) => run.specId === spec.id)).toBe(true);
-          const implementationOrchestrator = snapshot.threads.find(
-            (thread) => thread.workflowRole === "implementation-orchestrator",
-          );
-          expect(implementationOrchestrator?.parentThreadId).toBe(productThreadId);
-        }),
+            const snapshot = yield* system.query.getSnapshot();
+            const implementationRun = snapshot.implementationRuns.find(
+              (run) => run.specId === spec.id,
+            );
+            expect(implementationRun?.launchSummary.validationCommands).toEqual([
+              "pnpm check:full",
+            ]);
+            const implementationOrchestrator = snapshot.threads.find(
+              (thread) => thread.workflowRole === "implementation-orchestrator",
+            );
+            expect(implementationOrchestrator?.parentThreadId).toBe(productThreadId);
+          }),
+        { validationCommands: ["pnpm check:full"] },
       ),
   );
 
@@ -813,60 +833,63 @@ describe("ProductWorkflowReactor", () => {
   );
 
   it.effect("launches one proposed-plan Fast feature run on a dedicated branch", () =>
-    withSystem((system) =>
-      Effect.gen(function* () {
-        yield* seedProjectAndThread(system, {
-          workflowPreset: "fast-feature",
-          branch: "main",
-        });
-        yield* system.engine.dispatch({
-          type: "thread.activity.append",
-          commandId: commandId("fast-intent-locked"),
-          threadId: productThreadId,
-          activity: {
-            id: eventId("fast-intent-locked"),
-            tone: "info",
-            kind: "product-intent-locked",
-            summary: "Fast checkout",
-            payload: {
-              title: "Fast checkout",
-              summaryMarkdown: "Locked Fast feature.",
-              intentKind: "feature",
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          yield* seedProjectAndThread(system, {
+            workflowPreset: "fast-feature",
+            branch: "main",
+          });
+          yield* system.engine.dispatch({
+            type: "thread.activity.append",
+            commandId: commandId("fast-intent-locked"),
+            threadId: productThreadId,
+            activity: {
+              id: eventId("fast-intent-locked"),
+              tone: "info",
+              kind: "product-intent-locked",
+              summary: "Fast checkout",
+              payload: {
+                title: "Fast checkout",
+                summaryMarkdown: "Locked Fast feature.",
+                intentKind: "feature",
+              },
+              turnId: null,
+              createdAt: now,
             },
-            turnId: null,
             createdAt: now,
-          },
-          createdAt: now,
-        });
-        yield* system.reactor.drain;
-        yield* upsertProposedPlan(system, { planId: "plan-fast" });
-        yield* system.reactor.drain;
-        yield* upsertProposedPlan(system, { planId: "plan-fast", suffix: "-again" });
-        yield* system.reactor.drain;
+          });
+          yield* system.reactor.drain;
+          yield* upsertProposedPlan(system, { planId: "plan-fast" });
+          yield* system.reactor.drain;
+          yield* upsertProposedPlan(system, { planId: "plan-fast", suffix: "-again" });
+          yield* system.reactor.drain;
 
-        const snapshot = yield* system.query.getSnapshot();
-        const root = snapshot.threads.find((thread) => thread.id === productThreadId);
-        const runs = snapshot.implementationRuns.filter(
-          (run) => run.artifactSource === "proposed-plan",
-        );
-        expect(root?.interactionMode).toBe("plan");
-        expect(root?.workflowPreset).toBe("fast-feature");
-        expect(runs).toHaveLength(1);
-        expect(runs[0]).toMatchObject({
-          specId: null,
-          pinnedCommit: "abc123",
-          baseBranch: "main",
-          sourceProposedPlan: { threadId: productThreadId, planId: "plan-fast" },
-        });
-        expect(runs[0]?.orchestratorBranch.startsWith("fast-feature/")).toBe(true);
-        const implementers = snapshot.threads.filter(
-          (thread) => thread.workflowRole === "fast-feature-implementer",
-        );
-        expect(implementers).toHaveLength(1);
-        expect(implementers[0]?.parentThreadId).toBe(productThreadId);
-        expect(implementers[0]?.interactionMode).toBe("default");
-        expect(implementers[0]?.workflowPreset).toBe("fast-feature");
-      }),
+          const snapshot = yield* system.query.getSnapshot();
+          const root = snapshot.threads.find((thread) => thread.id === productThreadId);
+          const runs = snapshot.implementationRuns.filter(
+            (run) => run.artifactSource === "proposed-plan",
+          );
+          expect(root?.interactionMode).toBe("plan");
+          expect(root?.workflowPreset).toBe("fast-feature");
+          expect(runs).toHaveLength(1);
+          expect(runs[0]?.launchSummary.validationCommands).toEqual(["pnpm check:full"]);
+          expect(runs[0]).toMatchObject({
+            specId: null,
+            pinnedCommit: "abc123",
+            baseBranch: "main",
+            sourceProposedPlan: { threadId: productThreadId, planId: "plan-fast" },
+          });
+          expect(runs[0]?.orchestratorBranch.startsWith("fast-feature/")).toBe(true);
+          const implementers = snapshot.threads.filter(
+            (thread) => thread.workflowRole === "fast-feature-implementer",
+          );
+          expect(implementers).toHaveLength(1);
+          expect(implementers[0]?.parentThreadId).toBe(productThreadId);
+          expect(implementers[0]?.interactionMode).toBe("default");
+          expect(implementers[0]?.workflowPreset).toBe("fast-feature");
+        }),
+      { validationCommands: ["pnpm check:full"] },
     ),
   );
 

@@ -292,7 +292,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
     }),
   );
 
-  it.effect("omits browser MCP app-server args for ordinary implementation sessions", () =>
+  it.effect("includes the scoped T3 MCP server for registered workflow sessions", () =>
     Effect.gen(function* () {
       validationRuntimeFactory.factory.mockClear();
       const adapter = yield* CodexAdapter;
@@ -315,12 +315,43 @@ validationLayer("CodexAdapterLive validation", (it) => {
       });
 
       const runtimeOptions = validationRuntimeFactory.factory.mock.calls[0]?.[0];
-      NodeAssert.equal(runtimeOptions?.appServerArgs, undefined);
+      NodeAssert.ok(
+        runtimeOptions?.appServerArgs?.some((arg) => arg.includes("mcp_servers.t3-code.url")),
+      );
+      NodeAssert.equal(runtimeOptions?.environment?.T3_MCP_BEARER_TOKEN, "token");
       McpProviderSession.clearMcpProviderSession(threadId);
     }),
   );
 
-  it.effect("includes Dev Review MCP app-server args only for Browser Dev Review sessions", () =>
+  it.effect("omits the T3 MCP server for non-workflow sessions", () =>
+    Effect.gen(function* () {
+      validationRuntimeFactory.factory.mockClear();
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-mcp-non-workflow");
+      McpProviderSession.setMcpProviderSession({
+        environmentId: EnvironmentId.make("env-1"),
+        threadId,
+        providerSessionId: "provider-session-non-workflow",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        endpoint: "http://127.0.0.1/mcp",
+        authorizationHeader: "Bearer token",
+      });
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.3-codex", []),
+        runtimeMode: "full-access",
+      });
+
+      const runtimeOptions = validationRuntimeFactory.factory.mock.calls[0]?.[0];
+      NodeAssert.equal(runtimeOptions?.appServerArgs, undefined);
+      NodeAssert.equal(runtimeOptions?.environment?.T3_MCP_BEARER_TOKEN, undefined);
+      McpProviderSession.clearMcpProviderSession(threadId);
+    }),
+  );
+
+  it.effect("includes Dev Review MCP app-server args for Browser Dev Review sessions", () =>
     Effect.gen(function* () {
       validationRuntimeFactory.factory.mockClear();
       const adapter = yield* CodexAdapter;

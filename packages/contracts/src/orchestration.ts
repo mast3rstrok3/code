@@ -895,6 +895,9 @@ export const OrchestrationImplementationRun = Schema.Struct({
   activeValidationHeadSha: Schema.NullOr(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  activeValidationKind: Schema.NullOr(Schema.Literals(["integration", "final"])).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   activeValidatorThreadId: Schema.NullOr(ThreadId).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),

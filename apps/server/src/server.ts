@@ -385,6 +385,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   // keeps a single Live for all opencode consumers.
   Layer.provideMerge(OpenCodeRuntime.OpenCodeRuntimeLive),
   Layer.provideMerge(WorkspaceLayerLive),
+  Layer.provideMerge(T3ProjectFileLoader.layer),
   Layer.provideMerge(ProjectFaviconResolverLayerLive),
   Layer.provideMerge(RepositoryIdentityResolver.layer),
   Layer.provideMerge(ServerEnvironment.layer),

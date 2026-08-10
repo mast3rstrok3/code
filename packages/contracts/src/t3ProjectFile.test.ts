@@ -10,6 +10,7 @@ describe("T3ProjectFile", () => {
     const decoded = decode({
       $schema: "https://t3.codes/schema/t3.json",
       iconPath: "assets/logo.svg",
+      validationCommands: ["pnpm check:full"],
       scripts: [
         {
           name: "Dev",
@@ -24,6 +25,7 @@ describe("T3ProjectFile", () => {
     });
 
     expect(decoded.iconPath).toBe("assets/logo.svg");
+    expect(decoded.validationCommands).toEqual(["pnpm check:full"]);
     expect(decoded.scripts).toHaveLength(2);
     expect(decoded.scripts?.[1]).toEqual({ name: "Test", command: "pnpm test" });
   });
@@ -36,10 +38,12 @@ describe("T3ProjectFile", () => {
   it("trims icon paths and script fields", () => {
     const decoded = decode({
       iconPath: " assets/logo.svg ",
+      validationCommands: [" pnpm check:full "],
       scripts: [{ name: " Dev ", command: " pnpm dev " }],
     });
 
     expect(decoded.iconPath).toBe("assets/logo.svg");
+    expect(decoded.validationCommands).toEqual(["pnpm check:full"]);
     expect(decoded.scripts?.[0]).toEqual({ name: "Dev", command: "pnpm dev" });
   });
 
@@ -51,5 +55,14 @@ describe("T3ProjectFile", () => {
     expect(() =>
       decode({ scripts: [{ name: "Dev", command: "pnpm dev", icon: "rocket" }] }),
     ).toThrow();
+  });
+
+  it("rejects empty, oversized, and overlong validation commands", () => {
+    expect(() => decode({ validationCommands: [] })).toThrow();
+    expect(() => decode({ validationCommands: ["   "] })).toThrow();
+    expect(() =>
+      decode({ validationCommands: Array.from({ length: 11 }, () => "vp check") }),
+    ).toThrow();
+    expect(() => decode({ validationCommands: ["x".repeat(513)] })).toThrow();
   });
 });

@@ -11,6 +11,8 @@ export const T3_PROJECT_FILE_SCHEMA_URL = "https://t3.codes/schema/t3.json";
 
 const T3_PROJECT_FILE_PATH_MAX_LENGTH = 512;
 const T3_PROJECT_FILE_MAX_SCRIPTS = 50;
+const T3_PROJECT_FILE_MAX_VALIDATION_COMMANDS = 10;
+const T3_PROJECT_FILE_VALIDATION_COMMAND_MAX_LENGTH = 512;
 
 // Annotations go on the encoded (string) side so they survive into the
 // published JSON Schema; decoding still trims and re-validates non-emptiness.
@@ -72,6 +74,22 @@ export const T3ProjectFile = Schema.Struct({
       },
       T3_PROJECT_FILE_PATH_MAX_LENGTH,
     ),
+  ),
+  validationCommands: Schema.optionalKey(
+    Schema.Array(
+      trimmedNonEmpty(
+        {
+          description:
+            "Complete validation command run by T3 Code after implementation Code Review.",
+        },
+        T3_PROJECT_FILE_VALIDATION_COMMAND_MAX_LENGTH,
+      ),
+    )
+      .annotate({
+        description:
+          "Ordered final validation commands run once on the reviewed HEAD before publication. Explicit launch commands take precedence.",
+      })
+      .check(Schema.isMinLength(1), Schema.isMaxLength(T3_PROJECT_FILE_MAX_VALIDATION_COMMANDS)),
   ),
   scripts: Schema.optionalKey(
     Schema.Array(T3ProjectFileScript)

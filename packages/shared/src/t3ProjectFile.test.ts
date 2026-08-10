@@ -1,7 +1,11 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { buildT3ProjectFileJsonSchema, T3ProjectFileFromJson } from "./t3ProjectFile.ts";
+import {
+  buildT3ProjectFileJsonSchema,
+  resolveImplementationValidationCommands,
+  T3ProjectFileFromJson,
+} from "./t3ProjectFile.ts";
 
 const decodeJson = Schema.decodeUnknownSync(T3ProjectFileFromJson);
 
@@ -21,15 +25,30 @@ describe("buildT3ProjectFileJsonSchema", () => {
         string,
         {
           description?: string;
-          items?: { properties: Record<string, unknown>; required: ReadonlyArray<string> };
+          maxItems?: number;
+          minItems?: number;
+          items?: {
+            maxLength?: number;
+            properties?: Record<string, unknown>;
+            required?: ReadonlyArray<string>;
+          };
         }
       >;
       required?: ReadonlyArray<string>;
     };
 
-    expect(Object.keys(schema.properties).sort()).toEqual(["$schema", "iconPath", "scripts"]);
+    expect(Object.keys(schema.properties).sort()).toEqual([
+      "$schema",
+      "iconPath",
+      "scripts",
+      "validationCommands",
+    ]);
     expect(schema.required).toBeUndefined();
     expect(schema.properties.iconPath?.description).toContain("Workspace-relative path");
+    const validationCommands = JSON.stringify(schema.properties.validationCommands);
+    expect(validationCommands).toContain('"minItems":1');
+    expect(validationCommands).toContain('"maxItems":10');
+    expect(validationCommands).toContain('"maxLength":512');
 
     const script = schema.properties.scripts?.items;
     expect(script?.required).toEqual(["name", "command"]);
@@ -65,5 +84,20 @@ describe("T3ProjectFileFromJson", () => {
 
   it("fails on malformed JSON", () => {
     expect(() => decodeJson("{ not json")).toThrow();
+  });
+});
+
+describe("resolveImplementationValidationCommands", () => {
+  it("prefers explicit launch commands, then t3.json, then compatibility defaults", () => {
+    const projectFile = decodeJson(`{ "validationCommands": ["pnpm check:full"] }`);
+
+    expect(
+      resolveImplementationValidationCommands({
+        explicitCommands: ["pnpm explicit"],
+        projectFile,
+      }),
+    ).toEqual(["pnpm explicit"]);
+    expect(resolveImplementationValidationCommands({ projectFile })).toEqual(["pnpm check:full"]);
+    expect(resolveImplementationValidationCommands({})).toEqual(["vp check", "vp run typecheck"]);
   });
 });

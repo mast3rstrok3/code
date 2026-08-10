@@ -111,6 +111,15 @@ function eventId(value: string) {
 }
 
 function requiredValidations(completedAt = "2026-01-01T00:00:02.000Z") {
+  return ["vp test run src/feature.test.ts"].map((command) => ({
+    command,
+    status: "passed" as const,
+    outputMarkdown: "ok",
+    completedAt,
+  }));
+}
+
+function completeValidations(completedAt = "2026-01-01T00:00:06.000Z") {
   return ["vp check", "vp run typecheck"].map((command) => ({
     command,
     status: "passed" as const,
@@ -655,6 +664,39 @@ function passMergeGate(system: ImplementationSystem, run: OrchestrationImplement
   });
 }
 
+function passFinalGate(system: ImplementationSystem, run: OrchestrationImplementationRun) {
+  return Effect.gen(function* () {
+    const snapshot = yield* system.query.getSnapshot();
+    const activeValidatorThreadId = snapshot.implementationRuns.find(
+      (candidate) => candidate.id === run.id,
+    )?.activeValidatorThreadId;
+    const validator = snapshot.threads.find((thread) => thread.id === activeValidatorThreadId);
+    if (!validator) throw new Error("Final validator missing.");
+    yield* system.engine.dispatch({
+      type: "thread.activity.append",
+      commandId: commandId(`final-gate-pass-${validator.id}`),
+      threadId: validator.id,
+      activity: {
+        id: eventId(`final-gate-pass-${validator.id}`),
+        tone: "info",
+        kind: "implementation-merge-gate-result",
+        summary: "Final gate passed",
+        payload: {
+          type: "implementation-merge-gate-result",
+          runId: run.id,
+          status: "passed",
+          validations: completeValidations(),
+          summaryMarkdown: "Reviewed HEAD passed complete validation.",
+        },
+        turnId: null,
+        createdAt: "2026-01-01T00:00:06.000Z",
+      },
+      createdAt: "2026-01-01T00:00:06.000Z",
+    });
+    yield* system.reactor.drain;
+  });
+}
+
 function passDevReview(system: ImplementationSystem, run: OrchestrationImplementationRun) {
   return Effect.gen(function* () {
     const snapshot = yield* system.query.getSnapshot();
@@ -1077,7 +1119,7 @@ describe("ImplementationWorkflowReactor", () => {
         if (!implementer) throw new Error("Fast feature implementer missing.");
         expect(implementer.messages).toHaveLength(1);
 
-        // Build reports success but names its validation commands differently, so the run is
+        // Build reports success after running launch-level complete commands, so the run is
         // blocked at Build while `fastBuildResult.status` stays "succeeded".
         yield* system.engine.dispatch({
           type: "thread.activity.append",
@@ -1093,14 +1135,7 @@ describe("ImplementationWorkflowReactor", () => {
               runId: run.id,
               status: "succeeded",
               commitSha: "def456",
-              validations: [
-                {
-                  command: "vp check (run as `pnpm check`)",
-                  status: "passed",
-                  outputMarkdown: "ok",
-                  completedAt: "2026-01-01T00:00:02.000Z",
-                },
-              ],
+              validations: completeValidations(),
               notesMarkdown: "Implemented and committed.",
             },
             turnId: null,
@@ -1132,14 +1167,8 @@ describe("ImplementationWorkflowReactor", () => {
         expect(retried?.messages).toHaveLength(2);
         expect(retried?.messages.at(-1)?.role).toBe("user");
         expect(retried?.messages.at(-1)?.text).toContain("Your last result was rejected");
-        // The reason has to name the exact string that was expected and what arrived instead,
-        // otherwise Build cannot tell a naming problem from a real validation failure.
         expect(retried?.messages.at(-1)?.text).toContain(
-          "Missing a passing result under this exact command string:",
-        );
-        expect(retried?.messages.at(-1)?.text).toContain("- `vp run typecheck`");
-        expect(retried?.messages.at(-1)?.text).toContain(
-          "- `vp check (run as `pnpm check`)` (passed)",
+          "must not run launch-level complete commands before Code Review",
         );
       }),
     ),
@@ -1159,9 +1188,9 @@ describe("ImplementationWorkflowReactor", () => {
         )?.messages[0]?.text;
         if (prompt === undefined) throw new Error("Build handover missing.");
         for (const command of run.launchSummary.validationCommands) {
-          expect(prompt).toContain(`- \`${command}\``);
+          expect(prompt).toContain(`- ${command}`);
         }
-        expect(prompt).toContain("`validations[].command` **exactly** as written above");
+        expect(prompt).toContain("Do not run the launch-level complete validation commands");
 
         // The embedded example is generated from the run's own commands, not hardcoded.
         const fence = /```json\s*([\s\S]*?)```/.exec(prompt)?.[1] ?? "";
@@ -1173,7 +1202,7 @@ describe("ImplementationWorkflowReactor", () => {
           ),
         )(fence);
         expect(example.validations.map((validation) => validation.command)).toEqual([
-          ...run.launchSummary.validationCommands,
+          "<focused test or documented sub-minute fast check actually run>",
         ]);
       }),
     ),
@@ -2525,6 +2554,10 @@ describe("ImplementationWorkflowReactor", () => {
           expect(validators[0]?.messages.at(-1)?.text).toContain(
             "Programmatic integration stopped",
           );
+          expect(validators[0]?.messages.at(-1)?.text).toContain(
+            "integration gate before Dev Review and Code Review",
+          );
+          expect(snapshot.implementationRuns[0]?.activeValidationKind).toBe("integration");
 
           yield* appendWorkerResult(system, {
             run,
@@ -2639,6 +2672,9 @@ describe("ImplementationWorkflowReactor", () => {
         expect(validator?.messages.at(-1)?.text).toContain(
           "Missing worktree-local dependencies are setup work, not a validation failure.",
         );
+        expect(validator?.messages.at(-1)?.text).toContain(
+          "integration gate before Dev Review and Code Review",
+        );
 
         yield* system.engine.dispatch({
           type: "thread.activity.append",
@@ -2709,10 +2745,25 @@ describe("ImplementationWorkflowReactor", () => {
           status: "clean",
           tag: "clean",
         });
+        snapshot = yield* system.query.getSnapshot();
+        const finalGateRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(finalGateRun?.status).toBe("validating");
+        expect(finalGateRun?.activeValidationKind).toBe("final");
+        expect(finalGateRun?.validatedHeadSha).toBeNull();
+        expect(yield* Ref.get(system.createOrOpenChangeRequestCount)).toBe(0);
+        const finalValidator = snapshot.threads.find(
+          (thread) => thread.id === finalGateRun?.activeValidatorThreadId,
+        );
+        expect(finalValidator?.messages.at(-1)?.text).toContain("sole complete repository gate");
+        expect(finalValidator?.messages.at(-1)?.text).toContain("- vp check");
+        expect(finalValidator?.messages.at(-1)?.text).toContain("- vp run typecheck");
+        yield* passFinalGate(system, run);
 
         snapshot = yield* system.query.getSnapshot();
         const completedRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
         expect(completedRun?.status).toBe("completed");
+        expect(completedRun?.mergeGateAttemptCount).toBe(2);
+        expect(completedRun?.validatedHeadSha).toBe("def456");
         expect(completedRun?.changeRequest?.url).toBe("https://example.test/pr/1");
         expect(yield* Ref.get(system.createOrOpenChangeRequestCount)).toBe(1);
         expect(yield* Ref.get(system.createOrOpenChangeRequestInputs)).toEqual([
@@ -2749,7 +2800,13 @@ describe("ImplementationWorkflowReactor", () => {
           .filter((activity) => lifecycleKinds.has(activity.kind))
           .map((activity) => activity.kind)
           .sort();
-        expect(lifecycleTrail).toEqual([...lifecycleKinds].sort());
+        expect(lifecycleTrail).toEqual(
+          [
+            ...lifecycleKinds,
+            "implementation-merge-gate-started",
+            "implementation-merge-gate-finished",
+          ].sort(),
+        );
       }),
     ),
   );
@@ -2817,7 +2874,115 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("reruns the merge gate and downstream reviews after browser fixes", () =>
+  it.effect("rejects duplicate complete validation receipts on the reviewed HEAD", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+        yield* passMergeGate(system, run);
+        yield* passDevReview(system, run);
+        const reviewer = yield* nextThreadForRole(
+          system,
+          "implementation-code-reviewer",
+          new Set<string>(),
+        );
+        yield* appendCodeReviewResult(system, {
+          run,
+          threadId: reviewer.id,
+          status: "clean",
+          tag: "before-duplicate-final-gate",
+        });
+
+        let snapshot = yield* system.query.getSnapshot();
+        const finalGateRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        const validator = snapshot.threads.find(
+          (thread) => thread.id === finalGateRun?.activeValidatorThreadId,
+        );
+        if (validator === undefined) throw new Error("Final validator missing.");
+        const validations = completeValidations();
+        yield* system.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: commandId("duplicate-final-gate-result"),
+          threadId: validator.id,
+          activity: {
+            id: eventId("duplicate-final-gate-result"),
+            tone: "info",
+            kind: "implementation-merge-gate-result",
+            summary: "Final gate reported a duplicate command",
+            payload: {
+              type: "implementation-merge-gate-result",
+              runId: run.id,
+              status: "passed",
+              validations: [...validations, validations[0]!],
+              summaryMarkdown: "A configured command was run twice.",
+            },
+            turnId: null,
+            createdAt: "2026-01-01T00:00:06.000Z",
+          },
+          createdAt: "2026-01-01T00:00:06.000Z",
+        });
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        const fixing = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(fixing?.status).toBe("fixing");
+        expect(fixing?.activeValidationKind).toBe("final");
+        expect(fixing?.validatedHeadSha).toBeNull();
+        expect(yield* Ref.get(system.createOrOpenChangeRequestCount)).toBe(0);
+
+        const fixer = snapshot.threads.find((thread) => thread.id === fixing?.activeFixerThreadId);
+        if (fixer === undefined) throw new Error("Final-gate fixer missing.");
+        yield* system.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: commandId("focused-final-gate-fix"),
+          threadId: fixer.id,
+          activity: {
+            id: eventId("focused-final-gate-fix"),
+            tone: "info",
+            kind: "implementation-fix-result",
+            summary: "Final-gate repair succeeded",
+            payload: {
+              type: "implementation-fix-result",
+              runId: run.id,
+              status: "succeeded",
+              validations: requiredValidations(),
+              notesMarkdown: "Focused repair passed.",
+            },
+            turnId: null,
+            createdAt: "2026-01-01T00:00:07.000Z",
+          },
+          createdAt: "2026-01-01T00:00:07.000Z",
+        });
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        const rereviewing = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(rereviewing?.status).toBe("code-reviewing");
+        expect(rereviewing?.codeReviewAttemptCount).toBe(2);
+        expect(yield* Ref.get(system.createOrOpenChangeRequestCount)).toBe(0);
+        const secondReviewer = yield* nextThreadForRole(
+          system,
+          "implementation-code-reviewer",
+          new Set([reviewer.id]),
+        );
+        yield* appendCodeReviewResult(system, {
+          run,
+          threadId: secondReviewer.id,
+          status: "clean",
+          tag: "after-focused-final-gate-fix",
+        });
+        yield* passFinalGate(system, run);
+
+        snapshot = yield* system.query.getSnapshot();
+        const completed = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(completed?.status).toBe("completed");
+        expect(completed?.mergeGateAttemptCount).toBe(3);
+        expect(yield* Ref.get(system.createOrOpenChangeRequestCount)).toBe(1);
+      }),
+    ),
+  );
+
+  it.effect("starts the next Dev Review directly after a fresh TDD browser repair", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         const { run } = yield* launchRun(system);
@@ -2826,20 +2991,21 @@ describe("ImplementationWorkflowReactor", () => {
         yield* failDevReview(system, run);
         yield* appendBrowserFixResult(system, { run, validations: requiredValidations() });
 
-        let snapshot = yield* system.query.getSnapshot();
+        const snapshot = yield* system.query.getSnapshot();
         const updated = snapshot.implementationRuns.find((candidate) => candidate.id === run.id);
-        expect(updated?.status).toBe("validating");
-        expect(updated?.devReviewIds).toHaveLength(1);
+        expect(updated?.status).toBe("qa-reviewing");
+        expect(updated?.devReviewIds).toHaveLength(2);
+        expect(updated?.mergeGateAttemptCount).toBe(1);
         expect(
           snapshot.threads.filter((thread) => thread.workflowRole === "implementation-validator"),
-        ).toHaveLength(2);
-        expect(yield* Ref.get(system.mergeRefInputs)).toHaveLength(1);
-
-        yield* passMergeGate(system, run);
-        snapshot = yield* system.query.getSnapshot();
+        ).toHaveLength(1);
         expect(
-          snapshot.implementationRuns.find((candidate) => candidate.id === run.id)?.status,
-        ).toBe("qa-reviewing");
+          snapshot.threads.filter((thread) => thread.workflowRole === "implementation-qa-reviewer"),
+        ).toHaveLength(2);
+        expect(
+          snapshot.threads.filter((thread) => thread.workflowRole === "implementation-fixer"),
+        ).toHaveLength(1);
+        expect(yield* Ref.get(system.mergeRefInputs)).toHaveLength(1);
       }),
     ),
   );
@@ -2861,6 +3027,12 @@ describe("ImplementationWorkflowReactor", () => {
         expect(
           snapshot.threads.filter((thread) => thread.workflowRole === "implementation-fixer"),
         ).toHaveLength(1);
+        const fixer = snapshot.threads.find(
+          (thread) => thread.workflowRole === "implementation-fixer",
+        );
+        expect(fixer?.messages.at(-1)?.text).toContain("Retrieve Dev Review");
+        expect(fixer?.messages.at(-1)?.text).toContain("workflow_dev_review_get");
+        expect(fixer?.messages.at(-1)?.text).toContain("focused red-green TDD loop");
       }),
     ),
   );
@@ -3101,7 +3273,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("revalidates a clean unvalidated HEAD before exhausted QA enters Code Review", () =>
+  it.effect("reuses the clean integration gate when exhausted QA enters Code Review", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         const { run } = yield* launchRun(system);
@@ -3124,19 +3296,11 @@ describe("ImplementationWorkflowReactor", () => {
         yield* failDevReview(system, run, "blocked");
 
         snapshot = yield* system.query.getSnapshot();
-        const validating = snapshot.implementationRuns.find((entry) => entry.id === run.id);
-        expect(validating?.qaExhaustedAt).not.toBeNull();
-        expect(validating?.status).toBe("validating");
-        expect(validating?.validatedHeadSha).toBeNull();
-        expect(validating?.qaAttemptCount).toBe(1);
-        expect(validating?.codeReviewAttemptCount).toBe(0);
-
-        yield* passMergeGate(system, run);
-
-        snapshot = yield* system.query.getSnapshot();
         const exhausted = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(exhausted?.qaExhaustedAt).not.toBeNull();
         expect(exhausted?.status).toBe("code-reviewing");
-        expect(exhausted?.validatedHeadSha).toBe("def456");
+        expect(exhausted?.integrationHeadSha).toBe("def456");
+        expect(exhausted?.validatedHeadSha).toBeNull();
         expect(exhausted?.qaAttemptCount).toBe(1);
         expect(exhausted?.codeReviewAttemptCount).toBe(1);
         expect(
@@ -3257,6 +3421,7 @@ describe("ImplementationWorkflowReactor", () => {
           status: "clean",
           tag: "after-exhausted-dev-review",
         });
+        yield* passFinalGate(system, run);
 
         snapshot = yield* system.query.getSnapshot();
         const publishedRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
@@ -3346,6 +3511,7 @@ describe("ImplementationWorkflowReactor", () => {
             status: "clean",
             tag: "after-exhausted-app-stack",
           });
+          yield* passFinalGate(system, run);
 
           const changeRequests = yield* Ref.get(system.createOrOpenChangeRequestInputs);
           expect(changeRequests.at(-1)?.pullRequestBodyNote).toContain(
@@ -3371,13 +3537,15 @@ describe("ImplementationWorkflowReactor", () => {
           "implementation-code-reviewer",
           seenReviewers,
         );
-        // The reviewer fixed its own findings and committed them, so publication follows directly.
+        // The reviewer fixed its own findings and committed them, so the final gate validates
+        // exactly that reviewed commit before publication.
         yield* appendCodeReviewResult(system, {
           run,
           threadId: reviewer.id,
           status: "findings",
           tag: "single-pass",
         });
+        yield* passFinalGate(system, run);
 
         const snapshot = yield* system.query.getSnapshot();
         const completedRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);

@@ -62,7 +62,7 @@ import {
   type CodexSessionRuntimeShape,
 } from "./CodexSessionRuntime.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
-import { isDevReviewMcpWorkflowPromptId } from "../WorkflowPromptRegistry.ts";
+import { isRegisteredWorkflowPromptId } from "../WorkflowPromptRegistry.ts";
 import { resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
 const isCodexAppServerProcessExitedError = Schema.is(CodexErrors.CodexAppServerProcessExitedError);
 const isCodexAppServerTransportError = Schema.is(CodexErrors.CodexAppServerTransportError);
@@ -1412,12 +1412,14 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           input.modelSelection?.instanceId === boundInstanceId
             ? getCodexServiceTierOptionValue(input.modelSelection)
             : undefined;
-        const devReviewMcpWorkflow = isDevReviewMcpWorkflowPromptId(input.workflowPromptId);
-        const mcpSession = devReviewMcpWorkflow
+        const registeredWorkflow =
+          input.workflowPromptId !== undefined &&
+          isRegisteredWorkflowPromptId(input.workflowPromptId);
+        const mcpSession = registeredWorkflow
           ? McpProviderSession.readMcpProviderSession(input.threadId)
           : undefined;
         const appServerArgs =
-          devReviewMcpWorkflow && mcpSession
+          registeredWorkflow && mcpSession
             ? [
                 "-c",
                 `mcp_servers.t3-code.url=${mcpSession.endpoint}`,

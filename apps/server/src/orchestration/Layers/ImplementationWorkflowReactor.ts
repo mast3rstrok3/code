@@ -48,10 +48,10 @@ import {
   resolveWorkflowSubagentSpawnDefinition,
 } from "../workflowSubagents.ts";
 
-// Code Review is a single review-and-fix pass: the reviewer lands its own fixes and the change
-// request is published from that commit, so there is no re-review cycle and no cycle budget. The
-// `code-review-fixing` status and `fixOrigin: "code-review"` remain only so runs persisted by the
-// previous re-review loop still decode and recover.
+// Code Review is a single review-and-fix pass: the reviewer lands its own fixes, then the final
+// validator gates that exact commit before publication. There is no ordinary re-review cycle or
+// cycle budget. The `code-review-fixing` status and `fixOrigin: "code-review"` remain so runs
+// persisted by the previous re-review loop still decode and recover.
 
 type ImplementationWorkflowEvent = Extract<
   OrchestrationEvent,
@@ -237,49 +237,37 @@ function terminalLineageTicketIds(run: OrchestrationImplementationRun): Readonly
     .map((state) => state.ticketId);
 }
 
-function requiredValidationsPassed(input: {
+function completeValidationsPassedExactlyOnce(input: {
   readonly requiredCommands: ReadonlyArray<string>;
   readonly validations: ReadonlyArray<OrchestrationImplementationValidationResult>;
 }): boolean {
-  return input.requiredCommands.every((requiredCommand) =>
-    input.validations.some(
-      (validation) =>
-        validation.command.trim() === requiredCommand.trim() && validation.status === "passed",
-    ),
-  );
+  const requiredCounts = new Map<string, number>();
+  for (const command of input.requiredCommands) {
+    const normalized = command.trim();
+    requiredCounts.set(normalized, (requiredCounts.get(normalized) ?? 0) + 1);
+  }
+  const reportedCounts = new Map<string, number>();
+  for (const validation of input.validations) {
+    const normalized = validation.command.trim();
+    if (!requiredCounts.has(normalized)) continue;
+    if (validation.status !== "passed") return false;
+    reportedCounts.set(normalized, (reportedCounts.get(normalized) ?? 0) + 1);
+  }
+  return [...requiredCounts].every(([command, count]) => reportedCounts.get(command) === count);
 }
 
-/**
- * Names the exact strings expected against the exact strings received. The common failure is a
- * command reported under a paraphrase, which reads as "not run" to `requiredValidationsPassed`; a
- * reason that only lists what was required leaves Build guessing at what it did wrong.
- */
-function validationMismatchReason(input: {
-  readonly requiredCommands: ReadonlyArray<string>;
+function focusedRepairValidationsPassed(input: {
+  readonly finalCommands: ReadonlyArray<string>;
   readonly validations: ReadonlyArray<OrchestrationImplementationValidationResult>;
-  readonly preamble?: string;
-}): string {
-  const passed = new Set(
-    input.validations
-      .filter((validation) => validation.status === "passed")
-      .map((validation) => validation.command.trim()),
+}): boolean {
+  const finalCommands = new Set(input.finalCommands.map((command) => command.trim()));
+  return (
+    input.validations.length > 0 &&
+    input.validations.every(
+      (validation) =>
+        validation.status === "passed" && !finalCommands.has(validation.command.trim()),
+    )
   );
-  const missing = input.requiredCommands.filter((command) => !passed.has(command.trim()));
-  const reported = input.validations.map(
-    (validation) => `- \`${validation.command}\` (${validation.status})`,
-  );
-  return [
-    input.preamble ??
-      "Fast feature Build did not report a passing result for every required validation command.",
-    "",
-    "Missing a passing result under this exact command string:",
-    ...missing.map((command) => `- \`${command}\``),
-    "",
-    reported.length === 0 ? "No validations were reported." : "Reported instead:",
-    ...reported,
-    "",
-    "`validations[].command` is compared literally. Re-report the same runs using the exact strings above — do not annotate or rename them.",
-  ].join("\n");
 }
 
 function validationSummary(
@@ -322,7 +310,8 @@ function buildWorkerPrompt(input: {
   return [
     `Implement planning ticket ${input.ticketId} for implementation run ${input.run.id}.`,
     "",
-    "Do not ask the user questions. Work TDD-style: write or update a focused failing test, implement the smallest behavior, run targeted validation, then report the result.",
+    "Do not ask the user questions. Run one focused failing test before implementation. Work in behavioral slices, rerunning the relevant focused test after each slice, then finish with affected-file formatting, linting, typing, and focused tests only.",
+    "Do not run launch-level complete validation commands or full test suites. A documented sub-minute fast check such as `pnpm check` is allowed. The final gate after Code Review owns complete validation. Do not rerun an unchanged passing command without a new code change that could affect it.",
     "",
     "Branch/worktree:",
     `- branch: ${input.branch}`,
@@ -343,29 +332,47 @@ function buildWorkerPrompt(input: {
 function buildMergeGatePrompt(input: {
   readonly run: OrchestrationImplementationRun;
   readonly integration: BranchIntegration;
+  readonly kind: "integration" | "final";
 }): string {
   const integrationInstructions =
-    input.integration.conflictedTicketId === null
+    input.kind === "final"
       ? [
-          "All terminal worker branches were integrated programmatically. Do not merge worker branches again; run the required validations against the current orchestrator worktree.",
+          "Code Review has accepted the current HEAD. Do not change code or merge branches in this gate; validate that exact reviewed commit.",
+        ]
+      : input.integration.conflictedTicketId === null
+        ? [
+            "All terminal worker branches were integrated programmatically. Do not merge worker branches again; validate the current orchestrator HEAD for this gate.",
+          ]
+        : [
+            `Programmatic integration stopped while merging ${input.integration.conflictedTicketId} (${input.integration.conflictedRefName}).`,
+            `Conflicted files: ${input.integration.conflictedFiles.join(", ") || "unknown"}.`,
+            `After resolving and committing that merge, merge these remaining terminal branches in order: ${input.integration.remainingRefNames.join(", ") || "none"}.`,
+            "Then validate the resulting integrated HEAD for this gate.",
+          ];
+  const validationInstructions =
+    input.kind === "final"
+      ? [
+          "This is the sole complete repository gate. Code Review has finished for this HEAD. Run every configured command exactly once:",
+          ...input.run.launchSummary.validationCommands.map((command) => `- ${command}`),
+          "",
+          "If native mobile files changed, also run:",
+          "- vp run lint:mobile",
+          "",
+          "Never repeat a successful complete gate on an unchanged commit.",
         ]
       : [
-          `Programmatic integration stopped while merging ${input.integration.conflictedTicketId} (${input.integration.conflictedRefName}).`,
-          `Conflicted files: ${input.integration.conflictedFiles.join(", ") || "unknown"}.`,
-          `After resolving and committing that merge, merge these remaining terminal branches in order: ${input.integration.remainingRefNames.join(", ") || "none"}.`,
-          "Then run the required validations.",
+          "This is the integration gate before Dev Review and Code Review. Run focused tests and fast static checks that finish in under a minute; a repository-provided fast command such as `pnpm check` is appropriate when documented as sub-minute.",
+          "Do not run the configured complete validation commands at this stage:",
+          ...input.run.launchSummary.validationCommands.map((command) => `- ${command}`),
+          "The sole complete gate runs after Code Review.",
         ];
   return [
-    `Run merge gate for implementation run ${input.run.id}.`,
+    `Run ${input.kind} gate for implementation run ${input.run.id}.`,
     "",
     ...integrationInstructions,
     "If this fresh worktree has no installed dependencies, install them with the repository's declared package manager and lockfile before running validation. Missing worktree-local dependencies are setup work, not a validation failure.",
     "",
-    "Required validation commands:",
-    ...input.run.launchSummary.validationCommands.map((command) => `- ${command}`),
-    "",
-    "If native mobile files changed, also run:",
-    "- vp run lint:mobile",
+    ...validationInstructions,
     "",
     "Do not ask the user questions. Finish with exactly one fenced JSON directive of type implementation-merge-gate-result for this runId.",
   ].join("\n");
@@ -402,15 +409,13 @@ function buildFixPrompt(input: {
   return [
     `Fix browser dev-review failures for implementation run ${input.run.id}.`,
     "",
-    `This is QA repair ${input.run.qaCycleCount} of ${IMPLEMENTATION_RUN_MAX_QA_REPAIRS}. Do not ask the user questions. Use a focused red-green TDD loop, make the smallest implementation changes needed in the orchestrator worktree, run focused validation, and report the fix result.`,
+    `This is QA repair ${input.run.qaCycleCount} of ${IMPLEMENTATION_RUN_MAX_QA_REPAIRS}. Do not ask the user questions. Use a focused red-green TDD loop, make the smallest implementation changes needed in the orchestrator worktree, run focused validation only, commit the repair, and report the fix result.`,
     "",
     input.run.artifactSource === "proposed-plan"
       ? `Retrieve Dev Review ${input.reviewId} with workflow_dev_review_get before applying its findings. Review against the proposed-plan context below; do not load a missing Spec or tickets.\n\n${input.artifactMarkdown ?? "Proposed-plan context unavailable."}`
       : `Retrieve Dev Review ${input.reviewId} with workflow_dev_review_get before applying its findings. Use workflow_tickets_list and workflow_ticket_get for the linked tickets.`,
     "",
-    "Before reporting success, run every required validation command:",
-    ...input.run.launchSummary.validationCommands.map((command) => `- ${command}`),
-    `If git diff ${input.run.pinnedCommit}...HEAD includes apps/mobile, also run vp run lint:mobile, even when the current fix did not touch those files.`,
+    "Do not run launch-level complete validation commands or full test suites. A documented sub-minute fast check is allowed. The final gate after Code Review owns complete validation on the new HEAD.",
     "",
     "Finish with exactly one fenced JSON directive of type implementation-fix-result for this runId.",
   ].join("\n");
@@ -430,9 +435,7 @@ function buildAppDevStackFixPrompt(input: {
     "Programmatic AppDevStack diagnostics:",
     input.diagnosticsMarkdown,
     "",
-    "Before reporting success, run every required validation command:",
-    ...input.run.launchSummary.validationCommands.map((command) => `- ${command}`),
-    `If git diff ${input.run.pinnedCommit}...HEAD includes apps/mobile, also run vp run lint:mobile.`,
+    "Run focused validation or a documented sub-minute fast check. Do not run launch-level complete validation commands or full test suites; the final gate after Code Review owns complete validation on the new HEAD.",
     "",
     "Commit all completed changes and leave the orchestrator worktree clean. Finish with exactly one fenced JSON directive of type implementation-fix-result for this runId.",
   ].join("\n");
@@ -470,9 +473,7 @@ function buildCodeReviewPrompt(input: {
     "",
     `When status is "findings", fix the findings in ${input.run.orchestratorWorktreePath} on branch ${input.run.orchestratorBranch}, commit them, and set commitSha to the resulting HEAD. Leave the worktree clean.`,
     "",
-    "Before reporting findings you fixed, run every required validation command and report each result in validations:",
-    ...input.run.launchSummary.validationCommands.map((command) => `- ${command}`),
-    `If git diff ${fixedPoint}...HEAD includes apps/mobile, also run vp run lint:mobile, even when your fixes did not touch those files.`,
+    "When findings change HEAD, run focused or sub-minute fast validation and report it in validations. Do not run launch-level complete validation commands; the sole complete gate starts after Code Review finishes. A clean review should not rerun validation.",
     "",
     `Finish with exactly one fenced JSON directive of type implementation-code-review-result for runId ${input.run.id}.`,
   ].join("\n");
@@ -490,9 +491,7 @@ function buildCodeReviewFixPrompt(input: {
     "Latest code review report:",
     input.reportMarkdown,
     "",
-    "Before reporting success, run every required validation command:",
-    ...input.run.launchSummary.validationCommands.map((command) => `- ${command}`),
-    `If git diff ${input.run.pinnedCommit}...HEAD includes apps/mobile, also run vp run lint:mobile, even when the current fix did not touch those files.`,
+    "Run focused validation or a documented sub-minute fast check. Do not run launch-level complete validation commands or full test suites; the final gate after Code Review owns complete validation on the new HEAD.",
     "",
     "Finish with exactly one fenced JSON directive of type implementation-fix-result for this runId.",
   ].join("\n");
@@ -502,17 +501,16 @@ function buildMergeGateFixPrompt(input: {
   readonly run: OrchestrationImplementationRun;
   readonly reportMarkdown: string;
 }): string {
+  const gateName = input.run.activeValidationKind === "final" ? "final validation" : "merge gate";
   return [
-    `Fix merge-gate failures for implementation run ${input.run.id}.`,
+    `Fix ${gateName} failures for implementation run ${input.run.id}.`,
     "",
     "Do not ask the user questions. Resolve integration conflicts or validation failures in the orchestrator worktree, commit the result, and report the fix.",
     "",
     "Latest merge-gate report:",
     input.reportMarkdown,
     "",
-    "Before reporting success, run every required validation command:",
-    ...input.run.launchSummary.validationCommands.map((command) => `- ${command}`),
-    `If git diff ${input.run.pinnedCommit}...HEAD includes apps/mobile, also run vp run lint:mobile, even when the current fix did not touch those files.`,
+    "Run focused validation or a documented sub-minute fast check. Do not run launch-level complete validation commands or full test suites; the final gate after Code Review owns complete validation on the new HEAD.",
     "",
     "Finish with exactly one fenced JSON directive of type implementation-fix-result for this runId.",
   ].join("\n");
@@ -547,6 +545,20 @@ function fastFeatureArtifactMarkdown(input: {
  */
 const NATIVE_MOBILE_VALIDATION_COMMAND = "vp run lint:mobile";
 
+function completeValidationCommandsForFiles(
+  run: OrchestrationImplementationRun,
+  changedFiles: ReadonlyArray<string>,
+): ReadonlyArray<string> {
+  const commands = [...run.launchSummary.validationCommands];
+  const nativeMobileChanged = changedFiles.some(
+    (path) => path === "apps/mobile" || path.startsWith("apps/mobile/"),
+  );
+  if (nativeMobileChanged && !commands.includes(NATIVE_MOBILE_VALIDATION_COMMAND)) {
+    commands.push(NATIVE_MOBILE_VALIDATION_COMMAND);
+  }
+  return commands;
+}
+
 /**
  * `ready` has to mean "the frontend is serving", not "the controller accepted the request".
  * Recording a still-`starting` stack as ready froze that state on the run and made every later
@@ -558,23 +570,20 @@ function appDevStackReadiness(result: AppDevStackAutoCreateResult): "ready" | "e
   return result.stack === null || result.stack.status === "running" ? "ready" : "ensuring";
 }
 
-/**
- * The example directive embedded in the Build prompt. Derived from the run's own required commands
- * rather than hardcoded, so what Build is shown to copy is exactly what `requiredValidationsPassed`
- * accepts. `fastFeatureBuildContractHoldsForRun` asserts that round trip.
- */
 function fastFeatureExampleDirective(run: OrchestrationImplementationRun) {
   return {
     type: "implementation-fast-build-result",
     runId: run.id,
     status: "succeeded",
     commitSha: "HEAD commit SHA",
-    validations: run.launchSummary.validationCommands.map((command) => ({
-      command,
-      status: "passed",
-      outputMarkdown: "summary",
-      completedAt: "ISO timestamp",
-    })),
+    validations: [
+      {
+        command: "<focused test or documented sub-minute fast check actually run>",
+        status: "passed",
+        outputMarkdown: "summary",
+        completedAt: "ISO timestamp",
+      },
+    ],
     notesMarkdown: "Implementation notes",
   } as const;
 }
@@ -586,17 +595,12 @@ function fastFeatureExecutionContract(run: OrchestrationImplementationRun): Read
     `- worktree: ${run.orchestratorWorktreePath}`,
     `- fixed source commit: ${run.pinnedCommit}`,
     "",
-    "## Required validation",
-    ...run.launchSummary.validationCommands.map((command) => `- \`${command}\``),
-    `- \`${NATIVE_MOBILE_VALIDATION_COMMAND}\` when native mobile files changed`,
+    "## Pre-review validation",
+    "Run focused tests and affected-file checks. A documented sub-minute fast command such as `pnpm check` is allowed.",
+    "Do not run the launch-level complete validation commands in Build; the final gate runs them after Code Review:",
+    ...run.launchSummary.validationCommands.map((command) => `- ${command}`),
     "",
-    // The gate is a literal string comparison. Saying so is the difference between a result that
-    // lands and one that is rejected for naming the same command a different way.
-    "Copy each command into `validations[].command` **exactly** as written above, character for character.",
-    "Do not annotate it, expand it, or substitute the underlying package-manager command — not `pnpm check`, not",
-    "``vp check (run as `pnpm check`)``. A command reported under any other string counts as not run, and the",
-    "whole result is rejected even when the work itself is complete. If a command cannot be run here, report",
-    'it with `"status": "failed"` and explain why in `notesMarkdown`; do not rename it.',
+    "Report the exact focused or fast commands actually run in `validations`.",
     "",
     "Finish with exactly one fenced JSON directive:",
     "```json",
@@ -608,26 +612,14 @@ function fastFeatureExecutionContract(run: OrchestrationImplementationRun): Read
 /**
  * Programmatic guard that the Build prompt and the Build gate cannot drift apart. The example
  * directive the prompt tells Build to copy has to satisfy the very check `applyFastBuildResult`
- * runs, and every required command has to appear verbatim in the contract. Returns the problems so
- * a focused test can assert there are none; a prompt edit that breaks the round trip fails there
- * rather than silently rejecting a finished build in production.
+ * runs. Returns the problems so a focused test can assert there are none; a prompt edit that breaks
+ * the round trip fails there rather than silently rejecting a finished build in production.
  */
 export function fastFeatureBuildContractProblems(
   run: OrchestrationImplementationRun,
 ): ReadonlyArray<string> {
   const contract = fastFeatureExecutionContract(run).join("\n");
   const problems: string[] = [];
-
-  for (const command of run.launchSummary.validationCommands) {
-    if (!contract.includes(`- \`${command}\``)) {
-      problems.push(`Required command '${command}' is not listed verbatim in the contract.`);
-    }
-  }
-  if (!contract.includes(`- \`${NATIVE_MOBILE_VALIDATION_COMMAND}\``)) {
-    problems.push(
-      `Native mobile command '${NATIVE_MOBILE_VALIDATION_COMMAND}' is not listed in the contract.`,
-    );
-  }
 
   const fences = [...contract.matchAll(/```json\s*([\s\S]*?)```/g)];
   if (fences.length !== 1) {
@@ -650,13 +642,13 @@ export function fastFeatureBuildContractProblems(
     problems.push("Embedded directive names a different run.");
   }
   if (
-    !requiredValidationsPassed({
-      requiredCommands: run.launchSummary.validationCommands,
+    !focusedRepairValidationsPassed({
+      finalCommands: [...run.launchSummary.validationCommands, NATIVE_MOBILE_VALIDATION_COMMAND],
       validations: directive.validations,
     })
   ) {
     problems.push(
-      "Embedded directive would be rejected by requiredValidationsPassed: the example Build is told to copy does not satisfy the gate.",
+      "Embedded directive would be rejected by the focused pre-review validation gate.",
     );
   }
   return problems;
@@ -1460,6 +1452,7 @@ const make = Effect.gen(function* () {
       readonly sourceThreadId: ThreadId;
       readonly run: OrchestrationImplementationRun;
       readonly integration: BranchIntegration;
+      readonly kind: "integration" | "final";
       readonly createdAt: string;
     }) {
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
@@ -1484,15 +1477,20 @@ const make = Effect.gen(function* () {
         ...input.run,
         status: "validating",
         activeValidationHeadSha: validationHead.commitSha,
+        activeValidationKind: input.kind,
         activeValidatorThreadId: validatorThreadId,
         mergeGateAttemptCount: input.run.mergeGateAttemptCount + 1,
         validatedHeadSha: null,
-        devReviewedHeadSha: null,
-        activeDevReviewHeadSha: null,
-        activeDevReviewThreadId: null,
-        codeReviewedHeadSha: null,
-        activeCodeReviewHeadSha: null,
-        activeCodeReviewThreadId: null,
+        ...(input.kind === "integration"
+          ? {
+              devReviewedHeadSha: null,
+              activeDevReviewHeadSha: null,
+              activeDevReviewThreadId: null,
+              codeReviewedHeadSha: null,
+              activeCodeReviewHeadSha: null,
+              activeCodeReviewThreadId: null,
+            }
+          : {}),
         changeRequest: null,
         changeRequestFailure: null,
         updatedAt: input.createdAt,
@@ -1511,7 +1509,8 @@ const make = Effect.gen(function* () {
         ownerUserId: orchestratorThread.ownerUserId,
         parentThreadId: input.run.orchestratorThreadId,
         workflowRole: "implementation-validator",
-        title: "Implementation merge gate",
+        title:
+          input.kind === "final" ? "Implementation final validation" : "Implementation merge gate",
         modelSelection: orchestratorThread.modelSelection,
         runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
         interactionMode: "implementation-workflow",
@@ -1528,7 +1527,11 @@ const make = Effect.gen(function* () {
           messageId: yield* serverMessageId("implementation-validator"),
           role: "user",
           text: appendWorkflowSkillCommandSection(
-            buildMergeGatePrompt({ run: input.run, integration: input.integration }),
+            buildMergeGatePrompt({
+              run: input.run,
+              integration: input.integration,
+              kind: input.kind,
+            }),
             WORKFLOW_PROMPT_IDS.implementationMergeGateCodex,
           ),
           attachments: [],
@@ -1543,8 +1546,8 @@ const make = Effect.gen(function* () {
         threadId: input.run.orchestratorThreadId,
         tone: "info",
         kind: "implementation-merge-gate-started",
-        summary: "Merge gate started",
-        payload: { runId: input.run.id, validatorThreadId },
+        summary: input.kind === "final" ? "Final validation started" : "Merge gate started",
+        payload: { runId: input.run.id, validatorThreadId, kind: input.kind },
         createdAt: input.createdAt,
       });
     },
@@ -1647,6 +1650,7 @@ const make = Effect.gen(function* () {
         sourceThreadId: input.sourceThreadId,
         run: integratedRun,
         integration,
+        kind: "integration",
         createdAt: input.createdAt,
       });
     },
@@ -1871,14 +1875,14 @@ const make = Effect.gen(function* () {
         ref: "HEAD",
       });
       if (
-        cycleRun.validatedHeadSha === null ||
-        cycleRun.validatedHeadSha !== reviewHead.commitSha
+        cycleRun.integrationHeadSha === null ||
+        cycleRun.integrationHeadSha !== reviewHead.commitSha
       ) {
         yield* blockRun({
           sourceThreadId: input.sourceThreadId,
           run: cycleRun,
           retryableStage: "dev-review",
-          reasonMarkdown: `Dev Review requires a merge-gate pass for current HEAD '${reviewHead.commitSha}', but the validated HEAD is '${cycleRun.validatedHeadSha ?? "missing"}'.`,
+          reasonMarkdown: `Dev Review requires the current integrated orchestrator HEAD '${reviewHead.commitSha}', but the recorded integrated HEAD is '${cycleRun.integrationHeadSha ?? "missing"}'.`,
           updatedAt: input.createdAt,
         });
         return;
@@ -1992,6 +1996,7 @@ const make = Effect.gen(function* () {
       readonly sourceThreadId: ThreadId;
       readonly run: OrchestrationImplementationRun;
       readonly createdAt: string;
+      readonly skipDevReviewRequirement?: boolean;
     }) {
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
       const orchestratorThread = findThread(readModel, input.run.orchestratorThreadId);
@@ -2013,10 +2018,27 @@ const make = Effect.gen(function* () {
         cwd: input.run.orchestratorWorktreePath,
         ref: "HEAD",
       });
+      if (
+        input.skipDevReviewRequirement !== true &&
+        input.run.integrationHeadSha !== reviewHead.commitSha
+      ) {
+        yield* blockRun({
+          sourceThreadId: input.sourceThreadId,
+          run: input.run,
+          retryableStage: "merge-gate",
+          reasonMarkdown: `Code Review requires the integration gate on current HEAD '${reviewHead.commitSha}', but the integrated HEAD is '${input.run.integrationHeadSha ?? "missing"}'.`,
+          updatedAt: input.createdAt,
+        });
+        return;
+      }
       // Code Review normally requires a passing Dev Review at this exact HEAD. When Dev Review used
       // every attempt without passing, the run still continues — but only from a build-validated,
       // clean commit, so the reviewer never starts from unvalidated work.
-      if (input.run.qaExhaustedAt === null && input.run.devReviewExhaustedAt === null) {
+      if (
+        input.skipDevReviewRequirement !== true &&
+        input.run.qaExhaustedAt === null &&
+        input.run.devReviewExhaustedAt === null
+      ) {
         if (
           input.run.devReviewedHeadSha === null ||
           input.run.devReviewedHeadSha !== reviewHead.commitSha
@@ -2030,12 +2052,12 @@ const make = Effect.gen(function* () {
           });
           return;
         }
-      } else {
+      } else if (input.skipDevReviewRequirement !== true) {
         const reviewStatus = yield* gitWorkflow.localStatus({
           cwd: input.run.orchestratorWorktreePath,
         });
         if (
-          input.run.validatedHeadSha !== reviewHead.commitSha ||
+          input.run.integrationHeadSha !== reviewHead.commitSha ||
           !reviewStatus.isRepo ||
           reviewStatus.refName !== input.run.orchestratorBranch ||
           reviewStatus.hasWorkingTreeChanges
@@ -2044,7 +2066,7 @@ const make = Effect.gen(function* () {
             sourceThreadId: input.sourceThreadId,
             run: input.run,
             retryableStage: "dev-review",
-            reasonMarkdown: `Dev Review did not pass, so Code Review requires a validated, clean HEAD on '${input.run.orchestratorBranch}'. Current HEAD is '${reviewHead.commitSha}' and the validated HEAD is '${input.run.validatedHeadSha ?? "missing"}'.`,
+            reasonMarkdown: `Dev Review did not pass, so Code Review requires an integrated, clean HEAD on '${input.run.orchestratorBranch}'. Current HEAD is '${reviewHead.commitSha}' and the integrated HEAD is '${input.run.integrationHeadSha ?? "missing"}'.`,
             updatedAt: input.createdAt,
             humanBlocked: true,
           });
@@ -2147,19 +2169,20 @@ const make = Effect.gen(function* () {
         sourceThreadId: input.sourceThreadId,
         run: input.run,
         retryableStage: "dev-review",
-        reasonMarkdown: `Dev Review did not pass, so Code Review requires a validated, clean HEAD on '${input.run.orchestratorBranch}'. Current HEAD is '${head.commitSha}' and the validated HEAD is '${input.run.validatedHeadSha ?? "missing"}'.`,
+        reasonMarkdown: `Dev Review did not pass, so Code Review requires a clean integrated HEAD on '${input.run.orchestratorBranch}'. Current HEAD is '${head.commitSha}' and the integrated HEAD is '${input.run.integrationHeadSha ?? "missing"}'.`,
         updatedAt: input.createdAt,
         humanBlocked: true,
       });
       return;
     }
-    if (input.run.validatedHeadSha !== head.commitSha) {
+    if (input.run.integrationHeadSha !== head.commitSha) {
       yield* startMergeGate({
         sourceThreadId: input.sourceThreadId,
         run: {
           ...input.run,
           status: "integrating",
           activeValidationHeadSha: null,
+          activeValidationKind: null,
           activeValidatorThreadId: null,
           retryableFailure: null,
           updatedAt: input.createdAt,
@@ -2174,6 +2197,7 @@ const make = Effect.gen(function* () {
           remainingTicketIds: [],
           remainingRefNames: [],
         },
+        kind: "integration",
         createdAt: input.createdAt,
       });
       return;
@@ -2208,17 +2232,32 @@ const make = Effect.gen(function* () {
         });
         return;
       }
-      // Code Review commits its own fixes, so its accepted HEAD is the newest commit and the
-      // merge-gate and Dev Review evidence necessarily point at earlier commits. Dev Review may also
-      // never have passed. Require only that the run was validated at some point and that Code Review
-      // accepted the exact commit being published; createOrOpenChangeRequest re-verifies that commit
-      // against HEAD and refuses a dirty worktree.
-      if (input.run.validatedHeadSha === null) {
+      if (input.run.validatedHeadSha !== expectedHeadSha) {
         yield* blockRun({
           sourceThreadId: input.sourceThreadId,
           run: input.run,
           retryableStage: "merge-gate",
-          reasonMarkdown: `Cannot publish HEAD '${expectedHeadSha}' because the run has no passing validation on record.`,
+          reasonMarkdown: `Cannot publish HEAD '${expectedHeadSha}' because complete passing validation belongs to '${input.run.validatedHeadSha ?? "missing"}'.`,
+          updatedAt: input.createdAt,
+        });
+        return;
+      }
+      const changedFiles = yield* gitWorkflow.listChangedFiles({
+        cwd: input.run.orchestratorWorktreePath,
+        baseRef: input.run.pinnedCommit,
+        headRef: expectedHeadSha,
+      });
+      if (
+        !completeValidationsPassedExactlyOnce({
+          requiredCommands: completeValidationCommandsForFiles(input.run, changedFiles),
+          validations: input.run.finalValidationResults,
+        })
+      ) {
+        yield* blockRun({
+          sourceThreadId: input.sourceThreadId,
+          run: input.run,
+          retryableStage: "merge-gate",
+          reasonMarkdown: `Cannot publish HEAD '${expectedHeadSha}' without exactly one passing result for every complete validation command.`,
           updatedAt: input.createdAt,
         });
         return;
@@ -2886,8 +2925,11 @@ const make = Effect.gen(function* () {
         return;
       }
       if (
-        !requiredValidationsPassed({
-          requiredCommands: run.launchSummary.validationCommands,
+        !focusedRepairValidationsPassed({
+          finalCommands: [
+            ...run.launchSummary.validationCommands,
+            NATIVE_MOBILE_VALIDATION_COMMAND,
+          ],
           validations: directive.validations,
         })
       ) {
@@ -2895,10 +2937,8 @@ const make = Effect.gen(function* () {
           sourceThreadId,
           run: { ...run, fastBuildResult: buildResult, updatedAt },
           retryableStage: "build",
-          reasonMarkdown: validationMismatchReason({
-            requiredCommands: run.launchSummary.validationCommands,
-            validations: directive.validations,
-          }),
+          reasonMarkdown:
+            "Fast feature Build must report passing focused or documented sub-minute fast validation and must not run launch-level complete commands before Code Review.",
           updatedAt,
         });
         return;
@@ -2940,34 +2980,6 @@ const make = Effect.gen(function* () {
         });
         return;
       }
-      const changedFiles = yield* gitWorkflow.listChangedFiles({
-        cwd: run.orchestratorWorktreePath,
-        baseRef: run.pinnedCommit,
-        headRef: head.commitSha,
-      });
-      const changedNativeMobileFiles = changedFiles.some(
-        (path) => path === "apps/mobile" || path.startsWith("apps/mobile/"),
-      );
-      if (
-        changedNativeMobileFiles &&
-        !requiredValidationsPassed({
-          requiredCommands: [NATIVE_MOBILE_VALIDATION_COMMAND],
-          validations: directive.validations,
-        })
-      ) {
-        yield* blockRun({
-          sourceThreadId,
-          run: { ...run, fastBuildResult: buildResult, updatedAt },
-          retryableStage: "build",
-          reasonMarkdown: validationMismatchReason({
-            requiredCommands: [NATIVE_MOBILE_VALIDATION_COMMAND],
-            validations: directive.validations,
-            preamble: "Fast feature Build changed native mobile files.",
-          }),
-          updatedAt,
-        });
-        return;
-      }
       const succeededRun: OrchestrationImplementationRun = {
         ...run,
         status: "qa-reviewing",
@@ -2978,15 +2990,8 @@ const make = Effect.gen(function* () {
           validations: [...directive.validations],
           notesMarkdown: directive.notesMarkdown,
         },
-        finalValidation: validationSummary(
-          directive.validations,
-          "fast feature build",
-          directive.notesMarkdown,
-          updatedAt,
-        ),
-        finalValidationResults: [...directive.validations],
         integrationHeadSha: head.commitSha,
-        validatedHeadSha: head.commitSha,
+        validatedHeadSha: null,
         retryableFailure: null,
         updatedAt,
       };
@@ -3033,12 +3038,29 @@ const make = Effect.gen(function* () {
               Effect.orElseSucceed(() => false),
             )
           : true;
+      const changedFiles = yield* gitWorkflow.listChangedFiles({
+        cwd: run.orchestratorWorktreePath,
+        baseRef: run.pinnedCommit,
+        headRef: head.commitSha,
+      });
+      const requiredCommands = completeValidationCommandsForFiles(run, changedFiles);
+      const gateKind = run.activeValidationKind ?? "integration";
       const finalValidation = validationSummary(
         directive.validations,
-        "merge gate",
+        gateKind === "final" ? "final validation" : "integration gate",
         directive.summaryMarkdown,
         updatedAt,
       );
+      const validationsPassed =
+        gateKind === "final"
+          ? completeValidationsPassedExactlyOnce({
+              requiredCommands,
+              validations: directive.validations,
+            })
+          : focusedRepairValidationsPassed({
+              finalCommands: requiredCommands,
+              validations: directive.validations,
+            });
       const passed =
         directive.status === "passed" &&
         run.activeValidationHeadSha === head.commitSha &&
@@ -3046,17 +3068,14 @@ const make = Effect.gen(function* () {
         status.refName === run.orchestratorBranch &&
         !status.hasWorkingTreeChanges &&
         integrated &&
-        requiredValidationsPassed({
-          requiredCommands: run.launchSummary.validationCommands,
-          validations: directive.validations,
-        });
+        validationsPassed;
 
       yield* appendActivity({
         threadId: run.orchestratorThreadId,
         tone: passed ? "info" : "error",
         kind: "implementation-merge-gate-finished",
-        summary: `Merge gate ${passed ? "passed" : "failed"}`,
-        payload: { runId: run.id, status: passed ? "passed" : "failed" },
+        summary: `${gateKind === "final" ? "Final validation" : "Merge gate"} ${passed ? "passed" : "failed"}`,
+        payload: { runId: run.id, status: passed ? "passed" : "failed", kind: gateKind },
         createdAt: updatedAt,
       });
 
@@ -3065,15 +3084,20 @@ const make = Effect.gen(function* () {
           sourceThreadId,
           run: {
             ...run,
-            finalValidation,
-            finalValidationResults: [...directive.validations],
+            ...(gateKind === "final"
+              ? {
+                  finalValidation,
+                  finalValidationResults: [...directive.validations],
+                }
+              : {}),
             activeValidatorThreadId: null,
             activeValidationHeadSha: null,
+            activeValidationKind: gateKind,
             updatedAt,
           },
           status: "fixing",
           origin: "merge-gate",
-          title: "Fix merge gate",
+          title: gateKind === "final" ? "Fix final validation" : "Fix merge gate",
           promptText: buildMergeGateFixPrompt({
             run,
             reportMarkdown: directive.summaryMarkdown,
@@ -3083,14 +3107,31 @@ const make = Effect.gen(function* () {
         return;
       }
 
+      if (gateKind === "final") {
+        const validatedRun: OrchestrationImplementationRun = {
+          ...run,
+          status: "publishing-change-request",
+          finalValidation,
+          finalValidationResults: [...directive.validations],
+          integrationHeadSha: head.commitSha,
+          validatedHeadSha: head.commitSha,
+          activeValidationHeadSha: null,
+          activeValidationKind: null,
+          activeValidatorThreadId: null,
+          retryableFailure: null,
+          updatedAt,
+        };
+        yield* fileChangeRequest({ sourceThreadId, run: validatedRun, createdAt: updatedAt });
+        return;
+      }
+
       const validatedRun: OrchestrationImplementationRun = {
         ...run,
         status: "qa-reviewing",
-        finalValidation,
-        finalValidationResults: [...directive.validations],
         integrationHeadSha: head.commitSha,
-        validatedHeadSha: head.commitSha,
+        validatedHeadSha: null,
         activeValidationHeadSha: null,
+        activeValidationKind: null,
         activeValidatorThreadId: null,
         retryableFailure: null,
         updatedAt,
@@ -3139,29 +3180,8 @@ const make = Effect.gen(function* () {
     }
 
     if (
-      !requiredValidationsPassed({
-        requiredCommands: run.launchSummary.validationCommands,
-        validations: directive.validations,
-      })
-    ) {
-      yield* handleFixerFailure({
-        sourceThreadId,
-        run,
-        detailMarkdown: `Fix result did not include passing results for every required validation command. Required commands: ${run.launchSummary.validationCommands.join(", ")}.`,
-        createdAt: updatedAt,
-      });
-      return;
-    }
-
-    const changedFiles = yield* gitWorkflow.listChangedFiles({
-      cwd: run.orchestratorWorktreePath,
-      baseRef: run.pinnedCommit,
-      headRef: "HEAD",
-    });
-    if (
-      changedFiles.some((path) => path === "apps/mobile" || path.startsWith("apps/mobile/")) &&
-      !requiredValidationsPassed({
-        requiredCommands: [NATIVE_MOBILE_VALIDATION_COMMAND],
+      !focusedRepairValidationsPassed({
+        finalCommands: [...run.launchSummary.validationCommands, NATIVE_MOBILE_VALIDATION_COMMAND],
         validations: directive.validations,
       })
     ) {
@@ -3169,18 +3189,11 @@ const make = Effect.gen(function* () {
         sourceThreadId,
         run,
         detailMarkdown:
-          "Fix result changed native mobile files without a passing `vp run lint:mobile` validation.",
+          "Fix result must include passing focused or documented sub-minute fast validation and must not run launch-level complete commands; the final gate after Code Review owns complete validation.",
         createdAt: updatedAt,
       });
       return;
     }
-
-    const latestValidation = validationSummary(
-      directive.validations,
-      "fix validation",
-      directive.notesMarkdown,
-      updatedAt,
-    );
     const [head, status] = yield* Effect.all([
       gitWorkflow.resolveCommit({ cwd: run.orchestratorWorktreePath, ref: "HEAD" }),
       gitWorkflow.localStatus({ cwd: run.orchestratorWorktreePath }),
@@ -3214,12 +3227,65 @@ const make = Effect.gen(function* () {
       }
     }
 
+    if (run.activeValidationKind === "final") {
+      const repairedRun: OrchestrationImplementationRun = {
+        ...run,
+        status: "code-reviewing",
+        integrationHeadSha: head.commitSha,
+        validatedHeadSha: null,
+        activeValidationHeadSha: null,
+        activeValidationKind: null,
+        activeValidatorThreadId: null,
+        activeFixerThreadId: null,
+        fixOrigin: null,
+        codeReviewedHeadSha: null,
+        activeCodeReviewHeadSha: null,
+        activeCodeReviewThreadId: null,
+        retryableFailure: null,
+        updatedAt,
+      };
+      yield* startCodeReview({
+        sourceThreadId,
+        run: repairedRun,
+        createdAt: updatedAt,
+        skipDevReviewRequirement: true,
+      });
+      return;
+    }
+
+    if (run.fixOrigin === "dev-review") {
+      const repairedRun: OrchestrationImplementationRun = {
+        ...run,
+        status: "qa-reviewing",
+        integrationHeadSha: head.commitSha,
+        validatedHeadSha: null,
+        activeValidationHeadSha: null,
+        activeValidationKind: null,
+        activeValidatorThreadId: null,
+        activeFixerThreadId: null,
+        fixOrigin: null,
+        devReviewedHeadSha: null,
+        activeDevReviewHeadSha: null,
+        activeDevReviewThreadId: null,
+        codeReviewedHeadSha: null,
+        activeCodeReviewHeadSha: null,
+        activeCodeReviewThreadId: null,
+        retryableFailure: null,
+        updatedAt,
+      };
+      yield* startBrowserReview({
+        sourceThreadId,
+        run: repairedRun,
+        createdAt: updatedAt,
+      });
+      return;
+    }
+
     const fixedRun: OrchestrationImplementationRun = {
       ...run,
       status: "integrating",
-      finalValidation: latestValidation,
-      finalValidationResults: [...directive.validations],
       integrationHeadSha: head.commitSha,
+      activeValidationKind: null,
       activeFixerThreadId: null,
       fixOrigin: null,
       retryableFailure: null,
@@ -3238,6 +3304,7 @@ const make = Effect.gen(function* () {
         remainingTicketIds: [],
         remainingRefNames: [],
       },
+      kind: "integration",
       createdAt: updatedAt,
     });
   });
@@ -3362,7 +3429,7 @@ const make = Effect.gen(function* () {
         threadId: input.run.orchestratorThreadId,
         tone: "error",
         kind: "implementation-qa-exhausted",
-        summary: `Automated QA exhausted ${exhaustedRun.qaCycleCount}/${IMPLEMENTATION_RUN_MAX_QA_REPAIRS} repairs; continuing through merge-gate validation and Code Review`,
+        summary: `Automated QA exhausted ${exhaustedRun.qaCycleCount}/${IMPLEMENTATION_RUN_MAX_QA_REPAIRS} repairs; continuing to Code Review from the integrated HEAD`,
         payload: {
           runId: input.run.id,
           gate: input.gate,
@@ -3492,10 +3559,9 @@ const make = Effect.gen(function* () {
   );
 
   /**
-   * Send Dev Review findings back to whoever owns commits on the orchestrator branch. Fast feature
-   * runs build in the orchestrator thread itself, so the findings become a new Build turn there and
-   * the resulting implementation-fast-build-result re-enters Dev Review. Spec-driven runs have no
-   * single Build thread, so they keep the dedicated fixer plus merge-gate route.
+   * Send Dev Review findings to a fresh TDD repair thread. The repair commits directly on the
+   * already-integrated orchestrator branch, then the workflow re-enters Dev Review; there are no
+   * worker branches left to merge at this point.
    */
   const restartAfterDevReviewFindings = Effect.fn(
     "ImplementationWorkflowReactor.restartAfterDevReviewFindings",
@@ -3594,7 +3660,7 @@ const make = Effect.gen(function* () {
           });
           return;
         }
-        yield* fileChangeRequest({
+        yield* startMergeGate({
           sourceThreadId,
           run: {
             ...run,
@@ -3602,8 +3668,20 @@ const make = Effect.gen(function* () {
             activeCodeReviewHeadSha: null,
             activeCodeReviewThreadId: null,
             latestCodeReviewReportMarkdown: directive.reportMarkdown,
+            validatedHeadSha: null,
             updatedAt,
           },
+          integration: {
+            baseTicketId: null,
+            baseRefName: run.orchestratorBranch,
+            mergedTicketIds: [],
+            conflictedTicketId: null,
+            conflictedRefName: null,
+            conflictedFiles: [],
+            remainingTicketIds: [],
+            remainingRefNames: [],
+          },
+          kind: "final",
           createdAt: updatedAt,
         });
         return;
@@ -3637,30 +3715,11 @@ const make = Effect.gen(function* () {
       }
 
       if (
-        !requiredValidationsPassed({
-          requiredCommands: run.launchSummary.validationCommands,
-          validations: directive.validations,
-        })
-      ) {
-        yield* blockRun({
-          sourceThreadId,
-          run,
-          retryableStage: "code-review",
-          reasonMarkdown: `Code Review changed code without passing results for every required validation command: ${run.launchSummary.validationCommands.join(", ")}.`,
-          updatedAt,
-        });
-        return;
-      }
-
-      const changedFiles = yield* gitWorkflow.listChangedFiles({
-        cwd: run.orchestratorWorktreePath,
-        baseRef: run.pinnedCommit,
-        headRef: head.commitSha,
-      });
-      if (
-        changedFiles.some((path) => path === "apps/mobile" || path.startsWith("apps/mobile/")) &&
-        !requiredValidationsPassed({
-          requiredCommands: [NATIVE_MOBILE_VALIDATION_COMMAND],
+        !focusedRepairValidationsPassed({
+          finalCommands: [
+            ...run.launchSummary.validationCommands,
+            NATIVE_MOBILE_VALIDATION_COMMAND,
+          ],
           validations: directive.validations,
         })
       ) {
@@ -3669,13 +3728,13 @@ const make = Effect.gen(function* () {
           run,
           retryableStage: "code-review",
           reasonMarkdown:
-            "Code Review changed native mobile files without a passing `vp run lint:mobile` validation.",
+            "Code Review changed code without passing focused validation, or ran a launch-level complete command before the final gate.",
           updatedAt,
         });
         return;
       }
 
-      yield* fileChangeRequest({
+      yield* startMergeGate({
         sourceThreadId,
         run: {
           ...run,
@@ -3683,9 +3742,20 @@ const make = Effect.gen(function* () {
           activeCodeReviewHeadSha: null,
           activeCodeReviewThreadId: null,
           latestCodeReviewReportMarkdown: directive.reportMarkdown,
-          finalValidationResults: [...directive.validations],
+          validatedHeadSha: null,
           updatedAt,
         },
+        integration: {
+          baseTicketId: null,
+          baseRefName: run.orchestratorBranch,
+          mergedTicketIds: [],
+          conflictedTicketId: null,
+          conflictedRefName: null,
+          conflictedFiles: [],
+          remainingTicketIds: [],
+          remainingRefNames: [],
+        },
+        kind: "final",
         createdAt: updatedAt,
       });
     },
@@ -3855,6 +3925,7 @@ const make = Effect.gen(function* () {
             status: "integrating",
             activeValidatorThreadId: null,
             activeValidationHeadSha: null,
+            activeValidationKind: null,
           },
           integration: {
             baseTicketId: null,
@@ -3866,6 +3937,7 @@ const make = Effect.gen(function* () {
             remainingTicketIds: [],
             remainingRefNames: [],
           },
+          kind: input.run.activeValidationKind ?? "integration",
           createdAt: input.createdAt,
         });
         return;
@@ -4314,7 +4386,7 @@ const make = Effect.gen(function* () {
         run.artifactSource === "planning-spec" &&
         run.status === "needs-human-attention" &&
         run.appDevStack.status === "failed" &&
-        run.finalValidation?.status === "passed" &&
+        run.integrationHeadSha !== null &&
         run.devReviewIds.length === 0;
       const reviewThreads = readModel.threads.filter(
         (thread) =>
@@ -4641,6 +4713,7 @@ const make = Effect.gen(function* () {
               remainingTicketIds: [],
               remainingRefNames: [],
             },
+            kind: run.activeValidationKind ?? "integration",
             createdAt,
           }),
         );

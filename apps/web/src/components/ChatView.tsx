@@ -45,6 +45,7 @@ import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/proje
 import { truncate } from "@t3tools/shared/String";
 import { nextTerminalId, resolveTerminalSessionLabel } from "@t3tools/shared/terminalLabels";
 import { resolveImplementationBranchIdentity } from "@t3tools/shared/orchestrationImplementation";
+import { resolveImplementationValidationCommands } from "@t3tools/shared/t3ProjectFile";
 import { isProductWorkflowRoot, workflowPromptIdForPreset } from "@t3tools/shared/workflowPresets";
 import { Debouncer } from "@tanstack/react-pacer";
 import { useAtomValue } from "@effect/atom-react";
@@ -73,6 +74,7 @@ import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { isElectron } from "../env";
 import { readLocalApi } from "../localApi";
+import { useT3ProjectFile } from "~/hooks/useT3ProjectFileScripts";
 import { useDiffPanelStore } from "../diffPanelStore";
 import {
   collapseExpandedComposerCursor,
@@ -2738,6 +2740,10 @@ function ChatViewContent(props: ChatViewProps) {
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const activeWorkspaceRoot = activeThreadWorktreePath ?? activeProjectCwd ?? undefined;
+  const t3ProjectFile = useT3ProjectFile(
+    activeThread?.environmentId ?? null,
+    activeWorkspaceRoot ?? null,
+  );
   const implementationBranchIdentity = useMemo(() => {
     if (!activeWorkspaceRoot || !activePlanningWorkflow?.spec) {
       return null;
@@ -2816,11 +2822,13 @@ function ChatViewContent(props: ChatViewProps) {
           pinnedCommit: "HEAD",
           orchestratorBranch: implementationBranchIdentity.orchestratorBranch,
           orchestratorWorktreePath: implementationBranchIdentity.orchestratorWorktreePath,
-          validationCommands: ["vp check", "vp run typecheck"],
+          validationCommands: [
+            ...resolveImplementationValidationCommands({ projectFile: t3ProjectFile }),
+          ],
         },
       });
     },
-    [activeThread, implementationBranchIdentity, launchImplementationRun],
+    [activeThread, implementationBranchIdentity, launchImplementationRun, t3ProjectFile],
   );
   const handleRetryImplementationChangeRequest = useCallback(
     (runId: string) => {

@@ -417,7 +417,7 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("omits browser MCP servers for ordinary implementation sessions", () => {
+  it.effect("includes the scoped T3 MCP server for registered workflow sessions", () => {
     const harness = makeHarness();
     const threadId = ThreadId.make("thread-claude-mcp-default");
     return Effect.gen(function* () {
@@ -438,7 +438,11 @@ describe("ClaudeAdapterLive", () => {
       });
 
       const createInput = harness.getLastCreateQueryInput();
-      assert.equal(createInput?.options.mcpServers, undefined);
+      assert.equal(
+        (createInput?.options.mcpServers?.["t3-code"] as { readonly url?: string } | undefined)
+          ?.url,
+        "http://127.0.0.1/mcp",
+      );
       McpProviderSession.clearMcpProviderSession(threadId);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -446,7 +450,34 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("includes Dev Review MCP server only for Browser Dev Review sessions", () => {
+  it.effect("omits the T3 MCP server for non-workflow sessions", () => {
+    const harness = makeHarness();
+    const threadId = ThreadId.make("thread-claude-mcp-non-workflow");
+    return Effect.gen(function* () {
+      McpProviderSession.setMcpProviderSession({
+        environmentId: EnvironmentId.make("env-1"),
+        threadId,
+        providerSessionId: "provider-session-non-workflow",
+        providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+        endpoint: "http://127.0.0.1/mcp",
+        authorizationHeader: "Bearer token",
+      });
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      assert.equal(harness.getLastCreateQueryInput()?.options.mcpServers, undefined);
+      McpProviderSession.clearMcpProviderSession(threadId);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("includes Dev Review MCP server for Browser Dev Review sessions", () => {
     const harness = makeHarness();
     const threadId = ThreadId.make("thread-claude-mcp-browser-review");
     return Effect.gen(function* () {

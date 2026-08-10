@@ -92,7 +92,7 @@ import {
 import { type ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import {
-  isDevReviewMcpWorkflowPromptId,
+  isRegisteredWorkflowPromptId,
   resolveWorkflowSystemInstructions,
 } from "../WorkflowPromptRegistry.ts";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.UnknownFromJsonString);
@@ -3594,12 +3594,14 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(fastMode ? { fastMode: true } : {}),
         ...(ultracode ? { ultracode: true } : {}),
       };
-      const devReviewMcpWorkflow = isDevReviewMcpWorkflowPromptId(input.workflowPromptId);
-      const mcpSession = devReviewMcpWorkflow
+      const registeredWorkflow =
+        input.workflowPromptId !== undefined &&
+        isRegisteredWorkflowPromptId(input.workflowPromptId);
+      const mcpSession = registeredWorkflow
         ? McpProviderSession.readMcpProviderSession(input.threadId)
         : undefined;
       const mcpServers =
-        devReviewMcpWorkflow && mcpSession
+        registeredWorkflow && mcpSession
           ? {
               "t3-code": {
                 type: "http" as const,

@@ -805,6 +805,8 @@ Break the work into **tracer bullet** tickets.
 
 Give each ticket its **blocking edges** — the other tickets that must complete before it can start. A ticket with no blockers can start immediately.
 
+Dependencies represent actual compile-time, data, or behavioral prerequisites, never preferred implementation order. Keep the dependency frontier as wide as correctness allows. When several slices would otherwise edit the same central registry or service file, prefer an early extension-point/foundation ticket, parallel feature-module tickets with isolated tests, and one small final assembly ticket. If a long serial chain remains, justify every edge in the dependent ticket body with the concrete prerequisite it represents.
+
 **Wide refactors are the exception to vertical slicing.** A **wide refactor** is one mechanical change — rename a column, retype a shared symbol — whose **blast radius** fans across the whole codebase, so a single edit breaks thousands of call sites at once and no vertical slice can land green. Don't force it into a tracer bullet; sequence it as **expand–contract**. First expand: add the new form beside the old so nothing breaks. Then migrate the call sites over in batches sized by blast radius (per package, per directory), each batch its own ticket blocked by the expand, keeping CI green batch to batch because the old form still exists. Finally contract: delete the old form once no caller remains, in a ticket blocked by every migrate batch. When even the batches can't stay green alone, keep the sequence but let them share an integration branch that all block a final integrate-and-verify ticket — green is promised only there.
 
 ### 4. Quiz the user
@@ -897,6 +899,9 @@ Review the Spec, conversation context, durable project context, and drafted plan
 - Check that each completed slice is independently demoable or verifiable.
 - Check that prefactoring, contract/schema work, migrations, operational safeguards, and test seams are represented when they are required to make later slices reliable.
 - Check dependency ordering, including blockers-first sequencing and whether any slices should be merged or split.
+- Inspect the dependency frontier and planned-file overlap explicitly. Remove serial edges that express preferred order rather than real compile-time, data, or behavioral prerequisites.
+- When several slices share a central registry or service seam, prefer an early extension-point/foundation ticket, parallel isolated feature modules, and one small final assembly ticket.
+- Reject any remaining long serial chain unless every edge is justified in the dependent ticket body.
 - Check that ticket bodies are ready for AFK agents: concrete outcome, clear acceptance criteria, useful tests, and no stale implementation path prescriptions.
 
 ## Review cycle
@@ -1154,7 +1159,7 @@ Implement the work described by the user in the spec or tickets.
 
 Use /tdd where possible, at pre-agreed seams.
 
-Run typechecking regularly, single test files regularly, and the full test suite once at the end.
+Run focused tests and scoped static checks during implementation. Documented sub-minute fast checks such as \`pnpm check\` are allowed. The final gate after Code Review owns complete repository validation.
 
 Once done, use /code-review to review the work.
 
@@ -1168,10 +1173,11 @@ This stage orchestrates the upstream implement loop across sub-threads instead o
 - The run works in a dedicated worktree and branch created from the branch the user selected, and the finished change request is filed back into that branch.
 - The app dev stack for this worktree is checked at the start of the run and, when absent, started in parallel with implementation.
 - Tickets are implemented dependency-aware by TDD worker sub-threads (the TDD Implementation skill), each in its own worktree and branch. A dependent ticket's worker branches from its blocker's worker branch so chained tickets build on each other, and every worker commits to its own branch.
-- Worker branches are merged programmatically back into the orchestrator worktree; the Merge Gate stage runs only when programmatic integration stops on a real conflict.
-- Automated QA has one global budget of ten fresh AppDevStack/Dev Review repair agents after the merge. Initial stack probes and Browser Dev Review launches do not consume repair slots; replacing a malformed, failed, blocked, or interrupted repair does. After the cap, a clean merge-gate-validated HEAD proceeds through best-effort Code Review with the unresolved gate flagged in the change request. Unsafe or unvalidated worktrees require human attention.
+- Worker branches are merged programmatically back into the orchestrator worktree; the Merge Gate stage always runs once for the integrated HEAD, whether integration was clean or required conflict resolution.
+- A Browser Dev Review finding launches a fresh TDD repair thread on the already-integrated orchestrator worktree. After that repair commits and passes focused checks, start the next Browser Dev Review directly; do not rerun the Merge Gate between review cycles.
+- Automated QA has one global budget of ten fresh AppDevStack/Dev Review repair agents after integration. Initial stack probes and Browser Dev Review launches do not consume repair slots; replacing a malformed, failed, blocked, or interrupted repair does. After the cap, a clean integration-gated HEAD proceeds through best-effort Code Review with the unresolved gate flagged in the change request.
 - Code Review is a single review-and-fix pass that commits its own corrections and precedes change-request publication.
-- "The full test suite once at the end" is replaced by the validation commands named in the launch message; never run repo-wide suites.
+- Ticket workers never run launch-level complete validation commands or full test suites, but may run documented sub-minute fast checks. After Code Review finishes, the final gate runs each launch validation command once on the reviewed HEAD before publication.
 
 Plan the implementation run from the Spec and planning tickets. Identify worktree strategy, ticket order, validation commands, required app-dev/browser review surfaces, merge gates, and how progress will be reported. These rules override only upstream single-thread mechanics; TDD at pre-agreed seams, regular typechecking, review before publication, and committed work remain authoritative.
 </collaboration_mode>`;
@@ -1421,6 +1427,12 @@ Do not add scattered string logs as a debugging diary. Add logging when the new 
 
 When this prompt is run by an automatic implementation-worker thread, do not ask the user questions. In an orchestrated worker thread the Spec's Testing Decisions and the assigned ticket's acceptance criteria *are* the pre-agreed seams — never ask the user to confirm them. Implement the assigned planning ticket, run focused validation, and finish with exactly one fenced JSON block using this shape:
 
+- Run one focused failing test before implementation.
+- After each behavioral slice, run the relevant focused test.
+- At completion, run only affected-file formatting, linting, typing, and focused tests.
+- Do not run launch-level complete validation commands or full test suites. A documented sub-minute fast check such as \`pnpm check\` is allowed. The final gate after Code Review owns complete validation.
+- Do not rerun an unchanged passing command unless a code change could affect its result.
+
 \`\`\`json
 {
   "type": "implementation-worker-result",
@@ -1445,7 +1457,7 @@ When this prompt is run by an automatic implementation-worker thread, do not ask
 
 ## Orchestrated QA Repair Result
 
-When the launch message identifies an AppDevStack or Browser Dev Review failure, this is a QA repair thread rather than a planning-ticket worker. The programmatic diagnostics, original Spec/tickets or proposed plan, and the failed review are the pre-agreed seams. Do not ask the user to confirm them. Work red then green in the orchestrator worktree, run every required validation, commit the repair, leave the worktree clean, and finish with exactly one fenced JSON block using this shape:
+When the launch message identifies an AppDevStack or Browser Dev Review failure, this is a QA repair thread rather than a planning-ticket worker. The programmatic diagnostics, original Spec/tickets or proposed plan, and the failed review are the pre-agreed seams. Do not ask the user to confirm them. Work red then green in the orchestrator worktree, run focused validation or a documented sub-minute fast check, commit the repair, leave the worktree clean, and finish with exactly one fenced JSON block using this shape. The final gate after Code Review owns complete validation on the new HEAD; do not run launch-level complete validation commands here.
 
 \`\`\`json
 {
@@ -1468,7 +1480,7 @@ When the launch message identifies an AppDevStack or Browser Dev Review failure,
 
 const IMPLEMENTATION_MERGE_GATE_PROMPT = `<collaboration_mode># Implementation Workflow: Merge Gate
 
-Routine implementation branches are merged programmatically before this stage. Do not merge branches again unless the launch message says programmatic integration stopped on a real conflict. Resolve any reported conflict deliberately, merge only the explicitly listed remaining branches, run required validation, and report the concrete result.
+Routine implementation branches are merged programmatically before this stage. The launch message names this as either an integration gate or the final gate. The integration gate always runs for the integrated HEAD, including conflict-free integration, and uses focused or documented sub-minute fast checks. The final gate runs only after Code Review and runs each configured complete command exactly once before publication. Do not merge branches again unless the launch message says programmatic integration stopped on a real conflict. Never repeat a successful complete gate on an unchanged commit.
 
 Do not ask the user questions. If you cannot merge or validate, report a failed merge-gate result with the blocker.
 
@@ -1481,7 +1493,7 @@ When ready, finish with exactly one fenced JSON block using this shape:
   "status": "passed",
   "validations": [
     {
-      "command": "vp check",
+      "command": "vp test focused-test",
       "status": "passed",
       "outputMarkdown": "Important output or empty string.",
       "completedAt": "2026-01-01T00:00:00.000Z"
@@ -1518,7 +1530,7 @@ Use only the preview_* tools in feedback mode and preview_* plus dev_review_* to
 
 const IMPLEMENTATION_FIX_PROMPT = `<collaboration_mode># Implementation Workflow: Fix
 
-Fix the Browser Dev Review, merge-gate, or code-review failures in the orchestrator worktree. Do not ask the user questions. Make the smallest reliable change, run every validation command listed in the launch message, and report whether the run can continue. Fixes remain on the orchestrator branch; the merge gate does not run again.
+Fix the Browser Dev Review, integration-gate, final-gate, or code-review failures in the orchestrator worktree. Do not ask the user questions. Make the smallest reliable change, run focused validation or a documented sub-minute fast check, commit the repair, and report whether the run can continue. Do not run launch-level complete validation commands. The final gate after Code Review owns complete validation on the new HEAD.
 
 When ready, finish with exactly one fenced JSON block using this shape:
 
@@ -1530,7 +1542,7 @@ When ready, finish with exactly one fenced JSON block using this shape:
   "commitSha": "optional-commit-sha",
   "validations": [
     {
-      "command": "vp check",
+      "command": "vp test focused-test",
       "status": "passed",
       "outputMarkdown": "Important output or empty string.",
       "completedAt": "2026-01-01T00:00:00.000Z"
@@ -1643,7 +1655,7 @@ Run the two axes as parallel feedback sub-agents by emitting one workflow-subage
 
 1. Run both axes and aggregate the two-axis report.
 2. If either axis produced findings that require code changes, fix them in the orchestrator worktree with the smallest reliable changes. Do not delegate the fixes and do not defer them to a follow-up.
-3. Run every required validation command named in the launch message, plus \`vp run lint:mobile\` when the diff touches \`apps/mobile\`.
+3. If you made changes, run focused tests or a documented sub-minute fast check and report the results. Do not run launch-level complete validation commands. If the review is clean, do not rerun validation.
 4. Commit your fixes on the orchestrator branch and leave the worktree clean.
 5. Report the commit you produced.
 
@@ -1657,7 +1669,7 @@ Finish with exactly one fenced JSON block using this shape:
   "commitSha": "HEAD commit SHA after your fixes",
   "validations": [
     {
-      "command": "vp check",
+      "command": "vp test focused-test",
       "status": "passed",
       "outputMarkdown": "summary",
       "completedAt": "ISO timestamp"
