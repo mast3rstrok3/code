@@ -17,6 +17,7 @@ describe("PlanSidebar disclosure state", () => {
     expect(PLAN_SIDEBAR_SECTION_IDS).toEqual([
       "steps",
       "proposed-plan",
+      "wayfinder-map",
       "spec",
       "tickets",
       "review-cycles",

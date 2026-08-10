@@ -65,4 +65,10 @@ describe("T3ProjectFile", () => {
     ).toThrow();
     expect(() => decode({ validationCommands: ["x".repeat(513)] })).toThrow();
   });
+
+  it("decodes defaultThreadEnvMode and rejects unknown modes", () => {
+    expect(decode({ defaultThreadEnvMode: "worktree" }).defaultThreadEnvMode).toBe("worktree");
+    expect(decode({ defaultThreadEnvMode: "local" }).defaultThreadEnvMode).toBe("local");
+    expect(() => decode({ defaultThreadEnvMode: "remote" })).toThrow();
+  });
 });

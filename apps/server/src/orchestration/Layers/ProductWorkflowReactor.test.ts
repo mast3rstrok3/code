@@ -30,6 +30,8 @@ import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import { ProductWorkflowReactorLive } from "./ProductWorkflowReactor.ts";
+import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
+import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
 import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
@@ -80,6 +82,8 @@ function makeTestLayer(validationCommands?: ReadonlyArray<string>) {
     Layer.provide(SqlitePersistenceMemory),
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "product-reactor-" })),
     Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(ThreadBackgroundLiveness.layer),
+    Layer.provideMerge(ThreadPlanProgress.layer),
   );
 
   return Layer.mergeAll(

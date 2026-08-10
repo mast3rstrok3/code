@@ -1,6 +1,8 @@
 // @effect-diagnostics globalDate:off -- UI snooze presets use local calendar boundaries and Intl labels.
 import type { OrchestrationThreadShell } from "@t3tools/contracts";
 
+export type ChangeRequestStateLike = "open" | "closed" | "merged";
+
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
 export function threadLastActivityAt(shell: OrchestrationThreadShell): string | null {
@@ -230,6 +232,7 @@ export function effectiveSettled(
   options: {
     readonly now: string;
     readonly autoSettleAfterDays: number | null;
+    readonly changeRequestState?: ChangeRequestStateLike | null;
   },
 ): boolean {
   // Blocked work must remain visible even when a user explicitly settled it.
@@ -255,6 +258,10 @@ export function effectiveSettled(
   // "active" is the explicit keep-active pin: it suppresses auto-settle
   // until real activity clears it server-side.
   if (shell.settledOverride === "active") return false;
+  if (options.changeRequestState === "merged" || options.changeRequestState === "closed") {
+    return true;
+  }
+  if (options.changeRequestState === "open") return false;
   // These resting states still need a human decision. They may be settled
   // explicitly, but age alone must not move them out of the inbox.
   if (shell.session?.status === "error" || shell.hasActionableProposedPlan) return false;

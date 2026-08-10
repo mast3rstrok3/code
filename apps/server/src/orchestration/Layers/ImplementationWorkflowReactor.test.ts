@@ -44,6 +44,8 @@ import {
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
+import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
+import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
 import {
   ImplementationWorkflowReactor,
   type ImplementationWorkflowReactorShape,
@@ -60,6 +62,13 @@ import {
 const now = "2026-01-01T00:00:00.000Z";
 const projectId = ProjectId.make("project-implementation-reactor");
 const sourceThreadId = ThreadId.make("thread-implementation-source");
+const decodeBuildContractExample = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(
+    Schema.Struct({
+      validations: Schema.Array(Schema.Struct({ command: Schema.String })),
+    }),
+  ),
+);
 
 interface ImplementationCalls {
   readonly autoCreateInputs: Ref.Ref<
@@ -168,6 +177,8 @@ function makeTestLayer(
       ServerConfig.layerTest(process.cwd(), { prefix: "implementation-reactor-" }),
     ),
     Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(ThreadBackgroundLiveness.layer),
+    Layer.provideMerge(ThreadPlanProgress.layer),
   );
 
   return Layer.mergeAll(
@@ -1194,13 +1205,7 @@ describe("ImplementationWorkflowReactor", () => {
 
         // The embedded example is generated from the run's own commands, not hardcoded.
         const fence = /```json\s*([\s\S]*?)```/.exec(prompt)?.[1] ?? "";
-        const example = yield* Schema.decodeUnknownEffect(
-          Schema.fromJsonString(
-            Schema.Struct({
-              validations: Schema.Array(Schema.Struct({ command: Schema.String })),
-            }),
-          ),
-        )(fence);
+        const example = yield* decodeBuildContractExample(fence);
         expect(example.validations.map((validation) => validation.command)).toEqual([
           "<focused test or documented sub-minute fast check actually run>",
         ]);

@@ -8,6 +8,7 @@ import { resolveThreadRouteRef, resolveThreadRouteRenderState } from "../threadR
 import { resolveThreadSyncPhase } from "../threadSync";
 import { SidebarInset } from "~/components/ui/sidebar";
 import {
+  resolveThreadDetailRef,
   useEnvironmentThreadRefs,
   useThreadDetail,
   useThreadShell,
@@ -25,17 +26,19 @@ function ChatThreadRouteView() {
     threadRef === null ? null : environmentShell.stateAtom(threadRef.environmentId),
   );
   const serverThreadShell = useThreadShell(threadRef);
-  const serverThreadDetail = useThreadDetail(threadRef);
-  const serverThreadStatus = useThreadStatus(threadRef);
-  const environmentThreadRefs = useEnvironmentThreadRefs(threadRef?.environmentId ?? null);
-  const bootstrapComplete = shell.data?.snapshot._tag === "Some";
-  const environmentHasServerThreads = environmentThreadRefs.length > 0;
-  const draftThreadExists = useComposerDraftStore((store) =>
-    threadRef ? store.getDraftThreadByRef(threadRef) !== null : false,
-  );
   const draftThread = useComposerDraftStore((store) =>
     threadRef ? store.getDraftThreadByRef(threadRef) : null,
   );
+  const serverThreadDetailRef = resolveThreadDetailRef(threadRef, {
+    shellExists: serverThreadShell !== null,
+    waitForShell: draftThread !== null,
+  });
+  const serverThreadDetail = useThreadDetail(serverThreadDetailRef);
+  const serverThreadStatus = useThreadStatus(serverThreadDetailRef);
+  const environmentThreadRefs = useEnvironmentThreadRefs(threadRef?.environmentId ?? null);
+  const bootstrapComplete = shell.data?.snapshot._tag === "Some";
+  const environmentHasServerThreads = environmentThreadRefs.length > 0;
+  const draftThreadExists = draftThread !== null;
   const environmentHasDraftThreads = useComposerDraftStore((store) => {
     if (!threadRef) {
       return false;

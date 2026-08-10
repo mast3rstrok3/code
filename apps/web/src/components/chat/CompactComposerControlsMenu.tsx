@@ -20,12 +20,12 @@ import {
 } from "./ComposerModePicker";
 
 export const CompactComposerControlsMenu = memo(function CompactComposerControlsMenu(props: {
-  activePlan: boolean;
   interactionMode: ProviderInteractionMode;
   workflowPreset: WorkflowPreset | null;
   lastWorkflowPreset: WorkflowPreset | null;
   planSidebarLabel: string;
   planSidebarOpen: boolean;
+  showPlanToggle: boolean;
   planningWorkflowAvailable: boolean;
   runtimeMode: RuntimeMode;
   showInteractionModeToggle: boolean;
@@ -89,6 +89,15 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
             <MenuDivider />
           </>
         ) : null}
+        {props.showPlanToggle ? (
+          <>
+            <MenuItem onClick={props.onTogglePlanSidebar}>
+              <ListTodoIcon aria-hidden className="size-4" />
+              {props.planSidebarOpen ? "Hide" : "Show"} {props.planSidebarLabel}
+            </MenuItem>
+            <MenuDivider />
+          </>
+        ) : null}
         <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Access</div>
         <MenuRadioGroup
           value={props.runtimeMode}
@@ -102,17 +111,6 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
           <MenuRadioItem value="auto">Auto</MenuRadioItem>
           <MenuRadioItem value="full-access">Full access</MenuRadioItem>
         </MenuRadioGroup>
-        {props.activePlan ? (
-          <>
-            <MenuDivider />
-            <MenuItem onClick={props.onTogglePlanSidebar}>
-              <ListTodoIcon className="size-4 shrink-0" />
-              {props.planSidebarOpen
-                ? `Hide ${props.planSidebarLabel.toLowerCase()} sidebar`
-                : `Show ${props.planSidebarLabel.toLowerCase()} sidebar`}
-            </MenuItem>
-          </>
-        ) : null}
       </MenuPopup>
     </Menu>
   );

@@ -48,6 +48,8 @@ import { ImplementationWorkflowReactorLive } from "./ImplementationWorkflowReact
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
+import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
+import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
 import {
   makeStaleTurnReconcilerLive,
   STALE_TURN_RESUME_ACTIVITY_KIND,
@@ -115,6 +117,8 @@ function makeTestLayer(
     Layer.provide(SqlitePersistenceMemory),
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "stale-turn-reconciler-" })),
     Layer.provideMerge(NodeServices.layer),
+    Layer.provideMerge(ThreadBackgroundLiveness.layer),
+    Layer.provideMerge(ThreadPlanProgress.layer),
   );
 
   const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(

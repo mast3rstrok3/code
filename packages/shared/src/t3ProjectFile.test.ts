@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   buildT3ProjectFileJsonSchema,
+  parseT3ProjectFile,
   resolveImplementationValidationCommands,
   T3ProjectFileFromJson,
 } from "./t3ProjectFile.ts";
@@ -39,6 +40,7 @@ describe("buildT3ProjectFileJsonSchema", () => {
 
     expect(Object.keys(schema.properties).sort()).toEqual([
       "$schema",
+      "defaultThreadEnvMode",
       "iconPath",
       "scripts",
       "validationCommands",
@@ -49,6 +51,7 @@ describe("buildT3ProjectFileJsonSchema", () => {
     expect(validationCommands).toContain('"minItems":1');
     expect(validationCommands).toContain('"maxItems":10');
     expect(validationCommands).toContain('"maxLength":512');
+    expect(schema.properties.defaultThreadEnvMode?.description).toContain("new threads start");
 
     const script = schema.properties.scripts?.items;
     expect(script?.required).toEqual(["name", "command"]);
@@ -99,5 +102,18 @@ describe("resolveImplementationValidationCommands", () => {
     ).toEqual(["pnpm explicit"]);
     expect(resolveImplementationValidationCommands({ projectFile })).toEqual(["pnpm check:full"]);
     expect(resolveImplementationValidationCommands({})).toEqual(["vp check", "vp run typecheck"]);
+  });
+});
+
+describe("parseT3ProjectFile", () => {
+  it("returns the decoded file for valid contents", () => {
+    expect(parseT3ProjectFile('{ "defaultThreadEnvMode": "worktree" }')).toEqual({
+      defaultThreadEnvMode: "worktree",
+    });
+  });
+
+  it("returns null for malformed or invalid contents", () => {
+    expect(parseT3ProjectFile("{ not json")).toBeNull();
+    expect(parseT3ProjectFile('{ "defaultThreadEnvMode": "spaceship" }')).toBeNull();
   });
 });

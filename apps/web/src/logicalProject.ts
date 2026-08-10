@@ -1,4 +1,5 @@
 export {
+  buildProjectGroups,
   deriveLogicalProjectKey,
   deriveLogicalProjectKeyFromRef,
   deriveLogicalProjectKeyFromSettings,
@@ -15,4 +16,6 @@ export {
   type ProjectGroupingOverrideSelection,
   type ProjectGroupingMode,
   type ProjectGroupingSettings,
+  type ProjectGroup,
+  type ProjectGroupMember,
 } from "@t3tools/client-runtime/state/project-grouping";
