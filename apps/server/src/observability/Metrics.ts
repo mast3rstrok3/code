@@ -74,6 +74,18 @@ export const terminalRestartsTotal = Metric.counter("t3_terminal_restarts_total"
   description: "Total terminal restart requests handled.",
 });
 
+export const serverBrowserRuntimes = Metric.gauge("t3_server_browser_runtimes", {
+  description: "Active server-hosted browser runtimes.",
+});
+
+export const serverBrowserTabs = Metric.gauge("t3_server_browser_tabs", {
+  description: "Active server-hosted browser tabs.",
+});
+
+export const serverBrowserScreencasts = Metric.gauge("t3_server_browser_screencasts", {
+  description: "Active server-hosted browser screencasts.",
+});
+
 export const metricAttributes = (
   attributes: Readonly<Record<string, unknown>>,
 ): ReadonlyArray<[string, string]> => Object.entries(compactMetricAttributes(attributes));

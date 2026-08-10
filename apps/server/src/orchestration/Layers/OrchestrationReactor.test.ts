@@ -10,6 +10,7 @@ import { ImplementationWorkflowReactor } from "../Services/ImplementationWorkflo
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { ProductWorkflowReactor } from "../Services/ProductWorkflowReactor.ts";
+import { PreviewLifecycleReactor } from "../Services/PreviewLifecycleReactor.ts";
 import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
 import { OrchestrationReactor } from "../Services/OrchestrationReactor.ts";
 import { makeOrchestrationReactor } from "./OrchestrationReactor.ts";
@@ -77,6 +78,15 @@ describe("OrchestrationReactor", () => {
           }),
         ),
         Layer.provideMerge(
+          Layer.succeed(PreviewLifecycleReactor, {
+            start: () => {
+              started.push("preview-lifecycle-reactor");
+              return Effect.void;
+            },
+            drain: Effect.void,
+          }),
+        ),
+        Layer.provideMerge(
           Layer.succeed(ThreadDeletionReactor, {
             start: () => {
               started.push("thread-deletion-reactor");
@@ -107,6 +117,7 @@ describe("OrchestrationReactor", () => {
       "checkpoint-reactor",
       "product-workflow-reactor",
       "implementation-workflow-reactor",
+      "preview-lifecycle-reactor",
       "thread-deletion-reactor",
       "agent-awareness-relay",
     ]);

@@ -6631,6 +6631,7 @@ function ChatViewContent(props: ChatViewProps) {
           threadRef={activeThreadRef}
           tabId={activeRightPanelSurface.resourceId}
           configuredUrls={configuredPreviewUrls}
+          serverConfig={serverConfig}
           visible
           onSendAnnotation={(annotation, image) => {
             void onSend(undefined, { annotation, image });

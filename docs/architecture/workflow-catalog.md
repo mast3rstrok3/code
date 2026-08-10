@@ -46,6 +46,8 @@ At runtime, prompt rendering includes only document metadata in an `available-wo
 
 Specs, planning tickets, Wayfinder Maps, and dev reviews are durable artifacts in the server's event-sourced projection — not repository files or external tracker issues. This is a deliberate deviation from the upstream skills, which publish to an issue tracker or `.scratch/` files.
 
+The server-hosted live tab used by a Browser Dev Review is an ephemeral workflow resource. Terminal Dev Review and workflow-child events close it deterministically; the persisted screenshots, recording, findings, checks, and verdict are the post-review inspection artifacts.
+
 Workflow stages hand results to the orchestration by ending a message with exactly one fenced JSON directive, parsed in `apps/server/src/orchestration/workflowDirectives.ts`:
 
 - `product-intent-locked` — Product Grill finished with the intent kind fixed by its workflow preset.

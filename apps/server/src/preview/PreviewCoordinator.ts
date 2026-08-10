@@ -58,7 +58,9 @@ export class PreviewCoordinator extends Context.Service<
       input: PreviewResizeInput,
     ) => Effect.Effect<PreviewSessionSnapshot, PreviewError>;
     readonly refresh: (input: PreviewRefreshInput) => Effect.Effect<void, PreviewError>;
-    readonly close: (input: PreviewCloseInput) => Effect.Effect<void, PreviewError>;
+    readonly close: (
+      input: PreviewCloseInput & { readonly reason?: "workflow-cleanup" },
+    ) => Effect.Effect<void, PreviewError>;
     readonly list: (input: PreviewListInput) => Effect.Effect<PreviewListResult>;
     readonly reportStatus: (
       input: Parameters<PreviewManager.PreviewManager["Service"]["reportStatus"]>[0],

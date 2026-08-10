@@ -10,6 +10,7 @@ import { ImplementationWorkflowReactor } from "../Services/ImplementationWorkflo
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { ProductWorkflowReactor } from "../Services/ProductWorkflowReactor.ts";
+import { PreviewLifecycleReactor } from "../Services/PreviewLifecycleReactor.ts";
 import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
 import * as AgentAwarenessRelay from "../../relay/AgentAwarenessRelay.ts";
 
@@ -19,6 +20,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
   const checkpointReactor = yield* CheckpointReactor;
   const productWorkflowReactor = yield* ProductWorkflowReactor;
   const implementationWorkflowReactor = yield* ImplementationWorkflowReactor;
+  const previewLifecycleReactor = yield* PreviewLifecycleReactor;
   const threadDeletionReactor = yield* ThreadDeletionReactor;
   const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
 
@@ -28,6 +30,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
     yield* checkpointReactor.start();
     yield* productWorkflowReactor.start();
     yield* implementationWorkflowReactor.start();
+    yield* previewLifecycleReactor.start();
     yield* threadDeletionReactor.start();
     yield* agentAwarenessRelay.start();
   });

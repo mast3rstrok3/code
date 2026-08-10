@@ -63,6 +63,7 @@ import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRun
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor.ts";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor.ts";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor.ts";
+import { PreviewLifecycleReactorLive } from "./orchestration/Layers/PreviewLifecycleReactor.ts";
 import { ProductWorkflowReactorLive } from "./orchestration/Layers/ProductWorkflowReactor.ts";
 import { ImplementationWorkflowReactorLive } from "./orchestration/Layers/ImplementationWorkflowReactor.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
@@ -251,6 +252,7 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(CheckpointReactorLive),
   Layer.provideMerge(ProductWorkflowReactorLive),
   Layer.provideMerge(ImplementationWorkflowReactorLive),
+  Layer.provideMerge(PreviewLifecycleReactorLive),
   Layer.provideMerge(ThreadDeletionReactorLive),
   Layer.provideMerge(AgentAwarenessRelay.layer.pipe(Layer.provide(ServerSecretStore.layer))),
   Layer.provideMerge(RuntimeReceiptBusLive),

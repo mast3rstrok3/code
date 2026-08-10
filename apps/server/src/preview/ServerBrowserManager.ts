@@ -35,6 +35,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Metric from "effect/Metric";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
@@ -42,6 +43,7 @@ import * as Stream from "effect/Stream";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as Metrics from "../observability/Metrics.ts";
 import * as BrowserExecutableResolver from "./BrowserExecutableResolver.ts";
 import * as PreviewManager from "./Manager.ts";
 import * as VideoFrameSink from "./VideoFrameSink.ts";
@@ -58,6 +60,10 @@ interface ServerBrowserTab {
   lastRequestedUrl: string | null;
   viewportSetting: PreviewViewportSetting;
   renderedViewport: { readonly width: number; readonly height: number };
+  readonly screencastLeases: Set<symbol>;
+  screencastStarted: boolean;
+  screencastTransition: Promise<void>;
+  disposalPromise: Promise<void> | null;
 }
 
 interface ServerBrowserRuntime {
@@ -65,7 +71,23 @@ interface ServerBrowserRuntime {
   readonly source: BrowserExecutableResolver.BrowserExecutableResolution["source"];
 }
 
+export interface ServerBrowserManagerAdapter {
+  readonly launchPersistentContext: (
+    userDataDir: string,
+    options: Parameters<(typeof import("playwright"))["chromium"]["launchPersistentContext"]>[1],
+  ) => Promise<BrowserContext>;
+  readonly spawn: typeof NodeChildProcess.spawn;
+}
+
 type BrowserDataKind = "cookies" | "cache" | "all";
+type ServerBrowserTabDisposalReason =
+  | "explicit-close"
+  | "workflow-cleanup"
+  | "page-crash"
+  | "page-close"
+  | "context-closed"
+  | "initialization-failed"
+  | "shutdown";
 
 interface ActiveServerRecording {
   readonly tabId: string;
@@ -77,6 +99,7 @@ interface ActiveServerRecording {
   readonly process: NodeChildProcess.ChildProcess;
   readonly exited: Promise<number | null>;
   readonly stderrChunks: string[];
+  readonly screencastLease: symbol;
   stopping: boolean;
 }
 
@@ -88,6 +111,8 @@ const RECORDING_FPS = 25;
 const RECORDING_DESKTOP_WIDTH = 1280;
 const RECORDING_DESKTOP_HEIGHT = 720;
 const RECORDING_FFMPEG_EXIT_TIMEOUT_MS = 10_000;
+const BROWSER_CACHE_CLEAR_TIMEOUT_MS = 3_000;
+const BROWSER_CONTEXT_CLOSE_TIMEOUT_MS = 5_000;
 const PAGE_CRASHED_FAILURE = {
   code: -1,
   description: "ERR_PAGE_CRASHED",
@@ -274,7 +299,9 @@ export class ServerBrowserManager extends Context.Service<
     readonly refresh: (
       input: PreviewRefreshInput,
     ) => Effect.Effect<void, PreviewBrowserUnavailableError>;
-    readonly close: (input: PreviewCloseInput) => Effect.Effect<void>;
+    readonly close: (
+      input: PreviewCloseInput & { readonly reason?: ServerBrowserTabDisposalReason },
+    ) => Effect.Effect<void>;
     readonly goBack: (
       input: PreviewTabActionInput,
     ) => Effect.Effect<void, PreviewBrowserUnavailableError>;
@@ -375,7 +402,15 @@ export class ServerBrowserManager extends Context.Service<
   }
 >()("t3/preview/ServerBrowserManager") {}
 
-export const make = Effect.gen(function* ServerBrowserManagerMake() {
+const defaultAdapter: ServerBrowserManagerAdapter = {
+  launchPersistentContext: async (userDataDir, options) => {
+    const playwright = (await import("playwright")) as typeof import("playwright");
+    return playwright.chromium.launchPersistentContext(userDataDir, options);
+  },
+  spawn: NodeChildProcess.spawn,
+};
+
+function* serverBrowserManagerMake(adapter: ServerBrowserManagerAdapter) {
   const config = yield* ServerConfig.ServerConfig;
   const previewManager = yield* PreviewManager.PreviewManager;
   const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
@@ -385,34 +420,14 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
   const userDataDir = path.join(config.stateDir, "preview-browser", environmentHash(environmentId));
   const artifactDir = path.join(config.stateDir, "preview-artifacts");
   const tabs = new Map<string, ServerBrowserTab>();
-  let runtimePromise: Promise<ServerBrowserRuntime> | null = null;
+  let runtime: ServerBrowserRuntime | null = null;
+  let runtimeTransition: Promise<void> = Promise.resolve();
+  let closingRuntimePromise: Promise<void> | null = null;
+  const closingContexts = new WeakSet<BrowserContext>();
+  let idleShutdownTimer: ReturnType<typeof setTimeout> | null = null;
+  let pendingTabRequests = 0;
+  let legacyCacheCleared = false;
   const activeRecordings = new Map<string, ActiveServerRecording>();
-
-  const abortRecording = (recording: ActiveServerRecording) => {
-    recording.stopping = true;
-    if (activeRecordings.get(recording.tabId) === recording) {
-      activeRecordings.delete(recording.tabId);
-    }
-    try {
-      recording.process.stdin?.end();
-    } catch {
-      // stdin already closed.
-    }
-    const killTimer = setTimeout(() => {
-      try {
-        recording.process.kill("SIGKILL");
-      } catch {
-        // Process already exited.
-      }
-    }, RECORDING_FFMPEG_EXIT_TIMEOUT_MS);
-    killTimer.unref?.();
-    void recording.exited.finally(() => clearTimeout(killTimer));
-  };
-
-  const abortRecordingForTab = (tabId: string) => {
-    const recording = activeRecordings.get(tabId);
-    if (recording) abortRecording(recording);
-  };
 
   const enabled = config.mode === "web" && config.previewBrowserMode !== "off";
   const context = yield* Effect.context<never>();
@@ -421,6 +436,149 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
 
   const runDetached = <A, E>(effect: Effect.Effect<A, E>) => {
     runFork(effect.pipe(Effect.ignore));
+  };
+
+  const updateResourceGauges = () =>
+    runDetached(
+      Effect.all(
+        [
+          Metric.update(Metrics.serverBrowserRuntimes, runtime === null ? 0 : 1),
+          Metric.update(Metrics.serverBrowserTabs, tabs.size),
+          Metric.update(
+            Metrics.serverBrowserScreencasts,
+            [...tabs.values()].filter((tab) => tab.screencastStarted).length,
+          ),
+        ],
+        { discard: true },
+      ),
+    );
+
+  const serializeRuntime = <A>(operation: () => Promise<A>): Promise<A> => {
+    const next = runtimeTransition.then(operation, operation);
+    runtimeTransition = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  };
+
+  const cancelIdleShutdown = () => {
+    if (idleShutdownTimer === null) return;
+    clearTimeout(idleShutdownTimer);
+    idleShutdownTimer = null;
+    runDetached(Effect.logDebug("server preview browser idle shutdown canceled"));
+  };
+
+  const transitionScreencast = (tab: ServerBrowserTab, operation: () => Promise<void>) => {
+    const next = tab.screencastTransition.then(operation, operation);
+    tab.screencastTransition = next.catch(() => {});
+    return next;
+  };
+
+  const acquireScreencastLease = (tab: ServerBrowserTab, lease: symbol): Promise<void> =>
+    transitionScreencast(tab, async () => {
+      if (tab.disposalPromise !== null || tab.screencastLeases.has(lease)) return;
+      const shouldStart = tab.screencastLeases.size === 0;
+      tab.screencastLeases.add(lease);
+      if (!shouldStart || tab.screencastStarted) return;
+      try {
+        await withTimeoutReject(
+          tab.cdp.send("Page.startScreencast", {
+            format: "jpeg",
+            quality: config.previewBrowserJpegQuality,
+            maxWidth: config.previewBrowserMaxFrameWidth,
+            maxHeight: config.previewBrowserMaxFrameHeight,
+          }),
+          2_000,
+          "Timed out while starting the server preview screencast.",
+        );
+        tab.screencastStarted = true;
+        updateResourceGauges();
+        runDetached(Effect.logDebug("server preview screencast started"));
+      } catch (error) {
+        tab.screencastLeases.delete(lease);
+        runDetached(
+          Effect.logWarning("server preview screencast start failed", {
+            cause: error instanceof Error ? error.message : String(error),
+          }),
+        );
+        throw error;
+      }
+    });
+
+  const releaseScreencastLease = (tab: ServerBrowserTab, lease: symbol): Promise<void> =>
+    transitionScreencast(tab, async () => {
+      if (!tab.screencastLeases.delete(lease) || tab.screencastLeases.size > 0) return;
+      if (!tab.screencastStarted) return;
+      try {
+        await withTimeoutReject(
+          tab.cdp.send("Page.stopScreencast"),
+          2_000,
+          "Timed out while stopping the server preview screencast.",
+        );
+      } catch (error) {
+        runDetached(
+          Effect.logWarning("server preview screencast stop failed", {
+            cause: error instanceof Error ? error.message : String(error),
+          }),
+        );
+      } finally {
+        tab.screencastStarted = false;
+        updateResourceGauges();
+        runDetached(Effect.logDebug("server preview screencast stopped"));
+      }
+    });
+
+  const abortRecording = async (recording: ActiveServerRecording): Promise<void> => {
+    if (!recording.stopping) recording.stopping = true;
+    if (activeRecordings.get(recording.tabId) === recording) {
+      activeRecordings.delete(recording.tabId);
+    }
+    try {
+      recording.process.stdin?.end();
+    } catch {
+      // stdin already closed.
+    }
+    const exitCode = await withTimeoutFallback<number | null | "timeout">(
+      recording.exited,
+      RECORDING_FFMPEG_EXIT_TIMEOUT_MS,
+      "timeout" as const,
+    );
+    if (exitCode === "timeout") {
+      try {
+        recording.process.kill("SIGKILL");
+      } catch {
+        // Process already exited.
+      }
+      await withTimeoutFallback(recording.exited, 1_000, null);
+    }
+    const tab = tabs.get(recording.tabId);
+    if (tab) await releaseScreencastLease(tab, recording.screencastLease);
+  };
+
+  const clearCacheThroughTemporaryTarget = async (context: BrowserContext): Promise<void> => {
+    let page: Page | null = null;
+    let cdp: CDPSession | null = null;
+    try {
+      page = await withTimeoutReject(
+        context.newPage(),
+        BROWSER_CACHE_CLEAR_TIMEOUT_MS,
+        "Timed out while opening the browser cache-clear target.",
+      );
+      cdp = await withTimeoutReject(
+        context.newCDPSession(page),
+        BROWSER_CACHE_CLEAR_TIMEOUT_MS,
+        "Timed out while attaching the browser cache-clear target.",
+      );
+      await withTimeoutReject(
+        cdp.send("Network.clearBrowserCache"),
+        BROWSER_CACHE_CLEAR_TIMEOUT_MS,
+        "Timed out while clearing the server preview browser cache.",
+      );
+    } finally {
+      if (cdp) await withTimeoutFallback(cdp.detach(), 1_000, undefined).catch(() => {});
+      if (page) await withTimeoutFallback(page.close(), 1_000, undefined).catch(() => {});
+    }
   };
 
   const reportStatus = (tab: ServerBrowserTab, status?: NavigationStatusReport) =>
@@ -485,7 +643,6 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
     }
     const resolution = await runPromise(BrowserExecutableResolver.resolveBrowserExecutable(config));
     await NodeFSP.mkdir(userDataDir, { recursive: true });
-    const playwright = (await import("playwright")) as typeof import("playwright");
     const args: string[] = [
       "--disable-dev-shm-usage",
       "--disable-background-timer-throttling",
@@ -501,7 +658,7 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
       viewport: DEFAULT_VIEWPORT,
       ignoreHTTPSErrors: true,
     };
-    const contextPromise = playwright.chromium.launchPersistentContext(userDataDir, options);
+    const contextPromise = adapter.launchPersistentContext(userDataDir, options);
     let context: Awaited<typeof contextPromise>;
     try {
       context = await withTimeoutReject(
@@ -513,23 +670,176 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
       void contextPromise.then((lateContext) => lateContext.close()).catch(() => {});
       throw error;
     }
-    return { context, source: resolution.source };
+    const launched: ServerBrowserRuntime = { context, source: resolution.source };
+    context.once("close", () => {
+      if (runtime !== launched) return;
+      runtime = null;
+      cancelIdleShutdown();
+      updateResourceGauges();
+      if (!closingContexts.has(context)) {
+        runDetached(Effect.logWarning("server preview browser runtime closed unexpectedly"));
+      }
+      for (const tab of tabs.values()) {
+        void disposeTab(tab, "context-closed");
+      }
+    });
+    if (!legacyCacheCleared) {
+      legacyCacheCleared = true;
+      await clearCacheThroughTemporaryTarget(context).catch((error) => {
+        runDetached(
+          Effect.logWarning("server preview legacy cache clear failed", {
+            cause: error instanceof Error ? error.message : String(error),
+          }),
+        );
+      });
+    }
+    for (const initialPage of context.pages()) {
+      await withTimeoutFallback(initialPage.close(), 1_000, undefined).catch(() => {});
+    }
+    runDetached(
+      Effect.logInfo("server preview browser runtime launched", { source: resolution.source }),
+    );
+    return launched;
   };
 
-  const ensureRuntime = Effect.tryPromise({
-    try: async () => {
-      runtimePromise ??= launchRuntime();
-      try {
-        return await runtimePromise;
-      } catch (error) {
-        runtimePromise = null;
-        throw error;
+  const acquireRuntime = () =>
+    serializeRuntime(async () => {
+      if (closingRuntimePromise !== null) {
+        await withTimeoutReject(
+          closingRuntimePromise,
+          BROWSER_CONTEXT_CLOSE_TIMEOUT_MS,
+          "Timed out while waiting for the previous server preview browser to exit.",
+        );
       }
-    },
+      if (runtime !== null) return runtime;
+      const launched = await launchRuntime();
+      runtime = launched;
+      updateResourceGauges();
+      return launched;
+    });
+
+  const ensureRuntime = Effect.tryPromise({
+    try: acquireRuntime,
     catch: browserError,
   });
 
-  const attachPage = Effect.fn("ServerBrowserManager.attachPage")(function* (
+  const scheduleIdleShutdown = () => {
+    if (idleShutdownTimer !== null || runtime === null || tabs.size > 0 || pendingTabRequests > 0) {
+      return;
+    }
+    idleShutdownTimer = setTimeout(() => {
+      idleShutdownTimer = null;
+      void shutdownRuntime("idle");
+    }, config.previewBrowserIdleTtlMs);
+    idleShutdownTimer.unref?.();
+    runDetached(
+      Effect.logDebug("server preview browser idle shutdown scheduled", {
+        idleTtlMs: config.previewBrowserIdleTtlMs,
+      }),
+    );
+  };
+
+  const disposeTab = (
+    tab: ServerBrowserTab,
+    reason: ServerBrowserTabDisposalReason,
+  ): Promise<void> => {
+    if (tab.disposalPromise !== null) return tab.disposalPromise;
+    tab.disposalPromise = (async () => {
+      if (tabs.get(tab.tabId) === tab) tabs.delete(tab.tabId);
+      updateResourceGauges();
+      const recording = activeRecordings.get(tab.tabId);
+      if (recording) await abortRecording(recording);
+      await tab.screencastTransition.catch(() => {});
+      tab.screencastLeases.clear();
+      if (tab.screencastStarted) {
+        try {
+          await withTimeoutReject(
+            tab.cdp.send("Page.stopScreencast"),
+            2_000,
+            "Timed out while stopping a disposed server preview screencast.",
+          );
+        } catch (error) {
+          runDetached(
+            Effect.logWarning("server preview screencast cleanup failed", {
+              reason,
+              cause: error instanceof Error ? error.message : String(error),
+            }),
+          );
+        } finally {
+          tab.screencastStarted = false;
+          updateResourceGauges();
+        }
+      }
+      await withTimeoutFallback(tab.cdp.detach(), 1_000, undefined).catch(() => {});
+      if (!tab.page.isClosed()) {
+        await withTimeoutFallback(
+          tab.page.close({ runBeforeUnload: false }),
+          2_000,
+          undefined,
+        ).catch(() => {});
+      }
+      await runPromise(PubSub.shutdown(tab.frames)).catch(() => {});
+      runDetached(
+        Effect.logInfo("server preview tab disposed", {
+          reason,
+          remainingTabCount: tabs.size,
+        }),
+      );
+      scheduleIdleShutdown();
+    })();
+    return tab.disposalPromise;
+  };
+
+  const shutdownRuntime = (reason: "idle" | "service-shutdown"): Promise<void> =>
+    serializeRuntime(async () => {
+      if (reason === "idle" && (tabs.size > 0 || pendingTabRequests > 0)) return;
+      const target = runtime;
+      if (target === null) return;
+      cancelIdleShutdown();
+      for (const tab of tabs.values()) await disposeTab(tab, "shutdown");
+      try {
+        await clearCacheThroughTemporaryTarget(target.context);
+      } catch (error) {
+        runDetached(
+          Effect.logWarning("server preview browser cache clear failed", {
+            reason,
+            cause: error instanceof Error ? error.message : String(error),
+          }),
+        );
+      }
+      closingContexts.add(target.context);
+      const closePromise = target.context.close().then(() => undefined);
+      const trackedClosePromise = closePromise
+        .catch((error) => {
+          runDetached(
+            Effect.logWarning("server preview browser context shutdown failed", {
+              reason,
+              cause: error instanceof Error ? error.message : String(error),
+            }),
+          );
+        })
+        .finally(() => {
+          if (closingRuntimePromise === trackedClosePromise) closingRuntimePromise = null;
+        });
+      closingRuntimePromise = trackedClosePromise;
+      const closed = await withTimeoutFallback(
+        trackedClosePromise.then(() => true),
+        BROWSER_CONTEXT_CLOSE_TIMEOUT_MS,
+        false,
+      );
+      if (closed === false) {
+        runDetached(
+          Effect.logWarning("server preview browser context shutdown timed out", { reason }),
+        );
+        return;
+      }
+      if (runtime === target) runtime = null;
+      closingRuntimePromise = null;
+      updateResourceGauges();
+      runDetached(Effect.logInfo("server preview browser runtime shut down", { reason }));
+    });
+
+  const attachPageCore = Effect.fn("ServerBrowserManager.attachPageCore")(function* (
     input: PreviewTabActionInput & {
       readonly viewport?: PreviewViewportSetting;
       readonly renderedViewport?: { readonly width: number; readonly height: number };
@@ -600,20 +910,21 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
       lastRequestedUrl: null,
       viewportSetting,
       renderedViewport,
+      screencastLeases: new Set(),
+      screencastStarted: false,
+      screencastTransition: Promise.resolve(),
+      disposalPromise: null,
     };
     tabs.set(input.tabId, tab);
+    updateResourceGauges();
 
     page.on("load", () => runDetached(reportStatus(tab, "Success")));
     page.on("crash", () => {
-      if (tabs.get(input.tabId) === tab) tabs.delete(input.tabId);
-      abortRecordingForTab(input.tabId);
-      runDetached(PubSub.shutdown(framePubSub));
       runDetached(reportStatus(tab, { _tag: "LoadFailed" }));
+      void disposeTab(tab, "page-crash");
     });
     page.on("close", () => {
-      if (tabs.get(input.tabId) === tab) tabs.delete(input.tabId);
-      abortRecordingForTab(input.tabId);
-      runDetached(PubSub.shutdown(framePubSub));
+      void disposeTab(tab, "page-close");
     });
     cdp.on("Page.screencastFrame", (event: unknown) => {
       const frame = event as {
@@ -655,22 +966,31 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
       runDetached(PubSub.publish(framePubSub, previewFrame));
     });
     yield* Effect.tryPromise({
-      try: async () => {
-        await withTimeoutFallback(cdp.send("Page.enable"), 2_000, undefined);
-        await withTimeoutFallback(
-          cdp.send("Page.startScreencast", {
-            format: "jpeg",
-            quality: config.previewBrowserJpegQuality,
-            maxWidth: config.previewBrowserMaxFrameWidth,
-            maxHeight: config.previewBrowserMaxFrameHeight,
-          }),
-          2_000,
-          undefined,
-        );
-      },
+      try: () => withTimeoutReject(cdp.send("Page.enable"), 2_000, "Timed out enabling CDP Page."),
       catch: browserError,
-    });
+    }).pipe(Effect.tapError(() => Effect.promise(() => disposeTab(tab, "initialization-failed"))));
     return tab;
+  });
+
+  const attachPage = Effect.fn("ServerBrowserManager.attachPage")(function* (
+    input: PreviewTabActionInput & {
+      readonly viewport?: PreviewViewportSetting;
+      readonly renderedViewport?: { readonly width: number; readonly height: number };
+    },
+  ) {
+    const existing = tabs.get(input.tabId);
+    if (existing && existing.disposalPromise === null && !existing.page.isClosed()) return existing;
+    if (existing) yield* Effect.promise(() => disposeTab(existing, "page-close"));
+    cancelIdleShutdown();
+    pendingTabRequests += 1;
+    return yield* attachPageCore(input).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          pendingTabRequests -= 1;
+          scheduleIdleShutdown();
+        }),
+      ),
+    );
   });
 
   const getTab = Effect.fn("ServerBrowserManager.getTab")(function* (input: PreviewTabActionInput) {
@@ -751,11 +1071,7 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
         : Array.from(tabs.values()).filter((tab) => tab.threadId === input.threadId);
       yield* Effect.forEach(
         targets,
-        (tab) =>
-          Effect.tryPromise({
-            try: () => tab.page.close({ runBeforeUnload: false }),
-            catch: () => undefined,
-          }).pipe(Effect.ignore),
+        (tab) => Effect.promise(() => disposeTab(tab, input.reason ?? "explicit-close")),
         { discard: true },
       );
     },
@@ -894,18 +1210,16 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
   )(function* (data) {
     const runtime = yield* ensureRuntime;
     if (data === "cookies" || data === "all") {
-      yield* Effect.tryPromise({ try: () => runtime.context.clearCookies(), catch: browserError });
+      yield* Effect.tryPromise({
+        try: () => runtime.context.clearCookies(),
+        catch: browserError,
+      });
     }
     if (data === "cache" || data === "all") {
-      yield* Effect.forEach(
-        tabs.values(),
-        (tab) =>
-          Effect.tryPromise({
-            try: () => tab.cdp.send("Network.clearBrowserCache"),
-            catch: browserError,
-          }),
-        { discard: true },
-      );
+      yield* Effect.tryPromise({
+        try: () => clearCacheThroughTemporaryTarget(runtime.context),
+        catch: browserError,
+      });
     }
   });
 
@@ -913,7 +1227,25 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
     "ServerBrowserManager.frames",
   )(function* (input) {
     const tab = yield* getTab(input);
-    return Stream.fromPubSub(tab.frames);
+    return Stream.unwrap(
+      Effect.gen(function* () {
+        const lease = Symbol("frame-subscriber");
+        yield* Effect.promise(() =>
+          acquireScreencastLease(tab, lease).catch((error) => {
+            runDetached(
+              Effect.logWarning("server preview frame subscription failed to start screencast", {
+                cause: error instanceof Error ? error.message : String(error),
+              }),
+            );
+          }),
+        );
+        return Stream.fromPubSub(tab.frames).pipe(
+          Stream.ensuring(
+            Effect.promise(() => releaseScreencastLease(tab, lease)).pipe(Effect.ignore),
+          ),
+        );
+      }),
+    );
   });
 
   const automationStatus: ServerBrowserManager["Service"]["automationStatus"] = Effect.fn(
@@ -1185,7 +1517,7 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
 
     const recording = yield* Effect.try({
       try: () => {
-        const child = NodeChildProcess.spawn(ffmpegPath, args, {
+        const child = adapter.spawn(ffmpegPath, args, {
           stdio: ["pipe", "ignore", "pipe"],
         });
         child.stdin?.on("error", () => {});
@@ -1215,6 +1547,7 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
           process: child,
           exited,
           stderrChunks,
+          screencastLease: Symbol("recording"),
           stopping: false,
         };
         return started;
@@ -1222,6 +1555,15 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
       catch: browserError,
     });
     activeRecordings.set(recording.tabId, recording);
+    void recording.exited.then(() => {
+      if (activeRecordings.get(recording.tabId) !== recording || recording.stopping) return;
+      runDetached(Effect.logWarning("server preview recording process exited unexpectedly"));
+      void abortRecording(recording).catch(() => {});
+    });
+    yield* Effect.tryPromise({
+      try: () => acquireScreencastLease(tab, recording.screencastLease),
+      catch: browserError,
+    }).pipe(Effect.tapError(() => Effect.promise(() => abortRecording(recording))));
 
     // Seed one frame so a static page still yields a non-empty video.
     yield* Effect.tryPromise({
@@ -1237,7 +1579,7 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
           }),
         ),
       ),
-      Effect.tapError(() => Effect.sync(() => abortRecording(recording))),
+      Effect.tapError(() => Effect.promise(() => abortRecording(recording))),
     );
 
     return { tabId: tab.tabId as PreviewTabId, recording: true, startedAt };
@@ -1257,6 +1599,7 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
     }
     recording.stopping = true;
     activeRecordings.delete(recording.tabId);
+    const recordingTab = tabs.get(recording.tabId);
 
     const [createdAt, stoppedAtMillis] = yield* Effect.all([nowIso, Clock.currentTimeMillis]);
     const sizeBytes = yield* Effect.tryPromise({
@@ -1291,7 +1634,15 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
         return stats.size;
       },
       catch: browserError,
-    });
+    }).pipe(
+      Effect.ensuring(
+        recordingTab
+          ? Effect.promise(() =>
+              releaseScreencastLease(recordingTab, recording.screencastLease),
+            ).pipe(Effect.ignore)
+          : Effect.void,
+      ),
+    );
 
     return {
       id: recording.id,
@@ -1303,13 +1654,22 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
     };
   });
 
+  yield* Effect.all(
+    [
+      Metric.update(Metrics.serverBrowserRuntimes, 0),
+      Metric.update(Metrics.serverBrowserTabs, 0),
+      Metric.update(Metrics.serverBrowserScreencasts, 0),
+    ],
+    { discard: true },
+  );
+
   yield* Effect.addFinalizer(() =>
     Effect.tryPromise({
       try: async () => {
-        for (const recording of activeRecordings.values()) abortRecording(recording);
-        activeRecordings.clear();
-        const runtime = runtimePromise ? await runtimePromise.catch(() => null) : null;
-        await runtime?.context.close().catch(() => {});
+        cancelIdleShutdown();
+        for (const tab of tabs.values()) await disposeTab(tab, "shutdown");
+        for (const recording of activeRecordings.values()) await abortRecording(recording);
+        await shutdownRuntime("service-shutdown");
       },
       catch: () => undefined,
     }).pipe(Effect.ignore),
@@ -1342,6 +1702,12 @@ export const make = Effect.gen(function* ServerBrowserManagerMake() {
     recordingStart,
     recordingStop,
   });
-});
+}
+
+export const makeWithAdapter = Effect.fn("ServerBrowserManager.makeWithAdapter")(
+  serverBrowserManagerMake,
+);
+
+export const make = makeWithAdapter(defaultAdapter);
 
 export const layer = Layer.effect(ServerBrowserManager, make);
