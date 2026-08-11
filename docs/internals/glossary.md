@@ -147,7 +147,23 @@ Workflows are the server-orchestrated automation paths that chain planning and i
 
 #### Workflow (preset)
 
-One of the six orchestration paths — Fix, Fast Feature, Full Feature, Wayfinder, Planning, Implementation — defined in [workflowPresets.ts][25]. Each preset maps to an interaction mode and an ordered list of skill-backed steps.
+One of the seven orchestration paths — Fix, Fast Feature, Full Feature, Wayfinder, Planning, Implementation, Dev Review — defined in [workflowPresets.ts][25]. Each preset maps to an interaction mode and an ordered list of skill-backed steps.
+
+#### Dev Review Workflow
+
+A durable workflow that alternates fresh Browser Dev Review attempts with non-interactive repair planning and fresh TDD fixer children. It can run standalone against an in-place worktree or as a nested workflow below Implementation.
+
+#### Dev Review controller
+
+The persistent thread that owns one Dev Review run. It keeps the original brief across cycles and switches to CLI Plan mode only after a failed review. Reviewer and fixer threads are fresh for every cycle.
+
+#### Dev Review cycle
+
+One Browser Dev Review attempt. A failed cycle below budget also records its proposed plan and fixer child before the next cycle begins. The initial review is cycle 1; the last allowed failed review does not launch another repair.
+
+#### Dev Review outcome
+
+The terminal result of a Dev Review Workflow: `passed`, `exhausted`, `blocked`, or `canceled`. Exhausted means the review-attempt budget was consumed by failed reviews; blocked means review, planning, or repair could not run validly.
 
 #### Skill (workflow prompt)
 

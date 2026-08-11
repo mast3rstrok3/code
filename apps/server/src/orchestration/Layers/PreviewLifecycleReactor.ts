@@ -20,6 +20,8 @@ type PreviewLifecycleEvent = Extract<
       | "thread.dev-review-updated"
       | "thread.workflow-subagent-batch-child-updated"
       | "thread.implementation-run-cancel-requested"
+      | "thread.dev-review-workflow-cancel-requested"
+      | "thread.dev-review-workflow-updated"
       | "thread.deleted";
   }
 >;
@@ -46,6 +48,12 @@ export const previewThreadIdForEvent = (event: OrchestrationEvent): ThreadId | n
         : null;
     case "thread.implementation-run-cancel-requested":
       return event.payload.run.activeDevReviewThreadId;
+    case "thread.dev-review-workflow-cancel-requested":
+      return event.payload.run.cycles.at(-1)?.reviewerThreadId ?? null;
+    case "thread.dev-review-workflow-updated":
+      return event.payload.run.status === "running"
+        ? null
+        : (event.payload.run.cycles.at(-1)?.reviewerThreadId ?? null);
     case "thread.deleted":
       return event.payload.threadId;
     default:

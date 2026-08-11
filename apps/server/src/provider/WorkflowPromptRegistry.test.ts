@@ -45,7 +45,15 @@ describe("WorkflowPromptRegistry", () => {
     const catalog = listWorkflowCatalog();
     NodeAssert.deepEqual(
       catalog.workflows.map((workflow) => workflow.id),
-      ["fix", "fast-feature", "full-feature", "wayfinder", "planning", "implementation"],
+      [
+        "fix",
+        "fast-feature",
+        "full-feature",
+        "wayfinder",
+        "planning",
+        "implementation",
+        "dev-review",
+      ],
     );
     NodeAssert.equal(catalog.docs.filter((doc) => doc.id === "context-format").length, 1);
     NodeAssert.deepEqual(resolveWorkflowDoc("context-format")?.skillIds, [
@@ -284,6 +292,8 @@ describe("WorkflowPromptRegistry", () => {
     );
 
     NodeAssert.ok(browserReview);
+    NodeAssert.equal(browserReview.workflow, "dev-review");
+    NodeAssert.equal(browserReview.role, "dev-review-reviewer");
     const previewQaDoc = browserReview.associatedDocs?.find(
       (doc) => doc.id === "preview-browser-qa",
     );

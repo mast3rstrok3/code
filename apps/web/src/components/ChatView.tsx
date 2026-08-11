@@ -1,7 +1,9 @@
 import {
   type ApprovalRequestId,
   DEFAULT_MODEL,
-  DevReviewId,
+  DEV_REVIEW_WORKFLOW_DEFAULT_CYCLES,
+  DEV_REVIEW_WORKFLOW_MAX_CYCLES,
+  DevReviewWorkflowCycleBudget,
   defaultInstanceIdForDriver,
   type EnvironmentId,
   type MessageId,
@@ -22,8 +24,10 @@ import {
   ProviderInteractionMode,
   ProviderDriverKind,
   RuntimeMode,
+  WORKFLOW_AUTOMATION_RUNTIME_MODE,
   TerminalOpenInput,
   type WorkflowPreset,
+  WorkflowId,
 } from "@t3tools/contracts";
 import {
   connectionStatusTitle,
@@ -76,6 +80,7 @@ import {
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
 import * as Cause from "effect/Cause";
+import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { isElectron } from "../env";
 import { readLocalApi } from "../localApi";
@@ -256,6 +261,7 @@ import { vcsEnvironment } from "../state/vcs";
 import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
   useImplementationRuns,
+  useDevReviewWorkflowRuns,
   useLaunchImplementationRunCommand,
   useCreatePlanningSpecCommand,
   useLoadPlanningSpecBundleCommand,
@@ -309,8 +315,7 @@ import {
 } from "./chat/draftHeroTransition";
 import {
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
-  buildBrowserDevReviewLaunchMessage,
-  type BrowserDevReviewLaunchRequest,
+  type DevReviewWorkflowLaunchRequest,
   branchMismatchKey,
   buildExpiredTerminalContextToastCopy,
   buildLocalDraftThread,
@@ -325,6 +330,7 @@ import {
   scheduleEnvironmentReconnectWarning,
   hasServerAcknowledgedLocalDispatch,
   isBranchMismatchDismissedForSession,
+  normalizeDevReviewCycleBudget,
   shouldShowBranchMismatchBanner,
   getStartedThreadModelChangeBlockReason,
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
@@ -462,7 +468,7 @@ const DevReviewPanel = lazy(() =>
 );
 const FilePreviewPanel = lazy(() => import("./files/FilePreviewPanel"));
 const EMPTY_PENDING_FILE_SURFACE_IDS: ReadonlySet<string> = new Set();
-const BROWSER_DEV_REVIEW_WORKFLOW_PROMPT_ID = "implementation.browser-dev-review.codex";
+const DEV_REVIEW_CYCLE_BUDGET_STORAGE_KEY = "t3code.dev-review-cycle-budget";
 const STOP_WORKFLOW_RUN_CONFIRM_MESSAGE = [
   "Stop this workflow run?",
   "The current turn is interrupted and the run is canceled, so it will not resume on its own.",
@@ -1259,7 +1265,10 @@ function ChatViewContent(props: ChatViewProps) {
     reportFailure: false,
   });
   const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
-  const launchDevReview = useAtomCommand(threadEnvironment.launchDevReview, {
+  const launchDevReviewWorkflow = useAtomCommand(threadEnvironment.launchDevReviewWorkflow, {
+    reportFailure: false,
+  });
+  const cancelDevReviewWorkflow = useAtomCommand(threadEnvironment.cancelDevReviewWorkflow, {
     reportFailure: false,
   });
   const createPlanningSpec = useCreatePlanningSpecCommand();
@@ -1450,6 +1459,11 @@ function ChatViewContent(props: ChatViewProps) {
     LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
     {},
     LastInvokedScriptByProjectSchema,
+  );
+  const [devReviewCycleBudget, setDevReviewCycleBudget] = useLocalStorage(
+    DEV_REVIEW_CYCLE_BUDGET_STORAGE_KEY,
+    DEV_REVIEW_WORKFLOW_DEFAULT_CYCLES,
+    Schema.Number,
   );
   const legendListRef = useRef<LegendListRef | null>(null);
   const [composerOverlayElement, setComposerOverlayElement] = useState<HTMLDivElement | null>(null);
@@ -1866,6 +1880,26 @@ function ChatViewContent(props: ChatViewProps) {
   const activeProject = useProject(activeProjectRef);
   const activePlanningWorkflow = useThreadPlanningWorkflow(isServerThread ? activeThreadRef : null);
   const activeImplementationRuns = useImplementationRuns(activeThread?.environmentId ?? null);
+  const devReviewWorkflowRuns = useDevReviewWorkflowRuns(activeThread?.environmentId ?? null);
+  const activeWorktreeDevReviewRun = useMemo(() => {
+    if (!activeThread) return null;
+    const targetPath = activeThread.worktreePath ?? activeProject?.workspaceRoot ?? null;
+    return (
+      devReviewWorkflowRuns.find((run) => {
+        if (run.status !== "running") return false;
+        if (run.targetThreadId === activeThread.id) return true;
+        if (targetPath === null) return false;
+        const target = activeWorkflowNavigationThreadShells.find(
+          (thread) =>
+            thread.environmentId === activeThread.environmentId && thread.id === run.targetThreadId,
+        );
+        const runTargetPath =
+          target?.worktreePath ??
+          (target?.projectId === activeProject?.id ? (activeProject?.workspaceRoot ?? null) : null);
+        return runTargetPath === targetPath;
+      }) ?? null
+    );
+  }, [activeProject, activeThread, activeWorkflowNavigationThreadShells, devReviewWorkflowRuns]);
   const activeWorkflowThreadShells = usePlanningWorkflowThreadShells(
     activeThread?.environmentId ?? null,
     activeProject?.id ?? null,
@@ -1894,9 +1928,10 @@ function ChatViewContent(props: ChatViewProps) {
       : activePlanningWorkflow;
   const workflowArtifactsQuery = useEnvironmentQuery(
     isServerThread &&
-      activeThread?.workflowContext != null &&
+      activeThread !== undefined &&
       activeProject !== null &&
-      (activeRightPanelKind === "plan" || activeRightPanelKind === "review")
+      (activeRightPanelKind === "review" ||
+        (activeRightPanelKind === "plan" && activeThread?.workflowContext != null))
       ? reviewEnvironment.workflowArtifacts({
           environmentId: activeThread.environmentId,
           input: { projectId: activeProject.id, threadId: activeThread.id },
@@ -1940,9 +1975,15 @@ function ChatViewContent(props: ChatViewProps) {
         ...(displayedPlanningWorkflow?.tickets.map((ticket) => ticket.updatedAt) ?? []),
         ...(displayedPlanningWorkflow?.reviewCycles.map((cycle) => cycle.createdAt) ?? []),
         ...activeImplementationRuns.map((run) => `${run.updatedAt}:${run.devReviewIds.join(",")}`),
+        ...devReviewWorkflowRuns.map((run) => run.updatedAt),
         ...(activeThread?.devReviews.map((review) => review.updatedAt) ?? []),
       ].join("|"),
-    [activeImplementationRuns, activeThread?.devReviews, displayedPlanningWorkflow],
+    [
+      activeImplementationRuns,
+      activeThread?.devReviews,
+      devReviewWorkflowRuns,
+      displayedPlanningWorkflow,
+    ],
   );
   useEffect(() => {
     if (workflowArtifactsQuery.data === null) return;
@@ -3739,8 +3780,21 @@ function ChatViewContent(props: ChatViewProps) {
         : null,
     [activeThread],
   );
+  const devReviewPreviewTargets = useMemo(() => {
+    const activeUrl =
+      activePreviewState.snapshot?.navStatus._tag === "Idle"
+        ? null
+        : (activePreviewState.snapshot?.navStatus.url ?? null);
+    return Array.from(
+      new Set(
+        [activeUrl, ...getConfiguredPreviewUrls(activeProject?.scripts ?? [])].filter(
+          (url): url is string => Boolean(url?.trim()),
+        ),
+      ),
+    );
+  }, [activePreviewState.snapshot, activeProject?.scripts]);
   const launchBrowserDevReview = useCallback(
-    async (request: BrowserDevReviewLaunchRequest) => {
+    async (request: DevReviewWorkflowLaunchRequest) => {
       if (
         !activeThread ||
         !activeThreadRef ||
@@ -3750,55 +3804,57 @@ function ChatViewContent(props: ChatViewProps) {
       ) {
         return;
       }
-      const sendCtx = composerRef.current?.getSendContext();
-      if (!sendCtx) return;
-      setDevReviewLaunchInFlight(true);
-      const reviewThreadId = newThreadId();
-      const reviewThreadRef = scopeThreadRef(activeThread.environmentId, reviewThreadId);
-      const reviewId = DevReviewId.make(`dev-review-${Date.now().toString(36)}-${randomHex(6)}`);
-      const createdAt = new Date().toISOString();
-      const sourceContext =
-        request.mode === "auto"
-          ? selectBrowserDevReviewAutoContext({
-              messages: activeThread.messages,
-              latestTurn: activeThread.latestTurn,
-            })
-          : null;
-      if (request.mode === "auto" && sourceContext === null) {
+      if (!latestTurnSettled) {
         toastManager.add(
           stackedThreadToast({
             type: "warning",
-            title: "No source turn available",
-            description: "Use Specifics to launch a Browser Dev Review without a completed turn.",
+            title: "Wait for the current turn",
+            description: "Dev Review can take ownership after the source turn settles.",
           }),
         );
-        setDevReviewLaunchInFlight(false);
         return;
       }
-      const messageText = buildBrowserDevReviewLaunchMessage({
-        sourceThreadId: activeThread.id,
-        sourceTitle: activeThread.title,
-        mode: request.mode,
-        sourceContext,
-        customPrompt: request.customPrompt ?? null,
-        previewUrls: getConfiguredPreviewUrls(activeProject.scripts),
-      });
+      if (activeWorktreeDevReviewRun) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "warning",
+            title: "Dev Review is already running",
+            description: "Only one active Dev Review can own this worktree.",
+          }),
+        );
+        return;
+      }
+      if (
+        !Number.isInteger(request.cycleBudget) ||
+        request.cycleBudget < 1 ||
+        request.cycleBudget > DEV_REVIEW_WORKFLOW_MAX_CYCLES ||
+        devReviewPreviewTargets.length === 0
+      ) {
+        return;
+      }
+      const sendCtx = composerRef.current?.getSendContext();
+      if (!sendCtx) return;
+      setDevReviewLaunchInFlight(true);
+      const controllerThreadId = newThreadId();
+      const createdAt = new Date().toISOString();
+      const supportingContextMarkdown = browserDevReviewAutoContext
+        ? browserDevReviewAutoContext.messages
+            .map((message) => `${message.role}: ${message.text}`)
+            .join("\n\n")
+        : null;
+      setDevReviewCycleBudget(request.cycleBudget);
 
-      const result = await launchDevReview({
+      const result = await launchDevReviewWorkflow({
         environmentId,
         input: {
-          sourceThreadId: activeThread.id,
-          reviewThreadId,
-          reviewId,
-          message: {
-            messageId: newMessageId(),
-            role: "user",
-            text: messageText,
-            attachments: [],
-          },
+          targetThreadId: activeThread.id,
+          controllerThreadId,
+          caller: { type: "standalone", sourceThreadId: activeThread.id },
+          briefMarkdown: request.brief,
+          supportingContextMarkdown,
+          previewTargets: devReviewPreviewTargets,
+          cycleBudget: DevReviewWorkflowCycleBudget.make(request.cycleBudget),
           modelSelection: sendCtx.selectedModelSelection,
-          runtimeMode,
-          workflowPromptId: BROWSER_DEV_REVIEW_WORKFLOW_PROMPT_ID,
           createdAt,
         },
       });
@@ -3822,53 +3878,50 @@ function ChatViewContent(props: ChatViewProps) {
       }
 
       useRightPanelStore.getState().open(activeThreadRef, "review");
-      useRightPanelStore.getState().open(reviewThreadRef, "review");
-      const startedResult = await settlePromise(() => waitForStartedServerThread(reviewThreadRef));
-      if (startedResult._tag === "Failure") {
-        toastManager.add(
-          stackedThreadToast({
-            type: "warning",
-            title: "Dev Review record created",
-            description: "The review thread did not report a running agent yet.",
-          }),
-        );
-      }
-      const navigateResult = await settlePromise(() =>
-        navigate({
-          to: "/$environmentId/$threadId",
-          params: {
-            environmentId: activeThread.environmentId,
-            threadId: reviewThreadId,
-          },
-        }),
-      );
-      if (navigateResult._tag === "Failure" && !isAtomCommandInterrupted(navigateResult)) {
-        const error = squashAtomCommandFailure(navigateResult);
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Could not open review thread",
-            description:
-              error instanceof Error
-                ? error.message
-                : "The review thread was created but not opened.",
-          }),
-        );
-      }
       setDevReviewLaunchInFlight(false);
     },
     [
       activeProject,
       activeThread,
       activeThreadRef,
+      activeWorktreeDevReviewRun,
+      browserDevReviewAutoContext,
       composerRef,
+      devReviewPreviewTargets,
       devReviewLaunchInFlight,
       environmentId,
       isServerThread,
-      launchDevReview,
-      navigate,
-      runtimeMode,
+      latestTurnSettled,
+      launchDevReviewWorkflow,
+      setDevReviewCycleBudget,
     ],
+  );
+  const stopDevReviewWorkflow = useCallback(
+    async (run: (typeof devReviewWorkflowRuns)[number]) => {
+      if (devReviewLaunchInFlight) return;
+      setDevReviewLaunchInFlight(true);
+      const result = await cancelDevReviewWorkflow({
+        environmentId,
+        input: {
+          threadId: run.controllerThreadId,
+          runId: run.id,
+          reason: "Stopped by user",
+        },
+      });
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not stop Dev Review",
+            description:
+              error instanceof Error ? error.message : "The workflow could not be stopped.",
+          }),
+        );
+      }
+      setDevReviewLaunchInFlight(false);
+    },
+    [cancelDevReviewWorkflow, devReviewLaunchInFlight, devReviewWorkflowRuns, environmentId],
   );
   const addLogsSurface = useCallback(() => {
     if (!activeThreadRef) return;
@@ -5120,6 +5173,27 @@ function ChatViewContent(props: ChatViewProps) {
     }
     void handleSwitchCheckoutToThread();
   }, [gitStatusQuery.data?.hasWorkingTreeChanges, handleSwitchCheckoutToThread]);
+  const devReviewOwnershipBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
+    if (!activeWorktreeDevReviewRun) return null;
+    return {
+      id: `dev-review-owner:${activeWorktreeDevReviewRun.id}`,
+      variant: "info",
+      urgent: true,
+      icon: <GitBranchIcon />,
+      title: `Dev Review owns this worktree · ${activeWorktreeDevReviewRun.activePhase ?? "refreshing preview"}`,
+      description: `Cycle ${Math.max(1, activeWorktreeDevReviewRun.attemptsUsed)} of ${activeWorktreeDevReviewRun.cycleBudget}. The composer unlocks when the run finishes.`,
+      actions: (
+        <Button
+          size="xs"
+          variant="outline"
+          disabled={devReviewLaunchInFlight}
+          onClick={() => void stopDevReviewWorkflow(activeWorktreeDevReviewRun)}
+        >
+          {devReviewLaunchInFlight ? "Stopping..." : "Stop"}
+        </Button>
+      ),
+    };
+  }, [activeWorktreeDevReviewRun, devReviewLaunchInFlight, stopDevReviewWorkflow]);
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
     const isUrgentSystemItem = (item: ComposerBannerStackItem) =>
       item.urgent === true || item.variant === "error" || item.variant === "warning";
@@ -5131,6 +5205,7 @@ function ChatViewContent(props: ChatViewProps) {
     const parkedThreadItems = parkedThreadBannerItem === null ? [] : [parkedThreadBannerItem];
     if (!localCheckoutBranchMismatch || !showBranchMismatchBanner || !activeBranchMismatchKey) {
       return [
+        ...(devReviewOwnershipBannerItem ? [devReviewOwnershipBannerItem] : []),
         ...urgentSystemItems,
         ...backgroundLivenessItems,
         ...calmSystemItems,
@@ -5139,6 +5214,7 @@ function ChatViewContent(props: ChatViewProps) {
       ];
     }
     return [
+      ...(devReviewOwnershipBannerItem ? [devReviewOwnershipBannerItem] : []),
       ...urgentSystemItems,
       ...backgroundLivenessItems,
       ...calmSystemItems,
@@ -5187,6 +5263,7 @@ function ChatViewContent(props: ChatViewProps) {
   }, [
     activeBranchMismatchKey,
     backgroundLivenessBannerItem,
+    devReviewOwnershipBannerItem,
     handleRestoreThreadBranch,
     isRestoringThreadBranch,
     localCheckoutBranchMismatch,
@@ -5506,6 +5583,7 @@ function ChatViewContent(props: ChatViewProps) {
       isSendBusy ||
       isConnecting ||
       threadDetailLoading ||
+      activeWorktreeDevReviewRun !== null ||
       sendInFlightRef.current
     ) {
       notifyDirectAnnotationAttached();
@@ -5639,6 +5717,37 @@ function ChatViewContent(props: ChatViewProps) {
       );
       return;
     }
+    const isDevReviewWorkflowSend = workflowPreset === "dev-review";
+    if (isDevReviewWorkflowSend && trimmed.length === 0) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "warning",
+          title: "Add a review brief",
+          description: "The composer message is the acceptance boundary for Dev Review.",
+        }),
+      );
+      return;
+    }
+    if (isDevReviewWorkflowSend && devReviewPreviewTargets.length === 0) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "warning",
+          title: "Add a preview URL",
+          description: "Open a preview or configure a project preview URL before launching.",
+        }),
+      );
+      return;
+    }
+    if (isDevReviewWorkflowSend && activeWorktreeDevReviewRun) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "warning",
+          title: "Dev Review is already running",
+          description: "Only one active Dev Review can own this worktree.",
+        }),
+      );
+      return;
+    }
     const threadIdForSend = activeThread.id;
     const isFirstMessage = !isServerThread || activeThread.messages.length === 0;
     const baseBranchForWorktree =
@@ -5731,19 +5840,21 @@ function ChatViewContent(props: ChatViewProps) {
       threadKey: scopedThreadKey(scopeThreadRef(activeThread.environmentId, threadIdForSend)),
       messageId: messageIdForSend,
     });
-    setOptimisticUserMessages((existing) => [
-      ...existing,
-      {
-        id: messageIdForSend,
-        role: "user",
-        text: outgoingMessageText,
-        ...(optimisticAttachments.length > 0 ? { attachments: optimisticAttachments } : {}),
-        turnId: null,
-        createdAt: messageCreatedAt,
-        updatedAt: messageCreatedAt,
-        streaming: false,
-      },
-    ]);
+    if (!isDevReviewWorkflowSend) {
+      setOptimisticUserMessages((existing) => [
+        ...existing,
+        {
+          id: messageIdForSend,
+          role: "user",
+          text: outgoingMessageText,
+          ...(optimisticAttachments.length > 0 ? { attachments: optimisticAttachments } : {}),
+          turnId: null,
+          createdAt: messageCreatedAt,
+          updatedAt: messageCreatedAt,
+          streaming: false,
+        },
+      ]);
+    }
     setThreadError(threadIdForSend, null);
     if (expiredTerminalContextCount > 0) {
       const toastCopy = buildExpiredTerminalContextToastCopy(
@@ -5787,10 +5898,15 @@ function ChatViewContent(props: ChatViewProps) {
       ctxSelectedModel || activeProject.defaultModelSelection?.model || DEFAULT_MODEL,
       ctxSelectedModelSelection.options,
     );
+    const devReviewControllerThreadId = isDevReviewWorkflowSend
+      ? isServerThread
+        ? newThreadId()
+        : threadIdForSend
+      : null;
 
     let failure: AtomCommandResult<unknown, unknown> | null = null;
     // Auto-title from first message
-    if (isFirstMessage && isServerThread) {
+    if (isFirstMessage && isServerThread && !isDevReviewWorkflowSend) {
       const titleResult = await updateThreadMetadata({
         environmentId,
         input: {
@@ -5803,7 +5919,7 @@ function ChatViewContent(props: ChatViewProps) {
       }
     }
 
-    if (failure === null && isServerThread) {
+    if (failure === null && isServerThread && !isDevReviewWorkflowSend) {
       const settingsResult = await persistThreadSettingsForNextTurn({
         threadId: threadIdForSend,
         createdAt: messageCreatedAt,
@@ -5837,9 +5953,25 @@ function ChatViewContent(props: ChatViewProps) {
                       ownerUserId: draftThread?.ownerUserId ?? defaultNewThreadOwnerUserId,
                       title,
                       modelSelection: threadCreateModelSelection,
-                      runtimeMode,
-                      interactionMode,
-                      workflowPreset,
+                      runtimeMode: isDevReviewWorkflowSend
+                        ? WORKFLOW_AUTOMATION_RUNTIME_MODE
+                        : runtimeMode,
+                      interactionMode: isDevReviewWorkflowSend
+                        ? ("default" as const)
+                        : interactionMode,
+                      workflowPreset: isDevReviewWorkflowSend
+                        ? ("dev-review" as const)
+                        : workflowPreset,
+                      ...(isDevReviewWorkflowSend
+                        ? {
+                            workflowRole: "dev-review-orchestrator" as const,
+                            workflowContext: {
+                              workflowId: WorkflowId.make(`dev-review-workflow-${threadIdForSend}`),
+                              rootThreadId: threadIdForSend,
+                              ticketScope: [],
+                            },
+                          }
+                        : {}),
                       branch: activeThreadBranch,
                       worktreePath: activeThread.worktreePath,
                       createdAt: activeThread.createdAt,
@@ -5860,27 +5992,50 @@ function ChatViewContent(props: ChatViewProps) {
             }
           : undefined;
       beginLocalDispatch({ preparingWorktree: false });
-      const startResult = await startThreadTurn({
-        environmentId,
-        input: {
-          threadId: threadIdForSend,
-          message: {
-            messageId: messageIdForSend,
-            role: "user",
-            text: outgoingMessageText,
-            attachments: turnAttachmentsResult.value,
-          },
-          modelSelection: ctxSelectedModelSelection,
-          titleSeed: title,
-          runtimeMode,
-          interactionMode,
-          ...(interactionMode === "product-workflow" && workflowPromptIdForPreset(workflowPreset)
-            ? { workflowPromptId: workflowPromptIdForPreset(workflowPreset) }
-            : {}),
-          ...(bootstrap ? { bootstrap } : {}),
-          createdAt: messageCreatedAt,
-        },
-      });
+      const startResult = isDevReviewWorkflowSend
+        ? await launchDevReviewWorkflow({
+            environmentId,
+            input: {
+              targetThreadId: threadIdForSend,
+              controllerThreadId: devReviewControllerThreadId ?? threadIdForSend,
+              caller: { type: "standalone", sourceThreadId: threadIdForSend },
+              briefMarkdown: trimmed,
+              supportingContextMarkdown: browserDevReviewAutoContext
+                ? browserDevReviewAutoContext.messages
+                    .map((message) => `${message.role}: ${message.text}`)
+                    .join("\n\n")
+                : null,
+              previewTargets: devReviewPreviewTargets,
+              cycleBudget: DevReviewWorkflowCycleBudget.make(
+                normalizeDevReviewCycleBudget(devReviewCycleBudget),
+              ),
+              modelSelection: ctxSelectedModelSelection,
+              ...(bootstrap ? { bootstrap } : {}),
+              createdAt: messageCreatedAt,
+            },
+          })
+        : await startThreadTurn({
+            environmentId,
+            input: {
+              threadId: threadIdForSend,
+              message: {
+                messageId: messageIdForSend,
+                role: "user",
+                text: outgoingMessageText,
+                attachments: turnAttachmentsResult.value,
+              },
+              modelSelection: ctxSelectedModelSelection,
+              titleSeed: title,
+              runtimeMode,
+              interactionMode,
+              ...(interactionMode === "product-workflow" &&
+              workflowPromptIdForPreset(workflowPreset)
+                ? { workflowPromptId: workflowPromptIdForPreset(workflowPreset) }
+                : {}),
+              ...(bootstrap ? { bootstrap } : {}),
+              createdAt: messageCreatedAt,
+            },
+          });
       if (startResult._tag === "Failure") {
         failure = startResult;
       } else {
@@ -6716,8 +6871,13 @@ function ChatViewContent(props: ChatViewProps) {
           mode="embedded"
           threadRef={activeThreadRef}
           launchInFlight={devReviewLaunchInFlight}
-          autoContext={browserDevReviewAutoContext}
+          launchDisabled={activeWorktreeDevReviewRun !== null}
+          sourceSettled={latestTurnSettled}
+          sourceContext={browserDevReviewAutoContext}
+          previewTargets={devReviewPreviewTargets}
           onLaunch={launchBrowserDevReview}
+          onStop={stopDevReviewWorkflow}
+          onOpenThread={openWorkflowThread}
           onOpenPlanArtifact={openPlanArtifact}
           workflowArtifacts={displayedWorkflowArtifacts}
         />
@@ -7059,7 +7219,13 @@ function ChatViewContent(props: ChatViewProps) {
                             phase={phase}
                             isConnecting={isConnecting}
                             isSendBusy={isSendBusy}
-                            sendDisabledReason={threadDetailLoading ? "Messages loading" : null}
+                            sendDisabledReason={
+                              threadDetailLoading
+                                ? "Messages loading"
+                                : activeWorktreeDevReviewRun
+                                  ? "Dev Review owns this worktree"
+                                  : null
+                            }
                             isPreparingWorktree={isPreparingWorktree}
                             environmentUnavailable={activeEnvironmentUnavailableState}
                             activePendingApproval={activePendingApproval}
@@ -7080,6 +7246,9 @@ function ChatViewContent(props: ChatViewProps) {
                             interactionMode={interactionMode}
                             workflowPreset={workflowPreset}
                             lastWorkflowPreset={composerLastWorkflowPreset}
+                            devReviewCycleBudget={normalizeDevReviewCycleBudget(
+                              devReviewCycleBudget,
+                            )}
                             lockedProvider={lockedProvider}
                             providerStatuses={providerStatuses as ServerProvider[]}
                             activeProjectDefaultModelSelection={
@@ -7115,6 +7284,14 @@ function ChatViewContent(props: ChatViewProps) {
                             toggleInteractionMode={toggleInteractionMode}
                             handleRuntimeModeChange={handleRuntimeModeChange}
                             handleInteractionModeChange={handleComposerModeChange}
+                            onDevReviewCycleBudgetChange={(budget) =>
+                              setDevReviewCycleBudget(
+                                Math.min(
+                                  DEV_REVIEW_WORKFLOW_MAX_CYCLES,
+                                  Math.max(1, Math.round(budget || 1)),
+                                ),
+                              )
+                            }
                             togglePlanSidebar={togglePlanSidebar}
                             focusComposer={focusComposer}
                             scheduleComposerFocus={scheduleComposerFocus}

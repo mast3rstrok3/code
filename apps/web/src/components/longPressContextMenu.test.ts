@@ -98,4 +98,13 @@ describe("createLongPressContextMenuController", () => {
 
     expect(controller.consumeContextMenu()).toBe(false);
   });
+
+  it("suppresses the click after a browser context menu interrupts a touch hold", () => {
+    const controller = createLongPressContextMenuController({ onLongPress: vi.fn() });
+
+    controller.start(touch());
+
+    expect(controller.consumeContextMenu()).toBe(false);
+    expect(controller.consumeClick()).toBe(true);
+  });
 });

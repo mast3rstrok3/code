@@ -1,4 +1,6 @@
 import {
+  DEV_REVIEW_WORKFLOW_DEFAULT_CYCLES,
+  DEV_REVIEW_WORKFLOW_MAX_CYCLES,
   type EnvironmentId,
   isProviderDriverKind,
   type OrchestrationImplementationRun,
@@ -11,7 +13,6 @@ import {
   type ThreadId,
   type TurnId,
 } from "@t3tools/contracts";
-import { truncate } from "@t3tools/shared/String";
 import { isProductWorkflowRoot } from "@t3tools/shared/workflowPresets";
 import { type ChatMessage, type SessionPhase, type Thread, type ThreadShell } from "../types";
 import { type ComposerImageAttachment, type DraftThreadState } from "../composerDraftStore";
@@ -29,6 +30,11 @@ export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "t3code:last-invoked-script-by
 export const MAX_HIDDEN_MOUNTED_TERMINAL_THREADS = 10;
 export const MAX_HIDDEN_MOUNTED_PREVIEW_THREADS = 3;
 export const ENVIRONMENT_RECONNECT_WARNING_GRACE_MS = 2_000;
+
+export function normalizeDevReviewCycleBudget(value: number): number {
+  if (!Number.isFinite(value)) return DEV_REVIEW_WORKFLOW_DEFAULT_CYCLES;
+  return Math.min(DEV_REVIEW_WORKFLOW_MAX_CYCLES, Math.max(1, Math.round(value)));
+}
 
 export const LastInvokedScriptByProjectSchema = Schema.Record(ProjectId, Schema.String);
 
@@ -280,50 +286,9 @@ export function collectUserMessageBlobPreviewUrls(message: ChatMessage): string[
   return previewUrls;
 }
 
-export function buildBrowserDevReviewLaunchMessage(input: {
-  readonly sourceThreadId: ThreadId;
-  readonly sourceTitle: string;
-  readonly mode: BrowserDevReviewLaunchMode;
-  readonly sourceContext: BrowserDevReviewSourceContext | null;
-  readonly customPrompt: string | null;
-  readonly previewUrls?: ReadonlyArray<string> | undefined;
-}): string {
-  const previewUrls = Array.from(new Set(input.previewUrls ?? []))
-    .map((url) => url.trim())
-    .filter((url) => url.length > 0)
-    .slice(0, 5);
-  const launchMode =
-    input.mode === "auto" ? "Auto: latest settled source turn" : "Specifics: custom request";
-  const sourceContext =
-    input.mode === "auto" && input.sourceContext !== null
-      ? formatBrowserDevReviewSourceContext(input.sourceContext)
-      : null;
-  const customPrompt =
-    input.mode === "custom" && input.customPrompt !== null && input.customPrompt.trim().length > 0
-      ? `Review request:\n${input.customPrompt.trim()}`
-      : null;
-
-  return [
-    `Run Browser Dev Review for source thread ${input.sourceThreadId}.`,
-    `Source title: ${input.sourceTitle}`,
-    `Launch mode: ${launchMode}`,
-    previewUrls.length === 0
-      ? null
-      : previewUrls.length === 1
-        ? `Feature URL: ${previewUrls[0]}`
-        : `Feature URL candidates:\n${previewUrls.map((url) => `- ${url}`).join("\n")}`,
-    customPrompt,
-    sourceContext,
-  ]
-    .filter((part): part is string => Boolean(part))
-    .join("\n\n");
-}
-
-export type BrowserDevReviewLaunchMode = "auto" | "custom";
-
-export interface BrowserDevReviewLaunchRequest {
-  readonly mode: BrowserDevReviewLaunchMode;
-  readonly customPrompt?: string | undefined;
+export interface DevReviewWorkflowLaunchRequest {
+  readonly brief: string;
+  readonly cycleBudget: number;
 }
 
 export interface BrowserDevReviewSourceContextMessage {
@@ -336,9 +301,6 @@ export interface BrowserDevReviewSourceContext {
   readonly turnId: TurnId | null;
   readonly messages: ReadonlyArray<BrowserDevReviewSourceContextMessage>;
 }
-
-const MAX_BROWSER_DEV_REVIEW_CONTEXT_CHARS = 20_000;
-const MAX_BROWSER_DEV_REVIEW_MESSAGE_CHARS = 8_000;
 
 export function selectBrowserDevReviewAutoContext(input: {
   readonly messages: ReadonlyArray<ChatMessage>;
@@ -384,28 +346,6 @@ function resolveTurnIdForContext(messages: ReadonlyArray<ChatMessage>): TurnId |
     if (message.turnId !== null) return message.turnId;
   }
   return null;
-}
-
-function formatBrowserDevReviewSourceContext(context: BrowserDevReviewSourceContext): string {
-  let remaining = MAX_BROWSER_DEV_REVIEW_CONTEXT_CHARS;
-  const blocks: string[] = [];
-  for (const message of context.messages) {
-    if (remaining <= 0) break;
-    const header = `${message.role} (${message.createdAt})`;
-    const text = truncate(
-      message.text.trim(),
-      Math.min(MAX_BROWSER_DEV_REVIEW_MESSAGE_CHARS, remaining),
-    );
-    const block = `${header}:\n${text}`;
-    blocks.push(block);
-    remaining -= block.length;
-  }
-  return [
-    context.turnId === null
-      ? "Source context from latest settled turn:"
-      : `Source context from turn ${context.turnId}:`,
-    blocks.join("\n\n"),
-  ].join("\n");
 }
 
 export interface PullRequestDialogState {

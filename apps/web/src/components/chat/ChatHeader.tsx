@@ -133,6 +133,12 @@ export function workflowProgressLabel(input: {
       return "Implementation · Merge gate";
     case "implementation-qa-reviewer":
       return "Implementation · Browser Dev Review";
+    case "dev-review-orchestrator":
+      return "Dev Review · Controller";
+    case "dev-review-reviewer":
+      return "Dev Review · Browser review";
+    case "dev-review-fixer":
+      return "Dev Review · TDD repair";
     case "implementation-fixer":
     case "product-fix-implementer":
       return "Implementation · Fix";

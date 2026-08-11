@@ -13,6 +13,7 @@ import type {
   WorkflowPreset,
 } from "@t3tools/contracts";
 import {
+  DEV_REVIEW_WORKFLOW_MAX_CYCLES,
   ProviderDriverKind,
   ProviderInstanceId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
@@ -566,6 +567,7 @@ export interface ChatComposerProps {
   interactionMode: ProviderInteractionMode;
   workflowPreset: WorkflowPreset | null;
   lastWorkflowPreset: WorkflowPreset | null;
+  devReviewCycleBudget: number;
 
   // Provider / model
   lockedProvider: ProviderDriverKind | null;
@@ -617,6 +619,7 @@ export interface ChatComposerProps {
     mode: ProviderInteractionMode,
     preset: WorkflowPreset | null,
   ) => void;
+  onDevReviewCycleBudgetChange: (budget: number) => void;
   togglePlanSidebar: () => void;
 
   focusComposer: () => void;
@@ -667,6 +670,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     interactionMode,
     workflowPreset,
     lastWorkflowPreset,
+    devReviewCycleBudget,
     lockedProvider,
     providerStatuses,
     activeProjectDefaultModelSelection,
@@ -695,6 +699,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     toggleInteractionMode,
     handleRuntimeModeChange,
     handleInteractionModeChange,
+    onDevReviewCycleBudgetChange,
     togglePlanSidebar,
     focusComposer,
     scheduleComposerFocus,
@@ -3246,6 +3251,22 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     />
                   </>
                 )}
+                {workflowPreset === "dev-review" ? (
+                  <label className="ml-1 flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+                    <span>Attempts</span>
+                    <input
+                      aria-label="Dev Review attempts"
+                      className="h-7 w-12 rounded-md border border-input bg-transparent px-1.5 text-center text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      type="number"
+                      min={1}
+                      max={DEV_REVIEW_WORKFLOW_MAX_CYCLES}
+                      value={devReviewCycleBudget}
+                      onChange={(event) =>
+                        onDevReviewCycleBudgetChange(Number(event.currentTarget.value))
+                      }
+                    />
+                  </label>
+                ) : null}
               </div>
 
               {/* Right side: send / stop button */}

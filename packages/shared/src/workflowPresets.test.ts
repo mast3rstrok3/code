@@ -15,6 +15,22 @@ describe("workflow presets", () => {
       "wayfinder",
       "implementation",
       "planning",
+      "dev-review",
+    ]);
+  });
+
+  it("catalogs Dev Review as the seventh review workflow", () => {
+    const definition = WORKFLOW_PRESET_DEFINITIONS.at(-1);
+    expect(definition).toMatchObject({
+      id: "dev-review",
+      route: "review",
+      interactionMode: "default",
+    });
+    expect(definition?.helpSteps.map((step) => step.label)).toEqual([
+      "Browser Dev Review",
+      "Non-interactive CLI Plan mode on failure",
+      "Fresh TDD repair child",
+      "Repeat until pass or cycle budget exhaustion",
     ]);
   });
 

@@ -235,4 +235,22 @@ describe("showContextMenuFallback", () => {
 
     await expect(selectionPromise).resolves.toBe("rename:project-b");
   });
+
+  it("opens a nested submenu by tapping its parent", async () => {
+    const selectionPromise = showContextMenuFallback([
+      {
+        id: "snooze",
+        label: "Snooze",
+        children: [{ id: "snooze:hour", label: "In one hour" }],
+      },
+    ]);
+
+    findButton("Snooze")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    const childButton = findButton("In one hour");
+    expect(childButton).toBeTruthy();
+    childButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    await expect(selectionPromise).resolves.toBe("snooze:hour");
+  });
 });

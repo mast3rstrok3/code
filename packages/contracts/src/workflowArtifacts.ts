@@ -9,6 +9,7 @@ import {
   ThreadWorkflowContext,
 } from "./orchestration.ts";
 import { DevReviewRecord } from "./review.ts";
+import { DevReviewWorkflowRun } from "./review.ts";
 
 export const WorkflowArtifactsGetInput = Schema.Struct({
   projectId: ProjectId,
@@ -24,6 +25,7 @@ export const WorkflowArtifactsSnapshot = Schema.Struct({
   tickets: Schema.Array(OrchestrationPlanningTicket),
   reviewCycles: Schema.Array(OrchestrationPlanningReviewCycle),
   implementationRuns: Schema.Array(OrchestrationImplementationRun),
+  devReviewWorkflowRuns: Schema.Array(DevReviewWorkflowRun),
   devReviews: Schema.Array(DevReviewRecord),
 });
 export type WorkflowArtifactsSnapshot = typeof WorkflowArtifactsSnapshot.Type;

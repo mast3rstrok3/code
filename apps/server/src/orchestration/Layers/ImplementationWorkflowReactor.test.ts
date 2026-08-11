@@ -595,7 +595,16 @@ function launchRun(system: ImplementationSystem, options?: Parameters<typeof see
     const snapshot = yield* system.query.getSnapshot();
     const run = snapshot.implementationRuns[0];
     if (!run) throw new Error("Run missing.");
-    return { ticket, tickets, run };
+    const legacyRun = { ...run, devReviewStrategy: "legacy-inline" as const };
+    yield* system.engine.dispatch({
+      type: "thread.implementation-run.update",
+      commandId: commandId("implementation-mark-legacy-inline"),
+      threadId: sourceThreadId,
+      run: legacyRun,
+      createdAt: now,
+    });
+    yield* system.reactor.drain;
+    return { ticket, tickets, run: legacyRun };
   });
 }
 
@@ -942,7 +951,57 @@ function launchFastFeatureRun(system: ImplementationSystem) {
     const snapshot = yield* system.query.getSnapshot();
     const run = snapshot.implementationRuns[0];
     if (!run) throw new Error("Fast feature run missing.");
-    return run;
+    const legacyRun = { ...run, devReviewStrategy: "legacy-inline" as const };
+    yield* system.engine.dispatch({
+      type: "thread.implementation-run.update",
+      commandId: commandId("fast-feature-mark-legacy-inline"),
+      threadId: sourceThreadId,
+      run: legacyRun,
+      createdAt: now,
+    });
+    yield* system.reactor.drain;
+    return legacyRun;
+  });
+}
+
+function launchFastFeatureNestedReview(system: ImplementationSystem) {
+  return Effect.gen(function* () {
+    yield* dispatchFastFeatureLaunch(system);
+    yield* system.reactor.drain;
+    let snapshot = yield* system.query.getSnapshot();
+    const run = snapshot.implementationRuns[0];
+    const implementer = snapshot.threads.find(
+      (thread) => thread.workflowRole === "fast-feature-implementer",
+    );
+    if (!run || !implementer) throw new Error("Fast feature Build did not start.");
+    yield* system.engine.dispatch({
+      type: "thread.activity.append",
+      commandId: commandId("nested-fast-build-result"),
+      threadId: implementer.id,
+      activity: {
+        id: eventId("nested-fast-build-result"),
+        tone: "info",
+        kind: "implementation-fast-build-result",
+        summary: "Fast Build succeeded",
+        payload: {
+          type: "implementation-fast-build-result",
+          runId: run.id,
+          status: "succeeded",
+          commitSha: "def456",
+          validations: requiredValidations(),
+          notesMarkdown: "Implemented and committed.",
+        },
+        turnId: null,
+        createdAt: "2026-01-01T00:00:02.000Z",
+      },
+      createdAt: "2026-01-01T00:00:02.000Z",
+    });
+    yield* system.reactor.drain;
+    snapshot = yield* system.query.getSnapshot();
+    const nestedRun = snapshot.devReviewWorkflowRuns?.[0];
+    const currentRun = snapshot.implementationRuns[0];
+    if (!nestedRun || !currentRun) throw new Error("Nested Dev Review did not launch.");
+    return { run: currentRun, nestedRun };
   });
 }
 
@@ -955,6 +1014,114 @@ it("omits workflow ownership for legacy orchestrator threads without workflow co
 });
 
 describe("ImplementationWorkflowReactor", () => {
+  it.effect("composes new Fast Feature runs through a distinct nested Dev Review workflow", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, nestedRun } = yield* launchFastFeatureNestedReview(system);
+        const snapshot = yield* system.query.getSnapshot();
+
+        expect(run.devReviewStrategy).toBe("nested-workflow");
+        expect(run.devReviewWorkflowRunIds).toEqual([nestedRun.id]);
+        expect(nestedRun.caller).toEqual({
+          type: "implementation",
+          implementationRunId: run.id,
+          orchestratorThreadId: run.orchestratorThreadId,
+        });
+        expect(
+          snapshot.threads.some((thread) => thread.workflowRole === "dev-review-orchestrator"),
+        ).toBe(true);
+        expect(
+          snapshot.threads.some((thread) => thread.workflowRole === "implementation-qa-reviewer"),
+        ).toBe(false);
+      }),
+    ),
+  );
+
+  it.effect("continues embedded runs to Code Review after nested pass or exhaustion", () =>
+    Effect.all(
+      (["passed", "exhausted"] as const).map((outcome) =>
+        withSystem((system) =>
+          Effect.gen(function* () {
+            const { run, nestedRun } = yield* launchFastFeatureNestedReview(system);
+            yield* system.engine.dispatch({
+              type: "thread.dev-review-workflow.update",
+              commandId: commandId(`nested-${outcome}`),
+              threadId: nestedRun.controllerThreadId,
+              run: {
+                ...nestedRun,
+                status: outcome,
+                attemptsUsed: outcome === "passed" ? 1 : nestedRun.cycleBudget,
+                activePhase: null,
+                activeThreadId: null,
+                outcome,
+                finalHeadSha: "def456",
+                updatedAt: "2026-01-01T00:00:03.000Z",
+                completedAt: "2026-01-01T00:00:03.000Z",
+              },
+              createdAt: "2026-01-01T00:00:03.000Z",
+            });
+            yield* system.reactor.drain;
+
+            const snapshot = yield* system.query.getSnapshot();
+            const updated = snapshot.implementationRuns.find(
+              (candidate) => candidate.id === run.id,
+            );
+            expect(updated?.latestDevReviewWorkflowOutcome).toBe(outcome);
+            expect(updated?.status).toBe("code-reviewing");
+            expect(
+              snapshot.threads.some(
+                (thread) => thread.workflowRole === "implementation-code-reviewer",
+              ),
+            ).toBe(true);
+            if (outcome === "exhausted") {
+              expect(updated?.qaExhaustionReason).toBe("dev-review");
+            }
+          }),
+        ),
+      ),
+      { concurrency: 1 },
+    ),
+  );
+
+  it.effect("blocks embedded Implementation when the nested Dev Review is blocked", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, nestedRun } = yield* launchFastFeatureNestedReview(system);
+        yield* system.engine.dispatch({
+          type: "thread.dev-review-workflow.update",
+          commandId: commandId("nested-blocked"),
+          threadId: nestedRun.controllerThreadId,
+          run: {
+            ...nestedRun,
+            status: "blocked",
+            activePhase: null,
+            activeThreadId: null,
+            outcome: "blocked",
+            failure: {
+              reason: "automation-unavailable",
+              phase: "review",
+              cycleNumber: 1,
+              detailMarkdown: "Browser automation was unavailable.",
+              failedAt: "2026-01-01T00:00:03.000Z",
+            },
+            updatedAt: "2026-01-01T00:00:03.000Z",
+            completedAt: "2026-01-01T00:00:03.000Z",
+          },
+          createdAt: "2026-01-01T00:00:03.000Z",
+        });
+        yield* system.reactor.drain;
+
+        const updated = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (candidate) => candidate.id === run.id,
+        );
+        expect(updated?.status).toBe("needs-human-attention");
+        expect(updated?.latestDevReviewWorkflowOutcome).toBe("blocked");
+        expect(updated?.retryableFailure?.stage).toBe("dev-review");
+        expect(updated?.retryableFailure?.humanBlocked).toBe(true);
+      }),
+    ),
+  );
+
   it.effect("sets up Fast feature Build and starts Dev Review only after a verified result", () =>
     withSystem((system) =>
       Effect.gen(function* () {
@@ -1691,6 +1858,7 @@ describe("ImplementationWorkflowReactor", () => {
             threadId: sourceThreadId,
             run: {
               ...run,
+              devReviewStrategy: "legacy-inline",
               status: "needs-human-attention",
               retryableFailure: {
                 stage: "build",

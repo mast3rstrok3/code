@@ -65,6 +65,7 @@ import {
 import { ThreadDeletionReactor } from "../src/orchestration/Services/ThreadDeletionReactor.ts";
 import { ProductWorkflowReactor } from "../src/orchestration/Services/ProductWorkflowReactor.ts";
 import { ImplementationWorkflowReactor } from "../src/orchestration/Services/ImplementationWorkflowReactor.ts";
+import { DevReviewWorkflowReactor } from "../src/orchestration/Services/DevReviewWorkflowReactor.ts";
 import { PreviewLifecycleReactor } from "../src/orchestration/Services/PreviewLifecycleReactor.ts";
 import { OrchestrationReactor } from "../src/orchestration/Services/OrchestrationReactor.ts";
 import { ProjectionSnapshotQuery } from "../src/orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -383,6 +384,13 @@ export const makeOrchestrationIntegrationHarness = (
           start: () => Effect.void,
           drain: Effect.void,
           recoverRetryableRuns: () => Effect.void,
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.succeed(DevReviewWorkflowReactor, {
+          start: () => Effect.void,
+          drain: Effect.void,
+          reconcile: () => Effect.void,
         }),
       ),
       Layer.provideMerge(

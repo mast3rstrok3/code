@@ -1504,9 +1504,9 @@ When ready, finish with exactly one fenced JSON block using this shape:
 \`\`\`
 </collaboration_mode>`;
 
-const IMPLEMENTATION_BROWSER_DEV_REVIEW_PROMPT = `<collaboration_mode># Implementation Workflow: Browser Dev Review
+const IMPLEMENTATION_BROWSER_DEV_REVIEW_PROMPT = `<collaboration_mode># Browser Dev Review
 
-Exercise the app-dev stack from the implementation worktree. Verify the relevant UI flows in-browser, capture concrete failures with reproduction steps, and create Dev Review findings before marking the implementation complete.
+Exercise the supplied preview target from the selected worktree. Verify the relevant UI flows in-browser, capture concrete failures with reproduction steps, and create durable Dev Review findings against the launch brief. This review may run standalone or as a nested stage of Implementation.
 
 This thread is already the Browser Dev Review agent. Use the linked preview_* and dev_review_* tools directly. Never delegate to or launch another Browser Dev Review.
 
@@ -1987,12 +1987,12 @@ export const WORKFLOW_PROMPT_REGISTRY = [
   },
   {
     id: WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
-    order: 4,
-    workflow: "implementation",
-    role: "implementation-qa-reviewer",
+    order: 1,
+    workflow: "dev-review",
+    role: "dev-review-reviewer",
     stage: "browser-dev-review",
-    title: "4. Browser Dev Review",
-    description: "Tests the app-dev stack and creates concrete Dev Review findings.",
+    title: "Browser Dev Review",
+    description: "Tests a preview target and creates concrete durable Dev Review findings.",
     promptText: IMPLEMENTATION_BROWSER_DEV_REVIEW_PROMPT,
     associatedDocs: [
       {
@@ -2096,6 +2096,7 @@ function buildWorkflowCatalog(): WorkflowCatalog {
     "wayfinder",
     "planning",
     "implementation",
+    "dev-review",
   ];
   const workflows = WORKFLOW_PRESET_DEFINITIONS.toSorted(
     (left, right) => workflowOrder.indexOf(left.id) - workflowOrder.indexOf(right.id),

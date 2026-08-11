@@ -1085,6 +1085,12 @@ export function workflowRoleShortLabel(
       return "Merge gate";
     case "implementation-qa-reviewer":
       return "Dev review";
+    case "dev-review-orchestrator":
+      return "Dev Review";
+    case "dev-review-reviewer":
+      return "Browser review";
+    case "dev-review-fixer":
+      return "Repair";
     case "implementation-fixer":
     case "product-fix-implementer":
       return "Fix";

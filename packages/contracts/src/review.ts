@@ -1,7 +1,9 @@
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import {
   IsoDateTime,
   NonNegativeInt,
+  PositiveInt,
   ThreadId,
   TrimmedNonEmptyString,
   TurnId,
@@ -11,6 +13,158 @@ import { VcsError } from "./vcs.ts";
 
 export const DevReviewId = TrimmedNonEmptyString.pipe(Schema.brand("DevReviewId"));
 export type DevReviewId = typeof DevReviewId.Type;
+
+/** Default and hard limit for the number of Browser Dev Review attempts in one run. */
+export const DEV_REVIEW_WORKFLOW_DEFAULT_CYCLES = 10;
+export const DEV_REVIEW_WORKFLOW_MAX_CYCLES = 50;
+
+export const DevReviewWorkflowRunId = TrimmedNonEmptyString.pipe(
+  Schema.brand("DevReviewWorkflowRunId"),
+);
+export type DevReviewWorkflowRunId = typeof DevReviewWorkflowRunId.Type;
+
+export const DevReviewWorkflowCycleBudget = PositiveInt.check(
+  Schema.isLessThanOrEqualTo(DEV_REVIEW_WORKFLOW_MAX_CYCLES),
+);
+export type DevReviewWorkflowCycleBudget = typeof DevReviewWorkflowCycleBudget.Type;
+
+export const DevReviewWorkflowOutcome = Schema.Literals([
+  "passed",
+  "exhausted",
+  "blocked",
+  "canceled",
+]);
+export type DevReviewWorkflowOutcome = typeof DevReviewWorkflowOutcome.Type;
+
+export const DevReviewWorkflowRunStatus = Schema.Literals([
+  "running",
+  "passed",
+  "exhausted",
+  "blocked",
+  "canceled",
+]);
+export type DevReviewWorkflowRunStatus = typeof DevReviewWorkflowRunStatus.Type;
+
+export const DevReviewWorkflowPhase = Schema.Literals(["review", "planning", "fixing"]);
+export type DevReviewWorkflowPhase = typeof DevReviewWorkflowPhase.Type;
+
+export const DevReviewWorkflowCaller = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("standalone"),
+    sourceThreadId: ThreadId,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("implementation"),
+    implementationRunId: TrimmedNonEmptyString,
+    orchestratorThreadId: ThreadId,
+  }),
+]);
+export type DevReviewWorkflowCaller = typeof DevReviewWorkflowCaller.Type;
+
+/** HEAD plus ReviewService's two canonical diff hashes. */
+export const DevReviewWorkflowWorkspaceRevision = Schema.Struct({
+  headSha: TrimmedNonEmptyString,
+  workingTreeDiffHash: TrimmedNonEmptyString,
+  branchDiffHash: TrimmedNonEmptyString,
+  fingerprint: TrimmedNonEmptyString,
+});
+export type DevReviewWorkflowWorkspaceRevision = typeof DevReviewWorkflowWorkspaceRevision.Type;
+
+export const DevReviewWorkflowFixValidation = Schema.Struct({
+  command: TrimmedNonEmptyString,
+  status: Schema.Literals(["passed", "failed"]),
+  outputMarkdown: Schema.String,
+  completedAt: IsoDateTime,
+});
+export type DevReviewWorkflowFixValidation = typeof DevReviewWorkflowFixValidation.Type;
+
+export const DevReviewWorkflowFixResult = Schema.Struct({
+  runId: DevReviewWorkflowRunId,
+  planId: TrimmedNonEmptyString,
+  status: Schema.Literals(["succeeded", "failed", "blocked"]),
+  commitSha: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
+  validations: Schema.Array(DevReviewWorkflowFixValidation),
+  notesMarkdown: Schema.String,
+});
+export type DevReviewWorkflowFixResult = typeof DevReviewWorkflowFixResult.Type;
+
+export const DevReviewWorkflowCycleStatus = Schema.Literals([
+  "reviewing",
+  "review-failed",
+  "planning",
+  "fixing",
+  "completed",
+  "blocked",
+]);
+export type DevReviewWorkflowCycleStatus = typeof DevReviewWorkflowCycleStatus.Type;
+
+export const DevReviewWorkflowCycle = Schema.Struct({
+  cycleNumber: PositiveInt,
+  status: DevReviewWorkflowCycleStatus,
+  reviewId: DevReviewId,
+  reviewerThreadId: ThreadId,
+  reviewVerdict: Schema.NullOr(Schema.Literals(["pending", "passed", "failed", "blocked"])),
+  actionableFindingsMarkdown: Schema.NullOr(Schema.String),
+  planId: Schema.NullOr(TrimmedNonEmptyString),
+  plannerTurnId: Schema.NullOr(TurnId),
+  fixerThreadId: Schema.NullOr(ThreadId),
+  fixResult: Schema.NullOr(DevReviewWorkflowFixResult),
+  workspaceRevision: DevReviewWorkflowWorkspaceRevision,
+  startedAt: IsoDateTime,
+  completedAt: Schema.NullOr(IsoDateTime),
+});
+export type DevReviewWorkflowCycle = typeof DevReviewWorkflowCycle.Type;
+
+export const DevReviewWorkflowFailureReason = Schema.Literals([
+  "review-blocked",
+  "plan-missing",
+  "plan-malformed",
+  "fixer-failed",
+  "workspace-stale",
+  "automation-unavailable",
+  "unexpected-approval",
+  "unexpected-user-input",
+  "embedded-worktree-dirty",
+  "embedded-head-mismatch",
+  "preview-unavailable",
+  "unknown",
+]);
+export type DevReviewWorkflowFailureReason = typeof DevReviewWorkflowFailureReason.Type;
+
+export const DevReviewWorkflowFailure = Schema.Struct({
+  reason: DevReviewWorkflowFailureReason,
+  phase: Schema.NullOr(DevReviewWorkflowPhase),
+  cycleNumber: Schema.NullOr(PositiveInt),
+  detailMarkdown: TrimmedNonEmptyString,
+  failedAt: IsoDateTime,
+});
+export type DevReviewWorkflowFailure = typeof DevReviewWorkflowFailure.Type;
+
+export const DevReviewWorkflowRun = Schema.Struct({
+  id: DevReviewWorkflowRunId,
+  targetThreadId: ThreadId,
+  controllerThreadId: ThreadId,
+  caller: DevReviewWorkflowCaller,
+  briefMarkdown: TrimmedNonEmptyString,
+  supportingContextMarkdown: Schema.NullOr(Schema.String),
+  previewTargets: Schema.Array(TrimmedNonEmptyString).check(Schema.isMinLength(1)),
+  cycleBudget: DevReviewWorkflowCycleBudget.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEV_REVIEW_WORKFLOW_DEFAULT_CYCLES)),
+  ),
+  attemptsUsed: NonNegativeInt,
+  status: DevReviewWorkflowRunStatus,
+  cycles: Schema.Array(DevReviewWorkflowCycle),
+  activePhase: Schema.NullOr(DevReviewWorkflowPhase),
+  activeThreadId: Schema.NullOr(ThreadId),
+  workspaceRevision: DevReviewWorkflowWorkspaceRevision,
+  finalHeadSha: Schema.NullOr(TrimmedNonEmptyString),
+  outcome: Schema.NullOr(DevReviewWorkflowOutcome),
+  failure: Schema.NullOr(DevReviewWorkflowFailure),
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+  completedAt: Schema.NullOr(IsoDateTime),
+});
+export type DevReviewWorkflowRun = typeof DevReviewWorkflowRun.Type;
 
 export const DevReviewStatus = Schema.Literals([
   "pending",

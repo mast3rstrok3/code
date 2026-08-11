@@ -11,6 +11,8 @@ import {
   type LaunchThreadImplementationRunInput,
   type LaunchThreadFastFeatureRunInput,
   type LaunchThreadDevReviewInput,
+  type LaunchThreadDevReviewWorkflowInput,
+  type CancelThreadDevReviewWorkflowInput,
   type LoadThreadPlanningSpecBundleInput,
   type CreateThreadPlanningSpecInput,
   type RequestThreadPlanningTicketReviewInput,
@@ -43,6 +45,8 @@ import {
   launchThreadImplementationRun,
   launchThreadFastFeatureRun,
   launchThreadDevReview,
+  launchThreadDevReviewWorkflow,
+  cancelThreadDevReviewWorkflow,
   loadThreadPlanningSpecBundle,
   requestThreadPlanningTicketReview,
   respondToThreadApproval,
@@ -77,6 +81,8 @@ export type {
   LaunchThreadImplementationRunInput,
   LaunchThreadFastFeatureRunInput,
   LaunchThreadDevReviewInput,
+  LaunchThreadDevReviewWorkflowInput,
+  CancelThreadDevReviewWorkflowInput,
   LoadThreadPlanningSpecBundleInput,
   CreateThreadPlanningSpecInput,
   RequestThreadPlanningTicketReviewInput,
@@ -221,6 +227,36 @@ export function createThreadEnvironmentAtoms<R, E>(
           environmentId: string;
           input: LaunchThreadDevReviewInput;
         }) => JSON.stringify([environmentId, input.sourceThreadId, input.reviewThreadId]),
+      },
+    }),
+    launchDevReviewWorkflow: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:launch-dev-review-workflow",
+      execute: (input: LaunchThreadDevReviewWorkflowInput) => launchThreadDevReviewWorkflow(input),
+      scheduler,
+      concurrency: {
+        mode: "serial" as const,
+        key: ({
+          environmentId,
+          input,
+        }: {
+          environmentId: string;
+          input: LaunchThreadDevReviewWorkflowInput;
+        }) => JSON.stringify([environmentId, input.targetThreadId]),
+      },
+    }),
+    cancelDevReviewWorkflow: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:cancel-dev-review-workflow",
+      execute: (input: CancelThreadDevReviewWorkflowInput) => cancelThreadDevReviewWorkflow(input),
+      scheduler,
+      concurrency: {
+        mode: "serial" as const,
+        key: ({
+          environmentId,
+          input,
+        }: {
+          environmentId: string;
+          input: CancelThreadDevReviewWorkflowInput;
+        }) => JSON.stringify([environmentId, input.runId]),
       },
     }),
     createPlanningSpec: createEnvironmentCommand(runtime, {

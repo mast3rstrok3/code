@@ -3,6 +3,7 @@ import {
   EnvironmentId,
   ORCHESTRATION_WS_METHODS,
   ProjectId,
+  ProviderInstanceId,
   ThreadId,
   type ClientOrchestrationCommand,
 } from "@t3tools/contracts";
@@ -24,6 +25,7 @@ import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import {
   archiveThread,
   createProject,
+  launchThreadDevReviewWorkflow,
   settleThread,
   stopThreadSession,
   unsettleThread,
@@ -169,6 +171,37 @@ describe("environment commands", () => {
           reason: "user",
         },
       ]);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
+  it.effect("dispatches Dev Review as a workflow launch instead of a provider turn", () =>
+    Effect.gen(function* () {
+      const dispatched: ClientOrchestrationCommand[] = [];
+      const supervisor = yield* makeSupervisor(dispatched);
+
+      yield* launchThreadDevReviewWorkflow({
+        commandId: CommandId.make("dev-review-launch"),
+        targetThreadId: ThreadId.make("thread-source"),
+        controllerThreadId: ThreadId.make("thread-controller"),
+        caller: { type: "standalone", sourceThreadId: ThreadId.make("thread-source") },
+        briefMarkdown: "Review checkout.",
+        supportingContextMarkdown: "Latest settled turn.",
+        previewTargets: ["https://preview.example.test"],
+        cycleBudget: 10,
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.6-sol",
+        },
+        createdAt: "2026-06-06T00:02:00.000Z",
+      }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+
+      expect(dispatched).toHaveLength(1);
+      expect(dispatched[0]).toMatchObject({
+        type: "thread.dev-review-workflow.launch",
+        commandId: "dev-review-launch",
+        cycleBudget: 10,
+        briefMarkdown: "Review checkout.",
+      });
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );
 });

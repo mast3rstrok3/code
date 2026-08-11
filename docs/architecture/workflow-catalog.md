@@ -60,9 +60,9 @@ Workflow stages hand results to the orchestration by ending a message with exact
 
 Workflow threads read canonical artifacts through the read-only `workflow-artifacts` MCP toolkit: `workflow_context_get`, `workflow_spec_get`, `workflow_wayfinder_map_get`, `workflow_tickets_list`, `workflow_ticket_get`, `workflow_dev_reviews_list`, `workflow_dev_review_get`, and `workflow_doc_get`.
 
-## The six workflows
+## The seven workflows
 
-Workflows appear in catalog order: Fix, Fast Feature, Full Feature, Wayfinder, Planning, Implementation. The Spec is the node that binds tickets and dev reviews into one package.
+Workflows appear in catalog order: Fix, Fast Feature, Full Feature, Wayfinder, Planning, Implementation, Dev Review. The Spec is the node that binds tickets and dev reviews into one package.
 
 ### Fix
 
@@ -70,7 +70,7 @@ Product Grill (intent kind fixed to `fix`) → the same thread switches to CLI P
 
 ### Fast Feature
 
-Product Grill (intent kind fixed to `feature`) → same-thread CLI Plan mode → the proposed plan launches a Build child thread in a dedicated worktree branched from the starting branch, starting the app dev stack in parallel → AppDevStack probes and Browser Dev Reviews with a global budget of ten fresh QA repair agents → Code Review sub-thread (single pass) → the change request is published into the starting branch. Exhausted QA continues best-effort from a clean, merge-gate-validated HEAD and is flagged in the change request. A clean legacy HEAD missing its validation receipt reruns the merge gate before Code Review.
+Product Grill (intent kind fixed to `feature`) → same-thread CLI Plan mode → the proposed plan launches a Build child thread in a dedicated worktree branched from the starting branch, starting the app dev stack in parallel → nested Dev Review workflow → Code Review sub-thread (single pass) → the change request is published into the starting branch. Dev Review exhaustion continues best-effort and is called out explicitly; a blocked run requires human attention.
 
 ### Full Feature
 
@@ -94,9 +94,17 @@ Loads the Spec and tickets via the MCP tools, then:
 2. Starts the app dev stack for that worktree in parallel with implementation (`AppDevStackManager`).
 3. Runs dependency-aware TDD workers, each a sub-thread with its own worktree and branch. A dependent ticket's worker branches from its blocker's worker branch, so chained tickets build on each other; every worker commits to its own branch.
 4. Merges worker branches programmatically back into the orchestrator worktree; the Merge Gate stage runs only when programmatic integration stops on a real conflict.
-5. Ensures and probes AppDevStack, then launches fresh Browser Dev Reviews when the stack is healthy. These probes and reviews do not consume repair slots. Stack failures and failed/blocked reviews share `IMPLEMENTATION_RUN_MAX_QA_REPAIRS` (10) fresh TDD repair agents; replacing a completed malformed, failed, blocked, or interrupted repair consumes the next slot. After the cap, a clean HEAD matching a merge-gate-validated commit proceeds through best-effort Code Review and flags the unresolved gate in the change request. A clean, correct-branch legacy HEAD without a validation receipt reruns the merge gate first; dirty, wrong-branch, or non-repository worktrees require human attention.
+5. Ensures and probes AppDevStack, then launches a nested Dev Review workflow with its own workflow ID. AppDevStack repair remains Implementation-owned and does not consume Dev Review attempts. The nested workflow refreshes the frontend URL after every repair. Pass continues to Code Review; exhaustion continues with an unresolved-review warning; blocked requires human attention and retry starts a fresh nested run. Runs created before this strategy retain the legacy inline QA path.
 6. Runs Code Review as a single review-and-fix pass (Standards and Spec axes) that commits its own corrections, then publishes the change request into the original branch.
+
+### Dev Review
+
+Dev Review is a reusable, restartable loop. Cycle 1 always launches a fresh Browser Dev Review. A pass ends the run. A failed review below budget switches the persistent controller to non-interactive CLI Plan mode, requires one persisted proposed plan, and launches a fresh TDD fixer child before the next review. The original brief remains the acceptance boundary throughout. A final failed attempt ends as `exhausted` without an unverified repair.
+
+Standalone panel launches create a dedicated controller child and edit the selected worktree in place, including unrelated dirty WIP. A new composer draft becomes its own top-level controller. Embedded runs put the controller below Implementation and require each repair to leave a clean committed HEAD. A run is `blocked` for invalid automation rather than ordinary findings: unavailable review tooling, malformed or missing plans, fixer failure, unexpected interaction, or a stale workspace fingerprint.
+
+`projection_dev_review_workflow_runs` stores canonical run JSON. Each run records caller and target identity, original brief, preview targets, cycle budget, ordered reviewer/plan/fixer history, the active phase, HEAD and diff-hash fingerprint, terminal outcome, and timestamps. Launch, update, cancel, and refreshed-preview resume commands produce projected run events; `DevReviewWorkflowReactor` reconciles every nonterminal run after restart without polling.
 
 ## Orchestration
 
-`ProductWorkflowReactor.ts` drives Fix, Fast Feature, and Full Feature from the locked intent; `ImplementationWorkflowReactor.ts` owns worktrees, the merge pipeline, app dev stack provisioning, QA repairs, and change-request publication. Caps live in `packages/contracts/src/orchestration.ts` (`PLANNING_REVIEW_MAX_CYCLES`, `IMPLEMENTATION_RUN_MAX_QA_REPAIRS`; the older QA cycle/attempt names remain deprecated aliases). Shared sub-agent conventions (stage IDs, MCP tools, directives) are in `apps/server/src/provider/WorkflowSubagentInstructions.ts`.
+`ProductWorkflowReactor.ts` drives Fix, Fast Feature, and Full Feature from the locked intent; `ImplementationWorkflowReactor.ts` owns worktrees, the merge pipeline, app dev stack provisioning, composition with Dev Review, and change-request publication. `DevReviewWorkflowReactor.ts` owns browser-review, plan, and repair cycles. Caps live in the contracts (`PLANNING_REVIEW_MAX_CYCLES`, `DEV_REVIEW_WORKFLOW_DEFAULT_CYCLES`, and `DEV_REVIEW_WORKFLOW_MAX_CYCLES`). Shared sub-agent conventions (stage IDs, MCP tools, directives) are in `apps/server/src/provider/WorkflowSubagentInstructions.ts`.

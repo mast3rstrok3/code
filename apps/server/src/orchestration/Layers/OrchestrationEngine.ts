@@ -73,6 +73,11 @@ function commandToAggregateRef(command: OrchestrationCommand): {
         aggregateKind: "thread",
         aggregateId: command.sourceThreadId,
       };
+    case "thread.dev-review-workflow.launch":
+      return {
+        aggregateKind: "thread",
+        aggregateId: command.targetThreadId,
+      };
     default:
       return {
         aggregateKind: "thread",

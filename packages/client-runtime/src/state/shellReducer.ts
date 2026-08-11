@@ -51,6 +51,17 @@ export function applyShellStreamEvent(
         snapshotSequence: event.sequence,
       };
     }
+    case "dev-review-workflow-run-upserted": {
+      const devReviewWorkflowRuns = snapshot.devReviewWorkflowRuns ?? [];
+      const nextRuns = devReviewWorkflowRuns.some((run) => run.id === event.run.id)
+        ? Arr.map(devReviewWorkflowRuns, (run) => (run.id === event.run.id ? event.run : run))
+        : Arr.append(devReviewWorkflowRuns, event.run);
+      return {
+        ...snapshot,
+        devReviewWorkflowRuns: nextRuns,
+        snapshotSequence: event.sequence,
+      };
+    }
     default:
       return snapshot;
   }

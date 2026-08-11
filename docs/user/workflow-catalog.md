@@ -2,7 +2,7 @@
 
 The Settings catalog separates workflow automation into three layers:
 
-- **Workflows** are complete orchestration paths such as Fix, Fast Feature, Full Feature, Wayfinder, Planning, and Implementation.
+- **Workflows** are complete orchestration paths such as Fix, Fast Feature, Full Feature, Wayfinder, Planning, Implementation, and Dev Review.
 - **Skills** are the focused instructions used for individual workflow steps, such as Spec authoring, TDD implementation, or Code Review.
 - **Docs** are supporting references used by those skills, such as ADR, context, testing, and browser-QA formats.
 
@@ -16,6 +16,7 @@ All three catalogs are read-only and versioned with the T3 Code server. Project 
 - **Planning** — just the planning half: an interactive Engineering Grill, followed by automatic Spec, tickets, and ticket review. Pair it with Implementation when you want a checkpoint between the two.
 - **Wayfinder** — the effort is too large or foggy to specify in one pass; chart the decisions first.
 - **Implementation** — you already have a Spec and reviewed tickets; execute them.
+- **Dev Review** — repeatedly test a feature in the browser and repair every actionable finding.
 
 Every product-routed workflow starts with a **Product Grill**. Before asking anything, the agent grounds itself in the codebase and existing product context, resolves discoverable facts, and answers what is already clear. It maps the remaining product decisions as a dependency tree, then asks the complete currently unblocked product-alignment frontier when that frontier contains one through seven questions — the problem, the outcome, the audience, how it should feel, success criteria, scope, and non-goals. Seven is the maximum for a round, not a target; smaller frontiers keep their natural size, while larger frontiers continue in stable order after the first seven answers. Your answers unlock the next round. Product Grill never asks implementation, architecture, or testing questions; Full Feature delegates those decisions to an automatic Engineering Grill, while Fix and Fast Feature resolve them during their lighter planning paths.
 
@@ -31,7 +32,11 @@ Interactive Product and Engineering Grills present questions as structured cards
 
 **Planning** — Engineering Grill is the user-interactive stage. It works through the currently unblocked engineering-decision frontier in structured batches while maintaining your project's domain docs: glossary terms land in `CONTEXT.md` and durable decisions in ADRs as they crystallize. Once you confirm shared understanding, the rest is automatic: the Spec is written as a durable artifact in the app — not a file in your repository — tickets are drafted in the same thread, and ticket review runs for up to three cycles in reviewer sub-threads. A clean review finalizes the tickets without another approval prompt.
 
-**Implementation** — loads the Spec, creates a worktree from your chosen branch, and starts the app dev stack alongside the implementation. Tickets are implemented dependency-aware by TDD workers, each in its own sub-thread and worktree — a ticket that depends on another branches from that ticket's branch. Worker branches are merged back, then AppDevStack probes and Browser Dev Reviews run without consuming the global ten-repair budget. A stack problem or failed/blocked review gets a fresh TDD repair; replacing a repair consumes another slot. After ten repairs, a clean merge-gate-validated HEAD proceeds through best-effort Code Review with the unresolved gate flagged. A clean, correct-branch legacy HEAD without a validation receipt reruns the merge gate first; dirty or wrong-branch worktrees require human attention. Code Review is a single pass that commits its own corrections, and the change request is filed into the branch you started from.
+**Implementation** — loads the Spec, creates a worktree from your chosen branch, and starts the app dev stack alongside the implementation. Tickets are implemented dependency-aware by TDD workers, each in its own sub-thread and worktree. Worker branches are merged back, AppDevStack is ensured, and a nested Dev Review workflow runs before Code Review. A pass continues normally. Exhaustion continues with an explicit unresolved Dev Review warning. A blocked run pauses for human attention; Retry starts a fresh Dev Review run. Code Review is a single pass, and the change request is filed into the branch you started from.
+
+**Dev Review** — launch it from the web or desktop Dev Review panel, or select Dev Review in the composer workflow picker. The review brief is required and remains the acceptance boundary for every attempt. Choose 1–50 review attempts; the persisted default is 10. Each attempt is one fresh Browser Dev Review. A failed attempt below budget creates a non-interactive repair plan and a fresh TDD repair child. If the final attempt fails, the run ends as **exhausted** immediately, without making an unverified final repair. Invalid tooling, a missing plan, a failed fixer, unexpected input, or outside workspace changes end the run as **blocked**.
+
+Panel launches preserve the source conversation and temporarily lock its worktree and composer. The banner and panel both provide **Stop**. New-draft composer launches make the new top-level thread the controller; launches from an existing thread create a controller child without changing the source thread's normal workflow or interaction mode. Every cycle keeps its review document, recording, screenshots, plan, and reviewer/fixer thread links in the Dev Review panel. One-shot reviews created by older versions remain under Legacy history.
 
 A Browser Dev Review's live browser tab is temporary. It closes when the review or workflow child reaches a terminal state. Screenshots, recordings, findings, checks, and the verdict remain available as durable Dev Review evidence after the tab closes.
 

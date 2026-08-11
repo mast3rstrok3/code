@@ -30,7 +30,13 @@ export const WorkflowPromptAssociatedDocContract = Schema.Struct({
 });
 export type WorkflowPromptAssociatedDocContract = typeof WorkflowPromptAssociatedDocContract.Type;
 
-const WorkflowPromptWorkflow = Schema.Literals(["shared", "planning", "implementation", "product"]);
+const WorkflowPromptWorkflow = Schema.Literals([
+  "shared",
+  "planning",
+  "implementation",
+  "dev-review",
+  "product",
+]);
 
 export const WorkflowPromptContract = Schema.Struct({
   id: TrimmedNonEmptyString,
@@ -46,6 +52,9 @@ export const WorkflowPromptContract = Schema.Struct({
     "implementation-qa-reviewer",
     "implementation-fixer",
     "implementation-code-reviewer",
+    "dev-review-orchestrator",
+    "dev-review-reviewer",
+    "dev-review-fixer",
   ]),
   stage: TrimmedNonEmptyString,
   title: TrimmedNonEmptyString,

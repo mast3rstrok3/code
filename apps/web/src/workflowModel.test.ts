@@ -88,6 +88,41 @@ describe("buildWorkflowViewModel", () => {
     expect(groups?.find((group) => group.id === "batch:batch-a")?.preset).toBeNull();
   });
 
+  it("keeps nested Dev Review as its own workflow group under Implementation", () => {
+    const root = thread("root", { workflowPreset: "full-feature" });
+    const orchestrator = thread("implementation", {
+      parentThreadId: "root",
+      workflowPreset: "implementation",
+      workflowRole: "implementation-orchestrator",
+      workflowContext: { workflowId: "implementation-run", rootThreadId: "root" },
+    });
+    const controller = thread("dev-review-controller", {
+      parentThreadId: "implementation",
+      workflowPreset: "dev-review",
+      workflowRole: "dev-review-orchestrator",
+      workflowContext: { workflowId: "dev-review-run", rootThreadId: "root" },
+    });
+    const reviewer = thread("dev-review-reviewer", {
+      parentThreadId: "dev-review-controller",
+      workflowPreset: "dev-review",
+      workflowRole: "dev-review-reviewer",
+      workflowContext: { workflowId: "dev-review-run", rootThreadId: "root" },
+    });
+
+    const groups = buildWorkflowViewModel([
+      root,
+      orchestrator,
+      controller,
+      reviewer,
+    ]).rootsByThreadKey.get("env:root")?.groups;
+
+    expect(groups?.map((group) => [group.id, group.preset])).toEqual([
+      ["workflow:dev-review-run", "dev-review"],
+      ["workflow:implementation-run", "implementation"],
+    ]);
+    expect(groups?.find((group) => group.id === "workflow:dev-review-run")?.rows).toHaveLength(2);
+  });
+
   it("orders groups newest first and rows depth-first with deterministic siblings", () => {
     const root = thread("root");
     const older = thread("older", {

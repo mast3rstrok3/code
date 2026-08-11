@@ -110,6 +110,15 @@ export type WorkflowDirective =
       readonly notesMarkdown: string;
     }
   | {
+      readonly type: "dev-review-fix-result";
+      readonly runId: string;
+      readonly planId: string;
+      readonly status: "succeeded" | "failed" | "blocked";
+      readonly commitSha?: string;
+      readonly validations: ReadonlyArray<OrchestrationImplementationValidationResult>;
+      readonly notesMarkdown: string;
+    }
+  | {
       readonly type: "implementation-fast-build-result";
       readonly runId: string;
       readonly status: "succeeded" | "failed" | "blocked";
@@ -290,6 +299,9 @@ const WORKFLOW_AGENT_MESSAGE_WORKFLOW_ROLES: ReadonlySet<OrchestrationThreadWork
     "implementation-qa-reviewer",
     "implementation-fixer",
     "implementation-code-reviewer",
+    "dev-review-orchestrator",
+    "dev-review-reviewer",
+    "dev-review-fixer",
   ]);
 
 function parseWorkflowAgentMessageTarget(value: unknown): WorkflowAgentMessageTarget | string {
@@ -710,6 +722,33 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
       return {
         type: "implementation-fix-result",
         runId,
+        status,
+        ...(commitSha !== undefined ? { commitSha } : {}),
+        validations,
+        notesMarkdown,
+      };
+    }
+    case "dev-review-fix-result": {
+      const runId = requiredString(record, "runId");
+      const planId = requiredString(record, "planId");
+      const notesMarkdown = requiredString(record, "notesMarkdown");
+      const status = record["status"];
+      const validations = parseValidationResults(record["validations"] ?? []);
+      const commitSha = optionalString(record, "commitSha");
+      for (const value of [runId, planId, notesMarkdown]) {
+        if (value.startsWith("Directive field")) return value;
+      }
+      if (status !== "succeeded" && status !== "failed" && status !== "blocked") {
+        return "dev-review-fix-result.status must be succeeded, failed, or blocked.";
+      }
+      if (typeof validations === "string") return validations;
+      if (typeof commitSha === "string" && commitSha.startsWith("Directive field")) {
+        return commitSha;
+      }
+      return {
+        type: "dev-review-fix-result",
+        runId,
+        planId,
         status,
         ...(commitSha !== undefined ? { commitSha } : {}),
         validations,

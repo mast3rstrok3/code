@@ -1,12 +1,19 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
   DevReviewId,
+  DevReviewWorkflowRunId,
   EMPTY_DEV_REVIEW_EVIDENCE,
   ThreadId,
   type DevReviewRecord,
+  type DevReviewWorkflowRun,
 } from "@t3tools/contracts";
 
-import { selectActiveDevReviewRecord } from "./DevReviewPanel.logic";
+import {
+  devReviewRunContainsThread,
+  devReviewRunStatusLabel,
+  isValidDevReviewWorkflowLaunch,
+  selectActiveDevReviewRecord,
+} from "./DevReviewPanel.logic";
 
 describe("selectActiveDevReviewRecord", () => {
   it("prefers the record whose review thread is open", () => {
@@ -48,6 +55,46 @@ describe("selectActiveDevReviewRecord", () => {
   });
 });
 
+describe("Dev Review workflow panel logic", () => {
+  it("accepts only settled, preview-backed launches with a 1-50 attempt budget", () => {
+    const valid = {
+      brief: "Review checkout",
+      cycleBudget: 10,
+      sourceSettled: true,
+      previewTargets: ["https://preview.example.test"],
+      worktreeOwned: false,
+    };
+    expect(isValidDevReviewWorkflowLaunch(valid)).toBe(true);
+    expect(isValidDevReviewWorkflowLaunch({ ...valid, brief: " " })).toBe(false);
+    expect(isValidDevReviewWorkflowLaunch({ ...valid, cycleBudget: 0 })).toBe(false);
+    expect(isValidDevReviewWorkflowLaunch({ ...valid, cycleBudget: 51 })).toBe(false);
+    expect(isValidDevReviewWorkflowLaunch({ ...valid, sourceSettled: false })).toBe(false);
+    expect(isValidDevReviewWorkflowLaunch({ ...valid, previewTargets: [] })).toBe(false);
+    expect(isValidDevReviewWorkflowLaunch({ ...valid, worktreeOwned: true })).toBe(false);
+  });
+
+  it("shows phase and cycle progress and resolves every workflow child", () => {
+    const run = makeDevReviewWorkflowRun();
+    expect(devReviewRunStatusLabel(run)).toBe("planning · Cycle 1 of 10");
+    for (const threadId of [
+      run.targetThreadId,
+      run.controllerThreadId,
+      run.cycles[0]!.reviewerThreadId,
+      run.cycles[0]!.fixerThreadId!,
+    ]) {
+      expect(devReviewRunContainsThread(run, threadId)).toBe(true);
+    }
+    expect(
+      devReviewRunStatusLabel({
+        ...run,
+        status: "exhausted",
+        outcome: "exhausted",
+        activePhase: null,
+      }),
+    ).toBe("exhausted");
+  });
+});
+
 function makeDevReviewRecord(overrides: Partial<DevReviewRecord> = {}): DevReviewRecord {
   return {
     id: DevReviewId.make("dev-review-1"),
@@ -67,5 +114,52 @@ function makeDevReviewRecord(overrides: Partial<DevReviewRecord> = {}): DevRevie
     createdAt: "2026-03-09T10:00:00.000Z",
     updatedAt: "2026-03-09T10:00:00.000Z",
     ...overrides,
+  };
+}
+
+function makeDevReviewWorkflowRun(): DevReviewWorkflowRun {
+  const revision = {
+    headSha: "abc123",
+    workingTreeDiffHash: "working-hash",
+    branchDiffHash: "branch-hash",
+    fingerprint: "fingerprint",
+  };
+  return {
+    id: DevReviewWorkflowRunId.make("dev-review-workflow-controller"),
+    targetThreadId: ThreadId.make("thread-target"),
+    controllerThreadId: ThreadId.make("thread-controller"),
+    caller: { type: "standalone", sourceThreadId: ThreadId.make("thread-target") },
+    briefMarkdown: "Review checkout",
+    supportingContextMarkdown: null,
+    previewTargets: ["https://preview.example.test"],
+    cycleBudget: 10,
+    attemptsUsed: 1,
+    status: "running",
+    cycles: [
+      {
+        cycleNumber: 1,
+        status: "planning",
+        reviewId: DevReviewId.make("review-1"),
+        reviewerThreadId: ThreadId.make("thread-reviewer"),
+        reviewVerdict: "failed",
+        actionableFindingsMarkdown: "Fix validation.",
+        planId: "plan-1",
+        plannerTurnId: null,
+        fixerThreadId: ThreadId.make("thread-fixer"),
+        fixResult: null,
+        workspaceRevision: revision,
+        startedAt: "2026-08-11T00:00:00.000Z",
+        completedAt: null,
+      },
+    ],
+    activePhase: "planning",
+    activeThreadId: ThreadId.make("thread-controller"),
+    workspaceRevision: revision,
+    finalHeadSha: null,
+    outcome: null,
+    failure: null,
+    createdAt: "2026-08-11T00:00:00.000Z",
+    updatedAt: "2026-08-11T00:01:00.000Z",
+    completedAt: null,
   };
 }

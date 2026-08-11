@@ -48,6 +48,8 @@ export type SetThreadInteractionModeInput = CommandInput<"thread.interaction-mod
 export type SetThreadComposerModeInput = CommandInput<"thread.composer-mode.set">;
 export type StartThreadTurnInput = CommandInput<"thread.turn.start">;
 export type LaunchThreadDevReviewInput = CommandInput<"thread.dev-review.launch">;
+export type LaunchThreadDevReviewWorkflowInput = CommandInput<"thread.dev-review-workflow.launch">;
+export type CancelThreadDevReviewWorkflowInput = CommandInput<"thread.dev-review-workflow.cancel">;
 export type CreateThreadPlanningSpecInput = CommandInput<"thread.planning-spec.create">;
 export type StartThreadPlanningStageInput = CommandInput<"thread.planning-stage.start">;
 export type LaunchThreadPlanningWorkflowInput = CommandInput<"thread.planning-workflow.launch">;
@@ -310,6 +312,34 @@ export const launchThreadDevReview: (input: LaunchThreadDevReviewInput) => Comma
       createdAt: metadata.createdAt,
     });
   });
+
+export const launchThreadDevReviewWorkflow: (
+  input: LaunchThreadDevReviewWorkflowInput,
+) => CommandEffect = Effect.fn("EnvironmentCommands.launchThreadDevReviewWorkflow")(
+  function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "thread.dev-review-workflow.launch",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  },
+);
+
+export const cancelThreadDevReviewWorkflow: (
+  input: CancelThreadDevReviewWorkflowInput,
+) => CommandEffect = Effect.fn("EnvironmentCommands.cancelThreadDevReviewWorkflow")(
+  function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "thread.dev-review-workflow.cancel",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  },
+);
 
 export const createThreadPlanningSpec: (input: CreateThreadPlanningSpecInput) => CommandEffect =
   Effect.fn("EnvironmentCommands.createThreadPlanningSpec")(function* (input) {

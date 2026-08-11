@@ -27,6 +27,7 @@ import {
   type ProjectionThreadDevReview,
 } from "../../persistence/Services/ProjectionThreadDevReviews.ts";
 import { ProjectionImplementationRunRepository } from "../../persistence/Services/ProjectionImplementationRuns.ts";
+import { ProjectionDevReviewWorkflowRunRepository } from "../../persistence/Services/ProjectionDevReviewWorkflowRuns.ts";
 import {
   type ProjectionThreadMessage,
   ProjectionThreadMessageRepository,
@@ -58,6 +59,7 @@ import { ProjectionThreadActivityRepositoryLive } from "../../persistence/Layers
 import { ProjectionThreadMessageRepositoryLive } from "../../persistence/Layers/ProjectionThreadMessages.ts";
 import { ProjectionThreadDevReviewRepositoryLive } from "../../persistence/Layers/ProjectionThreadDevReviews.ts";
 import { ProjectionImplementationRunRepositoryLive } from "../../persistence/Layers/ProjectionImplementationRuns.ts";
+import { ProjectionDevReviewWorkflowRunRepositoryLive } from "../../persistence/Layers/ProjectionDevReviewWorkflowRuns.ts";
 import { ProjectionThreadProposedPlanRepositoryLive } from "../../persistence/Layers/ProjectionThreadProposedPlans.ts";
 import { ProjectionThreadPlanningTicketRepositoryLive } from "../../persistence/Layers/ProjectionThreadPlanningTickets.ts";
 import { ProjectionThreadPlanningReviewCycleRepositoryLive } from "../../persistence/Layers/ProjectionThreadPlanningReviewCycles.ts";
@@ -90,6 +92,7 @@ export const ORCHESTRATION_PROJECTOR_NAMES = {
   threadPlanningReviewCycles: "projection.thread-planning-review-cycles",
   threadLoadedSpecBundles: "projection.thread-loaded-spec-bundles",
   implementationRuns: "projection.implementation-runs",
+  devReviewWorkflowRuns: "projection.dev-review-workflow-runs",
   threadActivities: "projection.thread-activities",
   threadSessions: "projection.thread-sessions",
   threadTurns: "projection.thread-turns",
@@ -515,6 +518,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     const projectionThreadLoadedSpecBundleRepository =
       yield* ProjectionThreadLoadedSpecBundleRepository;
     const projectionImplementationRunRepository = yield* ProjectionImplementationRunRepository;
+    const projectionDevReviewWorkflowRunRepository =
+      yield* ProjectionDevReviewWorkflowRunRepository;
     const projectionThreadActivityRepository = yield* ProjectionThreadActivityRepository;
     const projectionThreadSessionRepository = yield* ProjectionThreadSessionRepository;
     const projectionTurnRepository = yield* ProjectionTurnRepository;
@@ -1545,6 +1550,25 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       }
     });
 
+    const applyDevReviewWorkflowRunsProjection: ProjectorDefinition["apply"] = Effect.fn(
+      "applyDevReviewWorkflowRunsProjection",
+    )(function* (event, _attachmentSideEffects) {
+      switch (event.type) {
+        case "thread.dev-review-workflow-launched":
+        case "thread.dev-review-workflow-updated":
+        case "thread.dev-review-workflow-cancel-requested":
+        case "thread.dev-review-workflow-resume-requested":
+          yield* projectionDevReviewWorkflowRunRepository.upsert({
+            runId: event.payload.run.id,
+            sourceThreadId: event.payload.sourceThreadId,
+            run: event.payload.run,
+          });
+          return;
+        default:
+          return;
+      }
+    });
+
     const applyThreadActivitiesProjection: ProjectorDefinition["apply"] = Effect.fn(
       "applyThreadActivitiesProjection",
     )(function* (event, _attachmentSideEffects) {
@@ -2118,6 +2142,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         apply: applyImplementationRunsProjection,
       },
       {
+        name: ORCHESTRATION_PROJECTOR_NAMES.devReviewWorkflowRuns,
+        apply: applyDevReviewWorkflowRunsProjection,
+      },
+      {
         name: ORCHESTRATION_PROJECTOR_NAMES.threadActivities,
         apply: applyThreadActivitiesProjection,
       },
@@ -2245,6 +2273,7 @@ export const OrchestrationProjectionPipelineLive = Layer.effect(
   Layer.provideMerge(ProjectionThreadPlanningReviewCycleRepositoryLive),
   Layer.provideMerge(ProjectionThreadLoadedSpecBundleRepositoryLive),
   Layer.provideMerge(ProjectionImplementationRunRepositoryLive),
+  Layer.provideMerge(ProjectionDevReviewWorkflowRunRepositoryLive),
   Layer.provideMerge(ProjectionThreadActivityRepositoryLive),
   Layer.provideMerge(ProjectionThreadSessionRepositoryLive),
   Layer.provideMerge(ProjectionTurnRepositoryLive),

@@ -1,6 +1,7 @@
 import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@t3tools/contracts";
 import {
   type DevReviewRecord,
+  type DevReviewWorkflowRun,
   type OrchestrationImplementationRun,
   OrchestrationCheckpointSummary,
   OrchestrationMessage,
@@ -24,6 +25,10 @@ import {
   ThreadDevReviewCreatedPayload,
   ThreadDevReviewEvidenceUpdatedPayload,
   ThreadDevReviewUpdatedPayload,
+  ThreadDevReviewWorkflowLaunchedPayload,
+  ThreadDevReviewWorkflowUpdatedPayload,
+  ThreadDevReviewWorkflowCancelRequestedPayload,
+  ThreadDevReviewWorkflowResumeRequestedPayload,
   ThreadWorkflowSubagentBatchCreatedPayload,
   ThreadWorkflowSubagentBatchChildUpdatedPayload,
   ThreadWorkflowSubagentBatchCompletedPayload,
@@ -233,6 +238,16 @@ function upsertImplementationRun(
   return [...runs.filter((entry) => entry.id !== run.id), run].toSorted(compareImplementationRuns);
 }
 
+function upsertDevReviewWorkflowRun(
+  runs: ReadonlyArray<DevReviewWorkflowRun>,
+  run: DevReviewWorkflowRun,
+): DevReviewWorkflowRun[] {
+  return [...runs.filter((entry) => entry.id !== run.id), run].toSorted(
+    (left, right) =>
+      left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+  );
+}
+
 function emptyPlanningWorkflow(): OrchestrationPlanningWorkflow {
   return {
     stage: "grill",
@@ -251,6 +266,7 @@ export function createEmptyReadModel(nowIso: string): OrchestrationReadModel {
     projects: [],
     threads: [],
     implementationRuns: [],
+    devReviewWorkflowRuns: [],
     updatedAt: nowIso,
   };
 }
@@ -837,6 +853,70 @@ export function projectEvent(
         Effect.map((payload) => ({
           ...nextBase,
           implementationRuns: upsertImplementationRun(nextBase.implementationRuns, payload.run),
+        })),
+      );
+
+    case "thread.dev-review-workflow-launched":
+      return decodeForEvent(
+        ThreadDevReviewWorkflowLaunchedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          devReviewWorkflowRuns: upsertDevReviewWorkflowRun(
+            nextBase.devReviewWorkflowRuns ?? [],
+            payload.run,
+          ),
+        })),
+      );
+
+    case "thread.dev-review-workflow-updated":
+      return decodeForEvent(
+        ThreadDevReviewWorkflowUpdatedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          devReviewWorkflowRuns: upsertDevReviewWorkflowRun(
+            nextBase.devReviewWorkflowRuns ?? [],
+            payload.run,
+          ),
+        })),
+      );
+
+    case "thread.dev-review-workflow-cancel-requested":
+      return decodeForEvent(
+        ThreadDevReviewWorkflowCancelRequestedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          devReviewWorkflowRuns: upsertDevReviewWorkflowRun(
+            nextBase.devReviewWorkflowRuns ?? [],
+            payload.run,
+          ),
+        })),
+      );
+
+    case "thread.dev-review-workflow-resume-requested":
+      return decodeForEvent(
+        ThreadDevReviewWorkflowResumeRequestedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          devReviewWorkflowRuns: upsertDevReviewWorkflowRun(
+            nextBase.devReviewWorkflowRuns ?? [],
+            payload.run,
+          ),
         })),
       );
 

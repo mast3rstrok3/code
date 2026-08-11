@@ -6,7 +6,22 @@ import * as Struct from "effect/Struct";
 import { ProviderOptionSelections } from "./model.ts";
 import { RepositoryIdentity, ThreadEnvMode } from "./environment.ts";
 import { ChangeRequest } from "./sourceControl.ts";
-import { DevReviewDocument, DevReviewEvidence, DevReviewId, DevReviewRecord } from "./review.ts";
+import {
+  DEV_REVIEW_WORKFLOW_DEFAULT_CYCLES,
+  DevReviewDocument,
+  DevReviewEvidence,
+  DevReviewId,
+  DevReviewRecord,
+  DevReviewWorkflowCaller,
+  DevReviewWorkflowCycleBudget,
+  DevReviewWorkflowRun,
+  DevReviewWorkflowRunId,
+  DevReviewWorkflowWorkspaceRevision,
+} from "./review.ts";
+
+export { DEV_REVIEW_WORKFLOW_DEFAULT_CYCLES, DEV_REVIEW_WORKFLOW_MAX_CYCLES } from "./review.ts";
+export const OrchestrationDevReviewWorkflowRun = DevReviewWorkflowRun;
+export type OrchestrationDevReviewWorkflowRun = DevReviewWorkflowRun;
 import {
   ApprovalRequestId,
   CheckpointRef,
@@ -150,6 +165,7 @@ export const WorkflowPreset = Schema.Literals([
   "wayfinder",
   "implementation",
   "planning",
+  "dev-review",
 ]);
 export type WorkflowPreset = typeof WorkflowPreset.Type;
 export const isPlanningWorkflowInteractionMode = (
@@ -942,6 +958,15 @@ export const OrchestrationImplementationRun = Schema.Struct({
   devReviewIds: Schema.Array(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
+  devReviewStrategy: Schema.Literals(["legacy-inline", "nested-workflow"]).pipe(
+    Schema.withDecodingDefault(Effect.succeed("legacy-inline" as const)),
+  ),
+  devReviewWorkflowRunIds: Schema.Array(DevReviewWorkflowRunId).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+  latestDevReviewWorkflowOutcome: Schema.NullOr(
+    Schema.Literals(["passed", "exhausted", "blocked", "canceled"]),
+  ).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   devReviews: Schema.Array(OrchestrationImplementationDevReviewArtifact).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
@@ -1036,6 +1061,9 @@ export const OrchestrationThreadWorkflowRole = Schema.Literals([
   "implementation-code-reviewer",
   "product-fix-implementer",
   "fast-feature-implementer",
+  "dev-review-orchestrator",
+  "dev-review-reviewer",
+  "dev-review-fixer",
 ]);
 export type OrchestrationThreadWorkflowRole = typeof OrchestrationThreadWorkflowRole.Type;
 
@@ -1257,6 +1285,7 @@ export const OrchestrationReadModel = Schema.Struct({
   implementationRuns: Schema.Array(OrchestrationImplementationRun).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
+  devReviewWorkflowRuns: Schema.optionalKey(Schema.Array(DevReviewWorkflowRun)),
   updatedAt: IsoDateTime,
 });
 export type OrchestrationReadModel = typeof OrchestrationReadModel.Type;
@@ -1357,6 +1386,7 @@ export const OrchestrationShellSnapshot = Schema.Struct({
   projects: Schema.Array(OrchestrationProjectShell),
   threads: Schema.Array(OrchestrationThreadShell),
   implementationRuns: Schema.optionalKey(Schema.Array(OrchestrationImplementationRun)),
+  devReviewWorkflowRuns: Schema.optionalKey(Schema.Array(DevReviewWorkflowRun)),
   updatedAt: IsoDateTime,
 });
 export type OrchestrationShellSnapshot = typeof OrchestrationShellSnapshot.Type;
@@ -1386,6 +1416,11 @@ export const OrchestrationShellStreamEvent = Schema.Union([
     kind: Schema.Literal("implementation-run-upserted"),
     sequence: NonNegativeInt,
     run: OrchestrationImplementationRun,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("dev-review-workflow-run-upserted"),
+    sequence: NonNegativeInt,
+    run: DevReviewWorkflowRun,
   }),
 ]);
 export type OrchestrationShellStreamEvent = typeof OrchestrationShellStreamEvent.Type;
@@ -1498,6 +1533,7 @@ export const OrchestrationThreadDetailSnapshot = Schema.Struct({
   snapshotSequence: NonNegativeInt,
   thread: OrchestrationThread,
   implementationRuns: Schema.optionalKey(Schema.Array(OrchestrationImplementationRun)),
+  devReviewWorkflowRuns: Schema.optionalKey(Schema.Array(DevReviewWorkflowRun)),
   // Present only on windowed responses. Absent on full snapshots (and from
   // pre-pagination servers), which clients treat as fully loaded.
   page: Schema.optional(OrchestrationThreadDetailPage),
@@ -1948,6 +1984,43 @@ export const ThreadTurnStartCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+export const ThreadDevReviewWorkflowLaunchCommand = Schema.Struct({
+  type: Schema.Literal("thread.dev-review-workflow.launch"),
+  commandId: CommandId,
+  targetThreadId: ThreadId,
+  controllerThreadId: ThreadId,
+  caller: DevReviewWorkflowCaller,
+  briefMarkdown: TrimmedNonEmptyString,
+  supportingContextMarkdown: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  previewTargets: Schema.Array(TrimmedNonEmptyString).check(Schema.isMinLength(1)),
+  cycleBudget: DevReviewWorkflowCycleBudget.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEV_REVIEW_WORKFLOW_DEFAULT_CYCLES)),
+  ),
+  modelSelection: ModelSelection,
+  workspaceRevision: Schema.optionalKey(DevReviewWorkflowWorkspaceRevision),
+  bootstrap: Schema.optional(ThreadTurnStartBootstrap),
+  createdAt: IsoDateTime,
+});
+
+const ThreadDevReviewWorkflowCancelCommand = Schema.Struct({
+  type: Schema.Literal("thread.dev-review-workflow.cancel"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  runId: DevReviewWorkflowRunId,
+  reason: Schema.optional(TrimmedNonEmptyString),
+  createdAt: IsoDateTime,
+});
+
+const ThreadDevReviewWorkflowResumeCommand = Schema.Struct({
+  type: Schema.Literal("thread.dev-review-workflow.resume"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  runId: DevReviewWorkflowRunId,
+  previewTargets: Schema.Array(TrimmedNonEmptyString).check(Schema.isMinLength(1)),
+  workspaceRevision: DevReviewWorkflowWorkspaceRevision,
+  createdAt: IsoDateTime,
+});
+
 const ThreadDevReviewLaunchCommand = Schema.Struct({
   type: Schema.Literal("thread.dev-review.launch"),
   commandId: CommandId,
@@ -2144,6 +2217,9 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadImplementationRunRetryCommand,
   ThreadImplementationRunCancelCommand,
   ThreadImplementationChangeRequestRetryCommand,
+  ThreadDevReviewWorkflowLaunchCommand,
+  ThreadDevReviewWorkflowCancelCommand,
+  ThreadDevReviewWorkflowResumeCommand,
   ThreadDevReviewLaunchCommand,
   ThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
@@ -2184,6 +2260,9 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadImplementationRunRetryCommand,
   ThreadImplementationRunCancelCommand,
   ThreadImplementationChangeRequestRetryCommand,
+  ThreadDevReviewWorkflowLaunchCommand,
+  ThreadDevReviewWorkflowCancelCommand,
+  ThreadDevReviewWorkflowResumeCommand,
   ThreadDevReviewLaunchCommand,
   ClientThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
@@ -2272,6 +2351,14 @@ const ThreadDevReviewEvidenceUpdateCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadDevReviewWorkflowUpdateCommand = Schema.Struct({
+  type: Schema.Literal("thread.dev-review-workflow.update"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  run: DevReviewWorkflowRun,
+  createdAt: IsoDateTime,
+});
+
 const ThreadRevertCompleteCommand = Schema.Struct({
   type: Schema.Literal("thread.revert.complete"),
   commandId: CommandId,
@@ -2302,6 +2389,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadActivityAppendCommand,
   ThreadDevReviewUpdateCommand,
   ThreadDevReviewEvidenceUpdateCommand,
+  ThreadDevReviewWorkflowUpdateCommand,
   ThreadWorkflowSubagentBatchCreateCommand,
   ThreadWorkflowSubagentLaunchCommand,
   ThreadWorkflowSubagentBatchChildRejectCommand,
@@ -2350,6 +2438,10 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.implementation-run-retry-requested",
   "thread.implementation-run-cancel-requested",
   "thread.implementation-change-request-retry-requested",
+  "thread.dev-review-workflow-launched",
+  "thread.dev-review-workflow-updated",
+  "thread.dev-review-workflow-cancel-requested",
+  "thread.dev-review-workflow-resume-requested",
   "thread.message-sent",
   "thread.turn-start-requested",
   "thread.turn-interrupt-requested",
@@ -2617,6 +2709,27 @@ export const ThreadImplementationRunCancelRequestedPayload = Schema.Struct({
   sourceThreadId: ThreadId,
   run: OrchestrationImplementationRun,
   reason: Schema.optional(Schema.String),
+});
+
+export const ThreadDevReviewWorkflowLaunchedPayload = Schema.Struct({
+  sourceThreadId: ThreadId,
+  run: DevReviewWorkflowRun,
+});
+
+export const ThreadDevReviewWorkflowUpdatedPayload = Schema.Struct({
+  sourceThreadId: ThreadId,
+  run: DevReviewWorkflowRun,
+});
+
+export const ThreadDevReviewWorkflowCancelRequestedPayload = Schema.Struct({
+  sourceThreadId: ThreadId,
+  run: DevReviewWorkflowRun,
+  reason: Schema.optional(Schema.String),
+});
+
+export const ThreadDevReviewWorkflowResumeRequestedPayload = Schema.Struct({
+  sourceThreadId: ThreadId,
+  run: DevReviewWorkflowRun,
 });
 
 export const ThreadMessageSentPayload = Schema.Struct({
@@ -2920,6 +3033,26 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.implementation-change-request-retry-requested"),
     payload: ThreadImplementationChangeRequestRetryRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.dev-review-workflow-launched"),
+    payload: ThreadDevReviewWorkflowLaunchedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.dev-review-workflow-updated"),
+    payload: ThreadDevReviewWorkflowUpdatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.dev-review-workflow-cancel-requested"),
+    payload: ThreadDevReviewWorkflowCancelRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.dev-review-workflow-resume-requested"),
+    payload: ThreadDevReviewWorkflowResumeRequestedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

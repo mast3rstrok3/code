@@ -1,6 +1,6 @@
 import type { ProviderInteractionMode, WorkflowPreset } from "@t3tools/contracts";
 
-export type WorkflowPresetRoute = "product" | "implementation" | "planning";
+export type WorkflowPresetRoute = "product" | "implementation" | "planning" | "review";
 
 export interface WorkflowPresetHelpStep {
   readonly label: string;
@@ -58,10 +58,10 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         threadBoundary: "new child thread",
       },
       {
-        label: "AppDevStack, Dev Review, and fresh TDD repair cycles",
+        label: "AppDevStack and nested Dev Review workflow",
         skillId: "implementation.browser-dev-review.codex",
         threadBoundary: "new review thread",
-        note: "up to ten fresh QA repairs; probes and browser reviews are counted separately",
+        note: "Dev Review owns its review, plan, and fresh TDD repair cycles",
       },
       {
         label: "Code Review",
@@ -108,9 +108,9 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         note: "automatic",
       },
       {
-        label: "AppDevStack, Dev Review, and fresh TDD repairs",
+        label: "AppDevStack and nested Dev Review workflow",
         skillId: "implementation.browser-dev-review.codex",
-        note: "automatic; up to ten fresh QA repairs",
+        note: "automatic; Dev Review has its own cycle budget",
       },
       {
         label: "Code Review",
@@ -158,9 +158,9 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         skillId: "implementation.merge-gate.codex",
       },
       {
-        label: "Run AppDevStack, Dev Review, and fresh TDD repair cycles",
+        label: "Run AppDevStack and the nested Dev Review workflow",
         skillId: "implementation.browser-dev-review.codex",
-        note: "up to ten fresh QA repairs",
+        note: "Dev Review has its own cycle budget",
       },
       {
         label: "Run Code Review",
@@ -192,6 +192,33 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         label: "Ticket review and revision cycles",
         skillId: "planning.ticket-reviewer.codex",
         note: "automatic; up to three cycles",
+      },
+    ],
+  },
+  {
+    id: "dev-review",
+    label: "Dev Review",
+    description: "Review a running feature in the browser and repair every actionable finding.",
+    route: "review",
+    interactionMode: "default",
+    helpSteps: [
+      {
+        label: "Browser Dev Review",
+        skillId: "implementation.browser-dev-review.codex",
+        threadBoundary: "new review thread",
+      },
+      {
+        label: "Non-interactive CLI Plan mode on failure",
+        threadBoundary: "same thread",
+      },
+      {
+        label: "Fresh TDD repair child",
+        skillId: "implementation.tdd.codex",
+        threadBoundary: "new child thread",
+      },
+      {
+        label: "Repeat until pass or cycle budget exhaustion",
+        threadBoundary: "new review thread",
       },
     ],
   },

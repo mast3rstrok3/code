@@ -62,7 +62,9 @@ type ImplementationWorkflowEvent = Extract<
       | "thread.dev-review-updated"
       | "thread.implementation-change-request-retry-requested"
       | "thread.implementation-run-retry-requested"
-      | "thread.implementation-run-cancel-requested";
+      | "thread.implementation-run-cancel-requested"
+      | "thread.dev-review-workflow-launched"
+      | "thread.dev-review-workflow-updated";
   }
 >;
 
@@ -467,7 +469,9 @@ function buildCodeReviewPrompt(input: {
     "",
     input.run.qaExhaustedAt === null && input.run.devReviewExhaustedAt === null
       ? "Dev Review passed at this commit."
-      : `Automated QA did not pass after ${IMPLEMENTATION_RUN_MAX_QA_REPAIRS} fresh repair agents. Last unsatisfied gate: ${input.run.qaExhaustionReason ?? "dev-review"}. Treat unresolved stack or user-visible defects as review findings and fix what you reasonably can.`,
+      : input.run.devReviewStrategy === "nested-workflow"
+        ? `Nested Dev Review '${input.run.devReviewWorkflowRunIds.at(-1) ?? "unknown"}' exhausted after ${input.run.qaAttemptCount} review attempt(s). Latest review: ${input.run.lastQaFailure?.reviewId ?? "unknown"}. Unresolved findings:\n\n${input.run.lastQaFailure?.detailMarkdown ?? "Unavailable"}\n\nTreat unresolved user-visible defects as review findings and fix what you reasonably can.`
+        : `Automated QA did not pass after ${IMPLEMENTATION_RUN_MAX_QA_REPAIRS} fresh repair agents. Last unsatisfied gate: ${input.run.qaExhaustionReason ?? "dev-review"}. Treat unresolved stack or user-visible defects as review findings and fix what you reasonably can.`,
     "",
     "Review scope:",
     `- worktree: ${input.run.orchestratorWorktreePath}`,
@@ -710,7 +714,9 @@ function changeRequestReviewNote(run: OrchestrationImplementationRun): string {
   } else {
     const gate = run.qaExhaustionReason ?? "dev-review";
     lines.push(
-      `- ⚠️ Automated QA: **did not pass; exhausted ${run.qaCycleCount}/${IMPLEMENTATION_RUN_MAX_QA_REPAIRS} fresh repairs**. Last unsatisfied gate: ${gate === "app-dev-stack" ? "AppDevStack" : "Browser Dev Review"}. This change request was published best-effort; manually verify the affected flow before merging.`,
+      run.devReviewStrategy === "nested-workflow" && gate === "dev-review"
+        ? `- ⚠️ Nested Dev Review '${run.devReviewWorkflowRunIds.at(-1) ?? "unknown"}' **exhausted after ${run.qaAttemptCount} review attempt(s)**. Latest review: ${run.lastQaFailure?.reviewId ?? "unknown"}. This change request was published best-effort with unresolved findings; manually verify the affected flow before merging.`
+        : `- ⚠️ Automated QA: **did not pass; exhausted ${run.qaCycleCount}/${IMPLEMENTATION_RUN_MAX_QA_REPAIRS} fresh repairs**. Last unsatisfied gate: ${gate === "app-dev-stack" ? "AppDevStack" : "Browser Dev Review"}. This change request was published best-effort; manually verify the affected flow before merging.`,
     );
     if (run.lastQaFailure !== null) {
       lines.push(`- Last QA failure: ${run.lastQaFailure.detailMarkdown.slice(0, 1_000)}`);
@@ -1686,6 +1692,18 @@ const make = Effect.gen(function* () {
         cycleRun.artifactSource === "proposed-plan" && artifactSourceThread !== null
           ? fastFeatureArtifactMarkdown({ run: cycleRun, sourceThread: artifactSourceThread })
           : undefined;
+      const activeNestedDevReview =
+        cycleRun.devReviewStrategy === "nested-workflow"
+          ? (readModel.devReviewWorkflowRuns ?? []).find(
+              (candidate) =>
+                candidate.caller.type === "implementation" &&
+                candidate.caller.implementationRunId === cycleRun.id &&
+                candidate.status === "running",
+            )
+          : undefined;
+      if (activeNestedDevReview !== undefined && activeNestedDevReview.activePhase !== null) {
+        return;
+      }
 
       const ensuringRun: OrchestrationImplementationRun = {
         ...cycleRun,
@@ -1900,6 +1918,71 @@ const make = Effect.gen(function* () {
           retryableStage: "dev-review",
           reasonMarkdown: `Dev Review requires the current integrated orchestrator HEAD '${reviewHead.commitSha}', but the recorded integrated HEAD is '${cycleRun.integrationHeadSha ?? "missing"}'.`,
           updatedAt: input.createdAt,
+        });
+        return;
+      }
+
+      if (cycleRun.devReviewStrategy === "nested-workflow") {
+        const readyRun: OrchestrationImplementationRun = {
+          ...ensuringRun,
+          appDevStack:
+            stack === null
+              ? ensuringRun.appDevStack
+              : {
+                  status: appDevStackReadiness(stack),
+                  stackId: stack.stack?.id ?? null,
+                  stackStatus: stack.stack?.status ?? null,
+                  frontendUrl,
+                  frontendServiceName: stack.frontendServiceName,
+                  displayName: stack.stack?.displayName ?? null,
+                  lastErrorMarkdown: null,
+                  requestedAt: ensuringRun.appDevStack.requestedAt || input.createdAt,
+                  updatedAt: input.createdAt,
+                },
+          integrationHeadSha: reviewHead.commitSha,
+          retryableFailure: null,
+          updatedAt: input.createdAt,
+        };
+        yield* updateRun({
+          sourceThreadId: input.sourceThreadId,
+          run: readyRun,
+          createdAt: input.createdAt,
+        });
+        if (activeNestedDevReview !== undefined) {
+          yield* orchestrationEngine.dispatch({
+            type: "thread.dev-review-workflow.resume",
+            commandId: yield* serverCommandId("implementation-dev-review-preview-refresh"),
+            threadId: activeNestedDevReview.controllerThreadId,
+            runId: activeNestedDevReview.id,
+            previewTargets: [frontendUrl],
+            workspaceRevision: activeNestedDevReview.workspaceRevision,
+            createdAt: input.createdAt,
+          });
+          return;
+        }
+        const controllerThreadId = yield* serverThreadId("dev-review-orchestrator");
+        yield* orchestrationEngine.dispatch({
+          type: "thread.dev-review-workflow.launch",
+          commandId: yield* serverCommandId("implementation-dev-review-workflow-launch"),
+          targetThreadId: cycleRun.orchestratorThreadId,
+          controllerThreadId,
+          caller: {
+            type: "implementation",
+            implementationRunId: cycleRun.id,
+            orchestratorThreadId: cycleRun.orchestratorThreadId,
+          },
+          briefMarkdown:
+            artifactMarkdown ??
+            `Verify Implementation run '${cycleRun.id}' against its complete Spec and Planning Tickets. Treat every acceptance criterion as required.`,
+          supportingContextMarkdown: buildBrowserDevReviewPrompt({
+            run: readyRun,
+            frontendUrl,
+            ...(artifactMarkdown === undefined ? {} : { artifactMarkdown }),
+          }),
+          previewTargets: [frontendUrl],
+          cycleBudget: Math.min(50, Math.max(1, cycleRun.launchSummary.finalDevReview.maxAttempts)),
+          modelSelection: orchestratorThread.modelSelection,
+          createdAt: input.createdAt,
         });
         return;
       }
@@ -3959,6 +4042,20 @@ const make = Effect.gen(function* () {
         return;
       }
       if (failure.stage === "dev-review") {
+        if (input.run.devReviewStrategy === "nested-workflow") {
+          yield* startBrowserReview({
+            sourceThreadId: input.sourceThreadId,
+            run: {
+              ...input.run,
+              status: "qa-reviewing",
+              latestDevReviewWorkflowOutcome: null,
+              retryableFailure: null,
+              updatedAt: input.createdAt,
+            },
+            createdAt: input.createdAt,
+          });
+          return;
+        }
         if (input.run.qaExhaustedAt !== null || input.run.devReviewExhaustedAt !== null) {
           yield* continueAfterQaExhaustion({
             sourceThreadId: input.sourceThreadId,
@@ -4165,6 +4262,22 @@ const make = Effect.gen(function* () {
   ) {
     const run = event.payload.run;
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    const activeNestedDevReview = (readModel.devReviewWorkflowRuns ?? []).find(
+      (candidate) =>
+        candidate.caller.type === "implementation" &&
+        candidate.caller.implementationRunId === run.id &&
+        candidate.status === "running",
+    );
+    if (activeNestedDevReview !== undefined) {
+      yield* orchestrationEngine.dispatch({
+        type: "thread.dev-review-workflow.cancel",
+        commandId: yield* serverCommandId("implementation-nested-dev-review-cancel"),
+        threadId: activeNestedDevReview.controllerThreadId,
+        runId: activeNestedDevReview.id,
+        reason: "Parent Implementation workflow was canceled.",
+        createdAt: event.occurredAt,
+      });
+    }
     // Stop the orchestrator plus every live workflow child so no provider turn
     // outlives the run. The worktree and branch are deliberately left in place —
     // cancel stops work, it does not clean up.
@@ -4201,6 +4314,108 @@ const make = Effect.gen(function* () {
       },
       createdAt: event.occurredAt,
     });
+  });
+
+  const handleNestedDevReviewWorkflow = Effect.fn(
+    "ImplementationWorkflowReactor.handleNestedDevReviewWorkflow",
+  )(function* (
+    event: Extract<
+      ImplementationWorkflowEvent,
+      { type: "thread.dev-review-workflow-launched" | "thread.dev-review-workflow-updated" }
+    >,
+  ) {
+    const nestedRun = event.payload.run;
+    if (nestedRun.caller.type !== "implementation") return;
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    const run = findRunById(readModel, nestedRun.caller.implementationRunId);
+    if (run === null || run.devReviewStrategy !== "nested-workflow") return;
+    const sourceThreadId = findRunSourceThreadId({ readModel, run });
+    if (sourceThreadId === null) return;
+    const runIds = run.devReviewWorkflowRunIds.includes(nestedRun.id)
+      ? run.devReviewWorkflowRunIds
+      : [...run.devReviewWorkflowRunIds, nestedRun.id];
+    const linkedRun: OrchestrationImplementationRun = {
+      ...run,
+      devReviewWorkflowRunIds: runIds,
+      latestDevReviewWorkflowOutcome: nestedRun.outcome,
+      updatedAt: event.occurredAt,
+    };
+    if (event.type === "thread.dev-review-workflow-launched") {
+      yield* updateRun({ sourceThreadId, run: linkedRun, createdAt: event.occurredAt });
+      return;
+    }
+    if (
+      nestedRun.status === "running" &&
+      nestedRun.activePhase === null &&
+      nestedRun.cycles.at(-1)?.fixResult?.status === "succeeded"
+    ) {
+      const repairedRun: OrchestrationImplementationRun = {
+        ...linkedRun,
+        integrationHeadSha: nestedRun.workspaceRevision.headSha,
+        status: "qa-reviewing",
+        retryableFailure: null,
+        updatedAt: event.occurredAt,
+      };
+      yield* updateRun({ sourceThreadId, run: repairedRun, createdAt: event.occurredAt });
+      yield* startBrowserReview({
+        sourceThreadId,
+        run: repairedRun,
+        createdAt: event.occurredAt,
+      });
+      return;
+    }
+    if (nestedRun.status === "passed") {
+      const passedRun: OrchestrationImplementationRun = {
+        ...linkedRun,
+        status: "qa-reviewing",
+        integrationHeadSha: nestedRun.finalHeadSha ?? nestedRun.workspaceRevision.headSha,
+        devReviewedHeadSha: nestedRun.finalHeadSha ?? nestedRun.workspaceRevision.headSha,
+        qaAttemptCount: nestedRun.attemptsUsed,
+        retryableFailure: null,
+        updatedAt: event.occurredAt,
+      };
+      yield* updateRun({ sourceThreadId, run: passedRun, createdAt: event.occurredAt });
+      yield* startCodeReview({ sourceThreadId, run: passedRun, createdAt: event.occurredAt });
+      return;
+    }
+    if (nestedRun.status === "exhausted") {
+      const exhaustedRun: OrchestrationImplementationRun = {
+        ...linkedRun,
+        status: "qa-reviewing",
+        integrationHeadSha: nestedRun.finalHeadSha ?? nestedRun.workspaceRevision.headSha,
+        qaAttemptCount: nestedRun.attemptsUsed,
+        qaExhaustedAt: event.occurredAt,
+        qaExhaustionReason: "dev-review",
+        devReviewExhaustedAt: event.occurredAt,
+        lastQaFailure: {
+          kind: "dev-review",
+          status: "exhausted",
+          detailMarkdown:
+            nestedRun.cycles.at(-1)?.actionableFindingsMarkdown ??
+            "Nested Dev Review exhausted with unresolved findings.",
+          reviewId: nestedRun.cycles.at(-1)?.reviewId ?? null,
+          headSha: nestedRun.finalHeadSha ?? nestedRun.workspaceRevision.headSha,
+          occurredAt: event.occurredAt,
+        },
+        retryableFailure: null,
+        updatedAt: event.occurredAt,
+      };
+      yield* updateRun({ sourceThreadId, run: exhaustedRun, createdAt: event.occurredAt });
+      yield* startCodeReview({ sourceThreadId, run: exhaustedRun, createdAt: event.occurredAt });
+      return;
+    }
+    if (nestedRun.status === "blocked" || nestedRun.status === "canceled") {
+      yield* blockRun({
+        sourceThreadId,
+        run: linkedRun,
+        retryableStage: "dev-review",
+        reasonMarkdown:
+          nestedRun.failure?.detailMarkdown ??
+          `Nested Dev Review ended with outcome '${nestedRun.status}'.`,
+        updatedAt: event.occurredAt,
+        humanBlocked: true,
+      });
+    }
   });
 
   const processActivity = Effect.fn("ImplementationWorkflowReactor.processActivity")(function* (
@@ -4259,6 +4474,10 @@ const make = Effect.gen(function* () {
       case "thread.implementation-run-cancel-requested":
         yield* handleRunCancel(event);
         return;
+      case "thread.dev-review-workflow-launched":
+      case "thread.dev-review-workflow-updated":
+        yield* handleNestedDevReviewWorkflow(event);
+        return;
     }
   });
 
@@ -4298,6 +4517,7 @@ const make = Effect.gen(function* () {
       const createdAt = DateTime.formatIso(yield* DateTime.now);
       for (const persistedRun of readModel.implementationRuns) {
         if (persistedRun.status === "completed" || persistedRun.status === "canceled") continue;
+        if (persistedRun.devReviewStrategy === "nested-workflow") continue;
         const sourceThreadId = findRunSourceThreadId({ readModel, run: persistedRun });
         if (sourceThreadId === null) continue;
         const qaFixers = readModel.threads.filter(
@@ -4883,7 +5103,9 @@ const make = Effect.gen(function* () {
           event.type !== "thread.dev-review-updated" &&
           event.type !== "thread.implementation-change-request-retry-requested" &&
           event.type !== "thread.implementation-run-retry-requested" &&
-          event.type !== "thread.implementation-run-cancel-requested"
+          event.type !== "thread.implementation-run-cancel-requested" &&
+          event.type !== "thread.dev-review-workflow-launched" &&
+          event.type !== "thread.dev-review-workflow-updated"
         ) {
           return Effect.void;
         }

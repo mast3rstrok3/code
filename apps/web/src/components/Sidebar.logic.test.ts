@@ -2281,6 +2281,9 @@ describe("workflowRoleShortLabel", () => {
     expect(workflowRoleShortLabel("implementation-worker")).toBe("Worker");
     expect(workflowRoleShortLabel("implementation-qa-reviewer")).toBe("Dev review");
     expect(workflowRoleShortLabel("planning-orchestrator")).toBe("Planning");
+    expect(workflowRoleShortLabel("dev-review-orchestrator")).toBe("Dev Review");
+    expect(workflowRoleShortLabel("dev-review-reviewer")).toBe("Browser review");
+    expect(workflowRoleShortLabel("dev-review-fixer")).toBe("Repair");
     expect(workflowRoleShortLabel(null)).toBeNull();
   });
 });

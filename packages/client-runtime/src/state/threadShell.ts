@@ -1,6 +1,7 @@
 import type {
   EnvironmentId,
   OrchestrationImplementationRun,
+  OrchestrationDevReviewWorkflowRun,
   OrchestrationPlanningSpecId,
   OrchestrationShellSnapshot,
   OrchestrationThreadShell,
@@ -25,6 +26,8 @@ import {
 
 const EMPTY_THREADS: ReadonlyArray<OrchestrationThreadShell> = Object.freeze([]);
 const EMPTY_IMPLEMENTATION_RUNS: ReadonlyArray<OrchestrationImplementationRun> = Object.freeze([]);
+const EMPTY_DEV_REVIEW_WORKFLOW_RUNS: ReadonlyArray<OrchestrationDevReviewWorkflowRun> =
+  Object.freeze([]);
 const EMPTY_SCOPED_THREAD_REFS: ReadonlyArray<ScopedThreadRef> = Object.freeze([]);
 const EMPTY_THREAD_INDEX: ReadonlyMap<ThreadId, OrchestrationThreadShell> = new Map();
 const EMPTY_THREAD_REFS_BY_PROJECT: ReadonlyMap<
@@ -50,6 +53,14 @@ export function createEnvironmentThreadShellAtoms(input: {
       (get): ReadonlyArray<OrchestrationImplementationRun> =>
         get(input.snapshotAtom(environmentId))?.implementationRuns ?? EMPTY_IMPLEMENTATION_RUNS,
     ).pipe(Atom.withLabel(`environment-implementation-runs:${environmentId}`)),
+  );
+
+  const environmentDevReviewWorkflowRunsAtom = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make(
+      (get): ReadonlyArray<OrchestrationDevReviewWorkflowRun> =>
+        get(input.snapshotAtom(environmentId))?.devReviewWorkflowRuns ??
+        EMPTY_DEV_REVIEW_WORKFLOW_RUNS,
+    ).pipe(Atom.withLabel(`environment-dev-review-workflow-runs:${environmentId}`)),
   );
 
   const implementationRunsBySpecAtomFamily = Atom.family((key: string) => {
@@ -205,6 +216,7 @@ export function createEnvironmentThreadShellAtoms(input: {
   return {
     environmentThreadsAtom,
     environmentImplementationRunsAtom,
+    environmentDevReviewWorkflowRunsAtom,
     implementationRunsBySpecAtom: (input: {
       readonly environmentId: EnvironmentId;
       readonly specId: OrchestrationPlanningSpecId;

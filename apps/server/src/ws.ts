@@ -795,6 +795,31 @@ const makeWsRpcLayer = (
               }),
             );
           }
+          case "thread.dev-review-workflow-launched":
+          case "thread.dev-review-workflow-updated":
+          case "thread.dev-review-workflow-cancel-requested":
+          case "thread.dev-review-workflow-resume-requested": {
+            const run = event.payload.run;
+            if (
+              visibleThreadIds !== undefined &&
+              !visibleThreadIds.has(run.targetThreadId) &&
+              !visibleThreadIds.has(run.controllerThreadId) &&
+              !run.cycles.some(
+                (cycle) =>
+                  visibleThreadIds.has(cycle.reviewerThreadId) ||
+                  (cycle.fixerThreadId !== null && visibleThreadIds.has(cycle.fixerThreadId)),
+              )
+            ) {
+              return Effect.succeed(Option.none());
+            }
+            return Effect.succeed(
+              Option.some({
+                kind: "dev-review-workflow-run-upserted" as const,
+                sequence: event.sequence,
+                run,
+              }),
+            );
+          }
           default:
             if (event.aggregateKind !== "thread") {
               return Effect.succeed(Option.none());
@@ -879,7 +904,23 @@ const makeWsRpcLayer = (
           }
           const latestByAggregate = new Map<string, OrchestrationEvent>();
           for (const event of events) {
-            latestByAggregate.set(`${event.aggregateKind}:${event.aggregateId}`, event);
+            const key = (() => {
+              switch (event.type) {
+                case "thread.implementation-run-launched":
+                case "thread.implementation-run-updated":
+                case "thread.implementation-run-cancel-requested":
+                case "thread.implementation-change-request-retry-requested":
+                  return `implementation-run:${event.payload.run.id}`;
+                case "thread.dev-review-workflow-launched":
+                case "thread.dev-review-workflow-updated":
+                case "thread.dev-review-workflow-cancel-requested":
+                case "thread.dev-review-workflow-resume-requested":
+                  return `dev-review-workflow-run:${event.payload.run.id}`;
+                default:
+                  return `${event.aggregateKind}:${event.aggregateId}`;
+              }
+            })();
+            latestByAggregate.set(key, event);
           }
           const survivors = Array.from(latestByAggregate.values()).sort(
             (left, right) => left.sequence - right.sequence,
@@ -954,11 +995,16 @@ const makeWsRpcLayer = (
         );
 
       const dispatchBootstrapTurnStart = (
-        command: Extract<OrchestrationCommand, { type: "thread.turn.start" }>,
+        command: Extract<
+          OrchestrationCommand,
+          { type: "thread.turn.start" | "thread.dev-review-workflow.launch" }
+        >,
       ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> =>
         Effect.gen(function* () {
           const bootstrap = command.bootstrap;
-          const { bootstrap: _bootstrap, ...finalTurnStartCommand } = command;
+          const { bootstrap: _bootstrap, ...finalCommand } = command;
+          const threadId =
+            command.type === "thread.turn.start" ? command.threadId : command.targetThreadId;
           let createdThread = false;
           let targetProjectId = bootstrap?.createThread?.projectId;
           let targetProjectCwd = bootstrap?.prepareWorktree?.projectCwd;
@@ -971,7 +1017,7 @@ const makeWsRpcLayer = (
                     orchestrationEngine.dispatch({
                       type: "thread.delete",
                       commandId,
-                      threadId: command.threadId,
+                      threadId,
                     }),
                   ),
                   Effect.ignoreCause({ log: true }),
@@ -985,7 +1031,7 @@ const makeWsRpcLayer = (
           }) => {
             const detail = projectSetupScriptCompatibilityDetail(input.error);
             return appendSetupScriptActivity({
-              threadId: command.threadId,
+              threadId,
               kind: "setup-script.failed",
               summary: "Setup script failed to start",
               createdAt: input.requestedAt,
@@ -998,7 +1044,7 @@ const makeWsRpcLayer = (
               Effect.ignoreCause({ log: false }),
               Effect.flatMap(() =>
                 Effect.logWarning("bootstrap turn start failed to launch setup script", {
-                  threadId: command.threadId,
+                  threadId,
                   worktreePath: input.worktreePath,
                   detail,
                 }),
@@ -1023,7 +1069,7 @@ const makeWsRpcLayer = (
               };
               yield* Effect.all([
                 appendSetupScriptActivity({
-                  threadId: command.threadId,
+                  threadId,
                   kind: "setup-script.requested",
                   summary: "Starting setup script",
                   createdAt: input.requestedAt,
@@ -1031,7 +1077,7 @@ const makeWsRpcLayer = (
                   tone: "info",
                 }),
                 appendSetupScriptActivity({
-                  threadId: command.threadId,
+                  threadId,
                   kind: "setup-script.started",
                   summary: "Setup script started",
                   createdAt: startedAt,
@@ -1044,7 +1090,7 @@ const makeWsRpcLayer = (
                   Effect.logWarning(
                     "bootstrap turn start launched setup script but failed to record setup activity",
                     {
-                      threadId: command.threadId,
+                      threadId,
                       worktreePath: input.worktreePath,
                       scriptId: input.scriptId,
                       terminalId: input.terminalId,
@@ -1064,7 +1110,7 @@ const makeWsRpcLayer = (
               const requestedAt = yield* nowIso;
               yield* projectSetupScriptRunner
                 .runForThread({
-                  threadId: command.threadId,
+                  threadId,
                   ...(targetProjectId ? { projectId: targetProjectId } : {}),
                   ...(targetProjectCwd ? { projectCwd: targetProjectCwd } : {}),
                   worktreePath,
@@ -1098,9 +1144,14 @@ const makeWsRpcLayer = (
               yield* orchestrationEngine.dispatch({
                 type: "thread.create",
                 commandId: yield* serverCommandId("bootstrap-thread-create"),
-                threadId: command.threadId,
+                threadId,
                 projectId: bootstrap.createThread.projectId,
                 ownerUserId: bootstrap.createThread.ownerUserId,
+                parentThreadId: bootstrap.createThread.parentThreadId ?? null,
+                workflowRole: bootstrap.createThread.workflowRole ?? null,
+                workflowContext: bootstrap.createThread.workflowContext ?? null,
+                workflowSubagentBatchProvenance:
+                  bootstrap.createThread.workflowSubagentBatchProvenance ?? null,
                 title: bootstrap.createThread.title,
                 modelSelection: bootstrap.createThread.modelSelection,
                 runtimeMode: bootstrap.createThread.runtimeMode,
@@ -1147,7 +1198,7 @@ const makeWsRpcLayer = (
               yield* orchestrationEngine.dispatch({
                 type: "thread.meta.update",
                 commandId: yield* serverCommandId("bootstrap-thread-meta-update"),
-                threadId: command.threadId,
+                threadId,
                 branch: worktree.worktree.refName,
                 worktreePath: targetWorktreePath,
               });
@@ -1156,7 +1207,7 @@ const makeWsRpcLayer = (
 
             yield* runSetupProgram();
 
-            return yield* orchestrationEngine.dispatch(finalTurnStartCommand);
+            return yield* orchestrationEngine.dispatch(finalCommand);
           });
 
           return yield* bootstrapProgram.pipe(
@@ -1174,7 +1225,9 @@ const makeWsRpcLayer = (
         normalizedCommand: OrchestrationCommand,
       ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> => {
         const dispatchEffect =
-          normalizedCommand.type === "thread.turn.start" && normalizedCommand.bootstrap
+          (normalizedCommand.type === "thread.turn.start" ||
+            normalizedCommand.type === "thread.dev-review-workflow.launch") &&
+          normalizedCommand.bootstrap
             ? dispatchBootstrapTurnStart(normalizedCommand)
             : orchestrationEngine
                 .dispatch(normalizedCommand)

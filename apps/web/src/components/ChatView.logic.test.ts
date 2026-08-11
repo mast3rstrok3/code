@@ -15,7 +15,6 @@ import type { Thread, ThreadShell } from "../types";
 import {
   MAX_HIDDEN_MOUNTED_PREVIEW_THREADS,
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
-  buildBrowserDevReviewLaunchMessage,
   buildLocalDraftThread,
   branchMismatchKey,
   buildExpiredTerminalContextToastCopy,
@@ -30,6 +29,7 @@ import {
   hasEnvironmentReconnectWarningGraceElapsed,
   hasServerAcknowledgedLocalDispatch,
   isBranchMismatchDismissedForSession,
+  normalizeDevReviewCycleBudget,
   reconcileMountedTerminalThreadIds,
   reconcileRetainedMountedThreadIds,
   resolveProductWorkflowPlanningThreadId,
@@ -192,59 +192,13 @@ describe("buildLocalDraftThread", () => {
   });
 });
 
-describe("buildBrowserDevReviewLaunchMessage", () => {
-  it("builds an auto launch message from source context without tool choreography", () => {
-    const sourceContext = {
-      turnId: TurnId.make("turn-2"),
-      messages: [
-        {
-          role: "user" as const,
-          text: "Please add login validation.",
-          createdAt: "2026-03-29T00:00:01.000Z",
-        },
-        {
-          role: "assistant" as const,
-          text: "Implemented validation and updated tests.",
-          createdAt: "2026-03-29T00:00:09.000Z",
-        },
-      ],
-    };
-    const message = buildBrowserDevReviewLaunchMessage({
-      sourceThreadId: threadId,
-      sourceTitle: "Implementation thread",
-      mode: "auto",
-      sourceContext,
-      customPrompt: null,
-      previewUrls: ["http://localhost:5173"],
-    });
-
-    expect(message).toContain("Run Browser Dev Review");
-    expect(message).toContain("Auto: latest settled source turn");
-    expect(message).toContain("Feature URL: http://localhost:5173");
-    expect(message).toContain("Please add login validation.");
-    expect(message).toContain("Implemented validation and updated tests.");
-    expect(message).not.toContain("dev_review_get");
-    expect(message).not.toContain("preview_open");
-    expect(message).not.toContain("dev_review_recording_start");
-    expect(message).not.toContain("agent-browser");
-    expect(message).not.toContain("replay");
-  });
-
-  it("builds a custom launch message from user specifics", () => {
-    const message = buildBrowserDevReviewLaunchMessage({
-      sourceThreadId: threadId,
-      sourceTitle: "Implementation thread",
-      mode: "custom",
-      sourceContext: null,
-      customPrompt: "Focus on the empty-state and failed-login flows.",
-      previewUrls: ["http://localhost:5173", "http://localhost:3000"],
-    });
-
-    expect(message).toContain("Specifics: custom request");
-    expect(message).toContain("Focus on the empty-state and failed-login flows.");
-    expect(message).toContain("Feature URL candidates");
-    expect(message).toContain("http://localhost:3000");
-    expect(message).not.toContain("dev_review_update");
+describe("normalizeDevReviewCycleBudget", () => {
+  it("persists an integer attempt budget constrained to 1 through 50", () => {
+    expect(normalizeDevReviewCycleBudget(10)).toBe(10);
+    expect(normalizeDevReviewCycleBudget(2.6)).toBe(3);
+    expect(normalizeDevReviewCycleBudget(0)).toBe(1);
+    expect(normalizeDevReviewCycleBudget(51)).toBe(50);
+    expect(normalizeDevReviewCycleBudget(Number.NaN)).toBe(10);
   });
 });
 

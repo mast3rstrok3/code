@@ -1,14 +1,15 @@
-import { Radio as RadioPrimitive } from "@base-ui/react/radio";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { CheckCircle2, FileText, Sparkles } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import {
+  DEV_REVIEW_WORKFLOW_DEFAULT_CYCLES,
+  DEV_REVIEW_WORKFLOW_MAX_CYCLES,
+} from "@t3tools/contracts";
 import { truncate } from "@t3tools/shared/String";
 
 import type {
-  BrowserDevReviewLaunchMode,
-  BrowserDevReviewLaunchRequest,
   BrowserDevReviewSourceContext,
+  DevReviewWorkflowLaunchRequest,
 } from "./ChatView.logic";
-import { cn } from "~/lib/utils";
+import { isValidDevReviewWorkflowLaunch } from "./DevReviewPanel.logic";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -19,102 +20,106 @@ import {
   DialogPopup,
   DialogTitle,
 } from "./ui/dialog";
-import { RadioGroup } from "./ui/radio-group";
+import { Input } from "./ui/input";
 import { Textarea } from "./ui/textarea";
 
 interface DevReviewLaunchDialogProps {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly launchInFlight: boolean;
-  readonly autoContext: BrowserDevReviewSourceContext | null;
-  readonly onLaunch: (request: BrowserDevReviewLaunchRequest) => void;
+  readonly launchDisabled: boolean;
+  readonly sourceSettled: boolean;
+  readonly sourceContext: BrowserDevReviewSourceContext | null;
+  readonly previewTargets: ReadonlyArray<string>;
+  readonly initialCycleBudget?: number;
+  readonly onLaunch: (request: DevReviewWorkflowLaunchRequest) => void;
 }
 
 export function DevReviewLaunchDialog(props: DevReviewLaunchDialogProps) {
-  const [mode, setMode] = useState<BrowserDevReviewLaunchMode>(
-    props.autoContext === null ? "custom" : "auto",
+  const [brief, setBrief] = useState("");
+  const [cycleBudget, setCycleBudget] = useState(
+    props.initialCycleBudget ?? DEV_REVIEW_WORKFLOW_DEFAULT_CYCLES,
   );
-  const [customPrompt, setCustomPrompt] = useState("");
-  const autoAvailable = props.autoContext !== null;
-  const customPromptText = customPrompt.trim();
-  const launchDisabled =
-    props.launchInFlight ||
-    (mode === "auto" && !autoAvailable) ||
-    (mode === "custom" && customPromptText.length === 0);
-
-  const autoPreview = useMemo(() => formatAutoPreview(props.autoContext), [props.autoContext]);
-
-  useEffect(() => {
-    if (!autoAvailable && mode === "auto") {
-      setMode("custom");
-    }
-  }, [autoAvailable, mode]);
+  const normalizedBrief = brief.trim();
+  const validLaunch = isValidDevReviewWorkflowLaunch({
+    brief: normalizedBrief,
+    cycleBudget,
+    sourceSettled: props.sourceSettled,
+    previewTargets: props.previewTargets,
+    worktreeOwned: props.launchDisabled,
+  });
+  const sourcePreview = useMemo(
+    () => formatSourcePreview(props.sourceContext),
+    [props.sourceContext],
+  );
 
   useEffect(() => {
     if (!props.open) return;
-    setMode(autoAvailable ? "auto" : "custom");
-  }, [autoAvailable, props.open]);
+    setCycleBudget(props.initialCycleBudget ?? DEV_REVIEW_WORKFLOW_DEFAULT_CYCLES);
+  }, [props.initialCycleBudget, props.open]);
 
   return (
     <Dialog
       open={props.open}
       onOpenChange={(open) => {
-        if (props.launchInFlight) return;
-        props.onOpenChange(open);
+        if (!props.launchInFlight) props.onOpenChange(open);
       }}
     >
       <DialogPopup className="max-w-xl overflow-hidden">
         <DialogHeader>
-          <DialogTitle>Browser Dev Review</DialogTitle>
+          <DialogTitle>Launch Dev Review</DialogTitle>
           <DialogDescription>
-            Create a review thread with durable browser evidence.
+            Review, plan repairs, and fix in fresh threads until the feature passes or the budget is
+            exhausted.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-4">
-          <RadioGroup
-            value={mode}
-            onValueChange={(value) => setMode(value as BrowserDevReviewLaunchMode)}
-            className="grid gap-2 sm:grid-cols-2"
-            aria-label="Browser Dev Review source"
-          >
-            <ModeOption
-              value="auto"
-              checked={mode === "auto"}
-              disabled={!autoAvailable}
-              icon={<Sparkles className="size-4" aria-hidden />}
-              title="Auto"
-              detail={autoAvailable ? "Use latest settled turn" : "No settled turn"}
+          <label className="grid gap-2">
+            <span className="text-xs font-medium text-foreground">Review brief</span>
+            <Textarea
+              value={brief}
+              onChange={(event) => setBrief(event.currentTarget.value)}
+              placeholder="Verify the login flow, including validation, loading, and failed submissions."
+              size="lg"
+              autoFocus
             />
-            <ModeOption
-              value="custom"
-              checked={mode === "custom"}
-              icon={<FileText className="size-4" aria-hidden />}
-              title="Specifics"
-              detail="Write a review prompt"
+          </label>
+          <label className="grid gap-2">
+            <span className="text-xs font-medium text-foreground">Review attempts</span>
+            <Input
+              type="number"
+              min={1}
+              max={DEV_REVIEW_WORKFLOW_MAX_CYCLES}
+              value={cycleBudget}
+              onChange={(event) => setCycleBudget(Number(event.currentTarget.value))}
             />
-          </RadioGroup>
-
-          {mode === "auto" ? (
-            <div className="rounded-lg border bg-muted/30 p-3">
-              <div className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground">
-                <CheckCircle2 className="size-3.5" aria-hidden />
-                Source turn
-              </div>
-              <pre className="max-h-40 whitespace-pre-wrap break-words text-xs leading-5 text-muted-foreground">
-                {autoPreview}
-              </pre>
-            </div>
-          ) : (
-            <label className="grid gap-2">
-              <span className="text-xs font-medium text-foreground">Review prompt</span>
-              <Textarea
-                value={customPrompt}
-                onChange={(event) => setCustomPrompt(event.currentTarget.value)}
-                placeholder="Review the login flow, especially empty states and failed submissions."
-                size="lg"
-              />
-            </label>
-          )}
+            <span className="text-xs text-muted-foreground">Between 1 and 50 attempts.</span>
+          </label>
+          <div className="rounded-lg border bg-muted/30 p-3">
+            <p className="text-xs font-medium text-foreground">Supporting source context</p>
+            <pre className="mt-2 max-h-28 whitespace-pre-wrap break-words text-xs leading-5 text-muted-foreground">
+              {sourcePreview}
+            </pre>
+          </div>
+          <div className="rounded-lg border bg-muted/30 p-3">
+            <p className="text-xs font-medium text-foreground">Preview targets</p>
+            {props.previewTargets.length > 0 ? (
+              <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
+                {props.previewTargets.map((url) => (
+                  <li key={url} className="truncate" title={url}>
+                    {url}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-2 text-xs text-destructive">
+                Open or configure a preview URL first.
+              </p>
+            )}
+          </div>
+          {!props.sourceSettled ? (
+            <p className="text-xs text-destructive">Wait for the current source turn to settle.</p>
+          ) : null}
         </DialogPanel>
         <DialogFooter>
           <Button
@@ -127,14 +132,10 @@ export function DevReviewLaunchDialog(props: DevReviewLaunchDialogProps) {
           </Button>
           <Button
             type="button"
-            disabled={launchDisabled}
-            onClick={() => {
-              props.onLaunch(
-                mode === "custom" ? { mode, customPrompt: customPromptText } : { mode },
-              );
-            }}
+            disabled={props.launchInFlight || !validLaunch}
+            onClick={() => props.onLaunch({ brief: normalizedBrief, cycleBudget })}
           >
-            Launch review
+            Launch Dev Review
           </Button>
         </DialogFooter>
       </DialogPopup>
@@ -142,40 +143,8 @@ export function DevReviewLaunchDialog(props: DevReviewLaunchDialogProps) {
   );
 }
 
-function ModeOption(props: {
-  readonly value: BrowserDevReviewLaunchMode;
-  readonly checked: boolean;
-  readonly disabled?: boolean | undefined;
-  readonly icon: ReactNode;
-  readonly title: string;
-  readonly detail: string;
-}) {
-  return (
-    <RadioPrimitive.Root
-      value={props.value}
-      disabled={props.disabled}
-      className={cn(
-        "size-auto cursor-pointer justify-start rounded-lg border p-3 text-left",
-        "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
-        props.checked ? "border-primary bg-background ring-2 ring-primary/30" : "border-border",
-        props.disabled && "cursor-not-allowed opacity-60",
-      )}
-    >
-      <span className="flex min-w-0 items-center gap-3">
-        <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
-          {props.icon}
-        </span>
-        <span className="min-w-0">
-          <span className="block text-sm font-medium text-foreground">{props.title}</span>
-          <span className="block truncate text-xs text-muted-foreground">{props.detail}</span>
-        </span>
-      </span>
-    </RadioPrimitive.Root>
-  );
-}
-
-function formatAutoPreview(context: BrowserDevReviewSourceContext | null): string {
-  if (context === null) return "No settled source turn found.";
+function formatSourcePreview(context: BrowserDevReviewSourceContext | null): string {
+  if (context === null) return "No settled source-turn context is available.";
   return context.messages
     .map((message) => `${message.role}: ${truncate(message.text, 280)}`)
     .join("\n\n");

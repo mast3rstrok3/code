@@ -11,6 +11,7 @@ import {
 import type {
   OrchestrationMessage,
   OrchestrationImplementationRun,
+  OrchestrationDevReviewWorkflowRun,
   OrchestrationPlanningSpecId,
   OrchestrationPlanningWorkflow,
   OrchestrationProposedPlan,
@@ -38,6 +39,8 @@ const EMPTY_ACTIVITIES: ReadonlyArray<OrchestrationThreadActivity> = Object.free
 const EMPTY_PROPOSED_PLANS: ReadonlyArray<OrchestrationProposedPlan> = Object.freeze([]);
 const EMPTY_DEV_REVIEWS: ReadonlyArray<DevReviewRecord> = Object.freeze([]);
 const EMPTY_IMPLEMENTATION_RUNS: ReadonlyArray<OrchestrationImplementationRun> = Object.freeze([]);
+const EMPTY_DEV_REVIEW_WORKFLOW_RUNS: ReadonlyArray<OrchestrationDevReviewWorkflowRun> =
+  Object.freeze([]);
 
 const EMPTY_PROJECT_ATOM = Atom.make<EnvironmentProject | null>(null).pipe(
   Atom.withLabel("web-project:empty"),
@@ -74,6 +77,9 @@ const EMPTY_PLANNING_WORKFLOW_ATOM = Atom.make<OrchestrationPlanningWorkflow | n
 );
 const EMPTY_IMPLEMENTATION_RUNS_ATOM = Atom.make(EMPTY_IMPLEMENTATION_RUNS).pipe(
   Atom.withLabel("web-implementation-runs:empty"),
+);
+const EMPTY_DEV_REVIEW_WORKFLOW_RUNS_ATOM = Atom.make(EMPTY_DEV_REVIEW_WORKFLOW_RUNS).pipe(
+  Atom.withLabel("web-dev-review-workflow-runs:empty"),
 );
 const EMPTY_SESSION_ATOM = Atom.make<OrchestrationSession | null>(null).pipe(
   Atom.withLabel("web-thread-session:empty"),
@@ -247,6 +253,16 @@ export function useImplementationRuns(
     environmentId === null
       ? EMPTY_IMPLEMENTATION_RUNS_ATOM
       : environmentThreadShells.environmentImplementationRunsAtom(environmentId),
+  );
+}
+
+export function useDevReviewWorkflowRuns(
+  environmentId: EnvironmentId | null,
+): ReadonlyArray<OrchestrationDevReviewWorkflowRun> {
+  return useAtomValue(
+    environmentId === null
+      ? EMPTY_DEV_REVIEW_WORKFLOW_RUNS_ATOM
+      : environmentThreadShells.environmentDevReviewWorkflowRunsAtom(environmentId),
   );
 }
 

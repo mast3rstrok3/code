@@ -2299,6 +2299,37 @@ const make = Effect.gen(function* () {
           return;
         }
 
+        case "dev-review-fix-result": {
+          if (thread.workflowRole !== "dev-review-fixer") {
+            yield* Effect.logWarning(
+              "provider Dev Review fix result ignored for non-fixer thread",
+              {
+                directiveType: input.directive.type,
+                threadId: thread.id,
+                workflowRole: thread.workflowRole,
+              },
+            );
+            return;
+          }
+
+          yield* orchestrationEngine.dispatch({
+            type: "thread.activity.append",
+            commandId: yield* providerCommandId(input.event, "dev-review-fix-result"),
+            threadId: thread.id,
+            activity: {
+              id: EventId.make(yield* crypto.randomUUIDv4),
+              tone: input.directive.status === "succeeded" ? "info" : "error",
+              kind: "dev-review-fix-result",
+              summary: `Dev Review fix ${input.directive.status}`,
+              payload: input.directive,
+              turnId: null,
+              createdAt: input.createdAt,
+            },
+            createdAt: input.createdAt,
+          });
+          return;
+        }
+
         case "implementation-fast-build-result": {
           if (thread.workflowRole !== "fast-feature-implementer") {
             yield* Effect.logWarning(
@@ -2495,6 +2526,55 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const consumeDevReviewFixerFailure = Effect.fn(
+    "ProviderRuntimeIngestion.consumeDevReviewFixerFailure",
+  )(function* (input: {
+    readonly event: ProviderRuntimeEvent;
+    readonly threadId: ThreadId;
+    readonly messageId: MessageId;
+    readonly detail: string;
+    readonly createdAt: string;
+    readonly dedupeScope?: string;
+  }) {
+    const thread = yield* resolveThreadDetail(input.threadId);
+    if (thread?.workflowRole !== "dev-review-fixer") return;
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    const run = (readModel.devReviewWorkflowRuns ?? []).find(
+      (candidate) =>
+        candidate.status === "running" &&
+        candidate.activePhase === "fixing" &&
+        candidate.activeThreadId === thread.id,
+    );
+    const cycle = run?.cycles.at(-1);
+    if (run === undefined || cycle?.planId === null || cycle?.planId === undefined) return;
+    const failureKey = `${input.threadId}:${input.dedupeScope ?? input.messageId}:dev-review-fix-failure`;
+    const existing = yield* Cache.getOption(processedWorkflowDirectiveKeys, failureKey);
+    if (Option.getOrElse(existing, () => false)) return;
+    yield* Cache.set(processedWorkflowDirectiveKeys, failureKey, true);
+    yield* orchestrationEngine.dispatch({
+      type: "thread.activity.append",
+      commandId: yield* providerCommandId(input.event, "dev-review-fix-failure"),
+      threadId: thread.id,
+      activity: {
+        id: EventId.make(yield* crypto.randomUUIDv4),
+        tone: "error",
+        kind: "dev-review-fix-result",
+        summary: "Dev Review fix result was missing or malformed",
+        payload: {
+          type: "dev-review-fix-result",
+          runId: run.id,
+          planId: cycle.planId,
+          status: "blocked",
+          validations: [],
+          notesMarkdown: input.detail,
+        },
+        turnId: null,
+        createdAt: input.createdAt,
+      },
+      createdAt: input.createdAt,
+    });
+  });
+
   const maybeProcessWorkflowDirective = (input: {
     event: ProviderRuntimeEvent;
     threadId: ThreadId;
@@ -2533,6 +2613,11 @@ const make = Effect.gen(function* () {
             ...failureInput,
             detail: "QA fixer completed without the required implementation-fix-result directive.",
           });
+          yield* consumeDevReviewFixerFailure({
+            ...failureInput,
+            detail:
+              "Dev Review fixer completed without the required dev-review-fix-result directive.",
+          });
         }
         return;
       }
@@ -2554,6 +2639,10 @@ const make = Effect.gen(function* () {
           yield* consumeImplementationFixerFailure({
             ...failureInput,
             detail: `QA fixer directive was rejected: ${parseResult.message}`,
+          });
+          yield* consumeDevReviewFixerFailure({
+            ...failureInput,
+            detail: `Dev Review fixer directive was rejected: ${parseResult.message}`,
           });
         }
         return;
@@ -2606,6 +2695,34 @@ const make = Effect.gen(function* () {
         }
       }
 
+      if (thread.workflowRole === "dev-review-fixer") {
+        const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+        const run = (readModel.devReviewWorkflowRuns ?? []).find(
+          (candidate) =>
+            candidate.status === "running" &&
+            candidate.activePhase === "fixing" &&
+            candidate.activeThreadId === thread.id,
+        );
+        const cycle = run?.cycles.at(-1);
+        if (
+          parseResult.directive.type !== "dev-review-fix-result" ||
+          run === undefined ||
+          cycle?.planId === null ||
+          cycle?.planId === undefined ||
+          parseResult.directive.runId !== run.id ||
+          parseResult.directive.planId !== cycle.planId
+        ) {
+          if (synthesizeFailure) {
+            yield* consumeDevReviewFixerFailure({
+              ...failureInput,
+              detail:
+                "Dev Review fixer completed with a directive for the wrong run or proposed plan.",
+            });
+          }
+          return;
+        }
+      }
+
       const directiveKey = `${input.threadId}:${input.messageId}:${parseResult.directive.type}`;
       const existing = yield* Cache.getOption(processedWorkflowDirectiveKeys, directiveKey);
       if (Option.getOrElse(existing, () => false)) {
@@ -2639,6 +2756,10 @@ const make = Effect.gen(function* () {
           ...input,
           detail: `QA fixer directive was rejected: ${detail}`,
         });
+        yield* consumeDevReviewFixerFailure({
+          ...input,
+          detail: `Dev Review fixer directive was rejected: ${detail}`,
+        });
         return;
       }
 
@@ -2666,6 +2787,7 @@ const make = Effect.gen(function* () {
         parseResult.directive.type === "workflow-subagent-result"
           ? parseResult.directive.status === "blocked"
           : parseResult.directive.type === "implementation-fix-result" ||
+              parseResult.directive.type === "dev-review-fix-result" ||
               parseResult.directive.type === "implementation-code-review-result"
             ? parseResult.directive.status === "blocked"
             : false;

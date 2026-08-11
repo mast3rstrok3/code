@@ -1,5 +1,7 @@
 import {
   type DevReviewDocument,
+  DevReviewWorkflowRunId,
+  type DevReviewWorkflowRun,
   EMPTY_DEV_REVIEW_EVIDENCE,
   EventId,
   IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
@@ -41,6 +43,7 @@ import { WORKFLOW_PROMPT_IDS } from "../provider/WorkflowPromptRegistry.ts";
 import { validatePlanningTicketFileChanges } from "./planningTicketFiles.ts";
 import { buildPlanImplementationThreadTitle } from "@t3tools/shared/orchestrationPlanning";
 import { resolveImplementationValidationCommands } from "@t3tools/shared/t3ProjectFile";
+import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 import { isProductWorkflowPreset, isProductWorkflowRoot } from "@t3tools/shared/workflowPresets";
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -577,6 +580,9 @@ function buildImplementationRun(input: {
       checkedAt: "",
     },
     devReviewIds: [],
+    devReviewStrategy: "nested-workflow",
+    devReviewWorkflowRunIds: [],
+    latestDevReviewWorkflowOutcome: null,
     devReviews: [],
     devReviewedHeadSha: null,
     activeDevReviewHeadSha: null,
@@ -2567,6 +2573,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           checkedAt: "",
         },
         devReviewIds: [],
+        devReviewStrategy: "nested-workflow",
+        devReviewWorkflowRunIds: [],
+        latestDevReviewWorkflowOutcome: null,
         devReviews: [],
         devReviewedHeadSha: null,
         activeDevReviewHeadSha: null,
@@ -2882,6 +2891,260 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.dev-review-workflow.launch": {
+      const targetThread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.targetThreadId,
+      });
+      const targetProject = readModel.projects.find(
+        (project) => project.id === targetThread.projectId,
+      );
+      const targetPath = targetThread.worktreePath ?? targetProject?.workspaceRoot ?? null;
+      if (targetPath === null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Dev Review requires a prepared worktree.",
+        });
+      }
+      const canonicalTargetPath = normalizeProjectPathForComparison(targetPath);
+      if (
+        command.caller.type === "standalone" &&
+        (targetThread.latestTurn?.state === "running" ||
+          targetThread.session?.status === "starting" ||
+          targetThread.session?.status === "running" ||
+          hasOpenBlockingRequest(targetThread) ||
+          threadHasQueuedTurnStart(targetThread, command.createdAt))
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Standalone Dev Review requires the source turn to be settled.",
+        });
+      }
+      if (
+        command.caller.type === "standalone" &&
+        command.caller.sourceThreadId !== command.targetThreadId
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Standalone Dev Review caller must reference the target thread.",
+        });
+      }
+      if (command.caller.type === "implementation") {
+        const caller = command.caller;
+        const implementationRun = readModel.implementationRuns.find(
+          (run) => run.id === caller.implementationRunId,
+        );
+        if (
+          implementationRun === undefined ||
+          implementationRun.orchestratorThreadId !== command.targetThreadId ||
+          caller.orchestratorThreadId !== command.targetThreadId
+        ) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: "Embedded Dev Review caller does not match an Implementation orchestrator.",
+          });
+        }
+      }
+      const duplicate = (readModel.devReviewWorkflowRuns ?? []).find((run) => {
+        if (run.status !== "running") return false;
+        const runTarget = readModel.threads.find((thread) => thread.id === run.targetThreadId);
+        if (runTarget === undefined) return false;
+        const runProject = readModel.projects.find((project) => project.id === runTarget.projectId);
+        const runPath = runTarget.worktreePath ?? runProject?.workspaceRoot ?? null;
+        return (
+          runPath !== null && normalizeProjectPathForComparison(runPath) === canonicalTargetPath
+        );
+      });
+      if (duplicate !== undefined) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Dev Review Workflow '${duplicate.id}' already owns this worktree.`,
+        });
+      }
+      if (command.controllerThreadId !== command.targetThreadId) {
+        yield* requireThreadAbsent({
+          readModel,
+          command,
+          threadId: command.controllerThreadId,
+        });
+      }
+      const runId = DevReviewWorkflowRunId.make(
+        `dev-review-workflow-${command.controllerThreadId}`,
+      );
+      const run: DevReviewWorkflowRun = {
+        id: runId,
+        targetThreadId: command.targetThreadId,
+        controllerThreadId: command.controllerThreadId,
+        caller: command.caller,
+        briefMarkdown: command.briefMarkdown,
+        supportingContextMarkdown: command.supportingContextMarkdown ?? null,
+        previewTargets: command.previewTargets,
+        cycleBudget: command.cycleBudget,
+        attemptsUsed: 0,
+        status: "running",
+        cycles: [],
+        activePhase: null,
+        activeThreadId: null,
+        workspaceRevision: command.workspaceRevision ?? {
+          headSha: "pending",
+          workingTreeDiffHash: "pending",
+          branchDiffHash: "pending",
+          fingerprint: "pending",
+        },
+        finalHeadSha: null,
+        outcome: null,
+        failure: null,
+        createdAt: command.createdAt,
+        updatedAt: command.createdAt,
+        completedAt: null,
+      };
+      const controllerCreated =
+        command.controllerThreadId === command.targetThreadId
+          ? null
+          : ({
+              ...(yield* withEventBase({
+                aggregateKind: "thread",
+                aggregateId: command.controllerThreadId,
+                occurredAt: command.createdAt,
+                commandId: command.commandId,
+              })),
+              type: "thread.created",
+              payload: {
+                threadId: command.controllerThreadId,
+                projectId: targetThread.projectId,
+                ownerUserId: targetThread.ownerUserId,
+                parentThreadId: targetThread.id,
+                workflowRole: "dev-review-orchestrator",
+                workflowContext: {
+                  workflowId: WorkflowId.make(runId),
+                  rootThreadId: targetThread.workflowContext?.rootThreadId ?? targetThread.id,
+                  ticketScope: targetThread.workflowContext?.ticketScope ?? [],
+                },
+                workflowPreset: "dev-review",
+                title: "Dev Review",
+                modelSelection: command.modelSelection,
+                runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
+                interactionMode: "default",
+                branch: targetThread.branch,
+                worktreePath: targetThread.worktreePath,
+                createdAt: command.createdAt,
+                updatedAt: command.createdAt,
+              },
+            } satisfies Omit<OrchestrationEvent, "sequence">);
+      const launched = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.controllerThreadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        ...(controllerCreated === null ? {} : { causationEventId: controllerCreated.eventId }),
+        type: "thread.dev-review-workflow-launched",
+        payload: { sourceThreadId: command.targetThreadId, run },
+      } satisfies Omit<OrchestrationEvent, "sequence">;
+      return controllerCreated === null ? launched : [controllerCreated, launched];
+    }
+
+    case "thread.dev-review-workflow.update": {
+      yield* requireThread({ readModel, command, threadId: command.threadId });
+      const existing = (readModel.devReviewWorkflowRuns ?? []).find(
+        (run) => run.id === command.run.id,
+      );
+      if (existing === undefined || existing.controllerThreadId !== command.threadId) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Dev Review Workflow '${command.run.id}' does not belong to this controller.`,
+        });
+      }
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.dev-review-workflow-updated",
+        payload: { sourceThreadId: existing.targetThreadId, run: command.run },
+      };
+    }
+
+    case "thread.dev-review-workflow.cancel": {
+      yield* requireThread({ readModel, command, threadId: command.threadId });
+      const existing = (readModel.devReviewWorkflowRuns ?? []).find(
+        (run) => run.id === command.runId,
+      );
+      if (existing === undefined || existing.status !== "running") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Dev Review Workflow '${command.runId}' is not active.`,
+        });
+      }
+      const run: DevReviewWorkflowRun = {
+        ...existing,
+        status: "canceled",
+        outcome: "canceled",
+        activePhase: null,
+        activeThreadId: null,
+        failure: null,
+        finalHeadSha:
+          existing.workspaceRevision.headSha === "pending"
+            ? null
+            : existing.workspaceRevision.headSha,
+        updatedAt: command.createdAt,
+        completedAt: command.createdAt,
+      };
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: existing.controllerThreadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.dev-review-workflow-cancel-requested",
+        payload: {
+          sourceThreadId: existing.targetThreadId,
+          run,
+          ...(command.reason === undefined ? {} : { reason: command.reason }),
+        },
+      };
+    }
+
+    case "thread.dev-review-workflow.resume": {
+      yield* requireThread({ readModel, command, threadId: command.threadId });
+      const existing = (readModel.devReviewWorkflowRuns ?? []).find(
+        (run) => run.id === command.runId,
+      );
+      if (
+        existing === undefined ||
+        existing.caller.type !== "implementation" ||
+        existing.status !== "running" ||
+        existing.activePhase !== null
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Dev Review Workflow '${command.runId}' is not waiting for an embedded preview refresh.`,
+        });
+      }
+      const run: DevReviewWorkflowRun = {
+        ...existing,
+        previewTargets: command.previewTargets,
+        workspaceRevision: command.workspaceRevision,
+        updatedAt: command.createdAt,
+        completedAt: null,
+      };
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: existing.controllerThreadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.dev-review-workflow-resume-requested",
+        payload: { sourceThreadId: existing.targetThreadId, run },
+      };
+    }
+
     case "thread.dev-review.launch": {
       const sourceThread = yield* requireThread({
         readModel,
@@ -2966,7 +3229,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           projectId: sourceThread.projectId,
           ownerUserId: sourceThread.ownerUserId,
           parentThreadId: sourceThread.id,
-          workflowRole: "implementation-qa-reviewer",
+          workflowRole:
+            sourceThread.workflowRole === "dev-review-orchestrator" ||
+            sourceThread.workflowPreset === "dev-review"
+              ? "dev-review-reviewer"
+              : "implementation-qa-reviewer",
           workflowContext:
             sourceThread.workflowContext == null
               ? null
@@ -2977,7 +3244,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           title: "Browser Dev Review",
           modelSelection: command.modelSelection,
           runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
-          interactionMode: "implementation-workflow",
+          interactionMode:
+            sourceThread.workflowRole === "dev-review-orchestrator" ||
+            sourceThread.workflowPreset === "dev-review"
+              ? "default"
+              : "implementation-workflow",
           branch: sourceThread.branch,
           worktreePath: sourceThread.worktreePath,
           createdAt: command.createdAt,
@@ -3034,7 +3305,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           modelSelection: command.modelSelection,
           titleSeed: "Browser Dev Review",
           runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
-          interactionMode: "implementation-workflow",
+          interactionMode:
+            sourceThread.workflowRole === "dev-review-orchestrator" ||
+            sourceThread.workflowPreset === "dev-review"
+              ? "default"
+              : "implementation-workflow",
           workflowPromptId: command.workflowPromptId,
           createdAt: command.createdAt,
         },
@@ -3344,6 +3619,30 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      const targetProject = readModel.projects.find(
+        (project) => project.id === targetThread.projectId,
+      );
+      const targetPath = targetThread.worktreePath ?? targetProject?.workspaceRoot ?? null;
+      const canonicalTargetPath =
+        targetPath === null ? null : normalizeProjectPathForComparison(targetPath);
+      const worktreeOwner = (readModel.devReviewWorkflowRuns ?? []).find((run) => {
+        if (run.status !== "running") return false;
+        const runTarget = readModel.threads.find((thread) => thread.id === run.targetThreadId);
+        if (runTarget === undefined) return false;
+        const runProject = readModel.projects.find((project) => project.id === runTarget.projectId);
+        const runPath = runTarget.worktreePath ?? runProject?.workspaceRoot ?? null;
+        return (
+          canonicalTargetPath !== null &&
+          runPath !== null &&
+          normalizeProjectPathForComparison(runPath) === canonicalTargetPath
+        );
+      });
+      if (worktreeOwner !== undefined && !command.commandId.startsWith("server:")) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Dev Review Workflow '${worktreeOwner.id}' currently owns this worktree.`,
+        });
+      }
       const sourceProposedPlan = command.sourceProposedPlan;
       const sourceThread = sourceProposedPlan
         ? yield* requireThread({

@@ -3,10 +3,12 @@ import {
   CommandId,
   type ClientOrchestrationCommand,
   DEFAULT_WORKSPACE_USER_ID,
+  DevReviewWorkflowCycleBudget,
   MessageId,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  WorkflowId,
 } from "@t3tools/contracts";
 
 import { canonicalizeClientCommandTimestamps } from "./Normalizer.ts";
@@ -68,6 +70,57 @@ describe("canonicalizeClientCommandTimestamps", () => {
     expect(result.type).toBe("thread.turn.start");
     if (result.type !== "thread.turn.start") {
       throw new Error("Expected a thread.turn.start command");
+    }
+    expect(result.createdAt).toBe(serverReceivedAt);
+    expect(result.bootstrap?.createThread?.createdAt).toBe(serverReceivedAt);
+  });
+
+  it("uses the same clock-safe bootstrap path for a draft Dev Review launch", () => {
+    const threadId = ThreadId.make("thread-dev-review-draft");
+    const command: ClientOrchestrationCommand = {
+      type: "thread.dev-review-workflow.launch",
+      commandId: CommandId.make("command-dev-review"),
+      targetThreadId: threadId,
+      controllerThreadId: threadId,
+      caller: { type: "standalone", sourceThreadId: threadId },
+      briefMarkdown: "Review checkout.",
+      previewTargets: ["https://preview.example.test"],
+      cycleBudget: DevReviewWorkflowCycleBudget.make(10),
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5.6-sol",
+      },
+      bootstrap: {
+        createThread: {
+          projectId: ProjectId.make("project-1"),
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+          workflowRole: "dev-review-orchestrator",
+          workflowContext: {
+            workflowId: WorkflowId.make(`dev-review-workflow-${threadId}`),
+            rootThreadId: threadId,
+            ticketScope: [],
+          },
+          title: "Review checkout",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5.6-sol",
+          },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          workflowPreset: "dev-review",
+          branch: null,
+          worktreePath: null,
+          createdAt: clientCreatedAt,
+        },
+      },
+      createdAt: clientCreatedAt,
+    };
+
+    const result = canonicalizeClientCommandTimestamps(command, serverReceivedAt);
+
+    expect(result.type).toBe("thread.dev-review-workflow.launch");
+    if (result.type !== "thread.dev-review-workflow.launch") {
+      throw new Error("Expected a Dev Review workflow launch command");
     }
     expect(result.createdAt).toBe(serverReceivedAt);
     expect(result.bootstrap?.createThread?.createdAt).toBe(serverReceivedAt);

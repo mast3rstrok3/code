@@ -107,7 +107,11 @@ export function createLongPressContextMenuController(input: {
       return shouldSuppress;
     },
     consumeContextMenu: () => {
+      const interruptedTouchHold = pending !== null;
       cancel();
+      if (interruptedTouchHold) {
+        suppressClickUntil = now() + 1_000;
+      }
       if (suppressContextMenuUntil === 0 || now() > suppressContextMenuUntil) {
         suppressContextMenuUntil = 0;
         return false;

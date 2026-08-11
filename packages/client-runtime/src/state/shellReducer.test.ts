@@ -2,11 +2,16 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   DEFAULT_WORKSPACE_USER_ID,
+  DevReviewWorkflowRunId,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
 } from "@t3tools/contracts";
-import type { OrchestrationShellSnapshot, OrchestrationShellStreamEvent } from "@t3tools/contracts";
+import type {
+  DevReviewWorkflowRun,
+  OrchestrationShellSnapshot,
+  OrchestrationShellStreamEvent,
+} from "@t3tools/contracts";
 
 import { applyShellStreamEvent } from "./shellReducer.ts";
 
@@ -52,6 +57,34 @@ const stubThread = {
   hasActionableProposedPlan: false,
   session: null,
 } as const;
+
+const stubDevReviewWorkflowRun: DevReviewWorkflowRun = {
+  id: DevReviewWorkflowRunId.make("dev-review-workflow-controller-1"),
+  targetThreadId: ThreadId.make("thread-1"),
+  controllerThreadId: ThreadId.make("controller-1"),
+  caller: { type: "standalone", sourceThreadId: ThreadId.make("thread-1") },
+  briefMarkdown: "Review the settings flow.",
+  supportingContextMarkdown: null,
+  previewTargets: ["https://preview.example.test"],
+  cycleBudget: 10,
+  attemptsUsed: 0,
+  status: "running",
+  cycles: [],
+  activePhase: null,
+  activeThreadId: null,
+  workspaceRevision: {
+    headSha: "abc123",
+    workingTreeDiffHash: "working-tree-hash",
+    branchDiffHash: "branch-diff-hash",
+    fingerprint: "workspace-fingerprint",
+  },
+  finalHeadSha: null,
+  outcome: null,
+  failure: null,
+  createdAt: "2026-04-01T00:00:00.000Z",
+  updatedAt: "2026-04-01T00:00:00.000Z",
+  completedAt: null,
+};
 
 describe("applyShellStreamEvent", () => {
   it("ignores stale project upserts without mutating the snapshot", () => {
@@ -182,6 +215,36 @@ describe("applyShellStreamEvent", () => {
 
       expect(next.threads).toHaveLength(0);
       expect(next.snapshotSequence).toBe(6);
+    });
+  });
+
+  describe("dev-review-workflow-run-upserted", () => {
+    it("adds and updates a workflow run without disturbing thread state", () => {
+      const added = applyShellStreamEvent(baseSnapshot, {
+        kind: "dev-review-workflow-run-upserted",
+        sequence: 7,
+        run: stubDevReviewWorkflowRun,
+      });
+
+      expect(added.devReviewWorkflowRuns).toEqual([stubDevReviewWorkflowRun]);
+      expect(added.threads).toEqual([]);
+
+      const completed = {
+        ...stubDevReviewWorkflowRun,
+        status: "passed" as const,
+        outcome: "passed" as const,
+        finalHeadSha: "def456",
+        completedAt: "2026-04-01T00:05:00.000Z",
+        updatedAt: "2026-04-01T00:05:00.000Z",
+      };
+      const updated = applyShellStreamEvent(added, {
+        kind: "dev-review-workflow-run-upserted",
+        sequence: 8,
+        run: completed,
+      });
+
+      expect(updated.devReviewWorkflowRuns).toEqual([completed]);
+      expect(updated.snapshotSequence).toBe(8);
     });
   });
 

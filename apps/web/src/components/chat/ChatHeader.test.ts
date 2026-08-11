@@ -76,6 +76,9 @@ describe("workflowProgressLabel", () => {
       ["implementation-qa-reviewer", "Implementation · Browser Dev Review"],
       ["implementation-fixer", "Implementation · Fix"],
       ["implementation-code-reviewer", "Implementation · Code review"],
+      ["dev-review-orchestrator", "Dev Review · Controller"],
+      ["dev-review-reviewer", "Dev Review · Browser review"],
+      ["dev-review-fixer", "Dev Review · TDD repair"],
     ] as const;
     for (const [workflowRole, expected] of labels) {
       expect(

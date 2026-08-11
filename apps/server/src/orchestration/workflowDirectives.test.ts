@@ -5,6 +5,29 @@ import { describe, it } from "vite-plus/test";
 import { parseWorkflowDirectiveFromMarkdown } from "./workflowDirectives.ts";
 
 describe("workflowDirectives", () => {
+  it("parses Dev Review fixer results with focused validations", () => {
+    const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
+{
+  "type": "dev-review-fix-result",
+  "runId": "dev-review-workflow-thread-controller",
+  "planId": "plan-1",
+  "status": "succeeded",
+  "commitSha": "abc123",
+  "validations": [{
+    "command": "vp test run src/checkout.test.ts",
+    "status": "passed",
+    "outputMarkdown": "ok",
+    "completedAt": "2026-01-01T00:00:00.000Z"
+  }],
+  "notesMarkdown": "Fixed every finding."
+}
+\`\`\``);
+
+    NodeAssert.equal(result.kind, "parsed");
+    if (result.kind !== "parsed") return;
+    NodeAssert.equal(result.directive.type, "dev-review-fix-result");
+  });
+
   it("parses Wayfinder Map artifacts", () => {
     const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
 { "type": "wayfinder-map-artifact", "title": "Remote roadmap", "summaryMarkdown": "## Destination\\nShip remote workflows" }

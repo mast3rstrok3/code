@@ -5,6 +5,7 @@ import {
   DEFAULT_WORKSPACE_USER_VIEW,
   DevReviewDocument,
   DevReviewEvidence,
+  DevReviewWorkflowRun,
   DevReviewSourceProposedPlan,
   IsoDateTime,
   MessageId,
@@ -72,6 +73,7 @@ import { ProjectionThreadActivity } from "../../persistence/Services/ProjectionT
 import { ProjectionThreadDevReview } from "../../persistence/Services/ProjectionThreadDevReviews.ts";
 import { ProjectionThreadMessage } from "../../persistence/Services/ProjectionThreadMessages.ts";
 import { ProjectionImplementationRun } from "../../persistence/Services/ProjectionImplementationRuns.ts";
+import { ProjectionDevReviewWorkflowRun } from "../../persistence/Services/ProjectionDevReviewWorkflowRuns.ts";
 import {
   ProjectionThreadPlanningTicket,
   projectionTicketToContract,
@@ -148,6 +150,11 @@ const ProjectionThreadPlanningReviewCycleDbRowSchema =
 const ProjectionImplementationRunDbRowSchema = ProjectionImplementationRun.mapFields(
   Struct.assign({
     run: Schema.fromJsonString(OrchestrationImplementationRun),
+  }),
+);
+const ProjectionDevReviewWorkflowRunDbRowSchema = ProjectionDevReviewWorkflowRun.mapFields(
+  Struct.assign({
+    run: Schema.fromJsonString(DevReviewWorkflowRun),
   }),
 );
 const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
@@ -295,6 +302,7 @@ const REQUIRED_SNAPSHOT_PROJECTORS = [
   ORCHESTRATION_PROJECTOR_NAMES.threadPlanningReviewCycles,
   ORCHESTRATION_PROJECTOR_NAMES.threadLoadedSpecBundles,
   ORCHESTRATION_PROJECTOR_NAMES.implementationRuns,
+  ORCHESTRATION_PROJECTOR_NAMES.devReviewWorkflowRuns,
   ORCHESTRATION_PROJECTOR_NAMES.threadActivities,
   ORCHESTRATION_PROJECTOR_NAMES.threadSessions,
   ORCHESTRATION_PROJECTOR_NAMES.checkpoints,
@@ -1053,6 +1061,20 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           source_thread_id AS "sourceThreadId",
           run_json AS "run"
         FROM projection_implementation_runs
+        ORDER BY created_at ASC, run_id ASC
+      `,
+  });
+
+  const listDevReviewWorkflowRunRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionDevReviewWorkflowRunDbRowSchema,
+    execute: () =>
+      sql`
+        SELECT
+          run_id AS "runId",
+          target_thread_id AS "sourceThreadId",
+          run_json AS "run"
+        FROM projection_dev_review_workflow_runs
         ORDER BY created_at ASC, run_id ASC
       `,
   });
@@ -2064,6 +2086,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               ),
             ),
           ),
+          listDevReviewWorkflowRunRows(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getSnapshot:listDevReviewWorkflowRuns:query",
+                "ProjectionSnapshotQuery.getSnapshot:listDevReviewWorkflowRuns:decodeRows",
+              ),
+            ),
+          ),
           listThreadActivityRows(undefined).pipe(
             Effect.mapError(
               toPersistenceSqlOrDecodeError(
@@ -2120,6 +2150,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             planningTicketRows,
             planningReviewCycleRows,
             implementationRunRows,
+            devReviewWorkflowRunRows,
             activityRows,
             sessionRows,
             checkpointRows,
@@ -2403,6 +2434,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 projects,
                 threads,
                 implementationRuns: implementationRunRows.map((row) => row.run),
+                devReviewWorkflowRuns: devReviewWorkflowRunRows.map((row) => row.run),
                 updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
               };
 
@@ -2505,6 +2537,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               ),
             ),
           ),
+          listDevReviewWorkflowRunRows(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getCommandReadModel:listDevReviewWorkflowRuns:query",
+                "ProjectionSnapshotQuery.getCommandReadModel:listDevReviewWorkflowRuns:decodeRows",
+              ),
+            ),
+          ),
           listThreadSessionRows(undefined).pipe(
             Effect.mapError(
               toPersistenceSqlOrDecodeError(
@@ -2544,6 +2584,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             planningTicketRows,
             planningReviewCycleRows,
             implementationRunRows,
+            devReviewWorkflowRunRows,
             sessionRows,
             latestTurnRows,
             stateRows,
@@ -2820,6 +2861,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 projects,
                 threads,
                 implementationRuns: implementationRunRows.map((row) => row.run),
+                devReviewWorkflowRuns: devReviewWorkflowRunRows.map((row) => row.run),
                 updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
               } satisfies OrchestrationReadModel;
             }),
@@ -2884,6 +2926,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               ),
             ),
           ),
+          listDevReviewWorkflowRunRows(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getShellSnapshot:listDevReviewWorkflowRuns:query",
+                "ProjectionSnapshotQuery.getShellSnapshot:listDevReviewWorkflowRuns:decodeRows",
+              ),
+            ),
+          ),
           listProjectionStateRows(undefined).pipe(
             Effect.mapError(
               toPersistenceSqlOrDecodeError(
@@ -2903,6 +2953,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             latestTurnRows,
             specRows,
             implementationRunRows,
+            devReviewWorkflowRunRows,
             stateRows,
           ]) =>
             Effect.gen(function* () {
@@ -2918,6 +2969,18 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   (row) =>
                     visibleThreadIds.has(row.sourceThreadId) ||
                     visibleThreadIds.has(row.run.orchestratorThreadId),
+                )
+                .map((row) => row.run);
+              const visibleDevReviewWorkflowRuns = devReviewWorkflowRunRows
+                .filter(
+                  (row) =>
+                    visibleThreadIds.has(row.run.targetThreadId) ||
+                    visibleThreadIds.has(row.run.controllerThreadId) ||
+                    row.run.cycles.some(
+                      (cycle) =>
+                        visibleThreadIds.has(cycle.reviewerThreadId) ||
+                        (cycle.fixerThreadId !== null && visibleThreadIds.has(cycle.fixerThreadId)),
+                    ),
                 )
                 .map((row) => row.run);
               let updatedAt: string | null = null;
@@ -2984,6 +3047,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                     : Result.failVoid,
                 ),
                 implementationRuns: visibleImplementationRuns,
+                devReviewWorkflowRuns: visibleDevReviewWorkflowRuns,
                 updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
               };
 
@@ -3058,6 +3122,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               ),
             ),
           ),
+          listDevReviewWorkflowRunRows(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getArchivedShellSnapshot:listDevReviewWorkflowRuns:query",
+                "ProjectionSnapshotQuery.getArchivedShellSnapshot:listDevReviewWorkflowRuns:decodeRows",
+              ),
+            ),
+          ),
           listProjectionStateRows(undefined).pipe(
             Effect.mapError(
               toPersistenceSqlOrDecodeError(
@@ -3077,6 +3149,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             latestTurnRows,
             specRows,
             implementationRunRows,
+            devReviewWorkflowRunRows,
             stateRows,
           ]) =>
             Effect.gen(function* () {
@@ -3092,6 +3165,18 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   (row) =>
                     visibleThreadIds.has(row.sourceThreadId) ||
                     visibleThreadIds.has(row.run.orchestratorThreadId),
+                )
+                .map((row) => row.run);
+              const visibleDevReviewWorkflowRuns = devReviewWorkflowRunRows
+                .filter(
+                  (row) =>
+                    visibleThreadIds.has(row.run.targetThreadId) ||
+                    visibleThreadIds.has(row.run.controllerThreadId) ||
+                    row.run.cycles.some(
+                      (cycle) =>
+                        visibleThreadIds.has(cycle.reviewerThreadId) ||
+                        (cycle.fixerThreadId !== null && visibleThreadIds.has(cycle.fixerThreadId)),
+                    ),
                 )
                 .map((row) => row.run);
               let updatedAt: string | null = null;
@@ -3157,6 +3242,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                     }),
                 ),
                 implementationRuns: visibleImplementationRuns,
+                devReviewWorkflowRuns: visibleDevReviewWorkflowRuns,
                 updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
               };
 
