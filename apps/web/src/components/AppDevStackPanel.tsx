@@ -66,6 +66,10 @@ import {
   type PreviewCandidate,
 } from "./AppDevStackPanel.logic";
 import {
+  AppDevStackWorkflowConflictWarning,
+  AppDevStackWorkflowOwnershipBadge,
+} from "./AppDevStackWorkflowOwnership";
+import {
   displayStackName,
   isSameOrChildStackPath,
   normalizeStackWorktreePath as normalizeWorktreePath,
@@ -676,6 +680,7 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
             displayName: sourceStack?.displayName ?? appDevStackDisplayName(normalizedPath, branch),
             gitBranch: branch,
             namespace,
+            workflowId: sourceStack?.workflowId ?? undefined,
           },
         });
         if (result._tag === "Failure") {
@@ -961,6 +966,7 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
                     Current
                   </span>
                 ) : null}
+                <AppDevStackWorkflowOwnershipBadge stack={stack} />
                 <StatusBadge status={stack.status} />
               </span>
               <span className="mt-1 block truncate text-xs text-muted-foreground">
@@ -1160,6 +1166,8 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
               <div>{statusQuery.error}</div>
             </div>
           ) : null}
+
+          <AppDevStackWorkflowConflictWarning conflicts={listQuery.data?.workflowConflicts ?? []} />
 
           {isCreateOpen ? (
             <section className="space-y-3 rounded-lg border border-border bg-card/35 p-3">

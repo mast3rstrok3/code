@@ -173,6 +173,19 @@ function findRunById(
   return readModel.implementationRuns.find((run) => run.id === runId) ?? null;
 }
 
+export function workflowIdForRun(
+  readModel: {
+    readonly threads: ReadonlyArray<{
+      readonly id: ThreadId;
+      readonly workflowContext?: { readonly workflowId: string } | null;
+    }>;
+  },
+  run: Pick<OrchestrationImplementationRun, "orchestratorThreadId">,
+): string | undefined {
+  return readModel.threads.find((thread) => thread.id === run.orchestratorThreadId)?.workflowContext
+    ?.workflowId;
+}
+
 function findRunByWorkerThreadId(
   readModel: OrchestrationReadModel,
   workerThreadId: ThreadId,
@@ -989,11 +1002,13 @@ const make = Effect.gen(function* () {
       readonly displayName: string;
       readonly createdAt: string;
     }) {
+      const workflowReadModel = yield* projectionSnapshotQuery.getCommandReadModel();
       const stackResult = yield* appDevStackManager
         .autoCreate({
           worktreePath: input.run.orchestratorWorktreePath,
           displayName: input.displayName,
           gitBranch: input.run.orchestratorBranch,
+          workflowId: workflowIdForRun(workflowReadModel, input.run),
         })
         .pipe(Effect.result);
 
@@ -1699,6 +1714,7 @@ const make = Effect.gen(function* () {
               ? `Fast feature ${cycleRun.id}`
               : `Implementation ${cycleRun.id}`,
           gitBranch: cycleRun.orchestratorBranch,
+          workflowId: orchestratorThread.workflowContext?.workflowId,
         })
         .pipe(Effect.result);
 

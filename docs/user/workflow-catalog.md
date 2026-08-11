@@ -37,9 +37,15 @@ A Browser Dev Review's live browser tab is temporary. It closes when the review 
 
 **Wayfinder** — for efforts too large or uncertain to specify in one pass. Its durable Wayfinder Map appears above the Spec in the Planning side panel. Research, prototype, grilling, and task decisions are stored as normal Planning Tickets linked to the map, including their dependency edges. It uses the Engineering Grill's interview and domain-modeling discipline while updating glossary and ADR documents as decisions crystallize. When the decision frontier is resolved, the map becomes the input to Spec authoring, and the flow continues through tickets, ticket review, and implementation.
 
+## Navigating workflow threads
+
+On web and desktop, a workflow keeps one sidebar entry: its top-level thread. Planning, build, review, repair, and other workflow-created child threads do not appear as separate sidebar rows.
+
+Open **Workflows** in the right panel to see every run and created child thread, including nested and completed work. Selecting a child opens its conversation while keeping the complete workflow overview open. Select the workflow title to return to the top-level conversation. Provider-native subagents remain in the separate **Agents** surface.
+
 ## Stopping a workflow
 
-In Sidebar V2, right-click a workflow thread on desktop or long-press it on a touch device, then choose **Delete**. Confirming the deletion cancels active work and permanently removes the workflow thread together with all of its sub-threads and conversation history.
+Right-click the top-level workflow thread on desktop or long-press it on a touch device, then choose **Delete**. Confirming the deletion cancels active work and permanently removes the workflow thread together with all of its child threads and conversation history.
 
 ## Skills and docs
 

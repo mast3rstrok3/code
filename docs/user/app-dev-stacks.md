@@ -13,6 +13,8 @@ For setup work in another repository, copy the full prompt in
 ## Contract summary
 
 - One worktree maps to one Kubernetes namespace.
+- A workflow owns at most one stack that it created. Existing worktree stacks and standing
+  deployments are reused without transferring ownership.
 - If no namespace is supplied, T3 Code derives it from the worktree basename and appends `-dev`.
 - The public frontend service should be named `web`, `frontend`, or `app`.
 - The public API service should be named `api` or `backend`.
@@ -33,6 +35,10 @@ Conventional URLs:
 Open **App Stack** in the right sidebar to see every stack reported by the active environment. The
 current worktree is marked and appears first. Stack cards start collapsed so the list stays compact;
 expand a card to access previews, start and stop controls, service details, and Kubernetes pod logs.
+
+Stacks created for a workflow are labeled **Workflow-owned**. If historical implementation runs
+map more than one visible stack to the same workflow, the panel reports the conflict but never
+deletes either stack automatically.
 
 Restart and delete remain available on every collapsed card. To clean up several stacks, select
 their checkboxes (or use **Select all**) and choose **Delete** in the selection toolbar. T3 Code asks
@@ -79,3 +85,8 @@ the worktree/branch is already running the API answers `created: false` with
 `alreadyRunning` and the existing URLs; branches served by the standing
 deployments (`dev`, `main`) answer `reserved: true` with that deployment's URL
 and never provision a duplicate stack.
+
+Workflow orchestration sends its durable workflow ID when no existing worktree stack can be reused.
+When that workflow later moves to another implementation worktree, the controller replaces only
+the stack owned by that workflow. Shared, manual, and standing `dev`/`main` stacks are protected.
+Completed and canceled workflows retain their latest stack for testing.

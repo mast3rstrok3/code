@@ -104,6 +104,28 @@ describe("rightPanelStore", () => {
     });
   });
 
+  it("preserves the singleton Workflows surface during persistence migration", () => {
+    expect(
+      migratePersistedRightPanelState({
+        byThreadKey: {
+          "env-1:thread-A": {
+            isOpen: true,
+            activeSurfaceId: "workflows",
+            surfaces: [{ id: "workflows", kind: "workflows" }],
+          },
+        },
+      }),
+    ).toEqual({
+      byThreadKey: {
+        "env-1:thread-A": {
+          isOpen: true,
+          activeSurfaceId: "workflows",
+          surfaces: [{ id: "workflows", kind: "workflows" }],
+        },
+      },
+    });
+  });
+
   it("upgrades the legacy singleton pull request surface to a reference-keyed tab", () => {
     const id = pullRequestSurfaceId({
       projectId: "project-a",
@@ -258,6 +280,9 @@ describe("rightPanelStore", () => {
     useRightPanelStore.getState().open(refA, "plan");
     useRightPanelStore.getState().open(refA, "review");
     useRightPanelStore.getState().open(refA, "logs");
+    useRightPanelStore.getState().open(refA, "workflows");
+    useRightPanelStore.getState().open(refA, "agents");
+    useRightPanelStore.getState().open(refA, "workflows");
     useRightPanelStore.getState().open(refA, "review");
 
     expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
@@ -267,6 +292,8 @@ describe("rightPanelStore", () => {
         { id: "plan", kind: "plan" },
         { id: "review", kind: "review" },
         { id: "logs", kind: "logs" },
+        { id: "workflows", kind: "workflows" },
+        { id: "agents", kind: "agents" },
       ],
     });
   });
@@ -409,6 +436,26 @@ describe("rightPanelStore", () => {
     useRightPanelStore.getState().toggle(refA, "preview");
     useRightPanelStore.getState().toggle(refA, "agents");
     expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, refA)).toBe("agents");
+  });
+
+  it("creates, activates, and toggles Workflows alongside Agents", () => {
+    useRightPanelStore.getState().open(refA, "agents");
+    useRightPanelStore.getState().toggle(refA, "workflows");
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "workflows",
+      surfaces: [
+        { id: "agents", kind: "agents" },
+        { id: "workflows", kind: "workflows" },
+      ],
+    });
+
+    useRightPanelStore.getState().toggle(refA, "workflows");
+    expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, refA)).toBeNull();
+    useRightPanelStore.getState().toggle(refA, "workflows");
+    expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, refA)).toBe(
+      "workflows",
+    );
   });
 
   it("removeThread clears persisted state", () => {

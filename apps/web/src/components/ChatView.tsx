@@ -159,6 +159,12 @@ import { PullRequestDetailPanel } from "./pullRequest/PullRequestDetailPanel";
 import { PullRequestDetailGhost } from "./pullRequest/PullRequestGhosts";
 import { PullRequestsUnavailableState } from "./pullRequest/PullRequestsUnavailableState";
 import { AgentsPanel } from "./AgentsPanel";
+import { WorkflowsPanel } from "./WorkflowsPanel";
+import {
+  buildWorkflowViewModel,
+  selectWorkflowRootForThread,
+  workflowThreadKey,
+} from "../workflowModel";
 import {
   deriveAgentPanelModel,
   foldSubagentActivities,
@@ -229,6 +235,7 @@ import {
 import { appendPreviewAnnotationPrompt } from "../lib/previewAnnotation";
 import { appendReviewCommentsToPrompt, type ReviewCommentContext } from "../reviewCommentContext";
 import { environmentCatalog } from "../connection/catalog";
+import { useArchivedThreadSnapshots } from "../lib/archivedThreadsState";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { useKnownTerminalSessions, useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { projectEnvironment } from "../state/projects";
@@ -263,6 +270,7 @@ import {
   useThread,
   useThreadPlanningWorkflow,
   useThreadRefs,
+  useThreadShells,
   useThreadShell,
 } from "../state/entities";
 import { environmentShell } from "../state/shell";
@@ -1490,6 +1498,27 @@ function ChatViewContent(props: ChatViewProps) {
   const storeSetActiveTerminal = useTerminalUiStateStore((s) => s.setActiveTerminal);
   const storeCloseTerminal = useTerminalUiStateStore((s) => s.closeTerminal);
   const serverThreadRefs = useThreadRefs();
+  const activeWorkflowNavigationThreadShells = useThreadShells();
+  const workflowArchiveEnvironmentIds = useMemo(() => [environmentId], [environmentId]);
+  const { snapshots: workflowArchivedSnapshots } = useArchivedThreadSnapshots(
+    workflowArchiveEnvironmentIds,
+  );
+  const workflowNavigationThreadShells = useMemo(() => {
+    const shellsByKey = new Map(
+      activeWorkflowNavigationThreadShells.map((thread) => [workflowThreadKey(thread), thread]),
+    );
+    for (const { environmentId: archivedEnvironmentId, snapshot } of workflowArchivedSnapshots) {
+      for (const thread of snapshot.threads) {
+        const archivedThread = { ...thread, environmentId: archivedEnvironmentId };
+        shellsByKey.set(workflowThreadKey(archivedThread), archivedThread);
+      }
+    }
+    return [...shellsByKey.values()];
+  }, [activeWorkflowNavigationThreadShells, workflowArchivedSnapshots]);
+  const workflowNavigationModel = useMemo(
+    () => buildWorkflowViewModel(workflowNavigationThreadShells),
+    [workflowNavigationThreadShells],
+  );
   const serverThreadKeys = useMemo(() => serverThreadRefs.map(scopedThreadKey), [serverThreadRefs]);
   const draftThreadsByThreadKey = useComposerDraftStore((store) => store.draftThreadsByThreadKey);
   const draftThreadKeys = useMemo(
@@ -1682,6 +1711,13 @@ function ChatViewContent(props: ChatViewProps) {
     ],
   );
   const activeThreadKey = activeThreadRef ? scopedThreadKey(activeThreadRef) : null;
+  const activeWorkflowNavigation = useMemo(
+    () => selectWorkflowRootForThread(workflowNavigationModel, activeThread),
+    [activeThread, workflowNavigationModel],
+  );
+  const workflowsAvailable = (activeWorkflowNavigation?.groups.length ?? 0) > 0;
+  const liveWorkflowCount =
+    activeWorkflowNavigation?.groups.filter((group) => group.isActive).length ?? 0;
   const [timelineAnchor, setTimelineAnchor] = useState<{
     readonly threadKey: string | null;
     readonly messageId: MessageId | null;
@@ -2922,6 +2958,11 @@ function ChatViewContent(props: ChatViewProps) {
   }, [activeImplementationRuns, activePlanningWorkflow?.spec, activeWorkspaceRoot]);
   const openWorkflowThread = useCallback(
     (targetThreadId: ThreadId) => {
+      const targetRef = scopeThreadRef(environmentId, targetThreadId);
+      // Each thread owns independent panel state. Seed the target before the
+      // route changes so navigating within a workflow keeps the navigator in
+      // place instead of flashing the target thread's previous surface.
+      useRightPanelStore.getState().open(targetRef, "workflows");
       void navigate({
         to: "/$environmentId/$threadId",
         params: {
@@ -3845,6 +3886,10 @@ function ChatViewContent(props: ChatViewProps) {
     if (!activeThreadRef) return;
     useRightPanelStore.getState().open(activeThreadRef, "agents");
   }, [activeThreadRef]);
+  const addWorkflowsSurface = useCallback(() => {
+    if (!activeThreadRef || !workflowsAvailable) return;
+    useRightPanelStore.getState().open(activeThreadRef, "workflows");
+  }, [activeThreadRef, workflowsAvailable]);
   const openFileSurface = useCallback(
     (relativePath: string) => {
       if (!activeThreadRef || !activeProject) return;
@@ -6759,6 +6804,17 @@ function ChatViewContent(props: ChatViewProps) {
         environmentId={activeThreadRef?.environmentId ?? null}
         threadId={activeThreadRef?.threadId ?? null}
       />
+    ) : activeRightPanelSurface?.kind === "workflows" ? (
+      <WorkflowsPanel
+        key={
+          activeWorkflowNavigation
+            ? `${activeWorkflowNavigation.root.environmentId}:${activeWorkflowNavigation.root.id}`
+            : "missing"
+        }
+        workflow={activeWorkflowNavigation}
+        activeThreadKey={activeThreadKey}
+        onOpenThread={(thread) => openWorkflowThread(thread.id)}
+      />
     ) : (activeRightPanelSurface?.kind === "files" || activeRightPanelSurface?.kind === "file") &&
       activeProject &&
       activeWorkspaceRoot ? (
@@ -7219,6 +7275,7 @@ function ChatViewContent(props: ChatViewProps) {
           onAddAppDevStack={addAppDevStackSurface}
           onAddPullRequest={addPullRequestSurface}
           onAddAgents={addAgentsSurface}
+          onAddWorkflows={addWorkflowsSurface}
           browserAvailable={previewAvailable}
           browserUnavailableReason={
             previewRuntimeCapability.supported ? undefined : previewRuntimeCapability.message
@@ -7232,8 +7289,10 @@ function ChatViewContent(props: ChatViewProps) {
           appDevStackAvailable={activeProject !== null}
           pullRequestAvailable={pullRequestSurfaceAvailable}
           agentsAvailable
+          workflowsAvailable={workflowsAvailable}
           pullRequestStatuses={pullRequestTabStatuses}
           liveAgentCount={agentPanelModel.liveCount}
+          liveWorkflowCount={liveWorkflowCount}
         >
           {rightPanelContent}
         </RightPanelTabs>
@@ -7264,6 +7323,7 @@ function ChatViewContent(props: ChatViewProps) {
             onAddAppDevStack={addAppDevStackSurface}
             onAddPullRequest={addPullRequestSurface}
             onAddAgents={addAgentsSurface}
+            onAddWorkflows={addWorkflowsSurface}
             browserAvailable={previewAvailable}
             browserUnavailableReason={
               previewRuntimeCapability.supported ? undefined : previewRuntimeCapability.message
@@ -7277,8 +7337,10 @@ function ChatViewContent(props: ChatViewProps) {
             appDevStackAvailable={activeProject !== null}
             pullRequestAvailable={pullRequestSurfaceAvailable}
             agentsAvailable
+            workflowsAvailable={workflowsAvailable}
             pullRequestStatuses={pullRequestTabStatuses}
             liveAgentCount={agentPanelModel.liveCount}
+            liveWorkflowCount={liveWorkflowCount}
           >
             {rightPanelContent}
           </RightPanelTabs>

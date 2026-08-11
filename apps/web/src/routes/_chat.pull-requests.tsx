@@ -1150,6 +1150,7 @@ function PullRequestsRouteView() {
             onAddAppDevStack={() => undefined}
             onAddPullRequest={() => undefined}
             onAddAgents={() => undefined}
+            onAddWorkflows={() => undefined}
             browserAvailable={false}
             browserUnavailableReason={undefined}
             terminalAvailable={false}
@@ -1161,7 +1162,9 @@ function PullRequestsRouteView() {
             appDevStackAvailable={false}
             pullRequestAvailable={false}
             agentsAvailable={false}
+            workflowsAvailable={false}
             liveAgentCount={0}
+            liveWorkflowCount={0}
             pullRequestStatuses={pullRequestTabStatuses}
           >
             <PullRequestDetailPanel

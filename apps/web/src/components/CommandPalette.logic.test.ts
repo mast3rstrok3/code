@@ -158,6 +158,25 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
 }
 
 describe("buildThreadActionItems", () => {
+  it("keeps workflow child threads recoverable in global search", () => {
+    const items = buildThreadActionItems({
+      threads: [
+        makeThread({ id: ThreadId.make("root"), title: "Workflow root" }),
+        makeThread({
+          id: ThreadId.make("child"),
+          parentThreadId: ThreadId.make("root"),
+          title: "Hidden implementation worker",
+        }),
+      ],
+      projectTitleById: new Map([[PROJECT_ID, "Project"]]),
+      sortOrder: "updated_at",
+      icon: null,
+      runThread: async (_thread) => undefined,
+    });
+
+    expect(items.map((item) => item.value).sort()).toEqual(["thread:child", "thread:root"]);
+  });
+
   it("orders threads by most recent activity and formats timestamps from updatedAt", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-25T12:00:00.000Z"));

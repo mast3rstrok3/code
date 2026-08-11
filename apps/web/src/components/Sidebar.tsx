@@ -136,6 +136,12 @@ import {
   sortThreadsForSidebar,
   workflowRoleShortLabel,
 } from "./Sidebar.logic";
+import {
+  buildWorkflowViewModel,
+  resolveWorkflowLifecycle,
+  resolveWorkflowRollupStatus,
+  workflowThreadKey,
+} from "../workflowModel";
 import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
 import {
   ThreadWorktreeIndicator,
@@ -644,6 +650,7 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
 
 const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   thread: SidebarThreadSummary;
+  statusOverride?: ReturnType<typeof resolveSidebarThreadStatus> | undefined;
   variant: "card" | "slim";
   // Slim rows are either settled (action: un-settle) or merely quiet
   // (seen Ready threads — action: settle).
@@ -754,7 +761,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // Same semantics as the legacy sidebar (never-visited counts as read):
   // switching sidebars must not light up every historical thread as unread.
   const isUnread = hasUnseenCompletion({ ...thread, lastVisitedAt });
-  const status = resolveSidebarThreadStatus(thread);
+  const status = props.statusOverride ?? resolveSidebarThreadStatus(thread);
   const workflowRoleLabel =
     thread.parentThreadId === null ? null : workflowRoleShortLabel(thread.workflowRole);
   // A woken thread reappears at its original position (the sort is
@@ -1586,6 +1593,8 @@ export default function Sidebar() {
   const projects = useProjects();
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const threads = useThreadShells();
+  const workflowModel = useMemo(() => buildWorkflowViewModel(threads), [threads]);
+  const topLevelThreads = workflowModel.topLevelThreads;
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
@@ -1676,13 +1685,17 @@ export default function Sidebar() {
     [routeDraftThread, routeTarget],
   );
   const routeThreadKey = routeThreadRef ? scopedThreadKey(routeThreadRef) : null;
+  const routeOwningRootKey =
+    routeThreadKey === null
+      ? null
+      : (workflowModel.ownerThreadKeyByThreadKey.get(routeThreadKey) ?? routeThreadKey);
   const routeTargetRef = useRef(routeTarget);
   routeTargetRef.current = routeTarget;
   // Post-settle navigation validates against the CURRENT route, not the one
   // captured when the settle started: if the user navigated elsewhere while
   // the command was in flight, completing it must not yank them away.
-  const routeThreadKeyRef = useRef(routeThreadKey);
-  routeThreadKeyRef.current = routeThreadKey;
+  const routeThreadKeyRef = useRef(routeOwningRootKey);
+  routeThreadKeyRef.current = routeOwningRootKey;
 
   const environmentLabelById = useMemo(
     () =>
@@ -1722,8 +1735,13 @@ export default function Sidebar() {
     ],
   );
   const projectGroups = useMemo(
-    () => sortLogicalProjectsForSidebar(unsortedProjectGroups, threads, sidebarProjectSortOrder),
-    [sidebarProjectSortOrder, threads, unsortedProjectGroups],
+    () =>
+      sortLogicalProjectsForSidebar(
+        unsortedProjectGroups,
+        topLevelThreads,
+        sidebarProjectSortOrder,
+      ),
+    [sidebarProjectSortOrder, topLevelThreads, unsortedProjectGroups],
   );
   const serverProviders = useAtomValue(primaryServerProvidersAtom);
   const providerEntryByInstanceId = useMemo(
@@ -1874,6 +1892,25 @@ export default function Sidebar() {
   // merging, no optimistic holds. Archived threads remain hidden here —
   // archive keeps its original "remove from sidebar" meaning.
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
+  const workflowRootStatusByThreadKey = useMemo(() => {
+    const statuses = new Map<string, ReturnType<typeof resolveSidebarThreadStatus>>();
+    for (const [rootKey, workflow] of workflowModel.rootsByThreadKey) {
+      if (workflow.groups.length === 0) continue;
+      const rollup = resolveWorkflowRollupStatus(workflow.members);
+      if (rollup === null) continue;
+      statuses.set(
+        rootKey,
+        rollup === "approval" ||
+          rollup === "input" ||
+          rollup === "working" ||
+          rollup === "monitoring" ||
+          rollup === "failed"
+          ? rollup
+          : "ready",
+      );
+    }
+    return statuses;
+  }, [workflowModel]);
   const {
     pinnedThreads,
     reorderablePinnedKeys,
@@ -1889,7 +1926,7 @@ export default function Sidebar() {
     // memo exactly at the next wake boundary.
     void snoozeWakeTick;
     const preciseNow = new Date().toISOString();
-    const visible = threads.filter(
+    const visible = topLevelThreads.filter(
       (thread) =>
         thread.archivedAt === null &&
         (scopedProjectKeys === null ||
@@ -1900,37 +1937,39 @@ export default function Sidebar() {
     const snoozed: EnvironmentThreadShell[] = [];
     const settled: EnvironmentThreadShell[] = [];
     for (const thread of visible) {
-      // Threads on servers without the settlement capability (old server,
-      // or descriptor not loaded yet) never classify as settled: the user
-      // could neither un-settle nor pin them, so auto-settling them would
-      // strand rows in a tail with no working affordances.
-      const supportsSettlement =
-        serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSettlement === true;
-      const supportsSnooze =
-        serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSnooze === true;
-      const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-      const changeRequestState = changeRequestStateByKey.get(threadKey) ?? null;
-      // Snooze outranks everything, including a pin: "hide until Tuesday"
-      // temporarily suspends "keep on top". The pin survives underneath —
-      // and so does its pinOrderKey, so on wake the thread reappears at
-      // its exact slot in the pinned block. (For unpinned threads
-      // this is also the snooze-beats-auto-settle rule: the wake time is a
-      // stronger statement about when the thread matters again.)
-      if (supportsSnooze && effectiveSnoozed(thread, { now: preciseNow })) {
-        snoozed.push(thread);
-        // A pin otherwise overrides the lifecycle: pinned threads never
-        // auto-settle out of sight. (The decider clears settled state on
-        // pin and the pin on settle, so pin-vs-settled conflicts only
-        // arise from stale or raced writes.)
-      } else if (thread.pinnedAt != null) {
+      const rootKey = workflowThreadKey(thread);
+      const members = workflowModel.rootsByThreadKey.get(rootKey)?.members ?? [thread];
+      const lifecycle = resolveWorkflowLifecycle(members, (member) => {
+        if (member.archivedAt !== null) return "settled";
+        const capabilities = serverConfigs.get(member.environmentId)?.environment.capabilities;
+        const memberKey = workflowThreadKey(member);
+        if (capabilities?.threadSnooze === true && effectiveSnoozed(member, { now: preciseNow })) {
+          return "snoozed";
+        }
+        if (
+          capabilities?.threadSettlement !== true ||
+          !effectiveSettled(member, {
+            now,
+            autoSettleAfterDays,
+            changeRequestState: changeRequestStateByKey.get(memberKey) ?? null,
+          })
+        ) {
+          return "active";
+        }
+        return "settled";
+      });
+
+      // A root card represents the complete workflow. Descendant activity
+      // keeps it in the inbox; it reaches history only after every surviving
+      // member is settled. Root pinning remains a root-level lifecycle action.
+      if (thread.pinnedAt != null && lifecycle !== "snoozed") {
         pinned.push(thread);
-      } else if (
-        supportsSettlement &&
-        effectiveSettled(thread, { now, autoSettleAfterDays, changeRequestState })
-      ) {
-        settled.push(thread);
-      } else {
+      } else if (lifecycle === "active") {
         active.push(thread);
+      } else if (lifecycle === "snoozed") {
+        snoozed.push(thread);
+      } else {
+        settled.push(thread);
       }
     }
     // One shared rule on every platform (see sortPinnedThreadsByOrderKey):
@@ -1966,7 +2005,8 @@ export default function Sidebar() {
     scopedProjectKeys,
     serverConfigs,
     snoozeWakeTick,
-    threads,
+    topLevelThreads,
+    workflowModel,
   ]);
 
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
@@ -2031,17 +2071,17 @@ export default function Sidebar() {
     // The open thread must never hide under "Show more": navigating into a
     // deep settled thread (search, deep link) pulls its row into the visible
     // tail so the highlight and the un-settle affordance stay reachable.
-    if (routeThreadKey !== null) {
+    if (routeOwningRootKey !== null) {
       const routeThread = settledThreads
         .slice(settledVisibleCount)
         .find(
           (thread) =>
-            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === routeThreadKey,
+            scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === routeOwningRootKey,
         );
       if (routeThread !== undefined) visible.push(routeThread);
     }
     return visible;
-  }, [routeThreadKey, settledThreads, settledVisibleCount]);
+  }, [routeOwningRootKey, settledThreads, settledVisibleCount]);
   const hiddenSettledCount = settledThreads.length - visibleSettledThreads.length;
   const showMoreSettled = useCallback(
     () => setSettledVisibleCount((count) => count + SETTLED_TAIL_PAGE_COUNT),
@@ -2051,13 +2091,13 @@ export default function Sidebar() {
   const toggleSettledShelf = useCallback(() => setSettledShelfExpanded((value) => !value), []);
   const renderedSettledThreads = useMemo(() => {
     if (settledShelfExpanded) return visibleSettledThreads;
-    if (routeThreadKey === null) return [];
+    if (routeOwningRootKey === null) return [];
     const routeThread = visibleSettledThreads.find(
       (thread) =>
-        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === routeThreadKey,
+        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === routeOwningRootKey,
     );
     return routeThread === undefined ? [] : [routeThread];
-  }, [routeThreadKey, settledShelfExpanded, visibleSettledThreads]);
+  }, [routeOwningRootKey, settledShelfExpanded, visibleSettledThreads]);
 
   // The snoozed shelf is collapsed by default: out of the way, never gone.
   // Collapsed threads don't render (and so don't participate in jump
@@ -2070,13 +2110,13 @@ export default function Sidebar() {
     // snoozed thread reached by route (deep link, open before snoozing
     // elsewhere) keeps its row — with highlight and wake affordance — same
     // exception the settled tail's "Show more" makes.
-    if (routeThreadKey === null) return [];
+    if (routeOwningRootKey === null) return [];
     const routeThread = snoozedThreads.find(
       (thread) =>
-        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === routeThreadKey,
+        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)) === routeOwningRootKey,
     );
     return routeThread === undefined ? [] : [routeThread];
-  }, [routeThreadKey, snoozedShelfExpanded, snoozedThreads]);
+  }, [routeOwningRootKey, snoozedShelfExpanded, snoozedThreads]);
 
   const orderedThreads = useMemo(
     () => [...pinnedThreads, ...activeThreads, ...visibleSnoozedThreads, ...renderedSettledThreads],
@@ -3105,7 +3145,7 @@ export default function Sidebar() {
         navigateToThreadKey(
           resolveAdjacentThreadId({
             threadIds: orderedThreadKeys,
-            currentThreadId: routeThreadKey,
+            currentThreadId: routeOwningRootKey,
             direction: traversalDirection,
           }),
         );
@@ -3122,7 +3162,7 @@ export default function Sidebar() {
     navigateToThread,
     orderedThreadKeys,
     routeTerminalOpen,
-    routeThreadKey,
+    routeOwningRootKey,
     threadByKey,
   ]);
 
@@ -3394,7 +3434,7 @@ export default function Sidebar() {
                         environmentLabel={environmentLabelById.get(thread.environmentId) ?? null}
                         providerEntryByInstanceId={providerEntryByInstanceId}
                         isHighlighted={activeSearchResultIndex === index}
-                        isRouteActive={routeThreadKey === threadKey}
+                        isRouteActive={routeOwningRootKey === threadKey}
                         resultId={`sidebar-thread-search-result-${index}`}
                         onHighlight={() => setActiveSearchResultIndex(index)}
                         onSelect={() => selectThreadSearchResult(thread)}
@@ -3445,6 +3485,7 @@ export default function Sidebar() {
                         // painted over text).
                         key={`${threadKey}:${rowVariant}`}
                         thread={thread}
+                        statusOverride={workflowRootStatusByThreadKey.get(threadKey)}
                         variant={rowVariant}
                         // Snoozed rows wake; settled rows un-settle (explicit
                         // settles clear the override, auto-settled rows get
@@ -3482,7 +3523,7 @@ export default function Sidebar() {
                         // the wake signal must survive the trip. Still-snoozed
                         // rows resolve to null on their own.
                         wokeAt={threadWokeAt(thread, { now: snoozeNow })}
-                        isActive={routeThreadKey === threadKey}
+                        isActive={routeOwningRootKey === threadKey}
                         openPullRequestsInRightPanel={routeThreadRef !== null}
                         jumpLabel={showJumpHints ? (jumpLabelByKey.get(threadKey) ?? null) : null}
                         currentEnvironmentId={primaryEnvironmentId}

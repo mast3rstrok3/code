@@ -1,0 +1,213 @@
+import { describe, expect, it } from "vite-plus/test";
+
+import {
+  buildWorkflowViewModel,
+  resolveWorkflowLifecycle,
+  resolveWorkflowRollupStatus,
+  resolveWorkflowThreadStatus,
+  selectWorkflowRootForThread,
+  type WorkflowModelThread,
+} from "./workflowModel";
+
+type TestThread = WorkflowModelThread & { readonly title: string };
+
+function thread(id: string, overrides: Partial<TestThread> = {}): TestThread {
+  return {
+    environmentId: "env",
+    id,
+    parentThreadId: null,
+    workflowRole: null,
+    workflowContext: null,
+    workflowSubagentBatchProvenance: null,
+    workflowPreset: null,
+    title: id,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    archivedAt: null,
+    settledAt: null,
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    backgroundLiveness: null,
+    latestTurn: null,
+    session: null,
+    ...overrides,
+  };
+}
+
+describe("buildWorkflowViewModel", () => {
+  it("resolves the same owner from a root and a deeply nested child", () => {
+    const root = thread("root");
+    const planning = thread("planning", {
+      parentThreadId: "root",
+      workflowContext: { workflowId: "workflow-a", rootThreadId: "root" },
+    });
+    const worker = thread("worker", {
+      parentThreadId: "planning",
+      workflowContext: { workflowId: "workflow-a", rootThreadId: "root" },
+    });
+    const model = buildWorkflowViewModel([worker, root, planning]);
+
+    expect(selectWorkflowRootForThread(model, root)?.root.id).toBe("root");
+    expect(selectWorkflowRootForThread(model, worker)?.root.id).toBe("root");
+    expect(model.topLevelThreads.map((candidate) => candidate.id)).toEqual(["root"]);
+  });
+
+  it("groups by workflow, then batch provenance, then the first legacy branch", () => {
+    const root = thread("root", { workflowPreset: "full-feature" });
+    const workflowChild = thread("workflow-child", {
+      parentThreadId: "root",
+      workflowContext: { workflowId: "workflow-a", rootThreadId: "root" },
+      workflowSubagentBatchProvenance: { batchId: "ignored-batch" },
+    });
+    const batchChild = thread("batch-child", {
+      parentThreadId: "root",
+      workflowSubagentBatchProvenance: { batchId: "batch-a" },
+    });
+    const legacyParent = thread("legacy-parent", { parentThreadId: "root" });
+    const legacyChild = thread("legacy-child", { parentThreadId: "legacy-parent" });
+    const groups = buildWorkflowViewModel([
+      root,
+      workflowChild,
+      batchChild,
+      legacyParent,
+      legacyChild,
+    ]).rootsByThreadKey.get("env:root")?.groups;
+
+    expect(groups?.map((group) => group.id).sort()).toEqual([
+      "batch:batch-a",
+      "legacy:legacy-parent",
+      "workflow:workflow-a",
+    ]);
+    expect(groups?.flatMap((group) => group.rows.map((row) => row.thread.id)).sort()).toEqual([
+      "batch-child",
+      "legacy-child",
+      "legacy-parent",
+      "workflow-child",
+    ]);
+    expect(groups?.some((group) => group.id === "batch:ignored-batch")).toBe(false);
+    expect(groups?.find((group) => group.id === "batch:batch-a")?.preset).toBeNull();
+  });
+
+  it("orders groups newest first and rows depth-first with deterministic siblings", () => {
+    const root = thread("root");
+    const older = thread("older", {
+      parentThreadId: "root",
+      createdAt: "2026-01-02T00:00:00.000Z",
+      workflowContext: { workflowId: "older-run", rootThreadId: "root" },
+    });
+    const newer = thread("newer", {
+      parentThreadId: "root",
+      createdAt: "2026-01-03T00:00:00.000Z",
+      workflowContext: { workflowId: "newer-run", rootThreadId: "root" },
+    });
+    const siblingB = thread("b", {
+      parentThreadId: "newer",
+      createdAt: "2026-01-04T00:00:00.000Z",
+      workflowContext: { workflowId: "newer-run", rootThreadId: "root" },
+    });
+    const siblingA = thread("a", {
+      parentThreadId: "newer",
+      createdAt: "2026-01-04T00:00:00.000Z",
+      workflowContext: { workflowId: "newer-run", rootThreadId: "root" },
+    });
+    const groups = buildWorkflowViewModel([
+      siblingB,
+      older,
+      root,
+      siblingA,
+      newer,
+    ]).rootsByThreadKey.get("env:root")?.groups;
+
+    expect(groups?.map((group) => group.sourceId)).toEqual(["newer-run", "older-run"]);
+    expect(groups?.[0]?.rows.map((row) => [row.thread.id, row.depth])).toEqual([
+      ["newer", 0],
+      ["a", 1],
+      ["b", 1],
+    ]);
+  });
+
+  it("promotes missing parents and cycles to roots and keeps archived shells", () => {
+    const root = thread("root");
+    const orphan = thread("orphan", {
+      parentThreadId: "missing",
+      archivedAt: "2026-01-05T00:00:00.000Z",
+      workflowContext: { workflowId: "run", rootThreadId: "root" },
+    });
+    const cycleA = thread("cycle-a", {
+      parentThreadId: "cycle-b",
+      workflowContext: { workflowId: "run", rootThreadId: "root" },
+    });
+    const cycleB = thread("cycle-b", {
+      parentThreadId: "cycle-a",
+      workflowContext: { workflowId: "run", rootThreadId: "root" },
+    });
+    const unrelatedRoot = thread("unrelated-root", { environmentId: "other-env" });
+    const unrelatedChild = thread("unrelated-child", {
+      environmentId: "other-env",
+      parentThreadId: "unrelated-root",
+    });
+    const model = buildWorkflowViewModel([
+      unrelatedChild,
+      cycleB,
+      orphan,
+      root,
+      unrelatedRoot,
+      cycleA,
+    ]);
+    const rows = model.rootsByThreadKey.get("env:root")?.groups[0]?.rows ?? [];
+
+    expect(rows.map((row) => row.thread.id).sort()).toEqual(["cycle-a", "cycle-b", "orphan"]);
+    expect(rows.every((row) => row.depth === 0)).toBe(true);
+    expect(resolveWorkflowThreadStatus(orphan)).toBe("archived");
+    expect(rows.some((row) => row.thread.environmentId === unrelatedChild.environmentId)).toBe(
+      false,
+    );
+  });
+
+  it("rolls active and settled counts from hidden descendants", () => {
+    const root = thread("root");
+    const approval = thread("approval", {
+      parentThreadId: "root",
+      hasPendingApprovals: true,
+      workflowContext: { workflowId: "run", rootThreadId: "root" },
+    });
+    const completed = thread("completed", {
+      parentThreadId: "root",
+      settledAt: "2026-01-02T00:00:00.000Z",
+      workflowContext: { workflowId: "run", rootThreadId: "root" },
+    });
+    const group = buildWorkflowViewModel([root, completed, approval]).rootsByThreadKey.get(
+      "env:root",
+    )?.groups[0];
+
+    expect(group).toMatchObject({ activeCount: 1, settledCount: 1, isActive: true });
+    expect(resolveWorkflowRollupStatus([root, completed, approval])).toBe("approval");
+    expect(
+      resolveWorkflowLifecycle([root, completed, approval], (candidate) =>
+        candidate.id === "approval" ? "active" : "settled",
+      ),
+    ).toBe("active");
+  });
+
+  it("keeps sidebar lists, counts, and local title search rooted at top-level threads", () => {
+    const root = thread("root", { title: "Visible workflow" });
+    const child = thread("child", {
+      title: "Secret worker",
+      parentThreadId: "root",
+      workflowContext: { workflowId: "run", rootThreadId: "root" },
+    });
+    const ordinary = thread("ordinary", { title: "Ordinary thread" });
+    const model = buildWorkflowViewModel([child, ordinary, root]);
+    const localSearch = (query: string) =>
+      model.topLevelThreads.filter((candidate) =>
+        candidate.title.toLowerCase().includes(query.toLowerCase()),
+      );
+
+    expect(model.topLevelThreads.map((candidate) => candidate.id).sort()).toEqual([
+      "ordinary",
+      "root",
+    ]);
+    expect(model.topLevelThreads).toHaveLength(2);
+    expect(localSearch("Secret worker")).toEqual([]);
+  });
+});

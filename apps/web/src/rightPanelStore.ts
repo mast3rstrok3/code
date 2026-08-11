@@ -26,6 +26,7 @@ export const RIGHT_PANEL_KINDS = [
   "app-dev-stack",
   "pull-request",
   "agents",
+  "workflows",
 ] as const;
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
 
@@ -64,14 +65,16 @@ export type RightPanelSurface =
       repository: string;
       number: number;
     }
-  | { id: "agents"; kind: "agents" };
+  | { id: "agents"; kind: "agents" }
+  | { id: "workflows"; kind: "workflows" };
 
 const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
 // v9 moved ordinary provider plans into the transcript. Fork workflow plans
 // remain a distinct surface and are only exposed for workflow threads.
 // v10 keys pull-request surfaces by reference instead of a singleton tab.
 // v11 stops persisting the pull-request list's shared panel, so a restart opens the page fresh.
-const RIGHT_PANEL_STORAGE_VERSION = 11;
+// v12 adds the persisted singleton Workflows surface.
+const RIGHT_PANEL_STORAGE_VERSION = 12;
 
 /**
  * The pull-request list's shared panel (see PULL_REQUESTS_PANEL_ID in the route) is session
@@ -147,6 +150,8 @@ const singletonSurface = (
       return { id: "logs", kind };
     case "agents":
       return { id: "agents", kind };
+    case "workflows":
+      return { id: "workflows", kind };
   }
 };
 

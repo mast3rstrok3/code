@@ -8,6 +8,7 @@ import {
   FileDiff,
   Files,
   GitPullRequest,
+  GitFork,
   Globe2,
   Plus,
   ScrollTextIcon,
@@ -38,7 +39,7 @@ import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 import { PreviewPanelShell, type PreviewPanelMode } from "./preview/PreviewPanelShell";
 import { PierreEntryIcon } from "./chat/PierreEntryIcon";
 
-interface RightPanelTabsProps {
+export interface RightPanelTabsProps {
   mode: PreviewPanelMode;
   maximized?: boolean;
   /** Forwarded to PreviewPanelShell so this surface persists its own width. */
@@ -67,6 +68,7 @@ interface RightPanelTabsProps {
   onAddAppDevStack: () => void;
   onAddPullRequest: () => void;
   onAddAgents: () => void;
+  onAddWorkflows: () => void;
   browserAvailable: boolean;
   browserUnavailableReason: string | undefined;
   terminalAvailable: boolean;
@@ -78,9 +80,12 @@ interface RightPanelTabsProps {
   appDevStackAvailable: boolean;
   pullRequestAvailable: boolean;
   agentsAvailable: boolean;
+  workflowsAvailable: boolean;
   pullRequestStatuses?: Readonly<Record<string, PullRequestTabStatus>>;
   /** Running + waiting subagents; badges the Agents card in the empty state. */
   liveAgentCount: number;
+  /** Active workflow runs; badges the Workflows card in the empty state. */
+  liveWorkflowCount: number;
   children: ReactNode;
 }
 
@@ -102,6 +107,7 @@ const SURFACE_DISABLED_REASONS = {
   diff: "Diff is only available for server threads in Git repositories.",
   pullRequest: "This thread's branch has no pull request yet.",
   agents: "Agents are only available from a thread.",
+  workflows: "Workflows are available when this thread has workflow children.",
 } as const;
 
 type TabContextMenuAction = "copy-path" | "close" | "close-others" | "close-to-right" | "close-all";
@@ -145,6 +151,7 @@ function RightPanelEmptyState(props: {
   onAddAppDevStack: () => void;
   onAddPullRequest: () => void;
   onAddAgents: () => void;
+  onAddWorkflows: () => void;
   browserAvailable: boolean;
   browserUnavailableReason: string | undefined;
   terminalAvailable: boolean;
@@ -156,7 +163,9 @@ function RightPanelEmptyState(props: {
   appDevStackAvailable: boolean;
   pullRequestAvailable: boolean;
   agentsAvailable: boolean;
+  workflowsAvailable: boolean;
   liveAgentCount: number;
+  liveWorkflowCount: number;
 }) {
   const actions = [
     {
@@ -241,8 +250,17 @@ function RightPanelEmptyState(props: {
       badgeCount: 0,
     },
     {
+      label: "Workflows",
+      description: "Navigate workflow runs and their child threads.",
+      icon: GitFork,
+      available: props.workflowsAvailable,
+      disabledReason: SURFACE_DISABLED_REASONS.workflows,
+      onClick: props.onAddWorkflows,
+      badgeCount: props.liveWorkflowCount,
+    },
+    {
       label: "Agents",
-      description: "Watch subagents and workflows run.",
+      description: "Watch provider-native subagents run.",
       icon: Bot,
       available: props.agentsAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.agents,
@@ -346,6 +364,8 @@ function surfaceTitle(
       return `#${surface.number}`;
     case "agents":
       return "Agents";
+    case "workflows":
+      return "Workflows";
     case "preview": {
       const snapshot = surface.resourceId ? sessions[surface.resourceId] : null;
       if (!snapshot || snapshot.navStatus._tag === "Idle") return "Browser";
@@ -431,6 +451,8 @@ function SurfaceIcon({
     }
     case "agents":
       return <Bot className="size-3 shrink-0" />;
+    case "workflows":
+      return <GitFork className="size-3 shrink-0" />;
   }
 }
 
@@ -681,6 +703,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                     Pull request
                   </SurfaceMenuItem>
                   <SurfaceMenuItem
+                    available={props.workflowsAvailable}
+                    disabledReason={SURFACE_DISABLED_REASONS.workflows}
+                    onClick={props.onAddWorkflows}
+                  >
+                    <GitFork />
+                    Workflows
+                  </SurfaceMenuItem>
+                  <SurfaceMenuItem
                     available={props.agentsAvailable}
                     disabledReason={SURFACE_DISABLED_REASONS.agents}
                     onClick={props.onAddAgents}
@@ -708,6 +738,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddAppDevStack={props.onAddAppDevStack}
             onAddPullRequest={props.onAddPullRequest}
             onAddAgents={props.onAddAgents}
+            onAddWorkflows={props.onAddWorkflows}
             browserAvailable={props.browserAvailable}
             browserUnavailableReason={props.browserUnavailableReason}
             terminalAvailable={props.terminalAvailable}
@@ -719,7 +750,9 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             appDevStackAvailable={props.appDevStackAvailable}
             pullRequestAvailable={props.pullRequestAvailable}
             agentsAvailable={props.agentsAvailable}
+            workflowsAvailable={props.workflowsAvailable}
             liveAgentCount={props.liveAgentCount}
+            liveWorkflowCount={props.liveWorkflowCount}
           />
         ) : (
           props.children

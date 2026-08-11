@@ -40,6 +40,7 @@ import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityRes
 import {
   fastFeatureBuildContractProblems,
   ImplementationWorkflowReactorLive,
+  workflowIdForRun,
 } from "./ImplementationWorkflowReactor.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
@@ -72,7 +73,11 @@ const decodeBuildContractExample = Schema.decodeUnknownEffect(
 
 interface ImplementationCalls {
   readonly autoCreateInputs: Ref.Ref<
-    ReadonlyArray<{ readonly worktreePath: string; readonly displayName: string }>
+    ReadonlyArray<{
+      readonly worktreePath: string;
+      readonly displayName: string;
+      readonly workflowId?: string | null | undefined;
+    }>
   >;
   readonly createOrOpenChangeRequestCount: Ref.Ref<number>;
   readonly createOrOpenChangeRequestInputs: Ref.Ref<
@@ -429,7 +434,11 @@ function withSystem<A, E>(
 ) {
   return Effect.gen(function* () {
     const autoCreateInputs = yield* Ref.make<
-      ReadonlyArray<{ readonly worktreePath: string; readonly displayName: string }>
+      ReadonlyArray<{
+        readonly worktreePath: string;
+        readonly displayName: string;
+        readonly workflowId?: string | null | undefined;
+      }>
     >([]);
     const createOrOpenChangeRequestCount = yield* Ref.make(0);
     const createOrOpenChangeRequestInputs = yield* Ref.make<
@@ -937,6 +946,14 @@ function launchFastFeatureRun(system: ImplementationSystem) {
   });
 }
 
+it("omits workflow ownership for legacy orchestrator threads without workflow context", () => {
+  const orchestratorThreadId = ThreadId.make("thread-legacy-orchestrator");
+
+  expect(
+    workflowIdForRun({ threads: [{ id: orchestratorThreadId }] }, { orchestratorThreadId }),
+  ).toBeUndefined();
+});
+
 describe("ImplementationWorkflowReactor", () => {
   it.effect("sets up Fast feature Build and starts Dev Review only after a verified result", () =>
     withSystem((system) =>
@@ -954,7 +971,12 @@ describe("ImplementationWorkflowReactor", () => {
           snapshot.threads.filter((thread) => thread.workflowRole === "implementation-qa-reviewer"),
         ).toHaveLength(0);
         expect(yield* Ref.get(system.createWorktreeInputs)).toHaveLength(1);
-        expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(1);
+        const firstAutoCreateInputs = yield* Ref.get(system.autoCreateInputs);
+        expect(firstAutoCreateInputs).toHaveLength(1);
+        expect(firstAutoCreateInputs[0]?.workflowId).toBe(
+          snapshot.threads.find((thread) => thread.id === run.orchestratorThreadId)?.workflowContext
+            ?.workflowId,
+        );
 
         yield* system.engine.dispatch({
           type: "thread.activity.append",
@@ -988,6 +1010,12 @@ describe("ImplementationWorkflowReactor", () => {
           snapshot.threads.filter((thread) => thread.workflowRole === "implementation-qa-reviewer"),
         ).toHaveLength(1);
         expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(2);
+        expect((yield* Ref.get(system.autoCreateInputs)).map((input) => input.workflowId)).toEqual([
+          snapshot.threads.find((thread) => thread.id === run.orchestratorThreadId)?.workflowContext
+            ?.workflowId,
+          snapshot.threads.find((thread) => thread.id === run.orchestratorThreadId)?.workflowContext
+            ?.workflowId,
+        ]);
       }),
     ),
   );
@@ -1815,6 +1843,11 @@ describe("ImplementationWorkflowReactor", () => {
             expect(worker?.messages.at(-1)?.role).toBe("user");
             expect(snapshot.implementationRuns[0]?.status).toBe("running");
             expect(snapshot.implementationRuns[0]?.appDevStack.status).toBe("ensuring");
+            const orchestratorThreadId = snapshot.implementationRuns[0]?.orchestratorThreadId;
+            expect((yield* Ref.get(system.autoCreateInputs))[0]?.workflowId).toBe(
+              snapshot.threads.find((thread) => thread.id === orchestratorThreadId)?.workflowContext
+                ?.workflowId,
+            );
 
             yield* Deferred.succeed(gate.release, undefined);
             yield* Fiber.join(drained);

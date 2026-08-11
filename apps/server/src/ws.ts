@@ -70,6 +70,7 @@ import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as AppDevStackManager from "./appDevStack/AppDevStackManager.ts";
+import { appDevStackWorkflowConflicts } from "./appDevStack/workflowOwnership.ts";
 import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
@@ -2493,9 +2494,21 @@ const makeWsRpcLayer = (
             "rpc.aggregate": "app-dev-stack",
           }),
         [WS_METHODS.appDevStackList]: (input) =>
-          observeRpcEffect(WS_METHODS.appDevStackList, appDevStackManager.list(input), {
-            "rpc.aggregate": "app-dev-stack",
-          }),
+          observeRpcEffect(
+            WS_METHODS.appDevStackList,
+            Effect.gen(function* () {
+              const result = yield* appDevStackManager.list(input);
+              const readModel = yield* projectionSnapshotQuery
+                .getCommandReadModel()
+                .pipe(Effect.orElseSucceed(() => null));
+              return {
+                ...result,
+                workflowConflicts:
+                  readModel === null ? [] : appDevStackWorkflowConflicts(result.stacks, readModel),
+              };
+            }),
+            { "rpc.aggregate": "app-dev-stack" },
+          ),
         [WS_METHODS.appDevStackGetByWorktree]: (input) =>
           observeRpcEffect(
             WS_METHODS.appDevStackGetByWorktree,

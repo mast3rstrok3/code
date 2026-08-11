@@ -4,7 +4,9 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   appDevStackBulkDeleteConfirmation,
   appDevStackBulkDeleteFailureMessage,
+  appDevStackOwnershipLabel,
   appDevStackSelectionState,
+  appDevStackWorkflowConflictSummary,
   autoCreateNotice,
   normalizePreviewHref,
   orderAppDevStacksForPanel,
@@ -118,6 +120,21 @@ describe("AppDevStackPanel URL helpers", () => {
 });
 
 describe("AppDevStackPanel list management", () => {
+  it("labels workflow ownership and summarizes non-destructive conflicts", () => {
+    expect(appDevStackOwnershipLabel(makeStack({ workflowId: "workflow-1" }))).toBe(
+      "Workflow-owned",
+    );
+    expect(appDevStackOwnershipLabel(makeStack({}))).toBeNull();
+    expect(
+      appDevStackWorkflowConflictSummary({
+        workflowId: "workflow-1",
+        stackIds: ["one", "two"],
+        runIds: ["run-one", "run-two"],
+        worktreePaths: ["/one", "/two"],
+      }),
+    ).toBe("2 stacks · workflow-1");
+  });
+
   it("shows the current stack once and orders remaining stacks by update time", () => {
     const current = makeStack({ id: "current", worktreePath: "/repo/current" });
     const older = makeStack({

@@ -65,6 +65,7 @@ export const AppDevStack = Schema.Struct({
   description: NullableString,
   repoName: Schema.optionalKey(NullableString),
   branchName: Schema.optionalKey(NullableString),
+  workflowId: Schema.optionalKey(NullableTrimmedNonEmptyString),
   status: AppDevStackStatus,
   namespace: Schema.optionalKey(NullableTrimmedNonEmptyString),
   services: Schema.NullOr(Schema.Array(AppDevStackService)),
@@ -93,6 +94,16 @@ export type AppDevStackListInput = typeof AppDevStackListInput.Type;
 
 export const AppDevStackListResult = Schema.Struct({
   stacks: Schema.Array(AppDevStack),
+  workflowConflicts: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        workflowId: TrimmedNonEmptyString,
+        stackIds: Schema.Array(TrimmedNonEmptyString),
+        runIds: Schema.Array(TrimmedNonEmptyString),
+        worktreePaths: Schema.Array(TrimmedNonEmptyString),
+      }),
+    ),
+  ),
 });
 export type AppDevStackListResult = typeof AppDevStackListResult.Type;
 
@@ -118,6 +129,7 @@ export const AppDevStackAutoCreateInput = Schema.Struct({
   displayName: TrimmedNonEmptyString,
   gitBranch: Schema.optional(NullableTrimmedNonEmptyString),
   namespace: Schema.optional(NullableTrimmedNonEmptyString),
+  workflowId: Schema.optional(NullableTrimmedNonEmptyString),
 });
 export type AppDevStackAutoCreateInput = typeof AppDevStackAutoCreateInput.Type;
 

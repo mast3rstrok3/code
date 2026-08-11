@@ -195,6 +195,10 @@ One orchestrated execution of a Spec's tickets: a dedicated worktree, dependency
 
 #### App dev stack
 
+A Kubernetes development deployment for a worktree. Workflow orchestration may own one stack at a
+time through its durable workflow ID. A matching pre-existing or standing stack can be reused but
+is not adopted, replaced, or deleted by that workflow.
+
 The per-worktree development stack (dev servers, preview) that implementation runs check and start in parallel with the build, so dev review has a live surface to test against. See [app-dev-stacks.md][30].
 
 ## Practical Shortcuts

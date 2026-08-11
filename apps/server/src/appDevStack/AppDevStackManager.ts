@@ -27,7 +27,9 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
+import * as Semaphore from "effect/Semaphore";
 import * as Schema from "effect/Schema";
+import * as SynchronizedRef from "effect/SynchronizedRef";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
@@ -127,6 +129,9 @@ export class AppDevStackManager extends Context.Service<
         readonly accessToken: string;
         readonly expiresAtEpochMs: number;
       } | null = null;
+      const autoCreateLocks = yield* SynchronizedRef.make(
+        new Map<string, { readonly semaphore: Semaphore.Semaphore; readonly users: number }>(),
+      );
 
       const status = Effect.succeed({
         enabled: baseUrl !== null,
@@ -405,9 +410,24 @@ export class AppDevStackManager extends Context.Service<
         );
       });
 
-      const autoCreate = Effect.fn("AppDevStackManager.autoCreate")(function* (
+      const autoCreateRequest = Effect.fn("AppDevStackManager.autoCreateRequest")(function* (
         input: AppDevStackAutoCreateInput,
       ) {
+        const existing = yield* getByWorktree({ worktreePath: input.worktreePath });
+        if (
+          existing.stack !== null &&
+          ["pending", "starting", "running", "stopping"].includes(existing.stack.status)
+        ) {
+          return {
+            stack: existing.stack,
+            created: false,
+            alreadyRunning: true,
+            reserved: false,
+            message: "An app dev stack for this worktree already exists; returning it.",
+            frontendUrl: existing.frontendUrl,
+            frontendServiceName: existing.frontendServiceName,
+          };
+        }
         const base = yield* requireBaseUrl("autoCreate");
         return yield* executeJson(
           "autoCreate",
@@ -417,10 +437,49 @@ export class AppDevStackManager extends Context.Service<
               display_name: input.displayName,
               git_branch: input.gitBranch ?? null,
               ...(input.namespace === undefined ? {} : { namespace: input.namespace }),
+              ...(input.workflowId === undefined ? {} : { workflow_id: input.workflowId }),
             }),
           ),
           AppDevStackAutoCreateResult,
         );
+      });
+
+      const getAutoCreateSemaphore = (key: string) =>
+        SynchronizedRef.modifyEffect(autoCreateLocks, (current) => {
+          const existing = current.get(key);
+          if (existing !== undefined) {
+            const next = new Map(current);
+            next.set(key, { ...existing, users: existing.users + 1 });
+            return Effect.succeed([existing.semaphore, next] as const);
+          }
+          return Semaphore.make(1).pipe(
+            Effect.map((semaphore) => {
+              const next = new Map(current);
+              next.set(key, { semaphore, users: 1 });
+              return [semaphore, next] as const;
+            }),
+          );
+        });
+
+      const releaseAutoCreateSemaphore = (key: string) =>
+        SynchronizedRef.update(autoCreateLocks, (current) => {
+          const existing = current.get(key);
+          if (existing === undefined) return current;
+          const next = new Map(current);
+          if (existing.users === 1) next.delete(key);
+          else next.set(key, { ...existing, users: existing.users - 1 });
+          return next;
+        });
+
+      const autoCreate = Effect.fn("AppDevStackManager.autoCreate")(function* (
+        input: AppDevStackAutoCreateInput,
+      ) {
+        const normalizedPath = input.worktreePath.trim().replace(/[\\/]+$/u, "");
+        const key = `${input.workflowId?.trim() ?? "manual"}\u0000${normalizedPath}`;
+        const semaphore = yield* getAutoCreateSemaphore(key);
+        return yield* semaphore
+          .withPermit(autoCreateRequest(input))
+          .pipe(Effect.ensuring(releaseAutoCreateSemaphore(key)));
       });
 
       const stop = Effect.fn("AppDevStackManager.stop")(function* (input: AppDevStackGetInput) {
@@ -443,6 +502,7 @@ export class AppDevStackManager extends Context.Service<
           worktreePath: stack.worktreePath,
           displayName: displayNameForRestart(stack),
           gitBranch: stack.branchName ?? null,
+          workflowId: stack.workflowId ?? undefined,
         });
         if (result.stack === null) {
           return yield* new AppDevStackError({

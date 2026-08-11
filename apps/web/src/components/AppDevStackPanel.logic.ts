@@ -1,10 +1,21 @@
 import type {
   AppDevStack,
+  AppDevStackListResult,
   AppDevStackAutoCreateResult,
   AppDevStackPod,
   AppDevStackService,
 } from "@t3tools/contracts";
 import { normalizePreviewUrl } from "@t3tools/shared/preview";
+
+type WorkflowConflict = NonNullable<AppDevStackListResult["workflowConflicts"]>[number];
+
+export function appDevStackOwnershipLabel(stack: AppDevStack): string | null {
+  return stack.workflowId ? "Workflow-owned" : null;
+}
+
+export function appDevStackWorkflowConflictSummary(conflict: WorkflowConflict): string {
+  return `${conflict.stackIds.length} stacks · ${conflict.workflowId}`;
+}
 
 export interface PreviewCandidate {
   readonly serviceName: string;

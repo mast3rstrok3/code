@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
+import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import * as ServerConfig from "../config.ts";
@@ -26,6 +27,16 @@ const stackJson = {
   createdAt: "2026-06-25T00:00:00.000Z",
   updatedAt: "2026-06-25T00:00:00.000Z",
 } as const;
+
+const noStackByWorktree = {
+  stack: null,
+  frontendUrl: null,
+  frontendServiceName: null,
+} as const;
+
+const decodeWorkflowRequest = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Struct({ workflow_id: Schema.optional(Schema.String) })),
+);
 
 const derivedPaths = {
   stateDir: "/tmp/t3-app-dev-stack-manager-test/state",
@@ -140,13 +151,17 @@ it.effect("sends the configured backend bearer token when starting a stack", () 
   const layer = makeLayer({
     bearerToken: "backend-token",
     requests,
-    response: () =>
-      Response.json({
-        stack: stackJson,
-        created: true,
-        frontendUrl: null,
-        frontendServiceName: null,
-      }),
+    response: (request) =>
+      Response.json(
+        new URL(request.url).pathname.endsWith("/by-worktree")
+          ? noStackByWorktree
+          : {
+              stack: stackJson,
+              created: true,
+              frontendUrl: null,
+              frontendServiceName: null,
+            },
+      ),
   });
 
   return Effect.gen(function* () {
@@ -155,9 +170,10 @@ it.effect("sends the configured backend bearer token when starting a stack", () 
       worktreePath: "/repo/worktrees/feature",
       displayName: "feature",
       gitBranch: "feature",
+      workflowId: "workflow-123",
     });
 
-    const request = requests[0];
+    const request = requests[1];
     if (request === undefined) {
       assert.fail("expected AppDevStackManager to send a backend request");
     }
@@ -167,6 +183,92 @@ it.effect("sends the configured backend bearer token when starting a stack", () 
       `${backendUrl.href.replace(/\/+$/u, "")}/api/app-dev-stacks/auto-create`,
     );
     assert.equal(request.headers.authorization, "Bearer backend-token");
+    if (request.body._tag !== "Uint8Array") {
+      assert.fail("expected JSON request body");
+    }
+    assert.equal(
+      decodeWorkflowRequest(new TextDecoder().decode(request.body.body)).workflow_id,
+      "workflow-123",
+    );
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("reuses an active stack without posting auto-create", () => {
+  const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+  const layer = makeLayer({
+    requests,
+    response: () =>
+      Response.json({
+        stack: stackJson,
+        frontendUrl: "https://feature.example.test",
+        frontendServiceName: "frontend",
+      }),
+  });
+
+  return Effect.gen(function* () {
+    const manager = yield* AppDevStackManager;
+    const result = yield* manager.autoCreate({
+      worktreePath: stackJson.worktreePath,
+      displayName: "feature",
+      workflowId: "workflow-123",
+    });
+
+    assert.equal(result.created, false);
+    assert.equal(result.stack?.id, stackJson.id);
+    assert.equal(result.frontendUrl, "https://feature.example.test");
+    assert.deepEqual(
+      requests.map((request) => [request.method, new URL(request.url).pathname]),
+      [["GET", "/api/app-dev-stacks/by-worktree"]],
+    );
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("serializes concurrent creates so only one controller create is posted", () => {
+  const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+  let created = false;
+  const layer = makeLayer({
+    requests,
+    response: (request) => {
+      const path = new URL(request.url).pathname;
+      if (path.endsWith("/by-worktree")) {
+        return Response.json(
+          created
+            ? { stack: stackJson, frontendUrl: null, frontendServiceName: null }
+            : noStackByWorktree,
+        );
+      }
+      created = true;
+      return Response.json({
+        stack: stackJson,
+        created: true,
+        frontendUrl: null,
+        frontendServiceName: null,
+      });
+    },
+  });
+
+  return Effect.gen(function* () {
+    const manager = yield* AppDevStackManager;
+    yield* Effect.all(
+      [
+        manager.autoCreate({
+          worktreePath: stackJson.worktreePath,
+          displayName: "feature",
+          workflowId: "workflow-123",
+        }),
+        manager.autoCreate({
+          worktreePath: stackJson.worktreePath,
+          displayName: "feature",
+          workflowId: "workflow-123",
+        }),
+      ],
+      { concurrency: "unbounded" },
+    );
+
+    assert.equal(
+      requests.filter((request) => new URL(request.url).pathname.endsWith("/auto-create")).length,
+      1,
+    );
   }).pipe(Effect.provide(layer));
 });
 
@@ -201,6 +303,9 @@ it.effect("uses the configured controller backend before native kubectl mode", (
     },
     response: (request) => {
       const url = new URL(request.url);
+      if (url.pathname === "/api/app-dev-stacks/by-worktree") {
+        return Response.json(noStackByWorktree);
+      }
       if (url.pathname === "/api/app-dev-stacks/auto-create") {
         return Response.json({
           stack: stackJson,
@@ -225,7 +330,10 @@ it.effect("uses the configured controller backend before native kubectl mode", (
     assert.equal(result.created, true);
     assert.deepEqual(
       requests.map((request) => [request.method, new URL(request.url).pathname]),
-      [["POST", "/api/app-dev-stacks/auto-create"]],
+      [
+        ["GET", "/api/app-dev-stacks/by-worktree"],
+        ["POST", "/api/app-dev-stacks/auto-create"],
+      ],
     );
   }).pipe(Effect.provide(layer));
 });
@@ -238,10 +346,16 @@ it.effect("restarts a stack through get, stop, and auto-create backend calls", (
     response: (request) => {
       const url = new URL(request.url);
       if (url.pathname === "/api/app-dev-stacks/11111111-1111-1111-1111-111111111111") {
-        return Response.json(stackJson);
+        return Response.json({ ...stackJson, workflowId: "workflow-123" });
       }
       if (url.pathname === "/api/app-dev-stacks/11111111-1111-1111-1111-111111111111/stop") {
         return Response.json({ ...stackJson, status: "stopped" });
+      }
+      if (url.pathname === "/api/app-dev-stacks/by-worktree") {
+        return Response.json({
+          ...noStackByWorktree,
+          stack: { ...stackJson, status: "stopped", workflowId: "workflow-123" },
+        });
       }
       if (url.pathname === "/api/app-dev-stacks/auto-create") {
         return Response.json({
@@ -269,12 +383,23 @@ it.effect("restarts a stack through get, stop, and auto-create backend calls", (
       [
         ["GET", "/api/app-dev-stacks/11111111-1111-1111-1111-111111111111"],
         ["POST", "/api/app-dev-stacks/11111111-1111-1111-1111-111111111111/stop"],
+        ["GET", "/api/app-dev-stacks/by-worktree"],
         ["POST", "/api/app-dev-stacks/auto-create"],
       ],
     );
     assert.equal(
       requests.every((request) => request.headers.authorization === "Bearer backend-token"),
       true,
+    );
+    const createRequest = requests.find((request) =>
+      new URL(request.url).pathname.endsWith("/auto-create"),
+    );
+    if (createRequest?.body._tag !== "Uint8Array") {
+      assert.fail("expected restart auto-create JSON body");
+    }
+    assert.equal(
+      decodeWorkflowRequest(new TextDecoder().decode(createRequest.body.body)).workflow_id,
+      "workflow-123",
     );
   }).pipe(Effect.provide(layer));
 });
@@ -333,6 +458,9 @@ it.effect("mints and caches an OIDC service token when no static bearer token is
           token_type: "Bearer",
         });
       }
+      if (new URL(request.url).pathname.endsWith("/by-worktree")) {
+        return Response.json(noStackByWorktree);
+      }
       return Response.json({
         stack: stackJson,
         created: true,
@@ -355,11 +483,13 @@ it.effect("mints and caches an OIDC service token when no static bearer token is
       gitBranch: "feature",
     });
 
-    assert.equal(requests.length, 3);
+    assert.equal(requests.length, 5);
     assert.equal(requests[0]?.method, "POST");
     assert.equal(requests[0]?.url, tokenUrl.href);
     assert.equal(requests[1]?.headers.authorization, "Bearer oidc-token");
     assert.equal(requests[2]?.headers.authorization, "Bearer oidc-token");
+    assert.equal(requests[3]?.headers.authorization, "Bearer oidc-token");
+    assert.equal(requests[4]?.headers.authorization, "Bearer oidc-token");
   }).pipe(Effect.provide(layer));
 });
 
