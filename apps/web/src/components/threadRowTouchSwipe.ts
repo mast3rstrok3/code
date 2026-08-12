@@ -1,9 +1,22 @@
 export const THREAD_ROW_SWIPE_ACTION_WIDTH_PX = 58;
 export const THREAD_ROW_SWIPE_INTENT_THRESHOLD_PX = 8;
+export const PINNED_THREAD_DRAG_ACTIVATION_DISTANCE_PX = THREAD_ROW_SWIPE_INTENT_THRESHOLD_PX + 2;
 
 const CLICK_SUPPRESSION_MS = 1_000;
 
 export type ThreadRowTouchActionKind = "settle" | "unsettle" | "wake";
+
+export function isThreadRowDirectActionPointer(input: {
+  readonly pointerType: string;
+  readonly isPrimary: boolean;
+  readonly button: number;
+}): boolean {
+  return (
+    input.isPrimary &&
+    input.button === 0 &&
+    (input.pointerType === "touch" || input.pointerType === "pen")
+  );
+}
 
 export function resolveThreadRowTouchActionKind(input: {
   readonly isSettled: boolean;

@@ -7419,6 +7419,92 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("stops every ready provider session after settling a thread hierarchy", () =>
+    Effect.gen(function* () {
+      const rootId = ThreadId.make("thread-settle-tree-root");
+      const childId = ThreadId.make("thread-settle-tree-child");
+      const grandchildId = ThreadId.make("thread-settle-tree-grandchild");
+      const effects: string[] = [];
+      const dispatchedCommands: Array<OrchestrationCommand> = [];
+      const now = "2026-01-01T00:00:00.000Z";
+      const base = makeDefaultOrchestrationReadModel();
+      const template = base.threads[0];
+      if (!template) return;
+      const readySession = (threadId: ThreadId) => ({
+        threadId,
+        status: "ready" as const,
+        providerName: "claudeAgent" as const,
+        runtimeMode: "full-access" as const,
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: now,
+      });
+      const readModel = {
+        ...base,
+        threads: [
+          { ...template, id: rootId, parentThreadId: null, session: readySession(rootId) },
+          {
+            ...template,
+            id: childId,
+            parentThreadId: rootId,
+            session: readySession(childId),
+          },
+          {
+            ...template,
+            id: grandchildId,
+            parentThreadId: childId,
+            session: null,
+          },
+        ],
+      };
+
+      yield* buildAppUnderTest({
+        layers: {
+          projectionSnapshotQuery: {
+            getCommandReadModel: () => Effect.succeed(readModel),
+          },
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.sync(() => {
+                dispatchedCommands.push(command);
+                effects.push(
+                  `dispatch:${command.type}:${"threadId" in command ? command.threadId : ""}`,
+                );
+                return { sequence: dispatchedCommands.length };
+              }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "thread.settle",
+            commandId: CommandId.make("cmd-thread-settle-tree"),
+            threadId: rootId,
+          }),
+        ),
+      );
+
+      assert.deepEqual(effects, [
+        `dispatch:thread.settle:${rootId}`,
+        `dispatch:thread.session.stop:${childId}`,
+        `dispatch:thread.session.stop:${rootId}`,
+      ]);
+      const stopCommands = dispatchedCommands.filter(
+        (command): command is Extract<OrchestrationCommand, { type: "thread.session.stop" }> =>
+          command.type === "thread.session.stop",
+      );
+      assert.deepEqual(
+        stopCommands.map((command) => command.threadId),
+        [childId, rootId],
+      );
+      assertTrue(stopCommands.every((command) => command.onlyIfSettled === true));
+      assert.equal(new Set(stopCommands.map((command) => command.commandId)).size, 2);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("settles without dispatching session stop when the thread has no session", () =>
     Effect.gen(function* () {
       const threadId = ThreadId.make("thread-settle-no-session");

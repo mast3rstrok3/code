@@ -163,7 +163,10 @@ import {
   type SidebarThreadTouchAction,
   type SidebarThreadTouchOpenCoordinator,
 } from "./SidebarThreadTouchSurface";
-import { resolveThreadRowTouchActionKind } from "./threadRowTouchSwipe";
+import {
+  PINNED_THREAD_DRAG_ACTIVATION_DISTANCE_PX,
+  resolveThreadRowTouchActionKind,
+} from "./threadRowTouchSwipe";
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 import { getTriggerDisplayModelLabel } from "./chat/providerIconUtils";
 import { deriveProviderInstanceEntries, type ProviderInstanceEntry } from "../providerInstances";
@@ -2515,7 +2518,9 @@ export default function Sidebar() {
   // release it: the override can't say where members it never saw belong,
   // and holding it would launder a stale order into later drags.
   const pinnedDndSensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: PINNED_THREAD_DRAG_ACTIVATION_DISTANCE_PX },
+    }),
   );
   const [optimisticPinnedOrder, setOptimisticPinnedOrder] = useState<{
     readonly order: readonly string[];
@@ -2900,14 +2905,16 @@ export default function Sidebar() {
       }
       if (clicked.value === "settle") {
         // Post-settle navigation must skip threads settling in this same
-        // batch — they are all leaving the card block together. Rows that
-        // are already explicitly settled are skipped: nothing to do on a
-        // valid mixed selection. Pinned rows ARE included: the decider
+        // batch — they are all leaving the card block together. Rows already
+        // classified in the settled section are skipped. Checking the
+        // rendered lifecycle (rather than only the root override) matters
+        // for workflow cards whose active child keeps the group in the
+        // inbox. Pinned rows ARE included: the decider
         // clears the pin as part of settling, so they park like the rest.
         const coSettlingKeys = new Set(threadKeys);
         for (const threadKey of threadKeys) {
           const thread = threadByKeyRef.current.get(threadKey);
-          if (!thread || thread.settledOverride === "settled") continue;
+          if (!thread || settledThreadKeysRef.current.has(threadKey)) continue;
           attemptSettle(scopeThreadRef(thread.environmentId, thread.id), { coSettlingKeys });
         }
         clearSelection();

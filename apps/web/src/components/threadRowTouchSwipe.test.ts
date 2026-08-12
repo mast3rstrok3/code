@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   createThreadRowTouchSwipeController,
+  isThreadRowDirectActionPointer,
+  PINNED_THREAD_DRAG_ACTIVATION_DISTANCE_PX,
   resolveThreadRowTouchActionKind,
+  THREAD_ROW_SWIPE_INTENT_THRESHOLD_PX,
   type ThreadRowSwipePointerInput,
 } from "./threadRowTouchSwipe";
 
@@ -48,6 +51,12 @@ function harness() {
 }
 
 describe("createThreadRowTouchSwipeController", () => {
+  it("claims horizontal intent before the pinned-row drag sensor", () => {
+    expect(PINNED_THREAD_DRAG_ACTIVATION_DISTANCE_PX).toBeGreaterThan(
+      THREAD_ROW_SWIPE_INTENT_THRESHOLD_PX,
+    );
+  });
+
   for (const [name, overrides] of [
     ["mouse", { pointerType: "mouse" }],
     ["secondary button", { button: 1 }],
@@ -149,6 +158,19 @@ describe("createThreadRowTouchSwipeController", () => {
     state.advance(1_001);
 
     expect(state.controller.consumeClick()).toBe(false);
+  });
+});
+
+describe("isThreadRowDirectActionPointer", () => {
+  it("directly activates primary touch and pen releases", () => {
+    expect(isThreadRowDirectActionPointer(touch())).toBe(true);
+    expect(isThreadRowDirectActionPointer(touch({ pointerType: "pen" }))).toBe(true);
+  });
+
+  it("leaves mouse, secondary, and non-primary activation to click handling", () => {
+    expect(isThreadRowDirectActionPointer(touch({ pointerType: "mouse" }))).toBe(false);
+    expect(isThreadRowDirectActionPointer(touch({ button: 1 }))).toBe(false);
+    expect(isThreadRowDirectActionPointer(touch({ isPrimary: false }))).toBe(false);
   });
 });
 

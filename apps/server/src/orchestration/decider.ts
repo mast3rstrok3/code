@@ -1117,81 +1117,94 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.settle": {
-      const thread = yield* requireThreadNotArchived({
+      yield* requireThreadNotArchived({
         readModel,
         command,
         threadId: command.threadId,
       });
+      // A sidebar workflow card represents its complete descendant tree. A
+      // settle on that card must therefore park the same hierarchy that
+      // archive/delete operate on; settling only the root leaves active
+      // children holding the card in the inbox forever.
+      const targets = collectHierarchyPostOrder(readModel.threads, command.threadId, {
+        getId: (thread) => thread.id,
+        getParentId: (thread) => thread.parentThreadId,
+      }).filter(
+        (thread) =>
+          thread.id === command.threadId ||
+          (thread.deletedAt === null && thread.archivedAt === null),
+      );
       // Server-side twin of the client's canSettle session check: a stale
       // or raced client must not settle a thread whose session is coming
       // alive or working.
-      if (thread.session?.status === "starting" || thread.session?.status === "running") {
-        return yield* new OrchestrationCommandInvariantError({
-          commandType: command.type,
-          detail: `thread ${command.threadId} has an active session and cannot be settled`,
-        });
-      }
-      // Pending approval / user-input requests are blocked-on-you work: a
-      // raced or stale client must not park them behind a settled override
-      // that would surface only after the request resolves.
-      if (hasOpenBlockingRequest(thread)) {
-        return yield* new OrchestrationCommandInvariantError({
-          commandType: command.type,
-          detail: `thread ${command.threadId} has a pending approval or user-input request and cannot be settled`,
-        });
-      }
       const occurredAt = yield* nowIso;
-      // Settling inside the adoption window would hide just-requested work.
-      if (threadHasQueuedTurnStart(thread, occurredAt)) {
-        return yield* new OrchestrationCommandInvariantError({
-          commandType: command.type,
-          detail: `thread ${command.threadId} has a queued turn start and cannot be settled`,
-        });
+      for (const thread of targets) {
+        if (thread.session?.status === "starting" || thread.session?.status === "running") {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `thread ${thread.id} has an active session and cannot be settled`,
+          });
+        }
+        // Pending approval / user-input requests are blocked-on-you work: a
+        // raced or stale client must not park them behind a settled override
+        // that would surface only after the request resolves.
+        if (hasOpenBlockingRequest(thread)) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `thread ${thread.id} has a pending approval or user-input request and cannot be settled`,
+          });
+        }
+        // Settling inside the adoption window would hide just-requested work.
+        if (threadHasQueuedTurnStart(thread, occurredAt)) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `thread ${thread.id} has a queued turn start and cannot be settled`,
+          });
+        }
       }
-      // Settling an already-settled thread re-emits with the original
-      // settledAt: the engine rejects zero-event commands, and bulk-settle /
-      // double-click must stay silent no-ops rather than surface errors.
-      const alreadySettled = thread.settledOverride === "settled" && thread.settledAt !== null;
-      const settledEvent = {
-        ...(yield* withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt,
-          commandId: command.commandId,
-        })),
-        type: "thread.settled" as const,
-        payload: {
-          threadId: command.threadId,
-          settledAt: alreadySettled ? thread.settledAt : occurredAt,
-          // A re-emission is a projected no-op: keep the existing updatedAt
-          // so duplicate settles neither rewind nor churn ordering. A fresh
-          // settle stamps the command time.
-          updatedAt: alreadySettled ? thread.updatedAt : occurredAt,
-        },
-      };
-      // Settling is "I'm done with this": it clears a pin the same way it
-      // parks the thread. Without this, settling a pinned thread would only
-      // stamp invisible state — the pin would hold the card in place until
-      // a separate unpin.
-      if (thread.pinnedAt == null) {
-        return settledEvent;
-      }
-      return [
-        settledEvent,
-        {
+      const events: PlannedOrchestrationEvent[] = [];
+      for (const thread of targets) {
+        // Settling an already-settled thread re-emits with the original
+        // settledAt: the engine rejects zero-event commands, and bulk-settle /
+        // double-click must stay silent no-ops rather than surface errors.
+        const alreadySettled = thread.settledOverride === "settled" && thread.settledAt !== null;
+        events.push({
           ...(yield* withEventBase({
             aggregateKind: "thread",
-            aggregateId: command.threadId,
+            aggregateId: thread.id,
             occurredAt,
             commandId: command.commandId,
           })),
-          type: "thread.unpinned" as const,
+          type: "thread.settled",
           payload: {
-            threadId: command.threadId,
+            threadId: thread.id,
+            settledAt: alreadySettled ? thread.settledAt : occurredAt,
+            // A re-emission is a projected no-op: keep the existing updatedAt
+            // so duplicate settles neither rewind nor churn ordering. A fresh
+            // settle stamps the command time.
+            updatedAt: alreadySettled ? thread.updatedAt : occurredAt,
+          },
+        });
+        // Settling is "I'm done with this": it clears a pin the same way it
+        // parks the thread. Without this, settling a pinned thread would only
+        // stamp invisible state — the pin would hold the card in place until
+        // a separate unpin.
+        if (thread.pinnedAt == null) continue;
+        events.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: thread.id,
+            occurredAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.unpinned",
+          payload: {
+            threadId: thread.id,
             updatedAt: occurredAt,
           },
-        },
-      ];
+        });
+      }
+      return events;
     }
 
     case "thread.unsettle": {

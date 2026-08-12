@@ -115,6 +115,93 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
     }),
   );
 
+  it.effect("settles a workflow root and every live descendant", () =>
+    Effect.gen(function* () {
+      const base = makeReadModel("settled");
+      const root = base.threads[0]!;
+      const child = {
+        ...root,
+        id: ThreadId.make("thread-child"),
+        parentThreadId: root.id,
+        title: "Child",
+        settledOverride: null,
+        settledAt: null,
+        pinnedAt: "2025-12-31T00:00:00.000Z",
+      } satisfies OrchestrationThread;
+      const grandchild = {
+        ...child,
+        id: ThreadId.make("thread-grandchild"),
+        parentThreadId: child.id,
+        title: "Grandchild",
+        pinnedAt: null,
+      } satisfies OrchestrationThread;
+
+      const event = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.settle",
+          commandId: CommandId.make("cmd-settle-workflow"),
+          threadId: root.id,
+        },
+        readModel: { ...base, threads: [root, child, grandchild] },
+      });
+      const events = Array.isArray(event) ? event : [event];
+
+      expect(
+        events.flatMap((entry) =>
+          entry.type === "thread.settled" ? [entry.payload.threadId] : [],
+        ),
+      ).toEqual([grandchild.id, child.id, root.id]);
+      expect(
+        events.flatMap((entry) =>
+          entry.type === "thread.unpinned" ? [entry.payload.threadId] : [],
+        ),
+      ).toEqual([child.id]);
+      const rootSettle = events.find(
+        (entry) => entry.type === "thread.settled" && entry.payload.threadId === root.id,
+      );
+      expect(rootSettle?.type === "thread.settled" ? rootSettle.payload.settledAt : null).toBe(
+        SETTLED_AT,
+      );
+      for (const descendantId of [child.id, grandchild.id]) {
+        const descendantSettle = events.find(
+          (entry) => entry.type === "thread.settled" && entry.payload.threadId === descendantId,
+        );
+        if (descendantSettle?.type !== "thread.settled") continue;
+        expect(descendantSettle.payload.settledAt).toBe(descendantSettle.payload.updatedAt);
+      }
+    }),
+  );
+
+  it.effect("rejects settling a workflow root while a descendant session is live", () =>
+    Effect.gen(function* () {
+      const base = makeReadModel("settled");
+      const root = base.threads[0]!;
+      const child = {
+        ...root,
+        id: ThreadId.make("thread-child-running"),
+        parentThreadId: root.id,
+        title: "Running child",
+        settledOverride: null,
+        settledAt: null,
+        session: makeSession("running"),
+      } satisfies OrchestrationThread;
+
+      const error = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.settle",
+          commandId: CommandId.make("cmd-settle-running-workflow"),
+          threadId: root.id,
+        },
+        readModel: { ...base, threads: [root, child] },
+      }).pipe(Effect.flip);
+
+      expect(error._tag).toBe("OrchestrationCommandInvariantError");
+      if (error._tag === "OrchestrationCommandInvariantError") {
+        expect(error.detail).toContain(child.id);
+      }
+    }),
+  );
+
   it.effect("rejects settling a thread with a live session", () =>
     Effect.gen(function* () {
       for (const status of ["starting", "running"] as const) {

@@ -1291,6 +1291,31 @@ const makeWsRpcLayer = (
           ),
         );
 
+      const resolveSettleCleanupTargets = (
+        command: Extract<OrchestrationCommand, { type: "thread.settle" }>,
+      ) =>
+        projectionSnapshotQuery.getCommandReadModel().pipe(
+          Effect.map((snapshot) =>
+            collectHierarchyPostOrder(snapshot.threads, command.threadId, {
+              getId: (thread) => thread.id,
+              getParentId: (thread) => thread.parentThreadId,
+            })
+              .filter((thread) => thread.deletedAt === null && thread.archivedAt === null)
+              .map((thread): ArchiveCleanupTarget => ({ id: thread.id, session: thread.session })),
+          ),
+          Effect.flatMap((targets) =>
+            targets.length > 0
+              ? Effect.succeed(targets)
+              : resolveArchiveCleanupFallback(command.threadId),
+          ),
+          Effect.catchCause((cause) =>
+            Effect.logWarning("failed to load settle cleanup hierarchy", {
+              threadId: command.threadId,
+              cause,
+            }).pipe(Effect.andThen(resolveArchiveCleanupFallback(command.threadId))),
+          ),
+        );
+
       const cleanupThreadBeforeArchive = (
         command: Extract<OrchestrationCommand, { type: "thread.archive" }>,
         target: ArchiveCleanupTarget,
@@ -1417,53 +1442,46 @@ const makeWsRpcLayer = (
               // be guarded by onlyIfSettled.
               const parkingCommand =
                 normalizedCommand.type === "thread.settle" ? normalizedCommand : undefined;
-              // Best-effort on purpose: the user's archive/settle must not
-              // fail because this cleanup read blipped, so a failed read
-              // logs and skips the stop instead of propagating.
-              const shouldStopSessionAfterCommand = parkingCommand
-                ? yield* projectionSnapshotQuery.getThreadShellById(parkingCommand.threadId).pipe(
-                    Effect.map(
-                      Option.match({
-                        onNone: () => false,
-                        onSome: (thread) =>
-                          thread.session !== null && thread.session.status !== "stopped",
-                      }),
-                    ),
-                    Effect.catchCause((cause) =>
-                      Effect.logWarning(
-                        "failed to read thread session state before session-stop check",
-                        { threadId: parkingCommand.threadId, cause },
-                      ).pipe(Effect.as(false)),
-                    ),
-                  )
-                : false;
+              // Best-effort on purpose: the user's settle must not fail
+              // because this cleanup read blipped. The resolver falls back
+              // to the target row, matching the pre-hierarchy behavior.
+              const settleCleanupTargets = parkingCommand
+                ? yield* resolveSettleCleanupTargets(parkingCommand)
+                : [];
               const result = yield* dispatchNormalizedCommand(normalizedCommand);
               if (parkingCommand) {
-                if (shouldStopSessionAfterCommand) {
-                  yield* Effect.gen(function* () {
-                    const stopCommand = yield* normalizeDispatchCommand({
-                      type: "thread.session.stop",
-                      commandId: CommandId.make(
-                        `session-stop-for-settle:${parkingCommand.commandId}`,
-                      ),
-                      threadId: parkingCommand.threadId,
-                      createdAt: yield* nowIso,
-                      // A settled thread can be re-engaged before this stop is
-                      // decided; the decider then drops the stop instead of
-                      // killing the new session.
-                      onlyIfSettled: true,
-                    });
+                yield* Effect.forEach(
+                  settleCleanupTargets,
+                  (target) =>
+                    target.session === null || target.session.status === "stopped"
+                      ? Effect.void
+                      : Effect.gen(function* () {
+                          const stopCommand = yield* normalizeDispatchCommand({
+                            type: "thread.session.stop",
+                            commandId: CommandId.make(
+                              target.id === parkingCommand.threadId
+                                ? `session-stop-for-settle:${parkingCommand.commandId}`
+                                : `session-stop-for-settle:${parkingCommand.commandId}:${target.id}`,
+                            ),
+                            threadId: target.id,
+                            createdAt: yield* nowIso,
+                            // A settled thread can be re-engaged before this
+                            // stop is decided; the decider then drops the stop
+                            // instead of killing the new session.
+                            onlyIfSettled: true,
+                          });
 
-                    yield* dispatchNormalizedCommand(stopCommand);
-                  }).pipe(
-                    Effect.catchCause((cause) =>
-                      Effect.logWarning("failed to stop provider session during settle", {
-                        threadId: parkingCommand.threadId,
-                        cause,
-                      }),
-                    ),
-                  );
-                }
+                          yield* dispatchNormalizedCommand(stopCommand);
+                        }).pipe(
+                          Effect.catchCause((cause) =>
+                            Effect.logWarning("failed to stop provider session during settle", {
+                              threadId: target.id,
+                              cause,
+                            }),
+                          ),
+                        ),
+                  { discard: true },
+                );
               }
               return result;
             }).pipe(

@@ -13,6 +13,7 @@ import { cn } from "~/lib/utils";
 import { createLongPressContextMenuController } from "./longPressContextMenu";
 import {
   createThreadRowTouchSwipeController,
+  isThreadRowDirectActionPointer,
   THREAD_ROW_SWIPE_ACTION_WIDTH_PX,
   type ThreadRowTouchActionKind,
 } from "./threadRowTouchSwipe";
@@ -50,6 +51,7 @@ export function SidebarThreadTouchSurface(props: {
   const actionRef = useRef(props.action);
   const contextMenuRef = useRef(props.onContextMenu);
   const coordinatorRef = useRef(props.onOpenChange);
+  const suppressActionClickRef = useRef(false);
   const swipeControllerRef = useRef<ReturnType<typeof createThreadRowTouchSwipeController> | null>(
     null,
   );
@@ -59,11 +61,17 @@ export function SidebarThreadTouchSurface(props: {
   coordinatorRef.current = props.onOpenChange;
 
   const close = useCallback(() => swipeControllerRef.current?.close(), []);
+  const invokeAction = useCallback(() => {
+    const action = actionRef.current;
+    if (action === null) return;
+    action.onPress();
+    swipeControllerRef.current?.close();
+  }, []);
   const swipeController = useMemo(
     () =>
       createThreadRowTouchSwipeController({
         getRowWidth: () => contentRef.current?.getBoundingClientRect().width ?? 0,
-        onCommit: () => actionRef.current?.onPress(),
+        onCommit: invokeAction,
         onOffsetChange: (offset, options) => {
           const content = contentRef.current;
           if (!content) return;
@@ -75,7 +83,7 @@ export function SidebarThreadTouchSurface(props: {
           coordinatorRef.current(props.coordinatorKey, nextOpen, close);
         },
       }),
-    [close, props.coordinatorKey],
+    [close, invokeAction, props.coordinatorKey],
   );
   swipeControllerRef.current = swipeController;
 
@@ -186,13 +194,30 @@ export function SidebarThreadTouchSurface(props: {
           aria-hidden={!open}
           aria-label={`${props.action.label} thread`}
           tabIndex={open ? 0 : -1}
-          className="absolute inset-y-0 right-0 flex cursor-pointer flex-col items-center justify-center gap-0.5 bg-[#007aff] text-[10px] font-medium text-white outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-white"
+          className={cn(
+            "absolute inset-y-0 right-0 flex cursor-pointer flex-col items-center justify-center gap-0.5 bg-[#007aff] text-[10px] font-medium text-white outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-white",
+            open ? "z-[2] pointer-events-auto" : "z-0 pointer-events-none",
+          )}
           style={{ width: THREAD_ROW_SWIPE_ACTION_WIDTH_PX }}
+          onPointerDown={(event) => {
+            if (isThreadRowDirectActionPointer(event)) event.stopPropagation();
+          }}
+          onPointerUp={(event) => {
+            if (!isThreadRowDirectActionPointer(event)) return;
+            event.preventDefault();
+            event.stopPropagation();
+            suppressActionClickRef.current = true;
+            invokeAction();
+          }}
           onClick={(event) => {
             event.preventDefault();
             event.stopPropagation();
-            swipeController.close();
-            props.action?.onPress();
+            if (suppressActionClickRef.current && event.detail !== 0) {
+              suppressActionClickRef.current = false;
+              return;
+            }
+            suppressActionClickRef.current = false;
+            invokeAction();
           }}
         >
           {props.action.kind === "settle" ? (
