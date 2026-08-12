@@ -20,6 +20,7 @@ import {
   buildExpiredTerminalContextToastCopy,
   buildLoadingThreadFromShell,
   buildThreadTurnInterruptInput,
+  collectDevReviewLaunchPreviewTargets,
   createLocalDispatchSnapshot,
   deriveComposerSendState,
   dismissBranchMismatchForSession,
@@ -199,6 +200,26 @@ describe("normalizeDevReviewCycleBudget", () => {
     expect(normalizeDevReviewCycleBudget(0)).toBe(1);
     expect(normalizeDevReviewCycleBudget(51)).toBe(50);
     expect(normalizeDevReviewCycleBudget(Number.NaN)).toBe(10);
+  });
+});
+
+describe("collectDevReviewLaunchPreviewTargets", () => {
+  it("uses URLs from this review brief before the current thread browser", () => {
+    expect(
+      collectDevReviewLaunchPreviewTargets({
+        brief: "Review https://feature.example.test/login.",
+        activeBrowserUrl: "https://older.example.test/",
+      }),
+    ).toEqual(["https://feature.example.test/login", "https://older.example.test/"]);
+  });
+
+  it("has no project-scoped preview input", () => {
+    expect(
+      collectDevReviewLaunchPreviewTargets({
+        brief: "Review checkout.",
+        activeBrowserUrl: null,
+      }),
+    ).toEqual([]);
   });
 });
 

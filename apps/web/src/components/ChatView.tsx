@@ -321,6 +321,7 @@ import {
   buildLocalDraftThread,
   buildLoadingThreadFromShell,
   buildThreadTurnInterruptInput,
+  collectDevReviewLaunchPreviewTargets,
   collectUserMessageBlobPreviewUrls,
   createLocalDispatchSnapshot,
   deriveComposerSendState,
@@ -3785,14 +3786,8 @@ function ChatViewContent(props: ChatViewProps) {
       activePreviewState.snapshot?.navStatus._tag === "Idle"
         ? null
         : (activePreviewState.snapshot?.navStatus.url ?? null);
-    return Array.from(
-      new Set(
-        [activeUrl, ...getConfiguredPreviewUrls(activeProject?.scripts ?? [])].filter(
-          (url): url is string => Boolean(url?.trim()),
-        ),
-      ),
-    );
-  }, [activePreviewState.snapshot, activeProject?.scripts]);
+    return collectDevReviewLaunchPreviewTargets({ brief: "", activeBrowserUrl: activeUrl });
+  }, [activePreviewState.snapshot]);
   const launchBrowserDevReview = useCallback(
     async (request: DevReviewWorkflowLaunchRequest) => {
       if (
@@ -3827,8 +3822,7 @@ function ChatViewContent(props: ChatViewProps) {
       if (
         !Number.isInteger(request.cycleBudget) ||
         request.cycleBudget < 1 ||
-        request.cycleBudget > DEV_REVIEW_WORKFLOW_MAX_CYCLES ||
-        devReviewPreviewTargets.length === 0
+        request.cycleBudget > DEV_REVIEW_WORKFLOW_MAX_CYCLES
       ) {
         return;
       }
@@ -3852,7 +3846,10 @@ function ChatViewContent(props: ChatViewProps) {
           caller: { type: "standalone", sourceThreadId: activeThread.id },
           briefMarkdown: request.brief,
           supportingContextMarkdown,
-          previewTargets: devReviewPreviewTargets,
+          previewTargets: collectDevReviewLaunchPreviewTargets({
+            brief: request.brief,
+            activeBrowserUrl: devReviewPreviewTargets[0] ?? null,
+          }),
           cycleBudget: DevReviewWorkflowCycleBudget.make(request.cycleBudget),
           modelSelection: sendCtx.selectedModelSelection,
           createdAt,
@@ -5728,16 +5725,6 @@ function ChatViewContent(props: ChatViewProps) {
       );
       return;
     }
-    if (isDevReviewWorkflowSend && devReviewPreviewTargets.length === 0) {
-      toastManager.add(
-        stackedThreadToast({
-          type: "warning",
-          title: "Add a preview URL",
-          description: "Open a preview or configure a project preview URL before launching.",
-        }),
-      );
-      return;
-    }
     if (isDevReviewWorkflowSend && activeWorktreeDevReviewRun) {
       toastManager.add(
         stackedThreadToast({
@@ -6005,7 +5992,10 @@ function ChatViewContent(props: ChatViewProps) {
                     .map((message) => `${message.role}: ${message.text}`)
                     .join("\n\n")
                 : null,
-              previewTargets: devReviewPreviewTargets,
+              previewTargets: collectDevReviewLaunchPreviewTargets({
+                brief: trimmed,
+                activeBrowserUrl: devReviewPreviewTargets[0] ?? null,
+              }),
               cycleBudget: DevReviewWorkflowCycleBudget.make(
                 normalizeDevReviewCycleBudget(devReviewCycleBudget),
               ),

@@ -4,6 +4,7 @@ import {
   DEV_REVIEW_WORKFLOW_MAX_CYCLES,
 } from "@t3tools/contracts";
 import { truncate } from "@t3tools/shared/String";
+import { extractPreviewUrls } from "@t3tools/shared/preview";
 
 import type {
   BrowserDevReviewSourceContext,
@@ -41,11 +42,14 @@ export function DevReviewLaunchDialog(props: DevReviewLaunchDialogProps) {
     props.initialCycleBudget ?? DEV_REVIEW_WORKFLOW_DEFAULT_CYCLES,
   );
   const normalizedBrief = brief.trim();
+  const resolvedPreviewTargets = useMemo(
+    () => Array.from(new Set([...extractPreviewUrls(normalizedBrief), ...props.previewTargets])),
+    [normalizedBrief, props.previewTargets],
+  );
   const validLaunch = isValidDevReviewWorkflowLaunch({
     brief: normalizedBrief,
     cycleBudget,
     sourceSettled: props.sourceSettled,
-    previewTargets: props.previewTargets,
     worktreeOwned: props.launchDisabled,
   });
   const sourcePreview = useMemo(
@@ -103,17 +107,18 @@ export function DevReviewLaunchDialog(props: DevReviewLaunchDialogProps) {
           </div>
           <div className="rounded-lg border bg-muted/30 p-3">
             <p className="text-xs font-medium text-foreground">Preview targets</p>
-            {props.previewTargets.length > 0 ? (
+            {resolvedPreviewTargets.length > 0 ? (
               <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
-                {props.previewTargets.map((url) => (
+                {resolvedPreviewTargets.map((url) => (
                   <li key={url} className="truncate" title={url}>
                     {url}
                   </li>
                 ))}
               </ul>
             ) : (
-              <p className="mt-2 text-xs text-destructive">
-                Open or configure a preview URL first.
+              <p className="mt-2 text-xs text-muted-foreground">
+                The matching App Dev Stack will be resolved from this worktree when the workflow
+                starts. For another target, paste its full URL into the review brief above.
               </p>
             )}
           </div>

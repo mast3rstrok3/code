@@ -1992,7 +1992,7 @@ export const ThreadDevReviewWorkflowLaunchCommand = Schema.Struct({
   caller: DevReviewWorkflowCaller,
   briefMarkdown: TrimmedNonEmptyString,
   supportingContextMarkdown: Schema.optionalKey(Schema.NullOr(Schema.String)),
-  previewTargets: Schema.Array(TrimmedNonEmptyString).check(Schema.isMinLength(1)),
+  previewTargets: Schema.Array(TrimmedNonEmptyString),
   cycleBudget: DevReviewWorkflowCycleBudget.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEV_REVIEW_WORKFLOW_DEFAULT_CYCLES)),
   ),

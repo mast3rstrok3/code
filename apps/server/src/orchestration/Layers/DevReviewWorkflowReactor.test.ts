@@ -8,7 +8,11 @@ import {
   type DevReviewWorkflowRun,
 } from "@t3tools/contracts";
 
-import { nextDevReviewWorkflowAction, terminalReviewAction } from "./DevReviewWorkflowReactor.ts";
+import {
+  nextDevReviewWorkflowAction,
+  selectStandalonePreviewTargets,
+  terminalReviewAction,
+} from "./DevReviewWorkflowReactor.ts";
 
 const now = "2026-01-01T00:00:00.000Z";
 
@@ -91,6 +95,66 @@ function review(
 
 it("always begins a nonterminal run with Browser Dev Review", () => {
   expect(nextDevReviewWorkflowAction(run())).toBe("review");
+});
+
+it("resolves standalone previews from the matching running App Dev Stack", () => {
+  expect(
+    selectStandalonePreviewTargets({
+      lookup: {
+        stack: {
+          id: "stack-1",
+          displayName: "feature checkout",
+          status: "running",
+          services: [{ name: "frontend", status: "running", health: "healthy" }],
+        },
+        frontendUrl: "https://feature.example.test",
+      },
+      lookupError: null,
+      fallbackTargets: ["http://localhost:3000"],
+    }),
+  ).toEqual({ _tag: "Resolved", previewTargets: ["https://feature.example.test"] });
+});
+
+it("keeps manual preview targets as a fallback when no App Dev Stack matches", () => {
+  expect(
+    selectStandalonePreviewTargets({
+      lookup: { stack: null, frontendUrl: null },
+      lookupError: null,
+      fallbackTargets: [" http://localhost:3000 ", "http://localhost:3000"],
+    }),
+  ).toEqual({ _tag: "Resolved", previewTargets: ["http://localhost:3000"] });
+});
+
+it("blocks before launching a reviewer when the matching App Dev Stack is not ready", () => {
+  const resolution = selectStandalonePreviewTargets({
+    lookup: {
+      stack: {
+        id: "stack-1",
+        displayName: "feature checkout",
+        status: "starting",
+        services: null,
+      },
+      frontendUrl: "https://feature.example.test",
+    },
+    lookupError: null,
+    fallbackTargets: ["http://localhost:3000"],
+  });
+  expect(resolution._tag).toBe("Blocked");
+  if (resolution._tag === "Blocked") {
+    expect(resolution.detailMarkdown).toContain("'starting', not 'running'");
+  }
+});
+
+it("blocks with an actionable message when neither App Dev Stack nor fallback exists", () => {
+  const resolution = selectStandalonePreviewTargets({
+    lookup: { stack: null, frontendUrl: null },
+    lookupError: null,
+    fallbackTargets: [],
+  });
+  expect(resolution._tag).toBe("Blocked");
+  if (resolution._tag === "Blocked") {
+    expect(resolution.detailMarkdown).toContain("Start the App Dev Stack");
+  }
 });
 
 it("waits for Implementation to refresh AppDevStack after an embedded repair", () => {

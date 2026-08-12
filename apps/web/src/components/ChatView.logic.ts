@@ -14,6 +14,7 @@ import {
   type TurnId,
 } from "@t3tools/contracts";
 import { isProductWorkflowRoot } from "@t3tools/shared/workflowPresets";
+import { extractPreviewUrls } from "@t3tools/shared/preview";
 import { type ChatMessage, type SessionPhase, type Thread, type ThreadShell } from "../types";
 import { type ComposerImageAttachment, type DraftThreadState } from "../composerDraftStore";
 import * as Schema from "effect/Schema";
@@ -34,6 +35,19 @@ export const ENVIRONMENT_RECONNECT_WARNING_GRACE_MS = 2_000;
 export function normalizeDevReviewCycleBudget(value: number): number {
   if (!Number.isFinite(value)) return DEV_REVIEW_WORKFLOW_DEFAULT_CYCLES;
   return Math.min(DEV_REVIEW_WORKFLOW_MAX_CYCLES, Math.max(1, Math.round(value)));
+}
+
+export function collectDevReviewLaunchPreviewTargets(input: {
+  readonly brief: string;
+  readonly activeBrowserUrl: string | null;
+}): ReadonlyArray<string> {
+  return Array.from(
+    new Set(
+      [...extractPreviewUrls(input.brief), input.activeBrowserUrl]
+        .map((target) => target?.trim())
+        .filter((target): target is string => Boolean(target)),
+    ),
+  );
 }
 
 export const LastInvokedScriptByProjectSchema = Schema.Record(ProjectId, Schema.String);

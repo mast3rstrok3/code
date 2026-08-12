@@ -56,12 +56,11 @@ describe("selectActiveDevReviewRecord", () => {
 });
 
 describe("Dev Review workflow panel logic", () => {
-  it("accepts only settled, preview-backed launches with a 1-50 attempt budget", () => {
+  it("accepts settled launches with a 1-50 attempt budget before preview resolution", () => {
     const valid = {
       brief: "Review checkout",
       cycleBudget: 10,
       sourceSettled: true,
-      previewTargets: ["https://preview.example.test"],
       worktreeOwned: false,
     };
     expect(isValidDevReviewWorkflowLaunch(valid)).toBe(true);
@@ -69,7 +68,6 @@ describe("Dev Review workflow panel logic", () => {
     expect(isValidDevReviewWorkflowLaunch({ ...valid, cycleBudget: 0 })).toBe(false);
     expect(isValidDevReviewWorkflowLaunch({ ...valid, cycleBudget: 51 })).toBe(false);
     expect(isValidDevReviewWorkflowLaunch({ ...valid, sourceSettled: false })).toBe(false);
-    expect(isValidDevReviewWorkflowLaunch({ ...valid, previewTargets: [] })).toBe(false);
     expect(isValidDevReviewWorkflowLaunch({ ...valid, worktreeOwned: true })).toBe(false);
   });
 

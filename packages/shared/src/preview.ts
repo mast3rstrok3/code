@@ -29,6 +29,7 @@ export const LSOF_LOCAL_HOST_TOKENS: ReadonlySet<string> = new Set([
 ]);
 
 const LOOPBACK_PREFIX_PATTERN = /^(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\])(?::|\/|$)/i;
+const EXPLICIT_HTTP_URL_PATTERN = /\bhttps?:\/\/[^\s<>"'`]+/giu;
 const CHROMIUM_NET_ERROR_PATTERN = /\b(?:net::)?(ERR_[A-Z0-9_]+)\b/u;
 const DESCRIPTION_MAX_LENGTH = 256;
 
@@ -135,6 +136,36 @@ export function normalizePreviewUrl(rawUrl: string): string {
     });
   }
   return parsed.href;
+}
+
+function trimProseUrlSuffix(rawUrl: string): string {
+  let candidate = rawUrl.replace(/[.,;:!?]+$/u, "");
+  for (const [open, close] of [
+    ["(", ")"],
+    ["[", "]"],
+    ["{", "}"],
+  ] as const) {
+    while (
+      candidate.endsWith(close) &&
+      candidate.split(close).length > candidate.split(open).length
+    ) {
+      candidate = candidate.slice(0, -1);
+    }
+  }
+  return candidate;
+}
+
+/** Extract distinct explicit HTTP(S) preview URLs pasted into prose or Markdown. */
+export function extractPreviewUrls(text: string): ReadonlyArray<string> {
+  const urls = new Set<string>();
+  for (const match of text.matchAll(EXPLICIT_HTTP_URL_PATTERN)) {
+    try {
+      urls.add(normalizePreviewUrl(trimProseUrlSuffix(match[0])));
+    } catch {
+      // A URL-like token should not make the surrounding review brief invalid.
+    }
+  }
+  return [...urls];
 }
 
 export interface ChromiumNetError {

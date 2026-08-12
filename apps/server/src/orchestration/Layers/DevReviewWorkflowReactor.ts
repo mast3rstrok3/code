@@ -1,4 +1,5 @@
 import {
+  type AppDevStackStatus,
   CommandId,
   DevReviewId,
   type DevReviewRecord,
@@ -15,6 +16,7 @@ import {
   WORKFLOW_AUTOMATION_RUNTIME_MODE,
 } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import { extractPreviewUrls } from "@t3tools/shared/preview";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -24,6 +26,7 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Stream from "effect/Stream";
 
+import { AppDevStackManager } from "../../appDevStack/AppDevStackManager.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import {
   appendWorkflowSkillCommandSection,
@@ -58,6 +61,75 @@ type DevReviewWorkflowEvent = Extract<
 >;
 
 const terminalStatuses = new Set(["passed", "exhausted", "blocked", "canceled"]);
+
+interface AppDevStackPreviewLookup {
+  readonly stack: {
+    readonly id: string;
+    readonly displayName: string | null;
+    readonly status: AppDevStackStatus;
+    readonly services: ReadonlyArray<{
+      readonly name: string;
+      readonly status: string;
+      readonly health?: string | null;
+      readonly error?: string | null;
+    }> | null;
+  } | null;
+  readonly frontendUrl: string | null;
+}
+
+export type StandalonePreviewTargetResolution =
+  | { readonly _tag: "Resolved"; readonly previewTargets: ReadonlyArray<string> }
+  | { readonly _tag: "Blocked"; readonly detailMarkdown: string };
+
+export function selectStandalonePreviewTargets(input: {
+  readonly lookup: AppDevStackPreviewLookup | null;
+  readonly lookupError: string | null;
+  readonly fallbackTargets: ReadonlyArray<string>;
+}): StandalonePreviewTargetResolution {
+  const fallbackTargets = Array.from(
+    new Set(input.fallbackTargets.map((target) => target.trim()).filter(Boolean)),
+  );
+  const stackMatched = input.lookup?.stack !== null || input.lookup?.frontendUrl !== null;
+  if (input.lookup !== null && stackMatched) {
+    const stack = input.lookup.stack;
+    if (stack !== null && stack.status !== "running") {
+      return {
+        _tag: "Blocked",
+        detailMarkdown: `The App Dev Stack '${stack.displayName ?? stack.id}' for this worktree is '${stack.status}', not 'running'.`,
+      };
+    }
+    const failedService = stack?.services?.find(
+      (service) =>
+        (service.error !== null && service.error !== undefined) ||
+        service.health === "unhealthy" ||
+        service.status === "error" ||
+        service.status === "stopped",
+    );
+    if (failedService !== undefined) {
+      return {
+        _tag: "Blocked",
+        detailMarkdown: `The App Dev Stack service '${failedService.name}' is unhealthy (${failedService.error ?? failedService.health ?? failedService.status}).`,
+      };
+    }
+    if (input.lookup.frontendUrl === null) {
+      return {
+        _tag: "Blocked",
+        detailMarkdown: "The App Dev Stack for this worktree has no frontend URL.",
+      };
+    }
+    return { _tag: "Resolved", previewTargets: [input.lookup.frontendUrl] };
+  }
+  if (fallbackTargets.length > 0) {
+    return { _tag: "Resolved", previewTargets: fallbackTargets };
+  }
+  return {
+    _tag: "Blocked",
+    detailMarkdown:
+      input.lookupError === null
+        ? "No App Dev Stack or fallback preview URL was found for this worktree. Start the App Dev Stack, then retry Dev Review."
+        : `The App Dev Stack for this worktree could not be resolved, and no fallback preview URL is available. ${input.lookupError}`,
+  };
+}
 
 export function nextDevReviewWorkflowAction(
   run: DevReviewWorkflowRun,
@@ -96,6 +168,7 @@ const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const gitWorkflow = yield* GitWorkflowService;
+  const appDevStackManager = yield* AppDevStackManager;
   const reviewService = yield* ReviewService;
   const serverSettingsService = yield* ServerSettingsService;
 
@@ -213,6 +286,47 @@ const make = Effect.gen(function* () {
     },
   );
 
+  const resolveStandalonePreviewTargetsForRun = Effect.fn(
+    "DevReviewWorkflowReactor.resolveStandalonePreviewTargetsForRun",
+  )(function* (run: DevReviewWorkflowRun, cwd: string, occurredAt: string) {
+    if (run.caller.type !== "standalone") return run;
+    const lookupResult = yield* appDevStackManager
+      .getByWorktree({ worktreePath: cwd })
+      .pipe(Effect.result);
+    const resolution = selectStandalonePreviewTargets({
+      lookup: lookupResult._tag === "Success" ? lookupResult.success : null,
+      lookupError:
+        lookupResult._tag === "Failure"
+          ? lookupResult.failure instanceof Error
+            ? lookupResult.failure.message
+            : String(lookupResult.failure)
+          : null,
+      fallbackTargets: [...extractPreviewUrls(run.briefMarkdown), ...run.previewTargets],
+    });
+    if (resolution._tag === "Blocked") {
+      yield* blockRun({
+        run,
+        reason: "preview-unavailable",
+        detailMarkdown: resolution.detailMarkdown,
+        occurredAt,
+      });
+      return null;
+    }
+    if (
+      resolution.previewTargets.length === run.previewTargets.length &&
+      resolution.previewTargets.every((target, index) => target === run.previewTargets[index])
+    ) {
+      return run;
+    }
+    const updatedRun = {
+      ...run,
+      previewTargets: [...resolution.previewTargets],
+      updatedAt: occurredAt,
+    } satisfies DevReviewWorkflowRun;
+    yield* updateRun(updatedRun);
+    return updatedRun;
+  });
+
   const modelForPrompt = Effect.fn("DevReviewWorkflowReactor.modelForPrompt")(function* (
     workflowPromptId: string,
     parent: OrchestrationThread,
@@ -301,7 +415,9 @@ const make = Effect.gen(function* () {
       return;
     }
     const cwd = target.cwd;
-    const run = yield* assertStableRevision(inputRun, cwd, occurredAt);
+    const stableRun = yield* assertStableRevision(inputRun, cwd, occurredAt);
+    if (stableRun === null) return;
+    const run = yield* resolveStandalonePreviewTargetsForRun(stableRun, cwd, occurredAt);
     if (run === null) return;
     if (run.caller.type === "implementation") {
       const status = yield* gitWorkflow.status({ cwd });

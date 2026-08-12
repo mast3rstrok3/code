@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  extractPreviewUrls,
   extractChromiumNetError,
   isLoopbackHost,
   isPreviewableUrl,
@@ -109,6 +110,24 @@ describe("normalizePreviewUrl", () => {
         /user|password|access_token|secret|fragment/,
       );
     }
+  });
+});
+
+describe("extractPreviewUrls", () => {
+  it("extracts and normalizes URLs pasted into prose and Markdown", () => {
+    expect(
+      extractPreviewUrls(
+        "Review https://app.example.test/login, then [settings](http://localhost:5173/settings).",
+      ),
+    ).toEqual(["https://app.example.test/login", "http://localhost:5173/settings"]);
+  });
+
+  it("deduplicates URLs and ignores non-HTTP schemes", () => {
+    expect(
+      extractPreviewUrls(
+        "https://app.example.test https://app.example.test/ file:///tmp/index.html",
+      ),
+    ).toEqual(["https://app.example.test/"]);
   });
 });
 

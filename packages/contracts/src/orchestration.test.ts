@@ -1016,6 +1016,30 @@ it.effect("accepts Browser Dev Review launch commands", () =>
   }),
 );
 
+it.effect("accepts Dev Review Workflow launches before App Dev Stack resolution", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationCommand({
+      type: "thread.dev-review-workflow.launch",
+      commandId: "cmd-dev-review-workflow-launch",
+      targetThreadId: "thread-source",
+      controllerThreadId: "thread-controller",
+      caller: { type: "standalone", sourceThreadId: "thread-source" },
+      briefMarkdown: "Review checkout.",
+      previewTargets: [],
+      cycleBudget: 10,
+      modelSelection: {
+        instanceId: "codex",
+        model: "gpt-5-codex",
+      },
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    assert.strictEqual(parsed.type, "thread.dev-review-workflow.launch");
+    if (parsed.type !== "thread.dev-review-workflow.launch") return;
+    assert.deepStrictEqual(parsed.previewTargets, []);
+  }),
+);
+
 it.effect("accepts planning workflow stage set commands and events", () =>
   Effect.gen(function* () {
     const command = yield* decodeOrchestrationCommand({

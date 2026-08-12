@@ -162,6 +162,13 @@ it.effect("defaults Dev Review runs to ten attempts", () =>
   }),
 );
 
+it.effect("allows Dev Review to resolve preview targets after launch", () =>
+  Effect.gen(function* () {
+    const run = yield* decodeDevReviewWorkflowRun({ ...workflowRun, previewTargets: [] });
+    assert.deepStrictEqual(run.previewTargets, []);
+  }),
+);
+
 it.effect("rejects Dev Review attempt budgets outside 1 through 50", () =>
   Effect.gen(function* () {
     for (const cycleBudget of [0, 51]) {

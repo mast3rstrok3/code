@@ -20,7 +20,7 @@ export function isValidDevReviewWorkflowLaunch(input: {
   readonly brief: string;
   readonly cycleBudget: number;
   readonly sourceSettled: boolean;
-  readonly previewTargets: ReadonlyArray<string>;
+  readonly previewTargets?: ReadonlyArray<string>;
   readonly worktreeOwned: boolean;
 }): boolean {
   return (
@@ -29,7 +29,6 @@ export function isValidDevReviewWorkflowLaunch(input: {
     input.cycleBudget >= 1 &&
     input.cycleBudget <= DEV_REVIEW_WORKFLOW_MAX_CYCLES &&
     input.sourceSettled &&
-    input.previewTargets.length > 0 &&
     !input.worktreeOwned
   );
 }
