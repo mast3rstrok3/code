@@ -38,6 +38,10 @@ import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 
 import { PreviewPanelShell, type PreviewPanelMode } from "./preview/PreviewPanelShell";
 import { PierreEntryIcon } from "./chat/PierreEntryIcon";
+import {
+  RIGHT_PANEL_EMPTY_STATE_CLASS_NAME,
+  rightPanelTabIconClassNames,
+} from "./rightPanelTabsLayout";
 
 export interface RightPanelTabsProps {
   mode: PreviewPanelMode;
@@ -270,8 +274,8 @@ function RightPanelEmptyState(props: {
   ] as const;
 
   return (
-    <div className="flex min-h-0 flex-1 items-center justify-center p-6">
-      <div className="w-full max-w-xl">
+    <div className={RIGHT_PANEL_EMPTY_STATE_CLASS_NAME} data-right-panel-empty-state>
+      <div className="m-auto w-full max-w-xl">
         <div className="mb-5 text-center">
           <h3 className="text-sm font-medium text-foreground">Open a surface</h3>
           <p className="mt-1 text-xs text-muted-foreground">
@@ -536,6 +540,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
     const activeTab = tabListRef.current?.querySelector<HTMLElement>("[data-active-tab='true']");
     activeTab?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [props.activeSurfaceId]);
+  const tabIconClassNames = rightPanelTabIconClassNames(props.mode);
 
   return (
     <PreviewPanelShell
@@ -586,7 +591,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                     aria-label={`Close ${title}`}
                     onClick={() => props.onCloseSurface(surface)}
                   >
-                    <span className="relative flex size-3 items-center justify-center group-hover/tab:hidden group-focus-visible/close:hidden">
+                    <span className={tabIconClassNames.surfaceIcon}>
                       <SurfaceIcon
                         surface={surface}
                         sessions={props.previewSessions}
@@ -600,7 +605,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                         />
                       ) : null}
                     </span>
-                    <X className="hidden size-3 group-hover/tab:block group-focus-visible/close:block" />
+                    <X className={tabIconClassNames.closeIcon} />
                   </button>
                   <Tooltip>
                     <TooltipTrigger
