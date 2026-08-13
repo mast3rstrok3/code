@@ -620,6 +620,10 @@ describe("Codex developer instructions browser scoping", () => {
       CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
       /implementation\.browser-dev-review\.codex/,
     );
+    NodeAssert.match(
+      CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
+      /Do not use this one-shot launch as a substitute for an active Fix, Fast Feature/,
+    );
     NodeAssert.doesNotMatch(CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS, /workflow-subagent-create/);
   });
 

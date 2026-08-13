@@ -9,6 +9,7 @@ import {
   ProviderInstanceId,
   ProjectId,
   ThreadId,
+  TurnId,
   type WorkflowPreset,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -66,6 +67,27 @@ function messageId(value: string) {
 
 function eventId(value: string) {
   return EventId.make(`event-${value}`);
+}
+
+function completeTurnCheckpoint(
+  system: ProductSystem,
+  input: { readonly turnId: string; readonly checkpointTurnCount?: number },
+) {
+  return system.engine.dispatch({
+    type: "thread.activity.append",
+    commandId: commandId(`checkpoint-${input.turnId}`),
+    threadId: productThreadId,
+    activity: {
+      id: eventId(`checkpoint-${input.turnId}`),
+      tone: "info",
+      kind: "checkpoint.captured",
+      summary: "Checkpoint captured",
+      payload: { turnCount: input.checkpointTurnCount ?? 1, status: "ready" },
+      turnId: TurnId.make(input.turnId),
+      createdAt: now,
+    },
+    createdAt: now,
+  });
 }
 
 function makeTestLayer(validationCommands?: ReadonlyArray<string>) {
@@ -289,6 +311,190 @@ function upsertProposedPlan(
 }
 
 describe("ProductWorkflowReactor", () => {
+  it.effect("recovers a Fast Feature turn that stops before Product Grill lock-in", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        yield* seedProjectAndThread(system, { workflowPreset: "fast-feature" });
+        yield* completeTurnCheckpoint(system, { turnId: "turn-skipped-grill" });
+        yield* system.reactor.drain;
+
+        const snapshot = yield* system.query.getSnapshot();
+        const thread = snapshot.threads.find((entry) => entry.id === productThreadId);
+        const events = yield* Stream.runCollect(system.engine.readEvents(0)).pipe(
+          Effect.map((chunk) => Array.from(chunk)),
+        );
+        const recoveryTurn = events.find(
+          (event) =>
+            event.type === "thread.turn-start-requested" &&
+            event.payload.threadId === productThreadId &&
+            event.payload.workflowPromptId === WORKFLOW_PROMPT_IDS.productFastFeatureCodex,
+        );
+        const recoveryMessage = events.find(
+          (event) =>
+            event.type === "thread.message-sent" &&
+            event.payload.threadId === productThreadId &&
+            event.payload.text.includes("previous turn ended before completing"),
+        );
+        expect(recoveryTurn?.type).toBe("thread.turn-start-requested");
+        expect(recoveryMessage?.type).toBe("thread.message-sent");
+        if (recoveryMessage?.type === "thread.message-sent") {
+          expect(recoveryMessage.payload.text).toContain(
+            "Do not implement, investigate, or verify",
+          );
+          expect(recoveryMessage.payload.text).toContain("product-intent-locked");
+        }
+        expect(
+          thread?.activities.filter(
+            (activity) => activity.kind === "product-grill-recovery-requested",
+          ),
+        ).toHaveLength(1);
+      }),
+    ),
+  );
+
+  it.effect("does not recover Product Grill while structured user input is pending", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        yield* seedProjectAndThread(system, { workflowPreset: "fast-feature" });
+        yield* system.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: commandId("product-question-pending"),
+          threadId: productThreadId,
+          activity: {
+            id: eventId("product-question-pending"),
+            tone: "info",
+            kind: "user-input.requested",
+            summary: "Product decision requested",
+            payload: { requestId: "request-product-question" },
+            turnId: null,
+            createdAt: now,
+          },
+          createdAt: now,
+        });
+        yield* completeTurnCheckpoint(system, { turnId: "turn-awaiting-input" });
+        yield* system.reactor.drain;
+
+        const snapshot = yield* system.query.getSnapshot();
+        const thread = snapshot.threads.find((entry) => entry.id === productThreadId);
+        expect(
+          thread?.activities.some(
+            (activity) => activity.kind === "product-grill-recovery-requested",
+          ),
+        ).toBe(false);
+      }),
+    ),
+  );
+
+  it.effect("carries settled Product Grill answers into a recovery without replaying them", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        yield* seedProjectAndThread(system, { workflowPreset: "fast-feature" });
+        const turnId = TurnId.make("turn-answered-grill");
+        yield* system.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: commandId("product-question-answered-request"),
+          threadId: productThreadId,
+          activity: {
+            id: eventId("product-question-answered-request"),
+            tone: "info",
+            kind: "user-input.requested",
+            summary: "Product decision requested",
+            payload: { requestId: "request-product-question" },
+            turnId,
+            createdAt: now,
+          },
+          createdAt: now,
+        });
+        yield* system.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: commandId("product-question-answered-response"),
+          threadId: productThreadId,
+          activity: {
+            id: eventId("product-question-answered-response"),
+            tone: "info",
+            kind: "user-input.resolved",
+            summary: "Product decision submitted",
+            payload: {
+              requestId: "request-product-question",
+              answers: {
+                target_environment: "App dev stack",
+                landing_identity: "Exact Home overview",
+              },
+            },
+            turnId,
+            createdAt: now,
+          },
+          createdAt: now,
+        });
+        yield* completeTurnCheckpoint(system, { turnId });
+        yield* system.reactor.drain;
+
+        const events = yield* Stream.runCollect(system.engine.readEvents(0)).pipe(
+          Effect.map((chunk) => Array.from(chunk)),
+        );
+        const recoveryMessage = events.find(
+          (event) =>
+            event.type === "thread.message-sent" &&
+            event.payload.threadId === productThreadId &&
+            event.payload.text.includes("previous turn ended before completing"),
+        );
+        expect(recoveryMessage?.type).toBe("thread.message-sent");
+        if (recoveryMessage?.type === "thread.message-sent") {
+          expect(recoveryMessage.payload.text).toContain('"target_environment": "App dev stack"');
+          expect(recoveryMessage.payload.text).toContain(
+            '"landing_identity": "Exact Home overview"',
+          );
+          expect(recoveryMessage.payload.text).toContain("Do not repeat these questions");
+          expect(recoveryMessage.payload.text).toContain(
+            "Continue only from the unresolved product-decision frontier",
+          );
+        }
+      }),
+    ),
+  );
+
+  it.effect("bounds repeated Product Grill recovery and surfaces a terminal activity", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        yield* seedProjectAndThread(system, { workflowPreset: "fast-feature" });
+        for (const [index, turnId] of [
+          "turn-skipped-one",
+          "turn-skipped-two",
+          "turn-skipped-three",
+        ].entries()) {
+          yield* completeTurnCheckpoint(system, {
+            turnId,
+            checkpointTurnCount: index + 1,
+          });
+          yield* system.reactor.drain;
+        }
+
+        const snapshot = yield* system.query.getSnapshot();
+        const thread = snapshot.threads.find((entry) => entry.id === productThreadId);
+        const events = yield* Stream.runCollect(system.engine.readEvents(0)).pipe(
+          Effect.map((chunk) => Array.from(chunk)),
+        );
+        expect(
+          thread?.activities.filter(
+            (activity) => activity.kind === "product-grill-recovery-requested",
+          ),
+        ).toHaveLength(2);
+        expect(
+          thread?.activities.filter(
+            (activity) => activity.kind === "product-grill-recovery-blocked",
+          ),
+        ).toHaveLength(1);
+        expect(
+          events.filter(
+            (event) =>
+              event.type === "thread.turn-start-requested" &&
+              event.payload.workflowPromptId === WORKFLOW_PROMPT_IDS.productFastFeatureCodex,
+          ),
+        ).toHaveLength(2);
+      }),
+    ),
+  );
+
   it.effect("continues planning in the product root thread after product intent locks", () =>
     withSystem((system) =>
       Effect.gen(function* () {

@@ -2252,6 +2252,12 @@ describe("ImplementationWorkflowReactor", () => {
           expect(reviewThread?.messages.at(-1)?.text).toContain(
             "Feature URL: https://fast-checkout-dev.nightingale-ai.com",
           );
+          expect(reviewThread?.messages.at(-1)?.text).toContain(
+            "authoritative frontend for the App Dev Stack associated with this implementation worktree",
+          );
+          expect(reviewThread?.messages.at(-1)?.text).toContain(
+            "Do not substitute a deployment URL from repository documentation",
+          );
         }),
       {
         autoCreateFrontendUrls: [null, "https://fast-checkout-dev.nightingale-ai.com"],

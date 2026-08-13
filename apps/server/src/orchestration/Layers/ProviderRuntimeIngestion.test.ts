@@ -3705,6 +3705,73 @@ describe("ProviderRuntimeIngestion", () => {
     });
   });
 
+  it("rejects ad hoc Browser Dev Review children while Fast Feature owns review sequencing", async () => {
+    const harness = await createHarness();
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    const parentThreadId = asThreadId("thread-fast-feature-review-owner");
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-fast-feature-review-owner-create"),
+        threadId: parentThreadId,
+        projectId: asProjectId("project-1"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+        parentThreadId: null,
+        workflowRole: null,
+        title: "Fast Feature parent",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: "product-workflow",
+        workflowPreset: "fast-feature",
+        runtimeMode: "full-access",
+        branch: "dev",
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-fast-feature-ad-hoc-review"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt,
+      threadId: parentThreadId,
+      turnId: asTurnId("turn-fast-feature-ad-hoc-review"),
+      itemId: asItemId("item-fast-feature-ad-hoc-review"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail: `\`\`\`json
+{
+  "type": "workflow-subagent-create",
+  "workflowPromptId": "${WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex}",
+  "title": "Ad hoc review",
+  "promptMarkdown": "Review the app now.",
+  "devReviewMode": "full"
+}
+\`\`\``,
+      },
+    });
+
+    const snapshot = await waitForReadModel(harness.readModel, (readModel) => {
+      const parent = readModel.threads.find((thread) => thread.id === parentThreadId);
+      return parent?.workflowSubagentBatches?.[0]?.children[0]?.status === "rejected";
+    });
+    const parent = snapshot.threads.find((thread) => thread.id === parentThreadId);
+    const child = parent?.workflowSubagentBatches?.[0]?.children[0];
+    expect(child?.status).toBe("rejected");
+    expect(child?.failureDetail).toContain("Fast Feature workflow owns Product Grill");
+    expect(
+      snapshot.threads.some(
+        (thread) =>
+          thread.parentThreadId === parentThreadId &&
+          thread.workflowRole === "implementation-qa-reviewer",
+      ),
+    ).toBe(false);
+  });
+
   it("launches all 50 focused browser reviewers in one durable batch", async () => {
     const harness = await createHarness();
     const createdAt = "2026-01-01T00:00:00.000Z";

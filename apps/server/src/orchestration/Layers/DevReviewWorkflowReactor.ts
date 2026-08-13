@@ -354,6 +354,7 @@ const make = Effect.gen(function* () {
         "",
         "Preview targets (try in order):",
         ...run.previewTargets.map((target) => `- ${target}`),
+        "These preview targets are authoritative for this Dev Review cycle. Do not substitute deployment URLs from repository documentation, supporting source context, browser history, or environment conventions. If every listed target is unavailable, report the review blocked.",
         "",
         "Use the linked durable Dev Review record. Record the complete flow, capture captioned screenshots, and report every actionable finding. A missing or unavailable preview is blocked, not failed.",
       ].join("\n"),

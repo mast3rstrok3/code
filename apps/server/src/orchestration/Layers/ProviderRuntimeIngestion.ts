@@ -1610,15 +1610,27 @@ const make = Effect.gen(function* () {
     readonly createdAt: string;
   }) {
     const batchId = workflowBatchId(input.thread.id, input.sourceMessageId);
-    const implementationRun =
-      (yield* projectionSnapshotQuery.getCommandReadModel()).implementationRuns
-        .filter(
-          (run) =>
-            run.orchestratorThreadId === input.thread.id &&
-            run.status !== "completed" &&
-            run.status !== "canceled",
-        )
-        .toSorted((left, right) => (left.updatedAt < right.updatedAt ? 1 : -1))[0];
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    const implementationRun = readModel.implementationRuns
+      .filter(
+        (run) =>
+          run.orchestratorThreadId === input.thread.id &&
+          run.status !== "completed" &&
+          run.status !== "canceled",
+      )
+      .toSorted((left, right) => (left.updatedAt < right.updatedAt ? 1 : -1))[0];
+    const productWorkflowThread = readModel.threads.find((thread) => thread.id === input.thread.id);
+    const productWorkflowSpecId = productWorkflowThread?.planningWorkflow?.spec?.id ?? null;
+    const productWorkflowRuns = readModel.implementationRuns.filter(
+      (run) =>
+        run.sourceProposedPlan?.threadId === input.thread.id ||
+        (productWorkflowSpecId !== null && run.specId === productWorkflowSpecId),
+    );
+    const productWorkflowOwnsBrowserReview =
+      (input.thread.workflowPreset === "fast-feature" ||
+        input.thread.workflowPreset === "full-feature") &&
+      (productWorkflowRuns.length === 0 ||
+        productWorkflowRuns.some((run) => run.status !== "completed" && run.status !== "canceled"));
     const persistedChildren = input.children.map((child, index) => {
       const definition = resolveWorkflowSubagentSpawnDefinition(child.workflowPromptId);
       const isBrowser =
@@ -1681,6 +1693,15 @@ const make = Effect.gen(function* () {
             });
           if (child.validationError !== undefined) {
             yield* reject(child.validationError);
+            return;
+          }
+          if (
+            child.workflowPromptId === WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex &&
+            productWorkflowOwnsBrowserReview
+          ) {
+            yield* reject(
+              `The selected ${input.thread.workflowPreset === "fast-feature" ? "Fast Feature" : "Full Feature"} workflow owns Product Grill, Planning, Build, Dev Review, Code Review, and change-request sequencing. Continue or recover that workflow instead of launching an ad hoc Browser Dev Review child.`,
+            );
             return;
           }
           if (definition === undefined) {

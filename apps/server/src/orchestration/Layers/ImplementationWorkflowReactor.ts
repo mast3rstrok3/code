@@ -406,6 +406,7 @@ function buildBrowserDevReviewPrompt(input: {
     input.frontendUrl === null
       ? "No frontend URL was resolved. If the app cannot be opened, mark the review blocked with concrete details."
       : `Feature URL: ${input.frontendUrl}`,
+    "The Feature URL above is the authoritative frontend for the App Dev Stack associated with this implementation worktree. Do not substitute a deployment URL from repository documentation, source-thread messages, browser history, or environment conventions. If the authoritative target is unavailable, mark the review blocked.",
     `Worktree: ${input.run.orchestratorWorktreePath}`,
     `Diff command: git diff ${input.run.pinnedCommit}...HEAD`,
     "",

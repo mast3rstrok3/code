@@ -66,6 +66,8 @@ Use T3's \`workflow_request_user_input\` tool for every interview round and for 
 
 Recompute the currently unblocked frontier before every round. When it contains one through seven questions, submit the entire frontier at its natural size. Seven is a maximum, never a target: do not aim for three, seven, or any other fixed batch size, and do not pad a round. If more than seven questions are independently ready, send the first seven in stable design-tree order and continue with the remainder after those answers resolve. Never put questions in the same call when one answer depends on another question in that call.
 
+Treat every answer returned by \`workflow_request_user_input\` as settled. Never repeat its question or the previously answered frontier unless the user explicitly reopens or contradicts that decision. When a custom answer needs clarification, ask only the narrower unresolved clarification instead of replaying the original question batch.
+
 Each question must have:
 
 - A compact header.
@@ -1693,6 +1695,8 @@ ${STRUCTURED_GRILL_QUESTION_ADAPTER}
 ## Product-only adapter
 
 Before asking questions, ground yourself in the codebase and existing product context. Use that knowledge to resolve facts and answer anything already clear; ask the user only where product clarity, preference, or alignment is needed.
+
+The selected product workflow is authoritative even when the user's wording sounds like a direct implementation, investigation, or verification request. Do not perform that work during Product Grill. If grounding resolves every product decision, go straight to the structured final shared-understanding confirmation; never silently treat apparent clarity as confirmation or end the turn without either a structured Product Grill question or the final intent-lock directive.
 
 Cover product direction only: the problem, audience, desired outcome, user-visible behavior and experience, success criteria, scope, and non-goals. Do not ask about implementation, architecture, testing, workflow sequencing, or operations.
 

@@ -21,6 +21,7 @@ import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import {
   expectedIntentKindForWorkflowPreset,
   isProductWorkflowRoot,
+  workflowPromptIdForPreset,
 } from "@t3tools/shared/workflowPresets";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
@@ -49,6 +50,8 @@ type ProductWorkflowEvent = Extract<
   }
 >;
 
+const PRODUCT_GRILL_RECOVERY_MAX_ATTEMPTS = 2;
+
 const isProductWorkflowThread = isProductWorkflowRoot;
 
 const isProductPlanningOrchestratorThread = (thread: {
@@ -69,6 +72,63 @@ const hasFixIntentLockedActivity = (thread: OrchestrationThread) =>
         : {};
     return payload.intentKind === "fix";
   });
+
+const hasProductIntentLockedActivity = (thread: OrchestrationThread) =>
+  thread.activities.some((activity) => activity.kind === "product-intent-locked");
+
+const hasOpenUserInputRequest = (thread: OrchestrationThread) => {
+  const openRequestIds = new Set<string>();
+  for (const activity of thread.activities) {
+    const payload =
+      activity.payload !== null && typeof activity.payload === "object"
+        ? (activity.payload as Record<string, unknown>)
+        : {};
+    const requestId = typeof payload.requestId === "string" ? payload.requestId : null;
+    if (requestId === null) continue;
+    if (activity.kind === "user-input.requested") {
+      openRequestIds.add(requestId);
+      continue;
+    }
+    if (
+      activity.kind === "user-input.resolved" ||
+      activity.kind === "provider.user-input.respond.failed"
+    ) {
+      openRequestIds.delete(requestId);
+    }
+  }
+  return openRequestIds.size > 0;
+};
+
+const buildProductGrillRecoveryPrompt = (thread: OrchestrationThread) => {
+  const settledAnswers = new Map<string, unknown>();
+  for (const activity of thread.activities) {
+    if (activity.kind !== "user-input.resolved") continue;
+    const payload =
+      activity.payload !== null && typeof activity.payload === "object"
+        ? (activity.payload as Record<string, unknown>)
+        : {};
+    const answers =
+      payload.answers !== null && typeof payload.answers === "object"
+        ? (payload.answers as Record<string, unknown>)
+        : {};
+    for (const [questionId, answer] of Object.entries(answers)) {
+      settledAnswers.set(questionId, answer);
+    }
+  }
+
+  const settledAnswerState = Object.fromEntries(settledAnswers);
+  return [
+    "The previous turn ended before completing the selected Product Grill.",
+    "",
+    "The following structured Product Grill answers are already settled and authoritative. Do not repeat these questions or ask the user to submit these answers again unless the user explicitly reopens or contradicts one:",
+    "",
+    "```json",
+    JSON.stringify(settledAnswerState, null, 2),
+    "```",
+    "",
+    "Do not implement, investigate, or verify the requested work yet. Continue only from the unresolved product-decision frontier with workflow_request_user_input. If the settled answers complete the frontier, ask only for the explicit final lock-in confirmation. If that confirmation is already settled as affirmative, emit product-intent-locked immediately. Only then may the selected workflow continue automatically into Planning, Build, Dev Review, Code Review, and change-request publication.",
+  ].join("\n");
+};
 
 const buildProductLightweightPlanPrompt = (input: {
   readonly intentKind: "fix" | "feature";
@@ -650,12 +710,89 @@ const make = Effect.gen(function* () {
     yield* ensureFixImplementation({ thread, plan, occurredAt: event.occurredAt });
   });
 
+  const recoverIncompleteProductGrill = Effect.fn(
+    "ProductWorkflowReactor.recoverIncompleteProductGrill",
+  )(function* (event: Extract<ProductWorkflowEvent, { type: "thread.activity-appended" }>) {
+    if (event.payload.activity.kind !== "checkpoint.captured") return;
+    const sourceTurnId = event.payload.activity.turnId;
+    if (sourceTurnId === null) return;
+    const thread = yield* resolveThread(event.payload.threadId);
+    if (!thread || !isProductWorkflowThread(thread)) return;
+    if (hasProductIntentLockedActivity(thread) || hasOpenUserInputRequest(thread)) return;
+    if (
+      thread.activities.some(
+        (activity) =>
+          activity.kind === "product-grill-recovery-requested" &&
+          activity.payload !== null &&
+          typeof activity.payload === "object" &&
+          (activity.payload as Record<string, unknown>).sourceTurnId === sourceTurnId,
+      )
+    ) {
+      return;
+    }
+
+    const recoveryCount = thread.activities.filter(
+      (activity) => activity.kind === "product-grill-recovery-requested",
+    ).length;
+    if (recoveryCount >= PRODUCT_GRILL_RECOVERY_MAX_ATTEMPTS) {
+      if (
+        !thread.activities.some((activity) => activity.kind === "product-grill-recovery-blocked")
+      ) {
+        yield* appendActivity({
+          threadId: thread.id,
+          tone: "error",
+          kind: "product-grill-recovery-blocked",
+          summary: "Product Grill stopped before intent lock",
+          payload: {
+            sourceTurnId,
+            attempts: recoveryCount,
+            detail:
+              "The selected product workflow repeatedly completed without structured Product Grill input or a product-intent-locked directive.",
+          },
+          createdAt: event.payload.activity.createdAt,
+        });
+      }
+      return;
+    }
+
+    if (thread.workflowPreset === null || thread.workflowPreset === undefined) return;
+    const workflowPromptId = workflowPromptIdForPreset(thread.workflowPreset);
+    if (workflowPromptId === undefined) return;
+    yield* appendActivity({
+      threadId: thread.id,
+      tone: "info",
+      kind: "product-grill-recovery-requested",
+      summary: "Resuming incomplete Product Grill",
+      payload: {
+        sourceTurnId,
+        attempt: recoveryCount + 1,
+      },
+      createdAt: event.payload.activity.createdAt,
+    });
+    yield* orchestrationEngine.dispatch({
+      type: "thread.turn.start",
+      commandId: yield* serverCommandId("product-grill-recovery-turn"),
+      threadId: thread.id,
+      message: {
+        messageId: yield* serverMessageId("product-grill-recovery"),
+        role: "user",
+        text: buildProductGrillRecoveryPrompt(thread),
+        attachments: [],
+      },
+      runtimeMode: thread.runtimeMode,
+      interactionMode: "product-workflow",
+      workflowPromptId,
+      createdAt: event.payload.activity.createdAt,
+    });
+  });
+
   const processEvent = Effect.fn("ProductWorkflowReactor.processEvent")(function* (
     event: ProductWorkflowEvent,
   ) {
     switch (event.type) {
       case "thread.activity-appended":
         yield* handleProductIntentLocked(event);
+        yield* recoverIncompleteProductGrill(event);
         return;
       case "thread.planning-tickets-created":
         yield* requestTicketReview(event);

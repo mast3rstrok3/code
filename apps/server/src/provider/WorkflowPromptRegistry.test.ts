@@ -619,6 +619,11 @@ describe("WorkflowPromptRegistry", () => {
         preset.promptText,
         /only where product clarity, preference, or alignment is needed/,
       );
+      NodeAssert.match(preset.promptText, /selected product workflow is authoritative/);
+      NodeAssert.match(preset.promptText, /Do not perform that work during Product Grill/);
+      NodeAssert.match(preset.promptText, /never silently treat apparent clarity as confirmation/);
+      NodeAssert.match(preset.promptText, /Treat every answer .* as settled/);
+      NodeAssert.match(preset.promptText, /Never repeat its question/);
       NodeAssert.match(preset.promptText, /Interview the user relentlessly/);
       NodeAssert.match(preset.promptText, /Ask the whole frontier in one round/);
       NodeAssert.match(preset.promptText, /❓ \*\*Q1\*\* - \*\*<question title>\*\*/);
