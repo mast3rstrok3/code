@@ -286,6 +286,8 @@ import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
 import { resolveTimelineIsAtEnd } from "./chat/MessagesTimeline.logic";
+import { selectLatestDevReviewControllerRun } from "./DevReviewPanel.logic";
+import { DevReviewThreadStatus } from "./DevReviewThreadStatus";
 import { ChatHeader } from "./chat/ChatHeader";
 import { PanelLayoutControls, RightPanelMaximizeControl } from "./chat/PanelLayoutControls";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
@@ -1882,6 +1884,13 @@ function ChatViewContent(props: ChatViewProps) {
   const activePlanningWorkflow = useThreadPlanningWorkflow(isServerThread ? activeThreadRef : null);
   const activeImplementationRuns = useImplementationRuns(activeThread?.environmentId ?? null);
   const devReviewWorkflowRuns = useDevReviewWorkflowRuns(activeThread?.environmentId ?? null);
+  const activeDevReviewControllerRun = useMemo(
+    () =>
+      activeThread
+        ? selectLatestDevReviewControllerRun(devReviewWorkflowRuns, activeThread.id)
+        : null,
+    [activeThread, devReviewWorkflowRuns],
+  );
   const activeWorktreeDevReviewRun = useMemo(() => {
     if (!activeThread) return null;
     const targetPath = activeThread.worktreePath ?? activeProject?.workspaceRoot ?? null;
@@ -7112,6 +7121,14 @@ function ChatViewContent(props: ChatViewProps) {
                 onIsAtEndChange={onIsAtEndChange}
                 onManualNavigation={cancelTimelineLiveFollowForUserNavigation}
                 hideEmptyPlaceholder={isDraftHeroState || threadDetailLoading}
+                emptyPlaceholder={
+                  activeDevReviewControllerRun ? (
+                    <DevReviewThreadStatus
+                      run={activeDevReviewControllerRun}
+                      onOpenDetails={addReviewSurface}
+                    />
+                  ) : undefined
+                }
                 topFadeEnabled={!hasTimelineTopBanner}
                 loadEarlier={loadEarlierTurns}
               />

@@ -49,3 +49,31 @@ export function devReviewRunStatusLabel(run: DevReviewWorkflowRun): string {
   const phase = run.activePhase ?? "refreshing preview";
   return `${phase} · Cycle ${Math.max(1, cycle)} of ${run.cycleBudget}`;
 }
+
+export function selectLatestDevReviewControllerRun(
+  runs: readonly DevReviewWorkflowRun[],
+  threadId: ThreadId,
+): DevReviewWorkflowRun | null {
+  let latest: DevReviewWorkflowRun | null = null;
+  for (const run of runs) {
+    if (run.controllerThreadId !== threadId) continue;
+    if (
+      latest === null ||
+      run.updatedAt > latest.updatedAt ||
+      (run.updatedAt === latest.updatedAt && run.id > latest.id)
+    ) {
+      latest = run;
+    }
+  }
+  return latest;
+}
+
+export function devReviewRunFailureSummary(run: DevReviewWorkflowRun): string | null {
+  if (run.failure === null) return null;
+  return run.failure.detailMarkdown
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .slice(0, 2)
+    .join("\n");
+}

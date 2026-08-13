@@ -10,9 +10,11 @@ import {
 
 import {
   devReviewRunContainsThread,
+  devReviewRunFailureSummary,
   devReviewRunStatusLabel,
   isValidDevReviewWorkflowLaunch,
   selectActiveDevReviewRecord,
+  selectLatestDevReviewControllerRun,
 } from "./DevReviewPanel.logic";
 
 describe("selectActiveDevReviewRecord", () => {
@@ -90,6 +92,49 @@ describe("Dev Review workflow panel logic", () => {
         activePhase: null,
       }),
     ).toBe("exhausted");
+  });
+
+  it("selects the latest run controlled by the open thread", () => {
+    const threadId = ThreadId.make("thread-controller");
+    const older = makeDevReviewWorkflowRun();
+    const newer = {
+      ...older,
+      id: DevReviewWorkflowRunId.make("dev-review-workflow-newer"),
+      updatedAt: "2026-08-11T00:02:00.000Z",
+    };
+    const unrelated = {
+      ...newer,
+      id: DevReviewWorkflowRunId.make("dev-review-workflow-unrelated"),
+      controllerThreadId: ThreadId.make("thread-other"),
+      updatedAt: "2026-08-11T00:03:00.000Z",
+    };
+
+    expect(selectLatestDevReviewControllerRun([older, unrelated, newer], threadId)?.id).toBe(
+      newer.id,
+    );
+  });
+
+  it("summarizes a launch failure without exposing its stack trace", () => {
+    const run = makeDevReviewWorkflowRun();
+    const blocked: DevReviewWorkflowRun = {
+      ...run,
+      status: "blocked",
+      outcome: "blocked",
+      activePhase: null,
+      failure: {
+        reason: "automation-unavailable",
+        phase: null,
+        cycleNumber: null,
+        detailMarkdown:
+          "Dev Review automation failed.\n\nVcsRepositoryDetectionError: Workspace rejected.\n    at internal.ts:10:2",
+        failedAt: "2026-08-11T00:02:00.000Z",
+      },
+    };
+
+    expect(devReviewRunFailureSummary(blocked)).toBe(
+      "Dev Review automation failed.\nVcsRepositoryDetectionError: Workspace rejected.",
+    );
+    expect(devReviewRunFailureSummary(run)).toBeNull();
   });
 });
 

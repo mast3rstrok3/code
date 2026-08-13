@@ -238,6 +238,7 @@ interface MessagesTimelineProps {
   onIsAtEndChange: (isAtEnd: boolean) => void;
   onManualNavigation: () => void;
   hideEmptyPlaceholder?: boolean;
+  emptyPlaceholder?: ReactNode;
   topFadeEnabled?: boolean;
   /** Non-null when older turns exist beyond the loaded window. */
   loadEarlier?: { readonly loading: boolean; readonly onLoadEarlier: () => void } | null;
@@ -278,6 +279,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onIsAtEndChange,
   onManualNavigation,
   hideEmptyPlaceholder = false,
+  emptyPlaceholder,
   topFadeEnabled = false,
   loadEarlier = null,
 }: MessagesTimelineProps) {
@@ -562,9 +564,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       return null;
     }
     return (
-      <div className="flex h-full items-center justify-center">
-        <p className="text-placeholder text-sm">Send a message to start the conversation.</p>
-      </div>
+      emptyPlaceholder ?? (
+        <div className="flex h-full items-center justify-center">
+          <p className="text-placeholder text-sm">Send a message to start the conversation.</p>
+        </div>
+      )
     );
   }
 
