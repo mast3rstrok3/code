@@ -142,6 +142,7 @@ import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import { ProjectionProjectRepository } from "./persistence/Services/ProjectionProjects.ts";
+import { ProjectionThreadRepository } from "./persistence/Services/ProjectionThreads.ts";
 import { ProjectionThreadDevReviewRepository } from "./persistence/Services/ProjectionThreadDevReviews.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
@@ -627,6 +628,9 @@ const buildAppUnderTest = (options?: {
     const projectionProjectRepositoryLayer = Layer.mock(ProjectionProjectRepository)({
       listAll: () => Effect.succeed([]),
     });
+    const projectionThreadRepositoryLayer = Layer.mock(ProjectionThreadRepository)({
+      listByProjectId: () => Effect.succeed([]),
+    });
     const reviewLayer = options?.layers?.reviewService
       ? Layer.mock(ReviewService.ReviewService)({
           ...options.layers.reviewService,
@@ -635,6 +639,7 @@ const buildAppUnderTest = (options?: {
           Layer.provideMerge(gitVcsDriverLayer),
           Layer.provide(vcsDriverRegistryLayer),
           Layer.provide(projectionProjectRepositoryLayer),
+          Layer.provide(projectionThreadRepositoryLayer),
         );
     const vcsStatusBroadcasterLayer = options?.layers?.vcsStatusBroadcaster
       ? Layer.mock(VcsStatusBroadcaster.VcsStatusBroadcaster)({

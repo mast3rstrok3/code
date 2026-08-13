@@ -237,53 +237,73 @@ export function WorkflowsPanel(props: {
             const expanded = expandedById[group.id] ?? group.isActive;
             const status = groupStatus(group);
             const visual = STATUS_VISUALS[status];
+            const visualDepth = Math.min(group.depth, 3);
             return (
-              <section
+              <div
                 key={group.id}
-                className="overflow-hidden rounded-lg border border-border/80 bg-card"
+                className="relative"
+                style={{ marginLeft: `${visualDepth * 0.75}rem` }}
               >
-                <button
-                  type="button"
-                  aria-expanded={expanded}
-                  onClick={() =>
-                    setExpandedById((current) => ({ ...current, [group.id]: !expanded }))
-                  }
-                  className="cursor-pointer flex w-full items-start gap-2 p-3 text-left hover:bg-accent/40"
-                >
-                  {expanded ? (
-                    <ChevronDown className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-                  ) : (
-                    <ChevronRight className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-                  )}
-                  <span className="min-w-0 flex-1">
-                    <span className="flex items-center gap-2">
-                      <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                        {groupTitle(group)}
-                      </span>
-                      <span className={cn("text-[11px]", visual.textClass)}>{visual.label}</span>
-                    </span>
-                    <span className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[11px] text-muted-foreground">
-                      <span>{group.activeCount} active</span>
-                      <span aria-hidden>·</span>
-                      <span>{group.settledCount} settled</span>
-                      <span aria-hidden>·</span>
-                      <Elapsed startedAt={group.createdAt} endedAt={groupEndedAt(group)} />
-                    </span>
-                  </span>
-                </button>
-                {expanded ? (
-                  <div className="border-t border-border/70 p-1">
-                    {group.rows.map((row) => (
-                      <ThreadRow
-                        key={workflowThreadKey(row.thread)}
-                        row={row}
-                        activeThreadKey={props.activeThreadKey}
-                        onOpenThread={props.onOpenThread}
-                      />
-                    ))}
-                  </div>
+                {visualDepth > 0 ? (
+                  <span
+                    aria-hidden
+                    className="absolute -left-2.5 top-0 h-6 w-2.5 rounded-bl-md border-b border-l border-border/70"
+                  />
                 ) : null}
-              </section>
+                <section
+                  data-workflow-group={group.id}
+                  data-workflow-depth={group.depth}
+                  className="overflow-hidden rounded-lg border border-border/80 bg-card"
+                >
+                  <button
+                    type="button"
+                    aria-expanded={expanded}
+                    onClick={() =>
+                      setExpandedById((current) => ({ ...current, [group.id]: !expanded }))
+                    }
+                    className="cursor-pointer flex w-full items-start gap-2 p-3 text-left hover:bg-accent/40"
+                  >
+                    {expanded ? (
+                      <ChevronDown className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+                    ) : (
+                      <ChevronRight className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+                    )}
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-2">
+                        <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                          {groupTitle(group)}
+                        </span>
+                        <span className={cn("text-[11px]", visual.textClass)}>{visual.label}</span>
+                      </span>
+                      <span className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[11px] text-muted-foreground">
+                        {group.depth > 0 ? (
+                          <>
+                            <span>Sub-workflow</span>
+                            <span aria-hidden>·</span>
+                          </>
+                        ) : null}
+                        <span>{group.activeCount} active</span>
+                        <span aria-hidden>·</span>
+                        <span>{group.settledCount} settled</span>
+                        <span aria-hidden>·</span>
+                        <Elapsed startedAt={group.createdAt} endedAt={groupEndedAt(group)} />
+                      </span>
+                    </span>
+                  </button>
+                  {expanded ? (
+                    <div className="border-t border-border/70 p-1">
+                      {group.rows.map((row) => (
+                        <ThreadRow
+                          key={workflowThreadKey(row.thread)}
+                          row={row}
+                          activeThreadKey={props.activeThreadKey}
+                          onOpenThread={props.onOpenThread}
+                        />
+                      ))}
+                    </div>
+                  ) : null}
+                </section>
+              </div>
             );
           })}
         </div>

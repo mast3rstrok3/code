@@ -56,6 +56,18 @@ describe("WorkflowPromptRegistry", () => {
       ],
     );
     NodeAssert.equal(catalog.docs.filter((doc) => doc.id === "context-format").length, 1);
+    NodeAssert.deepEqual(resolveWorkflowDoc("app-dev-stack")?.skillIds, [
+      WORKFLOW_PROMPT_IDS.planningPrototypeCodex,
+      WORKFLOW_PROMPT_IDS.implementationOrchestratorPlanningCodex,
+      WORKFLOW_PROMPT_IDS.implementationTddCodex,
+      WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
+      WORKFLOW_PROMPT_IDS.implementationFixCodex,
+    ]);
+    NodeAssert.match(resolveWorkflowDoc("app-dev-stack")?.content ?? "", /Kubernetes-backed/);
+    NodeAssert.match(resolveWorkflowDoc("app-dev-stack")?.content ?? "", /mount.*`\/app`/);
+    NodeAssert.match(resolveWorkflowDoc("app-dev-stack")?.content ?? "", /separate pod volumes/);
+    NodeAssert.match(resolveWorkflowDoc("app-dev-stack")?.content ?? "", /after integration/);
+    NodeAssert.match(resolveWorkflowDoc("app-dev-stack")?.content ?? "", /host dependency install/);
     NodeAssert.deepEqual(resolveWorkflowDoc("context-format")?.skillIds, [
       WORKFLOW_PROMPT_IDS.planningGrillStageCodex,
       WORKFLOW_PROMPT_IDS.planningAutomaticEngineeringGrillCodex,
@@ -117,6 +129,7 @@ describe("WorkflowPromptRegistry", () => {
     // Prototypes are full-fidelity: real-app worktree + app dev stack, no toy stand-ins.
     NodeAssert.match(prototype?.promptText ?? "", /## Full fidelity on the real application/);
     NodeAssert.match(prototype?.promptText ?? "", /app dev stack/);
+    NodeAssert.match(prototype?.promptText ?? "", /Load `app-dev-stack\.md`/);
     NodeAssert.doesNotMatch(prototype?.promptText ?? "", /tiny interactive terminal app/);
     const prototypeLogic = resolveWorkflowDoc("prototype-logic");
     NodeAssert.match(prototypeLogic?.content ?? "", /Isolate the logic in a portable module/);
@@ -208,6 +221,8 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /frontier-round mechanics remain authoritative/);
     NodeAssert.match(rendered, /## T3 structured-question adapter/);
     NodeAssert.match(rendered, /workflow_request_user_input.*every interview round/);
+    NodeAssert.match(rendered, /complete result.*outer text\(result\) helper/);
+    NodeAssert.match(rendered, /contentItems, not result\.content/);
     NodeAssert.match(rendered, /one through seven questions.*entire frontier/);
     NodeAssert.match(rendered, /Seven is a maximum, never a target/);
     NodeAssert.match(rendered, /first seven in stable design-tree order/);
@@ -310,6 +325,7 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.doesNotMatch(previewQaDoc.content, /agent-browser/i);
     NodeAssert.doesNotMatch(previewQaDoc.content, /rrweb/i);
     NodeAssert.doesNotMatch(previewQaDoc.content, /chrome-devtools-mcp/);
+    NodeAssert.ok(browserReview.associatedDocs?.some((doc) => doc.id === "app-dev-stack"));
 
     for (const contract of contracts.filter((entry) => entry.id !== browserReview.id)) {
       NodeAssert.equal(
@@ -343,6 +359,7 @@ describe("WorkflowPromptRegistry", () => {
 
     NodeAssert.match(rendered, /<available-workflow-docs>/);
     NodeAssert.match(rendered, /preview-browser-qa\.md/);
+    NodeAssert.match(rendered, /app-dev-stack\.md/);
     NodeAssert.match(rendered, /preview_open/);
     NodeAssert.match(rendered, /dev_review_get/);
     NodeAssert.match(rendered, /preview_navigate/);
@@ -374,7 +391,7 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.equal(tdd.title, "2. TDD Implementation");
     NodeAssert.equal(
       tdd.associatedDocs?.map((doc) => doc.path).join(","),
-      "mocking.md,tests.md,logging.md",
+      "app-dev-stack.md,mocking.md,tests.md,logging.md",
     );
 
     const rendered = resolveWorkflowPromptText(WORKFLOW_PROMPT_IDS.implementationTddCodex);
@@ -398,6 +415,7 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /Logging for TDD/);
     NodeAssert.match(rendered, /workflow_doc_get/);
     NodeAssert.match(rendered, /Orchestrated QA Repair Result/);
+    NodeAssert.match(rendered, /Load `app-dev-stack\.md`/);
     NodeAssert.match(rendered, /implementation-fix-result/);
     NodeAssert.match(rendered, /one focused failing test before implementation/);
     NodeAssert.match(rendered, /After each behavioral slice, run the relevant focused test/);
@@ -473,7 +491,8 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /use \/code-review to review the work/);
     NodeAssert.match(rendered, /## T3 workflow adapter/);
     NodeAssert.match(rendered, /worktree and branch created from the branch the user selected/);
-    NodeAssert.match(rendered, /app dev stack/);
+    NodeAssert.match(rendered, /app dev stack is provisioned after integration/);
+    NodeAssert.match(rendered, /app-dev-stack\.md/);
     NodeAssert.match(rendered, /worker branches from its blocker's worker branch/);
     NodeAssert.match(rendered, /global budget of ten fresh .* repair agents/);
     NodeAssert.match(rendered, /do not consume repair slots/);
@@ -636,6 +655,8 @@ describe("WorkflowPromptRegistry", () => {
       NodeAssert.match(preset.promptText, /dependency-frontier mechanics remain authoritative/);
       NodeAssert.match(preset.promptText, /## T3 structured-question adapter/);
       NodeAssert.match(preset.promptText, /workflow_request_user_input.*every interview round/);
+      NodeAssert.match(preset.promptText, /complete result.*outer text\(result\) helper/);
+      NodeAssert.match(preset.promptText, /contentItems, not result\.content/);
       NodeAssert.match(preset.promptText, /one through seven questions.*entire frontier/);
       NodeAssert.match(preset.promptText, /Seven is a maximum, never a target/);
       NodeAssert.match(preset.promptText, /first seven in stable design-tree order/);

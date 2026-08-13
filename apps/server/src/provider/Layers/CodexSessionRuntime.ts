@@ -50,6 +50,7 @@ import {
   isInteractiveStructuredInputWorkflowPromptId,
   resolveWorkflowPromptId,
   resolveWorkflowSystemInstructions,
+  WORKFLOW_REQUEST_USER_INPUT_CODE_MODE_FORWARDING,
 } from "../WorkflowPromptRegistry.ts";
 const decodeV2TurnStartResponse = Schema.decodeUnknownEffect(EffectCodexSchema.V2TurnStartResponse);
 const encodeUnknownJsonString = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
@@ -135,8 +136,7 @@ export const decodeWorkflowRequestUserInputArguments = Schema.decodeUnknownEffec
 export const WORKFLOW_REQUEST_USER_INPUT_TOOL = {
   type: "function",
   name: WORKFLOW_REQUEST_USER_INPUT_TOOL_NAME,
-  description:
-    "Ask one through seven currently unblocked workflow questions and wait for the user's answers.",
+  description: `Ask one through seven currently unblocked workflow questions and wait for the user's answers. ${WORKFLOW_REQUEST_USER_INPUT_CODE_MODE_FORWARDING}`,
   inputSchema: {
     type: "object",
     additionalProperties: false,

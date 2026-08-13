@@ -56,6 +56,8 @@ export interface WorkflowGroup<TThread extends WorkflowModelThread> {
   readonly id: string;
   readonly kind: "workflow" | "batch" | "legacy";
   readonly sourceId: string;
+  readonly parentGroupId: string | null;
+  readonly depth: number;
   readonly createdAt: string;
   readonly preset: WorkflowPreset | null;
   readonly rows: readonly WorkflowTreeRow<TThread>[];
@@ -153,12 +155,14 @@ function resolveOwner<TThread extends WorkflowModelThread>(
   byKey: ReadonlyMap<string, TThread>,
 ): TThread {
   const contextRootId = thread.workflowContext?.rootThreadId;
-  if (contextRootId) {
-    const contextRoot = byKey.get(`${thread.environmentId}:${contextRootId}`);
-    if (contextRoot) return contextRoot;
-  }
-
-  let current = thread;
+  const contextRoot = contextRootId
+    ? byKey.get(`${thread.environmentId}:${contextRootId}`)
+    : undefined;
+  // A nested workflow's rootThreadId identifies its local controller (for
+  // example, Dev Review can root at a Fast Feature Build child). Continue up
+  // the physical thread ancestry so every nested workflow remains visible from
+  // the thread that initiated the complete workflow tree.
+  let current = contextRoot ?? thread;
   const path: TThread[] = [];
   const indexByKey = new Map<string, number>();
   while (current.parentThreadId !== null) {
@@ -295,35 +299,119 @@ export function buildWorkflowViewModel<TThread extends WorkflowModelThread>(
       else grouped.set(groupId, { kind, sourceId, threads: [thread] });
     }
 
-    const groups = [...grouped.entries()]
-      .map(([id, group]): WorkflowGroup<TThread> => {
-        const rows = buildGroupRows(group.threads);
-        const statuses = rows.map((row) => resolveWorkflowThreadStatus(row.thread));
-        const activeCount = statuses.filter(workflowStatusIsActive).length;
-        return {
-          id,
-          kind: group.kind,
-          sourceId: group.sourceId,
-          createdAt: group.threads.reduce(
-            (earliest, thread) =>
-              timestampMs(thread.createdAt) < timestampMs(earliest) ? thread.createdAt : earliest,
-            group.threads[0]?.createdAt ?? owner.createdAt,
-          ),
-          preset:
-            group.threads.find((thread) => thread.workflowPreset != null)?.workflowPreset ??
-            (group.kind === "workflow" ? owner.workflowPreset : null) ??
-            null,
-          rows,
-          activeCount,
-          settledCount: statuses.length - activeCount,
-          isActive: activeCount > 0,
-        };
-      })
-      .toSorted(
-        (left, right) =>
-          timestampMs(right.createdAt) - timestampMs(left.createdAt) ||
-          left.id.localeCompare(right.id),
-      );
+    const groupIdByThreadKey = new Map<string, string>();
+    for (const [groupId, group] of grouped) {
+      for (const thread of group.threads) {
+        groupIdByThreadKey.set(workflowThreadKey(thread), groupId);
+      }
+    }
+
+    const parentGroupIdById = new Map<string, string | null>();
+    for (const [groupId, group] of grouped) {
+      let parentGroupId: string | null = null;
+      for (const thread of [...group.threads].sort(sortOldestFirst)) {
+        let parentThreadId = thread.parentThreadId;
+        const visited = new Set<string>();
+        while (parentThreadId !== null) {
+          const parentKey = `${thread.environmentId}:${parentThreadId}`;
+          if (visited.has(parentKey)) break;
+          visited.add(parentKey);
+          const candidateGroupId = groupIdByThreadKey.get(parentKey);
+          if (candidateGroupId !== undefined && candidateGroupId !== groupId) {
+            parentGroupId = candidateGroupId;
+            break;
+          }
+          const parent = byKey.get(parentKey);
+          if (!parent) break;
+          parentThreadId = parent.parentThreadId;
+        }
+        if (parentGroupId !== null) break;
+      }
+      parentGroupIdById.set(groupId, parentGroupId);
+    }
+
+    // Corrupt cross-workflow ancestry must not make the group renderer recurse
+    // forever. Break every group edge participating in a cycle, matching the
+    // thread-row cycle handling above.
+    for (const startId of grouped.keys()) {
+      const path: string[] = [];
+      const indexById = new Map<string, number>();
+      let currentId: string | null = startId;
+      while (currentId !== null) {
+        const cycleIndex = indexById.get(currentId);
+        if (cycleIndex !== undefined) {
+          for (const cycleId of path.slice(cycleIndex)) parentGroupIdById.set(cycleId, null);
+          break;
+        }
+        indexById.set(currentId, path.length);
+        path.push(currentId);
+        currentId = parentGroupIdById.get(currentId) ?? null;
+      }
+    }
+
+    const depthByGroupId = new Map<string, number>();
+    const resolveGroupDepth = (groupId: string): number => {
+      const cached = depthByGroupId.get(groupId);
+      if (cached !== undefined) return cached;
+      const parentGroupId = parentGroupIdById.get(groupId) ?? null;
+      const depth = parentGroupId === null ? 0 : resolveGroupDepth(parentGroupId) + 1;
+      depthByGroupId.set(groupId, depth);
+      return depth;
+    };
+
+    const unorderedGroups = [...grouped.entries()].map(([id, group]): WorkflowGroup<TThread> => {
+      const rows = buildGroupRows(group.threads);
+      const statuses = rows.map((row) => resolveWorkflowThreadStatus(row.thread));
+      const activeCount = statuses.filter(workflowStatusIsActive).length;
+      return {
+        id,
+        kind: group.kind,
+        sourceId: group.sourceId,
+        parentGroupId: parentGroupIdById.get(id) ?? null,
+        depth: resolveGroupDepth(id),
+        createdAt: group.threads.reduce(
+          (earliest, thread) =>
+            timestampMs(thread.createdAt) < timestampMs(earliest) ? thread.createdAt : earliest,
+          group.threads[0]?.createdAt ?? owner.createdAt,
+        ),
+        preset:
+          group.threads.find((thread) => thread.workflowPreset != null)?.workflowPreset ??
+          (group.kind === "workflow" ? owner.workflowPreset : null) ??
+          null,
+        rows,
+        activeCount,
+        settledCount: statuses.length - activeCount,
+        isActive: activeCount > 0,
+      };
+    });
+
+    const compareGroups = (left: WorkflowGroup<TThread>, right: WorkflowGroup<TThread>) =>
+      timestampMs(left.createdAt) - timestampMs(right.createdAt) || left.id.localeCompare(right.id);
+    const childrenByParentId = new Map<string, WorkflowGroup<TThread>[]>();
+    for (const group of unorderedGroups) {
+      if (group.parentGroupId === null) continue;
+      const children = childrenByParentId.get(group.parentGroupId);
+      if (children) children.push(group);
+      else childrenByParentId.set(group.parentGroupId, [group]);
+    }
+    for (const children of childrenByParentId.values()) children.sort(compareGroups);
+
+    // Workflow cards follow the generated step tree: a parent run comes first,
+    // followed immediately by its sub-workflows in creation order.
+    const groups: WorkflowGroup<TThread>[] = [];
+    const emittedGroups = new Set<string>();
+    const emitGroup = (group: WorkflowGroup<TThread>) => {
+      if (emittedGroups.has(group.id)) return;
+      emittedGroups.add(group.id);
+      groups.push(group);
+      for (const child of childrenByParentId.get(group.id) ?? []) emitGroup(child);
+    };
+    for (const group of unorderedGroups
+      .filter((candidate) => candidate.parentGroupId === null)
+      .sort(compareGroups)) {
+      emitGroup(group);
+    }
+    for (const group of unorderedGroups.sort(compareGroups)) emitGroup(group);
 
     rootsByThreadKey.set(ownerKey, { root: owner, members, groups });
   }

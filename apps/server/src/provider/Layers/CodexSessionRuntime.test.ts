@@ -470,6 +470,17 @@ describe("workflow_request_user_input handling", () => {
     },
   } as const;
 
+  it("tells Code Mode to expose the dynamic-tool result to the model", () => {
+    NodeAssert.match(
+      WORKFLOW_REQUEST_USER_INPUT_TOOL.description,
+      /complete result.*outer text\(result\) helper/,
+    );
+    NodeAssert.match(
+      WORKFLOW_REQUEST_USER_INPUT_TOOL.description,
+      /contentItems, not result\.content/,
+    );
+  });
+
   it.effect("emits one complete request, waits, and returns every answer", () =>
     Effect.gen(function* () {
       const requested = yield* Deferred.make<ReadonlyArray<unknown>>();

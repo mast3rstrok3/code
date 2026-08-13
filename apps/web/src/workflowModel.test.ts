@@ -116,14 +116,16 @@ describe("buildWorkflowViewModel", () => {
       reviewer,
     ]).rootsByThreadKey.get("env:root")?.groups;
 
-    expect(groups?.map((group) => [group.id, group.preset])).toEqual([
-      ["workflow:dev-review-run", "dev-review"],
-      ["workflow:implementation-run", "implementation"],
+    expect(
+      groups?.map((group) => [group.id, group.preset, group.parentGroupId, group.depth]),
+    ).toEqual([
+      ["workflow:implementation-run", "implementation", null, 0],
+      ["workflow:dev-review-run", "dev-review", "workflow:implementation-run", 1],
     ]);
     expect(groups?.find((group) => group.id === "workflow:dev-review-run")?.rows).toHaveLength(2);
   });
 
-  it("orders groups newest first and rows depth-first with deterministic siblings", () => {
+  it("orders workflow steps oldest first and rows depth-first with deterministic siblings", () => {
     const root = thread("root");
     const older = thread("older", {
       parentThreadId: "root",
@@ -153,11 +155,48 @@ describe("buildWorkflowViewModel", () => {
       newer,
     ]).rootsByThreadKey.get("env:root")?.groups;
 
-    expect(groups?.map((group) => group.sourceId)).toEqual(["newer-run", "older-run"]);
-    expect(groups?.[0]?.rows.map((row) => [row.thread.id, row.depth])).toEqual([
+    expect(groups?.map((group) => group.sourceId)).toEqual(["older-run", "newer-run"]);
+    expect(groups?.[1]?.rows.map((row) => [row.thread.id, row.depth])).toEqual([
       ["newer", 0],
       ["a", 1],
       ["b", 1],
+    ]);
+  });
+
+  it("keeps a nested workflow visible from the thread that initiated the whole tree", () => {
+    const root = thread("root", { workflowPreset: "fast-feature" });
+    const build = thread("build", {
+      parentThreadId: "root",
+      workflowPreset: "fast-feature",
+      workflowRole: "fast-feature-implementer",
+    });
+    const controller = thread("dev-review-controller", {
+      parentThreadId: "build",
+      workflowPreset: "dev-review",
+      workflowRole: "dev-review-orchestrator",
+      workflowContext: { workflowId: "dev-review-run", rootThreadId: "build" },
+    });
+    const reviewer = thread("dev-review-reviewer", {
+      parentThreadId: "dev-review-controller",
+      workflowRole: "dev-review-reviewer",
+      workflowContext: { workflowId: "dev-review-run", rootThreadId: "build" },
+    });
+
+    const model = buildWorkflowViewModel([reviewer, root, controller, build]);
+    const workflow = selectWorkflowRootForThread(model, root);
+
+    expect(selectWorkflowRootForThread(model, reviewer)?.root.id).toBe("root");
+    expect(workflow?.members.map((candidate) => candidate.id).sort()).toEqual([
+      "build",
+      "dev-review-controller",
+      "dev-review-reviewer",
+      "root",
+    ]);
+    expect(
+      workflow?.groups.map((group) => [group.id, group.preset, group.parentGroupId, group.depth]),
+    ).toEqual([
+      ["legacy:build", "fast-feature", null, 0],
+      ["workflow:dev-review-run", "dev-review", "legacy:build", 1],
     ]);
   });
 

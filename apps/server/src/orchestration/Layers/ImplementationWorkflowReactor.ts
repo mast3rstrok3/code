@@ -1002,62 +1002,6 @@ const make = Effect.gen(function* () {
     return blockedRun;
   });
 
-  const warmAppDevStack = Effect.fn("ImplementationWorkflowReactor.warmAppDevStack")(
-    function* (input: {
-      readonly sourceThreadId: ThreadId;
-      readonly run: OrchestrationImplementationRun;
-      readonly displayName: string;
-      readonly createdAt: string;
-    }) {
-      const workflowReadModel = yield* projectionSnapshotQuery.getCommandReadModel();
-      const stackResult = yield* appDevStackManager
-        .autoCreate({
-          worktreePath: input.run.orchestratorWorktreePath,
-          displayName: input.displayName,
-          gitBranch: input.run.orchestratorBranch,
-          workflowId: workflowIdForRun(workflowReadModel, input.run),
-        })
-        .pipe(Effect.result);
-
-      // Implementation continues while provisioning is in flight. Re-read before recording the
-      // result and replace only stack metadata so worker, validation, cancellation, and review
-      // updates that landed concurrently cannot be rolled back by this older snapshot.
-      const afterStack = yield* projectionSnapshotQuery.getCommandReadModel();
-      const latestRun = findRunById(afterStack, input.run.id);
-      if (latestRun === null) return { stackResult, previousStackStatus: null };
-      const previousStackStatus = latestRun.appDevStack.status;
-      yield* updateRun({
-        sourceThreadId: input.sourceThreadId,
-        run: {
-          ...latestRun,
-          appDevStack:
-            stackResult._tag === "Success"
-              ? {
-                  status: appDevStackReadiness(stackResult.success),
-                  stackId: stackResult.success.stack?.id ?? null,
-                  stackStatus: stackResult.success.stack?.status ?? null,
-                  frontendUrl: stackResult.success.frontendUrl,
-                  frontendServiceName: stackResult.success.frontendServiceName,
-                  displayName: stackResult.success.stack?.displayName ?? null,
-                  lastErrorMarkdown: null,
-                  requestedAt: latestRun.appDevStack.requestedAt || input.createdAt,
-                  updatedAt: input.createdAt,
-                }
-              : {
-                  ...latestRun.appDevStack,
-                  status: "failed",
-                  lastErrorMarkdown: errorDetail(stackResult.failure),
-                  requestedAt: latestRun.appDevStack.requestedAt || input.createdAt,
-                  updatedAt: input.createdAt,
-                },
-          updatedAt: latestRun.updatedAt,
-        },
-        createdAt: input.createdAt,
-      });
-      return { stackResult, previousStackStatus };
-    },
-  );
-
   const sourceThreadIdForRun = Effect.fn("ImplementationWorkflowReactor.sourceThreadIdForRun")(
     function* (run: OrchestrationImplementationRun) {
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
@@ -2640,20 +2584,9 @@ const make = Effect.gen(function* () {
       // keeps failing would never exhaust `maxAttempts` and the 30s sweep in
       // `recoverRetryableRuns` would relaunch it forever. Success paths
       // (e.g. `handleFastBuildResult`) clear it once the stage actually passes.
-      const needsAppDevStack = setupRun.appDevStack.status !== "ready";
       const resumedRun: OrchestrationImplementationRun = {
         ...setupRun,
         status: "running",
-        ...(needsAppDevStack
-          ? {
-              appDevStack: {
-                ...setupRun.appDevStack,
-                status: "ensuring" as const,
-                requestedAt: setupRun.appDevStack.requestedAt || input.createdAt,
-                updatedAt: input.createdAt,
-              },
-            }
-          : {}),
         updatedAt: input.createdAt,
       };
       yield* updateRun({
@@ -2662,28 +2595,11 @@ const make = Effect.gen(function* () {
         createdAt: input.createdAt,
       });
 
-      if (!needsAppDevStack) return;
-      const { stackResult, previousStackStatus } = yield* warmAppDevStack({
-        sourceThreadId: input.sourceThreadId,
-        run: resumedRun,
-        displayName: `Fast feature ${setupRun.id}`,
-        createdAt: input.createdAt,
-      });
-      if (stackResult._tag === "Success") return;
-      // Say so on the Build thread, but do not block: Build does not need the stack, and
-      // `startBrowserReview` blocks on `app-dev-stack` if it still cannot come up for Dev Review.
-      // A re-entry that fails again finds the stack already marked failed and stays quiet, so the
-      // notice does not stack up (thread activities are not in the command read model, so the run
-      // is what we can dedupe against).
-      if (previousStackStatus === "failed") return;
-      yield* appendActivity({
-        threadId: setupRun.orchestratorThreadId,
-        tone: "error",
-        kind: "fast-feature.app-dev-stack-failed",
-        summary: "App dev stack failed to start — the build continues; Dev Review retries it",
-        payload: { runId: resumedRun.id, reasonMarkdown: errorDetail(stackResult.failure) },
-        createdAt: input.createdAt,
-      });
+      // Build owns dependency setup in the host worktree. Starting AppDevStack here lets the
+      // container mount anonymous node_modules volumes beneath that same worktree while the host
+      // package manager can still replace those mountpoint directories, leaving the running
+      // container attached to unreachable mounts. `startBrowserReview` already ensures the stack;
+      // defer provisioning to that boundary after Build has committed and stopped mutating deps.
     },
   );
 
@@ -2742,22 +2658,9 @@ const make = Effect.gen(function* () {
         worktreePath: event.payload.run.orchestratorWorktreePath,
       });
 
-      // Workers need only the worktree. Start them before waiting for stack provisioning so the
-      // implementation and its eventual browser environment warm up concurrently.
-      const needsAppDevStack = runningRun.appDevStack.status !== "ready";
-      const launchedRun: OrchestrationImplementationRun = {
-        ...runningRun,
-        ...(needsAppDevStack
-          ? {
-              appDevStack: {
-                ...runningRun.appDevStack,
-                status: "ensuring" as const,
-                requestedAt: runningRun.appDevStack.requestedAt || event.occurredAt,
-                updatedAt: event.occurredAt,
-              },
-            }
-          : {}),
-      };
+      // Workers own dependency setup in the host worktree. AppDevStack is provisioned by
+      // `startBrowserReview` only after integration, when those package-manager writes are done.
+      const launchedRun = runningRun;
 
       yield* updateRun({
         sourceThreadId: event.payload.sourceThreadId,
@@ -2787,14 +2690,6 @@ const make = Effect.gen(function* () {
         },
         createdAt: event.occurredAt,
       });
-      if (needsAppDevStack) {
-        yield* warmAppDevStack({
-          sourceThreadId: event.payload.sourceThreadId,
-          run: launchedRun,
-          displayName: `Implementation ${runningRun.id}`,
-          createdAt: event.occurredAt,
-        });
-      }
     }).pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {

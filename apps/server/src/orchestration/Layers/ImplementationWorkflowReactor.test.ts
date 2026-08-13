@@ -21,7 +21,6 @@ import { type DeepPartial } from "@t3tools/shared/Struct";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import * as Option from "effect/Option";
@@ -1139,11 +1138,7 @@ describe("ImplementationWorkflowReactor", () => {
         ).toHaveLength(0);
         expect(yield* Ref.get(system.createWorktreeInputs)).toHaveLength(1);
         const firstAutoCreateInputs = yield* Ref.get(system.autoCreateInputs);
-        expect(firstAutoCreateInputs).toHaveLength(1);
-        expect(firstAutoCreateInputs[0]?.workflowId).toBe(
-          snapshot.threads.find((thread) => thread.id === run.orchestratorThreadId)?.workflowContext
-            ?.workflowId,
-        );
+        expect(firstAutoCreateInputs).toHaveLength(0);
 
         yield* system.engine.dispatch({
           type: "thread.activity.append",
@@ -1176,10 +1171,8 @@ describe("ImplementationWorkflowReactor", () => {
         expect(
           snapshot.threads.filter((thread) => thread.workflowRole === "implementation-qa-reviewer"),
         ).toHaveLength(1);
-        expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(2);
+        expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(1);
         expect((yield* Ref.get(system.autoCreateInputs)).map((input) => input.workflowId)).toEqual([
-          snapshot.threads.find((thread) => thread.id === run.orchestratorThreadId)?.workflowContext
-            ?.workflowId,
           snapshot.threads.find((thread) => thread.id === run.orchestratorThreadId)?.workflowContext
             ?.workflowId,
         ]);
@@ -1413,9 +1406,7 @@ describe("ImplementationWorkflowReactor", () => {
       (system) =>
         Effect.gen(function* () {
           const run = yield* launchFastFeatureRun(system);
-          expect(run.appDevStack.stackStatus).toBe("starting");
-          // A stack the controller reports as `starting` must not be cached as resolved.
-          expect(run.appDevStack.status).not.toBe("ready");
+          expect(run.appDevStack.status).toBe("not-requested");
 
           const implementer = (yield* system.query.getSnapshot()).threads.find(
             (thread) => thread.workflowRole === "fast-feature-implementer",
@@ -1468,10 +1459,7 @@ describe("ImplementationWorkflowReactor", () => {
       (system) =>
         Effect.gen(function* () {
           const run = yield* launchFastFeatureRun(system);
-          // The controller is happy: stack running, URL resolved, cached as ready. This is the
-          // state that used to skip every check and send reviewer after reviewer at a dead edge.
-          expect(run.appDevStack.status).toBe("ready");
-          expect(run.appDevStack.stackStatus).toBe("running");
+          expect(run.appDevStack.status).toBe("not-requested");
 
           const implementer = (yield* system.query.getSnapshot()).threads.find(
             (thread) => thread.workflowRole === "fast-feature-implementer",
@@ -1945,143 +1933,84 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("hands the plan to Build before the app dev stack finishes provisioning", () =>
-    Effect.gen(function* () {
-      const gate: AutoCreateGate = {
-        entered: yield* Deferred.make<void>(),
-        release: yield* Deferred.make<void>(),
-      };
-      yield* withSystem(
-        (system) =>
-          Effect.gen(function* () {
-            yield* dispatchFastFeatureLaunch(system);
-            const drained = yield* Effect.forkChild(system.reactor.drain);
-            // Resolves the moment the stack starts provisioning; the reactor is parked inside
-            // `autoCreate` for the assertions below.
-            yield* Deferred.await(gate.entered);
+  it.effect("defers the app dev stack until Fast Build finishes", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        yield* dispatchFastFeatureLaunch(system);
+        yield* system.reactor.drain;
 
-            const snapshot = yield* system.query.getSnapshot();
-            const implementer = snapshot.threads.find(
-              (thread) => thread.workflowRole === "fast-feature-implementer",
-            );
-            if (!implementer) throw new Error("Fast feature implementer missing.");
-            expect(implementer.messages.at(-1)?.text).toContain("# Fast checkout");
-            expect(implementer.messages.at(-1)?.role).toBe("user");
-            expect(snapshot.implementationRuns[0]?.appDevStack.status).toBe("ensuring");
-
-            yield* Deferred.succeed(gate.release, undefined);
-            yield* Fiber.join(drained);
-            const settled = yield* system.query.getSnapshot();
-            expect(settled.implementationRuns[0]?.appDevStack.status).toBe("ready");
-          }),
-        { autoCreateGate: gate },
-      );
-    }),
+        const snapshot = yield* system.query.getSnapshot();
+        const implementer = snapshot.threads.find(
+          (thread) => thread.workflowRole === "fast-feature-implementer",
+        );
+        if (!implementer) throw new Error("Fast feature implementer missing.");
+        expect(implementer.messages.at(-1)?.text).toContain("# Fast checkout");
+        expect(implementer.messages.at(-1)?.role).toBe("user");
+        expect(snapshot.implementationRuns[0]?.appDevStack.status).toBe("not-requested");
+        expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(0);
+      }),
+    ),
   );
 
-  it.effect("starts planning-spec workers before the app dev stack finishes provisioning", () =>
-    Effect.gen(function* () {
-      const gate: AutoCreateGate = {
-        entered: yield* Deferred.make<void>(),
-        release: yield* Deferred.make<void>(),
-      };
-      yield* withSystem(
-        (system) =>
-          Effect.gen(function* () {
-            const { spec } = yield* seedPlanning(system);
-            yield* system.engine.dispatch({
-              type: "thread.implementation-run.launch",
-              commandId: commandId("implementation-concurrent-stack-launch"),
-              threadId: sourceThreadId,
-              specId: spec.id,
-              baseBranch: "main",
-              pinnedCommit: "abc123",
-              orchestratorBranch: "implementation/checkout",
-              orchestratorWorktreePath: "/tmp/implementation-reactor.worktrees/checkout",
-              validationCommands: ["vp check", "vp run typecheck"],
-              createdAt: now,
-            });
-            const drained = yield* Effect.forkChild(system.reactor.drain);
-            yield* Deferred.await(gate.entered);
+  it.effect("defers the app dev stack while planning-spec workers run", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { spec } = yield* seedPlanning(system);
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.launch",
+          commandId: commandId("implementation-deferred-stack-launch"),
+          threadId: sourceThreadId,
+          specId: spec.id,
+          baseBranch: "main",
+          pinnedCommit: "abc123",
+          orchestratorBranch: "implementation/checkout",
+          orchestratorWorktreePath: "/tmp/implementation-reactor.worktrees/checkout",
+          validationCommands: ["vp check", "vp run typecheck"],
+          createdAt: now,
+        });
+        yield* system.reactor.drain;
 
-            const snapshot = yield* system.query.getSnapshot();
-            const worker = snapshot.threads.find(
-              (thread) => thread.workflowRole === "implementation-worker",
-            );
-            expect(worker?.messages.at(-1)?.role).toBe("user");
-            expect(snapshot.implementationRuns[0]?.status).toBe("running");
-            expect(snapshot.implementationRuns[0]?.appDevStack.status).toBe("ensuring");
-            const orchestratorThreadId = snapshot.implementationRuns[0]?.orchestratorThreadId;
-            expect((yield* Ref.get(system.autoCreateInputs))[0]?.workflowId).toBe(
-              snapshot.threads.find((thread) => thread.id === orchestratorThreadId)?.workflowContext
-                ?.workflowId,
-            );
-
-            yield* Deferred.succeed(gate.release, undefined);
-            yield* Fiber.join(drained);
-            const settled = yield* system.query.getSnapshot();
-            expect(settled.implementationRuns[0]?.appDevStack.status).toBe("ready");
-          }),
-        { autoCreateGate: gate },
-      );
-    }),
+        const snapshot = yield* system.query.getSnapshot();
+        const worker = snapshot.threads.find(
+          (thread) => thread.workflowRole === "implementation-worker",
+        );
+        expect(worker?.messages.at(-1)?.role).toBe("user");
+        expect(snapshot.implementationRuns[0]?.status).toBe("running");
+        expect(snapshot.implementationRuns[0]?.appDevStack.status).toBe("not-requested");
+        expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(0);
+      }),
+    ),
   );
 
-  it.effect("preserves cancellation that lands while the app dev stack is provisioning", () =>
-    Effect.gen(function* () {
-      const gate: AutoCreateGate = {
-        entered: yield* Deferred.make<void>(),
-        release: yield* Deferred.make<void>(),
-      };
-      yield* withSystem(
-        (system) =>
-          Effect.gen(function* () {
-            const { spec } = yield* seedPlanning(system);
-            yield* system.engine.dispatch({
-              type: "thread.implementation-run.launch",
-              commandId: commandId("implementation-cancel-during-stack-launch"),
-              threadId: sourceThreadId,
-              specId: spec.id,
-              baseBranch: "main",
-              pinnedCommit: "abc123",
-              orchestratorBranch: "implementation/checkout",
-              orchestratorWorktreePath: "/tmp/implementation-reactor.worktrees/checkout",
-              validationCommands: ["vp check", "vp run typecheck"],
-              createdAt: now,
-            });
-            const drained = yield* Effect.forkChild(system.reactor.drain);
-            yield* Deferred.await(gate.entered);
-            const running = (yield* system.query.getSnapshot()).implementationRuns[0];
-            if (!running) throw new Error("Implementation run missing.");
+  it.effect("does not provision an app dev stack for a run canceled during implementation", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.cancel",
+          commandId: commandId("implementation-cancel-before-review"),
+          threadId: sourceThreadId,
+          runId: run.id,
+          reason: "Stop before review.",
+          createdAt: "2026-01-01T00:00:01.000Z",
+        });
+        yield* system.reactor.drain;
 
-            yield* system.engine.dispatch({
-              type: "thread.implementation-run.cancel",
-              commandId: commandId("implementation-cancel-during-stack"),
-              threadId: sourceThreadId,
-              runId: running.id,
-              reason: "Stop while provisioning.",
-              createdAt: "2026-01-01T00:00:01.000Z",
-            });
-            yield* Deferred.succeed(gate.release, undefined);
-            yield* Fiber.join(drained);
-
-            const settled = (yield* system.query.getSnapshot()).implementationRuns[0];
-            expect(settled?.status).toBe("canceled");
-            expect(settled?.appDevStack.status).toBe("ready");
-            expect(settled?.updatedAt).toBe("2026-01-01T00:00:01.000Z");
-          }),
-        { autoCreateGate: gate },
-      );
-    }),
+        const settled = (yield* system.query.getSnapshot()).implementationRuns[0];
+        expect(settled?.status).toBe("canceled");
+        expect(settled?.appDevStack.status).toBe("not-requested");
+        expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(0);
+      }),
+    ),
   );
 
-  it.effect("reports a failed app dev stack on Build without blocking the run", () =>
+  it.effect("does not report app dev stack failures before Build succeeds", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
           const run = yield* launchFastFeatureRun(system);
           expect(run.status).toBe("running");
-          expect(run.appDevStack.status).toBe("failed");
+          expect(run.appDevStack.status).toBe("not-requested");
 
           let snapshot = yield* system.query.getSnapshot();
           const implementer = snapshot.threads.find(
@@ -2089,14 +2018,13 @@ describe("ImplementationWorkflowReactor", () => {
           );
           if (!implementer) throw new Error("Fast feature implementer missing.");
           expect(implementer.messages.at(-1)?.text).toContain("# Fast checkout");
-          const failures = implementer.activities.filter(
-            (activity) => activity.kind === "fast-feature.app-dev-stack-failed",
-          );
-          expect(failures).toHaveLength(1);
-          expect(failures[0]?.tone).toBe("error");
+          expect(
+            implementer.activities.filter(
+              (activity) => activity.kind === "fast-feature.app-dev-stack-failed",
+            ),
+          ).toHaveLength(0);
 
-          // Startup recovery must leave a run that already reached Build alone — re-driving it
-          // would provision a second stack and repeat the notice.
+          // Startup recovery must leave a run that already reached Build alone.
           yield* system.reactor.start();
           yield* system.reactor.drain;
           snapshot = yield* system.query.getSnapshot();
@@ -2106,8 +2034,8 @@ describe("ImplementationWorkflowReactor", () => {
               ?.activities.filter(
                 (activity) => activity.kind === "fast-feature.app-dev-stack-failed",
               ),
-          ).toHaveLength(1);
-          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(1);
+          ).toHaveLength(0);
+          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(0);
         }),
       { failAutoCreate: true },
     ),
@@ -2200,16 +2128,14 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("refreshes a stack with no URL before starting Browser Dev Review", () =>
+  it.effect("resolves the stack URL only after Build before starting Browser Dev Review", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
           const run = yield* launchFastFeatureRun(system);
           let snapshot = yield* system.query.getSnapshot();
-          // A stack with no frontend URL is not serving, so it is not `ready` — it stays
-          // `ensuring` and gets re-provisioned before Dev Review.
           expect(snapshot.implementationRuns[0]?.appDevStack).toMatchObject({
-            status: "ensuring",
+            status: "not-requested",
             frontendUrl: null,
           });
 
@@ -2245,7 +2171,7 @@ describe("ImplementationWorkflowReactor", () => {
           const reviewThread = snapshot.threads.find(
             (thread) => thread.workflowRole === "implementation-qa-reviewer",
           );
-          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(2);
+          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(1);
           expect(snapshot.implementationRuns[0]?.appDevStack.frontendUrl).toBe(
             "https://fast-checkout-dev.nightingale-ai.com",
           );
@@ -2260,7 +2186,7 @@ describe("ImplementationWorkflowReactor", () => {
           );
         }),
       {
-        autoCreateFrontendUrls: [null, "https://fast-checkout-dev.nightingale-ai.com"],
+        autoCreateFrontendUrls: ["https://fast-checkout-dev.nightingale-ai.com"],
       },
     ),
   );
@@ -2312,7 +2238,7 @@ describe("ImplementationWorkflowReactor", () => {
           );
           expect(repair?.messages.at(-1)?.text).toContain("Orchestrated QA Repair Result");
           expect(repair?.messages.at(-1)?.text).toContain("Programmatic AppDevStack diagnostics");
-          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(2);
+          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(1);
         }),
       { failAutoCreate: true },
     ),
@@ -2913,7 +2839,7 @@ describe("ImplementationWorkflowReactor", () => {
         snapshot = yield* system.query.getSnapshot();
         const reviewingRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
         const autoCreateInputs = yield* Ref.get(system.autoCreateInputs);
-        expect(autoCreateInputs).toHaveLength(2);
+        expect(autoCreateInputs).toHaveLength(1);
         expect(reviewingRun?.status).toBe("qa-reviewing");
         expect(reviewingRun?.devReviewIds).toHaveLength(1);
         const reviewThread = snapshot.threads.find(

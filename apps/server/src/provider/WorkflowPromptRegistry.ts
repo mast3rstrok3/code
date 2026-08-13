@@ -36,6 +36,17 @@ export const WORKFLOW_PROMPT_IDS = {
 
 const WORKFLOW_AGENT_COMMUNICATIONS_PROMPT = WORKFLOW_SUBAGENT_INSTRUCTIONS_PROMPT;
 
+const APP_DEV_STACK_ASSOCIATED_DOC_CONTENT = `# AppDevStack
+
+An AppDevStack is T3's Kubernetes-backed development environment for one workflow worktree: service pods mount that worktree at \`/app\`, while dependency paths such as \`node_modules\` can be separate pod volumes. Implementation workflows provision it after integration and before Browser Dev Review (prototype workflows may create one on demand); when a launch provides a Feature URL or stack diagnostics, treat them as authoritative, never start a competing dev server, and do not run a host dependency install while the stack is active because replacing a mounted path can disconnect the pod's dependency volume.`;
+
+const APP_DEV_STACK_ASSOCIATED_DOC = {
+  id: "app-dev-stack",
+  title: "AppDevStack",
+  path: "app-dev-stack.md",
+  content: APP_DEV_STACK_ASSOCIATED_DOC_CONTENT,
+} as const;
+
 // Keep this shared block verbatim; workflow-specific behavior belongs in trailing adapters.
 const GRILLING_BLUEPRINT = `---
 name: grilling
@@ -60,9 +71,14 @@ Finding _facts_ is your job, never the user's. When a frontier question needs a 
 
 The session is done when the frontier is empty: every branch of the design tree visited, nothing left silently assumed. Do not act on it until the user confirms you have reached a shared understanding.`;
 
+export const WORKFLOW_REQUEST_USER_INPUT_CODE_MODE_FORWARDING =
+  "When Code Mode calls workflow_request_user_input, keep its returned answers visible to the model by passing the complete result to the outer text(result) helper, for example: const result = await tools.workflow_request_user_input(...); text(result). Dynamic tool results use contentItems, not result.content; never discard or selectively read the returned value.";
+
 const STRUCTURED_GRILL_QUESTION_ADAPTER = `## T3 structured-question adapter
 
 Use T3's \`workflow_request_user_input\` tool for every interview round and for the final shared-understanding confirmation. Do not duplicate or summarize structured questions, choices, or recommendations in Markdown before or after the tool call.
+
+${WORKFLOW_REQUEST_USER_INPUT_CODE_MODE_FORWARDING}
 
 Recompute the currently unblocked frontier before every round. When it contains one through seven questions, submit the entire frontier at its natural size. Seven is a maximum, never a target: do not aim for three, seven, or any other fixed batch size, and do not pad a round. If more than seven questions are independently ready, send the first seven in stable design-tree order and continue with the remainder after those answers resolve. Never put questions in the same call when one answer depends on another question in that call.
 
@@ -161,6 +177,8 @@ A prototype is **throwaway code that answers a question**. The question decides 
 ## Full fidelity on the real application
 
 T3 prototypes are built on the real application, not as low-fidelity stand-ins. Work in a dedicated prototype worktree and branch created from the current branch, and start the app dev stack for that worktree when none is running — the running app on the prototype branch *is* the prototype. Do not build toy terminal apps, mock pages, or sandboxes outside the repository: a branch of the real application answers the same question with more truth, and the app dev stack makes it just as easy to run and share.
+
+Load \`app-dev-stack.md\` before creating or diagnosing the prototype stack.
 
 ## Pick a branch
 
@@ -1173,7 +1191,7 @@ This stage orchestrates the upstream implement loop across sub-threads instead o
 
 - Load the durable Spec with workflow_spec_get and the tickets with workflow_tickets_list and workflow_ticket_get. The Spec is the node that binds the tickets and later dev reviews together.
 - The run works in a dedicated worktree and branch created from the branch the user selected, and the finished change request is filed back into that branch.
-- The app dev stack for this worktree is checked at the start of the run and, when absent, started in parallel with implementation.
+- The app dev stack is provisioned after integration and before Browser Dev Review, once implementation agents have finished dependency setup. Load \`app-dev-stack.md\` when planning or diagnosing that boundary.
 - Tickets are implemented dependency-aware by TDD worker sub-threads (the TDD Implementation skill), each in its own worktree and branch. A dependent ticket's worker branches from its blocker's worker branch so chained tickets build on each other, and every worker commits to its own branch.
 - Worker branches are merged programmatically back into the orchestrator worktree; the Merge Gate stage always runs once for the integrated HEAD, whether integration was clean or required conflict resolution.
 - A Browser Dev Review finding launches a fresh TDD repair thread on the already-integrated orchestrator worktree. After that repair commits and passes focused checks, start the next Browser Dev Review directly; do not rerun the Merge Gate between review cycles.
@@ -1459,7 +1477,7 @@ When this prompt is run by an automatic implementation-worker thread, do not ask
 
 ## Orchestrated QA Repair Result
 
-When the launch message identifies an AppDevStack or Browser Dev Review failure, this is a QA repair thread rather than a planning-ticket worker. The programmatic diagnostics, original Spec/tickets or proposed plan, and the failed review are the pre-agreed seams. Do not ask the user to confirm them. Work red then green in the orchestrator worktree, run focused validation or a documented sub-minute fast check, commit the repair, leave the worktree clean, and finish with exactly one fenced JSON block using this shape. The final gate after Code Review owns complete validation on the new HEAD; do not run launch-level complete validation commands here.
+When the launch message identifies an AppDevStack or Browser Dev Review failure, this is a QA repair thread rather than a planning-ticket worker. Load \`app-dev-stack.md\` before changing dependency or runtime setup. The programmatic diagnostics, original Spec/tickets or proposed plan, and the failed review are the pre-agreed seams. Do not ask the user to confirm them. Work red then green in the orchestrator worktree, run focused validation or a documented sub-minute fast check, commit the repair, leave the worktree clean, and finish with exactly one fenced JSON block using this shape. The final gate after Code Review owns complete validation on the new HEAD; do not run launch-level complete validation commands here.
 
 \`\`\`json
 {
@@ -1510,6 +1528,8 @@ const IMPLEMENTATION_BROWSER_DEV_REVIEW_PROMPT = `<collaboration_mode># Browser 
 
 Exercise the supplied preview target from the selected worktree. Verify the relevant UI flows in-browser, capture concrete failures with reproduction steps, and create durable Dev Review findings against the launch brief. This review may run standalone or as a nested stage of Implementation.
 
+If the preview is unavailable, stuck on startup recovery, or has dependency/runtime failures, load \`app-dev-stack.md\` before diagnosing it.
+
 This thread is already the Browser Dev Review agent. Use the linked preview_* and dev_review_* tools directly. Never delegate to or launch another Browser Dev Review.
 
 When this Browser Dev Review is linked to a durable Dev Review record:
@@ -1533,6 +1553,8 @@ Use only the preview_* tools in feedback mode and preview_* plus dev_review_* to
 const IMPLEMENTATION_FIX_PROMPT = `<collaboration_mode># Implementation Workflow: Fix
 
 Fix the Browser Dev Review, integration-gate, final-gate, or code-review failures in the orchestrator worktree. Do not ask the user questions. Make the smallest reliable change, run focused validation or a documented sub-minute fast check, commit the repair, and report whether the run can continue. Do not run launch-level complete validation commands. The final gate after Code Review owns complete validation on the new HEAD.
+
+When the failure involves an AppDevStack, Feature URL, or preview runtime, load \`app-dev-stack.md\` before changing dependency or runtime setup.
 
 When ready, finish with exactly one fenced JSON block using this shape:
 
@@ -1830,6 +1852,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     description: "Builds throwaway logic or UI artifacts to answer one design question.",
     promptText: PROTOTYPE_PROMPT,
     associatedDocs: [
+      APP_DEV_STACK_ASSOCIATED_DOC,
       {
         id: "prototype-logic",
         title: "Logic Prototype",
@@ -1947,6 +1970,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     title: "1. Orchestrator Start",
     description: "Plans a durable implementation orchestration run from a Spec.",
     promptText: IMPLEMENTATION_ORCHESTRATOR_PROMPT,
+    associatedDocs: [APP_DEV_STACK_ASSOCIATED_DOC],
   },
   {
     id: WORKFLOW_PROMPT_IDS.implementationTddCodex,
@@ -1959,6 +1983,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
       "Implements planning tickets with a red-green-refactor loop and focused validation.",
     promptText: IMPLEMENTATION_TDD_PROMPT,
     associatedDocs: [
+      APP_DEV_STACK_ASSOCIATED_DOC,
       {
         id: "tdd-mocking",
         title: "When to Mock",
@@ -1999,6 +2024,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     description: "Tests a preview target and creates concrete durable Dev Review findings.",
     promptText: IMPLEMENTATION_BROWSER_DEV_REVIEW_PROMPT,
     associatedDocs: [
+      APP_DEV_STACK_ASSOCIATED_DOC,
       {
         id: "preview-browser-qa",
         path: "preview-browser-qa.md",
@@ -2016,6 +2042,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     title: "5. Fix",
     description: "Fixes merge-gate and code-review failures before rerunning validation.",
     promptText: IMPLEMENTATION_FIX_PROMPT,
+    associatedDocs: [APP_DEV_STACK_ASSOCIATED_DOC],
   },
   {
     id: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,

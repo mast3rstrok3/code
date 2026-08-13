@@ -17,6 +17,7 @@ import {
 
 import * as ServerConfig from "../config.ts";
 import { ProjectionProjectRepository } from "../persistence/Services/ProjectionProjects.ts";
+import { ProjectionThreadRepository } from "../persistence/Services/ProjectionThreads.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 
@@ -39,6 +40,7 @@ export const make = Effect.gen(function* () {
   const vcsRegistry = yield* VcsDriverRegistry.VcsDriverRegistry;
   const git = yield* GitVcsDriver.GitVcsDriver;
   const projectRepository = yield* ProjectionProjectRepository;
+  const threadRepository = yield* ProjectionThreadRepository;
 
   const canonicalizePath = (value: string) => {
     const resolvedPath = path.resolve(value);
@@ -89,12 +91,46 @@ export const make = Effect.gen(function* () {
           }),
       ),
     );
+    const activeProjects = projects.filter((project) => project.deletedAt === null);
     const registeredRoots = yield* Effect.forEach(
-      projects.filter((project) => project.deletedAt === null),
+      activeProjects,
       (project) => canonicalizePath(project.workspaceRoot),
       { concurrency: "unbounded" },
     );
     if (registeredRoots.some((root) => isWithinRoot(candidate, root))) {
+      return;
+    }
+
+    const threadsByProject = yield* Effect.forEach(
+      activeProjects,
+      (project) => threadRepository.listByProjectId({ projectId: project.projectId }),
+      { concurrency: "unbounded" },
+    ).pipe(
+      Effect.mapError(
+        (cause) =>
+          new VcsRepositoryDetectionError({
+            operation,
+            cwd,
+            detail: "Failed to load registered thread worktrees while validating the review path.",
+            cause,
+          }),
+      ),
+    );
+    const registeredWorktreePaths = Array.from(
+      new Set(
+        threadsByProject
+          .flat()
+          .flatMap((thread) =>
+            thread.deletedAt === null && thread.worktreePath !== null ? [thread.worktreePath] : [],
+          ),
+      ),
+    );
+    const registeredWorktreeRoots = yield* Effect.forEach(
+      registeredWorktreePaths,
+      canonicalizePath,
+      { concurrency: "unbounded" },
+    );
+    if (registeredWorktreeRoots.some((root) => isWithinRoot(candidate, root))) {
       return;
     }
 
