@@ -1954,6 +1954,7 @@ function ChatViewContent(props: ChatViewProps) {
       activeThread !== undefined &&
       activeProject !== null &&
       (activeRightPanelKind === "review" ||
+        activeRightPanelKind === "workflows" ||
         (activeRightPanelKind === "plan" && activeThread?.workflowContext != null))
       ? reviewEnvironment.workflowArtifacts({
           environmentId: activeThread.environmentId,
@@ -7015,7 +7016,11 @@ function ChatViewContent(props: ChatViewProps) {
         workflow={activeWorkflowNavigation}
         activeThreadKey={activeThreadKey}
         focusedWorkflowId={focusedWorkflowId}
+        devReviewWorkflowRuns={displayedWorkflowArtifacts?.devReviewWorkflowRuns ?? []}
         onOpenThread={(thread) => openWorkflowThread(thread.id)}
+        onOpenDevReview={() => {
+          useRightPanelStore.getState().open(activeThreadRef, "review");
+        }}
         onCopyWorkflowLink={copyWorkflowLink}
       />
     ) : (activeRightPanelSurface?.kind === "files" || activeRightPanelSurface?.kind === "file") &&

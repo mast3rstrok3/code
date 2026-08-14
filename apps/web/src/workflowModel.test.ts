@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   buildWorkflowViewModel,
+  buildWorkflowTimeline,
   resolveWorkflowLifecycle,
   resolveWorkflowRollupStatus,
   resolveWorkflowThreadStatus,
@@ -199,6 +200,54 @@ describe("buildWorkflowViewModel", () => {
       ["newer", 0],
       ["a", 1],
       ["b", 1],
+    ]);
+  });
+
+  it("interleaves nested workflows with parent steps by creation time", () => {
+    const root = thread("root", { workflowPreset: "fast-feature" });
+    const build = thread("build", {
+      parentThreadId: "root",
+      workflowRole: "fast-feature-implementer",
+      workflowContext: { workflowId: "fast-feature-run", rootThreadId: "root" },
+      createdAt: "2026-01-01T00:01:00.000Z",
+    });
+    const controller = thread("dev-review-controller", {
+      parentThreadId: "build",
+      workflowRole: "dev-review-orchestrator",
+      workflowPreset: "dev-review",
+      workflowContext: {
+        workflowId: "dev-review-run",
+        parentWorkflowId: "fast-feature-run",
+        rootThreadId: "root",
+      },
+      createdAt: "2026-01-01T00:02:00.000Z",
+    });
+    const codeReview = thread("code-review", {
+      parentThreadId: "build",
+      workflowRole: "implementation-code-reviewer",
+      workflowContext: { workflowId: "fast-feature-run", rootThreadId: "root" },
+      createdAt: "2026-01-01T00:03:00.000Z",
+    });
+    const finalValidation = thread("final-validation", {
+      parentThreadId: "build",
+      workflowRole: "implementation-validator",
+      workflowContext: { workflowId: "fast-feature-run", rootThreadId: "root" },
+      createdAt: "2026-01-01T00:04:00.000Z",
+    });
+    const groups = buildWorkflowViewModel([
+      finalValidation,
+      controller,
+      root,
+      codeReview,
+      build,
+    ]).rootsByThreadKey.get("env:root")?.groups;
+    const fastFeature = groups?.find((group) => group.sourceId === "fast-feature-run");
+
+    expect(fastFeature && groups ? buildWorkflowTimeline(fastFeature, groups) : []).toMatchObject([
+      { kind: "thread", row: { thread: { id: "build" } } },
+      { kind: "workflow", group: { sourceId: "dev-review-run" } },
+      { kind: "thread", row: { thread: { id: "code-review" } } },
+      { kind: "thread", row: { thread: { id: "final-validation" } } },
     ]);
   });
 

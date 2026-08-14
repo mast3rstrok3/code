@@ -43,6 +43,19 @@ export function devReviewRunContainsThread(run: DevReviewWorkflowRun, threadId: 
   );
 }
 
+export function selectDevReviewRunsForPanel(input: {
+  readonly runs: readonly DevReviewWorkflowRun[];
+  readonly openedThreadId: ThreadId;
+  readonly workflowScoped: boolean;
+}): readonly DevReviewWorkflowRun[] {
+  return input.runs
+    .filter((run) => input.workflowScoped || devReviewRunContainsThread(run, input.openedThreadId))
+    .toSorted(
+      (left, right) =>
+        right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id),
+    );
+}
+
 export function devReviewRunStatusLabel(run: DevReviewWorkflowRun): string {
   if (run.status !== "running") return run.outcome ?? run.status;
   const cycle = run.cycles.at(-1)?.cycleNumber ?? Math.min(run.attemptsUsed + 1, run.cycleBudget);

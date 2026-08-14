@@ -14,6 +14,7 @@ import {
   devReviewRunStatusLabel,
   isValidDevReviewWorkflowLaunch,
   selectActiveDevReviewRecord,
+  selectDevReviewRunsForPanel,
   selectLatestDevReviewControllerRun,
 } from "./DevReviewPanel.logic";
 
@@ -112,6 +113,32 @@ describe("Dev Review workflow panel logic", () => {
     expect(selectLatestDevReviewControllerRun([older, unrelated, newer], threadId)?.id).toBe(
       newer.id,
     );
+  });
+
+  it("shows every run from a workflow-scoped artifact response", () => {
+    const older = makeDevReviewWorkflowRun();
+    const newer = {
+      ...older,
+      id: DevReviewWorkflowRunId.make("dev-review-workflow-newer"),
+      targetThreadId: ThreadId.make("thread-other-target"),
+      controllerThreadId: ThreadId.make("thread-other-controller"),
+      createdAt: "2026-08-11T00:02:00.000Z",
+    };
+
+    expect(
+      selectDevReviewRunsForPanel({
+        runs: [older, newer],
+        openedThreadId: ThreadId.make("workflow-root"),
+        workflowScoped: true,
+      }).map((run) => run.id),
+    ).toEqual([newer.id, older.id]);
+    expect(
+      selectDevReviewRunsForPanel({
+        runs: [older, newer],
+        openedThreadId: older.targetThreadId,
+        workflowScoped: false,
+      }).map((run) => run.id),
+    ).toEqual([older.id]);
   });
 
   it("summarizes a launch failure without exposing its stack trace", () => {

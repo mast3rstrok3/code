@@ -73,6 +73,20 @@ export interface WorkflowRoot<TThread extends WorkflowModelThread> {
   readonly groups: readonly WorkflowGroup<TThread>[];
 }
 
+export type WorkflowTimelineEntry<TThread extends WorkflowModelThread> =
+  | {
+      readonly kind: "thread";
+      readonly id: string;
+      readonly createdAt: string;
+      readonly row: WorkflowTreeRow<TThread>;
+    }
+  | {
+      readonly kind: "workflow";
+      readonly id: string;
+      readonly createdAt: string;
+      readonly group: WorkflowGroup<TThread>;
+    };
+
 export interface WorkflowViewModel<TThread extends WorkflowModelThread> {
   readonly ownerThreadKeyByThreadKey: ReadonlyMap<string, string>;
   readonly rootsByThreadKey: ReadonlyMap<string, WorkflowRoot<TThread>>;
@@ -86,6 +100,35 @@ export function workflowThreadKey(thread: Pick<WorkflowModelThread, "environment
 function timestampMs(value: string): number {
   const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+export function buildWorkflowTimeline<TThread extends WorkflowModelThread>(
+  group: WorkflowGroup<TThread>,
+  groups: readonly WorkflowGroup<TThread>[],
+): readonly WorkflowTimelineEntry<TThread>[] {
+  return [
+    ...group.rows.map(
+      (row): WorkflowTimelineEntry<TThread> => ({
+        kind: "thread",
+        id: workflowThreadKey(row.thread),
+        createdAt: row.thread.createdAt,
+        row,
+      }),
+    ),
+    ...groups
+      .filter((candidate) => candidate.parentGroupId === group.id)
+      .map(
+        (child): WorkflowTimelineEntry<TThread> => ({
+          kind: "workflow",
+          id: child.id,
+          createdAt: child.createdAt,
+          group: child,
+        }),
+      ),
+  ].toSorted(
+    (left, right) =>
+      timestampMs(left.createdAt) - timestampMs(right.createdAt) || left.id.localeCompare(right.id),
+  );
 }
 
 export function resolveWorkflowThreadStatus(thread: WorkflowModelThread): WorkflowThreadStatus {

@@ -1,10 +1,19 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
+import type { DevReviewWorkflowRun } from "@t3tools/contracts";
 import { WORKFLOW_PRESET_DEFINITION_BY_ID } from "@t3tools/shared/workflowPresets";
-import { Archive, ChevronDown, ChevronRight, Copy, GitFork } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Archive, ChevronDown, ChevronRight, Copy, Eye, GitFork } from "lucide-react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type Dispatch,
+  type RefObject,
+  type SetStateAction,
+} from "react";
 
 import { cn } from "~/lib/utils";
 import {
+  buildWorkflowTimeline,
   resolveWorkflowThreadStatus,
   workflowStatusIsActive,
   workflowThreadKey,
@@ -139,6 +148,7 @@ function groupEndedAt(group: WorkflowGroup<EnvironmentThreadShell>): string | nu
 
 function ThreadRow(props: {
   readonly row: WorkflowGroup<EnvironmentThreadShell>["rows"][number];
+  readonly stepNumber: number;
   readonly activeThreadKey: string | null;
   readonly onOpenThread: (thread: EnvironmentThreadShell) => void;
 }) {
@@ -149,7 +159,15 @@ function ThreadRow(props: {
   const provider = row.thread.session?.providerInstanceId ?? row.thread.modelSelection.instanceId;
   const model = row.thread.modelSelection.model;
   const active = workflowThreadKey(row.thread) === props.activeThreadKey;
-  const visualDepth = Math.min(row.depth, 4);
+  const visualDepth = Math.min(
+    row.thread.workflowRole === "implementation-code-reviewer" ||
+      row.thread.workflowRole === "implementation-validator" ||
+      row.thread.workflowRole === "implementation-qa-reviewer" ||
+      row.thread.workflowRole === "implementation-fixer"
+      ? 0
+      : row.depth,
+    4,
+  );
 
   return (
     <button
@@ -176,6 +194,8 @@ function ThreadRow(props: {
           <span className={cn("shrink-0 text-[11px]", visual.textClass)}>{visual.label}</span>
         </span>
         <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+          <span className="shrink-0">Step {props.stepNumber}</span>
+          <span aria-hidden>·</span>
           <span className="shrink-0">{role}</span>
           <span aria-hidden>·</span>
           <span className="min-w-0 truncate">
@@ -193,11 +213,181 @@ function ThreadRow(props: {
   );
 }
 
+function devReviewRunPresentation(run: DevReviewWorkflowRun | null): {
+  readonly status: WorkflowThreadStatus;
+  readonly label: string | null;
+} {
+  if (run === null) return { status: "completed", label: null };
+  switch (run.status) {
+    case "running":
+      return { status: "working", label: "Running" };
+    case "passed":
+      return { status: "completed", label: "Passed" };
+    case "blocked":
+      return { status: "failed", label: "Blocked" };
+    case "exhausted":
+      return { status: "failed", label: "Exhausted" };
+    case "canceled":
+      return { status: "stopped", label: "Canceled" };
+  }
+}
+
+function WorkflowGroupCard(props: {
+  readonly group: WorkflowGroup<EnvironmentThreadShell>;
+  readonly groups: readonly WorkflowGroup<EnvironmentThreadShell>[];
+  readonly expandedById: Readonly<Record<string, boolean>>;
+  readonly setExpandedById: Dispatch<SetStateAction<Record<string, boolean>>>;
+  readonly focusedWorkflowId: string | null;
+  readonly focusedGroupRef: RefObject<HTMLElement | null>;
+  readonly activeThreadKey: string | null;
+  readonly devReviewWorkflowRuns: readonly DevReviewWorkflowRun[];
+  readonly onOpenThread: (thread: EnvironmentThreadShell) => void;
+  readonly onOpenDevReview: () => void;
+  readonly onCopyWorkflowLink: (workflowId: string) => void;
+  readonly nested?: boolean;
+  readonly stepNumber?: number;
+}) {
+  const { group } = props;
+  const expanded = props.expandedById[group.id] ?? group.isActive;
+  const focused = group.kind === "workflow" && group.sourceId === props.focusedWorkflowId;
+  const linkedDevReviewRun =
+    group.preset === "dev-review"
+      ? (props.devReviewWorkflowRuns.find((run) => run.id === group.sourceId) ?? null)
+      : null;
+  const runPresentation = devReviewRunPresentation(linkedDevReviewRun);
+  const status = linkedDevReviewRun === null ? groupStatus(group) : runPresentation.status;
+  const visual = STATUS_VISUALS[status];
+  const timeline = buildWorkflowTimeline(group, props.groups);
+
+  return (
+    <div className={cn("relative", props.nested && "ml-3 my-1.5")}>
+      {props.nested ? (
+        <span
+          aria-hidden
+          className="absolute -left-2.5 top-0 h-6 w-2.5 rounded-bl-md border-b border-l border-border/70"
+        />
+      ) : null}
+      <section
+        ref={focused ? props.focusedGroupRef : undefined}
+        data-workflow-group={group.id}
+        data-workflow-id={group.kind === "workflow" ? group.sourceId : undefined}
+        data-workflow-depth={group.depth}
+        className={cn(
+          "overflow-hidden rounded-lg border border-border/80 bg-card",
+          focused && "border-primary/60 ring-2 ring-primary/20",
+        )}
+      >
+        <div className="flex items-start hover:bg-accent/40">
+          <button
+            type="button"
+            aria-expanded={expanded}
+            onClick={() =>
+              props.setExpandedById((current) => ({ ...current, [group.id]: !expanded }))
+            }
+            className="cursor-pointer flex min-w-0 flex-1 items-start gap-2 p-3 text-left"
+          >
+            {expanded ? (
+              <ChevronDown className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+            ) : (
+              <ChevronRight className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+            )}
+            <span className="min-w-0 flex-1">
+              <span className="flex items-center gap-2">
+                <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                  {groupTitle(group)}
+                </span>
+                <span className={cn("text-[11px]", visual.textClass)}>
+                  {runPresentation.label ?? visual.label}
+                </span>
+              </span>
+              <span className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[11px] text-muted-foreground">
+                {props.stepNumber !== undefined ? (
+                  <>
+                    <span>Step {props.stepNumber}</span>
+                    <span aria-hidden>·</span>
+                  </>
+                ) : null}
+                {group.depth > 0 ? (
+                  <>
+                    <span>Sub-workflow</span>
+                    <span aria-hidden>·</span>
+                  </>
+                ) : null}
+                {group.kind === "workflow" ? (
+                  <>
+                    <span className="font-mono" title={group.sourceId}>
+                      ID {group.sourceId.slice(0, 8)}
+                    </span>
+                    <span aria-hidden>·</span>
+                  </>
+                ) : null}
+                <span>{group.activeCount} active</span>
+                <span aria-hidden>·</span>
+                <span>{group.settledCount} settled</span>
+                <span aria-hidden>·</span>
+                <Elapsed startedAt={group.createdAt} endedAt={groupEndedAt(group)} />
+              </span>
+            </span>
+          </button>
+          {group.preset === "dev-review" ? (
+            <button
+              type="button"
+              aria-label="View Dev Review results"
+              title="View Dev Review results"
+              onClick={props.onOpenDevReview}
+              className="cursor-pointer mt-2 flex items-center gap-1 rounded-md px-2 py-1.5 text-[11px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+            >
+              <Eye className="size-3.5" aria-hidden />
+              Results
+            </button>
+          ) : null}
+          {group.kind === "workflow" ? (
+            <button
+              type="button"
+              aria-label={`Copy link to ${groupTitle(group)} workflow`}
+              title="Copy workflow link"
+              onClick={() => props.onCopyWorkflowLink(group.sourceId)}
+              className="cursor-pointer m-2 rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+            >
+              <Copy className="size-3.5" aria-hidden />
+            </button>
+          ) : null}
+        </div>
+        {expanded ? (
+          <div className="border-t border-border/70 p-1">
+            {timeline.map((entry, index) =>
+              entry.kind === "thread" ? (
+                <ThreadRow
+                  key={entry.id}
+                  row={entry.row}
+                  stepNumber={index + 1}
+                  activeThreadKey={props.activeThreadKey}
+                  onOpenThread={props.onOpenThread}
+                />
+              ) : (
+                <WorkflowGroupCard
+                  key={entry.id}
+                  {...props}
+                  group={entry.group}
+                  nested
+                  stepNumber={index + 1}
+                />
+              ),
+            )}
+          </div>
+        ) : null}
+      </section>
+    </div>
+  );
+}
+
 export function WorkflowsPanel(props: {
   readonly workflow: WorkflowRoot<EnvironmentThreadShell> | null;
   readonly activeThreadKey: string | null;
   readonly focusedWorkflowId: string | null;
+  readonly devReviewWorkflowRuns: readonly DevReviewWorkflowRun[];
   readonly onOpenThread: (thread: EnvironmentThreadShell) => void;
+  readonly onOpenDevReview: () => void;
   readonly onCopyWorkflowLink: (workflowId: string) => void;
 }) {
   const groups = props.workflow?.groups ?? [];
@@ -212,7 +402,15 @@ export function WorkflowsPanel(props: {
       (group) => group.kind === "workflow" && group.sourceId === props.focusedWorkflowId,
     );
     if (!focusedGroup) return;
-    setExpandedById((current) => ({ ...current, [focusedGroup.id]: true }));
+    const groupById = new Map(groups.map((group) => [group.id, group] as const));
+    const expandedAncestors: Record<string, boolean> = {};
+    let currentGroup: WorkflowGroup<EnvironmentThreadShell> | undefined = focusedGroup;
+    while (currentGroup) {
+      expandedAncestors[currentGroup.id] = true;
+      currentGroup =
+        currentGroup.parentGroupId === null ? undefined : groupById.get(currentGroup.parentGroupId);
+    }
+    setExpandedById((current) => ({ ...current, ...expandedAncestors }));
     const frame = window.requestAnimationFrame(() => {
       focusedGroupRef.current?.scrollIntoView({ block: "nearest" });
     });
@@ -249,108 +447,24 @@ export function WorkflowsPanel(props: {
         </button>
 
         <div className="space-y-2">
-          {groups.map((group) => {
-            const expanded = expandedById[group.id] ?? group.isActive;
-            const focused = group.kind === "workflow" && group.sourceId === props.focusedWorkflowId;
-            const status = groupStatus(group);
-            const visual = STATUS_VISUALS[status];
-            const visualDepth = Math.min(group.depth, 3);
-            return (
-              <div
+          {groups
+            .filter((group) => group.parentGroupId === null)
+            .map((group) => (
+              <WorkflowGroupCard
                 key={group.id}
-                className="relative"
-                style={{ marginLeft: `${visualDepth * 0.75}rem` }}
-              >
-                {visualDepth > 0 ? (
-                  <span
-                    aria-hidden
-                    className="absolute -left-2.5 top-0 h-6 w-2.5 rounded-bl-md border-b border-l border-border/70"
-                  />
-                ) : null}
-                <section
-                  ref={focused ? focusedGroupRef : undefined}
-                  data-workflow-group={group.id}
-                  data-workflow-id={group.kind === "workflow" ? group.sourceId : undefined}
-                  data-workflow-depth={group.depth}
-                  className={cn(
-                    "overflow-hidden rounded-lg border border-border/80 bg-card",
-                    focused && "border-primary/60 ring-2 ring-primary/20",
-                  )}
-                >
-                  <div className="flex items-start hover:bg-accent/40">
-                    <button
-                      type="button"
-                      aria-expanded={expanded}
-                      onClick={() =>
-                        setExpandedById((current) => ({ ...current, [group.id]: !expanded }))
-                      }
-                      className="cursor-pointer flex min-w-0 flex-1 items-start gap-2 p-3 text-left"
-                    >
-                      {expanded ? (
-                        <ChevronDown className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-                      ) : (
-                        <ChevronRight className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-                      )}
-                      <span className="min-w-0 flex-1">
-                        <span className="flex items-center gap-2">
-                          <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                            {groupTitle(group)}
-                          </span>
-                          <span className={cn("text-[11px]", visual.textClass)}>
-                            {visual.label}
-                          </span>
-                        </span>
-                        <span className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[11px] text-muted-foreground">
-                          {group.depth > 0 ? (
-                            <>
-                              <span>Sub-workflow</span>
-                              <span aria-hidden>·</span>
-                            </>
-                          ) : null}
-                          {group.kind === "workflow" ? (
-                            <>
-                              <span className="font-mono" title={group.sourceId}>
-                                ID {group.sourceId.slice(0, 8)}
-                              </span>
-                              <span aria-hidden>·</span>
-                            </>
-                          ) : null}
-                          <span>{group.activeCount} active</span>
-                          <span aria-hidden>·</span>
-                          <span>{group.settledCount} settled</span>
-                          <span aria-hidden>·</span>
-                          <Elapsed startedAt={group.createdAt} endedAt={groupEndedAt(group)} />
-                        </span>
-                      </span>
-                    </button>
-                    {group.kind === "workflow" ? (
-                      <button
-                        type="button"
-                        aria-label={`Copy link to ${groupTitle(group)} workflow`}
-                        title="Copy workflow link"
-                        onClick={() => props.onCopyWorkflowLink(group.sourceId)}
-                        className="cursor-pointer m-2 rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-                      >
-                        <Copy className="size-3.5" aria-hidden />
-                      </button>
-                    ) : null}
-                  </div>
-                  {expanded ? (
-                    <div className="border-t border-border/70 p-1">
-                      {group.rows.map((row) => (
-                        <ThreadRow
-                          key={workflowThreadKey(row.thread)}
-                          row={row}
-                          activeThreadKey={props.activeThreadKey}
-                          onOpenThread={props.onOpenThread}
-                        />
-                      ))}
-                    </div>
-                  ) : null}
-                </section>
-              </div>
-            );
-          })}
+                group={group}
+                groups={groups}
+                expandedById={expandedById}
+                setExpandedById={setExpandedById}
+                focusedWorkflowId={props.focusedWorkflowId}
+                focusedGroupRef={focusedGroupRef}
+                activeThreadKey={props.activeThreadKey}
+                devReviewWorkflowRuns={props.devReviewWorkflowRuns}
+                onOpenThread={props.onOpenThread}
+                onOpenDevReview={props.onOpenDevReview}
+                onCopyWorkflowLink={props.onCopyWorkflowLink}
+              />
+            ))}
         </div>
       </div>
     </ScrollArea>

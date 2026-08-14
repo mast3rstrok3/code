@@ -16,7 +16,7 @@ import type {
   BrowserDevReviewSourceContext,
   DevReviewWorkflowLaunchRequest,
 } from "./ChatView.logic";
-import { devReviewRunContainsThread, devReviewRunStatusLabel } from "./DevReviewPanel.logic";
+import { devReviewRunStatusLabel, selectDevReviewRunsForPanel } from "./DevReviewPanel.logic";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
@@ -49,10 +49,12 @@ export function DevReviewPanel(props: {
       : { spec: props.workflowArtifacts.spec, tickets: props.workflowArtifacts.tickets };
   const relevantRuns = useMemo(
     () =>
-      runs
-        .filter((run) => devReviewRunContainsThread(run, props.threadRef.threadId))
-        .toSorted((left, right) => right.createdAt.localeCompare(left.createdAt)),
-    [props.threadRef.threadId, runs],
+      selectDevReviewRunsForPanel({
+        runs,
+        openedThreadId: props.threadRef.threadId,
+        workflowScoped: props.workflowArtifacts != null,
+      }),
+    [props.threadRef.threadId, props.workflowArtifacts, runs],
   );
   const currentRun = relevantRuns[0] ?? null;
   const activeRun = relevantRuns.find((run) => run.status === "running") ?? null;
@@ -66,7 +68,9 @@ export function DevReviewPanel(props: {
       header={
         <>
           <div className="min-w-0">
-            <h2 className="truncate text-sm font-semibold">Dev Review</h2>
+            <h2 className="truncate text-sm font-semibold">
+              {relevantRuns.length > 1 ? `Dev Reviews · ${relevantRuns.length}` : "Dev Review"}
+            </h2>
             <p className="truncate text-xs text-muted-foreground">
               {currentRun ? devReviewRunStatusLabel(currentRun) : "No workflow launched"}
             </p>
@@ -99,12 +103,18 @@ export function DevReviewPanel(props: {
     >
       <div className="min-h-0 flex-1 overflow-y-auto">
         {currentRun ? (
-          <RunDetails
-            run={currentRun}
-            records={records}
-            environmentId={props.threadRef.environmentId}
-            onOpenThread={props.onOpenThread}
-          />
+          <div className="divide-y divide-border">
+            {relevantRuns.map((run, index) => (
+              <RunDetails
+                key={run.id}
+                run={run}
+                records={records}
+                environmentId={props.threadRef.environmentId}
+                onOpenThread={props.onOpenThread}
+                label={relevantRuns.length > 1 ? `Dev Review ${relevantRuns.length - index}` : null}
+              />
+            ))}
+          </div>
         ) : (
           <div className="flex min-h-52 items-center justify-center p-6 text-center">
             <div className="max-w-sm">
@@ -169,11 +179,13 @@ function RunDetails(props: {
   readonly records: WorkflowArtifactsSnapshot["devReviews"];
   readonly environmentId: ScopedThreadRef["environmentId"];
   readonly onOpenThread: (threadId: ThreadId) => void;
+  readonly label: string | null;
 }) {
   const recordById = new Map(props.records.map((record) => [record.id, record] as const));
   return (
     <section>
       <div className="space-y-3 border-b border-border px-4 py-3">
+        {props.label ? <h3 className="text-sm font-semibold">{props.label}</h3> : null}
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant="outline" size="sm">
             {devReviewRunStatusLabel(props.run)}
