@@ -6,13 +6,34 @@ import { DraftId } from "./composerDraftStore";
 import {
   buildDraftThreadRouteParams,
   buildThreadRouteParams,
+  buildWorkflowRouteUrl,
   resolveActiveThreadRouteRef,
   resolveThreadRouteRenderState,
   resolveThreadRouteRef,
+  resolveThreadRouteSearch,
   resolveThreadRouteTarget,
 } from "./threadRoutes";
 
 describe("threadRoutes", () => {
+  it("parses workflow deep-link identity and ignores invalid values", () => {
+    expect(resolveThreadRouteSearch({ workflow: " workflow-123 " })).toEqual({
+      workflow: "workflow-123",
+    });
+    expect(resolveThreadRouteSearch({ workflow: 123 })).toEqual({});
+    expect(resolveThreadRouteSearch({ workflow: "   " })).toEqual({});
+  });
+
+  it("builds a canonical link to a workflow run", () => {
+    expect(
+      buildWorkflowRouteUrl({
+        currentHref: "https://code.example/old/thread?panel=diff#message",
+        environmentId: "env one" as never,
+        rootThreadId: ThreadId.make("root/thread"),
+        workflowId: "workflow-123" as never,
+      }),
+    ).toBe("https://code.example/env%20one/root%2Fthread?workflow=workflow-123");
+  });
+
   it("builds canonical thread route params from a scoped ref", () => {
     const ref = scopeThreadRef("env-1" as never, ThreadId.make("thread-1"));
 

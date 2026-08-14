@@ -94,19 +94,31 @@ describe("buildWorkflowViewModel", () => {
       parentThreadId: "root",
       workflowPreset: "implementation",
       workflowRole: "implementation-orchestrator",
-      workflowContext: { workflowId: "implementation-run", rootThreadId: "root" },
+      workflowContext: {
+        workflowId: "implementation-run",
+        parentWorkflowId: "full-feature-run",
+        rootThreadId: "root",
+      },
     });
     const controller = thread("dev-review-controller", {
       parentThreadId: "implementation",
       workflowPreset: "dev-review",
       workflowRole: "dev-review-orchestrator",
-      workflowContext: { workflowId: "dev-review-run", rootThreadId: "root" },
+      workflowContext: {
+        workflowId: "dev-review-run",
+        parentWorkflowId: "implementation-run",
+        rootThreadId: "root",
+      },
     });
     const reviewer = thread("dev-review-reviewer", {
       parentThreadId: "dev-review-controller",
       workflowPreset: "dev-review",
       workflowRole: "dev-review-reviewer",
-      workflowContext: { workflowId: "dev-review-run", rootThreadId: "root" },
+      workflowContext: {
+        workflowId: "dev-review-run",
+        parentWorkflowId: "implementation-run",
+        rootThreadId: "root",
+      },
     });
 
     const groups = buildWorkflowViewModel([
@@ -123,6 +135,33 @@ describe("buildWorkflowViewModel", () => {
       ["workflow:dev-review-run", "dev-review", "workflow:implementation-run", 1],
     ]);
     expect(groups?.find((group) => group.id === "workflow:dev-review-run")?.rows).toHaveLength(2);
+  });
+
+  it("uses explicit parent workflow identity when thread ancestry is incomplete", () => {
+    const root = thread("root");
+    const implementation = thread("implementation", {
+      parentThreadId: "root",
+      workflowContext: { workflowId: "implementation-run", rootThreadId: "root" },
+    });
+    const detachedReview = thread("detached-review", {
+      parentThreadId: "root",
+      workflowContext: {
+        workflowId: "dev-review-run",
+        parentWorkflowId: "implementation-run",
+        rootThreadId: "root",
+      },
+    });
+
+    const groups = buildWorkflowViewModel([
+      root,
+      detachedReview,
+      implementation,
+    ]).rootsByThreadKey.get("env:root")?.groups;
+
+    expect(groups?.find((group) => group.sourceId === "dev-review-run")).toMatchObject({
+      parentGroupId: "workflow:implementation-run",
+      depth: 1,
+    });
   });
 
   it("orders workflow steps oldest first and rows depth-first with deterministic siblings", () => {

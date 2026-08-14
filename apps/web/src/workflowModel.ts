@@ -11,6 +11,7 @@ export interface WorkflowModelThread {
   readonly workflowRole: OrchestrationThreadWorkflowRole | null;
   readonly workflowContext?: {
     readonly workflowId: string;
+    readonly parentWorkflowId?: string | null | undefined;
     readonly rootThreadId: string;
   } | null;
   readonly workflowSubagentBatchProvenance?: {
@@ -300,7 +301,9 @@ export function buildWorkflowViewModel<TThread extends WorkflowModelThread>(
     }
 
     const groupIdByThreadKey = new Map<string, string>();
+    const groupIdByWorkflowId = new Map<string, string>();
     for (const [groupId, group] of grouped) {
+      if (group.kind === "workflow") groupIdByWorkflowId.set(group.sourceId, groupId);
       for (const thread of group.threads) {
         groupIdByThreadKey.set(workflowThreadKey(thread), groupId);
       }
@@ -308,6 +311,17 @@ export function buildWorkflowViewModel<TThread extends WorkflowModelThread>(
 
     const parentGroupIdById = new Map<string, string | null>();
     for (const [groupId, group] of grouped) {
+      const declaredParentWorkflowId = group.threads.find(
+        (thread) => thread.workflowContext?.parentWorkflowId != null,
+      )?.workflowContext?.parentWorkflowId;
+      const declaredParentGroupId =
+        declaredParentWorkflowId === undefined || declaredParentWorkflowId === null
+          ? undefined
+          : groupIdByWorkflowId.get(declaredParentWorkflowId);
+      if (declaredParentGroupId !== undefined && declaredParentGroupId !== groupId) {
+        parentGroupIdById.set(groupId, declaredParentGroupId);
+        continue;
+      }
       let parentGroupId: string | null = null;
       for (const thread of [...group.threads].sort(sortOldestFirst)) {
         let parentThreadId = thread.parentThreadId;

@@ -147,7 +147,11 @@ Workflows are the server-orchestrated automation paths that chain planning and i
 
 #### Workflow (preset)
 
-One of the seven orchestration paths — Fix, Fast Feature, Full Feature, Wayfinder, Planning, Implementation, Dev Review — defined in [workflowPresets.ts][25]. Each preset maps to an interaction mode and an ordered list of skill-backed steps.
+One of the five selectable orchestration paths — Fast Feature, Full Feature, Wayfinder, Planning, or Implementation — defined in [workflowPresets.ts][25]. Each preset maps to an interaction mode and an ordered list of skill-backed steps. Legacy Fix and Dev Review preset values remain decodable but are not selectable; Dev Review is launched as a nested or panel-owned run.
+
+#### Workflow ID
+
+The durable identity of one workflow run. A top-level controller creates the ID and its owned children inherit it. A nested workflow creates a new ID and records its enclosing run as `parentWorkflowId`. Workflow links and AppDevStack ownership use this identity rather than a thread ID or preset name.
 
 #### Dev Review Workflow
 
@@ -175,7 +179,7 @@ A supporting reference a skill can load on demand with `workflow_doc_get` — fo
 
 #### Product grill
 
-The codebase-grounded, product-only composition of the shared Grilling primitive. It asks every currently unblocked product-decision question in numbered frontier rounds and ends in a `product-intent-locked` directive parsed by [workflowDirectives.ts][27]. Fix, Fast Feature, and Full Feature all begin here.
+The codebase-grounded, product-only composition of the shared Grilling primitive. It asks every currently unblocked product-decision question in numbered frontier rounds and ends in a `product-intent-locked` directive parsed by [workflowDirectives.ts][27]. Fast Feature and Full Feature begin here.
 
 #### Engineering grill
 
@@ -215,7 +219,7 @@ A Kubernetes development deployment for a worktree. Workflow orchestration may o
 time through its durable workflow ID. A matching pre-existing or standing stack can be reused but
 is not adopted, replaced, or deleted by that workflow.
 
-The per-worktree development stack (dev servers, preview) that implementation runs check and start in parallel with the build, so dev review has a live surface to test against. See [app-dev-stacks.md][30].
+The per-worktree development stack (dev servers, preview) that implementation runs start only after Build or worker integration has produced a stable worktree. Dev Review then uses its live surface. See [app-dev-stacks.md][30].
 
 ## Practical Shortcuts
 

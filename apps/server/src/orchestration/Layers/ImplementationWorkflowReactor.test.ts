@@ -1013,6 +1013,29 @@ it("omits workflow ownership for legacy orchestrator threads without workflow co
 });
 
 describe("ImplementationWorkflowReactor", () => {
+  it.effect("gives an Implementation run its own workflow identity and parent link", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        const snapshot = yield* system.query.getSnapshot();
+        const source = snapshot.threads.find((thread) => thread.id === sourceThreadId);
+        const orchestrator = snapshot.threads.find(
+          (thread) => thread.id === run.orchestratorThreadId,
+        );
+        const worker = snapshot.threads.find(
+          (thread) => thread.workflowRole === "implementation-worker",
+        );
+
+        expect(orchestrator?.workflowContext).toMatchObject({
+          workflowId: run.id,
+          parentWorkflowId: source?.workflowContext?.workflowId,
+          rootThreadId: sourceThreadId,
+        });
+        expect(worker?.workflowContext?.workflowId).toBe(run.id);
+      }),
+    ),
+  );
+
   it.effect("composes new Fast Feature runs through a distinct nested Dev Review workflow", () =>
     withSystem((system) =>
       Effect.gen(function* () {
@@ -1026,9 +1049,24 @@ describe("ImplementationWorkflowReactor", () => {
           implementationRunId: run.id,
           orchestratorThreadId: run.orchestratorThreadId,
         });
-        expect(
-          snapshot.threads.some((thread) => thread.workflowRole === "dev-review-orchestrator"),
-        ).toBe(true);
+        const source = snapshot.threads.find((thread) => thread.id === sourceThreadId);
+        const implementer = snapshot.threads.find(
+          (thread) => thread.workflowRole === "fast-feature-implementer",
+        );
+        const reviewController = snapshot.threads.find(
+          (thread) => thread.workflowRole === "dev-review-orchestrator",
+        );
+        expect(source?.workflowContext).toMatchObject({
+          workflowId: `workflow-${sourceThreadId}`,
+          parentWorkflowId: null,
+          rootThreadId: sourceThreadId,
+        });
+        expect(implementer?.workflowContext?.workflowId).toBe(source?.workflowContext?.workflowId);
+        expect(reviewController?.workflowContext).toMatchObject({
+          workflowId: nestedRun.id,
+          parentWorkflowId: source?.workflowContext?.workflowId,
+          rootThreadId: sourceThreadId,
+        });
         expect(
           snapshot.threads.some((thread) => thread.workflowRole === "implementation-qa-reviewer"),
         ).toBe(false);

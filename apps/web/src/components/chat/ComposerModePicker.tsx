@@ -47,9 +47,14 @@ export function resolveWorkflowPresetForPicker(input: {
   readonly workflowPreset: WorkflowPreset | null;
   readonly lastWorkflowPreset: WorkflowPreset | null;
 }): WorkflowPreset {
-  return (
-    inferDisplayedWorkflowPreset(input) ?? input.lastWorkflowPreset ?? ("full-feature" as const)
-  );
+  const activePreset = inferDisplayedWorkflowPreset(input);
+  if (activePreset !== null) return activePreset;
+  const rememberedPreset = WORKFLOW_PRESET_DEFINITIONS.some(
+    (definition) => definition.id === input.lastWorkflowPreset,
+  )
+    ? input.lastWorkflowPreset
+    : null;
+  return rememberedPreset ?? ("full-feature" as const);
 }
 
 function focusRelativeOption(container: HTMLElement, direction: 1 | -1) {

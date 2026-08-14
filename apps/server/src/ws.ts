@@ -1149,7 +1149,9 @@ const makeWsRpcLayer = (
                 ownerUserId: bootstrap.createThread.ownerUserId,
                 parentThreadId: bootstrap.createThread.parentThreadId ?? null,
                 workflowRole: bootstrap.createThread.workflowRole ?? null,
-                workflowContext: bootstrap.createThread.workflowContext ?? null,
+                ...(bootstrap.createThread.workflowContext === undefined
+                  ? {}
+                  : { workflowContext: bootstrap.createThread.workflowContext }),
                 workflowSubagentBatchProvenance:
                   bootstrap.createThread.workflowSubagentBatchProvenance ?? null,
                 title: bootstrap.createThread.title,

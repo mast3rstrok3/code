@@ -945,6 +945,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             command.interactionMode === "implementation-workflow"
               ? {
                   workflowId: WorkflowId.make(`workflow-${command.threadId}`),
+                  parentWorkflowId: null,
                   rootThreadId: command.threadId,
                   ticketScope: [],
                 }
@@ -1684,6 +1685,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: productRootThread.id,
           workflowContext: productRootThread.workflowContext ?? {
             workflowId: WorkflowId.make(`workflow-${productRootThread.id}`),
+            parentWorkflowId: null,
             rootThreadId: productRootThread.id,
             ticketScope: [],
           },
@@ -2155,6 +2157,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           workflowContext: {
             ...(planningThread.workflowContext ?? {
               workflowId: spec.workflowId,
+              parentWorkflowId: null,
               rootThreadId: planningThread.id,
               ticketScope: [],
             }),
@@ -2724,7 +2727,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           parentThreadId: launcherThread.id,
           workflowRole: "implementation-orchestrator",
           workflowContext: {
-            workflowId: bundle.spec.workflowId,
+            workflowId: WorkflowId.make(run.id),
+            parentWorkflowId: launcherThread.workflowContext?.workflowId ?? null,
             rootThreadId: launcherThread.workflowContext?.rootThreadId ?? launcherThread.id,
             ticketScope: bundle.tickets.map((ticket) => ticket.id),
           },
@@ -3031,6 +3035,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
                 workflowRole: "dev-review-orchestrator",
                 workflowContext: {
                   workflowId: WorkflowId.make(runId),
+                  parentWorkflowId: targetThread.workflowContext?.workflowId ?? null,
                   rootThreadId: targetThread.workflowContext?.rootThreadId ?? targetThread.id,
                   ticketScope: targetThread.workflowContext?.ticketScope ?? [],
                 },

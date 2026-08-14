@@ -4,7 +4,11 @@ import { useEffect } from "react";
 import ChatView from "../components/ChatView";
 import { threadHasStarted } from "../components/ChatView.logic";
 import { finalizePromotedDraftThreadByRef, useComposerDraftStore } from "../composerDraftStore";
-import { resolveThreadRouteRef, resolveThreadRouteRenderState } from "../threadRoutes";
+import {
+  resolveThreadRouteRef,
+  resolveThreadRouteRenderState,
+  resolveThreadRouteSearch,
+} from "../threadRoutes";
 import { resolveThreadSyncPhase } from "../threadSync";
 import { SidebarInset } from "~/components/ui/sidebar";
 import {
@@ -19,6 +23,7 @@ import { environmentShell } from "../state/shell";
 
 function ChatThreadRouteView() {
   const navigate = useNavigate();
+  const { workflow: focusedWorkflowId } = Route.useSearch();
   const threadRef = Route.useParams({
     select: (params) => resolveThreadRouteRef(params),
   });
@@ -89,6 +94,7 @@ function ChatThreadRouteView() {
           threadId={threadRef.threadId}
           routeKind="server"
           threadSyncPhase={threadSyncPhase}
+          focusedWorkflowId={focusedWorkflowId ?? null}
         />
       ) : null}
     </SidebarInset>
@@ -97,4 +103,5 @@ function ChatThreadRouteView() {
 
 export const Route = createFileRoute("/_chat/$environmentId/$threadId")({
   component: ChatThreadRouteView,
+  validateSearch: resolveThreadRouteSearch,
 });

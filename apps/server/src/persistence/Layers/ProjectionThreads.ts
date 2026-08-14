@@ -46,6 +46,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           parent_thread_id,
           workflow_role,
           workflow_id,
+          workflow_parent_id,
           workflow_root_thread_id,
           workflow_ticket_scope_json,
           workflow_subagent_batch_id,
@@ -84,6 +85,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.parentThreadId},
           ${row.workflowRole},
           ${row.workflowContext?.workflowId ?? null},
+          ${row.workflowContext?.parentWorkflowId ?? null},
           ${row.workflowContext?.rootThreadId ?? null},
           ${JSON.stringify(row.workflowContext?.ticketScope ?? [])},
           ${row.workflowSubagentBatchId ?? null},
@@ -122,6 +124,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           parent_thread_id = excluded.parent_thread_id,
           workflow_role = excluded.workflow_role,
           workflow_id = excluded.workflow_id,
+          workflow_parent_id = excluded.workflow_parent_id,
           workflow_root_thread_id = excluded.workflow_root_thread_id,
           workflow_ticket_scope_json = excluded.workflow_ticket_scope_json,
           workflow_subagent_batch_id = excluded.workflow_subagent_batch_id,
@@ -170,6 +173,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
             WHEN workflow_id IS NULL OR workflow_root_thread_id IS NULL THEN NULL
             ELSE json_object(
               'workflowId', workflow_id,
+              'parentWorkflowId', workflow_parent_id,
               'rootThreadId', workflow_root_thread_id,
               'ticketScope', json(workflow_ticket_scope_json)
             )
@@ -222,6 +226,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
             WHEN workflow_id IS NULL OR workflow_root_thread_id IS NULL THEN NULL
             ELSE json_object(
               'workflowId', workflow_id,
+              'parentWorkflowId', workflow_parent_id,
               'rootThreadId', workflow_root_thread_id,
               'ticketScope', json(workflow_ticket_scope_json)
             )
@@ -284,10 +289,12 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
     if (row.workflowContext == null) return;
     yield* sql`
       INSERT INTO projection_thread_workflow_membership (
-        thread_id, project_id, workflow_id, root_thread_id, created_at, updated_at
+        thread_id, project_id, workflow_id, parent_workflow_id, root_thread_id,
+        created_at, updated_at
       ) VALUES (
         ${row.threadId}, ${row.projectId}, ${row.workflowContext.workflowId},
-        ${row.workflowContext.rootThreadId}, ${row.createdAt}, ${row.updatedAt}
+        ${row.workflowContext.parentWorkflowId ?? null}, ${row.workflowContext.rootThreadId},
+        ${row.createdAt}, ${row.updatedAt}
       )
     `.pipe(Effect.mapError(toPersistenceSqlError("ProjectionThreadRepository.upsert:membership")));
     yield* Effect.forEach(

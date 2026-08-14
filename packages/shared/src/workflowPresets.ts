@@ -19,25 +19,29 @@ export interface WorkflowPresetDefinition {
   readonly helpSteps: ReadonlyArray<WorkflowPresetHelpStep>;
 }
 
-export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition> = [
+// These definitions remain available for decoding and rendering historical
+// threads, but they are not selectable workflows or catalog entries.
+const LEGACY_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition> = [
   {
     id: "fix",
     label: "Fix",
-    description: "Lock the fix, plan it here, then build it in one child thread.",
+    description: "Legacy fix workflow.",
     route: "product",
     interactionMode: "product-workflow",
     workflowPromptId: "product.fix.codex",
-    helpSteps: [
-      {
-        label: "Product Grill",
-        skillId: "product.fix.codex",
-        threadBoundary: "same thread",
-        note: "human-guided",
-      },
-      { label: "CLI Plan mode", threadBoundary: "same thread", note: "automatic" },
-      { label: "CLI Build mode", threadBoundary: "new child thread", note: "automatic" },
-    ],
+    helpSteps: [],
   },
+  {
+    id: "dev-review",
+    label: "Dev Review",
+    description: "Nested or panel-launched browser review workflow.",
+    route: "review",
+    interactionMode: "default",
+    helpSteps: [],
+  },
+];
+
+export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition> = [
   {
     id: "fast-feature",
     label: "Fast feature",
@@ -53,12 +57,12 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
       },
       { label: "CLI Plan mode", threadBoundary: "same thread" },
       {
-        label: "Worktree, app dev stack, and CLI Build",
+        label: "Worktree and CLI Build",
         skillId: "implementation.tdd.codex",
         threadBoundary: "new child thread",
       },
       {
-        label: "AppDevStack and nested Dev Review workflow",
+        label: "Start AppDevStack, then run nested Dev Review",
         skillId: "implementation.browser-dev-review.codex",
         threadBoundary: "new review thread",
         note: "Dev Review owns its review, plan, and fresh TDD repair cycles",
@@ -195,37 +199,13 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
       },
     ],
   },
-  {
-    id: "dev-review",
-    label: "Dev Review",
-    description: "Review a running feature in the browser and repair every actionable finding.",
-    route: "review",
-    interactionMode: "default",
-    helpSteps: [
-      {
-        label: "Browser Dev Review",
-        skillId: "implementation.browser-dev-review.codex",
-        threadBoundary: "new review thread",
-      },
-      {
-        label: "Non-interactive CLI Plan mode on failure",
-        threadBoundary: "same thread",
-      },
-      {
-        label: "Fresh TDD repair child",
-        skillId: "implementation.tdd.codex",
-        threadBoundary: "new child thread",
-      },
-      {
-        label: "Repeat until pass or cycle budget exhaustion",
-        threadBoundary: "new review thread",
-      },
-    ],
-  },
 ];
 
 export const WORKFLOW_PRESET_DEFINITION_BY_ID = Object.fromEntries(
-  WORKFLOW_PRESET_DEFINITIONS.map((definition) => [definition.id, definition]),
+  [...LEGACY_WORKFLOW_PRESET_DEFINITIONS, ...WORKFLOW_PRESET_DEFINITIONS].map((definition) => [
+    definition.id,
+    definition,
+  ]),
 ) as Readonly<Record<WorkflowPreset, WorkflowPresetDefinition>>;
 
 export function interactionModeForWorkflowPreset(preset: WorkflowPreset): ProviderInteractionMode {

@@ -319,6 +319,10 @@ export type WorkflowId = typeof WorkflowId.Type;
 
 export const ThreadWorkflowContext = Schema.Struct({
   workflowId: WorkflowId,
+  // Optional so snapshots and events written before nested workflow identity
+  // was introduced continue to decode. New workflow controllers write it
+  // explicitly (`null` for a top-level run).
+  parentWorkflowId: Schema.optional(Schema.NullOr(WorkflowId)),
   rootThreadId: ThreadId,
   ticketScope: Schema.Array(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),

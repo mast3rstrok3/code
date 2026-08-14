@@ -219,7 +219,8 @@ import {
   selectProjectGroupingSettings,
 } from "../logicalProject";
 import { buildPhysicalToLogicalProjectKeyMap } from "../sidebarProjectGrouping";
-import { buildDraftThreadRouteParams } from "../threadRoutes";
+import { buildDraftThreadRouteParams, buildWorkflowRouteUrl } from "../threadRoutes";
+import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import {
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
@@ -559,6 +560,7 @@ type ChatViewProps =
       reserveTitleBarControlInset?: boolean;
       forceExpandedMobileComposer?: boolean;
       threadSyncPhase?: ThreadSyncPhase | null;
+      focusedWorkflowId?: WorkflowId | null;
       routeKind: "server";
       draftId?: never;
     }
@@ -569,6 +571,7 @@ type ChatViewProps =
       reserveTitleBarControlInset?: boolean;
       forceExpandedMobileComposer?: boolean;
       threadSyncPhase?: never;
+      focusedWorkflowId?: never;
       routeKind: "draft";
       draftId: DraftId;
     };
@@ -1241,6 +1244,7 @@ function ChatViewContent(props: ChatViewProps) {
   } = props;
   const draftId = routeKind === "draft" ? props.draftId : null;
   const threadSyncPhase = routeKind === "server" ? (props.threadSyncPhase ?? null) : null;
+  const focusedWorkflowId = routeKind === "server" ? (props.focusedWorkflowId ?? null) : null;
   const threadDetailLoading = threadSyncPhase === "loading";
   const handleNewThread = useNewThreadHandler();
   const routeThreadRef = useMemo(
@@ -1733,6 +1737,15 @@ function ChatViewContent(props: ChatViewProps) {
     [activeThread, workflowNavigationModel],
   );
   const workflowsAvailable = (activeWorkflowNavigation?.groups.length ?? 0) > 0;
+  const focusedWorkflowExists =
+    focusedWorkflowId !== null &&
+    activeWorkflowNavigation?.groups.some(
+      (group) => group.kind === "workflow" && group.sourceId === focusedWorkflowId,
+    );
+  useEffect(() => {
+    if (!activeThreadRef || !focusedWorkflowExists) return;
+    useRightPanelStore.getState().open(activeThreadRef, "workflows");
+  }, [activeThreadRef, focusedWorkflowExists]);
   const liveWorkflowCount =
     activeWorkflowNavigation?.groups.filter((group) => group.isActive).length ?? 0;
   const [timelineAnchor, setTimelineAnchor] = useState<{
@@ -3020,9 +3033,37 @@ function ChatViewContent(props: ChatViewProps) {
           environmentId,
           threadId: targetThreadId,
         },
+        search: focusedWorkflowId ? { workflow: focusedWorkflowId } : {},
       });
     },
-    [environmentId, navigate],
+    [environmentId, focusedWorkflowId, navigate],
+  );
+  const copyWorkflowLink = useCallback(
+    (workflowId: string) => {
+      if (!activeWorkflowNavigation || typeof window === "undefined") return;
+      const url = buildWorkflowRouteUrl({
+        currentHref: window.location.href,
+        environmentId: activeWorkflowNavigation.root.environmentId,
+        rootThreadId: activeWorkflowNavigation.root.id,
+        workflowId: WorkflowId.make(workflowId),
+      });
+      void writeTextToClipboard(url, "workflow link").then(
+        (didCopy) => {
+          if (!didCopy) return;
+          toastManager.add({ type: "success", title: "Workflow link copied" });
+        },
+        (error: unknown) => {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to copy workflow link",
+              description: chatActionErrorMessage(error),
+            }),
+          );
+        },
+      );
+    },
+    [activeWorkflowNavigation],
   );
   const handleLoadPlanningSpecBundle = useCallback(
     (specId: string) => {
@@ -5963,6 +6004,7 @@ function ChatViewContent(props: ChatViewProps) {
                             workflowRole: "dev-review-orchestrator" as const,
                             workflowContext: {
                               workflowId: WorkflowId.make(`dev-review-workflow-${threadIdForSend}`),
+                              parentWorkflowId: null,
                               rootThreadId: threadIdForSend,
                               ticketScope: [],
                             },
@@ -6972,7 +7014,9 @@ function ChatViewContent(props: ChatViewProps) {
         }
         workflow={activeWorkflowNavigation}
         activeThreadKey={activeThreadKey}
+        focusedWorkflowId={focusedWorkflowId}
         onOpenThread={(thread) => openWorkflowThread(thread.id)}
+        onCopyWorkflowLink={copyWorkflowLink}
       />
     ) : (activeRightPanelSurface?.kind === "files" || activeRightPanelSurface?.kind === "file") &&
       activeProject &&

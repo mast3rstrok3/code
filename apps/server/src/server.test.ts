@@ -7831,7 +7831,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               },
               modelSelection: defaultModelSelection,
               runtimeMode: "full-access",
-              interactionMode: "default",
+              interactionMode: "product-workflow",
               bootstrap: {
                 createThread: {
                   projectId: defaultProjectId,
@@ -7839,7 +7839,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                   title: "Bootstrap Thread",
                   modelSelection: defaultModelSelection,
                   runtimeMode: "full-access",
-                  interactionMode: "default",
+                  interactionMode: "product-workflow",
+                  workflowPreset: "fast-feature",
                   branch: "main",
                   worktreePath: null,
                   createdAt,
@@ -7868,6 +7869,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             "thread.turn.start",
           ],
         );
+        const createCommand = dispatchedCommands[0];
+        assert.equal(createCommand?.type, "thread.create");
+        if (createCommand?.type !== "thread.create") return;
+        // Omission is meaningful: the decider assigns the durable top-level
+        // workflow ID. Coercing this field to null suppresses that default.
+        assert.equal("workflowContext" in createCommand, false);
+        assert.equal(createCommand.workflowPreset, "fast-feature");
         assert.deepEqual(createWorktree.mock.calls[0]?.[0], {
           cwd: "/tmp/project",
           refName: fetchedOriginCommit,

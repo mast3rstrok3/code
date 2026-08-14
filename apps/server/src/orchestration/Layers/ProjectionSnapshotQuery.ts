@@ -757,7 +757,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           parent_thread_id AS "parentThreadId",
           workflow_role AS "workflowRole",
           CASE WHEN workflow_id IS NULL OR workflow_root_thread_id IS NULL THEN NULL
-            ELSE json_object('workflowId', workflow_id, 'rootThreadId', workflow_root_thread_id,
+            ELSE json_object('workflowId', workflow_id, 'parentWorkflowId', workflow_parent_id,
+              'rootThreadId', workflow_root_thread_id,
               'ticketScope', json(workflow_ticket_scope_json)) END AS "workflowContext",
           workflow_subagent_batch_id AS "workflowSubagentBatchId",
           workflow_subagent_child_index AS "workflowSubagentChildIndex",
@@ -804,7 +805,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           parent_thread_id AS "parentThreadId",
           workflow_role AS "workflowRole",
           CASE WHEN workflow_id IS NULL OR workflow_root_thread_id IS NULL THEN NULL
-            ELSE json_object('workflowId', workflow_id, 'rootThreadId', workflow_root_thread_id,
+            ELSE json_object('workflowId', workflow_id, 'parentWorkflowId', workflow_parent_id,
+              'rootThreadId', workflow_root_thread_id,
               'ticketScope', json(workflow_ticket_scope_json)) END AS "workflowContext",
           workflow_subagent_batch_id AS "workflowSubagentBatchId",
           workflow_subagent_child_index AS "workflowSubagentChildIndex",
@@ -853,7 +855,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           parent_thread_id AS "parentThreadId",
           workflow_role AS "workflowRole",
           CASE WHEN workflow_id IS NULL OR workflow_root_thread_id IS NULL THEN NULL
-            ELSE json_object('workflowId', workflow_id, 'rootThreadId', workflow_root_thread_id,
+            ELSE json_object('workflowId', workflow_id, 'parentWorkflowId', workflow_parent_id,
+              'rootThreadId', workflow_root_thread_id,
               'ticketScope', json(workflow_ticket_scope_json)) END AS "workflowContext",
           workflow_subagent_batch_id AS "workflowSubagentBatchId",
           workflow_subagent_child_index AS "workflowSubagentChildIndex",
@@ -1456,7 +1459,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           parent_thread_id AS "parentThreadId",
           workflow_role AS "workflowRole",
           CASE WHEN workflow_id IS NULL OR workflow_root_thread_id IS NULL THEN NULL
-            ELSE json_object('workflowId', workflow_id, 'rootThreadId', workflow_root_thread_id,
+            ELSE json_object('workflowId', workflow_id, 'parentWorkflowId', workflow_parent_id,
+              'rootThreadId', workflow_root_thread_id,
               'ticketScope', json(workflow_ticket_scope_json)) END AS "workflowContext",
           workflow_subagent_batch_id AS "workflowSubagentBatchId",
           workflow_subagent_child_index AS "workflowSubagentChildIndex",

@@ -2099,7 +2099,6 @@ export function listWorkflowPromptContracts(): WorkflowPromptContract[] {
 }
 
 const VISIBLE_SKILL_IDS = new Set<string>([
-  WORKFLOW_PROMPT_IDS.productFixCodex,
   WORKFLOW_PROMPT_IDS.productFastFeatureCodex,
   WORKFLOW_PROMPT_IDS.productFullFeatureCodex,
   WORKFLOW_PROMPT_IDS.planningGrillStageCodex,
@@ -2120,15 +2119,7 @@ const VISIBLE_SKILL_IDS = new Set<string>([
 
 function buildWorkflowCatalog(): WorkflowCatalog {
   const promptContracts: ReadonlyArray<WorkflowPromptContract> = WORKFLOW_PROMPT_REGISTRY;
-  const workflowOrder = [
-    "fix",
-    "fast-feature",
-    "full-feature",
-    "wayfinder",
-    "planning",
-    "implementation",
-    "dev-review",
-  ];
+  const workflowOrder = ["fast-feature", "full-feature", "wayfinder", "planning", "implementation"];
   const workflows = WORKFLOW_PRESET_DEFINITIONS.toSorted(
     (left, right) => workflowOrder.indexOf(left.id) - workflowOrder.indexOf(right.id),
   ).map((definition, workflowIndex) => ({

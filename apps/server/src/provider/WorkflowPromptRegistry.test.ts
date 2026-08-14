@@ -45,15 +45,7 @@ describe("WorkflowPromptRegistry", () => {
     const catalog = listWorkflowCatalog();
     NodeAssert.deepEqual(
       catalog.workflows.map((workflow) => workflow.id),
-      [
-        "fix",
-        "fast-feature",
-        "full-feature",
-        "wayfinder",
-        "planning",
-        "implementation",
-        "dev-review",
-      ],
+      ["fast-feature", "full-feature", "wayfinder", "planning", "implementation"],
     );
     NodeAssert.equal(catalog.docs.filter((doc) => doc.id === "context-format").length, 1);
     NodeAssert.deepEqual(resolveWorkflowDoc("app-dev-stack")?.skillIds, [

@@ -14,12 +14,27 @@ describe("ComposerModePicker state", () => {
     ).toBe("workflow");
   });
 
-  it("restores the remembered preset and defaults first use to Full feature", () => {
+  it("restores selectable presets and does not revive removed legacy workflows", () => {
     expect(
       resolveWorkflowPresetForPicker({
         interactionMode: "default",
         workflowPreset: null,
         lastWorkflowPreset: "fix",
+      }),
+    ).toBe("full-feature");
+    expect(
+      resolveWorkflowPresetForPicker({
+        interactionMode: "default",
+        workflowPreset: null,
+        lastWorkflowPreset: "fast-feature",
+      }),
+    ).toBe("fast-feature");
+    // Existing historical threads still render their original identity.
+    expect(
+      resolveWorkflowPresetForPicker({
+        interactionMode: "product-workflow",
+        workflowPreset: "fix",
+        lastWorkflowPreset: null,
       }),
     ).toBe("fix");
     expect(

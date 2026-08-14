@@ -1,6 +1,6 @@
 # Workflow catalog
 
-The server owns a compiled workflow catalog with three linked record types: workflows contain ordered steps, skill-backed steps reference stable workflow prompt IDs, and skills reference deduplicated supporting document IDs. Existing prompt IDs remain the runtime and persistence identity.
+The server owns a compiled workflow catalog with three linked record types: workflows contain ordered steps, skill-backed steps reference stable workflow prompt IDs, and skills reference deduplicated supporting document IDs. Prompt IDs identify skills, workflow presets identify definitions, and durable workflow IDs identify individual runs.
 
 `server.getWorkflowCatalog` exposes the read-only catalog to clients. `server.getWorkflowPrompts` remains available for older clients and is derived from the same registry.
 
@@ -15,7 +15,7 @@ Provenance of the main skills:
 | Skill ID                                                                                                 | Upstream source                                                                                         |
 | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
 | `shared.grilling.codex`                                                                                  | `productivity/grilling`, the verbatim shared interview primitive                                        |
-| `product.fix.codex`, `product.fast-feature.codex`, `product.full-feature.codex`                          | shared `grilling`, plus a short codebase-grounded product-only adapter                                  |
+| `product.fast-feature.codex`, `product.full-feature.codex`                                               | shared `grilling`, plus a short codebase-grounded product-only adapter                                  |
 | `planning.grill-stage.codex`                                                                             | shared `grilling`, plus the complete `domain-modeling` discipline                                       |
 | `planning.engineering-grill-automatic.codex`                                                             | the Engineering Grill composition, plus the Full Feature autonomous adapter                             |
 | `planning.domain-modeling.codex`                                                                         | `engineering/domain-modeling`                                                                           |
@@ -30,7 +30,7 @@ Provenance of the main skills:
 | `implementation.code-review.codex`                                                                       | `engineering/code-review`                                                                               |
 | `implementation.merge-gate.codex`, `implementation.browser-dev-review.codex`, `implementation.fix.codex` | T3-native stages                                                                                        |
 
-The registry contains one independent Grilling primitive and two compositions. Product Grill adds codebase grounding, product-decision scope, the structured-question adapter, and the minimal `product-intent-locked` handoff; its three preset prompt IDs fix the intent kind up front. Engineering Grill adds the complete domain-modeling discipline and the Planning handoff, with the same structured-question adapter on its interactive prompt. The upstream `shared.grilling.codex` primitive remains verbatim. Full Feature uses a separate automatic adapter that keeps the design tree, dependency frontier, fact-finding, domain-modeling, and completeness requirements, but resolves every engineering decision internally from the locked Product Grill intent instead of asking another round of user questions.
+The registry contains one independent Grilling primitive and two compositions. Product Grill adds codebase grounding, product-decision scope, the structured-question adapter, and the minimal `product-intent-locked` handoff; its two selectable preset prompt IDs fix the intent kind up front. The old `product.fix.codex` prompt remains registered only so historical runs can be decoded and resumed. Engineering Grill adds the complete domain-modeling discipline and the Planning handoff, with the same structured-question adapter on its interactive prompt. The upstream `shared.grilling.codex` primitive remains verbatim. Full Feature uses a separate automatic adapter that keeps the design tree, dependency frontier, fact-finding, domain-modeling, and completeness requirements, but resolves every engineering decision internally from the locked Product Grill intent instead of asking another round of user questions.
 
 The structured adapter requires T3's `workflow_request_user_input` dynamic tool for every interview round and the final shared-understanding gate. It sends the complete currently unblocked dependency frontier when that frontier contains one through seven questions. Seven is a maximum rather than a target: smaller rounds keep their natural size, and frontiers larger than seven continue in stable design-tree order after the first seven answers. Questions with unresolved dependencies are never combined in one round. Each question has two or three naturally ordered choices with neutral impact or tradeoff descriptions, plus a separate recommendation object whose `optionLabel` references one unchanged option label and whose `rationale` explains the preference. Questions and recommendations are not duplicated in Markdown, and T3's existing free-form answer input remains implicit.
 
@@ -60,21 +60,17 @@ Workflow stages hand results to the orchestration by ending a message with exact
 
 Workflow threads read canonical artifacts through the read-only `workflow-artifacts` MCP toolkit: `workflow_context_get`, `workflow_spec_get`, `workflow_wayfinder_map_get`, `workflow_tickets_list`, `workflow_ticket_get`, `workflow_dev_reviews_list`, `workflow_dev_review_get`, and `workflow_doc_get`.
 
-## The seven workflows
+## The five selectable workflows
 
-Workflows appear in catalog order: Fix, Fast Feature, Full Feature, Wayfinder, Planning, Implementation, Dev Review. The Spec is the node that binds tickets and dev reviews into one package.
-
-### Fix
-
-Product Grill (intent kind fixed to `fix`) → the same thread switches to CLI Plan mode → the proposed plan launches one CLI Build child thread on the same worktree and branch the workflow started on. No dedicated worktree, app dev stack, Dev Review, or Code Review.
+Workflows appear in catalog order: Fast Feature, Full Feature, Wayfinder, Implementation, Planning. The Spec is the node that binds tickets and dev reviews into one package. `fix` and `dev-review` remain accepted persistence values for historical compatibility but are not catalog entries or composer choices.
 
 ### Fast Feature
 
-Product Grill (intent kind fixed to `feature`) → same-thread CLI Plan mode → the proposed plan launches a Build child thread in a dedicated worktree branched from the starting branch, starting the app dev stack in parallel → nested Dev Review workflow → Code Review sub-thread (single pass) → the change request is published into the starting branch. Dev Review exhaustion continues best-effort and is called out explicitly; a blocked run requires human attention.
+Product Grill (intent kind fixed to `feature`) → same-thread CLI Plan mode → the proposed plan launches a Build child thread in a dedicated worktree branched from the starting branch → Build completes and commits → the app dev stack starts from the completed worktree → nested Dev Review workflow → Code Review sub-thread (single pass) → the change request is published into the starting branch. The stack deliberately does not start in parallel with Build because its mounts and dependency discovery require a stable worktree. Dev Review exhaustion continues best-effort and is called out explicitly; a blocked run requires human attention.
 
 ### Full Feature
 
-Product Grill is the only user-interactive gate. After the user confirms the product intent, the same thread enters the complete Planning workflow at the automatic Engineering Grill, where the model resolves the engineering and domain design tree from the locked intent and codebase without asking the user. Spec authoring, tickets, ticket review, and the complete Implementation workflow then continue automatically. Implementation runs in its own sub-thread and worktree branched from the branch the user selected, with the app dev stack created in parallel when absent.
+Product Grill is the only user-interactive gate. After the user confirms the product intent, the same thread enters the complete Planning workflow at the automatic Engineering Grill, where the model resolves the engineering and domain design tree from the locked intent and codebase without asking the user. Spec authoring, tickets, ticket review, and the complete Implementation workflow then continue automatically. Implementation runs in its own sub-thread and worktree branched from the branch the user selected; AppDevStack starts only after worker integration and validation are complete.
 
 ### Wayfinder
 
@@ -91,13 +87,13 @@ Engineering Grill is the only user-interactive stage: it works the engineering a
 Loads the Spec and tickets via the MCP tools, then:
 
 1. Creates a dedicated worktree and branch from the branch the user selected; the finished change request is filed back into that branch.
-2. Starts the app dev stack for that worktree in parallel with implementation (`AppDevStackManager`).
-3. Runs dependency-aware TDD workers, each a sub-thread with its own worktree and branch. A dependent ticket's worker branches from its blocker's worker branch, so chained tickets build on each other; every worker commits to its own branch.
-4. Merges worker branches programmatically back into the orchestrator worktree; the Merge Gate stage runs only when programmatic integration stops on a real conflict.
-5. Ensures and probes AppDevStack, then launches a nested Dev Review workflow with its own workflow ID. AppDevStack repair remains Implementation-owned and does not consume Dev Review attempts. The nested workflow refreshes the frontend URL after every repair. Pass continues to Code Review; exhaustion continues with an unresolved-review warning; blocked requires human attention and retry starts a fresh nested run. Runs created before this strategy retain the legacy inline QA path.
+2. Runs dependency-aware TDD workers, each a sub-thread with its own worktree and branch. A dependent ticket's worker branches from its blocker's worker branch, so chained tickets build on each other; every worker commits to its own branch.
+3. Merges worker branches programmatically back into the orchestrator worktree; the Merge Gate stage runs only when programmatic integration stops on a real conflict.
+4. Starts, ensures, and probes AppDevStack from the integrated worktree. It starts after Build/integration so dependency installation and worktree mounts are stable.
+5. Launches a nested Dev Review workflow with its own workflow ID and the Implementation workflow ID as its parent. AppDevStack repair remains Implementation-owned and does not consume Dev Review attempts. The nested workflow refreshes the frontend URL after every repair. Pass continues to Code Review; exhaustion continues with an unresolved-review warning; blocked requires human attention and retry starts a fresh nested run. Runs created before this strategy retain the legacy inline QA path.
 6. Runs Code Review as a single review-and-fix pass (Standards and Spec axes) that commits its own corrections, then publishes the change request into the original branch.
 
-### Dev Review
+### Nested and panel-launched Dev Review
 
 Dev Review is a reusable, restartable loop. Cycle 1 always launches a fresh Browser Dev Review. A pass ends the run. A failed review below budget switches the persistent controller to non-interactive CLI Plan mode, requires one persisted proposed plan, and launches a fresh TDD fixer child before the next review. The original brief remains the acceptance boundary throughout. A final failed attempt ends as `exhausted` without an unverified repair.
 
@@ -105,6 +101,12 @@ Standalone panel launches create a dedicated controller child and edit the selec
 
 `projection_dev_review_workflow_runs` stores canonical run JSON. Each run records caller and target identity, original brief, preview targets, cycle budget, ordered reviewer/plan/fixer history, the active phase, HEAD and diff-hash fingerprint, terminal outcome, and timestamps. Launch, update, cancel, and refreshed-preview resume commands produce projected run events; `DevReviewWorkflowReactor` reconciles every nonterminal run after restart without polling.
 
+## Workflow identity and links
+
+`workflowPreset` identifies the selected workflow definition; it is not a run identity. Every new top-level run receives a durable `workflowId`, and every child owned by that run inherits it. A nested controller such as Dev Review receives a new `workflowId` and stores the enclosing run as `parentWorkflowId`. AppDevStack ownership uses the durable run ID, so it follows the implementation worktree rather than a transient thread.
+
+The web thread route accepts `?workflow=<workflowId>`. A copied workflow link targets the top-level thread route, opens the Workflows panel, expands the matching run, and keeps the workflow query while navigating among its child threads. The explicit parent link is also what nests Dev Review under its invoking Fast Feature or Implementation run when physical thread ancestry is incomplete.
+
 ## Orchestration
 
-`ProductWorkflowReactor.ts` drives Fix, Fast Feature, and Full Feature from the locked intent; `ImplementationWorkflowReactor.ts` owns worktrees, the merge pipeline, app dev stack provisioning, composition with Dev Review, and change-request publication. `DevReviewWorkflowReactor.ts` owns browser-review, plan, and repair cycles. Caps live in the contracts (`PLANNING_REVIEW_MAX_CYCLES`, `DEV_REVIEW_WORKFLOW_DEFAULT_CYCLES`, and `DEV_REVIEW_WORKFLOW_MAX_CYCLES`). Shared sub-agent conventions (stage IDs, MCP tools, directives) are in `apps/server/src/provider/WorkflowSubagentInstructions.ts`.
+`ProductWorkflowReactor.ts` drives Fast Feature and Full Feature from the locked intent; its Fix branch remains only for historical runs. `ImplementationWorkflowReactor.ts` owns worktrees, the merge pipeline, post-integration app dev stack provisioning, composition with Dev Review, and change-request publication. `DevReviewWorkflowReactor.ts` owns browser-review, plan, and repair cycles. Caps live in the contracts (`PLANNING_REVIEW_MAX_CYCLES`, `DEV_REVIEW_WORKFLOW_DEFAULT_CYCLES`, and `DEV_REVIEW_WORKFLOW_MAX_CYCLES`). Shared sub-agent conventions (stage IDs, MCP tools, directives) are in `apps/server/src/provider/WorkflowSubagentInstructions.ts`.

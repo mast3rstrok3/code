@@ -1,6 +1,6 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import { WORKFLOW_PRESET_DEFINITION_BY_ID } from "@t3tools/shared/workflowPresets";
-import { Archive, ChevronDown, ChevronRight, GitFork } from "lucide-react";
+import { Archive, ChevronDown, ChevronRight, Copy, GitFork } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { cn } from "~/lib/utils";
@@ -196,12 +196,28 @@ function ThreadRow(props: {
 export function WorkflowsPanel(props: {
   readonly workflow: WorkflowRoot<EnvironmentThreadShell> | null;
   readonly activeThreadKey: string | null;
+  readonly focusedWorkflowId: string | null;
   readonly onOpenThread: (thread: EnvironmentThreadShell) => void;
+  readonly onCopyWorkflowLink: (workflowId: string) => void;
 }) {
   const groups = props.workflow?.groups ?? [];
+  const focusedGroupRef = useRef<HTMLElement>(null);
   const [expandedById, setExpandedById] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(groups.map((group) => [group.id, group.isActive])),
   );
+
+  useEffect(() => {
+    if (props.focusedWorkflowId === null) return;
+    const focusedGroup = groups.find(
+      (group) => group.kind === "workflow" && group.sourceId === props.focusedWorkflowId,
+    );
+    if (!focusedGroup) return;
+    setExpandedById((current) => ({ ...current, [focusedGroup.id]: true }));
+    const frame = window.requestAnimationFrame(() => {
+      focusedGroupRef.current?.scrollIntoView({ block: "nearest" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [groups, props.focusedWorkflowId]);
 
   if (!props.workflow || groups.length === 0) {
     return (
@@ -235,6 +251,7 @@ export function WorkflowsPanel(props: {
         <div className="space-y-2">
           {groups.map((group) => {
             const expanded = expandedById[group.id] ?? group.isActive;
+            const focused = group.kind === "workflow" && group.sourceId === props.focusedWorkflowId;
             const status = groupStatus(group);
             const visual = STATUS_VISUALS[status];
             const visualDepth = Math.min(group.depth, 3);
@@ -251,45 +268,73 @@ export function WorkflowsPanel(props: {
                   />
                 ) : null}
                 <section
+                  ref={focused ? focusedGroupRef : undefined}
                   data-workflow-group={group.id}
+                  data-workflow-id={group.kind === "workflow" ? group.sourceId : undefined}
                   data-workflow-depth={group.depth}
-                  className="overflow-hidden rounded-lg border border-border/80 bg-card"
+                  className={cn(
+                    "overflow-hidden rounded-lg border border-border/80 bg-card",
+                    focused && "border-primary/60 ring-2 ring-primary/20",
+                  )}
                 >
-                  <button
-                    type="button"
-                    aria-expanded={expanded}
-                    onClick={() =>
-                      setExpandedById((current) => ({ ...current, [group.id]: !expanded }))
-                    }
-                    className="cursor-pointer flex w-full items-start gap-2 p-3 text-left hover:bg-accent/40"
-                  >
-                    {expanded ? (
-                      <ChevronDown className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-                    ) : (
-                      <ChevronRight className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-                    )}
-                    <span className="min-w-0 flex-1">
-                      <span className="flex items-center gap-2">
-                        <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                          {groupTitle(group)}
+                  <div className="flex items-start hover:bg-accent/40">
+                    <button
+                      type="button"
+                      aria-expanded={expanded}
+                      onClick={() =>
+                        setExpandedById((current) => ({ ...current, [group.id]: !expanded }))
+                      }
+                      className="cursor-pointer flex min-w-0 flex-1 items-start gap-2 p-3 text-left"
+                    >
+                      {expanded ? (
+                        <ChevronDown className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+                      ) : (
+                        <ChevronRight className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+                      )}
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center gap-2">
+                          <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                            {groupTitle(group)}
+                          </span>
+                          <span className={cn("text-[11px]", visual.textClass)}>
+                            {visual.label}
+                          </span>
                         </span>
-                        <span className={cn("text-[11px]", visual.textClass)}>{visual.label}</span>
+                        <span className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[11px] text-muted-foreground">
+                          {group.depth > 0 ? (
+                            <>
+                              <span>Sub-workflow</span>
+                              <span aria-hidden>·</span>
+                            </>
+                          ) : null}
+                          {group.kind === "workflow" ? (
+                            <>
+                              <span className="font-mono" title={group.sourceId}>
+                                ID {group.sourceId.slice(0, 8)}
+                              </span>
+                              <span aria-hidden>·</span>
+                            </>
+                          ) : null}
+                          <span>{group.activeCount} active</span>
+                          <span aria-hidden>·</span>
+                          <span>{group.settledCount} settled</span>
+                          <span aria-hidden>·</span>
+                          <Elapsed startedAt={group.createdAt} endedAt={groupEndedAt(group)} />
+                        </span>
                       </span>
-                      <span className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[11px] text-muted-foreground">
-                        {group.depth > 0 ? (
-                          <>
-                            <span>Sub-workflow</span>
-                            <span aria-hidden>·</span>
-                          </>
-                        ) : null}
-                        <span>{group.activeCount} active</span>
-                        <span aria-hidden>·</span>
-                        <span>{group.settledCount} settled</span>
-                        <span aria-hidden>·</span>
-                        <Elapsed startedAt={group.createdAt} endedAt={groupEndedAt(group)} />
-                      </span>
-                    </span>
-                  </button>
+                    </button>
+                    {group.kind === "workflow" ? (
+                      <button
+                        type="button"
+                        aria-label={`Copy link to ${groupTitle(group)} workflow`}
+                        title="Copy workflow link"
+                        onClick={() => props.onCopyWorkflowLink(group.sourceId)}
+                        className="cursor-pointer m-2 rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                      >
+                        <Copy className="size-3.5" aria-hidden />
+                      </button>
+                    ) : null}
+                  </div>
                   {expanded ? (
                     <div className="border-t border-border/70 p-1">
                       {group.rows.map((row) => (

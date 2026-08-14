@@ -9,29 +9,22 @@ import {
 describe("workflow presets", () => {
   it("defines every preset once in canonical display order", () => {
     expect(WORKFLOW_PRESET_DEFINITIONS.map((definition) => definition.id)).toEqual([
-      "fix",
       "fast-feature",
       "full-feature",
       "wayfinder",
       "implementation",
       "planning",
-      "dev-review",
     ]);
   });
 
-  it("catalogs Dev Review as the seventh review workflow", () => {
-    const definition = WORKFLOW_PRESET_DEFINITIONS.at(-1);
-    expect(definition).toMatchObject({
-      id: "dev-review",
-      route: "review",
-      interactionMode: "default",
-    });
-    expect(definition?.helpSteps.map((step) => step.label)).toEqual([
-      "Browser Dev Review",
-      "Non-interactive CLI Plan mode on failure",
-      "Fresh TDD repair child",
-      "Repeat until pass or cycle budget exhaustion",
-    ]);
+  it("starts Fast Feature AppDevStack only after Build", () => {
+    const definition = WORKFLOW_PRESET_DEFINITIONS.find(
+      (candidate) => candidate.id === "fast-feature",
+    );
+    expect(definition?.helpSteps.map((step) => step.label)).toContain("Worktree and CLI Build");
+    expect(definition?.helpSteps.map((step) => step.label)).toContain(
+      "Start AppDevStack, then run nested Dev Review",
+    );
   });
 
   it("lists code review before change-request publication wherever both appear", () => {
