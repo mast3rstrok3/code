@@ -7720,13 +7720,14 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     () =>
       Effect.gen(function* () {
         const dispatchedCommands: Array<OrchestrationCommand> = [];
+        const workflowEvents = yield* PubSub.unbounded<OrchestrationEvent>();
         const bootstrapGitOperations: string[] = [];
         const refreshStatus = vi.fn((_: string) =>
           Effect.succeed({
             isRepo: true,
             hasPrimaryRemote: true,
             isDefaultRef: false,
-            refName: "t3code/bootstrap-refName",
+            refName: "worktree/deadbeef",
             hasWorkingTreeChanges: false,
             workingTree: {
               files: [],
@@ -7769,7 +7770,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               bootstrapGitOperations.push("create-worktree");
               return {
                 worktree: {
-                  refName: "t3code/bootstrap-refName",
+                  refName: "worktree/deadbeef",
                   path: "/tmp/bootstrap-worktree",
                 },
               };
@@ -7825,6 +7826,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                   return { sequence: dispatchedCommands.length };
                 }),
               readEvents: () => Stream.empty,
+              streamDomainEvents: Stream.fromPubSub(workflowEvents),
             },
             projectSetupScriptRunner: {
               runForThread,
@@ -7868,7 +7870,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 prepareWorktree: {
                   projectCwd: "/tmp/project",
                   baseBranch: "main",
-                  branch: "t3code/bootstrap-refName",
+                  branch: "worktree/deadbeef",
                   startFromOrigin: true,
                 },
                 runSetupScript: true,
@@ -7881,6 +7883,26 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.equal(autoCreateAppDevStack.mock.calls.length, 0);
         assert.equal(dispatchedCommands[3]?.type, "thread.turn.start");
         yield* Deferred.succeed(setupCompleted, undefined);
+        yield* Effect.yieldNow;
+        assert.equal(autoCreateAppDevStack.mock.calls.length, 0);
+        yield* PubSub.publish(workflowEvents, {
+          sequence: 5,
+          eventId: EventId.make("event-workflow-branch-renamed"),
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-bootstrap"),
+          occurredAt: "2026-01-01T00:00:01.000Z",
+          commandId: CommandId.make("cmd-workflow-branch-renamed"),
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          type: "thread.meta-updated",
+          payload: {
+            threadId: ThreadId.make("thread-bootstrap"),
+            branch: "verify-email-capabilities",
+            worktreePath: "/tmp/bootstrap-worktree",
+            updatedAt: "2026-01-01T00:00:01.000Z",
+          },
+        });
         yield* Deferred.await(stackProvisioned);
         yield* Effect.yieldNow;
 
@@ -7908,7 +7930,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.deepEqual(createWorktree.mock.calls[0]?.[0], {
           cwd: "/tmp/project",
           refName: fetchedOriginCommit,
-          newRefName: "t3code/bootstrap-refName",
+          newRefName: "worktree/deadbeef",
           baseRefName: "main",
           path: null,
         });
@@ -7953,12 +7975,12 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.equal(autoCreateAppDevStack.mock.calls.length, 1);
         assert.deepEqual(autoCreateAppDevStack.mock.calls[0]?.[0], {
           worktreePath: "/tmp/bootstrap-worktree",
-          displayName: "Bootstrap Thread",
-          gitBranch: "t3code/bootstrap-refName",
+          displayName: "verify-email-capabilities",
+          gitBranch: "verify-email-capabilities",
         });
         assert.deepEqual(activities[0]?.activity.payload, {
           baseBranch: "main",
-          branch: "t3code/bootstrap-refName",
+          branch: "worktree/deadbeef",
           worktreePath: "/tmp/bootstrap-worktree",
         });
         const finalCommand = dispatchedCommands[3];

@@ -4,8 +4,10 @@ import { projectScriptRuntimeEnv, setupProjectScript } from "@t3tools/shared/pro
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -45,6 +47,7 @@ export class ProjectSetupScriptOperationError extends Schema.TaggedErrorClass<Pr
     worktreePath: Schema.String,
     operation: Schema.Literals([
       "resolveProject",
+      "resolveSetupScript",
       "openTerminal",
       "writeCommand",
       "executeCommand",
@@ -86,10 +89,34 @@ export class ProjectSetupScriptRunner extends Context.Service<
   }
 >()("t3/project/ProjectSetupScriptRunner") {}
 
+const WorktreePackageManifest = Schema.Struct({
+  packageManager: Schema.optionalKey(Schema.String),
+  scripts: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+});
+
+const decodeWorktreePackageManifest = Schema.decodeUnknownOption(
+  Schema.fromJsonString(WorktreePackageManifest),
+);
+
+const conventionalBootstrapCommand = (packageManager: string | undefined) => {
+  const name = packageManager?.split("@", 1)[0];
+  switch (name) {
+    case "bun":
+    case "npm":
+    case "pnpm":
+    case "yarn":
+      return `${name} run bootstrap:worktree`;
+    default:
+      return null;
+  }
+};
+
 export const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const terminalManager = yield* TerminalManager.TerminalManager;
   const platform = yield* HostProcessPlatform;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
 
   const runForThread: ProjectSetupScriptRunner["Service"]["runForThread"] = Effect.fn(
     "ProjectSetupScriptRunner.runForThread",
@@ -133,7 +160,40 @@ export const make = Effect.gen(function* () {
       return yield* new ProjectSetupScriptProjectNotFoundError(errorContext);
     }
 
-    const script = setupProjectScript(project.scripts);
+    const configuredScript = setupProjectScript(project.scripts);
+    const script =
+      configuredScript ??
+      (yield* fileSystem.readFileString(path.join(input.worktreePath, "package.json")).pipe(
+        Effect.map((raw) => {
+          const manifest = decodeWorktreePackageManifest(raw);
+          if (
+            Option.isNone(manifest) ||
+            typeof manifest.value.scripts?.["bootstrap:worktree"] !== "string"
+          ) {
+            return null;
+          }
+          const command = conventionalBootstrapCommand(manifest.value.packageManager);
+          return command === null
+            ? null
+            : {
+                id: "bootstrap-worktree",
+                name: "Bootstrap Worktree",
+                command,
+              };
+        }),
+        Effect.catchTags({
+          PlatformError: (cause) =>
+            cause.reason._tag === "NotFound"
+              ? Effect.succeed(null)
+              : Effect.fail(
+                  new ProjectSetupScriptOperationError({
+                    ...errorContext,
+                    operation: "resolveSetupScript",
+                    cause,
+                  }),
+                ),
+        }),
+      ));
     if (!script) {
       return {
         status: "no-script",

@@ -65,6 +65,7 @@ import {
   type WorkspaceUserView,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
+import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
 import {
   WORKFLOW_WORKSPACE_PREPARED_ACTIVITY_KIND,
   resolveWorkflowWorkspaceIdentity,
@@ -1357,7 +1358,49 @@ const makeWsRpcLayer = (
               }
             }
 
-            const provisionWorkflowAppDevStack = () =>
+            const awaitFinalWorkflowBranch = () => {
+              if (preparedWorkflowWorkspace === null) {
+                return Effect.never;
+              }
+              if (!isTemporaryWorktreeBranch(preparedWorkflowWorkspace.branch)) {
+                return Effect.succeed(preparedWorkflowWorkspace.branch);
+              }
+
+              const currentBranch = projectionSnapshotQuery.getThreadDetailById(threadId).pipe(
+                Effect.map(Option.getOrUndefined),
+                Effect.map((thread) => {
+                  const branch = thread?.branch;
+                  return branch && !isTemporaryWorktreeBranch(branch) ? branch : null;
+                }),
+                Effect.orElseSucceed(() => null),
+              );
+              const renamedBranches = orchestrationEngine.streamDomainEvents.pipe(
+                Stream.filter(
+                  (event): event is Extract<OrchestrationEvent, { type: "thread.meta-updated" }> =>
+                    event.type === "thread.meta-updated" &&
+                    event.payload.threadId === threadId &&
+                    event.payload.branch !== undefined &&
+                    event.payload.branch !== null &&
+                    !isTemporaryWorktreeBranch(event.payload.branch),
+                ),
+                Stream.map((event) => event.payload.branch as string),
+              );
+
+              // Subscribe to the hot rename stream alongside the authoritative read so a rename
+              // landing at this boundary cannot be missed.
+              return Stream.merge(Stream.fromEffect(currentBranch), renamedBranches).pipe(
+                Stream.filter((branch): branch is string => branch !== null),
+                Stream.runHead,
+                Effect.flatMap(
+                  Option.match({
+                    onNone: () => Effect.never,
+                    onSome: (branch) => Effect.succeed(branch),
+                  }),
+                ),
+              );
+            };
+
+            const provisionWorkflowAppDevStack = (finalBranch: string) =>
               preparedWorkflowWorkspace === null
                 ? Effect.void
                 : Effect.gen(function* () {
@@ -1367,7 +1410,7 @@ const makeWsRpcLayer = (
                       bootstrap?.createThread?.workflowContext?.workflowId;
                     const identity = {
                       worktreePath: preparedWorkflowWorkspace.worktreePath,
-                      branch: preparedWorkflowWorkspace.branch,
+                      branch: finalBranch,
                       workflowPreset: workflowPreset ?? null,
                       workflowId: workflowId ?? null,
                     };
@@ -1382,11 +1425,8 @@ const makeWsRpcLayer = (
                     const outcome = yield* appDevStackManager
                       .autoCreate({
                         worktreePath: preparedWorkflowWorkspace.worktreePath,
-                        displayName:
-                          threadDetail?.title ??
-                          bootstrap?.createThread?.title ??
-                          `Workflow ${threadId}`,
-                        gitBranch: preparedWorkflowWorkspace.branch,
+                        displayName: finalBranch,
+                        gitBranch: finalBranch,
                         ...(workflowId === undefined ? {} : { workflowId }),
                       })
                       .pipe(Effect.result);
@@ -1443,7 +1483,9 @@ const makeWsRpcLayer = (
             if (preparedWorkflowWorkspace !== null) {
               yield* runSetupProgram().pipe(
                 Effect.flatMap((dependenciesReady) =>
-                  dependenciesReady ? provisionWorkflowAppDevStack() : Effect.void,
+                  dependenciesReady
+                    ? awaitFinalWorkflowBranch().pipe(Effect.flatMap(provisionWorkflowAppDevStack))
+                    : Effect.void,
                 ),
                 Effect.ignoreCause({ log: true }),
                 Effect.forkDetach,

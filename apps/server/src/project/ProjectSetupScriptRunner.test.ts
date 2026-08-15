@@ -1,6 +1,8 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it, vi } from "@effect/vitest";
 import { type OrchestrationProject, ProjectId, type TerminalEvent } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -71,6 +73,7 @@ const testLayer = (
   ProjectSetupScriptRunner.layer.pipe(
     Layer.provideMerge(makeProjectionSnapshotQueryLayer(project)),
     Layer.provideMerge(makeTerminalManagerLayer(terminal)),
+    Layer.provideMerge(NodeServices.layer),
   );
 
 describe("ProjectSetupScriptRunner", () => {
@@ -174,6 +177,76 @@ describe("ProjectSetupScriptRunner", () => {
       }).pipe(Effect.provide(testLayer(project, { open, write, subscribe })));
     },
   );
+
+  it.effect("runs a conventional package bootstrap before reporting no setup script", () => {
+    let listener: ((event: TerminalEvent) => Effect.Effect<void>) | undefined;
+    const open = vi.fn(() =>
+      Effect.succeed({
+        threadId: "thread-1",
+        terminalId: "setup-bootstrap-worktree",
+        cwd: "/unused",
+        worktreePath: "/unused",
+        status: "running" as const,
+        pid: 123,
+        history: "",
+        exitCode: null,
+        exitSignal: null,
+        label: "setup-bootstrap-worktree",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    const write = vi.fn(
+      () =>
+        listener?.({
+          type: "exited",
+          threadId: "thread-1",
+          terminalId: "setup-bootstrap-worktree",
+          exitCode: 0,
+          exitSignal: null,
+        }) ?? Effect.void,
+    );
+    const subscribe = vi.fn((nextListener: (event: TerminalEvent) => Effect.Effect<void>) =>
+      Effect.sync(() => {
+        listener = nextListener;
+        return () => undefined;
+      }),
+    );
+    const project = makeProject([]);
+
+    return Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const worktreePath = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3code-bootstrap-worktree-",
+      });
+      yield* fileSystem.writeFileString(
+        `${worktreePath}/package.json`,
+        '{"packageManager":"pnpm@11.4.0","scripts":{"bootstrap:worktree":"bash scripts/bootstrap-worktree.sh"}}',
+      );
+
+      const runner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
+      const result = yield* runner.runForThread({
+        threadId: "thread-1",
+        projectId: "project-1",
+        worktreePath,
+      });
+      if (result.status === "started") {
+        yield* result.completion;
+      }
+
+      expect(result).toMatchObject({
+        status: "started",
+        scriptId: "bootstrap-worktree",
+        scriptName: "Bootstrap Worktree",
+        terminalId: "setup-bootstrap-worktree",
+        cwd: worktreePath,
+      });
+      expect(write).toHaveBeenCalledWith({
+        threadId: "thread-1",
+        terminalId: "setup-bootstrap-worktree",
+        data: "exec sh -lc 'pnpm run bootstrap:worktree'\r",
+      });
+    }).pipe(Effect.scoped, Effect.provide(testLayer(project, { open, write, subscribe })));
+  });
 
   it.effect("fails completion when the setup command exits unsuccessfully", () => {
     let listener: ((event: TerminalEvent) => Effect.Effect<void>) | undefined;
