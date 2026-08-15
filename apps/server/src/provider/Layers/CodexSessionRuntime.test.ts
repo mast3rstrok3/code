@@ -691,7 +691,7 @@ describe("Codex workflow prompt browser scoping", () => {
       NodeAssert.match(instructions, /dev_review_recording_start/);
       NodeAssert.match(instructions, /dev_review_capture_screenshot/);
       NodeAssert.match(instructions, /preview-browser-qa\.md/);
-      NodeAssert.match(instructions, /blocked rather than passed/);
+      NodeAssert.match(instructions, /Never turn evidenced product defects into blocked/);
       NodeAssert.doesNotMatch(instructions, /Agent Browser CLI/);
       NodeAssert.doesNotMatch(instructions, /agent-browser/);
       NodeAssert.doesNotMatch(instructions, /rrweb/i);

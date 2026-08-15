@@ -255,6 +255,28 @@ export const DevReviewEvidence = Schema.Struct({
 });
 export type DevReviewEvidence = typeof DevReviewEvidence.Type;
 
+export const hasCompleteDevReviewEvidence = (evidence: DevReviewEvidence): boolean =>
+  evidence.recording.status === "saved" && evidence.screenshots.length > 0;
+
+/**
+ * A failed recording must not erase product defects that have independent durable evidence.
+ * Every actionable finding stays traceable to a captured screenshot and the check matrix records
+ * at least one actual failure, so orchestration can safely repair rather than retrying tooling.
+ */
+export const hasScreenshotBackedDevReviewFailure = (
+  document: DevReviewDocument,
+  evidence: DevReviewEvidence,
+): boolean => {
+  const screenshotIds = new Set(evidence.screenshots.map((screenshot) => screenshot.id));
+  return (
+    document.checks.some((check) => check.status === "failed") &&
+    document.findings.length > 0 &&
+    document.findings.every((finding) =>
+      finding.evidenceIds.some((evidenceId) => screenshotIds.has(evidenceId)),
+    )
+  );
+};
+
 /** Evidence id used to mint asset URLs for the review's screen recording. */
 export const DEV_REVIEW_RECORDING_EVIDENCE_ID = "recording";
 

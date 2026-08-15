@@ -2,6 +2,8 @@ import {
   type AppDevStackStatus,
   CommandId,
   DevReviewId,
+  hasCompleteDevReviewEvidence,
+  hasScreenshotBackedDevReviewFailure,
   type DevReviewRecord,
   type DevReviewWorkflowCycle,
   type DevReviewWorkflowFailureReason,
@@ -171,10 +173,16 @@ export function terminalReviewEvidenceFailure(
   // before preserving its block reason replaces the actionable infrastructure failure with a
   // misleading "missing evidence" error. Evidence remains mandatory for every product verdict.
   if (action === "blocked") return null;
-  if (review.evidence.recording.status === "saved" && review.evidence.screenshots.length > 0) {
+  if (hasCompleteDevReviewEvidence(review.evidence)) return null;
+  if (
+    (action === "planning" || action === "exhausted") &&
+    hasScreenshotBackedDevReviewFailure(review.document, review.evidence)
+  ) {
     return null;
   }
-  return "Browser Dev Review completed without the required durable recording and screenshot evidence.";
+  return action === "passed"
+    ? "Browser Dev Review completed without the required durable recording and screenshot evidence."
+    : "Browser Dev Review reported product findings without a saved recording or screenshot-backed failed checks.";
 }
 
 const make = Effect.gen(function* () {

@@ -7,7 +7,7 @@ This browser tooling context is scoped to the Implementation Workflow Browser De
 
 Use the \`t3-code\` MCP server for all browser work. Drive the browser with the \`preview_*\` tools (\`preview_open\`, \`preview_navigate\`, \`preview_snapshot\`, \`preview_click\`, \`preview_type\`, \`preview_press\`, \`preview_scroll\`, \`preview_wait_for\`, \`preview_resize\`) and coordinate the durable Dev Review record with \`dev_review_get\`, \`dev_review_recording_start\`, \`dev_review_capture_screenshot\`, \`dev_review_recording_stop\`, and \`dev_review_update\`. Do not use external browsers, browser MCP servers, or standalone Playwright scripts.
 
-Evidence is required: a terminal verdict (passed/failed) needs a saved screen recording plus at least one captioned screenshot, and \`dev_review_update\` rejects it otherwise. If recording start or stop fails, or the browser tools are unavailable, mark the Dev Review blocked rather than passed. See \`preview-browser-qa.md\` for the full workflow.`;
+Evidence is required. A passed verdict needs a saved screen recording plus at least one captioned screenshot. A failed verdict normally uses the same evidence, but if recording finalization fails after product testing, preserve the failure when there is at least one failed check and every actionable finding references a captured screenshot. Never turn evidenced product defects into blocked solely because video saving failed. If no trustworthy product evidence could be captured, mark the Dev Review blocked. See \`preview-browser-qa.md\` for the full workflow.`;
 
 export const CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS = `<collaboration_mode># Plan Mode (Conversational)
 

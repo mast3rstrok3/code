@@ -1543,7 +1543,7 @@ When this Browser Dev Review is linked to a durable Dev Review record:
 5. Exercise the product with the preview tools: preview_snapshot to inspect the page, then preview_click, preview_type, preview_press, preview_scroll, and preview_wait_for to interact. Re-run preview_snapshot after the DOM changes; element references from an old snapshot go stale. Do not rely on static assumptions.
 6. Capture a captioned screenshot with dev_review_capture_screenshot at each meaningful application state (initial load, after key interactions, any failure states). Findings should reference these screenshot ids in evidenceIds.
 7. Stop the recording with dev_review_recording_stop after browser testing.
-8. Treat evidence as required. A terminal verdict (passed or failed) requires a saved recording and at least one screenshot; dev_review_update enforces this. If recording start or stop fails, or the browser tools are unavailable, mark the review blocked instead.
+8. Treat evidence as required. Passed requires a saved recording and at least one screenshot. Failed normally uses the same evidence, but if recording finalization fails after product testing, keep a failed verdict when at least one check failed and every actionable finding references a captured screenshot. Do not turn evidenced product defects into blocked solely because video saving failed. Use blocked only when trustworthy product evidence could not be captured.
 9. Update the Dev Review record with dev_review_update, including verdict, summary, checks, findings, questions, next steps, and evidence IDs.
 10. Mark the review status passed, failed, or blocked.
 

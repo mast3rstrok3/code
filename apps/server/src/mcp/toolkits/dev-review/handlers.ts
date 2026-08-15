@@ -1,6 +1,8 @@
 import {
   CommandId,
   DevReviewError,
+  hasCompleteDevReviewEvidence,
+  hasScreenshotBackedDevReviewFailure,
   OrchestrationDispatchCommandError,
   OrchestrationGetSnapshotError,
   type DevReviewEvidence,
@@ -136,14 +138,26 @@ export const handlers = {
       if (input.status === undefined && input.document === undefined) {
         return yield* reviewError(review.id, "Provide status, document, or both.");
       }
-      if (input.status === "passed" || input.status === "failed") {
+      if (input.status === "passed") {
         const { recording, screenshots } = review.evidence;
-        if (recording.status !== "saved" || screenshots.length === 0) {
+        if (!hasCompleteDevReviewEvidence(review.evidence)) {
           return yield* reviewError(
             review.id,
-            `Cannot set status '${input.status}' without browser evidence: a saved screen recording (current recording status is '${recording.status}') and at least one screenshot (currently ${screenshots.length}) are required. ` +
+            `Cannot set status 'passed' without browser evidence: a saved screen recording (current recording status is '${recording.status}') and at least one screenshot (currently ${screenshots.length}) are required. ` +
               "Run dev_review_recording_start, exercise the app with the preview_* tools, capture screenshots with dev_review_capture_screenshot, then dev_review_recording_stop. " +
               "If the browser tools are unavailable, set status 'blocked' instead.",
+          );
+        }
+      }
+      if (input.status === "failed") {
+        const document = input.document ?? review.document;
+        if (
+          !hasCompleteDevReviewEvidence(review.evidence) &&
+          !hasScreenshotBackedDevReviewFailure(document, review.evidence)
+        ) {
+          return yield* reviewError(
+            review.id,
+            "Cannot set status 'failed' without trustworthy browser evidence. Provide either a saved recording plus a captured screenshot, or—when recording finalization failed—at least one failed check and actionable findings that each reference a captured screenshot. If no product behavior could be evidenced, set status 'blocked' instead.",
           );
         }
       }

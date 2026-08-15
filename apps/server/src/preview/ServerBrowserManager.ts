@@ -107,7 +107,8 @@ const DEFAULT_VIEWPORT = { width: 1280, height: 800 } as const;
 const MAX_VISIBLE_TEXT_LENGTH = 20_000;
 const MAX_INTERACTIVE_ELEMENTS = 80;
 const MAX_EVALUATION_BYTES = 2 * 1024 * 1024;
-const RECORDING_FPS = 25;
+const RECORDING_FPS = 12;
+const RECORDING_FINAL_FRAME_HOLD_MS = 2_000;
 const RECORDING_DESKTOP_WIDTH = 1280;
 const RECORDING_DESKTOP_HEIGHT = 720;
 const RECORDING_FFMPEG_EXIT_TIMEOUT_MS = 10_000;
@@ -1538,6 +1539,7 @@ function* serverBrowserManagerMake(adapter: ServerBrowserManagerAdapter) {
         });
         const sink = VideoFrameSink.createVideoFrameSink({
           fps: RECORDING_FPS,
+          maxFinalFrameHoldMs: RECORDING_FINAL_FRAME_HOLD_MS,
           write: (frame) => {
             child.stdin?.write(frame);
           },
@@ -1610,11 +1612,7 @@ function* serverBrowserManagerMake(adapter: ServerBrowserManagerAdapter) {
     const sizeBytes = yield* Effect.tryPromise({
       try: async () => {
         recording.sink.flush(stoppedAtMillis);
-        await new Promise<void>((resolve) => {
-          const stdin = recording.process.stdin;
-          if (stdin) stdin.end(resolve);
-          else resolve();
-        });
+        recording.process.stdin?.end();
         const exitCode = await Promise.race([
           recording.exited,
           new Promise<"timeout">((resolve) =>

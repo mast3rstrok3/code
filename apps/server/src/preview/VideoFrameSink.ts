@@ -76,6 +76,8 @@ export const buildFfmpegArgs = (input: BuildFfmpegArgsInput): string[] => {
 export interface VideoFrameSinkOptions {
   readonly fps: number;
   readonly write: (frame: Uint8Array) => void;
+  /** Compress renderer-idle time after the final browser frame while the reviewer writes notes. */
+  readonly maxFinalFrameHoldMs?: number;
 }
 
 export interface VideoFrameSink {
@@ -93,9 +95,10 @@ export const createVideoFrameSink = (options: VideoFrameSinkOptions): VideoFrame
   let heldFrameTimestampMs = 0;
   let writtenFrames = 0;
 
-  const emitHeldFrame = (timestampMs: number) => {
+  const emitHeldFrame = (timestampMs: number, maxElapsedMs = Number.POSITIVE_INFINITY) => {
     if (heldFrame === null) return;
-    const elapsedSeconds = Math.max(0, timestampMs - heldFrameTimestampMs) / 1000;
+    const elapsedMs = Math.min(Math.max(0, timestampMs - heldFrameTimestampMs), maxElapsedMs);
+    const elapsedSeconds = elapsedMs / 1000;
     const repeatCount = Math.max(1, Math.round(fps * elapsedSeconds));
     for (let index = 0; index < repeatCount; index += 1) write(heldFrame);
     writtenFrames += repeatCount;
@@ -108,7 +111,7 @@ export const createVideoFrameSink = (options: VideoFrameSinkOptions): VideoFrame
       heldFrameTimestampMs = Math.max(timestampMs, heldFrameTimestampMs);
     },
     flush: (timestampMs) => {
-      emitHeldFrame(timestampMs);
+      emitHeldFrame(timestampMs, options.maxFinalFrameHoldMs);
       heldFrame = null;
     },
     writtenFrameCount: () => writtenFrames,

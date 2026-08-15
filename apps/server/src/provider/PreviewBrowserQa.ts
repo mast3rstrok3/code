@@ -37,6 +37,6 @@ The review's evidence is server-authoritative: recordings and screenshots are st
 
 - \`dev_review_recording_start\` / \`dev_review_recording_stop\` bracket the whole testing session. Stop returns the recording evidence; status \`failed\` means no video was saved.
 - \`dev_review_capture_screenshot\` saves a PNG of the current tab with your caption and returns \`{id, caption, capturedAt}\`. Reference these ids in findings' \`evidenceIds\`.
-- A terminal verdict (\`passed\`/\`failed\`) requires a saved recording plus at least one screenshot — \`dev_review_update\` rejects it otherwise. If the browser tools fail or are unavailable, set the review to \`blocked\` with an explanation instead of forcing a verdict.
+- A passed verdict requires a saved recording plus at least one screenshot. A failed verdict normally uses the same evidence. If recording finalization fails after product testing, retain a failed verdict when at least one check failed and every actionable finding references a captured screenshot; the recording error remains visible as an evidence warning. Do not erase evidenced defects by changing them to blocked solely because video saving failed. If no trustworthy product evidence was captured, set the review to \`blocked\` with an explanation instead of forcing a verdict.
 - If no URL is provided and no usable preview is already open, mark the review \`blocked\` with concrete details instead of inventing a target.
 `;

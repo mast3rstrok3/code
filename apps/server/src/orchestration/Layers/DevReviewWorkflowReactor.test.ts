@@ -249,17 +249,60 @@ it("preserves a blocked review reason when browser evidence could not be capture
   expect(terminalReviewEvidenceFailure(action, blocked)).toBeNull();
 });
 
-it("still requires evidence for passed and actionable failed reviews", () => {
-  for (const verdict of ["passed", "failed"] as const) {
-    const original = review(verdict);
-    const terminal = {
-      ...original,
-      evidence: { ...original.evidence, screenshots: [] },
-    } satisfies DevReviewRecord;
-    const action = terminalReviewAction(run({ attemptsUsed: 1 }), terminal);
+it("still requires complete recording evidence for passed reviews", () => {
+  const original = review("passed");
+  const terminal = {
+    ...original,
+    evidence: { ...original.evidence, screenshots: [] },
+  } satisfies DevReviewRecord;
+  const action = terminalReviewAction(run({ attemptsUsed: 1 }), terminal);
 
-    expect(terminalReviewEvidenceFailure(action, terminal)).toContain(
-      "required durable recording and screenshot evidence",
-    );
-  }
+  expect(terminalReviewEvidenceFailure(action, terminal)).toContain(
+    "required durable recording and screenshot evidence",
+  );
+});
+
+it("accepts screenshot-backed failed findings when recording finalization fails", () => {
+  const original = review("failed");
+  const terminal = {
+    ...original,
+    document: {
+      ...original.document,
+      checks: [
+        {
+          id: "checkout-submit",
+          label: "Submit checkout",
+          status: "failed" as const,
+          notes: "The submit button remains disabled.",
+        },
+      ],
+      findings: original.document.findings.map((finding) => ({
+        ...finding,
+        evidenceIds: ["shot-1"],
+      })),
+    },
+    evidence: {
+      recording: {
+        ...original.evidence.recording,
+        status: "failed" as const,
+        path: null,
+        mimeType: null,
+        sizeBytes: null,
+        error: "ffmpeg did not finalize in time",
+      },
+      screenshots: [
+        {
+          id: "shot-1",
+          path: "/tmp/shot-1.png",
+          mimeType: "image/png" as const,
+          caption: "Checkout submit remains disabled",
+          capturedAt: now,
+        },
+      ],
+    },
+  } satisfies DevReviewRecord;
+  const action = terminalReviewAction(run({ attemptsUsed: 1 }), terminal);
+
+  expect(action).toBe("planning");
+  expect(terminalReviewEvidenceFailure(action, terminal)).toBeNull();
 });

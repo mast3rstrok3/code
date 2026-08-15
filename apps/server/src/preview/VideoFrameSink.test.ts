@@ -4,10 +4,11 @@ import { buildFfmpegArgs, createVideoFrameSink, evenDimension } from "./VideoFra
 
 const frame = (byte: number): Uint8Array => Uint8Array.of(byte);
 
-const collectingSink = (fps: number) => {
+const collectingSink = (fps: number, maxFinalFrameHoldMs?: number) => {
   const written: number[] = [];
   const sink = createVideoFrameSink({
     fps,
+    ...(maxFinalFrameHoldMs === undefined ? {} : { maxFinalFrameHoldMs }),
     write: (bytes) => {
       written.push(bytes[0]!);
     },
@@ -100,6 +101,14 @@ describe("VideoFrameSink", () => {
       assert.deepStrictEqual(written, [1]);
       sink.flush(2_040);
       assert.deepStrictEqual(written, [1, 2]);
+    });
+
+    it("caps the final idle frame so report-writing time does not inflate the recording", () => {
+      const { sink, written } = collectingSink(10, 2_000);
+      sink.pushFrame(frame(1), 1_000);
+      sink.flush(61_000);
+      assert.strictEqual(written.length, 20);
+      assert.strictEqual(sink.writtenFrameCount(), 20);
     });
   });
 });

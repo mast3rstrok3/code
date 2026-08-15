@@ -42,6 +42,31 @@ const emptyDocument = {
   nextSteps: [],
 } as const;
 
+const screenshotBackedFailureDocument = {
+  verdict: "failed",
+  summary: "Checkout remains broken.",
+  checks: [
+    {
+      id: "checkout-submit",
+      label: "Submit checkout",
+      status: "failed",
+      notes: "The submit button remains disabled.",
+    },
+  ],
+  findings: [
+    {
+      id: "finding-1",
+      severity: "major",
+      title: "Submit remains disabled",
+      details: "Checkout cannot continue.",
+      reproduction: "Enter valid details and submit.",
+      evidenceIds: ["shot-1"],
+    },
+  ],
+  questions: [],
+  nextSteps: ["Repair checkout submission."],
+} as const;
+
 const makeReview = (evidence: DevReviewEvidence): DevReviewRecord => ({
   id: reviewId,
   sourceThreadId: ThreadId.make("thread-source"),
@@ -286,6 +311,61 @@ describe("dev-review toolkit handlers", () => {
       assert.match(error.message, /saved screen recording/);
       assert.match(error.message, /dev_review_recording_start/);
       assert.match(error.message, /blocked/);
+      assert.strictEqual(harness.dispatched.length, 0);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("accepts screenshot-backed failed findings when recording finalization fails", () => {
+    const harness = makeHarness({
+      review: makeReview({
+        recording: {
+          ...EMPTY_DEV_REVIEW_EVIDENCE.recording,
+          status: "failed",
+          error: "ffmpeg did not finalize in time",
+        },
+        screenshots: [
+          {
+            id: "shot-1",
+            path: "/state/preview-artifacts/dev-review/dev-review-1/shot-1.png",
+            mimeType: "image/png",
+            caption: "Checkout submit remains disabled",
+            capturedAt: "2026-01-01T00:00:30.000Z",
+          },
+        ],
+      }),
+    });
+
+    return Effect.gen(function* () {
+      const updated = yield* handlers.dev_review_update({
+        reviewId,
+        status: "failed",
+        document: screenshotBackedFailureDocument,
+      });
+      assert.strictEqual(updated.status, "failed");
+      assert.strictEqual(harness.dispatched.length, 1);
+      assert.strictEqual(harness.dispatched[0]?.type, "thread.dev-review.update");
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("rejects recording-degraded failed findings without linked screenshot evidence", () => {
+    const harness = makeHarness({
+      review: makeReview({
+        recording: { ...EMPTY_DEV_REVIEW_EVIDENCE.recording, status: "failed" },
+        screenshots: [],
+      }),
+    });
+
+    return Effect.gen(function* () {
+      const error = yield* handlers
+        .dev_review_update({
+          reviewId,
+          status: "failed",
+          document: screenshotBackedFailureDocument,
+        })
+        .pipe(Effect.flip);
+      assert.strictEqual(error._tag, "DevReviewError");
+      assert.match(error.message, /failed check/);
+      assert.match(error.message, /captured screenshot/);
       assert.strictEqual(harness.dispatched.length, 0);
     }).pipe(Effect.provide(harness.layer));
   });

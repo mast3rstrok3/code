@@ -121,7 +121,7 @@ export const DevReviewGetTool = Tool.make("dev_review_get", {
 export const DevReviewUpdateTool = devReviewTool(
   Tool.make("dev_review_update", {
     description:
-      "Persist the Dev Review document and/or final status. Send the complete document each time, not a partial patch. A terminal status (passed/failed) requires a saved screen recording and at least one captured screenshot.",
+      "Persist the Dev Review document and/or final status. Send the complete document each time, not a partial patch. Passed requires a saved recording and screenshot. Failed accepts the same complete evidence, or screenshot-backed findings with failed checks when recording finalization failed.",
     parameters: DevReviewUpdateInput,
     success: DevReviewRecord,
     failure: DevReviewToolFailure,
