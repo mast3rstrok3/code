@@ -1,6 +1,8 @@
 import { ProjectId } from "@t3tools/contracts";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { projectScriptRuntimeEnv, setupProjectScript } from "@t3tools/shared/projectScripts";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -19,6 +21,7 @@ export interface ProjectSetupScriptRunnerResultStarted {
   readonly scriptName: string;
   readonly terminalId: string;
   readonly cwd: string;
+  readonly completion: Effect.Effect<void, ProjectSetupScriptOperationError>;
 }
 
 export type ProjectSetupScriptRunnerResult =
@@ -40,7 +43,12 @@ export class ProjectSetupScriptOperationError extends Schema.TaggedErrorClass<Pr
     projectId: Schema.optional(Schema.String),
     projectCwd: Schema.optional(Schema.String),
     worktreePath: Schema.String,
-    operation: Schema.Literals(["resolveProject", "openTerminal", "writeCommand"]),
+    operation: Schema.Literals([
+      "resolveProject",
+      "openTerminal",
+      "writeCommand",
+      "executeCommand",
+    ]),
     cause: Schema.Defect(),
   },
 ) {
@@ -81,6 +89,7 @@ export class ProjectSetupScriptRunner extends Context.Service<
 export const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const terminalManager = yield* TerminalManager.TerminalManager;
+  const platform = yield* HostProcessPlatform;
 
   const runForThread: ProjectSetupScriptRunner["Service"]["runForThread"] = Effect.fn(
     "ProjectSetupScriptRunner.runForThread",
@@ -156,11 +165,51 @@ export const make = Effect.gen(function* () {
             }),
         ),
       );
+
+    const completionSignal = yield* Deferred.make<
+      | {
+          readonly type: "exited";
+          readonly exitCode: number | null;
+          readonly exitSignal: number | null;
+        }
+      | { readonly type: "error"; readonly message: string }
+      | { readonly type: "closed" }
+    >();
+    const unsubscribe = yield* terminalManager.subscribe((event) => {
+      if (event.threadId !== input.threadId || event.terminalId !== terminalId) {
+        return Effect.void;
+      }
+      switch (event.type) {
+        case "exited":
+          return Deferred.succeed(completionSignal, {
+            type: "exited",
+            exitCode: event.exitCode,
+            exitSignal: event.exitSignal,
+          }).pipe(Effect.asVoid);
+        case "error":
+          return Deferred.succeed(completionSignal, {
+            type: "error",
+            message: event.message,
+          }).pipe(Effect.asVoid);
+        case "closed":
+          return Deferred.succeed(completionSignal, { type: "closed" }).pipe(Effect.asVoid);
+        case "started":
+        case "output":
+        case "cleared":
+        case "restarted":
+        case "activity":
+          return Effect.void;
+      }
+    });
+    const command =
+      platform === "win32"
+        ? `& { ${script.command} }; $t3SetupSucceeded = $?; $t3SetupExit = $LASTEXITCODE; if (-not $t3SetupSucceeded) { if ($null -ne $t3SetupExit -and $t3SetupExit -ne 0) { exit $t3SetupExit }; exit 1 }; exit 0`
+        : `exec sh -lc '${script.command.replaceAll("'", `'"'"'`)}'`;
     yield* terminalManager
       .write({
         threadId: input.threadId,
         terminalId,
-        data: `${script.command}\r`,
+        data: `${command}\r`,
       })
       .pipe(
         Effect.mapError(
@@ -171,7 +220,32 @@ export const make = Effect.gen(function* () {
               cause,
             }),
         ),
+        Effect.tapError(() => Effect.sync(unsubscribe)),
       );
+
+    const completion = Deferred.await(completionSignal).pipe(
+      Effect.flatMap((event) => {
+        if (event.type === "exited" && event.exitCode === 0) {
+          return Effect.void;
+        }
+        const cause =
+          event.type === "error"
+            ? new Error(event.message)
+            : event.type === "closed"
+              ? new Error("Setup terminal closed before the command completed.")
+              : new Error(
+                  `Setup command exited with code ${event.exitCode ?? "unknown"} and signal ${event.exitSignal ?? "none"}.`,
+                );
+        return Effect.fail(
+          new ProjectSetupScriptOperationError({
+            ...errorContext,
+            operation: "executeCommand",
+            cause,
+          }),
+        );
+      }),
+      Effect.ensuring(Effect.sync(unsubscribe)),
+    );
 
     return {
       status: "started",
@@ -179,6 +253,7 @@ export const make = Effect.gen(function* () {
       scriptName: script.name,
       terminalId,
       cwd,
+      completion,
     } as const;
   });
 

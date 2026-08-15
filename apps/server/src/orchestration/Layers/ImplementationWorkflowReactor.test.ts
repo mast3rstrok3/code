@@ -167,6 +167,7 @@ function makeTestLayer(
   autoCreateGate?: AutoCreateGate,
   autoCreateStackStatus: "running" | "starting" | "error" = "running",
   frontendProbeStatus = 200,
+  inheritedStackMissing = false,
 ) {
   const coreLayer = Layer.mergeAll(
     OrchestrationEngineLive.pipe(
@@ -337,6 +338,29 @@ function makeTestLayer(
       ),
       Layer.provide(
         Layer.mock(AppDevStackManager)({
+          getByWorktree: (input) =>
+            Effect.succeed({
+              stack: inheritedStackMissing
+                ? null
+                : {
+                    id: "stack-1",
+                    uuid: "stack-uuid-1",
+                    userId: "user-1",
+                    worktreePath: input.worktreePath,
+                    composePath: "/tmp/compose.yml",
+                    displayName: "Implementation test",
+                    description: null,
+                    status: autoCreateStackStatus,
+                    services: null,
+                    serviceCount: 0,
+                    lastError: null,
+                    errorCount: 0,
+                    createdAt: now,
+                    updatedAt: now,
+                  },
+              frontendUrl: inheritedStackMissing ? null : "http://127.0.0.1:5173",
+              frontendServiceName: inheritedStackMissing ? null : "frontend",
+            }),
           get: (input) =>
             Effect.succeed({
               id: input.stackId,
@@ -436,6 +460,7 @@ function withSystem<A, E>(
     readonly autoCreateStackStatus?: "running" | "starting" | "error";
     /** HTTP status the frontend URL answers with when the reactor probes it before Dev Review. */
     readonly frontendProbeStatus?: number;
+    readonly inheritedStackMissing?: boolean;
   },
 ) {
   return Effect.gen(function* () {
@@ -502,6 +527,7 @@ function withSystem<A, E>(
           options?.autoCreateGate,
           options?.autoCreateStackStatus,
           options?.frontendProbeStatus,
+          options?.inheritedStackMissing,
         ),
       ),
     );
@@ -2182,7 +2208,7 @@ describe("ImplementationWorkflowReactor", () => {
       ),
   );
 
-  it.effect("does not contact a failing app dev stack controller before Fast Build completes", () =>
+  it.effect("does not re-ensure the inherited stack before Fast Build completes", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
@@ -2197,7 +2223,7 @@ describe("ImplementationWorkflowReactor", () => {
           if (!implementer) throw new Error("Fast feature implementer missing.");
           expect(implementer.messages.at(-1)?.text).toContain("# Fast checkout");
           expect(implementer.messages.at(-1)?.text).toContain(
-            "App Dev Stack: starts after this Build finishes cleanly",
+            "App Dev Stack: created by workflow workspace bootstrap after dependency setup; Build reuses it",
           );
           expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(0);
 
@@ -2299,7 +2325,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("starts the stack from the completed Build before Browser Dev Review", () =>
+  it.effect("requires and probes the inherited stack after Build before Browser Dev Review", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
@@ -2359,6 +2385,54 @@ describe("ImplementationWorkflowReactor", () => {
       {
         autoCreateFrontendUrls: ["https://fast-checkout-dev.nightingale-ai.com"],
       },
+    ),
+  );
+
+  it.effect("blocks instead of creating a replacement when the inherited stack is missing", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const run = yield* launchFastFeatureRun(system);
+          const snapshot = yield* system.query.getSnapshot();
+          const implementer = snapshot.threads.find(
+            (thread) => thread.workflowRole === "fast-feature-implementer",
+          );
+          if (!implementer) throw new Error("Fast feature implementer missing.");
+
+          yield* system.engine.dispatch({
+            type: "thread.activity.append",
+            commandId: commandId("fast-build-missing-inherited-stack"),
+            threadId: implementer.id,
+            activity: {
+              id: eventId("fast-build-missing-inherited-stack"),
+              tone: "info",
+              kind: "implementation-fast-build-result",
+              summary: "Fast Build succeeded",
+              payload: {
+                type: "implementation-fast-build-result",
+                runId: run.id,
+                status: "succeeded",
+                commitSha: "def456",
+                validations: requiredValidations(),
+                notesMarkdown: "Implemented and committed.",
+              },
+              turnId: null,
+              createdAt: "2026-01-01T00:00:02.000Z",
+            },
+            createdAt: "2026-01-01T00:00:02.000Z",
+          });
+          yield* system.reactor.drain;
+
+          const settled = (yield* system.query.getSnapshot()).implementationRuns[0];
+          expect(settled?.status).toBe("needs-human-attention");
+          expect(settled?.retryableFailure?.stage).toBe("app-dev-stack");
+          expect(settled?.retryableFailure?.humanBlocked).toBe(true);
+          expect(settled?.lastQaFailure?.detailMarkdown).toContain(
+            "workflow-owned App Dev Stack is missing",
+          );
+          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(0);
+        }),
+      { inheritedStackMissing: true },
     ),
   );
 
@@ -3032,7 +3106,7 @@ describe("ImplementationWorkflowReactor", () => {
         );
         expect(validator).toBeDefined();
         expect(validator?.messages.at(-1)?.text).toContain(
-          "T3 Code provisions AppDevStack from the clean integrated worktree after this gate passes",
+          "its workflow-owned AppDevStack was created during workspace bootstrap and is reused here",
         );
         expect(validator?.messages.at(-1)?.text).toContain(
           "integration gate before Dev Review and Code Review",

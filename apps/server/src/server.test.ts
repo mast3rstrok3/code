@@ -7775,6 +7775,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               };
             }),
         );
+        const setupCompleted = yield* Deferred.make<void>();
         const runForThread = vi.fn(
           (
             _: Parameters<
@@ -7787,19 +7788,23 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               scriptName: "Setup",
               terminalId: "setup-setup",
               cwd: "/tmp/bootstrap-worktree",
+              completion: Deferred.await(setupCompleted),
             }),
         );
+        const stackProvisioned = yield* Deferred.make<void>();
         const autoCreateAppDevStack = vi.fn(
           (_: Parameters<AppDevStackManager.AppDevStackManager["Service"]["autoCreate"]>[0]) =>
-            Effect.succeed({
-              stack: null,
-              created: false,
-              alreadyRunning: true,
-              reserved: true,
-              message: "Workflow preview is ready.",
-              frontendUrl: "https://fast-feature.example.test",
-              frontendServiceName: "frontend",
-            }),
+            Deferred.succeed(stackProvisioned, undefined).pipe(
+              Effect.as({
+                stack: null,
+                created: false,
+                alreadyRunning: true,
+                reserved: true,
+                message: "Workflow preview is ready.",
+                frontendUrl: "https://fast-feature.example.test",
+                frontendServiceName: "frontend",
+              }),
+            ),
         );
 
         yield* buildAppUnderTest({
@@ -7872,8 +7877,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             }),
           ),
         );
-
         assert.equal(response.sequence, 4);
+        assert.equal(autoCreateAppDevStack.mock.calls.length, 0);
+        assert.equal(dispatchedCommands[3]?.type, "thread.turn.start");
+        yield* Deferred.succeed(setupCompleted, undefined);
+        yield* Deferred.await(stackProvisioned);
+        yield* Effect.yieldNow;
+
         assert.deepEqual(
           dispatchedCommands.map((command) => command.type),
           [
@@ -7881,6 +7891,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             "thread.meta.update",
             "thread.activity.append",
             "thread.turn.start",
+            "thread.activity.append",
+            "thread.activity.append",
+            "thread.activity.append",
             "thread.activity.append",
             "thread.activity.append",
           ],
@@ -7928,9 +7941,21 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         );
         assert.deepEqual(
           activities.map((command) => command.activity.kind),
-          ["workflow-workspace-prepared", "setup-script.requested", "setup-script.started"],
+          [
+            "workflow-workspace-prepared",
+            "setup-script.requested",
+            "setup-script.started",
+            "setup-script.completed",
+            "workflow-app-dev-stack.requested",
+            "workflow-app-dev-stack.ready",
+          ],
         );
-        assert.equal(autoCreateAppDevStack.mock.calls.length, 0);
+        assert.equal(autoCreateAppDevStack.mock.calls.length, 1);
+        assert.deepEqual(autoCreateAppDevStack.mock.calls[0]?.[0], {
+          worktreePath: "/tmp/bootstrap-worktree",
+          displayName: "Bootstrap Thread",
+          gitBranch: "t3code/bootstrap-refName",
+        });
         assert.deepEqual(activities[0]?.activity.payload, {
           baseBranch: "main",
           branch: "t3code/bootstrap-refName",
@@ -8179,6 +8204,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             scriptName: "Setup",
             terminalId: "setup-setup",
             cwd: "/tmp/bootstrap-worktree",
+            completion: Effect.void,
           }),
       );
       let setupActivityAppendAttempt = 0;
@@ -8259,10 +8285,16 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ),
       );
 
-      assert.equal(response.sequence, 4);
+      assert.equal(response.sequence, 5);
       assert.deepEqual(
         dispatchedCommands.map((command) => command.type),
-        ["thread.create", "thread.meta.update", "thread.activity.append", "thread.turn.start"],
+        [
+          "thread.create",
+          "thread.meta.update",
+          "thread.activity.append",
+          "thread.activity.append",
+          "thread.turn.start",
+        ],
       );
       const setupActivities = dispatchedCommands.filter(
         (command): command is Extract<OrchestrationCommand, { type: "thread.activity.append" }> =>
@@ -8270,7 +8302,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       );
       assert.deepEqual(
         setupActivities.map((command) => command.activity.kind),
-        ["setup-script.requested"],
+        ["setup-script.requested", "setup-script.completed"],
       );
       assertTrue(
         setupActivities.every((command) => command.activity.kind !== "setup-script.failed"),

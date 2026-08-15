@@ -385,7 +385,7 @@ function buildMergeGatePrompt(input: {
     `Run ${input.kind} gate for implementation run ${input.run.id}.`,
     "",
     ...integrationInstructions,
-    "Use the repository's existing focused validation setup and complete any dependency installation it requires. Do not start a competing development server. T3 Code provisions AppDevStack from the clean integrated worktree after this gate passes. If validation cannot run with the prepared workspace, report the setup failure explicitly.",
+    "Use the repository's existing focused validation setup. Do not start a competing development server or replace dependency paths in the shared worktree: its workflow-owned AppDevStack was created during workspace bootstrap and is reused here. If validation cannot run with the prepared workspace, report the setup failure explicitly.",
     "",
     ...validationInstructions,
     "",
@@ -616,9 +616,9 @@ function fastFeatureExecutionContract(run: OrchestrationImplementationRun): Read
     `- branch: ${run.orchestratorBranch}`,
     `- worktree: ${run.orchestratorWorktreePath}`,
     `- fixed source commit: ${run.pinnedCommit}`,
-    "- App Dev Stack: starts after this Build finishes cleanly",
+    "- App Dev Stack: created by workflow workspace bootstrap after dependency setup; Build reuses it",
     "",
-    "Complete any repository-declared setup or dependency installation needed by the implementation and focused checks. Do not start a competing development server; T3 Code provisions the workflow App Dev Stack from the finished worktree before Dev Review.",
+    "Use the repository dependencies prepared during workflow workspace bootstrap. Do not start a competing development server or replace dependency paths mounted by the workflow-owned App Dev Stack.",
     "",
     "## Pre-review validation",
     "Run focused tests and affected-file checks. A documented sub-minute fast command such as `pnpm check` is allowed.",
@@ -1674,30 +1674,41 @@ const make = Effect.gen(function* () {
         updatedAt: input.createdAt,
       };
 
-      // "The controller accepted the request" is not "the app is serving". A stack still `starting`
-      // was being cached as resolved, which skipped `autoCreate` on every later Dev Review and sent
-      // reviewer after reviewer at a URL that never came up. A null `stackStatus` is a reserved
-      // branch served by a standing deployment — there is no stack to wait on there.
-      // Every post-repair QA pass re-ensures the stack. This is intentionally idempotent at the manager
-      // boundary and prevents a cached `running` result from hiding service failures or code that
-      // changed during the previous TDD repair.
-      const stackResult = yield* appDevStackManager
-        .autoCreate({
-          worktreePath: cycleRun.orchestratorWorktreePath,
-          displayName:
-            cycleRun.artifactSource === "proposed-plan"
-              ? `Fast feature ${cycleRun.id}`
-              : `Implementation ${cycleRun.id}`,
-          gitBranch: cycleRun.orchestratorBranch,
-          workflowId: orchestratorThread.workflowContext?.workflowId,
-        })
+      // Planning, Full Feature, or Fast Feature owns stack creation during workspace bootstrap.
+      // Implementation may re-ensure that exact registered stack after integration or repair, but
+      // it must never silently manufacture a second runtime when the inherited one is missing.
+      const inheritedLookup = yield* appDevStackManager
+        .getByWorktree({ worktreePath: cycleRun.orchestratorWorktreePath })
         .pipe(Effect.result);
+      const inheritedStackMissing =
+        inheritedLookup._tag === "Success" && inheritedLookup.success.stack === null;
+      const stackResult =
+        inheritedLookup._tag === "Failure" || inheritedStackMissing
+          ? null
+          : yield* appDevStackManager
+              .autoCreate({
+                worktreePath: cycleRun.orchestratorWorktreePath,
+                displayName:
+                  cycleRun.artifactSource === "proposed-plan"
+                    ? `Fast feature ${cycleRun.id}`
+                    : `Implementation ${cycleRun.id}`,
+                gitBranch: cycleRun.orchestratorBranch,
+                workflowId: orchestratorThread.workflowContext?.workflowId,
+              })
+              .pipe(Effect.result);
 
       const stackFailureDetail =
-        stackResult?._tag === "Failure" ? errorDetail(stackResult.failure) : null;
+        inheritedLookup._tag === "Failure"
+          ? errorDetail(inheritedLookup.failure)
+          : inheritedStackMissing
+            ? `The workflow-owned App Dev Stack is missing for '${cycleRun.orchestratorWorktreePath}'. Planning, Full Feature, or Fast Feature must create it after workspace dependency setup; Implementation will not create a replacement.`
+            : stackResult?._tag === "Failure"
+              ? errorDetail(stackResult.failure)
+              : null;
       const stack = stackResult?._tag === "Success" ? stackResult.success : null;
       if (stackFailureDetail !== null) {
-        const infrastructureBlocked = isAppDevStackInfrastructureFailure(stackFailureDetail);
+        const infrastructureBlocked =
+          inheritedStackMissing || isAppDevStackInfrastructureFailure(stackFailureDetail);
         const diagnostics = yield* appDevStackDiagnostics({
           run: ensuringRun,
           stackId: ensuringRun.appDevStack.stackId,
@@ -2620,8 +2631,8 @@ const make = Effect.gen(function* () {
         createdAt: input.createdAt,
       });
 
-      // The App Dev Stack intentionally starts only after Build reports a clean committed HEAD.
-      // `startBrowserReview` provisions and probes it from that completed worktree.
+      // Workspace bootstrap already owns App Dev Stack creation. `startBrowserReview` requires and
+      // probes that inherited stack after Build reports a clean committed HEAD.
     },
   );
 

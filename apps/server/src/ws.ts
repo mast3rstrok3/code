@@ -673,7 +673,11 @@ const makeWsRpcLayer = (
 
       const appendSetupScriptActivity = (input: {
         readonly threadId: ThreadId;
-        readonly kind: "setup-script.requested" | "setup-script.started" | "setup-script.failed";
+        readonly kind:
+          | "setup-script.requested"
+          | "setup-script.started"
+          | "setup-script.completed"
+          | "setup-script.failed";
         readonly summary: string;
         readonly createdAt: string;
         readonly payload: Record<string, unknown>;
@@ -712,6 +716,41 @@ const makeWsRpcLayer = (
       }) =>
         Effect.all({
           commandId: serverCommandId("workflow-workspace-activity"),
+          activityId: serverEventId,
+        }).pipe(
+          Effect.flatMap(({ commandId, activityId }) =>
+            orchestrationEngine.dispatch({
+              type: "thread.activity.append",
+              commandId,
+              threadId: input.threadId,
+              activity: {
+                id: activityId,
+                tone: input.tone,
+                kind: input.kind,
+                summary: input.summary,
+                payload: input.payload,
+                turnId: null,
+                createdAt: input.createdAt,
+              },
+              createdAt: input.createdAt,
+            }),
+          ),
+        );
+
+      const appendWorkflowAppDevStackActivity = (input: {
+        readonly threadId: ThreadId;
+        readonly kind:
+          | "workflow-app-dev-stack.requested"
+          | "workflow-app-dev-stack.starting"
+          | "workflow-app-dev-stack.ready"
+          | "workflow-app-dev-stack.failed";
+        readonly summary: string;
+        readonly createdAt: string;
+        readonly payload: Record<string, unknown>;
+        readonly tone: "info" | "error";
+      }) =>
+        Effect.all({
+          commandId: serverCommandId("workflow-app-dev-stack-activity"),
           activityId: serverEventId,
         }).pipe(
           Effect.flatMap(({ commandId, activityId }) =>
@@ -1061,7 +1100,7 @@ const makeWsRpcLayer = (
                 )
               : Effect.void;
 
-          const recordSetupScriptLaunchFailure = (input: {
+          const recordSetupScriptFailure = (input: {
             readonly error: ProjectSetupScriptRunner.ProjectSetupScriptRunnerError;
             readonly requestedAt: string;
             readonly worktreePath: string;
@@ -1070,7 +1109,7 @@ const makeWsRpcLayer = (
             return appendSetupScriptActivity({
               threadId,
               kind: "setup-script.failed",
-              summary: "Setup script failed to start",
+              summary: "Setup script failed",
               createdAt: input.requestedAt,
               payload: {
                 detail,
@@ -1080,7 +1119,7 @@ const makeWsRpcLayer = (
             }).pipe(
               Effect.ignoreCause({ log: false }),
               Effect.flatMap(() =>
-                Effect.logWarning("bootstrap turn start failed to launch setup script", {
+                Effect.logWarning("bootstrap setup script failed", {
                   threadId,
                   worktreePath: input.worktreePath,
                   detail,
@@ -1088,6 +1127,26 @@ const makeWsRpcLayer = (
               ),
             );
           };
+
+          const recordSetupScriptCompleted = (input: {
+            readonly worktreePath: string;
+            readonly scriptId: string;
+            readonly scriptName: string;
+            readonly terminalId: string;
+          }) =>
+            nowIso.pipe(
+              Effect.flatMap((completedAt) =>
+                appendSetupScriptActivity({
+                  threadId,
+                  kind: "setup-script.completed",
+                  summary: "Setup script completed",
+                  createdAt: completedAt,
+                  payload: input,
+                  tone: "info",
+                }),
+              ),
+              Effect.ignoreCause({ log: true }),
+            );
 
           const recordSetupScriptStarted = (input: {
             readonly requestedAt: string;
@@ -1141,11 +1200,11 @@ const makeWsRpcLayer = (
           const runSetupProgram = () =>
             Effect.gen(function* () {
               if (!bootstrap?.runSetupScript || !targetWorktreePath) {
-                return;
+                return true;
               }
               const worktreePath = targetWorktreePath;
               const requestedAt = yield* nowIso;
-              yield* projectSetupScriptRunner
+              return yield* projectSetupScriptRunner
                 .runForThread({
                   threadId,
                   ...(targetProjectId ? { projectId: targetProjectId } : {}),
@@ -1155,22 +1214,36 @@ const makeWsRpcLayer = (
                 .pipe(
                   Effect.matchEffect({
                     onFailure: (error) =>
-                      recordSetupScriptLaunchFailure({
-                        error,
-                        requestedAt,
-                        worktreePath,
-                      }),
+                      recordSetupScriptFailure({ error, requestedAt, worktreePath }).pipe(
+                        Effect.as(false),
+                      ),
                     onSuccess: (setupResult) => {
                       if (setupResult.status !== "started") {
-                        return Effect.void;
+                        return Effect.succeed(true);
                       }
-                      return recordSetupScriptStarted({
+                      const activityInput = {
                         requestedAt,
                         worktreePath,
                         scriptId: setupResult.scriptId,
                         scriptName: setupResult.scriptName,
                         terminalId: setupResult.terminalId,
-                      });
+                      };
+                      return recordSetupScriptStarted(activityInput).pipe(
+                        Effect.andThen(
+                          setupResult.completion.pipe(
+                            Effect.matchEffect({
+                              onFailure: (error) =>
+                                recordSetupScriptFailure({
+                                  error,
+                                  requestedAt,
+                                  worktreePath,
+                                }).pipe(Effect.as(false)),
+                              onSuccess: () =>
+                                recordSetupScriptCompleted(activityInput).pipe(Effect.as(true)),
+                            }),
+                          ),
+                        ),
+                      );
                     },
                   }),
                 );
@@ -1284,6 +1357,82 @@ const makeWsRpcLayer = (
               }
             }
 
+            const provisionWorkflowAppDevStack = () =>
+              preparedWorkflowWorkspace === null
+                ? Effect.void
+                : Effect.gen(function* () {
+                    const requestedAt = yield* nowIso;
+                    const workflowId =
+                      threadDetail?.workflowContext?.workflowId ??
+                      bootstrap?.createThread?.workflowContext?.workflowId;
+                    const identity = {
+                      worktreePath: preparedWorkflowWorkspace.worktreePath,
+                      branch: preparedWorkflowWorkspace.branch,
+                      workflowPreset: workflowPreset ?? null,
+                      workflowId: workflowId ?? null,
+                    };
+                    yield* appendWorkflowAppDevStackActivity({
+                      threadId,
+                      kind: "workflow-app-dev-stack.requested",
+                      summary: "Starting workflow App Dev Stack",
+                      createdAt: requestedAt,
+                      payload: identity,
+                      tone: "info",
+                    }).pipe(Effect.ignoreCause({ log: true }));
+                    const outcome = yield* appDevStackManager
+                      .autoCreate({
+                        worktreePath: preparedWorkflowWorkspace.worktreePath,
+                        displayName:
+                          threadDetail?.title ??
+                          bootstrap?.createThread?.title ??
+                          `Workflow ${threadId}`,
+                        gitBranch: preparedWorkflowWorkspace.branch,
+                        ...(workflowId === undefined ? {} : { workflowId }),
+                      })
+                      .pipe(Effect.result);
+                    const updatedAt = yield* nowIso;
+                    if (outcome._tag === "Failure") {
+                      yield* appendWorkflowAppDevStackActivity({
+                        threadId,
+                        kind: "workflow-app-dev-stack.failed",
+                        summary: "Workflow App Dev Stack failed to start",
+                        createdAt: updatedAt,
+                        payload: { ...identity, detail: outcome.failure.message },
+                        tone: "error",
+                      }).pipe(Effect.ignoreCause({ log: true }));
+                      return;
+                    }
+                    const result = outcome.success;
+                    const unhealthyService = result.stack?.services?.find(
+                      (service) =>
+                        (service.error !== null && service.error !== undefined) ||
+                        service.health === "unhealthy" ||
+                        service.status === "error" ||
+                        service.status === "stopped",
+                    );
+                    const ready =
+                      result.frontendUrl !== null &&
+                      (result.stack === null || result.stack.status === "running") &&
+                      unhealthyService === undefined;
+                    yield* appendWorkflowAppDevStackActivity({
+                      threadId,
+                      kind: ready
+                        ? "workflow-app-dev-stack.ready"
+                        : "workflow-app-dev-stack.starting",
+                      summary: ready
+                        ? "Workflow App Dev Stack ready"
+                        : "Workflow App Dev Stack starting",
+                      createdAt: updatedAt,
+                      payload: {
+                        ...identity,
+                        stackId: result.stack?.id ?? null,
+                        stackStatus: result.stack?.status ?? null,
+                        frontendUrl: result.frontendUrl,
+                      },
+                      tone: "info",
+                    }).pipe(Effect.ignoreCause({ log: true }));
+                  });
+
             // Ordinary worktrees retain their setup-before-turn ordering. Workflow roots start
             // Product or Engineering Grill as soon as their canonical worktree identity is
             // durable; setup may initialize that worktree alongside the non-implementation turn.
@@ -1292,7 +1441,13 @@ const makeWsRpcLayer = (
             }
             const finalResult = yield* orchestrationEngine.dispatch(finalCommand);
             if (preparedWorkflowWorkspace !== null) {
-              yield* runSetupProgram();
+              yield* runSetupProgram().pipe(
+                Effect.flatMap((dependenciesReady) =>
+                  dependenciesReady ? provisionWorkflowAppDevStack() : Effect.void,
+                ),
+                Effect.ignoreCause({ log: true }),
+                Effect.forkDetach,
+              );
             }
 
             return finalResult;

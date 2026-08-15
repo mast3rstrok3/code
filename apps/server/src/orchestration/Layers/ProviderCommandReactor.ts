@@ -23,6 +23,7 @@ import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
@@ -359,6 +360,34 @@ const make = Effect.gen(function* () {
         branch: input.thread.branch,
         workflowPreset: input.thread.workflowPreset ?? null,
         stackLookup: Option.getOrNull(stackLookup),
+        setupFailureDetail: (() => {
+          const latestSetupOutcome = input.thread.activities
+            .toReversed()
+            .find(
+              (activity) =>
+                activity.kind === "setup-script.completed" ||
+                activity.kind === "setup-script.failed",
+            );
+          if (latestSetupOutcome?.kind !== "setup-script.failed") return null;
+          const detail = Predicate.isObject(latestSetupOutcome.payload)
+            ? latestSetupOutcome.payload["detail"]
+            : undefined;
+          return typeof detail === "string" && detail.trim().length > 0
+            ? detail
+            : "See the setup terminal and workflow activity for details.";
+        })(),
+        stackFailureDetail: (() => {
+          const latestStackOutcome = input.thread.activities
+            .toReversed()
+            .find((activity) => activity.kind.startsWith("workflow-app-dev-stack."));
+          if (latestStackOutcome?.kind !== "workflow-app-dev-stack.failed") return null;
+          const detail = Predicate.isObject(latestStackOutcome.payload)
+            ? latestStackOutcome.payload["detail"]
+            : undefined;
+          return typeof detail === "string" && detail.trim().length > 0
+            ? detail
+            : "See workflow activity for details.";
+        })(),
       });
       return `${context}\n\n${input.messageText}`;
     },

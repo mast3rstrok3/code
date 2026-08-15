@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "@effect/vitest";
-import { type OrchestrationProject, ProjectId } from "@t3tools/contracts";
+import { type OrchestrationProject, ProjectId, type TerminalEvent } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -49,7 +49,8 @@ const makeProjectionSnapshotQueryLayer = (project: OrchestrationProject) =>
   });
 
 const makeTerminalManagerLayer = (
-  overrides: Pick<TerminalManager.TerminalManager["Service"], "open" | "write">,
+  overrides: Pick<TerminalManager.TerminalManager["Service"], "open" | "write"> &
+    Partial<Pick<TerminalManager.TerminalManager["Service"], "subscribe">>,
 ) =>
   Layer.succeed(TerminalManager.TerminalManager, {
     ...overrides,
@@ -58,13 +59,14 @@ const makeTerminalManagerLayer = (
     clear: () => Effect.void,
     restart: () => Effect.die(new Error("unused")),
     close: () => Effect.void,
-    subscribe: () => Effect.succeed(() => undefined),
+    subscribe: overrides.subscribe ?? (() => Effect.succeed(() => undefined)),
     subscribeMetadata: () => Effect.succeed(() => undefined),
   });
 
 const testLayer = (
   project: OrchestrationProject,
-  terminal: Pick<TerminalManager.TerminalManager["Service"], "open" | "write">,
+  terminal: Pick<TerminalManager.TerminalManager["Service"], "open" | "write"> &
+    Partial<Pick<TerminalManager.TerminalManager["Service"], "subscribe">>,
 ) =>
   ProjectSetupScriptRunner.layer.pipe(
     Layer.provideMerge(makeProjectionSnapshotQueryLayer(project)),
@@ -94,6 +96,7 @@ describe("ProjectSetupScriptRunner", () => {
   it.effect(
     "opens the deterministic setup terminal with worktree env and writes the command",
     () => {
+      let listener: ((event: TerminalEvent) => Effect.Effect<void>) | undefined;
       const open = vi.fn(() =>
         Effect.succeed({
           threadId: "thread-1",
@@ -109,7 +112,22 @@ describe("ProjectSetupScriptRunner", () => {
           updatedAt: "2026-01-01T00:00:00.000Z",
         }),
       );
-      const write = vi.fn(() => Effect.void);
+      const write = vi.fn(
+        () =>
+          listener?.({
+            type: "exited",
+            threadId: "thread-1",
+            terminalId: "setup-setup",
+            exitCode: 0,
+            exitSignal: null,
+          }) ?? Effect.void,
+      );
+      const subscribe = vi.fn((nextListener: (event: TerminalEvent) => Effect.Effect<void>) =>
+        Effect.sync(() => {
+          listener = nextListener;
+          return () => undefined;
+        }),
+      );
       const project = makeProject([
         {
           id: "setup",
@@ -127,8 +145,11 @@ describe("ProjectSetupScriptRunner", () => {
           projectCwd: "/repo/project",
           worktreePath: "/repo/worktrees/a",
         });
+        if (result.status === "started") {
+          yield* result.completion;
+        }
 
-        expect(result).toEqual({
+        expect(result).toMatchObject({
           status: "started",
           scriptId: "setup",
           scriptName: "Setup",
@@ -148,11 +169,66 @@ describe("ProjectSetupScriptRunner", () => {
         expect(write).toHaveBeenCalledWith({
           threadId: "thread-1",
           terminalId: "setup-setup",
-          data: "bun install\r",
+          data: "exec sh -lc 'bun install'\r",
         });
-      }).pipe(Effect.provide(testLayer(project, { open, write })));
+      }).pipe(Effect.provide(testLayer(project, { open, write, subscribe })));
     },
   );
+
+  it.effect("fails completion when the setup command exits unsuccessfully", () => {
+    let listener: ((event: TerminalEvent) => Effect.Effect<void>) | undefined;
+    const project = makeProject([
+      {
+        id: "setup",
+        name: "Setup",
+        command: "bun install",
+        icon: "configure",
+        runOnWorktreeCreate: true,
+      },
+    ]);
+    const open = () =>
+      Effect.succeed({
+        threadId: "thread-1",
+        terminalId: "setup-setup",
+        cwd: "/repo/worktrees/a",
+        worktreePath: "/repo/worktrees/a",
+        status: "running" as const,
+        pid: 123,
+        history: "",
+        exitCode: null,
+        exitSignal: null,
+        label: "setup-setup",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      });
+    const subscribe = (nextListener: (event: TerminalEvent) => Effect.Effect<void>) =>
+      Effect.sync(() => {
+        listener = nextListener;
+        return () => undefined;
+      });
+    const write = () =>
+      listener?.({
+        type: "exited",
+        threadId: "thread-1",
+        terminalId: "setup-setup",
+        exitCode: 1,
+        exitSignal: null,
+      }) ?? Effect.void;
+
+    return Effect.gen(function* () {
+      const runner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
+      const result = yield* runner.runForThread({
+        threadId: "thread-1",
+        projectId: "project-1",
+        worktreePath: "/repo/worktrees/a",
+      });
+      expect(result.status).toBe("started");
+      if (result.status !== "started") return;
+
+      const error = yield* result.completion.pipe(Effect.flip);
+      expect(error.operation).toBe("executeCommand");
+      expect(String(error.cause)).toContain("code 1");
+    }).pipe(Effect.provide(testLayer(project, { open, write, subscribe })));
+  });
 
   it.effect("keeps terminal failures as the exact cause of a structured operation error", () => {
     const rootCause = new Error("stat failed");

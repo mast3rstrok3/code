@@ -1614,7 +1614,7 @@ describe("ProviderCommandReactor", () => {
     const request = harness.sendTurn.mock.calls[0]?.[0] as { readonly input?: string };
     expect(request.input).toContain("Worktree path: /tmp/worktrees/rudi/worktree-1234abcd");
     expect(request.input).toContain("Git branch: verify-email-capabilities");
-    expect(request.input).toContain("App Dev Stack status: pending Build");
+    expect(request.input).toContain("App Dev Stack status: pending workspace dependency readiness");
     expect(request.input).toContain("do not substitute another runtime");
     expect(request.input).toMatch(/Check the email capabilities\.$/);
   });

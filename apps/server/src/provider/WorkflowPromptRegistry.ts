@@ -38,7 +38,7 @@ const WORKFLOW_AGENT_COMMUNICATIONS_PROMPT = WORKFLOW_SUBAGENT_INSTRUCTIONS_PROM
 
 const APP_DEV_STACK_ASSOCIATED_DOC_CONTENT = `# AppDevStack
 
-An AppDevStack is T3's Kubernetes-backed development environment for one workflow worktree: service pods mount that worktree at \`/app\`, while dependency paths such as \`node_modules\` can be separate pod volumes. Planning, Full Feature, and Fast Feature prepare their shared worktree before the first model turn. Planning and Build use that workspace immediately; AppDevStack starts only after implementation has produced a clean, committed or integrated worktree ready for Dev Review. When a later launch provides a Feature URL or stack diagnostics, treat them as authoritative, never start a competing dev server, and do not run a host dependency install in the shared worktree while the stack is active because replacing a mounted path can disconnect the pod's dependency volume. Implementation TDD workers branch downward into child worktrees and may perform repository-declared setup needed for focused tests, but must not start a competing app server.`;
+An AppDevStack is T3's Kubernetes-backed development environment for one workflow worktree: service pods mount that worktree at \`/app\`, while dependency paths such as \`node_modules\` can be separate pod volumes. Planning, Full Feature, and Fast Feature create their shared worktree before the first model turn, run its repository-declared dependency setup, and start AppDevStack immediately after that setup succeeds. The workflow thread itself starts immediately while this happens. Every later Planning, Build, Implementation, and Dev Review stage reuses that exact worktree, branch, and stack. Treat the injected stack status, id, and Feature URL as authoritative; do not use another worktree's runtime, start a competing dev server, or replace dependency paths in the shared worktree while its stack is active. Implementation TDD workers branch downward into child worktrees and may perform repository-declared setup needed for focused tests, but must not start a competing app server.`;
 
 const APP_DEV_STACK_ASSOCIATED_DOC = {
   id: "app-dev-stack",
@@ -677,7 +677,7 @@ If any of the three is missing, skip the ADR. Use the format in [ADR-FORMAT.md](
 
 The Engineering Grill is represented above by the complete Grilling and Domain Modeling instructions. Load CONTEXT-FORMAT.md or ADR-FORMAT.md with workflow_doc_get only immediately before writing that artifact.
 
-This Planning workflow already owns the current worktree. Treat it as the shared workspace for every later Planning and Implementation stage. AppDevStack starts only after implementation is integrated and ready for Dev Review; do not start a competing development server.
+This Planning workflow already owns the current worktree and AppDevStack. Treat them as the shared runtime workspace for every later Planning and Implementation stage. The stack starts programmatically as soon as repository-declared workspace setup succeeds; do not start a competing development server or use another worktree's stack.
 
 Planning artifact writes during this stage are limited to glossary and ADR updates. Do not make implementation changes. Finish only when the goal, audience, success criteria, scope, non-goals, terminology, decisions, risks, edge cases, failure modes, and acceptance criteria are clear enough for Spec authoring.
 
@@ -1193,7 +1193,7 @@ This stage orchestrates the upstream implement loop across sub-threads instead o
 
 - Load the durable Spec with workflow_spec_get and the tickets with workflow_tickets_list and workflow_ticket_get. The Spec is the node that binds the tickets and later dev reviews together.
 - The run reuses the Planning workflow's dedicated worktree and branch, which were created from the branch the user selected before Planning began. The finished change request is filed back into that original branch.
-- AppDevStack starts from the completed integrated worktree before Dev Review. Load \`app-dev-stack.md\` before diagnosing it; do not start another server.
+- Reuse the AppDevStack created for the Planning worktree during workspace bootstrap. Implementation must not create a replacement stack. Load \`app-dev-stack.md\` before diagnosing it; do not start another server.
 - Tickets are implemented dependency-aware by TDD worker sub-threads (the TDD Implementation skill), each in its own worktree and branch. A dependent ticket's worker branches from its blocker's worker branch so chained tickets build on each other, and every worker commits to its own branch.
 - Worker branches are merged programmatically back into the orchestrator worktree; the Merge Gate stage always runs once for the integrated HEAD, whether integration was clean or required conflict resolution.
 - A Browser Dev Review finding launches a fresh TDD repair thread on the already-integrated orchestrator worktree. After that repair commits and passes focused checks, start the next Browser Dev Review directly; do not rerun the Merge Gate between review cycles.
@@ -1723,7 +1723,7 @@ Before asking questions, ground yourself in the codebase and existing product co
 
 ${
   input.workspacePrepared
-    ? "This workflow already owns the current worktree. Every later Plan, Build, Implementation, and Dev Review stage reuses that shared workspace. AppDevStack starts only after Build or integration finishes; do not start a competing development server."
+    ? "This workflow already owns the current worktree. Every later Plan, Build, Implementation, and Dev Review stage reuses that shared workspace and its AppDevStack. The stack starts programmatically as soon as repository-declared dependency setup succeeds; do not start a competing development server or use another worktree's runtime."
     : ""
 }
 
