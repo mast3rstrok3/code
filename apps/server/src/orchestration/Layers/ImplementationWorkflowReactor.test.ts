@@ -1190,7 +1190,7 @@ describe("ImplementationWorkflowReactor", () => {
         ).toHaveLength(0);
         expect(yield* Ref.get(system.createWorktreeInputs)).toHaveLength(1);
         const firstAutoCreateInputs = yield* Ref.get(system.autoCreateInputs);
-        expect(firstAutoCreateInputs).toHaveLength(1);
+        expect(firstAutoCreateInputs).toHaveLength(0);
 
         yield* system.engine.dispatch({
           type: "thread.activity.append",
@@ -1223,10 +1223,8 @@ describe("ImplementationWorkflowReactor", () => {
         expect(
           snapshot.threads.filter((thread) => thread.workflowRole === "implementation-qa-reviewer"),
         ).toHaveLength(1);
-        expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(2);
+        expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(1);
         expect((yield* Ref.get(system.autoCreateInputs)).map((input) => input.workflowId)).toEqual([
-          snapshot.threads.find((thread) => thread.id === run.orchestratorThreadId)?.workflowContext
-            ?.workflowId,
           snapshot.threads.find((thread) => thread.id === run.orchestratorThreadId)?.workflowContext
             ?.workflowId,
         ]);
@@ -1460,7 +1458,7 @@ describe("ImplementationWorkflowReactor", () => {
       (system) =>
         Effect.gen(function* () {
           const run = yield* launchFastFeatureRun(system);
-          expect(run.appDevStack.status).toBe("ensuring");
+          expect(run.appDevStack.status).toBe("not-requested");
 
           const implementer = (yield* system.query.getSnapshot()).threads.find(
             (thread) => thread.workflowRole === "fast-feature-implementer",
@@ -1513,7 +1511,7 @@ describe("ImplementationWorkflowReactor", () => {
       (system) =>
         Effect.gen(function* () {
           const run = yield* launchFastFeatureRun(system);
-          expect(run.appDevStack.status).toBe("ready");
+          expect(run.appDevStack.status).toBe("not-requested");
 
           const implementer = (yield* system.query.getSnapshot()).threads.find(
             (thread) => thread.workflowRole === "fast-feature-implementer",
@@ -1987,7 +1985,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("starts the app dev stack before Fast Build", () =>
+  it.effect("starts Fast Build before requesting the app dev stack", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         yield* dispatchFastFeatureLaunch(system);
@@ -2000,8 +1998,8 @@ describe("ImplementationWorkflowReactor", () => {
         if (!implementer) throw new Error("Fast feature implementer missing.");
         expect(implementer.messages.at(-1)?.text).toContain("# Fast checkout");
         expect(implementer.messages.at(-1)?.role).toBe("user");
-        expect(snapshot.implementationRuns[0]?.appDevStack.status).toBe("ready");
-        expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(1);
+        expect(snapshot.implementationRuns[0]?.appDevStack.status).toBe("not-requested");
+        expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(0);
       }),
     ),
   );
@@ -2023,13 +2021,14 @@ describe("ImplementationWorkflowReactor", () => {
           expect(run?.orchestratorWorktreePath).toBe("/tmp/implementation-reactor");
           expect(implementer?.messages.at(-1)?.text).toContain("# Fast checkout");
           expect(yield* Ref.get(system.createWorktreeInputs)).toHaveLength(0);
-          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(1);
+          expect(run?.appDevStack.status).toBe("not-requested");
+          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(0);
         }),
       { sourceRefName: "workflow/fast-feature-checkout" },
     ),
   );
 
-  it.effect("starts the shared app dev stack before planning-spec workers", () =>
+  it.effect("starts planning-spec workers before requesting the shared app dev stack", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         const { spec } = yield* seedPlanning(system);
@@ -2053,8 +2052,8 @@ describe("ImplementationWorkflowReactor", () => {
         );
         expect(worker?.messages.at(-1)?.role).toBe("user");
         expect(snapshot.implementationRuns[0]?.status).toBe("running");
-        expect(snapshot.implementationRuns[0]?.appDevStack.status).toBe("ready");
-        expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(1);
+        expect(snapshot.implementationRuns[0]?.appDevStack.status).toBe("not-requested");
+        expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(0);
       }),
     ),
   );
@@ -2084,7 +2083,7 @@ describe("ImplementationWorkflowReactor", () => {
           const run = snapshot.implementationRuns[0];
           expect(run?.orchestratorBranch).toBe("workflow/planning-checkout");
           expect(run?.orchestratorWorktreePath).toBe("/tmp/implementation-reactor");
-          expect(run?.appDevStack.status).toBe("ready");
+          expect(run?.appDevStack.status).toBe("not-requested");
 
           const worktrees = yield* Ref.get(system.createWorktreeInputs);
           expect(worktrees).toHaveLength(1);
@@ -2096,35 +2095,37 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("keeps the eagerly provisioned app dev stack when implementation is canceled", () =>
-    withSystem((system) =>
-      Effect.gen(function* () {
-        const { run } = yield* launchRun(system);
-        yield* system.engine.dispatch({
-          type: "thread.implementation-run.cancel",
-          commandId: commandId("implementation-cancel-before-review"),
-          threadId: sourceThreadId,
-          runId: run.id,
-          reason: "Stop before review.",
-          createdAt: "2026-01-01T00:00:01.000Z",
-        });
-        yield* system.reactor.drain;
+  it.effect(
+    "does not provision the app dev stack when implementation is canceled before review",
+    () =>
+      withSystem((system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          yield* system.engine.dispatch({
+            type: "thread.implementation-run.cancel",
+            commandId: commandId("implementation-cancel-before-review"),
+            threadId: sourceThreadId,
+            runId: run.id,
+            reason: "Stop before review.",
+            createdAt: "2026-01-01T00:00:01.000Z",
+          });
+          yield* system.reactor.drain;
 
-        const settled = (yield* system.query.getSnapshot()).implementationRuns[0];
-        expect(settled?.status).toBe("canceled");
-        expect(settled?.appDevStack.status).toBe("ready");
-        expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(1);
-      }),
-    ),
+          const settled = (yield* system.query.getSnapshot()).implementationRuns[0];
+          expect(settled?.status).toBe("canceled");
+          expect(settled?.appDevStack.status).toBe("not-requested");
+          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(0);
+        }),
+      ),
   );
 
-  it.effect("records eager app dev stack failures without blocking Fast Build", () =>
+  it.effect("does not contact a failing app dev stack controller before Fast Build completes", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
           const run = yield* launchFastFeatureRun(system);
           expect(run.status).toBe("running");
-          expect(run.appDevStack.status).toBe("failed");
+          expect(run.appDevStack.status).toBe("not-requested");
 
           let snapshot = yield* system.query.getSnapshot();
           const implementer = snapshot.threads.find(
@@ -2132,24 +2133,17 @@ describe("ImplementationWorkflowReactor", () => {
           );
           if (!implementer) throw new Error("Fast feature implementer missing.");
           expect(implementer.messages.at(-1)?.text).toContain("# Fast checkout");
-          expect(
-            implementer.activities.filter(
-              (activity) => activity.kind === "implementation-app-dev-stack-start-failed",
-            ),
-          ).toHaveLength(1);
+          expect(implementer.messages.at(-1)?.text).toContain(
+            "App Dev Stack: starts after this Build finishes cleanly",
+          );
+          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(0);
 
           // Startup recovery must leave a run that already reached Build alone.
           yield* system.reactor.start();
           yield* system.reactor.drain;
           snapshot = yield* system.query.getSnapshot();
-          expect(
-            snapshot.threads
-              .find((thread) => thread.workflowRole === "fast-feature-implementer")
-              ?.activities.filter(
-                (activity) => activity.kind === "implementation-app-dev-stack-start-failed",
-              ),
-          ).toHaveLength(1);
-          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(1);
+          expect(snapshot.implementationRuns[0]?.status).toBe("running");
+          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(0);
         }),
       { failAutoCreate: true },
     ),
@@ -2242,15 +2236,15 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("reuses the eager stack URL when starting Browser Dev Review after Build", () =>
+  it.effect("starts the stack from the completed Build before Browser Dev Review", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
           const run = yield* launchFastFeatureRun(system);
           let snapshot = yield* system.query.getSnapshot();
           expect(snapshot.implementationRuns[0]?.appDevStack).toMatchObject({
-            status: "ready",
-            frontendUrl: "https://fast-checkout-dev.nightingale-ai.com",
+            status: "not-requested",
+            frontendUrl: null,
           });
 
           const implementer = snapshot.threads.find(
@@ -2285,7 +2279,7 @@ describe("ImplementationWorkflowReactor", () => {
           const reviewThread = snapshot.threads.find(
             (thread) => thread.workflowRole === "implementation-qa-reviewer",
           );
-          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(2);
+          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(1);
           expect(snapshot.implementationRuns[0]?.appDevStack.frontendUrl).toBe(
             "https://fast-checkout-dev.nightingale-ai.com",
           );
@@ -2300,10 +2294,7 @@ describe("ImplementationWorkflowReactor", () => {
           );
         }),
       {
-        autoCreateFrontendUrls: [
-          "https://fast-checkout-dev.nightingale-ai.com",
-          "https://fast-checkout-dev.nightingale-ai.com",
-        ],
+        autoCreateFrontendUrls: ["https://fast-checkout-dev.nightingale-ai.com"],
       },
     ),
   );
@@ -2355,7 +2346,7 @@ describe("ImplementationWorkflowReactor", () => {
           );
           expect(repair?.messages.at(-1)?.text).toContain("Orchestrated QA Repair Result");
           expect(repair?.messages.at(-1)?.text).toContain("Programmatic AppDevStack diagnostics");
-          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(2);
+          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(1);
         }),
       { failAutoCreate: true },
     ),
@@ -2925,7 +2916,7 @@ describe("ImplementationWorkflowReactor", () => {
         );
         expect(validator).toBeDefined();
         expect(validator?.messages.at(-1)?.text).toContain(
-          "The shared workflow AppDevStack is already active",
+          "T3 Code provisions AppDevStack from the clean integrated worktree after this gate passes",
         );
         expect(validator?.messages.at(-1)?.text).toContain(
           "integration gate before Dev Review and Code Review",
@@ -2956,7 +2947,7 @@ describe("ImplementationWorkflowReactor", () => {
         snapshot = yield* system.query.getSnapshot();
         const reviewingRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
         const autoCreateInputs = yield* Ref.get(system.autoCreateInputs);
-        expect(autoCreateInputs).toHaveLength(2);
+        expect(autoCreateInputs).toHaveLength(1);
         expect(reviewingRun?.status).toBe("qa-reviewing");
         expect(reviewingRun?.devReviewIds).toHaveLength(1);
         const reviewThread = snapshot.threads.find(

@@ -385,7 +385,7 @@ function buildMergeGatePrompt(input: {
     `Run ${input.kind} gate for implementation run ${input.run.id}.`,
     "",
     ...integrationInstructions,
-    "Use the repository's existing focused validation setup. The shared workflow AppDevStack is already active, so do not run a host dependency install that replaces mounted dependency paths. If validation cannot run with the prepared workspace, report the setup failure explicitly.",
+    "Use the repository's existing focused validation setup and complete any dependency installation it requires. Do not start a competing development server. T3 Code provisions AppDevStack from the clean integrated worktree after this gate passes. If validation cannot run with the prepared workspace, report the setup failure explicitly.",
     "",
     ...validationInstructions,
     "",
@@ -612,9 +612,9 @@ function fastFeatureExecutionContract(run: OrchestrationImplementationRun): Read
     `- branch: ${run.orchestratorBranch}`,
     `- worktree: ${run.orchestratorWorktreePath}`,
     `- fixed source commit: ${run.pinnedCommit}`,
-    `- App Dev Stack: ${run.appDevStack.frontendUrl ?? "starting; use the workflow-owned stack for this worktree"}`,
+    "- App Dev Stack: starts after this Build finishes cleanly",
     "",
-    "The workflow App Dev Stack already owns this worktree. Do not start a competing dev server or run a host dependency install that replaces a mounted dependency path.",
+    "Complete any repository-declared setup or dependency installation needed by the implementation and focused checks. Do not start a competing development server; T3 Code provisions the workflow App Dev Stack from the finished worktree before Dev Review.",
     "",
     "## Pre-review validation",
     "Run focused tests and affected-file checks. A documented sub-minute fast command such as `pnpm check` is allowed.",
@@ -919,76 +919,6 @@ const make = Effect.gen(function* () {
       });
     },
   );
-
-  const ensureLaunchAppDevStack = Effect.fn(
-    "ImplementationWorkflowReactor.ensureLaunchAppDevStack",
-  )(function* (input: {
-    readonly run: OrchestrationImplementationRun;
-    readonly orchestratorThread: OrchestrationThread;
-    readonly createdAt: string;
-  }) {
-    const result = yield* appDevStackManager
-      .autoCreate({
-        worktreePath: input.run.orchestratorWorktreePath,
-        displayName:
-          input.run.artifactSource === "proposed-plan"
-            ? `Fast feature ${input.run.id}`
-            : `Implementation ${input.run.id}`,
-        gitBranch: input.run.orchestratorBranch,
-        workflowId: input.orchestratorThread.workflowContext?.workflowId,
-      })
-      .pipe(Effect.result);
-    if (result._tag === "Failure") {
-      const detail = errorDetail(result.failure);
-      yield* appendActivity({
-        threadId: input.run.orchestratorThreadId,
-        tone: "error",
-        kind: "implementation-app-dev-stack-start-failed",
-        summary: "Implementation is continuing while App Dev Stack startup is retried",
-        payload: { runId: input.run.id, detail },
-        createdAt: input.createdAt,
-      });
-      return {
-        ...input.run,
-        appDevStack: {
-          ...input.run.appDevStack,
-          status: "failed" as const,
-          lastErrorMarkdown: detail,
-          requestedAt: input.run.appDevStack.requestedAt || input.createdAt,
-          updatedAt: input.createdAt,
-        },
-      };
-    }
-
-    const stack = result.success;
-    yield* appendActivity({
-      threadId: input.run.orchestratorThreadId,
-      tone: "info",
-      kind: "implementation-app-dev-stack-ready",
-      summary: "Implementation App Dev Stack is available from workflow start",
-      payload: {
-        runId: input.run.id,
-        stackId: stack.stack?.id ?? null,
-        stackStatus: stack.stack?.status ?? null,
-        frontendUrl: stack.frontendUrl,
-      },
-      createdAt: input.createdAt,
-    });
-    return {
-      ...input.run,
-      appDevStack: {
-        status: appDevStackReadiness(stack),
-        stackId: stack.stack?.id ?? null,
-        stackStatus: stack.stack?.status ?? null,
-        frontendUrl: stack.frontendUrl,
-        frontendServiceName: stack.frontendServiceName,
-        displayName: stack.stack?.displayName ?? null,
-        lastErrorMarkdown: null,
-        requestedAt: input.run.appDevStack.requestedAt || input.createdAt,
-        updatedAt: input.createdAt,
-      },
-    };
-  });
 
   const requestRunRetry = Effect.fn("ImplementationWorkflowReactor.requestRunRetry")(
     function* (input: {
@@ -2585,12 +2515,6 @@ const make = Effect.gen(function* () {
         worktreePath: setupRun.orchestratorWorktreePath,
       });
 
-      setupRun = yield* ensureLaunchAppDevStack({
-        run: setupRun,
-        orchestratorThread: implementerThread,
-        createdAt: input.createdAt,
-      });
-
       const refreshed = yield* projectionSnapshotQuery.getCommandReadModel();
       // A miss in the refreshed model must not read as "already started" — that silently drops
       // the handover and leaves an empty Build thread.
@@ -2682,9 +2606,8 @@ const make = Effect.gen(function* () {
         createdAt: input.createdAt,
       });
 
-      // Browser Review re-ensures and probes this same stack after Build. Build must use the
-      // already-running workflow workspace instead of creating another server or replacing
-      // dependency mountpoints from the host.
+      // The App Dev Stack intentionally starts only after Build reports a clean committed HEAD.
+      // `startBrowserReview` provisions and probes it from that completed worktree.
     },
   );
 
@@ -2763,32 +2686,26 @@ const make = Effect.gen(function* () {
         worktreePath: event.payload.run.orchestratorWorktreePath,
       });
 
-      const launchedRun = yield* ensureLaunchAppDevStack({
-        run: runningRun,
-        orchestratorThread,
-        createdAt: event.occurredAt,
-      });
-
       yield* updateRun({
         sourceThreadId: event.payload.sourceThreadId,
-        run: launchedRun,
+        run: runningRun,
         createdAt: event.occurredAt,
       });
       yield* startReadyWorkers({
         sourceThreadId: event.payload.sourceThreadId,
-        run: launchedRun,
+        run: runningRun,
         createdAt: event.occurredAt,
       });
       const ticketTitles = ticketsById(sourceThread);
       yield* appendActivity({
-        threadId: launchedRun.orchestratorThreadId,
+        threadId: runningRun.orchestratorThreadId,
         tone: "info",
         kind: "implementation-run-launched",
-        summary: `Implementation run launched with ${launchedRun.ticketStates.length} ticket(s)`,
+        summary: `Implementation run launched with ${runningRun.ticketStates.length} ticket(s)`,
         payload: {
-          runId: launchedRun.id,
-          ticketCount: launchedRun.ticketStates.length,
-          tickets: launchedRun.ticketStates.map((state) => ({
+          runId: runningRun.id,
+          ticketCount: runningRun.ticketStates.length,
+          tickets: runningRun.ticketStates.map((state) => ({
             ticketId: state.ticketId,
             ...(ticketTitles.get(state.ticketId)?.title !== undefined
               ? { title: ticketTitles.get(state.ticketId)?.title }

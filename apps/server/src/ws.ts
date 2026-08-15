@@ -704,10 +704,7 @@ const makeWsRpcLayer = (
 
       const appendWorkflowWorkspaceActivity = (input: {
         readonly threadId: ThreadId;
-        readonly kind:
-          | typeof WORKFLOW_WORKSPACE_PREPARED_ACTIVITY_KIND
-          | "workflow-app-dev-stack-started"
-          | "workflow-app-dev-stack-failed";
+        readonly kind: typeof WORKFLOW_WORKSPACE_PREPARED_ACTIVITY_KIND;
         readonly summary: string;
         readonly createdAt: string;
         readonly payload: Record<string, unknown>;
@@ -1248,10 +1245,7 @@ const makeWsRpcLayer = (
               yield* refreshGitStatus(targetWorktreePath);
             }
 
-            yield* runSetupProgram();
-
             const fallbackWorkflowPreset = bootstrap?.createThread?.workflowPreset;
-            const fallbackWorkflowContext = bootstrap?.createThread?.workflowContext;
             const threadDetail = yield* projectionSnapshotQuery.getThreadDetailById(threadId).pipe(
               Effect.map(Option.getOrUndefined),
               Effect.orElseSucceed(() => undefined),
@@ -1266,71 +1260,42 @@ const makeWsRpcLayer = (
             const workflowWorktreePath =
               targetWorktreePath ?? existingWorkspace?.worktreePath ?? null;
 
-            if (
+            const preparedWorkflowWorkspace =
               workflowPresetStartsInDedicatedWorkspace(workflowPreset) &&
               workflowBaseBranch !== null &&
               workflowBranch !== null &&
               workflowWorktreePath !== null
-            ) {
+                ? {
+                    baseBranch: workflowBaseBranch,
+                    branch: workflowBranch,
+                    worktreePath: workflowWorktreePath,
+                  }
+                : null;
+            if (preparedWorkflowWorkspace !== null) {
               if (existingWorkspace === null) {
                 yield* appendWorkflowWorkspaceActivity({
                   threadId,
                   kind: WORKFLOW_WORKSPACE_PREPARED_ACTIVITY_KIND,
                   summary: "Workflow workspace prepared",
-                  payload: {
-                    baseBranch: workflowBaseBranch,
-                    branch: workflowBranch,
-                    worktreePath: workflowWorktreePath,
-                  },
+                  payload: preparedWorkflowWorkspace,
                   tone: "info",
-                  createdAt: command.createdAt,
-                });
-              }
-
-              const workflowId =
-                threadDetail?.workflowContext?.workflowId ??
-                fallbackWorkflowContext?.workflowId ??
-                `workflow-${threadId}`;
-              const stackResult = yield* appDevStackManager
-                .autoCreate({
-                  worktreePath: workflowWorktreePath,
-                  displayName: `${workflowPreset} workflow`,
-                  gitBranch: workflowBranch,
-                  workflowId,
-                })
-                .pipe(Effect.result);
-              if (stackResult._tag === "Success") {
-                yield* appendWorkflowWorkspaceActivity({
-                  threadId,
-                  kind: "workflow-app-dev-stack-started",
-                  summary: "Workflow App Dev Stack started",
-                  payload: {
-                    workflowId,
-                    worktreePath: workflowWorktreePath,
-                    stackId: stackResult.success.stack?.id ?? null,
-                    stackStatus: stackResult.success.stack?.status ?? null,
-                    frontendUrl: stackResult.success.frontendUrl,
-                  },
-                  tone: "info",
-                  createdAt: command.createdAt,
-                });
-              } else {
-                yield* appendWorkflowWorkspaceActivity({
-                  threadId,
-                  kind: "workflow-app-dev-stack-failed",
-                  summary: "Workflow App Dev Stack failed to start",
-                  payload: {
-                    workflowId,
-                    worktreePath: workflowWorktreePath,
-                    detail: String(stackResult.failure),
-                  },
-                  tone: "error",
                   createdAt: command.createdAt,
                 });
               }
             }
 
-            return yield* orchestrationEngine.dispatch(finalCommand);
+            // Ordinary worktrees retain their setup-before-turn ordering. Workflow roots start
+            // Product or Engineering Grill as soon as their canonical worktree identity is
+            // durable; setup may initialize that worktree alongside the non-implementation turn.
+            if (preparedWorkflowWorkspace === null) {
+              yield* runSetupProgram();
+            }
+            const finalResult = yield* orchestrationEngine.dispatch(finalCommand);
+            if (preparedWorkflowWorkspace !== null) {
+              yield* runSetupProgram();
+            }
+
+            return finalResult;
           });
 
           return yield* bootstrapProgram.pipe(

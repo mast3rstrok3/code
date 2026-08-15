@@ -3021,7 +3021,7 @@ function ChatViewContent(props: ChatViewProps) {
     if (workflowWorkspace !== null) {
       return {
         baseBranch: workflowWorkspace.baseBranch,
-        orchestratorBranch: workflowWorkspace.branch,
+        orchestratorBranch: activeThread?.branch ?? workflowWorkspace.branch,
         orchestratorWorktreePath: workflowWorkspace.worktreePath,
       };
     }
@@ -6042,7 +6042,7 @@ function ChatViewContent(props: ChatViewProps) {
                       branch: buildTemporaryWorktreeBranchName(randomHex),
                       ...(startFromOrigin ? { startFromOrigin: true } : {}),
                     },
-                    ...(workflowStartsWorkspace ? {} : { runSetupScript: true }),
+                    runSetupScript: true,
                   }
                 : {}),
             }

@@ -961,7 +961,7 @@ describe("ProductWorkflowReactor", () => {
   );
 
   it.effect(
-    "launches implementation from the Product Workflow root after passed product review",
+    "launches implementation on the Product workspace after its temporary branch is renamed",
     () =>
       withSystem(
         (system) =>
@@ -973,7 +973,7 @@ describe("ProductWorkflowReactor", () => {
             });
             yield* prepareWorkflowWorkspace(system, {
               baseBranch: "main",
-              branch: "t3code/full-feature",
+              branch: "t3code/1234abcd",
               worktreePath: "/tmp/product-reactor.worktrees/full-feature",
             });
             const planningThread = yield* lockProductIntent(system);
@@ -1358,7 +1358,7 @@ describe("ProductWorkflowReactor", () => {
     ),
   );
 
-  it.effect("launches one proposed-plan Fast feature run on a dedicated branch", () =>
+  it.effect("launches Fast Build on the renamed shared workflow branch", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
@@ -1369,7 +1369,7 @@ describe("ProductWorkflowReactor", () => {
           });
           yield* prepareWorkflowWorkspace(system, {
             baseBranch: "main",
-            branch: "t3code/fast-feature",
+            branch: "t3code/1234abcd",
             worktreePath: "/tmp/product-reactor.worktrees/fast-feature",
           });
           yield* system.engine.dispatch({
@@ -1423,6 +1423,43 @@ describe("ProductWorkflowReactor", () => {
           expect(implementers[0]?.parentThreadId).toBe(productThreadId);
           expect(implementers[0]?.interactionMode).toBe("default");
           expect(implementers[0]?.workflowPreset).toBe("fast-feature");
+        }),
+      { validationCommands: ["pnpm check:full"] },
+    ),
+  );
+
+  it.effect("holds Fast Build until the workflow branch rename is authoritative", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          yield* seedProjectAndThread(system, {
+            workflowPreset: "fast-feature",
+            branch: "t3code/1234abcd",
+            worktreePath: "/tmp/product-reactor.worktrees/fast-feature",
+          });
+          yield* prepareWorkflowWorkspace(system, {
+            baseBranch: "main",
+            branch: "t3code/1234abcd",
+            worktreePath: "/tmp/product-reactor.worktrees/fast-feature",
+          });
+          yield* upsertProposedPlan(system, { planId: "plan-fast-rename" });
+          yield* system.reactor.drain;
+          expect((yield* system.query.getSnapshot()).implementationRuns).toHaveLength(0);
+
+          yield* system.engine.dispatch({
+            type: "thread.meta.update",
+            commandId: commandId("fast-workspace-renamed"),
+            threadId: productThreadId,
+            branch: "t3code/fast-feature",
+          });
+          yield* system.reactor.drain;
+
+          const runs = (yield* system.query.getSnapshot()).implementationRuns;
+          expect(runs).toHaveLength(1);
+          expect(runs[0]?.orchestratorBranch).toBe("t3code/fast-feature");
+          expect(runs[0]?.orchestratorWorktreePath).toBe(
+            "/tmp/product-reactor.worktrees/fast-feature",
+          );
         }),
       { validationCommands: ["pnpm check:full"] },
     ),

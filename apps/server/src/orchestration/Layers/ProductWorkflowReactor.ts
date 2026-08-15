@@ -21,6 +21,7 @@ import {
   buildPlanImplementationPrompt,
   buildPlanImplementationThreadTitle,
 } from "@t3tools/shared/orchestrationPlanning";
+import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import {
   expectedIntentKindForWorkflowPreset,
@@ -52,7 +53,8 @@ type ProductWorkflowEvent = Extract<
       | "thread.activity-appended"
       | "thread.planning-tickets-created"
       | "thread.planning-tickets-revised"
-      | "thread.proposed-plan-upserted";
+      | "thread.proposed-plan-upserted"
+      | "thread.meta-updated";
   }
 >;
 
@@ -357,6 +359,13 @@ const make = Effect.gen(function* () {
     const workflowWorkspace = resolveWorkflowWorkspaceIdentity(
       context.productRootThread.activities,
     );
+    if (
+      workflowWorkspace !== null &&
+      (context.productRootThread.branch === null ||
+        isTemporaryWorktreeBranch(context.productRootThread.branch))
+    ) {
+      return;
+    }
     const identity =
       workflowWorkspace === null
         ? resolveImplementationBranchIdentity({
@@ -369,7 +378,10 @@ const make = Effect.gen(function* () {
           })
         : {
             baseBranch: workflowWorkspace.baseBranch,
-            orchestratorBranch: workflowWorkspace.branch,
+            // The first-turn branch naming reactor may replace the temporary bootstrap ref with a
+            // semantic name. The thread projection is authoritative after that rename; the
+            // workspace activity remains the durable source for the original base and path.
+            orchestratorBranch: context.productRootThread.branch ?? workflowWorkspace.branch,
             orchestratorWorktreePath: workflowWorkspace.worktreePath,
           };
 
@@ -685,68 +697,130 @@ const make = Effect.gen(function* () {
     }
   });
 
-  const handleFixPlanReady = Effect.fn("ProductWorkflowReactor.handleFixPlanReady")(function* (
-    event: Extract<ProductWorkflowEvent, { type: "thread.proposed-plan-upserted" }>,
-  ) {
-    const plan = event.payload.proposedPlan;
-    if (plan.implementedAt !== null) return;
-    const thread = yield* resolveThread(event.payload.threadId);
-    if (!thread) return;
-    if (thread.workflowRole !== null) return;
-    const isFastFeature = thread.workflowPreset === "fast-feature";
-    const isFix = thread.workflowPreset === "fix" || hasFixIntentLockedActivity(thread);
-    if (!isFastFeature && !isFix) return;
-    if (isFastFeature) {
-      if (yield* hasActiveFastFeatureRun(thread.id, plan.id)) return;
-      if (thread.branch === null || thread.branch.trim().length === 0) {
-        yield* appendActivity({
+  const ensurePlanImplementation = Effect.fn("ProductWorkflowReactor.ensurePlanImplementation")(
+    function* (input: {
+      readonly threadId: ThreadId;
+      readonly plan: OrchestrationThread["proposedPlans"][number];
+      readonly occurredAt: string;
+    }) {
+      const plan = input.plan;
+      if (plan.implementedAt !== null) return;
+      const thread = yield* resolveThread(input.threadId);
+      if (!thread) return;
+      if (thread.workflowRole !== null) return;
+      const isFastFeature = thread.workflowPreset === "fast-feature";
+      const isFix = thread.workflowPreset === "fix" || hasFixIntentLockedActivity(thread);
+      if (!isFastFeature && !isFix) return;
+      if (isFastFeature) {
+        if (yield* hasActiveFastFeatureRun(thread.id, plan.id)) return;
+        const workflowWorkspace = resolveWorkflowWorkspaceIdentity(thread.activities);
+        if (thread.branch === null || thread.branch.trim().length === 0) {
+          yield* appendActivity({
+            threadId: thread.id,
+            tone: "error",
+            kind: "fast-feature.needs-human-attention",
+            summary: "Fast feature needs a named source branch",
+            payload: { planId: plan.id },
+            createdAt: input.occurredAt,
+          });
+          return;
+        }
+        if (workflowWorkspace !== null && isTemporaryWorktreeBranch(thread.branch)) return;
+        const project = yield* resolveProject(thread.projectId);
+        if (!project) return;
+        const sourceCwd = thread.worktreePath ?? project.workspaceRoot;
+        const projectFile = Option.getOrUndefined(yield* projectFileLoader.load(sourceCwd));
+        const pinnedCommit = (yield* gitWorkflow.resolveCommit({ cwd: sourceCwd, ref: "HEAD" }))
+          .commitSha;
+        const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+        const identity =
+          workflowWorkspace === null
+            ? resolveImplementationBranchIdentity({
+                specId: plan.id,
+                specTitle: buildPlanImplementationThreadTitle(plan.planMarkdown),
+                baseBranch: thread.branch,
+                workspaceRoot: sourceCwd,
+                implementationRuns: readModel.implementationRuns,
+                branchPrefix: "fast-feature",
+              })
+            : {
+                baseBranch: workflowWorkspace.baseBranch,
+                orchestratorBranch: thread.branch ?? workflowWorkspace.branch,
+                orchestratorWorktreePath: workflowWorkspace.worktreePath,
+              };
+        yield* orchestrationEngine.dispatch({
+          type: "thread.fast-feature-run.launch",
+          commandId: yield* serverCommandId("fast-feature-launch"),
           threadId: thread.id,
-          tone: "error",
-          kind: "fast-feature.needs-human-attention",
-          summary: "Fast feature needs a named source branch",
-          payload: { planId: plan.id },
-          createdAt: event.occurredAt,
+          proposedPlanId: plan.id,
+          baseBranch: identity.baseBranch,
+          pinnedCommit,
+          orchestratorBranch: identity.orchestratorBranch,
+          orchestratorWorktreePath: identity.orchestratorWorktreePath,
+          validationCommands: [...resolveImplementationValidationCommands({ projectFile })],
+          createdAt: input.occurredAt,
         });
         return;
       }
-      const project = yield* resolveProject(thread.projectId);
-      if (!project) return;
-      const sourceCwd = thread.worktreePath ?? project.workspaceRoot;
-      const projectFile = Option.getOrUndefined(yield* projectFileLoader.load(sourceCwd));
-      const pinnedCommit = (yield* gitWorkflow.resolveCommit({ cwd: sourceCwd, ref: "HEAD" }))
-        .commitSha;
-      const workflowWorkspace = resolveWorkflowWorkspaceIdentity(thread.activities);
-      const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
-      const identity =
-        workflowWorkspace === null
-          ? resolveImplementationBranchIdentity({
-              specId: plan.id,
-              specTitle: buildPlanImplementationThreadTitle(plan.planMarkdown),
-              baseBranch: thread.branch,
-              workspaceRoot: sourceCwd,
-              implementationRuns: readModel.implementationRuns,
-              branchPrefix: "fast-feature",
-            })
-          : {
-              baseBranch: workflowWorkspace.baseBranch,
-              orchestratorBranch: workflowWorkspace.branch,
-              orchestratorWorktreePath: workflowWorkspace.worktreePath,
-            };
-      yield* orchestrationEngine.dispatch({
-        type: "thread.fast-feature-run.launch",
-        commandId: yield* serverCommandId("fast-feature-launch"),
-        threadId: thread.id,
-        proposedPlanId: plan.id,
-        baseBranch: identity.baseBranch,
-        pinnedCommit,
-        orchestratorBranch: identity.orchestratorBranch,
-        orchestratorWorktreePath: identity.orchestratorWorktreePath,
-        validationCommands: [...resolveImplementationValidationCommands({ projectFile })],
-        createdAt: event.occurredAt,
-      });
-      return;
+      yield* ensureFixImplementation({ thread, plan, occurredAt: input.occurredAt });
+    },
+  );
+
+  const handlePlanReady = Effect.fn("ProductWorkflowReactor.handlePlanReady")(function* (
+    event: Extract<ProductWorkflowEvent, { type: "thread.proposed-plan-upserted" }>,
+  ) {
+    yield* ensurePlanImplementation({
+      threadId: event.payload.threadId,
+      plan: event.payload.proposedPlan,
+      occurredAt: event.occurredAt,
+    });
+  });
+
+  const handleWorkspaceRenamed = Effect.fn("ProductWorkflowReactor.handleWorkspaceRenamed")(
+    function* (event: Extract<ProductWorkflowEvent, { type: "thread.meta-updated" }>) {
+      if (
+        event.payload.branch === undefined ||
+        event.payload.branch === null ||
+        isTemporaryWorktreeBranch(event.payload.branch)
+      ) {
+        return;
+      }
+      const thread = yield* resolveThread(event.payload.threadId);
+      if (!thread) return;
+      for (const plan of thread.proposedPlans) {
+        yield* ensurePlanImplementation({
+          threadId: thread.id,
+          plan,
+          occurredAt: event.payload.updatedAt,
+        });
+      }
+      yield* reconcileImplementationLaunches();
+    },
+  );
+
+  const reconcileFastFeatureImplementations = Effect.fn(
+    "ProductWorkflowReactor.reconcileFastFeatureImplementations",
+  )(function* () {
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    for (const candidate of readModel.threads) {
+      if (
+        candidate.deletedAt !== null ||
+        candidate.workflowPreset !== "fast-feature" ||
+        candidate.workflowRole !== null ||
+        candidate.proposedPlans.every((plan) => plan.implementedAt !== null)
+      ) {
+        continue;
+      }
+      const thread = yield* resolveThread(candidate.id);
+      if (!thread) continue;
+      for (const plan of thread.proposedPlans) {
+        yield* ensurePlanImplementation({
+          threadId: thread.id,
+          plan,
+          occurredAt: thread.updatedAt,
+        });
+      }
     }
-    yield* ensureFixImplementation({ thread, plan, occurredAt: event.occurredAt });
   });
 
   const recoverIncompleteProductGrill = Effect.fn(
@@ -974,7 +1048,10 @@ const make = Effect.gen(function* () {
         yield* requestTicketReview(event);
         return;
       case "thread.proposed-plan-upserted":
-        yield* handleFixPlanReady(event);
+        yield* handlePlanReady(event);
+        return;
+      case "thread.meta-updated":
+        yield* handleWorkspaceRenamed(event);
         return;
     }
   });
@@ -1001,7 +1078,8 @@ const make = Effect.gen(function* () {
           event.type !== "thread.activity-appended" &&
           event.type !== "thread.planning-tickets-created" &&
           event.type !== "thread.planning-tickets-revised" &&
-          event.type !== "thread.proposed-plan-upserted"
+          event.type !== "thread.proposed-plan-upserted" &&
+          event.type !== "thread.meta-updated"
         ) {
           return Effect.void;
         }
@@ -1020,6 +1098,13 @@ const make = Effect.gen(function* () {
       yield* reconcileImplementationLaunches().pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("product workflow implementation reconciliation failed", {
+            cause: Cause.pretty(cause),
+          }),
+        ),
+      );
+      yield* reconcileFastFeatureImplementations().pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("product workflow Fast Build reconciliation failed", {
             cause: Cause.pretty(cause),
           }),
         ),

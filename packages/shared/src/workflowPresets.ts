@@ -50,7 +50,7 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
     interactionMode: "product-workflow",
     workflowPromptId: "product.fast-feature.codex",
     helpSteps: [
-      { label: "Create shared worktree and start AppDevStack" },
+      { label: "Create shared worktree" },
       {
         label: "Product Grill",
         skillId: "product.fast-feature.codex",
@@ -62,6 +62,7 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         skillId: "implementation.tdd.codex",
         threadBoundary: "new child thread",
       },
+      { label: "Start and probe AppDevStack from the completed Build" },
       {
         label: "Run nested Dev Review against AppDevStack",
         skillId: "implementation.browser-dev-review.codex",
@@ -85,7 +86,7 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
     interactionMode: "product-workflow",
     workflowPromptId: "product.full-feature.codex",
     helpSteps: [
-      { label: "Create shared worktree and start AppDevStack", note: "automatic" },
+      { label: "Create shared worktree", note: "automatic" },
       {
         label: "Product Grill",
         skillId: "product.full-feature.codex",
@@ -113,6 +114,7 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         skillId: "implementation.merge-gate.codex",
         note: "automatic",
       },
+      { label: "Start and probe AppDevStack from the integrated worktree", note: "automatic" },
       {
         label: "Nested Dev Review against the shared AppDevStack",
         skillId: "implementation.browser-dev-review.codex",
@@ -163,6 +165,7 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         label: "Integrate worker branches and run the merge gate",
         skillId: "implementation.merge-gate.codex",
       },
+      { label: "Start and probe AppDevStack from the integrated worktree" },
       {
         label: "Run nested Dev Review against the shared AppDevStack",
         skillId: "implementation.browser-dev-review.codex",
@@ -183,7 +186,7 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
     route: "planning",
     interactionMode: "planning-workflow",
     helpSteps: [
-      { label: "Create shared worktree and start AppDevStack" },
+      { label: "Create shared worktree" },
       {
         label: "Engineering Grill",
         skillId: "planning.grill-stage.codex",

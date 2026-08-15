@@ -7873,17 +7873,16 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           ),
         );
 
-        assert.equal(response.sequence, 7);
+        assert.equal(response.sequence, 4);
         assert.deepEqual(
           dispatchedCommands.map((command) => command.type),
           [
             "thread.create",
             "thread.meta.update",
             "thread.activity.append",
-            "thread.activity.append",
-            "thread.activity.append",
-            "thread.activity.append",
             "thread.turn.start",
+            "thread.activity.append",
+            "thread.activity.append",
           ],
         );
         const createCommand = dispatchedCommands[0];
@@ -7929,25 +7928,15 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         );
         assert.deepEqual(
           activities.map((command) => command.activity.kind),
-          [
-            "setup-script.requested",
-            "setup-script.started",
-            "workflow-workspace-prepared",
-            "workflow-app-dev-stack-started",
-          ],
+          ["workflow-workspace-prepared", "setup-script.requested", "setup-script.started"],
         );
-        assert.deepEqual(autoCreateAppDevStack.mock.calls[0]?.[0], {
-          worktreePath: "/tmp/bootstrap-worktree",
-          displayName: "fast-feature workflow",
-          gitBranch: "t3code/bootstrap-refName",
-          workflowId: "workflow-thread-bootstrap",
-        });
-        assert.deepEqual(activities[2]?.activity.payload, {
+        assert.equal(autoCreateAppDevStack.mock.calls.length, 0);
+        assert.deepEqual(activities[0]?.activity.payload, {
           baseBranch: "main",
           branch: "t3code/bootstrap-refName",
           worktreePath: "/tmp/bootstrap-worktree",
         });
-        const finalCommand = dispatchedCommands[6];
+        const finalCommand = dispatchedCommands[3];
         assertTrue(finalCommand?.type === "thread.turn.start");
         if (finalCommand?.type === "thread.turn.start") {
           assert.equal(finalCommand.bootstrap, undefined);

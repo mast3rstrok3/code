@@ -17,13 +17,16 @@ describe("workflow presets", () => {
     ]);
   });
 
-  it("starts the Fast Feature worktree and AppDevStack before workflow stages", () => {
+  it("starts Fast Feature immediately and defers AppDevStack until after Build", () => {
     const definition = WORKFLOW_PRESET_DEFINITIONS.find(
       (candidate) => candidate.id === "fast-feature",
     );
-    expect(definition?.helpSteps[0]?.label).toBe("Create shared worktree and start AppDevStack");
+    expect(definition?.helpSteps[0]?.label).toBe("Create shared worktree");
     expect(definition?.helpSteps.map((step) => step.label)).toContain(
       "CLI Build in the shared worktree",
+    );
+    expect(definition?.helpSteps.map((step) => step.label)).toContain(
+      "Start and probe AppDevStack from the completed Build",
     );
     expect(definition?.helpSteps.map((step) => step.label)).toContain(
       "Run nested Dev Review against AppDevStack",
