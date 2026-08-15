@@ -163,6 +163,20 @@ export function terminalReviewAction(
   return run.attemptsUsed >= run.cycleBudget ? "exhausted" : "planning";
 }
 
+export function terminalReviewEvidenceFailure(
+  action: ReturnType<typeof terminalReviewAction>,
+  review: DevReviewRecord,
+): string | null {
+  // A blocked reviewer may be unable to open the preview at all, so requiring browser evidence
+  // before preserving its block reason replaces the actionable infrastructure failure with a
+  // misleading "missing evidence" error. Evidence remains mandatory for every product verdict.
+  if (action === "blocked") return null;
+  if (review.evidence.recording.status === "saved" && review.evidence.screenshots.length > 0) {
+    return null;
+  }
+  return "Browser Dev Review completed without the required durable recording and screenshot evidence.";
+}
+
 const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const orchestrationEngine = yield* OrchestrationEngineService;
@@ -665,22 +679,22 @@ const make = Effect.gen(function* () {
     if (target === null) return;
     const stableRun = yield* assertStableRevision(run, target.cwd, occurredAt);
     if (stableRun === null) return;
-    if (review.evidence.recording.status !== "saved" || review.evidence.screenshots.length === 0) {
-      yield* blockRun({
-        run: stableRun,
-        reason: "review-blocked",
-        detailMarkdown:
-          "Browser Dev Review completed without the required durable recording and screenshot evidence.",
-        occurredAt,
-      });
-      return;
-    }
     const action = terminalReviewAction(stableRun, review);
     if (action === "blocked") {
       yield* blockRun({
         run: stableRun,
         reason: "review-blocked",
         detailMarkdown: review.document.summary || "Browser Dev Review was blocked.",
+        occurredAt,
+      });
+      return;
+    }
+    const evidenceFailure = terminalReviewEvidenceFailure(action, review);
+    if (evidenceFailure !== null) {
+      yield* blockRun({
+        run: stableRun,
+        reason: "review-blocked",
+        detailMarkdown: evidenceFailure,
         occurredAt,
       });
       return;

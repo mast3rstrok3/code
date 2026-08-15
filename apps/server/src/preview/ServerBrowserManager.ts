@@ -113,6 +113,8 @@ const RECORDING_DESKTOP_HEIGHT = 720;
 const RECORDING_FFMPEG_EXIT_TIMEOUT_MS = 10_000;
 const BROWSER_CACHE_CLEAR_TIMEOUT_MS = 3_000;
 const BROWSER_CONTEXT_CLOSE_TIMEOUT_MS = 5_000;
+const PAGE_NAVIGATION_TIMEOUT_MS = 60_000;
+const PAGE_NAVIGATION_GUARD_TIMEOUT_MS = PAGE_NAVIGATION_TIMEOUT_MS + 5_000;
 const PAGE_CRASHED_FAILURE = {
   code: -1,
   description: "ERR_PAGE_CRASHED",
@@ -1020,8 +1022,11 @@ function* serverBrowserManagerMake(adapter: ServerBrowserManagerAdapter) {
     yield* Effect.tryPromise({
       try: () =>
         withTimeoutReject(
-          tab.page.goto(input.url, { waitUntil: "domcontentloaded", timeout: 30_000 }),
-          8_000,
+          tab.page.goto(input.url, {
+            waitUntil: "domcontentloaded",
+            timeout: PAGE_NAVIGATION_TIMEOUT_MS,
+          }),
+          PAGE_NAVIGATION_GUARD_TIMEOUT_MS,
           "Timed out while navigating the server preview browser page.",
         ),
       catch: browserError,

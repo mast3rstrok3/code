@@ -203,7 +203,7 @@ The durable map of decision tickets for efforts too large to specify in one pass
 
 #### Dev review
 
-The bounded QA stage of an implementation run. AppDevStack and Dev Review failures share up to `IMPLEMENTATION_RUN_MAX_QA_REPAIRS` (10) fresh automated repair agents in [the contracts][1]. Initial probes and Browser Dev Reviews do not consume slots; replacing a malformed, failed, blocked, or interrupted repair does. Exhaustion proceeds through best-effort Code Review and flagged publication only from a clean, merge-gate-validated HEAD. A clean legacy HEAD without a validation receipt reruns the merge gate; dirty, wrong-branch, or non-repository worktrees require human attention. The persisted `qaCycleCount` name remains for compatibility but records consumed repair slots; `qaAttemptCount` records Browser Dev Review launches.
+The bounded QA stage of an implementation run. AppDevStack and Dev Review failures share up to `IMPLEMENTATION_RUN_MAX_QA_REPAIRS` (10) fresh automated repair agents in [the contracts][1]. Initial probes and Browser Dev Reviews do not consume slots; replacing a malformed, failed, blocked, or interrupted repair does. A successful AppDevStack repair re-ensures the stack directly; the final merge gate after Code Review owns complete validation instead of rerunning the integration gate after every stack repair. Exhaustion proceeds through best-effort Code Review and flagged publication only from a clean, merge-gate-validated HEAD. A clean legacy HEAD without a validation receipt reruns the merge gate; dirty, wrong-branch, non-repository, or controller-invisible worktrees require human attention. The persisted `qaCycleCount` name remains for compatibility but records consumed repair slots; `qaAttemptCount` records Browser Dev Review launches.
 
 #### Code review
 
@@ -219,7 +219,7 @@ A Kubernetes development deployment for a worktree. Workflow orchestration may o
 time through its durable workflow ID. A matching pre-existing or standing stack can be reused but
 is not adopted, replaced, or deleted by that workflow.
 
-The per-worktree development stack (dev servers, preview) that implementation runs start only after Build or worker integration has produced a stable worktree. Dev Review then uses its live surface. See [app-dev-stacks.md][30].
+The per-worktree development stack (dev servers, preview) that implementation runs start only after Build or worker integration has produced a stable worktree. Transitional `pending` and `starting` states are retried as waiting states, while controller visibility failures and unhealthy non-optional services block before Browser Dev Review. Dev Review then uses its live surface. See [app-dev-stacks.md][30].
 
 ## Practical Shortcuts
 

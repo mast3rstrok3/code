@@ -156,6 +156,8 @@ function makeTestLayer(
   serverSettings: DeepPartial<ServerSettings> = {},
   failCreateWorktreeAfter?: number,
   failAutoCreate = false,
+  failAutoCreateAttempts = 0,
+  autoCreateFailureMessage = "compose file missing",
   conflictMergeRefName?: string,
   failMergeRefName?: string,
   resolvedCommitSha = "def456",
@@ -376,12 +378,12 @@ function makeTestLayer(
                   configuredFrontendUrl === undefined
                     ? "http://127.0.0.1:5173"
                     : configuredFrontendUrl;
-                return failAutoCreate
+                return failAutoCreate || inputs.length <= failAutoCreateAttempts
                   ? Effect.fail(
                       new AppDevStackError({
                         operation: "autoCreate",
                         reason: "request_failed",
-                        message: "compose file missing",
+                        message: autoCreateFailureMessage,
                       }),
                     )
                   : Effect.succeed({
@@ -419,6 +421,8 @@ function withSystem<A, E>(
     readonly serverSettings?: DeepPartial<ServerSettings>;
     readonly failCreateWorktreeAfter?: number;
     readonly failAutoCreate?: boolean;
+    readonly failAutoCreateAttempts?: number;
+    readonly autoCreateFailureMessage?: string;
     readonly conflictMergeRefName?: string;
     readonly failMergeRefName?: string;
     readonly resolvedCommitSha?: string;
@@ -487,6 +491,8 @@ function withSystem<A, E>(
           options?.serverSettings,
           options?.failCreateWorktreeAfter,
           options?.failAutoCreate,
+          options?.failAutoCreateAttempts,
+          options?.autoCreateFailureMessage,
           options?.conflictMergeRefName,
           options?.failMergeRefName,
           options?.resolvedCommitSha,
@@ -1501,8 +1507,65 @@ describe("ImplementationWorkflowReactor", () => {
             ),
           ).toHaveLength(0);
           expect(blocked?.qaAttemptCount).toBe(0);
+          const orchestrator = snapshot.threads.find(
+            (thread) => thread.id === run.orchestratorThreadId,
+          );
+          const waiting = orchestrator?.activities.find(
+            (activity) => activity.kind === "implementation-app-dev-stack-waiting",
+          );
+          expect(waiting?.tone).toBe("info");
+          expect(waiting?.summary).toBe("Waiting for App Dev Stack");
         }),
       { autoCreateStackStatus: "starting" },
+    ),
+  );
+
+  it.effect("re-ensures AppDevStack directly after a focused repair", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const run = yield* launchFastFeatureRun(system);
+          const implementer = (yield* system.query.getSnapshot()).threads.find(
+            (thread) => thread.workflowRole === "fast-feature-implementer",
+          );
+          if (!implementer) throw new Error("Fast feature implementer missing.");
+
+          yield* system.engine.dispatch({
+            type: "thread.activity.append",
+            commandId: commandId("fast-build-stack-repair"),
+            threadId: implementer.id,
+            activity: {
+              id: eventId("fast-build-stack-repair"),
+              tone: "info",
+              kind: "implementation-fast-build-result",
+              summary: "Fast Build succeeded",
+              payload: {
+                type: "implementation-fast-build-result",
+                runId: run.id,
+                status: "succeeded",
+                commitSha: "def456",
+                validations: requiredValidations(),
+                notesMarkdown: "Implemented and committed.",
+              },
+              turnId: null,
+              createdAt: "2026-01-01T00:00:02.000Z",
+            },
+            createdAt: "2026-01-01T00:00:02.000Z",
+          });
+          yield* system.reactor.drain;
+          yield* appendBrowserFixResult(system, { run, validations: requiredValidations() });
+
+          const snapshot = yield* system.query.getSnapshot();
+          const reviewing = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+          expect(reviewing?.status).toBe("qa-reviewing");
+          expect(reviewing?.fixOrigin).toBeNull();
+          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(2);
+          expect(
+            snapshot.threads.filter((thread) => thread.workflowRole === "implementation-validator"),
+          ).toHaveLength(0);
+          expect(reviewing?.devReviewIds).toHaveLength(1);
+        }),
+      { failAutoCreateAttempts: 1 },
     ),
   );
 
@@ -2349,6 +2412,59 @@ describe("ImplementationWorkflowReactor", () => {
           expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(1);
         }),
       { failAutoCreate: true },
+    ),
+  );
+
+  it.effect("blocks infrastructure repair when the controller cannot see the worktree", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const run = yield* launchFastFeatureRun(system);
+          const implementer = (yield* system.query.getSnapshot()).threads.find(
+            (thread) => thread.workflowRole === "fast-feature-implementer",
+          );
+          if (!implementer) throw new Error("Fast feature implementer missing.");
+
+          yield* system.engine.dispatch({
+            type: "thread.activity.append",
+            commandId: commandId("fast-build-unmounted-worktree"),
+            threadId: implementer.id,
+            activity: {
+              id: eventId("fast-build-unmounted-worktree"),
+              tone: "info",
+              kind: "implementation-fast-build-result",
+              summary: "Fast Build succeeded",
+              payload: {
+                type: "implementation-fast-build-result",
+                runId: run.id,
+                status: "succeeded",
+                commitSha: "def456",
+                validations: requiredValidations(),
+                notesMarkdown: "Implemented and committed.",
+              },
+              turnId: null,
+              createdAt: "2026-01-01T00:00:02.000Z",
+            },
+            createdAt: "2026-01-01T00:00:02.000Z",
+          });
+          yield* system.reactor.drain;
+
+          const snapshot = yield* system.query.getSnapshot();
+          const blocked = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+          expect(blocked?.status).toBe("needs-human-attention");
+          expect(blocked?.retryableFailure?.humanBlocked).toBe(true);
+          expect(blocked?.retryableFailure?.detail).toContain(
+            "not visible to the App Dev Stack controller",
+          );
+          expect(
+            snapshot.threads.filter((thread) => thread.workflowRole === "implementation-fixer"),
+          ).toHaveLength(0);
+        }),
+      {
+        failAutoCreate: true,
+        autoCreateFailureMessage:
+          "Worktree path is not visible to the App Dev Stack controller: /var/lib/code/worktrees/feature.",
+      },
     ),
   );
 

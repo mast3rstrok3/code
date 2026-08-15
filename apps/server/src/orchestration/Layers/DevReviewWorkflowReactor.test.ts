@@ -12,6 +12,7 @@ import {
   nextDevReviewWorkflowAction,
   selectStandalonePreviewTargets,
   terminalReviewAction,
+  terminalReviewEvidenceFailure,
 } from "./DevReviewWorkflowReactor.ts";
 
 const now = "2026-01-01T00:00:00.000Z";
@@ -223,4 +224,42 @@ it("exhausts on the final failed review without scheduling another repair", () =
 it("treats blocked reviews and failures without actionable findings as blocked", () => {
   expect(terminalReviewAction(run({ attemptsUsed: 1 }), review("blocked"))).toBe("blocked");
   expect(terminalReviewAction(run({ attemptsUsed: 1 }), review("failed", false))).toBe("blocked");
+});
+
+it("preserves a blocked review reason when browser evidence could not be captured", () => {
+  const blocked = {
+    ...review("blocked"),
+    evidence: {
+      recording: {
+        status: "not-started" as const,
+        path: null,
+        mimeType: null,
+        sizeBytes: null,
+        startedAt: null,
+        completedAt: null,
+        error: null,
+      },
+      screenshots: [],
+    },
+  } satisfies DevReviewRecord;
+
+  const action = terminalReviewAction(run({ attemptsUsed: 1 }), blocked);
+
+  expect(action).toBe("blocked");
+  expect(terminalReviewEvidenceFailure(action, blocked)).toBeNull();
+});
+
+it("still requires evidence for passed and actionable failed reviews", () => {
+  for (const verdict of ["passed", "failed"] as const) {
+    const original = review(verdict);
+    const terminal = {
+      ...original,
+      evidence: { ...original.evidence, screenshots: [] },
+    } satisfies DevReviewRecord;
+    const action = terminalReviewAction(run({ attemptsUsed: 1 }), terminal);
+
+    expect(terminalReviewEvidenceFailure(action, terminal)).toContain(
+      "required durable recording and screenshot evidence",
+    );
+  }
 });

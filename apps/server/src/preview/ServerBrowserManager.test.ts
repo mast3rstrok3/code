@@ -49,7 +49,9 @@ class FakeEventTarget {
 class FakePage extends FakeEventTarget {
   closed = false;
   failScreenshot = false;
+  deferGoto = false;
   viewport = { width: 1280, height: 800 };
+  private gotoResolver: (() => void) | null = null;
 
   readonly mouse = {
     move: async () => {},
@@ -88,6 +90,19 @@ class FakePage extends FakeEventTarget {
     return "";
   }
 
+  async goto() {
+    if (!this.deferGoto) return null;
+    await new Promise<void>((resolve) => {
+      this.gotoResolver = resolve;
+    });
+    return null;
+  }
+
+  resolveGoto() {
+    this.gotoResolver?.();
+    this.gotoResolver = null;
+  }
+
   async screenshot() {
     if (this.failScreenshot) throw new Error("screenshot failed");
     return Buffer.from("jpeg-frame");
@@ -122,6 +137,7 @@ class FakeContext extends FakeEventTarget {
   clearCookiesCalls = 0;
   deferClose = false;
   failCacheClear = false;
+  deferPageGoto = false;
   private closeResolver: (() => void) | null = null;
 
   pages() {
@@ -130,6 +146,7 @@ class FakeContext extends FakeEventTarget {
 
   async newPage() {
     const page = new FakePage();
+    page.deferGoto = this.deferPageGoto;
     this.createdPages.push(page);
     return page as unknown as Page;
   }
@@ -259,6 +276,35 @@ afterEach(() => {
 });
 
 describe("ServerBrowserManager lifecycle", () => {
+  it.effect(
+    "allows cold development pages more than eight seconds to reach DOMContentLoaded",
+    () => {
+      vi.useFakeTimers();
+      const harness = makeHarness();
+      harness.configureNextContext((context) => {
+        context.deferPageGoto = true;
+      });
+      return Effect.gen(function* () {
+        const browser = yield* ServerBrowserManager;
+        const navigation = yield* browser
+          .navigate({ ...tab("cold-navigation"), url: "https://feature.example.test" })
+          .pipe(Effect.forkScoped);
+
+        yield* Effect.promise(() =>
+          vi.waitFor(() => {
+            expect(harness.contexts).toHaveLength(1);
+            expect(harness.contexts[0]!.managedPage()).toBeDefined();
+          }),
+        );
+        yield* Effect.promise(() => vi.advanceTimersByTimeAsync(10_000));
+        harness.contexts[0]!.managedPage()!.resolveGoto();
+        yield* Effect.promise(() => vi.advanceTimersByTimeAsync(0));
+
+        expect(Exit.isSuccess(yield* Effect.exit(Fiber.join(navigation)))).toBe(true);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
   it.effect("starts screencasting only for active frame subscribers", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

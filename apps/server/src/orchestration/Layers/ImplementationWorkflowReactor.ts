@@ -588,6 +588,10 @@ function appDevStackReadiness(result: AppDevStackAutoCreateResult): "ready" | "e
   return result.stack === null || result.stack.status === "running" ? "ready" : "ensuring";
 }
 
+function isAppDevStackInfrastructureFailure(detail: string): boolean {
+  return detail.toLowerCase().includes("not visible to the app dev stack controller");
+}
+
 function fastFeatureExampleDirective(run: OrchestrationImplementationRun) {
   return {
     type: "implementation-fast-build-result",
@@ -955,6 +959,7 @@ const make = Effect.gen(function* () {
       | "build"
       | "change-request";
     readonly automaticRecovery?: boolean;
+    readonly automaticRecoveryWaiting?: boolean;
     /**
      * Set when only a human can clear the condition (a moved source branch, a
      * conflicting worktree). `recoverRetryableRuns` skips these, so the attempt
@@ -990,15 +995,19 @@ const make = Effect.gen(function* () {
     });
     yield* appendActivity({
       threadId: input.run.orchestratorThreadId,
-      tone: "error",
+      tone: input.automaticRecoveryWaiting === true ? "info" : "error",
       kind:
-        input.automaticRecovery === true
-          ? "implementation-qa-remediation-requested"
-          : "implementation-workflow.needs-human-attention",
+        input.automaticRecoveryWaiting === true
+          ? "implementation-app-dev-stack-waiting"
+          : input.automaticRecovery === true
+            ? "implementation-qa-remediation-requested"
+            : "implementation-workflow.needs-human-attention",
       summary:
-        input.automaticRecovery === true
-          ? "Automated QA remediation requested"
-          : "Implementation workflow needs human attention",
+        input.automaticRecoveryWaiting === true
+          ? "Waiting for App Dev Stack"
+          : input.automaticRecovery === true
+            ? "Automated QA remediation requested"
+            : "Implementation workflow needs human attention",
       payload: { runId: input.run.id, reasonMarkdown: input.reasonMarkdown },
       createdAt: input.updatedAt,
     });
@@ -1688,6 +1697,7 @@ const make = Effect.gen(function* () {
         stackResult?._tag === "Failure" ? errorDetail(stackResult.failure) : null;
       const stack = stackResult?._tag === "Success" ? stackResult.success : null;
       if (stackFailureDetail !== null) {
+        const infrastructureBlocked = isAppDevStackInfrastructureFailure(stackFailureDetail);
         const diagnostics = yield* appDevStackDiagnostics({
           run: ensuringRun,
           stackId: ensuringRun.appDevStack.stackId,
@@ -1714,15 +1724,18 @@ const make = Effect.gen(function* () {
             },
           },
           retryableStage: "app-dev-stack",
-          automaticRecovery: true,
+          automaticRecovery: !infrastructureBlocked,
+          humanBlocked: infrastructureBlocked,
           reasonMarkdown: diagnostics,
           updatedAt: input.createdAt,
         });
-        yield* requestRunRetry({
-          sourceThreadId: input.sourceThreadId,
-          runId: blocked.id,
-          createdAt: input.createdAt,
-        });
+        if (!infrastructureBlocked) {
+          yield* requestRunRetry({
+            sourceThreadId: input.sourceThreadId,
+            runId: blocked.id,
+            createdAt: input.createdAt,
+          });
+        }
         return;
       }
       const frontendUrl = stack?.frontendUrl ?? null;
@@ -1791,6 +1804,7 @@ const make = Effect.gen(function* () {
           },
           retryableStage: "app-dev-stack",
           automaticRecovery: true,
+          automaticRecoveryWaiting: transitioning,
           reasonMarkdown: diagnostics,
           updatedAt: input.createdAt,
         });
@@ -3272,7 +3286,7 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    if (run.fixOrigin === "dev-review") {
+    if (run.fixOrigin === "app-dev-stack" || run.fixOrigin === "dev-review") {
       const repairedRun: OrchestrationImplementationRun = {
         ...run,
         status: "qa-reviewing",
