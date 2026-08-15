@@ -5798,7 +5798,18 @@ function ChatViewContent(props: ChatViewProps) {
       );
       return;
     }
-    const threadIdForSend = activeThread.id;
+    // A draft is the durable client-side identity; its first-send thread ID is only an attempt.
+    // Minting it at send time means a failed bootstrap can be retried without reusing an aggregate
+    // ID that the server may already have created and deleted while unwinding the failed attempt.
+    const threadIdForSend = isLocalDraftThread ? newThreadId() : activeThread.id;
+    if (isLocalDraftThread && draftId && draftThread) {
+      setLogicalProjectDraftThreadId(
+        draftThread.logicalProjectKey,
+        scopeProjectRef(draftThread.environmentId, draftThread.projectId),
+        draftId,
+        { threadId: threadIdForSend },
+      );
+    }
     const isFirstMessage = !isServerThread || activeThread.messages.length === 0;
     const workflowStartsWorkspace = workflowPresetStartsInDedicatedWorkspace(workflowPreset);
     const baseBranchForWorktree =

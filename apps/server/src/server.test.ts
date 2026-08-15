@@ -8333,7 +8333,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("cleans up created bootstrap threads when worktree creation defects", () =>
+  it.effect("keeps bootstrap threads retryable when worktree creation defects", () =>
     Effect.gen(function* () {
       const dispatchedCommands: Array<OrchestrationCommand> = [];
       const createWorktree = vi.fn(
@@ -8403,7 +8403,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.include(result.failure.message, "worktree exploded");
       assert.deepEqual(
         dispatchedCommands.map((command) => command.type),
-        ["thread.create", "thread.delete"],
+        ["thread.create"],
       );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );

@@ -1081,25 +1081,10 @@ const makeWsRpcLayer = (
           const { bootstrap: _bootstrap, ...finalCommand } = command;
           const threadId =
             command.type === "thread.turn.start" ? command.threadId : command.targetThreadId;
-          let createdThread = false;
           let targetProjectId = bootstrap?.createThread?.projectId;
           let targetProjectCwd = bootstrap?.prepareWorktree?.projectCwd;
           let targetWorktreePath = bootstrap?.createThread?.worktreePath ?? null;
           let targetBranch = bootstrap?.createThread?.branch ?? null;
-
-          const cleanupCreatedThread = () =>
-            createdThread
-              ? serverCommandId("bootstrap-thread-delete").pipe(
-                  Effect.flatMap((commandId) =>
-                    orchestrationEngine.dispatch({
-                      type: "thread.delete",
-                      commandId,
-                      threadId,
-                    }),
-                  ),
-                  Effect.ignoreCause({ log: true }),
-                )
-              : Effect.void;
 
           const recordSetupScriptFailure = (input: {
             readonly error: ProjectSetupScriptRunner.ProjectSetupScriptRunnerError;
@@ -1274,7 +1259,6 @@ const makeWsRpcLayer = (
                 worktreePath: bootstrap.createThread.worktreePath,
                 createdAt: bootstrap.createThread.createdAt,
               });
-              createdThread = true;
             }
 
             if (bootstrap?.prepareWorktree) {
@@ -1496,13 +1480,7 @@ const makeWsRpcLayer = (
           });
 
           return yield* bootstrapProgram.pipe(
-            Effect.catchCause((cause) => {
-              const dispatchError = toBootstrapDispatchCommandCauseError(cause);
-              if (Cause.hasInterruptsOnly(cause)) {
-                return Effect.fail(dispatchError);
-              }
-              return cleanupCreatedThread().pipe(Effect.flatMap(() => Effect.fail(dispatchError)));
-            }),
+            Effect.catchCause((cause) => Effect.fail(toBootstrapDispatchCommandCauseError(cause))),
           );
         });
 

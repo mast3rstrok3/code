@@ -1068,6 +1068,32 @@ describe("composerDraftStore project draft thread mapping", () => {
     });
   });
 
+  it("rotates a failed first-send identity without losing the draft", () => {
+    const store = useComposerDraftStore.getState();
+    const retryThreadId = ThreadId.make("thread-retry");
+    store.setProjectDraftThreadId(projectRef, draftId, {
+      threadId,
+      branch: "main",
+      envMode: "worktree",
+      startFromOrigin: true,
+    });
+    store.setPrompt(draftId, "keep this request");
+
+    store.setLogicalProjectDraftThreadId(scopedProjectKey(projectRef), projectRef, draftId, {
+      threadId: retryThreadId,
+    });
+
+    expect(useComposerDraftStore.getState().getDraftThread(draftId)).toMatchObject({
+      threadId: retryThreadId,
+      branch: "main",
+      envMode: "worktree",
+      startFromOrigin: true,
+    });
+    expect(useComposerDraftStore.getState().getComposerDraft(draftId)?.prompt).toBe(
+      "keep this request",
+    );
+  });
+
   it("stores the start-from-origin choice with the draft thread", () => {
     const store = useComposerDraftStore.getState();
     store.setProjectDraftThreadId(projectRef, draftId, {
