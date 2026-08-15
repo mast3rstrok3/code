@@ -15,6 +15,11 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
 import { PreviewSnapshotToolkit, PreviewStandardToolkit, PreviewToolkit } from "./tools.ts";
 
+// Cold Vite module graphs can legitimately take longer than the broker's
+// default request timeout. The server browser guards navigation at 65 seconds,
+// so leave enough room for it to return either a loaded page or a real error.
+const PREVIEW_OPEN_TIMEOUT_MS = 75_000;
+
 export function normalizePreviewOpenInput(
   input: PreviewAutomationOpenInput,
 ): PreviewAutomationOpenInput {
@@ -63,7 +68,11 @@ const invokeTargeted = <A>(
 const handlers = {
   preview_status: (input) => invokeTargeted<PreviewAutomationStatus>("status", input ?? {}),
   preview_open: (input) =>
-    invokeTargeted<PreviewAutomationStatus>("open", normalizePreviewOpenInput(input)),
+    invokeTargeted<PreviewAutomationStatus>(
+      "open",
+      normalizePreviewOpenInput(input),
+      PREVIEW_OPEN_TIMEOUT_MS,
+    ),
   preview_navigate: (input) =>
     invokeTargeted<PreviewAutomationStatus>("navigate", input, input.timeoutMs),
   preview_resize: (input) =>

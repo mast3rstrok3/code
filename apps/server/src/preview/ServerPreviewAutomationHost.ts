@@ -64,6 +64,20 @@ const OPERATIONS_WITHOUT_RECORDING = PREVIEW_AUTOMATION_OPERATIONS.filter(
 const noPreviewTabOpen = () =>
   new PreviewBrowserUnavailableError({ message: "No preview tab is open." });
 
+export const runPreviewAutomationRequests = <E, R, E2, R2>(
+  stream: Stream.Stream<PreviewAutomationStreamEvent, E, R>,
+  handleRequest: (
+    event: Extract<PreviewAutomationStreamEvent, { readonly type: "request" }>,
+  ) => Effect.Effect<void, E2, R2>,
+) =>
+  stream.pipe(
+    Stream.mapEffect((event) => (event.type === "connected" ? Effect.void : handleRequest(event)), {
+      concurrency: "unbounded",
+      unordered: true,
+    }),
+    Stream.runDrain,
+  );
+
 export const layer = Layer.effectDiscard(
   Effect.gen(function* ServerPreviewAutomationHost() {
     const config = yield* ServerConfig.ServerConfig;
@@ -273,15 +287,11 @@ export const layer = Layer.effectDiscard(
         : OPERATIONS_WITHOUT_RECORDING,
     });
 
-    yield* stream.pipe(
-      Stream.runForEach((event: PreviewAutomationStreamEvent) => {
-        if (event.type === "connected") return Effect.void;
-        return handleRequest(event.request).pipe(
-          Effect.flatMap((result) => respond(event.connectionId, event.request, result)),
-          Effect.catchCause((cause) => fail(event.connectionId, event.request, cause)),
-        );
-      }),
-      Effect.forkScoped,
-    );
+    yield* runPreviewAutomationRequests(stream, (event) =>
+      handleRequest(event.request).pipe(
+        Effect.flatMap((result) => respond(event.connectionId, event.request, result)),
+        Effect.catchCause((cause) => fail(event.connectionId, event.request, cause)),
+      ),
+    ).pipe(Effect.forkScoped);
   }),
 );
