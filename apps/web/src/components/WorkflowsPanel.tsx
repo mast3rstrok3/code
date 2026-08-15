@@ -1,8 +1,8 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
-import type { DevReviewWorkflowRun } from "@t3tools/contracts";
+import type { DevReviewWorkflowRun, OrchestrationImplementationRun } from "@t3tools/contracts";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 import { WORKFLOW_PRESET_DEFINITION_BY_ID } from "@t3tools/shared/workflowPresets";
-import { Archive, ChevronDown, ChevronRight, Copy, Eye, GitFork } from "lucide-react";
+import { Archive, ChevronDown, ChevronRight, Copy, Eye, GitFork, RotateCcw } from "lucide-react";
 import {
   useEffect,
   useRef,
@@ -20,6 +20,7 @@ import {
   resolveWorkflowStepTimeRange,
   resolveWorkflowThreadTimeRange,
   resolveWorkflowThreadStatus,
+  workflowStepMatchesImplementationFailure,
   workflowThreadKey,
   type WorkflowGroup,
   type WorkflowRoot,
@@ -241,10 +242,25 @@ function ThreadRow(props: {
 }
 
 function workflowStepTitle(step: WorkflowTimelineStep<EnvironmentThreadShell>): string {
+  if (step.label !== null) return step.label;
   const first = step.entries[0];
   if (!first) return "Work";
   if (first.kind === "workflow") return groupTitle(first.group);
   return workflowRoleShortLabel(first.row.thread.workflowRole) ?? "Work";
+}
+
+function implementationRunForGroup(
+  group: WorkflowGroup<EnvironmentThreadShell>,
+  runs: readonly OrchestrationImplementationRun[],
+): OrchestrationImplementationRun | null {
+  return (
+    runs.find(
+      (run) =>
+        run.id === group.sourceId ||
+        run.devReviewWorkflowRunIds.some((runId) => runId === group.sourceId) ||
+        group.rows.some((row) => row.thread.id === run.orchestratorThreadId),
+    ) ?? null
+  );
 }
 
 function devReviewRunPresentation(run: DevReviewWorkflowRun | null): {
@@ -276,10 +292,14 @@ function WorkflowGroupCard(props: {
   readonly activeThreadKey: string | null;
   readonly timestampFormat: TimestampFormat;
   readonly devReviewWorkflowRuns: readonly DevReviewWorkflowRun[];
+  readonly implementationRuns: readonly OrchestrationImplementationRun[];
+  readonly workflowRoot: EnvironmentThreadShell;
   readonly onOpenThread: (thread: EnvironmentThreadShell) => void;
   readonly onOpenDevReview: () => void;
   readonly onCopyWorkflowLink: (workflowId: string) => void;
+  readonly onRetryImplementationRun?: ((runId: string) => void) | undefined;
   readonly nested?: boolean;
+  readonly cycleLabel?: string | undefined;
 }) {
   const { group } = props;
   const expanded = props.expandedById[group.id] ?? group.isActive;
@@ -289,9 +309,15 @@ function WorkflowGroupCard(props: {
       ? (props.devReviewWorkflowRuns.find((run) => run.id === group.sourceId) ?? null)
       : null;
   const runPresentation = devReviewRunPresentation(linkedDevReviewRun);
-  const status = linkedDevReviewRun === null ? groupStatus(group) : runPresentation.status;
+  const linkedImplementationRun = implementationRunForGroup(group, props.implementationRuns);
+  const status =
+    linkedImplementationRun?.status === "needs-human-attention"
+      ? "failed"
+      : linkedDevReviewRun === null
+        ? groupStatus(group)
+        : runPresentation.status;
   const visual = STATUS_VISUALS[status];
-  const steps = buildWorkflowSteps(group, props.groups);
+  const steps = buildWorkflowSteps(group, props.groups, props.workflowRoot);
   const timeRange = resolveWorkflowGroupTimeRange(group, props.groups);
 
   return (
@@ -329,7 +355,7 @@ function WorkflowGroupCard(props: {
             <span className="min-w-0 flex-1">
               <span className="flex items-center gap-2">
                 <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                  {groupTitle(group)}
+                  {props.cycleLabel ?? groupTitle(group)}
                 </span>
                 <span className={cn("text-[11px]", visual.textClass)}>
                   {runPresentation.label ?? visual.label}
@@ -390,6 +416,12 @@ function WorkflowGroupCard(props: {
             {steps.map((step, index) => {
               const stepTimeRange = resolveWorkflowStepTimeRange(step, props.groups);
               const threadCount = step.entries.filter((entry) => entry.kind === "thread").length;
+              const retryableFailure = linkedImplementationRun?.retryableFailure ?? null;
+              const canRetryStep =
+                linkedImplementationRun?.status === "needs-human-attention" &&
+                retryableFailure !== null &&
+                workflowStepMatchesImplementationFailure(step, retryableFailure.stage) &&
+                props.onRetryImplementationRun !== undefined;
               return (
                 <section key={step.id} className="px-1 py-2">
                   <header className="px-2 pb-1.5">
@@ -402,7 +434,23 @@ function WorkflowGroupCard(props: {
                           {workflowStepTitle(step)}
                         </h4>
                       </div>
-                      {threadCount > 1 ? (
+                      {canRetryStep ? (
+                        <button
+                          type="button"
+                          title={`Restart blocked ${workflowStepTitle(step)} step`}
+                          onClick={() =>
+                            props.onRetryImplementationRun?.(linkedImplementationRun.id)
+                          }
+                          className="cursor-pointer flex shrink-0 items-center gap-1 rounded-md border border-destructive/30 px-2 py-1 text-[10px] font-medium text-destructive hover:bg-destructive/10"
+                        >
+                          <RotateCcw className="size-3" aria-hidden />
+                          Restart step
+                        </button>
+                      ) : step.repeatsAsCycles && step.entries.length > 1 ? (
+                        <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
+                          {step.entries.length} cycles
+                        </span>
+                      ) : threadCount > 1 ? (
                         <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
                           {threadCount} threads
                         </span>
@@ -414,21 +462,42 @@ function WorkflowGroupCard(props: {
                       className="mt-1"
                     />
                   </header>
-                  <div className="space-y-0.5">
-                    {step.entries.map((entry) =>
-                      entry.kind === "thread" ? (
-                        <ThreadRow
-                          key={entry.id}
-                          row={entry.row}
-                          timestampFormat={props.timestampFormat}
-                          activeThreadKey={props.activeThreadKey}
-                          onOpenThread={props.onOpenThread}
-                        />
-                      ) : (
-                        <WorkflowGroupCard key={entry.id} {...props} group={entry.group} nested />
-                      ),
-                    )}
-                  </div>
+                  {step.entries.length === 0 ? (
+                    <div className="px-2 py-1 text-[11px] text-muted-foreground/55">
+                      Not started
+                    </div>
+                  ) : (
+                    <div className="space-y-0.5">
+                      {step.entries.map((entry, entryIndex) => {
+                        const cycleLabel = step.repeatsAsCycles
+                          ? `Cycle ${entryIndex + 1}`
+                          : undefined;
+                        return entry.kind === "thread" ? (
+                          <div key={entry.id}>
+                            {cycleLabel ? (
+                              <div className="px-2 pt-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                                {cycleLabel}
+                              </div>
+                            ) : null}
+                            <ThreadRow
+                              row={entry.row}
+                              timestampFormat={props.timestampFormat}
+                              activeThreadKey={props.activeThreadKey}
+                              onOpenThread={props.onOpenThread}
+                            />
+                          </div>
+                        ) : (
+                          <WorkflowGroupCard
+                            key={entry.id}
+                            {...props}
+                            group={entry.group}
+                            nested
+                            cycleLabel={cycleLabel}
+                          />
+                        );
+                      })}
+                    </div>
+                  )}
                 </section>
               );
             })}
@@ -445,9 +514,11 @@ export function WorkflowsPanel(props: {
   readonly focusedWorkflowId: string | null;
   readonly timestampFormat: TimestampFormat;
   readonly devReviewWorkflowRuns: readonly DevReviewWorkflowRun[];
+  readonly implementationRuns: readonly OrchestrationImplementationRun[];
   readonly onOpenThread: (thread: EnvironmentThreadShell) => void;
   readonly onOpenDevReview: () => void;
   readonly onCopyWorkflowLink: (workflowId: string) => void;
+  readonly onRetryImplementationRun?: ((runId: string) => void) | undefined;
 }) {
   const groups = props.workflow?.groups ?? [];
   const focusedGroupRef = useRef<HTMLElement>(null);
@@ -490,21 +561,22 @@ export function WorkflowsPanel(props: {
     );
   }
 
-  const rootTimeRange = resolveWorkflowThreadTimeRange(props.workflow.root);
+  const workflow = props.workflow;
+  const rootTimeRange = resolveWorkflowThreadTimeRange(workflow.root);
 
   return (
     <ScrollArea className="min-h-0 flex-1">
       <div className="p-3">
         <button
           type="button"
-          onClick={() => props.onOpenThread(props.workflow!.root)}
+          onClick={() => props.onOpenThread(workflow.root)}
           className="cursor-pointer mb-3 flex w-full min-w-0 items-start gap-2 rounded-md px-2 py-2 text-left hover:bg-accent/60"
         >
           <GitFork className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
           <span className="min-w-0 flex-1">
             <span className="flex min-w-0 items-center gap-2">
               <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                {props.workflow.root.title}
+                {workflow.root.title}
               </span>
               <span className="shrink-0 text-[11px] text-muted-foreground">Main thread</span>
             </span>
@@ -531,9 +603,12 @@ export function WorkflowsPanel(props: {
                 activeThreadKey={props.activeThreadKey}
                 timestampFormat={props.timestampFormat}
                 devReviewWorkflowRuns={props.devReviewWorkflowRuns}
+                implementationRuns={props.implementationRuns}
+                workflowRoot={workflow.root}
                 onOpenThread={props.onOpenThread}
                 onOpenDevReview={props.onOpenDevReview}
                 onCopyWorkflowLink={props.onCopyWorkflowLink}
+                onRetryImplementationRun={props.onRetryImplementationRun}
               />
             ))}
         </div>

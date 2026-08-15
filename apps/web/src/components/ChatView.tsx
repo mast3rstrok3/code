@@ -7046,11 +7046,13 @@ function ChatViewContent(props: ChatViewProps) {
         focusedWorkflowId={focusedWorkflowId}
         timestampFormat={timestampFormat}
         devReviewWorkflowRuns={displayedWorkflowArtifacts?.devReviewWorkflowRuns ?? []}
+        implementationRuns={activeImplementationRuns}
         onOpenThread={(thread) => openWorkflowThread(thread.id)}
         onOpenDevReview={() => {
           useRightPanelStore.getState().open(activeThreadRef, "review");
         }}
         onCopyWorkflowLink={copyWorkflowLink}
+        onRetryImplementationRun={handleRetryImplementationRun}
       />
     ) : (activeRightPanelSurface?.kind === "files" || activeRightPanelSurface?.kind === "file") &&
       activeProject &&

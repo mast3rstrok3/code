@@ -1,8 +1,13 @@
 import type {
+  OrchestrationImplementationRetryableFailure,
   OrchestrationSessionStatus,
   OrchestrationThreadWorkflowRole,
   WorkflowPreset,
 } from "@t3tools/contracts";
+import {
+  WORKFLOW_PRESET_DEFINITION_BY_ID,
+  type WorkflowPresetHelpStep,
+} from "@t3tools/shared/workflowPresets";
 
 export interface WorkflowModelThread {
   readonly environmentId: string;
@@ -90,12 +95,44 @@ export type WorkflowTimelineEntry<TThread extends WorkflowModelThread> =
 export interface WorkflowTimelineStep<TThread extends WorkflowModelThread> {
   readonly id: string;
   readonly createdAt: string;
+  readonly label: string | null;
+  readonly repeatsAsCycles: boolean;
   readonly entries: readonly WorkflowTimelineEntry<TThread>[];
 }
 
 export interface WorkflowTimeRange {
   readonly startedAt: string;
   readonly endedAt: string | null;
+}
+
+export function workflowStepMatchesImplementationFailure<TThread extends WorkflowModelThread>(
+  step: WorkflowTimelineStep<TThread>,
+  stage: OrchestrationImplementationRetryableFailure["stage"],
+): boolean {
+  const label = step.label?.toLowerCase() ?? "";
+  switch (stage) {
+    case "source-dirty":
+    case "worktree-setup":
+      return label === "create shared worktree" || label.startsWith("load the selected spec");
+    case "worker-setup":
+    case "worker-execution":
+      return label.includes("tdd") || label.includes("build");
+    case "integration":
+    case "merge-gate":
+      return label.includes("integrat") || label.includes("merge gate");
+    case "app-dev-stack":
+      return label.startsWith("start and probe appdevstack");
+    case "dev-review":
+      return label.includes("dev review");
+    case "code-review":
+      return label.includes("code review");
+    case "fixer":
+      return label.includes("repair") || label.includes("tdd");
+    case "build":
+      return label.includes("build") || label.includes("tdd");
+    case "change-request":
+      return label.includes("change request") || label.includes("publish");
+  }
 }
 
 export interface WorkflowViewModel<TThread extends WorkflowModelThread> {
@@ -145,29 +182,184 @@ export function buildWorkflowTimeline<TThread extends WorkflowModelThread>(
 function workflowStepIdentity<TThread extends WorkflowModelThread>(
   entry: WorkflowTimelineEntry<TThread>,
 ): string {
-  if (entry.kind === "workflow") return entry.id;
+  if (entry.kind === "workflow") {
+    return `workflow:${entry.group.preset ?? entry.group.id}`;
+  }
   return `role:${entry.row.thread.workflowRole ?? "workflow-child"}`;
 }
 
+function entrySkillIds<TThread extends WorkflowModelThread>(
+  entry: WorkflowTimelineEntry<TThread>,
+): ReadonlySet<string> {
+  if (entry.kind === "workflow") {
+    return entry.group.preset === "dev-review"
+      ? new Set(["implementation.browser-dev-review.codex"])
+      : new Set();
+  }
+  switch (entry.row.thread.workflowRole) {
+    case "planning-orchestrator":
+      return new Set([
+        "planning.engineering-grill-automatic.codex",
+        "planning.grill-stage.codex",
+        "planning.spec.codex",
+        "planning.tickets.codex",
+        "planning.wayfinder.codex",
+        "planning.research.codex",
+        "planning.prototype.codex",
+      ]);
+    case "planning-reviewer":
+      return new Set(["planning.ticket-reviewer.codex"]);
+    case "implementation-orchestrator":
+      return new Set(["implementation.orchestrator-planning.codex"]);
+    case "implementation-worker":
+    case "implementation-fixer":
+    case "product-fix-implementer":
+    case "fast-feature-implementer":
+    case "dev-review-fixer":
+      return new Set(["implementation.tdd.codex"]);
+    case "implementation-validator":
+      return new Set(["implementation.merge-gate.codex"]);
+    case "implementation-qa-reviewer":
+    case "dev-review-reviewer":
+    case "dev-review-orchestrator":
+      return new Set(["implementation.browser-dev-review.codex"]);
+    case "implementation-code-reviewer":
+      return new Set(["implementation.code-review.codex"]);
+    case null:
+      return new Set();
+  }
+}
+
+function entryMatchesDefinedStep<TThread extends WorkflowModelThread>(
+  entry: WorkflowTimelineEntry<TThread>,
+  step: WorkflowPresetHelpStep,
+): boolean {
+  if (step.skillId !== undefined && entrySkillIds(entry).has(step.skillId)) return true;
+  if (entry.kind === "workflow") return false;
+  const role = entry.row.thread.workflowRole;
+  const label = step.label.toLowerCase();
+  if (label.includes("start and probe appdevstack")) {
+    return role === "implementation-orchestrator" || role === "fast-feature-implementer";
+  }
+  if (label.includes("change request") || label.includes("publish")) {
+    return role === "implementation-orchestrator" || role === "fast-feature-implementer";
+  }
+  if (label.includes("cli plan")) return role === "fast-feature-implementer";
+  return false;
+}
+
+function definedStepRepeatsAsCycles(step: WorkflowPresetHelpStep): boolean {
+  const label = step.label.toLowerCase();
+  return (
+    step.skillId === "implementation.browser-dev-review.codex" ||
+    step.skillId === "planning.ticket-reviewer.codex" ||
+    label.includes("cycle")
+  );
+}
+
+function definedStepUsesRootThread(preset: WorkflowPreset, step: WorkflowPresetHelpStep): boolean {
+  if (step.threadBoundary === "same thread") return true;
+  const definition = WORKFLOW_PRESET_DEFINITION_BY_ID[preset];
+  if (step.skillId !== undefined && step.skillId === definition.workflowPromptId) return true;
+  const label = step.label.toLowerCase();
+  if (label.includes("create shared worktree")) return true;
+  if (preset === "planning") {
+    return step.skillId !== "planning.ticket-reviewer.codex";
+  }
+  if (preset === "wayfinder") return true;
+  return false;
+}
+
+function fallbackStepRepeatsAsCycles<TThread extends WorkflowModelThread>(
+  entries: readonly WorkflowTimelineEntry<TThread>[],
+): boolean {
+  if (entries.length < 2) return false;
+  if (entries.every((entry) => entry.kind === "workflow")) return true;
+  return entries.every(
+    (entry) =>
+      entry.kind === "thread" &&
+      (entry.row.thread.workflowRole === "planning-reviewer" ||
+        entry.row.thread.workflowRole === "implementation-qa-reviewer" ||
+        entry.row.thread.workflowRole === "implementation-fixer" ||
+        entry.row.thread.workflowRole === "dev-review-reviewer" ||
+        entry.row.thread.workflowRole === "dev-review-fixer"),
+  );
+}
+
 /**
- * Turn the chronological workflow timeline into visible steps. Adjacent threads
- * with the same workflow role belong under one step heading; a nested workflow
- * always remains a step of its own.
+ * Render the canonical steps users see in Settings → Workflows. Runtime threads
+ * attach to those definitions; a fresh thread for a repeated review or repair
+ * remains another cycle of the same step. Historical workflows without defined
+ * steps retain role-based grouping as a fallback.
  */
 export function buildWorkflowSteps<TThread extends WorkflowModelThread>(
   group: WorkflowGroup<TThread>,
   groups: readonly WorkflowGroup<TThread>[],
+  rootThread?: TThread,
+): readonly WorkflowTimelineStep<TThread>[] {
+  const timeline = buildWorkflowTimeline(group, groups);
+  const definedSteps =
+    group.preset === null ? [] : WORKFLOW_PRESET_DEFINITION_BY_ID[group.preset].helpSteps;
+  if (definedSteps.length > 0) {
+    const matchedEntryIds = new Set<string>();
+    const steps = definedSteps.map((definition, index): WorkflowTimelineStep<TThread> => {
+      const matchedEntries = timeline.filter((entry) => entryMatchesDefinedStep(entry, definition));
+      for (const entry of matchedEntries) matchedEntryIds.add(entry.id);
+      const entries =
+        rootThread !== undefined &&
+        group.preset !== null &&
+        definedStepUsesRootThread(group.preset, definition)
+          ? [
+              {
+                kind: "thread" as const,
+                id: workflowThreadKey(rootThread),
+                createdAt: rootThread.createdAt,
+                row: { thread: rootThread, depth: 0, parentThreadKey: null },
+              },
+              ...matchedEntries,
+            ]
+          : matchedEntries;
+      return {
+        id: `defined:${group.id}:${String(index)}`,
+        createdAt: entries[0]?.createdAt ?? group.createdAt,
+        label: definition.label,
+        repeatsAsCycles: definedStepRepeatsAsCycles(definition),
+        entries,
+      };
+    });
+    const unmatched = timeline.filter((entry) => !matchedEntryIds.has(entry.id));
+    if (unmatched.length === 0) return steps;
+    return [...steps, ...buildFallbackWorkflowSteps(unmatched)];
+  }
+  return buildFallbackWorkflowSteps(timeline);
+}
+
+function buildFallbackWorkflowSteps<TThread extends WorkflowModelThread>(
+  timeline: readonly WorkflowTimelineEntry<TThread>[],
 ): readonly WorkflowTimelineStep<TThread>[] {
   const steps: WorkflowTimelineStep<TThread>[] = [];
-  for (const entry of buildWorkflowTimeline(group, groups)) {
+  const stepIndexByIdentity = new Map<string, number>();
+  for (const entry of timeline) {
     const identity = workflowStepIdentity(entry);
-    const previous = steps.at(-1);
-    const previousEntry = previous?.entries[0];
-    if (previous && previousEntry && workflowStepIdentity(previousEntry) === identity) {
-      steps[steps.length - 1] = { ...previous, entries: [...previous.entries, entry] };
+    const existingIndex = stepIndexByIdentity.get(identity);
+    if (existingIndex !== undefined) {
+      const existing = steps[existingIndex]!;
+      const entries = [...existing.entries, entry];
+      steps[existingIndex] = {
+        ...existing,
+        entries,
+        repeatsAsCycles: fallbackStepRepeatsAsCycles(entries),
+      };
       continue;
     }
-    steps.push({ id: `${identity}:${entry.id}`, createdAt: entry.createdAt, entries: [entry] });
+    stepIndexByIdentity.set(identity, steps.length);
+    steps.push({
+      id: `${identity}:${entry.id}`,
+      createdAt: entry.createdAt,
+      label: null,
+      repeatsAsCycles: false,
+      entries: [entry],
+    });
   }
   return steps;
 }

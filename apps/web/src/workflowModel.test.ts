@@ -11,6 +11,7 @@ import {
   resolveWorkflowThreadTimeRange,
   resolveWorkflowThreadStatus,
   selectWorkflowRootForThread,
+  workflowStepMatchesImplementationFailure,
   type WorkflowModelThread,
 } from "./workflowModel";
 
@@ -297,7 +298,7 @@ describe("buildWorkflowViewModel", () => {
     ]);
   });
 
-  it("keeps repeated non-adjacent roles as separate workflow steps", () => {
+  it("keeps repeated non-adjacent roles as cycles in one workflow step", () => {
     const root = thread("root");
     const firstFix = thread("first-fix", {
       parentThreadId: "root",
@@ -322,13 +323,95 @@ describe("buildWorkflowViewModel", () => {
     )?.groups;
     const group = groups?.[0];
 
-    expect(group && groups ? buildWorkflowSteps(group, groups).map((step) => step.id) : []).toEqual(
-      [
-        "role:implementation-fixer:env:first-fix",
-        "role:implementation-code-reviewer:env:review",
-        "role:implementation-fixer:env:second-fix",
+    expect(group && groups ? buildWorkflowSteps(group, groups) : []).toMatchObject([
+      {
+        id: "role:implementation-fixer:env:first-fix",
+        repeatsAsCycles: true,
+        entries: [
+          { kind: "thread", row: { thread: { id: "first-fix" } } },
+          { kind: "thread", row: { thread: { id: "second-fix" } } },
+        ],
+      },
+      {
+        id: "role:implementation-code-reviewer:env:review",
+        entries: [{ kind: "thread", row: { thread: { id: "review" } } }],
+      },
+    ]);
+  });
+
+  it("uses Settings workflow steps and groups repeated Dev Reviews as cycles", () => {
+    const root = thread("root", { workflowPreset: "fast-feature" });
+    const build = thread("build", {
+      parentThreadId: "root",
+      workflowRole: "fast-feature-implementer",
+      workflowContext: { workflowId: "fast-feature-run", rootThreadId: "root" },
+      createdAt: "2026-01-01T00:01:00.000Z",
+    });
+    const reviewA = thread("review-a", {
+      parentThreadId: "build",
+      workflowRole: "dev-review-orchestrator",
+      workflowPreset: "dev-review",
+      workflowContext: {
+        workflowId: "dev-review-a",
+        parentWorkflowId: "fast-feature-run",
+        rootThreadId: "root",
+      },
+      createdAt: "2026-01-01T00:02:00.000Z",
+    });
+    const reviewB = thread("review-b", {
+      parentThreadId: "build",
+      workflowRole: "dev-review-orchestrator",
+      workflowPreset: "dev-review",
+      workflowContext: {
+        workflowId: "dev-review-b",
+        parentWorkflowId: "fast-feature-run",
+        rootThreadId: "root",
+      },
+      createdAt: "2026-01-01T00:03:00.000Z",
+    });
+    const model = buildWorkflowViewModel([root, build, reviewA, reviewB]);
+    const groups = model.rootsByThreadKey.get("env:root")?.groups;
+    const fastFeature = groups?.find((group) => group.sourceId === "fast-feature-run");
+    const steps = fastFeature && groups ? buildWorkflowSteps(fastFeature, groups, root) : [];
+
+    expect(steps.slice(0, 8).map((step) => step.label)).toEqual([
+      "Create shared worktree",
+      "Product Grill",
+      "CLI Plan mode",
+      "CLI Build in the shared worktree",
+      "Start and probe AppDevStack from the completed Build",
+      "Run nested Dev Review against AppDevStack",
+      "Code Review",
+      "Change request publication",
+    ]);
+    expect(steps[5]).toMatchObject({
+      repeatsAsCycles: true,
+      entries: [
+        { kind: "workflow", group: { sourceId: "dev-review-a" } },
+        { kind: "workflow", group: { sourceId: "dev-review-b" } },
       ],
-    );
+    });
+    expect(steps.slice(0, 3).map((step) => step.entries[0]?.id)).toEqual([
+      "env:root",
+      "env:root",
+      "env:root",
+    ]);
+    expect(steps[3]?.entries[0]).toMatchObject({
+      kind: "thread",
+      row: { thread: { id: "build" } },
+    });
+    expect(
+      steps.findIndex((step) => workflowStepMatchesImplementationFailure(step, "dev-review")),
+    ).toBe(5);
+    expect(
+      steps.findIndex((step) => workflowStepMatchesImplementationFailure(step, "app-dev-stack")),
+    ).toBe(4);
+    expect(
+      steps.filter((step) => workflowStepMatchesImplementationFailure(step, "app-dev-stack")),
+    ).toHaveLength(1);
+    expect(
+      steps.filter((step) => workflowStepMatchesImplementationFailure(step, "worktree-setup")),
+    ).toHaveLength(1);
   });
 
   it("calculates thread, step, and parent workflow timing across nested work", () => {

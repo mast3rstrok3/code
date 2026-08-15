@@ -757,6 +757,10 @@ function changeRequestFailure(input: {
 const FRONTEND_PROBE_TIMEOUT = Duration.seconds(10);
 const APP_DEV_STACK_DIAGNOSTIC_LIMIT = 24 * 1_024;
 
+export function appDevStackBackendHealthUrl(frontendUrl: string): string {
+  return new URL("/api/health", frontendUrl).href;
+}
+
 function errorDetail(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
@@ -1830,15 +1834,30 @@ const make = Effect.gen(function* () {
         return;
       }
 
-      // The controller's own status is a claim about the stack, not about the edge. A frontend
-      // crash-looping behind a live Service reports as running and still answers 503, which can
-      // send repeated reviewers at a URL that has been down for hours. Only the URL the reviewer
-      // will actually open settles it — so this probe runs on the cached path too, which otherwise
-      // skips every check above.
+      // The controller's own status is a claim about the stack, not about the edge. The frontend
+      // can keep serving its static shell while its backend has no ready pod, so probing only `/`
+      // sends reviewers into a login flow that can only return 502. Probe both surfaces on the
+      // cached path too; a failed runtime probe is routed through AppDevStack diagnostics and TDD
+      // repair before another Browser Dev Review is launched.
       if (frontendUrl !== null) {
-        const serving = yield* probeFrontend(frontendUrl);
-        if (!serving.ok) {
-          const detail = `${frontendUrl} ${serving.detail}`;
+        const probes = [
+          { label: "frontend", url: frontendUrl },
+          { label: "backend health", url: appDevStackBackendHealthUrl(frontendUrl) },
+        ];
+        let failedProbe: {
+          readonly label: string;
+          readonly url: string;
+          readonly detail: string;
+        } | null = null;
+        for (const probe of probes) {
+          const serving = yield* probeFrontend(probe.url);
+          if (!serving.ok) {
+            failedProbe = { ...probe, detail: serving.detail };
+            break;
+          }
+        }
+        if (failedProbe !== null) {
+          const detail = `${failedProbe.label} ${failedProbe.url} ${failedProbe.detail}`;
           const diagnostics = yield* appDevStackDiagnostics({
             run: ensuringRun,
             stackId: stack?.stack?.id ?? ensuringRun.appDevStack.stackId,
@@ -1852,12 +1871,13 @@ const make = Effect.gen(function* () {
               appDevStack: {
                 ...ensuringRun.appDevStack,
                 status: "ensuring",
-                lastErrorMarkdown: serving.detail,
+                lastErrorMarkdown: failedProbe.detail,
                 updatedAt: input.createdAt,
               },
               lastQaFailure: {
                 kind: "app-dev-stack",
-                status: "frontend-unreachable",
+                status:
+                  failedProbe.label === "frontend" ? "frontend-unreachable" : "backend-unreachable",
                 detailMarkdown: diagnostics,
                 reviewId: null,
                 headSha,
@@ -4364,6 +4384,49 @@ const make = Effect.gen(function* () {
       return;
     }
     if (nestedRun.status === "blocked") {
+      // A reviewer can load a cached/static frontend shell while the worktree backend has stopped
+      // serving. That is an actionable runtime/code failure, not browser-automation blockage.
+      // Diagnose it here, attach pod logs to a TDD repair, and keep the retry inside this Dev
+      // Review step. Only genuinely unavailable review automation uses the bounded unblock path
+      // below.
+      const frontendUrl = linkedRun.appDevStack.frontendUrl;
+      if (frontendUrl !== null) {
+        const healthUrl = appDevStackBackendHealthUrl(frontendUrl);
+        const backendHealth = yield* probeFrontend(healthUrl);
+        if (!backendHealth.ok) {
+          const failureDetail =
+            nestedRun.failure?.detailMarkdown ?? "Nested Dev Review was blocked.";
+          const diagnostics = yield* appDevStackDiagnostics({
+            run: linkedRun,
+            stackId: linkedRun.appDevStack.stackId,
+            detail: [failureDetail, `Backend health ${healthUrl} ${backendHealth.detail}.`].join(
+              "\n\n",
+            ),
+          });
+          const headSha = yield* resolveQaHeadSha(linkedRun);
+          yield* startQaFixer({
+            sourceThreadId,
+            run: {
+              ...linkedRun,
+              devReviewUnblockAttemptCount: 0,
+              lastQaFailure: {
+                kind: "app-dev-stack",
+                status: "backend-unreachable",
+                detailMarkdown: diagnostics,
+                reviewId: nestedRun.cycles.at(-1)?.reviewId ?? null,
+                headSha,
+                occurredAt: event.occurredAt,
+              },
+              retryableFailure: null,
+              updatedAt: event.occurredAt,
+            },
+            origin: "app-dev-stack",
+            failureMarkdown: diagnostics,
+            createdAt: event.occurredAt,
+          });
+          return;
+        }
+      }
       // A blocked review means its automation could not produce a trustworthy verdict; it does
       // not consume the separate ten-repair product budget. Re-ensuring the inherited stack here
       // also probes the exact frontend before a fresh nested run receives a fresh browser runtime.

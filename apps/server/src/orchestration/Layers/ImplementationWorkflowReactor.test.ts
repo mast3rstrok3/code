@@ -38,6 +38,7 @@ import { OrchestrationEventStoreLive } from "../../persistence/Layers/Orchestrat
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
 import {
+  appDevStackBackendHealthUrl,
   fastFeatureBuildContractProblems,
   ImplementationWorkflowReactorLive,
   workflowIdForRun,
@@ -168,6 +169,8 @@ function makeTestLayer(
   autoCreateGate?: AutoCreateGate,
   autoCreateStackStatus: "running" | "starting" | "error" = "running",
   frontendProbeStatus = 200,
+  backendProbeStatus = frontendProbeStatus,
+  backendProbeStatuses: ReadonlyArray<number> = [backendProbeStatus],
   inheritedStackMissing = false,
 ) {
   const coreLayer = Layer.mergeAll(
@@ -199,14 +202,24 @@ function makeTestLayer(
         Layer.succeed(
           HttpClient.HttpClient,
           HttpClient.make((request) =>
-            Ref.update(calls.frontendProbeUrls, (urls) => [...urls, request.url]).pipe(
-              Effect.as(
+            Ref.modify(calls.frontendProbeUrls, (urls) => {
+              const backendProbeIndex = urls.filter((url) => url.endsWith("/api/health")).length;
+              const backendStatus =
+                backendProbeStatuses[
+                  Math.min(backendProbeIndex, backendProbeStatuses.length - 1)
+                ] ?? backendProbeStatus;
+              return [
                 HttpClientResponse.fromWeb(
                   request,
-                  new Response("ok", { status: frontendProbeStatus }),
+                  new Response("ok", {
+                    status: request.url.endsWith("/api/health")
+                      ? backendStatus
+                      : frontendProbeStatus,
+                  }),
                 ),
-              ),
-            ),
+                [...urls, request.url],
+              ] as const;
+            }),
           ),
         ),
       ),
@@ -461,6 +474,10 @@ function withSystem<A, E>(
     readonly autoCreateStackStatus?: "running" | "starting" | "error";
     /** HTTP status the frontend URL answers with when the reactor probes it before Dev Review. */
     readonly frontendProbeStatus?: number;
+    /** HTTP status the same-origin backend health route answers with. */
+    readonly backendProbeStatus?: number;
+    /** Successive backend health statuses, held at the final value after exhaustion. */
+    readonly backendProbeStatuses?: ReadonlyArray<number>;
     readonly inheritedStackMissing?: boolean;
   },
 ) {
@@ -528,6 +545,8 @@ function withSystem<A, E>(
           options?.autoCreateGate,
           options?.autoCreateStackStatus,
           options?.frontendProbeStatus,
+          options?.backendProbeStatus,
+          options?.backendProbeStatuses,
           options?.inheritedStackMissing,
         ),
       ),
@@ -1060,6 +1079,12 @@ it("omits workflow ownership for legacy orchestrator threads without workflow co
 });
 
 describe("ImplementationWorkflowReactor", () => {
+  it("derives backend health from the authoritative frontend origin", () => {
+    expect(
+      appDevStackBackendHealthUrl("https://feature-frontend.example.test/calendar?view=month"),
+    ).toBe("https://feature-frontend.example.test/api/health");
+  });
+
   it.effect("gives an Implementation run its own workflow identity and parent link", () =>
     withSystem((system) =>
       Effect.gen(function* () {
@@ -1279,6 +1304,59 @@ describe("ImplementationWorkflowReactor", () => {
           IMPLEMENTATION_RUN_MAX_DEV_REVIEW_UNBLOCK_ATTEMPTS + 2,
         );
       }),
+    ),
+  );
+
+  it.effect("turns a blocked review with a failed backend into a TDD repair cycle", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run, nestedRun } = yield* launchFastFeatureNestedReview(system);
+          const blockedAt = "2026-01-01T00:00:03.000Z";
+          yield* system.engine.dispatch({
+            type: "thread.dev-review-workflow.update",
+            commandId: commandId("nested-backend-blocked"),
+            threadId: nestedRun.controllerThreadId,
+            run: {
+              ...nestedRun,
+              status: "blocked",
+              activePhase: null,
+              activeThreadId: null,
+              outcome: "blocked",
+              failure: {
+                reason: "review-blocked",
+                phase: "review",
+                cycleNumber: 1,
+                detailMarkdown:
+                  "The frontend loaded, but login and backend API requests returned HTTP 502.",
+                failedAt: blockedAt,
+              },
+              updatedAt: blockedAt,
+              completedAt: blockedAt,
+            },
+            createdAt: blockedAt,
+          });
+          yield* system.reactor.drain;
+
+          const snapshot = yield* system.query.getSnapshot();
+          const repairing = snapshot.implementationRuns.find(
+            (candidate) => candidate.id === run.id,
+          );
+          expect(repairing?.status).toBe("fixing");
+          expect(repairing?.fixOrigin).toBe("app-dev-stack");
+          expect(repairing?.qaCycleCount).toBe(1);
+          expect(repairing?.devReviewUnblockAttemptCount).toBe(0);
+          expect(repairing?.lastQaFailure?.status).toBe("backend-unreachable");
+          expect(repairing?.lastQaFailure?.detailMarkdown).toContain("HTTP 502");
+          expect(
+            snapshot.threads.some(
+              (thread) =>
+                thread.workflowRole === "implementation-fixer" &&
+                thread.title.includes("AppDevStack"),
+            ),
+          ).toBe(true);
+        }),
+      { backendProbeStatuses: [200, 502] },
     ),
   );
 
@@ -1672,7 +1750,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("starts TDD repair when the stack reports running but the URL is down", () =>
+  it.effect("starts TDD repair when the frontend shell is up but backend health is down", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
@@ -1713,9 +1791,12 @@ describe("ImplementationWorkflowReactor", () => {
           expect(repairing?.status).toBe("fixing");
           expect(repairing?.fixOrigin).toBe("app-dev-stack");
           expect(repairing?.lastQaFailure?.detailMarkdown).toContain("returned HTTP 503");
+          expect(repairing?.lastQaFailure?.detailMarkdown).toContain("backend health");
           expect(repairing?.qaCycleCount).toBe(1);
-          // The probe has to actually have gone to the reviewer's URL.
-          expect(yield* Ref.get(system.frontendProbeUrls)).toContain("http://127.0.0.1:5173");
+          // Both the static frontend shell and its same-origin backend must be ready.
+          const probeUrls = yield* Ref.get(system.frontendProbeUrls);
+          expect(probeUrls).toContain("http://127.0.0.1:5173");
+          expect(probeUrls).toContain("http://127.0.0.1:5173/api/health");
           // No reviewer launched, no Dev Review attempt burned.
           expect(
             snapshot.threads.filter(
@@ -1724,7 +1805,7 @@ describe("ImplementationWorkflowReactor", () => {
           ).toHaveLength(0);
           expect(repairing?.qaAttemptCount).toBe(0);
         }),
-      { frontendProbeStatus: 503 },
+      { frontendProbeStatus: 200, backendProbeStatus: 503 },
     ),
   );
 
