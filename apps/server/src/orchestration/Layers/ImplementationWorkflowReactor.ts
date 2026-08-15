@@ -4,6 +4,7 @@ import {
   DevReviewId,
   EventId,
   GitCommandError,
+  IMPLEMENTATION_RUN_MAX_DEV_REVIEW_UNBLOCK_ATTEMPTS,
   IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
   MessageId,
   ThreadId,
@@ -3994,6 +3995,9 @@ const make = Effect.gen(function* () {
               ...input.run,
               status: "qa-reviewing",
               latestDevReviewWorkflowOutcome: null,
+              devReviewUnblockAttemptCount: failure.humanBlocked
+                ? 0
+                : input.run.devReviewUnblockAttemptCount,
               retryableFailure: null,
               updatedAt: input.createdAt,
             },
@@ -4276,6 +4280,14 @@ const make = Effect.gen(function* () {
     if (run === null || run.devReviewStrategy !== "nested-workflow") return;
     const sourceThreadId = findRunSourceThreadId({ readModel, run });
     if (sourceThreadId === null) return;
+    if (
+      event.type === "thread.dev-review-workflow-updated" &&
+      nestedRun.status === "blocked" &&
+      run.devReviewWorkflowRunIds.at(-1) === nestedRun.id &&
+      run.latestDevReviewWorkflowOutcome === "blocked"
+    ) {
+      return;
+    }
     const runIds = run.devReviewWorkflowRunIds.includes(nestedRun.id)
       ? run.devReviewWorkflowRunIds
       : [...run.devReviewWorkflowRunIds, nestedRun.id];
@@ -4316,6 +4328,7 @@ const make = Effect.gen(function* () {
         integrationHeadSha: nestedRun.finalHeadSha ?? nestedRun.workspaceRevision.headSha,
         devReviewedHeadSha: nestedRun.finalHeadSha ?? nestedRun.workspaceRevision.headSha,
         qaAttemptCount: nestedRun.attemptsUsed,
+        devReviewUnblockAttemptCount: 0,
         retryableFailure: null,
         updatedAt: event.occurredAt,
       };
@@ -4329,6 +4342,7 @@ const make = Effect.gen(function* () {
         status: "qa-reviewing",
         integrationHeadSha: nestedRun.finalHeadSha ?? nestedRun.workspaceRevision.headSha,
         qaAttemptCount: nestedRun.attemptsUsed,
+        devReviewUnblockAttemptCount: 0,
         qaExhaustedAt: event.occurredAt,
         qaExhaustionReason: "dev-review",
         devReviewExhaustedAt: event.occurredAt,
@@ -4349,14 +4363,62 @@ const make = Effect.gen(function* () {
       yield* startCodeReview({ sourceThreadId, run: exhaustedRun, createdAt: event.occurredAt });
       return;
     }
-    if (nestedRun.status === "blocked" || nestedRun.status === "canceled") {
+    if (nestedRun.status === "blocked") {
+      // A blocked review means its automation could not produce a trustworthy verdict; it does
+      // not consume the separate ten-repair product budget. Re-ensuring the inherited stack here
+      // also probes the exact frontend before a fresh nested run receives a fresh browser runtime.
+      // Ignore terminal updates from superseded nested runs so duplicate/stale events cannot spend
+      // the bounded recovery budget.
+      if (runIds.at(-1) !== nestedRun.id) return;
+      if (
+        linkedRun.devReviewUnblockAttemptCount < IMPLEMENTATION_RUN_MAX_DEV_REVIEW_UNBLOCK_ATTEMPTS
+      ) {
+        const unblockAttempt = linkedRun.devReviewUnblockAttemptCount + 1;
+        const recoveringRun: OrchestrationImplementationRun = {
+          ...linkedRun,
+          status: "qa-reviewing",
+          devReviewUnblockAttemptCount: unblockAttempt,
+          retryableFailure: null,
+          updatedAt: event.occurredAt,
+        };
+        yield* updateRun({ sourceThreadId, run: recoveringRun, createdAt: event.occurredAt });
+        yield* appendActivity({
+          threadId: recoveringRun.orchestratorThreadId,
+          tone: "info",
+          kind: "implementation-dev-review-unblock-attempted",
+          summary: `Retrying blocked Dev Review (${unblockAttempt}/${IMPLEMENTATION_RUN_MAX_DEV_REVIEW_UNBLOCK_ATTEMPTS})`,
+          payload: {
+            runId: recoveringRun.id,
+            nestedDevReviewRunId: nestedRun.id,
+            attempt: unblockAttempt,
+            maxAttempts: IMPLEMENTATION_RUN_MAX_DEV_REVIEW_UNBLOCK_ATTEMPTS,
+            reasonMarkdown: nestedRun.failure?.detailMarkdown ?? "Nested Dev Review was blocked.",
+          },
+          createdAt: event.occurredAt,
+        });
+        yield* startBrowserReview({
+          sourceThreadId,
+          run: recoveringRun,
+          createdAt: event.occurredAt,
+        });
+        return;
+      }
       yield* blockRun({
         sourceThreadId,
         run: linkedRun,
         retryableStage: "dev-review",
-        reasonMarkdown:
-          nestedRun.failure?.detailMarkdown ??
-          `Nested Dev Review ended with outcome '${nestedRun.status}'.`,
+        reasonMarkdown: `Nested Dev Review remained blocked after ${IMPLEMENTATION_RUN_MAX_DEV_REVIEW_UNBLOCK_ATTEMPTS} automatic unblock attempts. Latest failure:\n\n${nestedRun.failure?.detailMarkdown ?? "Nested Dev Review was blocked without failure details."}`,
+        updatedAt: event.occurredAt,
+        humanBlocked: true,
+      });
+      return;
+    }
+    if (nestedRun.status === "canceled") {
+      yield* blockRun({
+        sourceThreadId,
+        run: linkedRun,
+        retryableStage: "dev-review",
+        reasonMarkdown: nestedRun.failure?.detailMarkdown ?? "Nested Dev Review was canceled.",
         updatedAt: event.occurredAt,
         humanBlocked: true,
       });

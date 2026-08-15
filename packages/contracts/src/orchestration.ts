@@ -502,6 +502,8 @@ export type OrchestrationPlanningSpecBundle = typeof OrchestrationPlanningSpecBu
 
 /** Maximum number of fresh automated AppDevStack/Dev Review repair agents per run. */
 export const IMPLEMENTATION_RUN_MAX_QA_REPAIRS = 10;
+/** Maximum number of fresh nested Dev Review runs launched after consecutive blocked outcomes. */
+export const IMPLEMENTATION_RUN_MAX_DEV_REVIEW_UNBLOCK_ATTEMPTS = 3;
 /** @deprecated Use IMPLEMENTATION_RUN_MAX_QA_REPAIRS. */
 export const IMPLEMENTATION_RUN_MAX_QA_CYCLES = IMPLEMENTATION_RUN_MAX_QA_REPAIRS;
 /** @deprecated Use IMPLEMENTATION_RUN_MAX_QA_REPAIRS. */
@@ -971,6 +973,7 @@ export const OrchestrationImplementationRun = Schema.Struct({
   latestDevReviewWorkflowOutcome: Schema.NullOr(
     Schema.Literals(["passed", "exhausted", "blocked", "canceled"]),
   ).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  devReviewUnblockAttemptCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
   devReviews: Schema.Array(OrchestrationImplementationDevReviewArtifact).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),

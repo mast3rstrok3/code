@@ -7,6 +7,7 @@ import {
   DevReviewId,
   EventId,
   GitCommandError,
+  IMPLEMENTATION_RUN_MAX_DEV_REVIEW_UNBLOCK_ATTEMPTS,
   IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
   MessageId,
   ProviderInstanceId,
@@ -1166,13 +1167,62 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("blocks embedded Implementation when the nested Dev Review is blocked", () =>
+  it.effect("tries to unblock Dev Review three times before requiring a human", () =>
     withSystem((system) =>
       Effect.gen(function* () {
-        const { run, nestedRun } = yield* launchFastFeatureNestedReview(system);
+        const { run, nestedRun: firstNestedRun } = yield* launchFastFeatureNestedReview(system);
+        let nestedRun = firstNestedRun;
+        for (
+          let attempt = 1;
+          attempt <= IMPLEMENTATION_RUN_MAX_DEV_REVIEW_UNBLOCK_ATTEMPTS;
+          attempt += 1
+        ) {
+          const occurredAt = `2026-01-01T00:00:0${attempt + 2}.000Z`;
+          yield* system.engine.dispatch({
+            type: "thread.dev-review-workflow.update",
+            commandId: commandId(`nested-blocked-${attempt}`),
+            threadId: nestedRun.controllerThreadId,
+            run: {
+              ...nestedRun,
+              status: "blocked",
+              activePhase: null,
+              activeThreadId: null,
+              outcome: "blocked",
+              failure: {
+                reason: "automation-unavailable",
+                phase: "review",
+                cycleNumber: 1,
+                detailMarkdown: "Browser automation was unavailable.",
+                failedAt: occurredAt,
+              },
+              updatedAt: occurredAt,
+              completedAt: occurredAt,
+            },
+            createdAt: occurredAt,
+          });
+          yield* system.reactor.drain;
+
+          const snapshot = yield* system.query.getSnapshot();
+          const recovering = snapshot.implementationRuns.find(
+            (candidate) => candidate.id === run.id,
+          );
+          expect(recovering?.status).toBe("qa-reviewing");
+          expect(recovering?.devReviewUnblockAttemptCount).toBe(attempt);
+          expect(recovering?.retryableFailure).toBeNull();
+          const nextNestedRunId = recovering?.devReviewWorkflowRunIds.at(-1);
+          const nextNestedRun = (snapshot.devReviewWorkflowRuns ?? []).find(
+            (candidate) => candidate.id === nextNestedRunId,
+          );
+          if (!nextNestedRun || nextNestedRun.status !== "running") {
+            throw new Error(`Automatic unblock attempt ${attempt} did not launch Dev Review.`);
+          }
+          nestedRun = nextNestedRun;
+        }
+
+        const gateAt = "2026-01-01T00:00:06.000Z";
         yield* system.engine.dispatch({
           type: "thread.dev-review-workflow.update",
-          commandId: commandId("nested-blocked"),
+          commandId: commandId("nested-blocked-human-gate"),
           threadId: nestedRun.controllerThreadId,
           run: {
             ...nestedRun,
@@ -1184,13 +1234,13 @@ describe("ImplementationWorkflowReactor", () => {
               reason: "automation-unavailable",
               phase: "review",
               cycleNumber: 1,
-              detailMarkdown: "Browser automation was unavailable.",
-              failedAt: "2026-01-01T00:00:03.000Z",
+              detailMarkdown: "Browser automation was still unavailable.",
+              failedAt: gateAt,
             },
-            updatedAt: "2026-01-01T00:00:03.000Z",
-            completedAt: "2026-01-01T00:00:03.000Z",
+            updatedAt: gateAt,
+            completedAt: gateAt,
           },
-          createdAt: "2026-01-01T00:00:03.000Z",
+          createdAt: gateAt,
         });
         yield* system.reactor.drain;
 
@@ -1199,8 +1249,35 @@ describe("ImplementationWorkflowReactor", () => {
         );
         expect(updated?.status).toBe("needs-human-attention");
         expect(updated?.latestDevReviewWorkflowOutcome).toBe("blocked");
+        expect(updated?.devReviewUnblockAttemptCount).toBe(
+          IMPLEMENTATION_RUN_MAX_DEV_REVIEW_UNBLOCK_ATTEMPTS,
+        );
+        expect(updated?.qaCycleCount).toBe(0);
         expect(updated?.retryableFailure?.stage).toBe("dev-review");
         expect(updated?.retryableFailure?.humanBlocked).toBe(true);
+        expect(updated?.retryableFailure?.detail).toContain(
+          "remained blocked after 3 automatic unblock attempts",
+        );
+
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.retry",
+          commandId: commandId("nested-blocked-human-retry"),
+          threadId: sourceThreadId,
+          runId: run.id,
+          createdAt: "2026-01-01T00:00:07.000Z",
+        });
+        yield* system.reactor.drain;
+
+        const resumedSnapshot = yield* system.query.getSnapshot();
+        const resumed = resumedSnapshot.implementationRuns.find(
+          (candidate) => candidate.id === run.id,
+        );
+        expect(resumed?.status).toBe("qa-reviewing");
+        expect(resumed?.devReviewUnblockAttemptCount).toBe(0);
+        expect(resumed?.retryableFailure).toBeNull();
+        expect(resumed?.devReviewWorkflowRunIds).toHaveLength(
+          IMPLEMENTATION_RUN_MAX_DEV_REVIEW_UNBLOCK_ATTEMPTS + 2,
+        );
       }),
     ),
   );

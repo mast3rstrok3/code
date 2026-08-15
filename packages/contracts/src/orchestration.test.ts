@@ -5,6 +5,7 @@ import * as Schema from "effect/Schema";
 import {
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
+  IMPLEMENTATION_RUN_MAX_DEV_REVIEW_UNBLOCK_ATTEMPTS,
   IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS,
   IMPLEMENTATION_RUN_MAX_QA_CYCLES,
   IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
@@ -68,6 +69,7 @@ const decodeOrchestrationThreadWorkflowRole = Schema.decodeUnknownEffect(
 
 it("exports the QA repair cap with deprecated compatibility aliases", () => {
   assert.strictEqual(IMPLEMENTATION_RUN_MAX_QA_REPAIRS, 10);
+  assert.strictEqual(IMPLEMENTATION_RUN_MAX_DEV_REVIEW_UNBLOCK_ATTEMPTS, 3);
   assert.strictEqual(IMPLEMENTATION_RUN_MAX_QA_CYCLES, IMPLEMENTATION_RUN_MAX_QA_REPAIRS);
   assert.strictEqual(IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS, IMPLEMENTATION_RUN_MAX_QA_REPAIRS);
 });
