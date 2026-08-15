@@ -65,6 +65,11 @@ import {
   type WorkspaceUserView,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
+import {
+  WORKFLOW_WORKSPACE_PREPARED_ACTIVITY_KIND,
+  resolveWorkflowWorkspaceIdentity,
+  workflowPresetStartsInDedicatedWorkspace,
+} from "@t3tools/shared/orchestrationImplementation";
 import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
@@ -697,6 +702,40 @@ const makeWsRpcLayer = (
           ),
         );
 
+      const appendWorkflowWorkspaceActivity = (input: {
+        readonly threadId: ThreadId;
+        readonly kind:
+          | typeof WORKFLOW_WORKSPACE_PREPARED_ACTIVITY_KIND
+          | "workflow-app-dev-stack-started"
+          | "workflow-app-dev-stack-failed";
+        readonly summary: string;
+        readonly createdAt: string;
+        readonly payload: Record<string, unknown>;
+        readonly tone: "info" | "error";
+      }) =>
+        Effect.all({
+          commandId: serverCommandId("workflow-workspace-activity"),
+          activityId: serverEventId,
+        }).pipe(
+          Effect.flatMap(({ commandId, activityId }) =>
+            orchestrationEngine.dispatch({
+              type: "thread.activity.append",
+              commandId,
+              threadId: input.threadId,
+              activity: {
+                id: activityId,
+                tone: input.tone,
+                kind: input.kind,
+                summary: input.summary,
+                payload: input.payload,
+                turnId: null,
+                createdAt: input.createdAt,
+              },
+              createdAt: input.createdAt,
+            }),
+          ),
+        );
+
       const toBootstrapDispatchCommandCauseError = (cause: Cause.Cause<unknown>) => {
         const error = Cause.squash(cause);
         return isOrchestrationDispatchCommandError(error)
@@ -1009,6 +1048,7 @@ const makeWsRpcLayer = (
           let targetProjectId = bootstrap?.createThread?.projectId;
           let targetProjectCwd = bootstrap?.prepareWorktree?.projectCwd;
           let targetWorktreePath = bootstrap?.createThread?.worktreePath ?? null;
+          let targetBranch = bootstrap?.createThread?.branch ?? null;
 
           const cleanupCreatedThread = () =>
             createdThread
@@ -1197,6 +1237,7 @@ const makeWsRpcLayer = (
                 path: null,
               });
               targetWorktreePath = worktree.worktree.path;
+              targetBranch = worktree.worktree.refName;
               yield* orchestrationEngine.dispatch({
                 type: "thread.meta.update",
                 commandId: yield* serverCommandId("bootstrap-thread-meta-update"),
@@ -1208,6 +1249,86 @@ const makeWsRpcLayer = (
             }
 
             yield* runSetupProgram();
+
+            const fallbackWorkflowPreset = bootstrap?.createThread?.workflowPreset;
+            const fallbackWorkflowContext = bootstrap?.createThread?.workflowContext;
+            const threadDetail = yield* projectionSnapshotQuery.getThreadDetailById(threadId).pipe(
+              Effect.map(Option.getOrUndefined),
+              Effect.orElseSucceed(() => undefined),
+            );
+            const workflowPreset = threadDetail?.workflowPreset ?? fallbackWorkflowPreset;
+            const existingWorkspace = resolveWorkflowWorkspaceIdentity(
+              threadDetail?.activities ?? [],
+            );
+            const workflowBaseBranch =
+              bootstrap?.prepareWorktree?.baseBranch ?? existingWorkspace?.baseBranch ?? null;
+            const workflowBranch = targetBranch ?? existingWorkspace?.branch ?? null;
+            const workflowWorktreePath =
+              targetWorktreePath ?? existingWorkspace?.worktreePath ?? null;
+
+            if (
+              workflowPresetStartsInDedicatedWorkspace(workflowPreset) &&
+              workflowBaseBranch !== null &&
+              workflowBranch !== null &&
+              workflowWorktreePath !== null
+            ) {
+              if (existingWorkspace === null) {
+                yield* appendWorkflowWorkspaceActivity({
+                  threadId,
+                  kind: WORKFLOW_WORKSPACE_PREPARED_ACTIVITY_KIND,
+                  summary: "Workflow workspace prepared",
+                  payload: {
+                    baseBranch: workflowBaseBranch,
+                    branch: workflowBranch,
+                    worktreePath: workflowWorktreePath,
+                  },
+                  tone: "info",
+                  createdAt: command.createdAt,
+                });
+              }
+
+              const workflowId =
+                threadDetail?.workflowContext?.workflowId ??
+                fallbackWorkflowContext?.workflowId ??
+                `workflow-${threadId}`;
+              const stackResult = yield* appDevStackManager
+                .autoCreate({
+                  worktreePath: workflowWorktreePath,
+                  displayName: `${workflowPreset} workflow`,
+                  gitBranch: workflowBranch,
+                  workflowId,
+                })
+                .pipe(Effect.result);
+              if (stackResult._tag === "Success") {
+                yield* appendWorkflowWorkspaceActivity({
+                  threadId,
+                  kind: "workflow-app-dev-stack-started",
+                  summary: "Workflow App Dev Stack started",
+                  payload: {
+                    workflowId,
+                    worktreePath: workflowWorktreePath,
+                    stackId: stackResult.success.stack?.id ?? null,
+                    stackStatus: stackResult.success.stack?.status ?? null,
+                    frontendUrl: stackResult.success.frontendUrl,
+                  },
+                  tone: "info",
+                  createdAt: command.createdAt,
+                });
+              } else {
+                yield* appendWorkflowWorkspaceActivity({
+                  threadId,
+                  kind: "workflow-app-dev-stack-failed",
+                  summary: "Workflow App Dev Stack failed to start",
+                  payload: {
+                    workflowId,
+                    worktreePath: workflowWorktreePath,
+                    detail: String(stackResult.failure),
+                  },
+                  tone: "error",
+                  createdAt: command.createdAt,
+                });
+              }
+            }
 
             return yield* orchestrationEngine.dispatch(finalCommand);
           });

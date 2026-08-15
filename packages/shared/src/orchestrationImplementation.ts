@@ -1,3 +1,45 @@
+import type { WorkflowPreset } from "@t3tools/contracts";
+import * as Predicate from "effect/Predicate";
+
+export const WORKFLOW_WORKSPACE_PREPARED_ACTIVITY_KIND = "workflow-workspace-prepared";
+
+export interface WorkflowWorkspaceIdentity {
+  readonly baseBranch: string;
+  readonly branch: string;
+  readonly worktreePath: string;
+}
+
+export function workflowPresetStartsInDedicatedWorkspace(
+  preset: WorkflowPreset | null | undefined,
+): boolean {
+  return preset === "planning" || preset === "full-feature" || preset === "fast-feature";
+}
+
+export function resolveWorkflowWorkspaceIdentity(
+  activities: ReadonlyArray<{ readonly kind: string; readonly payload: unknown }>,
+): WorkflowWorkspaceIdentity | null {
+  for (let index = activities.length - 1; index >= 0; index -= 1) {
+    const activity = activities[index];
+    if (activity?.kind !== WORKFLOW_WORKSPACE_PREPARED_ACTIVITY_KIND) continue;
+    if (!Predicate.isObject(activity.payload)) continue;
+    const baseBranch = activity.payload["baseBranch"];
+    const branch = activity.payload["branch"];
+    const worktreePath = activity.payload["worktreePath"];
+    if (
+      !Predicate.isString(baseBranch) ||
+      baseBranch.trim().length === 0 ||
+      !Predicate.isString(branch) ||
+      branch.trim().length === 0 ||
+      !Predicate.isString(worktreePath) ||
+      worktreePath.trim().length === 0
+    ) {
+      continue;
+    }
+    return { baseBranch, branch, worktreePath };
+  }
+  return null;
+}
+
 function slugifyBranchSegment(value: string): string {
   const slug = value
     .trim()

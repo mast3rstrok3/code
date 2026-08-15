@@ -65,13 +65,34 @@ export const getWorkflowArtifactsForThread = Effect.fn("getWorkflowArtifactsForT
       });
     }
 
+    const workflowLineage = [context.workflowId];
+    const workflowIds = new Set(workflowLineage);
+    let parentWorkflowId = context.parentWorkflowId;
+    while (parentWorkflowId != null && !workflowIds.has(parentWorkflowId)) {
+      const parentContext = readModel.threads.find(
+        (candidate) =>
+          candidate.projectId === thread.projectId &&
+          candidate.workflowContext?.rootThreadId === context.rootThreadId &&
+          candidate.workflowContext.workflowId === parentWorkflowId,
+      )?.workflowContext;
+      if (parentContext == null) break;
+      workflowLineage.push(parentWorkflowId);
+      workflowIds.add(parentWorkflowId);
+      parentWorkflowId = parentContext.parentWorkflowId;
+    }
+
     const workflowThreads = readModel.threads.filter(
       (candidate) =>
         candidate.projectId === thread.projectId &&
-        candidate.workflowContext?.workflowId === context.workflowId,
+        candidate.workflowContext?.rootThreadId === context.rootThreadId &&
+        workflowIds.has(candidate.workflowContext.workflowId),
     );
-    const planningWorkflow = workflowThreads
-      .map((candidate) => candidate.planningWorkflow)
+    const planningWorkflow = workflowLineage
+      .flatMap((workflowId) =>
+        workflowThreads
+          .filter((candidate) => candidate.workflowContext?.workflowId === workflowId)
+          .map((candidate) => candidate.planningWorkflow),
+      )
       .find(
         (workflow) =>
           (workflow?.spec !== null && workflow?.spec !== undefined) ||

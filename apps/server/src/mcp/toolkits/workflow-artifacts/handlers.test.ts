@@ -21,13 +21,33 @@ const projectId = ProjectId.make("project-workflow-artifacts");
 const otherProjectId = ProjectId.make("project-other");
 const rootThreadId = ThreadId.make("thread-workflow-root");
 const childThreadId = ThreadId.make("thread-workflow-child");
+const implementationThreadId = ThreadId.make("thread-implementation-orchestrator");
+const devReviewControllerThreadId = ThreadId.make("thread-dev-review-orchestrator");
+const nestedReviewerThreadId = ThreadId.make("thread-dev-review-reviewer");
+const detachedThreadId = ThreadId.make("thread-detached-workflow");
 const workflowId = WorkflowId.make("workflow-artifacts-1");
+const implementationWorkflowId = WorkflowId.make("implementation-run-1");
+const devReviewWorkflowId = WorkflowId.make("dev-review-workflow-1");
 const ticketId = "planning-ticket-1";
 
 const readModel = {
   snapshotSequence: 1,
   projects: [],
   implementationRuns: [],
+  devReviewWorkflowRuns: [
+    {
+      id: devReviewWorkflowId,
+      targetThreadId: implementationThreadId,
+      controllerThreadId: devReviewControllerThreadId,
+      cycles: [
+        {
+          reviewerThreadId: nestedReviewerThreadId,
+          fixerThreadId: null,
+          reviewId: DevReviewId.make("dev-review-nested"),
+        },
+      ],
+    },
+  ],
   threads: [
     {
       id: rootThreadId,
@@ -118,6 +138,90 @@ const readModel = {
         },
       ],
     },
+    {
+      id: implementationThreadId,
+      projectId,
+      ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+      workflowContext: {
+        workflowId: implementationWorkflowId,
+        parentWorkflowId: workflowId,
+        rootThreadId,
+        ticketScope: [ticketId],
+      },
+      planningWorkflow: null,
+      devReviews: [],
+    },
+    {
+      id: devReviewControllerThreadId,
+      projectId,
+      ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+      workflowContext: {
+        workflowId: devReviewWorkflowId,
+        parentWorkflowId: implementationWorkflowId,
+        rootThreadId,
+        ticketScope: [ticketId],
+      },
+      planningWorkflow: null,
+      devReviews: [
+        {
+          id: DevReviewId.make("dev-review-nested"),
+          sourceThreadId: implementationThreadId,
+          reviewThreadId: nestedReviewerThreadId,
+          sourceTurnId: null,
+          planningTicketIds: [ticketId],
+          status: "running",
+          document: {
+            verdict: "blocked",
+            summary: "Reviewing",
+            checks: [],
+            findings: [],
+            questions: [],
+            nextSteps: [],
+          },
+          evidence: {
+            recording: {
+              status: "not-started",
+              path: null,
+              mimeType: null,
+              sizeBytes: null,
+              startedAt: null,
+              completedAt: null,
+              durationMs: null,
+              error: null,
+            },
+            screenshots: [],
+          },
+          createdAt: "2026-01-01T00:00:02.000Z",
+          updatedAt: "2026-01-01T00:00:02.000Z",
+        },
+      ],
+    },
+    {
+      id: nestedReviewerThreadId,
+      projectId,
+      ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+      workflowContext: {
+        workflowId: devReviewWorkflowId,
+        parentWorkflowId: implementationWorkflowId,
+        rootThreadId,
+        ticketScope: [ticketId],
+      },
+      planningWorkflow: null,
+      devReviews: [],
+    },
+    {
+      id: detachedThreadId,
+      projectId,
+      ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+      workflowContext: {
+        workflowId: WorkflowId.make("detached-workflow"),
+        parentWorkflowId: null,
+        rootThreadId,
+        ticketScope: [ticketId],
+      },
+      planningWorkflow: null,
+      devReviews: [],
+    },
   ],
 } as unknown as OrchestrationReadModel;
 
@@ -129,6 +233,15 @@ const invocationLayer = Layer.succeed(McpInvocationContext.McpInvocationContext,
   environmentId: EnvironmentId.make("environment-1"),
   threadId: childThreadId,
   providerSessionId: "provider-session-1",
+  providerInstanceId: ProviderInstanceId.make("codex"),
+  capabilities: new Set(["workflow-artifacts"] as const),
+  issuedAt: 1,
+});
+
+const nestedReviewerInvocationLayer = Layer.succeed(McpInvocationContext.McpInvocationContext, {
+  environmentId: EnvironmentId.make("environment-1"),
+  threadId: nestedReviewerThreadId,
+  providerSessionId: "provider-session-nested-reviewer",
   providerInstanceId: ProviderInstanceId.make("codex"),
   capabilities: new Set(["workflow-artifacts"] as const),
   issuedAt: 1,
@@ -170,6 +283,33 @@ describe("workflow-artifacts toolkit handlers", () => {
       assert.strictEqual(projectError._tag, "WorkflowArtifactAccessError");
       assert.match(projectError.message, /different project/);
     }).pipe(Effect.provide(Layer.mergeAll(queryLayer, invocationLayer))),
+  );
+
+  it.effect("resolves planning artifacts through nested workflow ancestry", () =>
+    Effect.gen(function* () {
+      const context = yield* handlers.workflow_context_get();
+      const spec = yield* handlers.workflow_spec_get();
+      const tickets = yield* handlers.workflow_tickets_list();
+      const ticket = yield* handlers.workflow_ticket_get({ ticketId });
+
+      assert.strictEqual(context.workflowId, implementationWorkflowId);
+      assert.strictEqual(context.parentWorkflowId, workflowId);
+      assert.strictEqual(spec?.id, "spec-1");
+      assert.deepStrictEqual(
+        tickets.map((ticket) => ticket.id),
+        [ticketId],
+      );
+      assert.strictEqual(ticket.id, ticketId);
+    }).pipe(Effect.provide(Layer.mergeAll(queryLayer, nestedReviewerInvocationLayer))),
+  );
+
+  it.effect("does not authorize artifacts by shared root thread alone", () =>
+    Effect.gen(function* () {
+      const snapshot = yield* getWorkflowArtifactsForThread({ threadId: detachedThreadId });
+
+      assert.strictEqual(snapshot.spec, null);
+      assert.deepStrictEqual(snapshot.tickets, []);
+    }).pipe(Effect.provide(queryLayer)),
   );
 
   it.effect("loads built-in workflow docs and rejects unknown IDs", () =>

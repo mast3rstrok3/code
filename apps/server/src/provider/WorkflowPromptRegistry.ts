@@ -38,7 +38,7 @@ const WORKFLOW_AGENT_COMMUNICATIONS_PROMPT = WORKFLOW_SUBAGENT_INSTRUCTIONS_PROM
 
 const APP_DEV_STACK_ASSOCIATED_DOC_CONTENT = `# AppDevStack
 
-An AppDevStack is T3's Kubernetes-backed development environment for one workflow worktree: service pods mount that worktree at \`/app\`, while dependency paths such as \`node_modules\` can be separate pod volumes. Implementation workflows provision it after integration and before Browser Dev Review (prototype workflows may create one on demand); when a launch provides a Feature URL or stack diagnostics, treat them as authoritative, never start a competing dev server, and do not run a host dependency install while the stack is active because replacing a mounted path can disconnect the pod's dependency volume.`;
+An AppDevStack is T3's Kubernetes-backed development environment for one workflow worktree: service pods mount that worktree at \`/app\`, while dependency paths such as \`node_modules\` can be separate pod volumes. Planning, Full Feature, and Fast Feature prepare their shared worktree and start its AppDevStack before the first model turn; later Planning, Build, Implementation integration, and Dev Review stages reuse that workspace. When a launch provides a Feature URL or stack diagnostics, treat them as authoritative, never start a competing dev server, and do not run a host dependency install in the shared worktree while the stack is active because replacing a mounted path can disconnect the pod's dependency volume. Implementation TDD workers branch downward into child worktrees; they may perform repository-declared setup needed for focused tests in those child worktrees, but must not start a competing app server.`;
 
 const APP_DEV_STACK_ASSOCIATED_DOC = {
   id: "app-dev-stack",
@@ -677,6 +677,8 @@ If any of the three is missing, skip the ADR. Use the format in [ADR-FORMAT.md](
 
 The Engineering Grill is represented above by the complete Grilling and Domain Modeling instructions. Load CONTEXT-FORMAT.md or ADR-FORMAT.md with workflow_doc_get only immediately before writing that artifact.
 
+This Planning workflow already owns the current worktree and its running AppDevStack. Treat both as the shared workspace for every later Planning and Implementation stage. Do not start a competing development server or run a host dependency install that replaces mounted dependency paths.
+
 Planning artifact writes during this stage are limited to glossary and ADR updates. Do not make implementation changes. Finish only when the goal, audience, success criteria, scope, non-goals, terminology, decisions, risks, edge cases, failure modes, and acceptance criteria are clear enough for Spec authoring.
 
 Updating domain documentation as decisions crystallize is the only exception to the Grilling blueprint's instruction not to act before confirmation. The frontier-round mechanics remain authoritative.
@@ -1190,8 +1192,8 @@ Commit your work to the current branch.
 This stage orchestrates the upstream implement loop across sub-threads instead of doing the work inline:
 
 - Load the durable Spec with workflow_spec_get and the tickets with workflow_tickets_list and workflow_ticket_get. The Spec is the node that binds the tickets and later dev reviews together.
-- The run works in a dedicated worktree and branch created from the branch the user selected, and the finished change request is filed back into that branch.
-- The app dev stack is provisioned after integration and before Browser Dev Review, once implementation agents have finished dependency setup. Load \`app-dev-stack.md\` when planning or diagnosing that boundary.
+- The run reuses the Planning workflow's dedicated worktree and branch, which were created from the branch the user selected before Planning began. The finished change request is filed back into that original branch.
+- The app dev stack is already running for that shared workflow worktree. Load \`app-dev-stack.md\` before planning or diagnosing it; do not start another server or replace host dependency mountpoints.
 - Tickets are implemented dependency-aware by TDD worker sub-threads (the TDD Implementation skill), each in its own worktree and branch. A dependent ticket's worker branches from its blocker's worker branch so chained tickets build on each other, and every worker commits to its own branch.
 - Worker branches are merged programmatically back into the orchestrator worktree; the Merge Gate stage always runs once for the integrated HEAD, whether integration was clean or required conflict resolution.
 - A Browser Dev Review finding launches a fresh TDD repair thread on the already-integrated orchestrator worktree. After that repair commits and passes focused checks, start the next Browser Dev Review directly; do not rerun the Merge Gate between review cycles.
@@ -1708,6 +1710,7 @@ Use status "clean" when neither axis has findings that require code changes — 
 
 const buildPresetProductWorkflowPrompt = (input: {
   readonly intentKind: "feature" | "fix";
+  readonly workspacePrepared: boolean;
 }) => `<collaboration_mode># Product Grill
 
 ${GRILLING_BLUEPRINT}
@@ -1717,6 +1720,12 @@ ${STRUCTURED_GRILL_QUESTION_ADAPTER}
 ## Product-only adapter
 
 Before asking questions, ground yourself in the codebase and existing product context. Use that knowledge to resolve facts and answer anything already clear; ask the user only where product clarity, preference, or alignment is needed.
+
+${
+  input.workspacePrepared
+    ? "This workflow already owns the current worktree and its running AppDevStack. Every later Plan, Build, Implementation, and Dev Review stage reuses that shared workspace; do not start a competing development server or run a host dependency install that replaces mounted dependency paths."
+    : ""
+}
 
 The selected product workflow is authoritative even when the user's wording sounds like a direct implementation, investigation, or verification request. Do not perform that work during Product Grill. If grounding resolves every product decision, go straight to the structured final shared-understanding confirmation; never silently treat apparent clarity as confirmation or end the turn without either a structured Product Grill question or the final intent-lock directive.
 
@@ -1738,12 +1747,15 @@ After confirmation, finish with exactly one fenced JSON directive and no other f
 
 const PRODUCT_FIX_WORKFLOW_PROMPT = buildPresetProductWorkflowPrompt({
   intentKind: "fix",
+  workspacePrepared: false,
 });
 const PRODUCT_FAST_FEATURE_WORKFLOW_PROMPT = buildPresetProductWorkflowPrompt({
   intentKind: "feature",
+  workspacePrepared: true,
 });
 const PRODUCT_FULL_FEATURE_WORKFLOW_PROMPT = buildPresetProductWorkflowPrompt({
   intentKind: "feature",
+  workspacePrepared: true,
 });
 
 export const WORKFLOW_PROMPT_REGISTRY = [
@@ -1779,6 +1791,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
       "Grills engineering decisions while maintaining the domain glossary and qualifying ADRs.",
     promptText: ENGINEERING_GRILL_PROMPT,
     associatedDocs: [
+      APP_DEV_STACK_ASSOCIATED_DOC,
       {
         id: "context-format",
         title: "CONTEXT.md Format",
@@ -1803,6 +1816,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     description: "Sharpens repository language, contexts, scenarios, and durable decisions.",
     promptText: DOMAIN_MODELING_PROMPT,
     associatedDocs: [
+      APP_DEV_STACK_ASSOCIATED_DOC,
       {
         id: "context-format",
         title: "CONTEXT.md Format",
@@ -1828,6 +1842,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
       "Resolves engineering and domain decisions autonomously from locked Product Grill intent.",
     promptText: AUTOMATIC_ENGINEERING_GRILL_PROMPT,
     associatedDocs: [
+      APP_DEV_STACK_ASSOCIATED_DOC,
       {
         id: "context-format",
         title: "CONTEXT.md Format",
@@ -1897,6 +1912,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     description: "Creates the durable Spec artifact from planning context and locked decisions.",
     promptText: PLANNING_SPEC_PROMPT,
     associatedDocs: [
+      APP_DEV_STACK_ASSOCIATED_DOC,
       {
         id: "context-format",
         title: "CONTEXT.md Format",
@@ -1928,6 +1944,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
       "Decomposes the Spec into implementation-ready planning tickets with dependencies and tests.",
     promptText: PLANNING_TICKETS_PROMPT,
     associatedDocs: [
+      APP_DEV_STACK_ASSOCIATED_DOC,
       {
         id: "domain-docs",
         title: "Domain Docs",
@@ -1953,6 +1970,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
       "Reviews planning tickets for dependency correctness, readiness, and Spec alignment.",
     promptText: PLANNING_REVIEW_PROMPT,
     associatedDocs: [
+      APP_DEV_STACK_ASSOCIATED_DOC,
       {
         id: "agent-brief",
         title: "Writing Agent Briefs",
@@ -2013,6 +2031,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     title: "3. Merge Gate",
     description: "Merges implementation work and fixes validation failures until green.",
     promptText: IMPLEMENTATION_MERGE_GATE_PROMPT,
+    associatedDocs: [APP_DEV_STACK_ASSOCIATED_DOC],
   },
   {
     id: WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
@@ -2054,6 +2073,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     description:
       "Reviews the filed change request along the Standards and Spec axes via parallel sub-agents.",
     promptText: IMPLEMENTATION_CODE_REVIEW_PROMPT,
+    associatedDocs: [APP_DEV_STACK_ASSOCIATED_DOC],
   },
   {
     id: WORKFLOW_PROMPT_IDS.productFixCodex,
@@ -2074,6 +2094,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     title: "Product Grill — Fast Feature",
     description: "Locks feature intent before lightweight Plan, Build, and review orchestration.",
     promptText: PRODUCT_FAST_FEATURE_WORKFLOW_PROMPT,
+    associatedDocs: [APP_DEV_STACK_ASSOCIATED_DOC],
   },
   {
     id: WORKFLOW_PROMPT_IDS.productFullFeatureCodex,
@@ -2084,6 +2105,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     title: "Product Grill — Full Feature",
     description: "Locks feature intent before complete Planning and Implementation workflows.",
     promptText: PRODUCT_FULL_FEATURE_WORKFLOW_PROMPT,
+    associatedDocs: [APP_DEV_STACK_ASSOCIATED_DOC],
   },
 ] as const satisfies ReadonlyArray<WorkflowPromptContract>;
 

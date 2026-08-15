@@ -17,13 +17,16 @@ describe("workflow presets", () => {
     ]);
   });
 
-  it("starts Fast Feature AppDevStack only after Build", () => {
+  it("starts the Fast Feature worktree and AppDevStack before workflow stages", () => {
     const definition = WORKFLOW_PRESET_DEFINITIONS.find(
       (candidate) => candidate.id === "fast-feature",
     );
-    expect(definition?.helpSteps.map((step) => step.label)).toContain("Worktree and CLI Build");
+    expect(definition?.helpSteps[0]?.label).toBe("Create shared worktree and start AppDevStack");
     expect(definition?.helpSteps.map((step) => step.label)).toContain(
-      "Start AppDevStack, then run nested Dev Review",
+      "CLI Build in the shared worktree",
+    );
+    expect(definition?.helpSteps.map((step) => step.label)).toContain(
+      "Run nested Dev Review against AppDevStack",
     );
   });
 
@@ -55,23 +58,23 @@ describe("workflow presets", () => {
     const fullFeature = WORKFLOW_PRESET_DEFINITIONS.find(
       (definition) => definition.id === "full-feature",
     );
-    expect(fullFeature?.helpSteps.slice(0, 2).map((step) => step.skillId)).toEqual([
+    expect(fullFeature?.helpSteps.slice(1, 3).map((step) => step.skillId)).toEqual([
       "product.full-feature.codex",
       "planning.engineering-grill-automatic.codex",
     ]);
-    expect(fullFeature?.helpSteps.slice(0, 2).map((step) => step.note)).toEqual([
+    expect(fullFeature?.helpSteps.slice(1, 3).map((step) => step.note)).toEqual([
       "human-guided",
       "automatic",
     ]);
-    expect(fullFeature?.helpSteps.slice(1).every((step) => step.note?.includes("automatic"))).toBe(
+    expect(fullFeature?.helpSteps.slice(2).every((step) => step.note?.includes("automatic"))).toBe(
       true,
     );
   });
 
   it("keeps the standalone Planning Engineering Grill interactive", () => {
     const planning = WORKFLOW_PRESET_DEFINITIONS.find((definition) => definition.id === "planning");
-    expect(planning?.helpSteps[0]?.skillId).toBe("planning.grill-stage.codex");
-    expect(planning?.helpSteps[0]?.note).toBe("human-guided");
+    expect(planning?.helpSteps[1]?.skillId).toBe("planning.grill-stage.codex");
+    expect(planning?.helpSteps[1]?.note).toBe("human-guided");
   });
 
   it("requires Product workflows to carry an explicit preset", () => {

@@ -71,8 +71,13 @@ function eventId(value: string) {
 
 function completeTurnCheckpoint(
   system: ProductSystem,
-  input: { readonly turnId: string; readonly checkpointTurnCount?: number },
+  input: {
+    readonly turnId: string;
+    readonly checkpointTurnCount?: number;
+    readonly createdAt?: string;
+  },
 ) {
+  const createdAt = input.createdAt ?? now;
   return system.engine.dispatch({
     type: "thread.activity.append",
     commandId: commandId(`checkpoint-${input.turnId}`),
@@ -84,9 +89,48 @@ function completeTurnCheckpoint(
       summary: "Checkpoint captured",
       payload: { turnCount: input.checkpointTurnCount ?? 1, status: "ready" },
       turnId: TurnId.make(input.turnId),
-      createdAt: now,
+      createdAt,
     },
-    createdAt: now,
+    createdAt,
+  });
+}
+
+function settleTurn(
+  system: ProductSystem,
+  input: { readonly turnId: string; readonly completedAt: string },
+) {
+  const turnId = TurnId.make(input.turnId);
+  return Effect.gen(function* () {
+    yield* system.engine.dispatch({
+      type: "thread.session.set",
+      commandId: commandId(`session-running-${input.turnId}`),
+      threadId: productThreadId,
+      session: {
+        threadId: productThreadId,
+        status: "running",
+        providerName: "codex",
+        runtimeMode: "full-access",
+        activeTurnId: turnId,
+        lastError: null,
+        updatedAt: now,
+      },
+      createdAt: now,
+    });
+    yield* system.engine.dispatch({
+      type: "thread.session.set",
+      commandId: commandId(`session-ready-${input.turnId}`),
+      threadId: productThreadId,
+      session: {
+        threadId: productThreadId,
+        status: "ready",
+        providerName: "codex",
+        runtimeMode: "full-access",
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: input.completedAt,
+      },
+      createdAt: input.completedAt,
+    });
   });
 }
 
@@ -159,6 +203,7 @@ function seedProjectAndThread(
     readonly workflowRole?: "planning-orchestrator" | null;
     readonly workflowPreset?: WorkflowPreset | null;
     readonly branch?: string | null;
+    readonly worktreePath?: string | null;
     readonly createProject?: boolean;
     readonly runtimeMode?: "full-access" | "approval-required";
   } = {},
@@ -189,10 +234,35 @@ function seedProjectAndThread(
       interactionMode: input.interactionMode ?? "product-workflow",
       workflowPreset: input.workflowPreset ?? null,
       branch: input.branch ?? null,
-      worktreePath: null,
+      worktreePath: input.worktreePath ?? null,
       createdAt: now,
     });
     return threadId;
+  });
+}
+
+function prepareWorkflowWorkspace(
+  system: ProductSystem,
+  input: {
+    readonly baseBranch: string;
+    readonly branch: string;
+    readonly worktreePath: string;
+  },
+) {
+  return system.engine.dispatch({
+    type: "thread.activity.append",
+    commandId: commandId("workflow-workspace-prepared"),
+    threadId: productThreadId,
+    activity: {
+      id: eventId("workflow-workspace-prepared"),
+      tone: "info",
+      kind: "workflow-workspace-prepared",
+      summary: "Workflow workspace prepared",
+      payload: input,
+      turnId: null,
+      createdAt: now,
+    },
+    createdAt: now,
   });
 }
 
@@ -563,6 +633,238 @@ describe("ProductWorkflowReactor", () => {
     ),
   );
 
+  it.effect("recovers an automatic Engineering Grill turn that omits its directive", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        yield* seedProjectAndThread(system, { workflowPreset: "full-feature" });
+        yield* lockProductIntent(system);
+        const completedAt = "2026-01-01T00:01:00.000Z";
+        yield* settleTurn(system, { turnId: "turn-engineering-grill", completedAt });
+        yield* completeTurnCheckpoint(system, {
+          turnId: "turn-engineering-grill",
+          checkpointTurnCount: 2,
+          createdAt: completedAt,
+        });
+        yield* system.reactor.drain;
+
+        const snapshot = yield* system.query.getSnapshot();
+        const thread = snapshot.threads.find((entry) => entry.id === productThreadId);
+        const recoveryMessages = thread?.messages.filter(
+          (message) =>
+            message.role === "user" &&
+            message.text.includes(
+              "automatic Engineering Grill turn completed without its required workflow directive",
+            ),
+        );
+        const events = yield* Stream.runCollect(system.engine.readEvents(0)).pipe(
+          Effect.map((chunk) => Array.from(chunk)),
+        );
+        const recoveryTurns = events.filter(
+          (event) =>
+            event.type === "thread.turn-start-requested" &&
+            event.payload.workflowPromptId ===
+              WORKFLOW_PROMPT_IDS.planningAutomaticEngineeringGrillCodex,
+        );
+        expect(recoveryMessages).toHaveLength(1);
+        expect(recoveryMessages?.[0]?.text).toContain('"type": "planning-grill-complete"');
+        expect(recoveryTurns).toHaveLength(2);
+        expect(
+          thread?.activities.filter(
+            (activity) => activity.kind === "engineering-grill-recovery-requested",
+          ),
+        ).toHaveLength(1);
+        expect(thread?.planningWorkflow?.stage).toBe("grill");
+      }),
+    ),
+  );
+
+  it.effect("does not recover from the Product Grill checkpoint after Planning starts", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const productTurnId = TurnId.make("turn-product-grill-before-planning");
+        const productTurnStartedAt = "2025-12-31T23:59:00.000Z";
+        const productTurnCompletedAt = "2026-01-01T00:00:30.000Z";
+        yield* seedProjectAndThread(system, { workflowPreset: "full-feature" });
+        yield* system.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: commandId("product-grill-turn-before-planning"),
+          threadId: productThreadId,
+          message: {
+            messageId: messageId("product-grill-turn-before-planning"),
+            role: "user",
+            text: "Plan checkout.",
+            attachments: [],
+          },
+          runtimeMode: "full-access",
+          interactionMode: "product-workflow",
+          createdAt: productTurnStartedAt,
+        });
+        yield* system.engine.dispatch({
+          type: "thread.session.set",
+          commandId: commandId("product-grill-session-running-before-planning"),
+          threadId: productThreadId,
+          session: {
+            threadId: productThreadId,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: productTurnId,
+            lastError: null,
+            updatedAt: productTurnStartedAt,
+          },
+          createdAt: productTurnStartedAt,
+        });
+        yield* lockProductIntent(system);
+        yield* system.engine.dispatch({
+          type: "thread.session.set",
+          commandId: commandId("product-grill-session-ready-after-planning"),
+          threadId: productThreadId,
+          session: {
+            threadId: productThreadId,
+            status: "ready",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: productTurnCompletedAt,
+          },
+          createdAt: productTurnCompletedAt,
+        });
+        yield* completeTurnCheckpoint(system, {
+          turnId: productTurnId,
+          createdAt: productTurnCompletedAt,
+        });
+        yield* system.reactor.drain;
+
+        const snapshot = yield* system.query.getSnapshot();
+        const thread = snapshot.threads.find((entry) => entry.id === productThreadId);
+        expect(
+          thread?.messages.some((message) =>
+            message.text.includes("completed without its required workflow directive"),
+          ),
+        ).toBe(false);
+        expect(thread?.planningWorkflow?.stage).toBe("grill");
+      }),
+    ),
+  );
+
+  it.effect("recovers a stranded automatic Engineering Grill when the reactor starts", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          yield* seedProjectAndThread(system, { workflowPreset: "full-feature" });
+          yield* system.engine.dispatch({
+            type: "thread.planning-workflow.launch",
+            commandId: commandId("planning-launch-before-reactor"),
+            threadId: productThreadId,
+            intentTitle: "Checkout",
+            intentSummaryMarkdown: "Locked checkout intent.",
+            createdAt: now,
+          });
+          yield* settleTurn(system, {
+            turnId: "turn-engineering-before-reactor",
+            completedAt: "2026-01-01T00:01:00.000Z",
+          });
+
+          let snapshot = yield* system.query.getSnapshot();
+          let thread = snapshot.threads.find((entry) => entry.id === productThreadId);
+          expect(
+            thread?.messages.some((message) =>
+              message.text.includes("completed without its required workflow directive"),
+            ),
+          ).toBe(false);
+
+          yield* system.reactor.start();
+          yield* system.reactor.drain;
+
+          snapshot = yield* system.query.getSnapshot();
+          thread = snapshot.threads.find((entry) => entry.id === productThreadId);
+          expect(
+            thread?.messages.filter((message) =>
+              message.text.includes("completed without its required workflow directive"),
+            ),
+          ).toHaveLength(1);
+          expect(
+            thread?.activities.filter(
+              (activity) => activity.kind === "engineering-grill-recovery-requested",
+            ),
+          ).toHaveLength(1);
+        }),
+      { startReactor: false },
+    ),
+  );
+
+  it.effect("re-drives an orphaned startup recovery turn after provider shutdown", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          yield* seedProjectAndThread(system, { workflowPreset: "full-feature" });
+          yield* system.engine.dispatch({
+            type: "thread.planning-workflow.launch",
+            commandId: commandId("planning-launch-before-orphaned-recovery"),
+            threadId: productThreadId,
+            intentTitle: "Checkout",
+            intentSummaryMarkdown: "Locked checkout intent.",
+            createdAt: now,
+          });
+          const completedAt = "2026-01-01T00:01:00.000Z";
+          yield* settleTurn(system, {
+            turnId: "turn-engineering-before-orphaned-recovery",
+            completedAt,
+          });
+          yield* system.engine.dispatch({
+            type: "thread.session.set",
+            commandId: commandId("session-stopped-before-orphaned-recovery"),
+            threadId: productThreadId,
+            session: {
+              threadId: productThreadId,
+              status: "stopped",
+              providerName: "codex",
+              runtimeMode: "full-access",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: completedAt,
+            },
+            createdAt: completedAt,
+          });
+          yield* system.engine.dispatch({
+            type: "thread.turn.start",
+            commandId: commandId("orphaned-engineering-recovery"),
+            threadId: productThreadId,
+            message: {
+              messageId: messageId("orphaned-engineering-recovery"),
+              role: "user",
+              text: "The previous automatic Engineering Grill turn completed without its required workflow directive.\n\nFinish with the directive.",
+              attachments: [],
+            },
+            runtimeMode: "full-access",
+            interactionMode: "planning-workflow",
+            workflowPromptId: WORKFLOW_PROMPT_IDS.planningAutomaticEngineeringGrillCodex,
+            createdAt: completedAt,
+          });
+
+          yield* system.reactor.start();
+          yield* system.reactor.drain;
+
+          const snapshot = yield* system.query.getSnapshot();
+          const thread = snapshot.threads.find((entry) => entry.id === productThreadId);
+          expect(
+            thread?.messages.filter((message) =>
+              message.text.startsWith(
+                "The previous automatic Engineering Grill turn completed without its required workflow directive.",
+              ),
+            ),
+          ).toHaveLength(2);
+          expect(
+            thread?.activities.filter(
+              (activity) => activity.kind === "engineering-grill-recovery-requested",
+            ),
+          ).toHaveLength(1);
+        }),
+      { startReactor: false },
+    ),
+  );
+
   it.effect("requests automatic ticket review when product tickets are created", () =>
     withSystem((system) =>
       Effect.gen(function* () {
@@ -664,7 +966,16 @@ describe("ProductWorkflowReactor", () => {
       withSystem(
         (system) =>
           Effect.gen(function* () {
-            yield* seedProjectAndThread(system);
+            yield* seedProjectAndThread(system, {
+              workflowPreset: "full-feature",
+              branch: "t3code/full-feature",
+              worktreePath: "/tmp/product-reactor.worktrees/full-feature",
+            });
+            yield* prepareWorkflowWorkspace(system, {
+              baseBranch: "main",
+              branch: "t3code/full-feature",
+              worktreePath: "/tmp/product-reactor.worktrees/full-feature",
+            });
             const planningThread = yield* lockProductIntent(system);
             const spec = yield* seedProductSpecAndTickets(system, planningThread.id);
             const beforeVerdict = yield* system.query.getSnapshot();
@@ -694,6 +1005,11 @@ describe("ProductWorkflowReactor", () => {
             expect(implementationRun?.launchSummary.validationCommands).toEqual([
               "pnpm check:full",
             ]);
+            expect(implementationRun).toMatchObject({
+              baseBranch: "main",
+              orchestratorBranch: "t3code/full-feature",
+              orchestratorWorktreePath: "/tmp/product-reactor.worktrees/full-feature",
+            });
             const implementationOrchestrator = snapshot.threads.find(
               (thread) => thread.workflowRole === "implementation-orchestrator",
             );
@@ -1048,7 +1364,13 @@ describe("ProductWorkflowReactor", () => {
         Effect.gen(function* () {
           yield* seedProjectAndThread(system, {
             workflowPreset: "fast-feature",
-            branch: "main",
+            branch: "t3code/fast-feature",
+            worktreePath: "/tmp/product-reactor.worktrees/fast-feature",
+          });
+          yield* prepareWorkflowWorkspace(system, {
+            baseBranch: "main",
+            branch: "t3code/fast-feature",
+            worktreePath: "/tmp/product-reactor.worktrees/fast-feature",
           });
           yield* system.engine.dispatch({
             type: "thread.activity.append",
@@ -1090,7 +1412,10 @@ describe("ProductWorkflowReactor", () => {
             baseBranch: "main",
             sourceProposedPlan: { threadId: productThreadId, planId: "plan-fast" },
           });
-          expect(runs[0]?.orchestratorBranch.startsWith("fast-feature/")).toBe(true);
+          expect(runs[0]?.orchestratorBranch).toBe("t3code/fast-feature");
+          expect(runs[0]?.orchestratorWorktreePath).toBe(
+            "/tmp/product-reactor.worktrees/fast-feature",
+          );
           const implementers = snapshot.threads.filter(
             (thread) => thread.workflowRole === "fast-feature-implementer",
           );

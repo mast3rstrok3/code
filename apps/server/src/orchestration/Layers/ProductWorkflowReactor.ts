@@ -9,9 +9,13 @@ import {
   PLANNING_REVIEW_MAX_CYCLES,
   type ProjectId,
   ThreadId,
+  type TurnId,
   WORKFLOW_AUTOMATION_RUNTIME_MODE,
 } from "@t3tools/contracts";
-import { resolveImplementationBranchIdentity } from "@t3tools/shared/orchestrationImplementation";
+import {
+  resolveImplementationBranchIdentity,
+  resolveWorkflowWorkspaceIdentity,
+} from "@t3tools/shared/orchestrationImplementation";
 import { resolveImplementationValidationCommands } from "@t3tools/shared/t3ProjectFile";
 import {
   buildPlanImplementationPrompt,
@@ -32,6 +36,8 @@ import * as Stream from "effect/Stream";
 
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import { T3ProjectFileLoader } from "../../project/T3ProjectFileLoader.ts";
+import { WORKFLOW_PROMPT_IDS } from "../../provider/WorkflowPromptRegistry.ts";
+import { forkParked, ServerActivation } from "../../serverActivation.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   ProductWorkflowReactor,
@@ -51,6 +57,9 @@ type ProductWorkflowEvent = Extract<
 >;
 
 const PRODUCT_GRILL_RECOVERY_MAX_ATTEMPTS = 2;
+const ENGINEERING_GRILL_RECOVERY_MAX_ATTEMPTS = 2;
+const ENGINEERING_GRILL_RECOVERY_PROMPT_PREFIX =
+  "The previous automatic Engineering Grill turn completed without its required workflow directive.";
 
 const isProductWorkflowThread = isProductWorkflowRoot;
 
@@ -129,6 +138,17 @@ const buildProductGrillRecoveryPrompt = (thread: OrchestrationThread) => {
     "Do not implement, investigate, or verify the requested work yet. Continue only from the unresolved product-decision frontier with workflow_request_user_input. If the settled answers complete the frontier, ask only for the explicit final lock-in confirmation. If that confirmation is already settled as affirmative, emit product-intent-locked immediately. Only then may the selected workflow continue automatically into Planning, Build, Dev Review, Code Review, and change-request publication.",
   ].join("\n");
 };
+
+const buildEngineeringGrillRecoveryPrompt = () =>
+  [
+    ENGINEERING_GRILL_RECOVERY_PROMPT_PREFIX,
+    "",
+    "Keep the locked Product Grill intent and the engineering decisions already resolved in the conversation authoritative. Do not repeat the Product Grill, ask the user questions, or wait for confirmation.",
+    "",
+    "If the engineering frontier is already complete, preserve the plan and conclusions you just produced. Otherwise resolve only the remaining engineering and domain decisions autonomously.",
+    "",
+    'Finish this turn with exactly one fenced JSON block containing { "type": "planning-grill-complete" }. Do not write the Spec in this stage.',
+  ].join("\n");
 
 const buildProductLightweightPlanPrompt = (input: {
   readonly intentKind: "fix" | "feature";
@@ -334,13 +354,24 @@ const make = Effect.gen(function* () {
     const pinnedCommit = yield* gitWorkflow
       .resolveCommit({ cwd: sourceCwd, ref: "HEAD" })
       .pipe(Effect.map((result) => result.commitSha));
-    const identity = resolveImplementationBranchIdentity({
-      specId: spec.id,
-      specTitle: spec.title,
-      baseBranch: context.productRootThread.branch ?? "main",
-      workspaceRoot: sourceCwd,
-      implementationRuns: (yield* projectionSnapshotQuery.getCommandReadModel()).implementationRuns,
-    });
+    const workflowWorkspace = resolveWorkflowWorkspaceIdentity(
+      context.productRootThread.activities,
+    );
+    const identity =
+      workflowWorkspace === null
+        ? resolveImplementationBranchIdentity({
+            specId: spec.id,
+            specTitle: spec.title,
+            baseBranch: context.productRootThread.branch ?? "main",
+            workspaceRoot: sourceCwd,
+            implementationRuns: (yield* projectionSnapshotQuery.getCommandReadModel())
+              .implementationRuns,
+          })
+        : {
+            baseBranch: workflowWorkspace.baseBranch,
+            orchestratorBranch: workflowWorkspace.branch,
+            orchestratorWorktreePath: workflowWorkspace.worktreePath,
+          };
 
     yield* orchestrationEngine.dispatch({
       type: "thread.implementation-run.launch",
@@ -684,15 +715,23 @@ const make = Effect.gen(function* () {
       const projectFile = Option.getOrUndefined(yield* projectFileLoader.load(sourceCwd));
       const pinnedCommit = (yield* gitWorkflow.resolveCommit({ cwd: sourceCwd, ref: "HEAD" }))
         .commitSha;
+      const workflowWorkspace = resolveWorkflowWorkspaceIdentity(thread.activities);
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
-      const identity = resolveImplementationBranchIdentity({
-        specId: plan.id,
-        specTitle: buildPlanImplementationThreadTitle(plan.planMarkdown),
-        baseBranch: thread.branch,
-        workspaceRoot: sourceCwd,
-        implementationRuns: readModel.implementationRuns,
-        branchPrefix: "fast-feature",
-      });
+      const identity =
+        workflowWorkspace === null
+          ? resolveImplementationBranchIdentity({
+              specId: plan.id,
+              specTitle: buildPlanImplementationThreadTitle(plan.planMarkdown),
+              baseBranch: thread.branch,
+              workspaceRoot: sourceCwd,
+              implementationRuns: readModel.implementationRuns,
+              branchPrefix: "fast-feature",
+            })
+          : {
+              baseBranch: workflowWorkspace.baseBranch,
+              orchestratorBranch: workflowWorkspace.branch,
+              orchestratorWorktreePath: workflowWorkspace.worktreePath,
+            };
       yield* orchestrationEngine.dispatch({
         type: "thread.fast-feature-run.launch",
         commandId: yield* serverCommandId("fast-feature-launch"),
@@ -786,6 +825,138 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const recoverIncompleteEngineeringGrill = Effect.fn(
+    "ProductWorkflowReactor.recoverIncompleteEngineeringGrill",
+  )(function* (input: {
+    readonly thread: OrchestrationThread;
+    readonly sourceTurnId: TurnId;
+    readonly createdAt: string;
+    readonly relaunchPendingRecovery?: boolean;
+  }) {
+    const { thread } = input;
+    if (!isProductWorkflowThread(thread) || thread.workflowPreset !== "full-feature") return;
+    if (thread.planningWorkflow?.stage !== "grill") return;
+    const latestUserMessageAt = thread.messages.reduce<string | null>(
+      (latest, message) =>
+        message.role === "user" &&
+        !message.text.startsWith(ENGINEERING_GRILL_RECOVERY_PROMPT_PREFIX) &&
+        (latest === null || message.createdAt > latest)
+          ? message.createdAt
+          : latest,
+      null,
+    );
+    if (
+      thread.latestTurn?.turnId !== input.sourceTurnId ||
+      thread.latestTurn.state !== "completed" ||
+      thread.latestTurn.completedAt === null ||
+      latestUserMessageAt === null ||
+      thread.latestTurn.requestedAt < latestUserMessageAt
+    ) {
+      return;
+    }
+
+    const recoveryMessages = thread.messages.filter(
+      (message) =>
+        message.role === "user" &&
+        message.text.startsWith(ENGINEERING_GRILL_RECOVERY_PROMPT_PREFIX),
+    );
+    const recoveryAlreadyLaunched = recoveryMessages.some(
+      (message) => message.createdAt >= (thread.latestTurn?.completedAt ?? input.createdAt),
+    );
+    if (recoveryAlreadyLaunched && input.relaunchPendingRecovery !== true) {
+      return;
+    }
+
+    if (recoveryMessages.length >= ENGINEERING_GRILL_RECOVERY_MAX_ATTEMPTS) {
+      if (
+        !thread.activities.some(
+          (activity) => activity.kind === "engineering-grill-recovery-blocked",
+        )
+      ) {
+        yield* appendActivity({
+          threadId: thread.id,
+          tone: "error",
+          kind: "engineering-grill-recovery-blocked",
+          summary: "Engineering Grill stopped before Spec authoring",
+          payload: {
+            sourceTurnId: input.sourceTurnId,
+            attempts: recoveryMessages.length,
+            detail:
+              "The automatic Engineering Grill repeatedly completed without a planning-grill-complete directive.",
+          },
+          createdAt: input.createdAt,
+        });
+      }
+      return;
+    }
+
+    yield* orchestrationEngine.dispatch({
+      type: "thread.turn.start",
+      commandId: yield* serverCommandId("engineering-grill-recovery-turn"),
+      threadId: thread.id,
+      message: {
+        messageId: yield* serverMessageId("engineering-grill-recovery"),
+        role: "user",
+        text: buildEngineeringGrillRecoveryPrompt(),
+        attachments: [],
+      },
+      runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
+      interactionMode: "planning-workflow",
+      workflowPromptId: WORKFLOW_PROMPT_IDS.planningAutomaticEngineeringGrillCodex,
+      createdAt: input.createdAt,
+    });
+    yield* appendActivity({
+      threadId: thread.id,
+      tone: "info",
+      kind: "engineering-grill-recovery-requested",
+      summary: "Resuming incomplete Engineering Grill",
+      payload: {
+        sourceTurnId: input.sourceTurnId,
+        attempt: recoveryMessages.length + 1,
+      },
+      createdAt: input.createdAt,
+    });
+  });
+
+  const recoverIncompleteEngineeringGrillFromCheckpoint = Effect.fn(
+    "ProductWorkflowReactor.recoverIncompleteEngineeringGrillFromCheckpoint",
+  )(function* (event: Extract<ProductWorkflowEvent, { type: "thread.activity-appended" }>) {
+    if (event.payload.activity.kind !== "checkpoint.captured") return;
+    const sourceTurnId = event.payload.activity.turnId;
+    if (sourceTurnId === null) return;
+    const thread = yield* resolveThread(event.payload.threadId);
+    if (!thread) return;
+    yield* recoverIncompleteEngineeringGrill({
+      thread,
+      sourceTurnId,
+      createdAt: event.payload.activity.createdAt,
+    });
+  });
+
+  const reconcileIncompleteEngineeringGrills = Effect.fn(
+    "ProductWorkflowReactor.reconcileIncompleteEngineeringGrills",
+  )(function* () {
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    for (const candidate of readModel.threads) {
+      if (
+        !isProductWorkflowThread(candidate) ||
+        candidate.workflowPreset !== "full-feature" ||
+        candidate.planningWorkflow?.stage !== "grill" ||
+        candidate.latestTurn?.state !== "completed"
+      ) {
+        continue;
+      }
+      const thread = yield* resolveThread(candidate.id);
+      if (!thread || thread.latestTurn === null) continue;
+      yield* recoverIncompleteEngineeringGrill({
+        thread,
+        sourceTurnId: thread.latestTurn.turnId,
+        createdAt: thread.latestTurn.completedAt ?? thread.updatedAt,
+        relaunchPendingRecovery: true,
+      });
+    }
+  });
+
   const processEvent = Effect.fn("ProductWorkflowReactor.processEvent")(function* (
     event: ProductWorkflowEvent,
   ) {
@@ -793,6 +964,7 @@ const make = Effect.gen(function* () {
       case "thread.activity-appended":
         yield* handleProductIntentLocked(event);
         yield* recoverIncompleteProductGrill(event);
+        yield* recoverIncompleteEngineeringGrillFromCheckpoint(event);
         return;
       case "thread.planning-tickets-created":
         yield* requestTicketReview(event);
@@ -823,20 +995,6 @@ const make = Effect.gen(function* () {
   const worker = yield* makeDrainableWorker(processEventSafely);
 
   const start: ProductWorkflowReactorShape["start"] = Effect.fn("start")(function* () {
-    yield* reconcileImplementationLaunches().pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("product workflow implementation reconciliation failed", {
-          cause: Cause.pretty(cause),
-        }),
-      ),
-    );
-    yield* reconcileFixImplementations().pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("product workflow fix handover reconciliation failed", {
-          cause: Cause.pretty(cause),
-        }),
-      ),
-    );
     yield* Effect.forkScoped(
       Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
         if (
@@ -850,6 +1008,38 @@ const make = Effect.gen(function* () {
         return worker.enqueue(event);
       }),
     );
+
+    const reconcileStartup = Effect.gen(function* () {
+      yield* reconcileIncompleteEngineeringGrills().pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("product workflow Engineering Grill reconciliation failed", {
+            cause: Cause.pretty(cause),
+          }),
+        ),
+      );
+      yield* reconcileImplementationLaunches().pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("product workflow implementation reconciliation failed", {
+            cause: Cause.pretty(cause),
+          }),
+        ),
+      );
+      yield* reconcileFixImplementations().pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("product workflow fix handover reconciliation failed", {
+            cause: Cause.pretty(cause),
+          }),
+        ),
+      );
+    });
+    const activation = yield* ServerActivation;
+    if (activation === undefined) {
+      yield* reconcileStartup;
+    } else {
+      // Provider command handling parks at the same activation boundary. Yield once after
+      // activation so its hot-stream subscriber is live before reconciliation emits turns.
+      yield* forkParked(Effect.yieldNow.pipe(Effect.andThen(reconcileStartup)));
+    }
   });
 
   return {

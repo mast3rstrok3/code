@@ -3,8 +3,12 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   buildWorkflowViewModel,
   buildWorkflowTimeline,
+  buildWorkflowSteps,
+  resolveWorkflowGroupTimeRange,
   resolveWorkflowLifecycle,
   resolveWorkflowRollupStatus,
+  resolveWorkflowStepTimeRange,
+  resolveWorkflowThreadTimeRange,
   resolveWorkflowThreadStatus,
   selectWorkflowRootForThread,
   type WorkflowModelThread,
@@ -249,6 +253,125 @@ describe("buildWorkflowViewModel", () => {
       { kind: "thread", row: { thread: { id: "code-review" } } },
       { kind: "thread", row: { thread: { id: "final-validation" } } },
     ]);
+  });
+
+  it("groups adjacent threads with the same role under one chronological step", () => {
+    const root = thread("root");
+    const workerB = thread("worker-b", {
+      parentThreadId: "root",
+      workflowRole: "implementation-worker",
+      workflowContext: { workflowId: "implementation-run", rootThreadId: "root" },
+      createdAt: "2026-01-01T00:02:00.000Z",
+    });
+    const workerA = thread("worker-a", {
+      parentThreadId: "root",
+      workflowRole: "implementation-worker",
+      workflowContext: { workflowId: "implementation-run", rootThreadId: "root" },
+      createdAt: "2026-01-01T00:01:00.000Z",
+    });
+    const validator = thread("validator", {
+      parentThreadId: "root",
+      workflowRole: "implementation-validator",
+      workflowContext: { workflowId: "implementation-run", rootThreadId: "root" },
+      createdAt: "2026-01-01T00:03:00.000Z",
+    });
+    const groups = buildWorkflowViewModel([validator, root, workerB, workerA]).rootsByThreadKey.get(
+      "env:root",
+    )?.groups;
+    const implementation = groups?.[0];
+
+    expect(
+      implementation && groups ? buildWorkflowSteps(implementation, groups) : [],
+    ).toMatchObject([
+      {
+        id: "role:implementation-worker:env:worker-a",
+        entries: [
+          { kind: "thread", row: { thread: { id: "worker-a" } } },
+          { kind: "thread", row: { thread: { id: "worker-b" } } },
+        ],
+      },
+      {
+        id: "role:implementation-validator:env:validator",
+        entries: [{ kind: "thread", row: { thread: { id: "validator" } } }],
+      },
+    ]);
+  });
+
+  it("keeps repeated non-adjacent roles as separate workflow steps", () => {
+    const root = thread("root");
+    const firstFix = thread("first-fix", {
+      parentThreadId: "root",
+      workflowRole: "implementation-fixer",
+      workflowContext: { workflowId: "run", rootThreadId: "root" },
+      createdAt: "2026-01-01T00:01:00.000Z",
+    });
+    const review = thread("review", {
+      parentThreadId: "root",
+      workflowRole: "implementation-code-reviewer",
+      workflowContext: { workflowId: "run", rootThreadId: "root" },
+      createdAt: "2026-01-01T00:02:00.000Z",
+    });
+    const secondFix = thread("second-fix", {
+      parentThreadId: "root",
+      workflowRole: "implementation-fixer",
+      workflowContext: { workflowId: "run", rootThreadId: "root" },
+      createdAt: "2026-01-01T00:03:00.000Z",
+    });
+    const groups = buildWorkflowViewModel([secondFix, review, root, firstFix]).rootsByThreadKey.get(
+      "env:root",
+    )?.groups;
+    const group = groups?.[0];
+
+    expect(group && groups ? buildWorkflowSteps(group, groups).map((step) => step.id) : []).toEqual(
+      [
+        "role:implementation-fixer:env:first-fix",
+        "role:implementation-code-reviewer:env:review",
+        "role:implementation-fixer:env:second-fix",
+      ],
+    );
+  });
+
+  it("calculates thread, step, and parent workflow timing across nested work", () => {
+    const root = thread("root");
+    const build = thread("build", {
+      parentThreadId: "root",
+      workflowRole: "implementation-worker",
+      workflowContext: { workflowId: "implementation-run", rootThreadId: "root" },
+      createdAt: "2026-01-01T10:00:00.000Z",
+      settledAt: "2026-01-01T10:05:00.000Z",
+      updatedAt: "2026-01-01T10:09:00.000Z",
+    });
+    const review = thread("review", {
+      parentThreadId: "build",
+      workflowRole: "dev-review-reviewer",
+      workflowContext: {
+        workflowId: "review-run",
+        parentWorkflowId: "implementation-run",
+        rootThreadId: "root",
+      },
+      createdAt: "2026-01-01T10:06:00.000Z",
+      settledAt: "2026-01-01T10:12:00.000Z",
+    });
+    const groups = buildWorkflowViewModel([review, build, root]).rootsByThreadKey.get(
+      "env:root",
+    )?.groups;
+    const implementation = groups?.find((group) => group.sourceId === "implementation-run");
+    const steps = implementation && groups ? buildWorkflowSteps(implementation, groups) : [];
+
+    expect(resolveWorkflowThreadTimeRange(build)).toEqual({
+      startedAt: "2026-01-01T10:00:00.000Z",
+      endedAt: "2026-01-01T10:05:00.000Z",
+    });
+    expect(
+      implementation && groups ? resolveWorkflowGroupTimeRange(implementation, groups) : null,
+    ).toEqual({
+      startedAt: "2026-01-01T10:00:00.000Z",
+      endedAt: "2026-01-01T10:12:00.000Z",
+    });
+    expect(steps[1] && groups ? resolveWorkflowStepTimeRange(steps[1], groups) : null).toEqual({
+      startedAt: "2026-01-01T10:06:00.000Z",
+      endedAt: "2026-01-01T10:12:00.000Z",
+    });
   });
 
   it("keeps a nested workflow visible from the thread that initiated the whole tree", () => {

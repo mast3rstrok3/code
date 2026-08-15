@@ -87,6 +87,17 @@ export type WorkflowTimelineEntry<TThread extends WorkflowModelThread> =
       readonly group: WorkflowGroup<TThread>;
     };
 
+export interface WorkflowTimelineStep<TThread extends WorkflowModelThread> {
+  readonly id: string;
+  readonly createdAt: string;
+  readonly entries: readonly WorkflowTimelineEntry<TThread>[];
+}
+
+export interface WorkflowTimeRange {
+  readonly startedAt: string;
+  readonly endedAt: string | null;
+}
+
 export interface WorkflowViewModel<TThread extends WorkflowModelThread> {
   readonly ownerThreadKeyByThreadKey: ReadonlyMap<string, string>;
   readonly rootsByThreadKey: ReadonlyMap<string, WorkflowRoot<TThread>>;
@@ -129,6 +140,109 @@ export function buildWorkflowTimeline<TThread extends WorkflowModelThread>(
     (left, right) =>
       timestampMs(left.createdAt) - timestampMs(right.createdAt) || left.id.localeCompare(right.id),
   );
+}
+
+function workflowStepIdentity<TThread extends WorkflowModelThread>(
+  entry: WorkflowTimelineEntry<TThread>,
+): string {
+  if (entry.kind === "workflow") return entry.id;
+  return `role:${entry.row.thread.workflowRole ?? "workflow-child"}`;
+}
+
+/**
+ * Turn the chronological workflow timeline into visible steps. Adjacent threads
+ * with the same workflow role belong under one step heading; a nested workflow
+ * always remains a step of its own.
+ */
+export function buildWorkflowSteps<TThread extends WorkflowModelThread>(
+  group: WorkflowGroup<TThread>,
+  groups: readonly WorkflowGroup<TThread>[],
+): readonly WorkflowTimelineStep<TThread>[] {
+  const steps: WorkflowTimelineStep<TThread>[] = [];
+  for (const entry of buildWorkflowTimeline(group, groups)) {
+    const identity = workflowStepIdentity(entry);
+    const previous = steps.at(-1);
+    const previousEntry = previous?.entries[0];
+    if (previous && previousEntry && workflowStepIdentity(previousEntry) === identity) {
+      steps[steps.length - 1] = { ...previous, entries: [...previous.entries, entry] };
+      continue;
+    }
+    steps.push({ id: `${identity}:${entry.id}`, createdAt: entry.createdAt, entries: [entry] });
+  }
+  return steps;
+}
+
+export function resolveWorkflowThreadTimeRange(thread: WorkflowModelThread): WorkflowTimeRange {
+  if (workflowStatusIsActive(resolveWorkflowThreadStatus(thread))) {
+    return { startedAt: thread.createdAt, endedAt: null };
+  }
+  return {
+    startedAt: thread.createdAt,
+    endedAt:
+      thread.settledAt ??
+      thread.latestTurn?.completedAt ??
+      thread.archivedAt ??
+      thread.session?.updatedAt ??
+      thread.updatedAt,
+  };
+}
+
+export function resolveWorkflowGroupTimeRange<TThread extends WorkflowModelThread>(
+  group: WorkflowGroup<TThread>,
+  groups: readonly WorkflowGroup<TThread>[],
+): WorkflowTimeRange {
+  const childrenByParentId = new Map<string, WorkflowGroup<TThread>[]>();
+  for (const candidate of groups) {
+    if (candidate.parentGroupId === null) continue;
+    const children = childrenByParentId.get(candidate.parentGroupId);
+    if (children) children.push(candidate);
+    else childrenByParentId.set(candidate.parentGroupId, [candidate]);
+  }
+  const ranges: WorkflowTimeRange[] = [];
+  const visited = new Set<string>();
+  const collect = (candidate: WorkflowGroup<TThread>) => {
+    if (visited.has(candidate.id)) return;
+    visited.add(candidate.id);
+    ranges.push(...candidate.rows.map((row) => resolveWorkflowThreadTimeRange(row.thread)));
+    for (const child of childrenByParentId.get(candidate.id) ?? []) collect(child);
+  };
+  collect(group);
+
+  const startedAt = ranges.reduce(
+    (earliest, range) =>
+      timestampMs(range.startedAt) < timestampMs(earliest) ? range.startedAt : earliest,
+    group.createdAt,
+  );
+  if (ranges.some((range) => range.endedAt === null)) return { startedAt, endedAt: null };
+  const endedAt = ranges.reduce<string>((latest, range) => {
+    const candidate = range.endedAt ?? range.startedAt;
+    return timestampMs(candidate) > timestampMs(latest) ? candidate : latest;
+  }, startedAt);
+  return { startedAt, endedAt };
+}
+
+export function resolveWorkflowStepTimeRange<TThread extends WorkflowModelThread>(
+  step: WorkflowTimelineStep<TThread>,
+  groups: readonly WorkflowGroup<TThread>[],
+): WorkflowTimeRange {
+  const ranges = step.entries.map((entry) =>
+    entry.kind === "thread"
+      ? resolveWorkflowThreadTimeRange(entry.row.thread)
+      : resolveWorkflowGroupTimeRange(entry.group, groups),
+  );
+  const startedAt = ranges.reduce(
+    (earliest, range) =>
+      timestampMs(range.startedAt) < timestampMs(earliest) ? range.startedAt : earliest,
+    step.createdAt,
+  );
+  if (ranges.some((range) => range.endedAt === null)) return { startedAt, endedAt: null };
+  return {
+    startedAt,
+    endedAt: ranges.reduce<string>((latest, range) => {
+      const candidate = range.endedAt ?? range.startedAt;
+      return timestampMs(candidate) > timestampMs(latest) ? candidate : latest;
+    }, startedAt),
+  };
 }
 
 export function resolveWorkflowThreadStatus(thread: WorkflowModelThread): WorkflowThreadStatus {

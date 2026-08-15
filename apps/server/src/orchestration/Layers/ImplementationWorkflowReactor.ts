@@ -385,7 +385,7 @@ function buildMergeGatePrompt(input: {
     `Run ${input.kind} gate for implementation run ${input.run.id}.`,
     "",
     ...integrationInstructions,
-    "If this fresh worktree has no installed dependencies, install them with the repository's declared package manager and lockfile before running validation. Missing worktree-local dependencies are setup work, not a validation failure.",
+    "Use the repository's existing focused validation setup. The shared workflow AppDevStack is already active, so do not run a host dependency install that replaces mounted dependency paths. If validation cannot run with the prepared workspace, report the setup failure explicitly.",
     "",
     ...validationInstructions,
     "",
@@ -612,6 +612,9 @@ function fastFeatureExecutionContract(run: OrchestrationImplementationRun): Read
     `- branch: ${run.orchestratorBranch}`,
     `- worktree: ${run.orchestratorWorktreePath}`,
     `- fixed source commit: ${run.pinnedCommit}`,
+    `- App Dev Stack: ${run.appDevStack.frontendUrl ?? "starting; use the workflow-owned stack for this worktree"}`,
+    "",
+    "The workflow App Dev Stack already owns this worktree. Do not start a competing dev server or run a host dependency install that replaces a mounted dependency path.",
     "",
     "## Pre-review validation",
     "Run focused tests and affected-file checks. A documented sub-minute fast command such as `pnpm check` is allowed.",
@@ -916,6 +919,76 @@ const make = Effect.gen(function* () {
       });
     },
   );
+
+  const ensureLaunchAppDevStack = Effect.fn(
+    "ImplementationWorkflowReactor.ensureLaunchAppDevStack",
+  )(function* (input: {
+    readonly run: OrchestrationImplementationRun;
+    readonly orchestratorThread: OrchestrationThread;
+    readonly createdAt: string;
+  }) {
+    const result = yield* appDevStackManager
+      .autoCreate({
+        worktreePath: input.run.orchestratorWorktreePath,
+        displayName:
+          input.run.artifactSource === "proposed-plan"
+            ? `Fast feature ${input.run.id}`
+            : `Implementation ${input.run.id}`,
+        gitBranch: input.run.orchestratorBranch,
+        workflowId: input.orchestratorThread.workflowContext?.workflowId,
+      })
+      .pipe(Effect.result);
+    if (result._tag === "Failure") {
+      const detail = errorDetail(result.failure);
+      yield* appendActivity({
+        threadId: input.run.orchestratorThreadId,
+        tone: "error",
+        kind: "implementation-app-dev-stack-start-failed",
+        summary: "Implementation is continuing while App Dev Stack startup is retried",
+        payload: { runId: input.run.id, detail },
+        createdAt: input.createdAt,
+      });
+      return {
+        ...input.run,
+        appDevStack: {
+          ...input.run.appDevStack,
+          status: "failed" as const,
+          lastErrorMarkdown: detail,
+          requestedAt: input.run.appDevStack.requestedAt || input.createdAt,
+          updatedAt: input.createdAt,
+        },
+      };
+    }
+
+    const stack = result.success;
+    yield* appendActivity({
+      threadId: input.run.orchestratorThreadId,
+      tone: "info",
+      kind: "implementation-app-dev-stack-ready",
+      summary: "Implementation App Dev Stack is available from workflow start",
+      payload: {
+        runId: input.run.id,
+        stackId: stack.stack?.id ?? null,
+        stackStatus: stack.stack?.status ?? null,
+        frontendUrl: stack.frontendUrl,
+      },
+      createdAt: input.createdAt,
+    });
+    return {
+      ...input.run,
+      appDevStack: {
+        status: appDevStackReadiness(stack),
+        stackId: stack.stack?.id ?? null,
+        stackStatus: stack.stack?.status ?? null,
+        frontendUrl: stack.frontendUrl,
+        frontendServiceName: stack.frontendServiceName,
+        displayName: stack.stack?.displayName ?? null,
+        lastErrorMarkdown: null,
+        requestedAt: input.run.appDevStack.requestedAt || input.createdAt,
+        updatedAt: input.createdAt,
+      },
+    };
+  });
 
   const requestRunRetry = Effect.fn("ImplementationWorkflowReactor.requestRunRetry")(
     function* (input: {
@@ -2424,18 +2497,22 @@ const make = Effect.gen(function* () {
       if (!project) return;
       const sourceCwd = sourceThread.worktreePath ?? project.workspaceRoot;
       const sourceStatus = yield* gitWorkflow.localStatus({ cwd: sourceCwd });
-      if (!sourceStatus.isRepo || sourceStatus.refName !== input.run.baseBranch) {
+      const reusesSourceWorkspace = sourceCwd === input.run.orchestratorWorktreePath;
+      const expectedSourceBranch = reusesSourceWorkspace
+        ? input.run.orchestratorBranch
+        : input.run.baseBranch;
+      if (!sourceStatus.isRepo || sourceStatus.refName !== expectedSourceBranch) {
         yield* blockRun({
           sourceThreadId: input.sourceThreadId,
           run: input.run,
           retryableStage: "source-dirty",
           humanBlocked: true,
-          reasonMarkdown: `The source worktree must be on the captured branch '${input.run.baseBranch}', but Git reports '${sourceStatus.refName ?? "detached HEAD"}'. Switch back to the captured branch, then retry.`,
+          reasonMarkdown: `The source worktree must be on the captured branch '${expectedSourceBranch}', but Git reports '${sourceStatus.refName ?? "detached HEAD"}'. Switch back to the captured branch, then retry.`,
           updatedAt: input.createdAt,
         });
         return;
       }
-      const setupRun =
+      let setupRun =
         input.run.retryableFailure?.stage === "source-dirty"
           ? yield* gitWorkflow.resolveCommit({ cwd: sourceCwd, ref: "HEAD" }).pipe(
               Effect.map(({ commitSha }) => ({
@@ -2446,21 +2523,28 @@ const make = Effect.gen(function* () {
             )
           : input.run;
 
-      // A dirty source worktree does not block the run: the Fast feature worktree is
-      // created from the pinned commit, so uncommitted work is simply not part of it.
-      // Say so on the source thread — that is where the user is reading — rather than
-      // refusing to start, which made the workflow unusable on any working checkout.
       if (sourceStatus.hasWorkingTreeChanges) {
         yield* appendActivity({
           threadId: input.sourceThreadId,
           tone: "info",
-          kind: "fast-feature.source-dirty-ignored",
-          summary: "Uncommitted source changes are not included in this run",
-          payload: {
-            runId: setupRun.id,
-            pinnedCommit: setupRun.pinnedCommit,
-            reasonMarkdown: `The source worktree has modified, staged, or untracked files. This Fast feature run was created from commit \`${setupRun.pinnedCommit}\` and does **not** include them. Commit them and relaunch if they should be part of the run.`,
-          },
+          kind: reusesSourceWorkspace
+            ? "fast-feature.source-dirty-included"
+            : "fast-feature.source-dirty-ignored",
+          summary: reusesSourceWorkspace
+            ? "Existing workflow workspace changes are included in this run"
+            : "Uncommitted source changes are not included in this run",
+          payload: reusesSourceWorkspace
+            ? {
+                runId: setupRun.id,
+                pinnedCommit: setupRun.pinnedCommit,
+                reasonMarkdown:
+                  "The shared workflow worktree has modified, staged, or untracked files. Build inherits that workspace and must inspect, validate, and commit the intended changes.",
+              }
+            : {
+                runId: setupRun.id,
+                pinnedCommit: setupRun.pinnedCommit,
+                reasonMarkdown: `The source worktree has modified, staged, or untracked files. This Fast feature run was created from commit \`${setupRun.pinnedCommit}\` and does **not** include them. Commit them and relaunch if they should be part of the run.`,
+              },
           createdAt: input.createdAt,
         });
       }
@@ -2501,9 +2585,12 @@ const make = Effect.gen(function* () {
         worktreePath: setupRun.orchestratorWorktreePath,
       });
 
-      // Hand the plan over before provisioning the app dev stack. Build needs only the branch,
-      // worktree, and pinned commit; the stack is for Dev Review, and `startBrowserReview`
-      // re-ensures it there. Provisioning first left the Build thread blank for minutes.
+      setupRun = yield* ensureLaunchAppDevStack({
+        run: setupRun,
+        orchestratorThread: implementerThread,
+        createdAt: input.createdAt,
+      });
+
       const refreshed = yield* projectionSnapshotQuery.getCommandReadModel();
       // A miss in the refreshed model must not read as "already started" — that silently drops
       // the handover and leaves an empty Build thread.
@@ -2595,11 +2682,9 @@ const make = Effect.gen(function* () {
         createdAt: input.createdAt,
       });
 
-      // Build owns dependency setup in the host worktree. Starting AppDevStack here lets the
-      // container mount anonymous node_modules volumes beneath that same worktree while the host
-      // package manager can still replace those mountpoint directories, leaving the running
-      // container attached to unreachable mounts. `startBrowserReview` already ensures the stack;
-      // defer provisioning to that boundary after Build has committed and stopped mutating deps.
+      // Browser Review re-ensures and probes this same stack after Build. Build must use the
+      // already-running workflow workspace instead of creating another server or replacing
+      // dependency mountpoints from the host.
     },
   );
 
@@ -2642,13 +2727,33 @@ const make = Effect.gen(function* () {
       updatedAt: event.occurredAt,
     };
     yield* Effect.gen(function* () {
-      yield* gitWorkflow.createWorktree({
-        cwd: project.workspaceRoot,
-        refName: event.payload.run.pinnedCommit,
-        newRefName: event.payload.run.orchestratorBranch,
-        baseRefName: event.payload.run.baseBranch,
-        path: event.payload.run.orchestratorWorktreePath,
-      });
+      const existingWorktreeHead = yield* gitWorkflow
+        .resolveCommit({ cwd: event.payload.run.orchestratorWorktreePath, ref: "HEAD" })
+        .pipe(Effect.option);
+      if (Option.isSome(existingWorktreeHead)) {
+        const status = yield* gitWorkflow.localStatus({
+          cwd: event.payload.run.orchestratorWorktreePath,
+        });
+        if (!status.isRepo || status.refName !== event.payload.run.orchestratorBranch) {
+          return yield* new GitCommandError({
+            operation: "ImplementationWorkflowReactor.handleRunLaunched",
+            command: "git status --short --branch",
+            cwd: event.payload.run.orchestratorWorktreePath,
+            detail: `The Planning workspace must remain on '${event.payload.run.orchestratorBranch}', but Git reports '${status.refName ?? "detached HEAD"}'.`,
+          });
+        }
+      } else {
+        // Historical and standalone Implementation launches may not have a Planning workspace.
+        // Keep their old setup path while new Planning, Full Feature, and Fast Feature runs reuse
+        // the workspace prepared before their first model turn.
+        yield* gitWorkflow.createWorktree({
+          cwd: project.workspaceRoot,
+          refName: event.payload.run.pinnedCommit,
+          newRefName: event.payload.run.orchestratorBranch,
+          baseRefName: event.payload.run.baseBranch,
+          path: event.payload.run.orchestratorWorktreePath,
+        });
+      }
 
       yield* orchestrationEngine.dispatch({
         type: "thread.meta.update",
@@ -2658,9 +2763,11 @@ const make = Effect.gen(function* () {
         worktreePath: event.payload.run.orchestratorWorktreePath,
       });
 
-      // Workers own dependency setup in the host worktree. AppDevStack is provisioned by
-      // `startBrowserReview` only after integration, when those package-manager writes are done.
-      const launchedRun = runningRun;
+      const launchedRun = yield* ensureLaunchAppDevStack({
+        run: runningRun,
+        orchestratorThread,
+        createdAt: event.occurredAt,
+      });
 
       yield* updateRun({
         sourceThreadId: event.payload.sourceThreadId,

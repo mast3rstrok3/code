@@ -1,5 +1,6 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import type { DevReviewWorkflowRun } from "@t3tools/contracts";
+import type { TimestampFormat } from "@t3tools/contracts/settings";
 import { WORKFLOW_PRESET_DEFINITION_BY_ID } from "@t3tools/shared/workflowPresets";
 import { Archive, ChevronDown, ChevronRight, Copy, Eye, GitFork } from "lucide-react";
 import {
@@ -12,13 +13,17 @@ import {
 } from "react";
 
 import { cn } from "~/lib/utils";
+import { formatChatTimestampTooltip, formatShortTimestamp } from "~/timestampFormat";
 import {
-  buildWorkflowTimeline,
+  buildWorkflowSteps,
+  resolveWorkflowGroupTimeRange,
+  resolveWorkflowStepTimeRange,
+  resolveWorkflowThreadTimeRange,
   resolveWorkflowThreadStatus,
-  workflowStatusIsActive,
   workflowThreadKey,
   type WorkflowGroup,
   type WorkflowRoot,
+  type WorkflowTimelineStep,
   type WorkflowThreadStatus,
 } from "~/workflowModel";
 import { ScrollArea } from "~/components/ui/scroll-area";
@@ -78,24 +83,6 @@ function elapsedBetween(startedAt: string, endedAt: string | null): string {
   return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`;
 }
 
-function threadStartedAt(thread: EnvironmentThreadShell): string {
-  return thread.latestTurn?.startedAt ?? thread.latestTurn?.requestedAt ?? thread.createdAt;
-}
-
-function threadEndedAt(
-  thread: EnvironmentThreadShell,
-  status: WorkflowThreadStatus,
-): string | null {
-  if (workflowStatusIsActive(status)) return null;
-  return (
-    thread.archivedAt ??
-    thread.latestTurn?.completedAt ??
-    thread.settledAt ??
-    thread.session?.updatedAt ??
-    thread.updatedAt
-  );
-}
-
 function Elapsed(props: { readonly startedAt: string; readonly endedAt: string | null }) {
   const ref = useRef<HTMLSpanElement>(null);
   useEffect(() => {
@@ -110,6 +97,58 @@ function Elapsed(props: { readonly startedAt: string; readonly endedAt: string |
   return (
     <span ref={ref} className="tabular-nums">
       {elapsedBetween(props.startedAt, props.endedAt)}
+    </span>
+  );
+}
+
+function TimelineTimeRange(props: {
+  readonly startedAt: string;
+  readonly endedAt: string | null;
+  readonly timestampFormat: TimestampFormat;
+  readonly className?: string;
+}) {
+  const start = formatShortTimestamp(props.startedAt, props.timestampFormat) || "—";
+  const end =
+    props.endedAt === null
+      ? "In progress"
+      : formatShortTimestamp(props.endedAt, props.timestampFormat) || "—";
+  return (
+    <span
+      className={cn(
+        "flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] leading-4 text-muted-foreground",
+        props.className,
+      )}
+    >
+      <span className="whitespace-nowrap">
+        <span className="mr-1 uppercase tracking-wide text-muted-foreground/70">Start</span>
+        <time
+          dateTime={props.startedAt}
+          title={formatChatTimestampTooltip(props.startedAt, props.timestampFormat)}
+          className="tabular-nums text-foreground/80"
+        >
+          {start}
+        </time>
+      </span>
+      <span className="whitespace-nowrap">
+        <span className="mr-1 uppercase tracking-wide text-muted-foreground/70">End</span>
+        {props.endedAt === null ? (
+          <span className="text-foreground/80">{end}</span>
+        ) : (
+          <time
+            dateTime={props.endedAt}
+            title={formatChatTimestampTooltip(props.endedAt, props.timestampFormat)}
+            className="tabular-nums text-foreground/80"
+          >
+            {end}
+          </time>
+        )}
+      </span>
+      <span className="whitespace-nowrap">
+        <span className="mr-1 uppercase tracking-wide text-muted-foreground/70">Took</span>
+        <span className="text-foreground/80">
+          <Elapsed startedAt={props.startedAt} endedAt={props.endedAt} />
+        </span>
+      </span>
     </span>
   );
 }
@@ -135,20 +174,9 @@ function groupStatus(group: WorkflowGroup<EnvironmentThreadShell>): WorkflowThre
   );
 }
 
-function groupEndedAt(group: WorkflowGroup<EnvironmentThreadShell>): string | null {
-  if (group.isActive) return null;
-  let latest = group.createdAt;
-  for (const row of group.rows) {
-    const status = resolveWorkflowThreadStatus(row.thread);
-    const endedAt = threadEndedAt(row.thread, status) ?? row.thread.updatedAt;
-    if (Date.parse(endedAt) > Date.parse(latest)) latest = endedAt;
-  }
-  return latest;
-}
-
 function ThreadRow(props: {
   readonly row: WorkflowGroup<EnvironmentThreadShell>["rows"][number];
-  readonly stepNumber: number;
+  readonly timestampFormat: TimestampFormat;
   readonly activeThreadKey: string | null;
   readonly onOpenThread: (thread: EnvironmentThreadShell) => void;
 }) {
@@ -159,6 +187,7 @@ function ThreadRow(props: {
   const provider = row.thread.session?.providerInstanceId ?? row.thread.modelSelection.instanceId;
   const model = row.thread.modelSelection.model;
   const active = workflowThreadKey(row.thread) === props.activeThreadKey;
+  const timeRange = resolveWorkflowThreadTimeRange(row.thread);
   const visualDepth = Math.min(
     row.thread.workflowRole === "implementation-code-reviewer" ||
       row.thread.workflowRole === "implementation-validator" ||
@@ -194,23 +223,28 @@ function ThreadRow(props: {
           <span className={cn("shrink-0 text-[11px]", visual.textClass)}>{visual.label}</span>
         </span>
         <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
-          <span className="shrink-0">Step {props.stepNumber}</span>
-          <span aria-hidden>·</span>
           <span className="shrink-0">{role}</span>
           <span aria-hidden>·</span>
           <span className="min-w-0 truncate">
             {provider} · {model}
           </span>
-          <span aria-hidden>·</span>
-          <Elapsed
-            startedAt={threadStartedAt(row.thread)}
-            endedAt={threadEndedAt(row.thread, status)}
-          />
           {status === "archived" ? <Archive className="size-3 shrink-0" aria-hidden /> : null}
         </span>
+        <TimelineTimeRange
+          {...timeRange}
+          timestampFormat={props.timestampFormat}
+          className="mt-1"
+        />
       </span>
     </button>
   );
+}
+
+function workflowStepTitle(step: WorkflowTimelineStep<EnvironmentThreadShell>): string {
+  const first = step.entries[0];
+  if (!first) return "Work";
+  if (first.kind === "workflow") return groupTitle(first.group);
+  return workflowRoleShortLabel(first.row.thread.workflowRole) ?? "Work";
 }
 
 function devReviewRunPresentation(run: DevReviewWorkflowRun | null): {
@@ -240,12 +274,12 @@ function WorkflowGroupCard(props: {
   readonly focusedWorkflowId: string | null;
   readonly focusedGroupRef: RefObject<HTMLElement | null>;
   readonly activeThreadKey: string | null;
+  readonly timestampFormat: TimestampFormat;
   readonly devReviewWorkflowRuns: readonly DevReviewWorkflowRun[];
   readonly onOpenThread: (thread: EnvironmentThreadShell) => void;
   readonly onOpenDevReview: () => void;
   readonly onCopyWorkflowLink: (workflowId: string) => void;
   readonly nested?: boolean;
-  readonly stepNumber?: number;
 }) {
   const { group } = props;
   const expanded = props.expandedById[group.id] ?? group.isActive;
@@ -257,7 +291,8 @@ function WorkflowGroupCard(props: {
   const runPresentation = devReviewRunPresentation(linkedDevReviewRun);
   const status = linkedDevReviewRun === null ? groupStatus(group) : runPresentation.status;
   const visual = STATUS_VISUALS[status];
-  const timeline = buildWorkflowTimeline(group, props.groups);
+  const steps = buildWorkflowSteps(group, props.groups);
+  const timeRange = resolveWorkflowGroupTimeRange(group, props.groups);
 
   return (
     <div className={cn("relative", props.nested && "ml-3 my-1.5")}>
@@ -301,12 +336,6 @@ function WorkflowGroupCard(props: {
                 </span>
               </span>
               <span className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[11px] text-muted-foreground">
-                {props.stepNumber !== undefined ? (
-                  <>
-                    <span>Step {props.stepNumber}</span>
-                    <span aria-hidden>·</span>
-                  </>
-                ) : null}
                 {group.depth > 0 ? (
                   <>
                     <span>Sub-workflow</span>
@@ -324,9 +353,12 @@ function WorkflowGroupCard(props: {
                 <span>{group.activeCount} active</span>
                 <span aria-hidden>·</span>
                 <span>{group.settledCount} settled</span>
-                <span aria-hidden>·</span>
-                <Elapsed startedAt={group.createdAt} endedAt={groupEndedAt(group)} />
               </span>
+              <TimelineTimeRange
+                {...timeRange}
+                timestampFormat={props.timestampFormat}
+                className="mt-1"
+              />
             </span>
           </button>
           {group.preset === "dev-review" ? (
@@ -354,26 +386,52 @@ function WorkflowGroupCard(props: {
           ) : null}
         </div>
         {expanded ? (
-          <div className="border-t border-border/70 p-1">
-            {timeline.map((entry, index) =>
-              entry.kind === "thread" ? (
-                <ThreadRow
-                  key={entry.id}
-                  row={entry.row}
-                  stepNumber={index + 1}
-                  activeThreadKey={props.activeThreadKey}
-                  onOpenThread={props.onOpenThread}
-                />
-              ) : (
-                <WorkflowGroupCard
-                  key={entry.id}
-                  {...props}
-                  group={entry.group}
-                  nested
-                  stepNumber={index + 1}
-                />
-              ),
-            )}
+          <div className="divide-y divide-border/70 border-t border-border/70">
+            {steps.map((step, index) => {
+              const stepTimeRange = resolveWorkflowStepTimeRange(step, props.groups);
+              const threadCount = step.entries.filter((entry) => entry.kind === "thread").length;
+              return (
+                <section key={step.id} className="px-1 py-2">
+                  <header className="px-2 pb-1.5">
+                    <div className="flex min-w-0 items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                          Step {index + 1}
+                        </div>
+                        <h4 className="truncate text-sm font-semibold text-foreground">
+                          {workflowStepTitle(step)}
+                        </h4>
+                      </div>
+                      {threadCount > 1 ? (
+                        <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
+                          {threadCount} threads
+                        </span>
+                      ) : null}
+                    </div>
+                    <TimelineTimeRange
+                      {...stepTimeRange}
+                      timestampFormat={props.timestampFormat}
+                      className="mt-1"
+                    />
+                  </header>
+                  <div className="space-y-0.5">
+                    {step.entries.map((entry) =>
+                      entry.kind === "thread" ? (
+                        <ThreadRow
+                          key={entry.id}
+                          row={entry.row}
+                          timestampFormat={props.timestampFormat}
+                          activeThreadKey={props.activeThreadKey}
+                          onOpenThread={props.onOpenThread}
+                        />
+                      ) : (
+                        <WorkflowGroupCard key={entry.id} {...props} group={entry.group} nested />
+                      ),
+                    )}
+                  </div>
+                </section>
+              );
+            })}
           </div>
         ) : null}
       </section>
@@ -385,6 +443,7 @@ export function WorkflowsPanel(props: {
   readonly workflow: WorkflowRoot<EnvironmentThreadShell> | null;
   readonly activeThreadKey: string | null;
   readonly focusedWorkflowId: string | null;
+  readonly timestampFormat: TimestampFormat;
   readonly devReviewWorkflowRuns: readonly DevReviewWorkflowRun[];
   readonly onOpenThread: (thread: EnvironmentThreadShell) => void;
   readonly onOpenDevReview: () => void;
@@ -431,19 +490,30 @@ export function WorkflowsPanel(props: {
     );
   }
 
+  const rootTimeRange = resolveWorkflowThreadTimeRange(props.workflow.root);
+
   return (
     <ScrollArea className="min-h-0 flex-1">
       <div className="p-3">
         <button
           type="button"
           onClick={() => props.onOpenThread(props.workflow!.root)}
-          className="cursor-pointer mb-3 flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-accent/60"
+          className="cursor-pointer mb-3 flex w-full min-w-0 items-start gap-2 rounded-md px-2 py-2 text-left hover:bg-accent/60"
         >
-          <GitFork className="size-4 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 flex-1 truncate text-sm font-medium">
-            {props.workflow.root.title}
+          <GitFork className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 flex-1">
+            <span className="flex min-w-0 items-center gap-2">
+              <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                {props.workflow.root.title}
+              </span>
+              <span className="shrink-0 text-[11px] text-muted-foreground">Main thread</span>
+            </span>
+            <TimelineTimeRange
+              {...rootTimeRange}
+              timestampFormat={props.timestampFormat}
+              className="mt-1"
+            />
           </span>
-          <span className="text-[11px] text-muted-foreground">Main thread</span>
         </button>
 
         <div className="space-y-2">
@@ -459,6 +529,7 @@ export function WorkflowsPanel(props: {
                 focusedWorkflowId={props.focusedWorkflowId}
                 focusedGroupRef={focusedGroupRef}
                 activeThreadKey={props.activeThreadKey}
+                timestampFormat={props.timestampFormat}
                 devReviewWorkflowRuns={props.devReviewWorkflowRuns}
                 onOpenThread={props.onOpenThread}
                 onOpenDevReview={props.onOpenDevReview}

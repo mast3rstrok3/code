@@ -53,7 +53,11 @@ import { CHAT_LIST_ANCHOR_OFFSET } from "@t3tools/shared/chatList";
 import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
 import { truncate } from "@t3tools/shared/String";
 import { nextTerminalId, resolveTerminalSessionLabel } from "@t3tools/shared/terminalLabels";
-import { resolveImplementationBranchIdentity } from "@t3tools/shared/orchestrationImplementation";
+import {
+  resolveImplementationBranchIdentity,
+  resolveWorkflowWorkspaceIdentity,
+  workflowPresetStartsInDedicatedWorkspace,
+} from "@t3tools/shared/orchestrationImplementation";
 import { resolveImplementationValidationCommands } from "@t3tools/shared/t3ProjectFile";
 import { isProductWorkflowRoot, workflowPromptIdForPreset } from "@t3tools/shared/workflowPresets";
 import { Debouncer } from "@tanstack/react-pacer";
@@ -3013,6 +3017,14 @@ function ChatViewContent(props: ChatViewProps) {
     if (!activeWorkspaceRoot || !activePlanningWorkflow?.spec) {
       return null;
     }
+    const workflowWorkspace = resolveWorkflowWorkspaceIdentity(activeThread?.activities ?? []);
+    if (workflowWorkspace !== null) {
+      return {
+        baseBranch: workflowWorkspace.baseBranch,
+        orchestratorBranch: workflowWorkspace.branch,
+        orchestratorWorktreePath: workflowWorkspace.worktreePath,
+      };
+    }
     return resolveImplementationBranchIdentity({
       workspaceRoot: activeWorkspaceRoot,
       specId: activePlanningWorkflow.spec.id,
@@ -3020,7 +3032,7 @@ function ChatViewContent(props: ChatViewProps) {
       baseBranch: activeThread?.branch ?? null,
       implementationRuns: activeImplementationRuns,
     });
-  }, [activeImplementationRuns, activePlanningWorkflow?.spec, activeWorkspaceRoot]);
+  }, [activeImplementationRuns, activePlanningWorkflow?.spec, activeThread, activeWorkspaceRoot]);
   const openWorkflowThread = useCallback(
     (targetThreadId: ThreadId) => {
       const targetRef = scopeThreadRef(environmentId, targetThreadId);
@@ -5788,15 +5800,20 @@ function ChatViewContent(props: ChatViewProps) {
     }
     const threadIdForSend = activeThread.id;
     const isFirstMessage = !isServerThread || activeThread.messages.length === 0;
+    const workflowStartsWorkspace = workflowPresetStartsInDedicatedWorkspace(workflowPreset);
     const baseBranchForWorktree =
-      isFirstMessage && sendEnvMode === "worktree" && !activeThread.worktreePath
+      isFirstMessage &&
+      (sendEnvMode === "worktree" || workflowStartsWorkspace) &&
+      !activeThread.worktreePath
         ? activeThreadBranch
         : null;
 
     // In worktree mode, require an explicit base branch so we don't silently
     // fall back to local execution when branch selection is missing.
     const shouldCreateWorktree =
-      isFirstMessage && sendEnvMode === "worktree" && !activeThread.worktreePath;
+      isFirstMessage &&
+      (sendEnvMode === "worktree" || workflowStartsWorkspace) &&
+      !activeThread.worktreePath;
     if (shouldCreateWorktree && !activeThreadBranch) {
       setThreadError(threadIdForSend, "Select a base branch before sending in New worktree mode.");
       return;
@@ -6025,7 +6042,7 @@ function ChatViewContent(props: ChatViewProps) {
                       branch: buildTemporaryWorktreeBranchName(randomHex),
                       ...(startFromOrigin ? { startFromOrigin: true } : {}),
                     },
-                    runSetupScript: true,
+                    ...(workflowStartsWorkspace ? {} : { runSetupScript: true }),
                   }
                 : {}),
             }
@@ -7016,6 +7033,7 @@ function ChatViewContent(props: ChatViewProps) {
         workflow={activeWorkflowNavigation}
         activeThreadKey={activeThreadKey}
         focusedWorkflowId={focusedWorkflowId}
+        timestampFormat={timestampFormat}
         devReviewWorkflowRuns={displayedWorkflowArtifacts?.devReviewWorkflowRuns ?? []}
         onOpenThread={(thread) => openWorkflowThread(thread.id)}
         onOpenDevReview={() => {

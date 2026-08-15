@@ -7789,6 +7789,18 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               cwd: "/tmp/bootstrap-worktree",
             }),
         );
+        const autoCreateAppDevStack = vi.fn(
+          (_: Parameters<AppDevStackManager.AppDevStackManager["Service"]["autoCreate"]>[0]) =>
+            Effect.succeed({
+              stack: null,
+              created: false,
+              alreadyRunning: true,
+              reserved: true,
+              message: "Workflow preview is ready.",
+              frontendUrl: "https://fast-feature.example.test",
+              frontendServiceName: "frontend",
+            }),
+        );
 
         yield* buildAppUnderTest({
           layers: {
@@ -7811,6 +7823,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             },
             projectSetupScriptRunner: {
               runForThread,
+            },
+            appDevStackManager: {
+              autoCreate: autoCreateAppDevStack,
             },
           },
         });
@@ -7858,12 +7873,14 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           ),
         );
 
-        assert.equal(response.sequence, 5);
+        assert.equal(response.sequence, 7);
         assert.deepEqual(
           dispatchedCommands.map((command) => command.type),
           [
             "thread.create",
             "thread.meta.update",
+            "thread.activity.append",
+            "thread.activity.append",
             "thread.activity.append",
             "thread.activity.append",
             "thread.turn.start",
@@ -7906,15 +7923,31 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         });
         assert.deepEqual(refreshStatus.mock.calls[0]?.[0], "/tmp/bootstrap-worktree");
 
-        const setupActivities = dispatchedCommands.filter(
+        const activities = dispatchedCommands.filter(
           (command): command is Extract<OrchestrationCommand, { type: "thread.activity.append" }> =>
             command.type === "thread.activity.append",
         );
         assert.deepEqual(
-          setupActivities.map((command) => command.activity.kind),
-          ["setup-script.requested", "setup-script.started"],
+          activities.map((command) => command.activity.kind),
+          [
+            "setup-script.requested",
+            "setup-script.started",
+            "workflow-workspace-prepared",
+            "workflow-app-dev-stack-started",
+          ],
         );
-        const finalCommand = dispatchedCommands[4];
+        assert.deepEqual(autoCreateAppDevStack.mock.calls[0]?.[0], {
+          worktreePath: "/tmp/bootstrap-worktree",
+          displayName: "fast-feature workflow",
+          gitBranch: "t3code/bootstrap-refName",
+          workflowId: "workflow-thread-bootstrap",
+        });
+        assert.deepEqual(activities[2]?.activity.payload, {
+          baseBranch: "main",
+          branch: "t3code/bootstrap-refName",
+          worktreePath: "/tmp/bootstrap-worktree",
+        });
+        const finalCommand = dispatchedCommands[6];
         assertTrue(finalCommand?.type === "thread.turn.start");
         if (finalCommand?.type === "thread.turn.start") {
           assert.equal(finalCommand.bootstrap, undefined);

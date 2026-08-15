@@ -50,6 +50,7 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
     interactionMode: "product-workflow",
     workflowPromptId: "product.fast-feature.codex",
     helpSteps: [
+      { label: "Create shared worktree and start AppDevStack" },
       {
         label: "Product Grill",
         skillId: "product.fast-feature.codex",
@@ -57,12 +58,12 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
       },
       { label: "CLI Plan mode", threadBoundary: "same thread" },
       {
-        label: "Worktree and CLI Build",
+        label: "CLI Build in the shared worktree",
         skillId: "implementation.tdd.codex",
         threadBoundary: "new child thread",
       },
       {
-        label: "Start AppDevStack, then run nested Dev Review",
+        label: "Run nested Dev Review against AppDevStack",
         skillId: "implementation.browser-dev-review.codex",
         threadBoundary: "new review thread",
         note: "Dev Review owns its review, plan, and fresh TDD repair cycles",
@@ -84,6 +85,7 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
     interactionMode: "product-workflow",
     workflowPromptId: "product.full-feature.codex",
     helpSteps: [
+      { label: "Create shared worktree and start AppDevStack", note: "automatic" },
       {
         label: "Product Grill",
         skillId: "product.full-feature.codex",
@@ -112,7 +114,7 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         note: "automatic",
       },
       {
-        label: "AppDevStack and nested Dev Review workflow",
+        label: "Nested Dev Review against the shared AppDevStack",
         skillId: "implementation.browser-dev-review.codex",
         note: "automatic; Dev Review has its own cycle budget",
       },
@@ -150,7 +152,7 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
     interactionMode: "implementation-workflow",
     helpSteps: [
       {
-        label: "Load the selected Spec and initialize orchestration",
+        label: "Load the selected Spec and reuse its Planning workspace",
         skillId: "implementation.orchestrator-planning.codex",
       },
       {
@@ -162,7 +164,7 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         skillId: "implementation.merge-gate.codex",
       },
       {
-        label: "Run AppDevStack and the nested Dev Review workflow",
+        label: "Run nested Dev Review against the shared AppDevStack",
         skillId: "implementation.browser-dev-review.codex",
         note: "Dev Review has its own cycle budget",
       },
@@ -181,6 +183,7 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
     route: "planning",
     interactionMode: "planning-workflow",
     helpSteps: [
+      { label: "Create shared worktree and start AppDevStack" },
       {
         label: "Engineering Grill",
         skillId: "planning.grill-stage.codex",
