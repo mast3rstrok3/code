@@ -4,6 +4,7 @@ import {
   EventId,
   type ModelSelection,
   type OrchestrationEvent,
+  type OrchestrationThread,
   ProviderDriverKind,
   type ProviderInteractionMode,
   type ProjectId,
@@ -13,7 +14,7 @@ import {
   type RuntimeMode,
   type TurnId,
 } from "@t3tools/contracts";
-import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
+import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
@@ -46,7 +47,9 @@ import {
 } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
+import { AppDevStackManager } from "../../appDevStack/AppDevStackManager.ts";
 import { isDevReviewMcpWorkflowPromptId } from "../../provider/WorkflowPromptRegistry.ts";
+import { buildWorktreeRuntimeContext } from "../worktreeRuntimeContext.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 
@@ -296,9 +299,7 @@ function buildGeneratedWorktreeBranchName(raw: string): string {
     .replace(/^refs\/heads\//, "")
     .replace(/['"`]/g, "");
 
-  const withoutPrefix = normalized.startsWith(`${WORKTREE_BRANCH_PREFIX}/`)
-    ? normalized.slice(`${WORKTREE_BRANCH_PREFIX}/`.length)
-    : normalized;
+  const withoutPrefix = normalized.replace(/^(?:t3code|worktree)\//, "");
 
   const branchFragment = withoutPrefix
     .replace(/[^a-z0-9/_-]+/g, "-")
@@ -309,7 +310,7 @@ function buildGeneratedWorktreeBranchName(raw: string): string {
     .replace(/[./_-]+$/g, "");
 
   const safeFragment = branchFragment.length > 0 ? branchFragment : "update";
-  return `${WORKTREE_BRANCH_PREFIX}/${safeFragment}`;
+  return safeFragment;
 }
 
 const make = Effect.gen(function* () {
@@ -322,6 +323,7 @@ const make = Effect.gen(function* () {
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
   const textGeneration = yield* TextGeneration;
   const serverSettingsService = yield* ServerSettingsService;
+  const appDevStackManager = yield* AppDevStackManager;
   const serverCommandId = (tag: string) =>
     crypto.randomUUIDv4.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
   const serverEventId = () => crypto.randomUUIDv4.pipe(Effect.map(EventId.make));
@@ -340,6 +342,27 @@ const make = Effect.gen(function* () {
 
   const threadModelSelections = new Map<string, ModelSelection>();
   const threadWorkflowPromptIds = new Map<string, string | undefined>();
+
+  const addWorktreeRuntimeContext = Effect.fn("ProviderCommandReactor.addWorktreeRuntimeContext")(
+    function* (input: { readonly thread: OrchestrationThread; readonly messageText: string }) {
+      const worktreePath = input.thread.worktreePath?.trim();
+      if (!worktreePath) return input.messageText;
+
+      const stackLookup = yield* appDevStackManager.getByWorktree({ worktreePath }).pipe(
+        Effect.map(Option.some),
+        Effect.orElseSucceed(() => Option.none()),
+        Effect.timeoutOption("1500 millis"),
+        Effect.map(Option.flatten),
+      );
+      const context = buildWorktreeRuntimeContext({
+        worktreePath,
+        branch: input.thread.branch,
+        workflowPreset: input.thread.workflowPreset ?? null,
+        stackLookup: Option.getOrNull(stackLookup),
+      });
+      return `${context}\n\n${input.messageText}`;
+    },
+  );
 
   const appendProviderFailureActivity = (input: {
     readonly threadId: ThreadId;
@@ -1181,9 +1204,13 @@ const make = Effect.gen(function* () {
         ),
       );
 
+    const providerMessageText = yield* addWorktreeRuntimeContext({
+      thread,
+      messageText: message.text,
+    });
     const sendTurnRequest = yield* buildSendTurnRequestForThread({
       threadId: event.payload.threadId,
-      messageText: message.text,
+      messageText: providerMessageText,
       ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
       ...(event.payload.modelSelection !== undefined
         ? { modelSelection: event.payload.modelSelection }

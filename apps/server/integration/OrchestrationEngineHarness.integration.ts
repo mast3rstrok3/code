@@ -86,6 +86,7 @@ import { VcsStatusBroadcaster } from "../src/vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../src/git/GitWorkflowService.ts";
 import * as VcsProcess from "../src/vcs/VcsProcess.ts";
 import * as AgentAwarenessRelay from "../src/relay/AgentAwarenessRelay.ts";
+import { AppDevStackManager } from "../src/appDevStack/AppDevStackManager.ts";
 
 const decodeCodexSettings = Schema.decodeEffect(CodexSettings);
 
@@ -335,11 +336,16 @@ export const makeOrchestrationIntegrationHarness = (
       generateBranchName: () => Effect.succeed({ branch: "update" }),
       generateThreadTitle: () => Effect.succeed({ title: "New thread" }),
     } as unknown as TextGenerationShape);
+    const appDevStackLayer = Layer.mock(AppDevStackManager)({
+      getByWorktree: () =>
+        Effect.succeed({ stack: null, frontendUrl: null, frontendServiceName: null }),
+    });
     const providerCommandReactorLayer = ProviderCommandReactorLive.pipe(
       Layer.provideMerge(runtimeServicesLayer),
       Layer.provideMerge(gitWorkflowLayer),
       Layer.provideMerge(textGenerationLayer),
       Layer.provideMerge(serverSettingsLayer),
+      Layer.provideMerge(appDevStackLayer),
     );
     const checkpointReactorLayer = CheckpointReactorLive.pipe(
       Layer.provideMerge(runtimeServicesLayer),

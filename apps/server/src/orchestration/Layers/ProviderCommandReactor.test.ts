@@ -4,6 +4,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import {
+  type AppDevStackByWorktreeResult,
   ModelSelection,
   ProviderRuntimeEvent,
   ProviderSession,
@@ -21,6 +22,7 @@ import {
   ProjectId,
   ThreadId,
   TurnId,
+  type WorkflowPreset,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
@@ -65,6 +67,7 @@ import * as Clock from "effect/Clock";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
+import { AppDevStackManager } from "../../appDevStack/AppDevStackManager.ts";
 
 const asProjectId = (value: string): ProjectId => ProjectId.make(value);
 const asApprovalRequestId = (value: string): ApprovalRequestId => ApprovalRequestId.make(value);
@@ -152,6 +155,8 @@ describe("ProviderCommandReactor", () => {
     readonly requiresNewThreadForModelChange?: boolean;
     readonly titleRegenerationCompletionDispatchFailures?: number;
     readonly titleRegenerationBeforeStart?: "one" | "two";
+    readonly threadWorkflowPreset?: WorkflowPreset;
+    readonly appDevStackByWorktreeResult?: AppDevStackByWorktreeResult;
     readonly startSessionEffect?: (
       session: ProviderSession,
     ) => Effect.Effect<ProviderSession, ProviderAdapterRequestError>;
@@ -300,6 +305,15 @@ describe("ProviderCommandReactor", () => {
         }),
       ),
     );
+    const getByWorktree = vi.fn((_input: { readonly worktreePath: string }) =>
+      Effect.succeed(
+        input?.appDevStackByWorktreeResult ?? {
+          stack: null,
+          frontendUrl: null,
+          frontendServiceName: null,
+        },
+      ),
+    );
     const providerSnapshots = [
       {
         instanceId: modelSelection.instanceId,
@@ -415,6 +429,11 @@ describe("ProviderCommandReactor", () => {
         }),
       ),
       Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        Layer.mock(AppDevStackManager)({
+          getByWorktree,
+        } satisfies Partial<AppDevStackManager["Service"]>),
+      ),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
       Layer.provideMerge(NodeServices.layer),
     );
@@ -447,6 +466,7 @@ describe("ProviderCommandReactor", () => {
         modelSelection: modelSelection,
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
+        workflowPreset: input?.threadWorkflowPreset ?? null,
         branch: null,
         worktreePath: null,
         createdAt: now,
@@ -506,6 +526,7 @@ describe("ProviderCommandReactor", () => {
       refreshStatus,
       generateBranchName,
       generateThreadTitle,
+      getByWorktree,
       runtimeSessions,
       stateDir,
       drain,
@@ -1547,6 +1568,55 @@ describe("ProviderCommandReactor", () => {
       message: "Add a safer reconnect backoff.",
     });
     expect(harness.refreshStatus.mock.calls[0]?.[0]).toBe("/tmp/provider-project-worktree");
+    const renameInput = harness.renameBranch.mock.calls[0]?.[0] as {
+      readonly oldBranch?: string;
+      readonly newBranch?: string;
+    };
+    expect(renameInput.oldBranch).toBe("t3code/1234abcd");
+    expect(renameInput.newBranch).toMatch(/^feature\//);
+    expect(renameInput.newBranch).not.toMatch(/^t3code\//);
+  });
+
+  it("injects authoritative worktree and App Dev Stack state into provider turns", async () => {
+    const harness = await createHarness({ threadWorkflowPreset: "fast-feature" });
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.make("cmd-thread-worktree-context"),
+        threadId: ThreadId.make("thread-1"),
+        branch: "verify-email-capabilities",
+        worktreePath: "/tmp/worktrees/rudi/worktree-1234abcd",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-worktree-context"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-worktree-context"),
+          role: "user",
+          text: "Check the email capabilities.",
+          attachments: [],
+        },
+        interactionMode: "product-workflow",
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.getByWorktree.mock.calls[0]?.[0]).toEqual({
+      worktreePath: "/tmp/worktrees/rudi/worktree-1234abcd",
+    });
+    const request = harness.sendTurn.mock.calls[0]?.[0] as { readonly input?: string };
+    expect(request.input).toContain("Worktree path: /tmp/worktrees/rudi/worktree-1234abcd");
+    expect(request.input).toContain("Git branch: verify-email-capabilities");
+    expect(request.input).toContain("App Dev Stack status: pending Build");
+    expect(request.input).toContain("do not substitute another runtime");
+    expect(request.input).toMatch(/Check the email capabilities\.$/);
   });
 
   it("forwards codex model options through session start and turn send", async () => {

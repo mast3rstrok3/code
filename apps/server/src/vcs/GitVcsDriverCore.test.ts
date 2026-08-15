@@ -15,6 +15,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { GitCommandError, type ReviewDiffFileContentsInput } from "@t3tools/contracts";
+import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import { ServerConfig } from "../config.ts";
 import { makeGitVcsDriverCore, splitNullSeparatedGitStdoutPaths } from "./GitVcsDriverCore.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
@@ -1361,6 +1362,26 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         yield* driver.removeWorktree({ cwd, path: worktreePath });
         const fileSystem = yield* FileSystem.FileSystem;
         assert.equal(yield* fileSystem.exists(worktreePath), false);
+      }),
+    );
+
+    it.effect("uses a neutral default directory for temporary worktrees", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const pathService = yield* Path.Path;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const temporaryBranch = buildTemporaryWorktreeBranchName(() => "deadbeef");
+
+        const created = yield* driver.createWorktree({
+          cwd,
+          refName: initialBranch,
+          newRefName: temporaryBranch,
+        });
+
+        assert.equal(temporaryBranch, "worktree/deadbeef");
+        assert.equal(pathService.basename(created.worktree.path), "worktree-deadbeef");
+        yield* driver.removeWorktree({ cwd, path: created.worktree.path });
       }),
     );
   });
