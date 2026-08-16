@@ -41,6 +41,7 @@ const WORKFLOW_SUBAGENT_SPAWN_DEFINITIONS: ReadonlyArray<WorkflowSubagentSpawnDe
       [WORKFLOW_PROMPT_IDS.productFixCodex, "Product Fix", "product-fix"],
       [WORKFLOW_PROMPT_IDS.productFastFeatureCodex, "Product Fast Feature", "product-fast-feature"],
       [WORKFLOW_PROMPT_IDS.productFullFeatureCodex, "Product Full Feature", "product-full-feature"],
+      [WORKFLOW_PROMPT_IDS.productPlanningCodex, "Product Planning", "product-planning"],
     ] as const
   ).map(
     ([workflowPromptId, title, threadIdTag]): WorkflowSubagentSpawnDefinition => ({

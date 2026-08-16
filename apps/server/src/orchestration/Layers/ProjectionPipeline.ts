@@ -1399,7 +1399,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       "applyThreadSpecsProjection",
     )(function* (event, _attachmentSideEffects) {
       switch (event.type) {
-        case "thread.planning-spec-created":
+        case "thread.planning-spec-created": {
           yield* projectionThreadSpecRepository.upsert({
             specId: event.payload.spec.id,
             threadId: event.payload.threadId,
@@ -1416,6 +1416,28 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             updatedAt: event.payload.spec.updatedAt,
           });
           return;
+        }
+
+        case "thread.planning-tickets-created": {
+          const spec = event.payload.spec;
+          if (spec === undefined) return;
+          yield* projectionThreadSpecRepository.upsert({
+            specId: spec.id,
+            threadId: event.payload.threadId,
+            title: spec.title,
+            summaryMarkdown: spec.summaryMarkdown,
+            tenantId: spec.tenantId,
+            teamId: spec.teamId,
+            sourceThreadId: spec.sourceThreadId,
+            sourceMessageIds: spec.sourceMessageIds,
+            createdBy: spec.createdBy,
+            workflowId: spec.workflowId,
+            ticketCount: spec.ticketCount,
+            createdAt: spec.createdAt,
+            updatedAt: spec.updatedAt,
+          });
+          return;
+        }
 
         case "thread.planning-spec-bundle-loaded":
           // Loaded bundles are relationship markers. Canonical Specs remain

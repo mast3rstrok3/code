@@ -103,6 +103,9 @@ function validatePlanningTicketGraph(
     if (ticket.specId !== specId) {
       return `Planning Ticket '${ticket.id}' belongs to Spec '${ticket.specId}', expected '${specId}'.`;
     }
+    if (ticket.appReviewEligible === true && !ticket.appReviewPlanMarkdown) {
+      return `Planning Ticket '${ticket.id}' is App Review eligible but has no review plan.`;
+    }
     for (const dependency of ticket.dependencies) {
       if (dependency.specId !== specId) {
         return `Planning Ticket '${ticket.id}' has a dependency in a different Spec.`;
@@ -199,6 +202,8 @@ function buildPlanningTicketsFromArtifact(input: {
       bodyMarkdown: ticket.bodyMarkdown,
       plannedFileChanges: [...ticket.plannedFileChanges],
       dependencies,
+      appReviewEligible: ticket.appReviewEligible ?? false,
+      appReviewPlanMarkdown: ticket.appReviewPlanMarkdown ?? null,
       status: "open",
       createdAt: input.command.createdAt,
       updatedAt: input.command.createdAt,
@@ -274,6 +279,8 @@ function applyPlanningReviewerEdits(input: {
         bodyMarkdown: edit.bodyMarkdown,
         plannedFileChanges: [...edit.plannedFileChanges],
         dependencies: [],
+        appReviewEligible: edit.appReviewEligible,
+        appReviewPlanMarkdown: edit.appReviewPlanMarkdown,
         status: "open",
         createdAt: input.updatedAt,
         updatedAt: input.updatedAt,
@@ -320,6 +327,12 @@ function applyPlanningReviewerEdits(input: {
       ...(edit.plannedFileChanges === undefined
         ? {}
         : { plannedFileChanges: [...edit.plannedFileChanges] }),
+      ...(edit.appReviewEligible === undefined
+        ? {}
+        : { appReviewEligible: edit.appReviewEligible }),
+      ...(edit.appReviewPlanMarkdown === undefined
+        ? {}
+        : { appReviewPlanMarkdown: edit.appReviewPlanMarkdown }),
       updatedAt: input.updatedAt,
     });
   }
@@ -381,6 +394,21 @@ function buildProductAutomaticEngineeringGrillStagePrompt(
   ].join("\n");
 }
 
+function buildProductContextStagePrompt(
+  command: Extract<OrchestrationCommand, { type: "thread.planning-workflow.launch" }>,
+): string {
+  return [
+    "Build durable product and domain context from this locked Product Grill intent.",
+    "",
+    "Do not run an Engineering Grill, make engineering decisions, or ask the user questions. Maintain CONTEXT.md, CONTEXT-MAP.md when warranted, and product/domain ADRs, then hand off to Spec authoring.",
+    "",
+    `Intent title: ${command.intentTitle}`,
+    "",
+    "Intent summary:",
+    command.intentSummaryMarkdown,
+  ].join("\n");
+}
+
 function buildPlanningTicketsStagePrompt(spec: OrchestrationPlanningSpec): string {
   return [
     "Decompose this Spec into implementation-ready planning tickets.",
@@ -405,6 +433,9 @@ function buildPlanningTicketsStagePrompt(spec: OrchestrationPlanningSpec): strin
             bodyMarkdown: "Outcome, touched surfaces, acceptance criteria, and expected tests.",
             plannedFileChanges: [{ path: "apps/example/src/feature.ts", action: "update" }],
             dependencyKeys: [],
+            appReviewEligible: true,
+            appReviewPlanMarkdown:
+              "Start the ticket worktree's App Dev Stack, open the affected UI, exercise the primary flow, and capture the expected visible result.",
           },
         ],
       },
@@ -1644,7 +1675,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       // thread still reads as a product root once its interaction mode flips.
       const crypto = yield* Crypto.Crypto;
       const messageUuid = yield* crypto.randomUUIDv4;
-      const messageId = MessageId.make(`message-product-engineering-grill-${messageUuid}`);
+      const productContextOnly = productRootThread.workflowPreset === "product-planning";
+      const messageId = MessageId.make(
+        `message-product-${productContextOnly ? "context" : "engineering-grill"}-${messageUuid}`,
+      );
       const modeSetEvent: PlannedOrchestrationEvent = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -1709,7 +1743,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: productRootThread.id,
           messageId,
           role: "user",
-          text: buildProductAutomaticEngineeringGrillStagePrompt(command),
+          text: productContextOnly
+            ? buildProductContextStagePrompt(command)
+            : buildProductAutomaticEngineeringGrillStagePrompt(command),
           turnId: null,
           streaming: false,
           createdAt: command.createdAt,
@@ -1731,7 +1767,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           modelSelection: productRootThread.modelSelection,
           runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
           interactionMode: "planning-workflow",
-          workflowPromptId: WORKFLOW_PROMPT_IDS.planningAutomaticEngineeringGrillCodex,
+          workflowPromptId: productContextOnly
+            ? WORKFLOW_PROMPT_IDS.planningProductContextCodex
+            : WORKFLOW_PROMPT_IDS.planningAutomaticEngineeringGrillCodex,
           createdAt: command.createdAt,
         },
       };
@@ -1988,6 +2026,64 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const workflow = thread.planningWorkflow;
       const spec = workflow?.spec ?? null;
       const wayfinderMap = workflow?.wayfinderMap ?? null;
+      if (
+        thread.interactionMode === "implementation-workflow" &&
+        thread.workflowRole === null &&
+        workflow == null
+      ) {
+        const promptSpec = buildPlanningSpecFromArtifact({
+          specId: command.specId,
+          threadId: thread.id,
+          command: {
+            type: "thread.planning-spec.apply",
+            commandId: command.commandId,
+            threadId: command.threadId,
+            sourceMessageId: command.sourceMessageId,
+            title: command.tickets[0]?.title ?? "Prompt implementation",
+            summaryMarkdown:
+              "Implementation tickets derived directly from the originating user prompt.",
+            createdAt: command.createdAt,
+          },
+        });
+        const crypto = yield* Crypto.Crypto;
+        const generatedTicketIds = yield* Effect.forEach(command.tickets, () =>
+          crypto.randomUUIDv4.pipe(Effect.map((uuid) => `planning-ticket-${uuid}`)),
+        );
+        const tickets = buildPlanningTicketsFromArtifact({
+          specId: promptSpec.id,
+          command,
+          generatedTicketIds,
+        });
+        if (typeof tickets === "string") {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: tickets,
+          });
+        }
+        const validationError = validatePlanningTicketGraph(promptSpec.id, tickets);
+        if (validationError !== null) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: validationError,
+          });
+        }
+        return {
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: thread.id,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.planning-tickets-created",
+          payload: {
+            threadId: thread.id,
+            specId: promptSpec.id,
+            spec: { ...promptSpec, ticketCount: tickets.length },
+            tickets,
+            stage: "completed",
+          },
+        } satisfies PlannedOrchestrationEvent;
+      }
       if (thread.interactionMode !== "planning-workflow") {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -2958,10 +3054,18 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         const implementationRun = readModel.implementationRuns.find(
           (run) => run.id === caller.implementationRunId,
         );
+        const ticketTargetMatches =
+          caller.ticketId !== undefined &&
+          implementationRun?.ticketStates.some(
+            (state) =>
+              state.ticketId === caller.ticketId && state.workerThreadId === command.targetThreadId,
+          );
         if (
           implementationRun === undefined ||
-          implementationRun.orchestratorThreadId !== command.targetThreadId ||
-          caller.orchestratorThreadId !== command.targetThreadId
+          caller.orchestratorThreadId !== implementationRun.orchestratorThreadId ||
+          (caller.ticketId === undefined
+            ? implementationRun.orchestratorThreadId !== command.targetThreadId
+            : !ticketTargetMatches)
         ) {
           return yield* new OrchestrationCommandInvariantError({
             commandType: command.type,

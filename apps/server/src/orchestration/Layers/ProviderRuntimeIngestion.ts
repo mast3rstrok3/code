@@ -2109,7 +2109,10 @@ const make = Effect.gen(function* () {
         }
 
         case "planning-tickets-artifact": {
-          if (!isPlanningArtifactThread(thread)) {
+          if (
+            !isPlanningArtifactThread(thread) &&
+            !(thread.interactionMode === "implementation-workflow" && thread.workflowRole === null)
+          ) {
             yield* Effect.logWarning(
               "provider workflow directive ignored for non-planning thread",
               {
@@ -2133,6 +2136,8 @@ const make = Effect.gen(function* () {
               bodyMarkdown: ticket.bodyMarkdown,
               plannedFileChanges: ticket.plannedFileChanges.map((change) => ({ ...change })),
               dependencyKeys: [...ticket.dependencyKeys],
+              appReviewEligible: ticket.appReviewEligible,
+              appReviewPlanMarkdown: ticket.appReviewPlanMarkdown,
             })),
             createdAt: input.createdAt,
           });

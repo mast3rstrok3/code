@@ -195,7 +195,7 @@ A tracer-bullet vertical slice of a Spec (or a Wayfinder decision), with depende
 
 #### Ticket review
 
-The planning stage where reviewer sub-threads check the ticket set against the Spec for up to three cycles, editing tickets directly through the `planning-reviewer-verdict` directive's `ticketEdits`. The cap is `PLANNING_REVIEW_MAX_CYCLES` in [the contracts][1].
+The planning stage where reviewer sub-threads check the ticket set against the Spec for up to five cycles, editing tickets directly through the `planning-reviewer-verdict` directive's `ticketEdits`. The cap is `PLANNING_REVIEW_MAX_CYCLES` in [the contracts][1].
 
 #### Wayfinder map
 

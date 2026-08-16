@@ -45,7 +45,14 @@ describe("WorkflowPromptRegistry", () => {
     const catalog = listWorkflowCatalog();
     NodeAssert.deepEqual(
       catalog.workflows.map((workflow) => workflow.id),
-      ["fast-feature", "full-feature", "wayfinder", "planning", "implementation"],
+      [
+        "fast-feature",
+        "full-feature",
+        "product-planning",
+        "wayfinder",
+        "planning",
+        "implementation",
+      ],
     );
     NodeAssert.equal(
       catalog.skills.filter((skill) => skill.id.startsWith("matt-pocock.")).length,
@@ -68,8 +75,11 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(resolveWorkflowDoc("app-dev-stack")?.content ?? "", /Kubernetes-backed/);
     NodeAssert.match(resolveWorkflowDoc("app-dev-stack")?.content ?? "", /mount.*`\/app`/);
     NodeAssert.match(resolveWorkflowDoc("app-dev-stack")?.content ?? "", /separate pod volumes/);
-    NodeAssert.match(resolveWorkflowDoc("app-dev-stack")?.content ?? "", /after integration/);
-    NodeAssert.match(resolveWorkflowDoc("app-dev-stack")?.content ?? "", /host dependency install/);
+    NodeAssert.match(resolveWorkflowDoc("app-dev-stack")?.content ?? "", /ticket workers/);
+    NodeAssert.match(
+      resolveWorkflowDoc("app-dev-stack")?.content ?? "",
+      /worktree-owned AppDevStack/,
+    );
     NodeAssert.deepEqual(resolveWorkflowDoc("context-format")?.skillIds, [
       "matt-pocock.grill-with-docs",
       "matt-pocock.domain-modeling",
@@ -80,7 +90,7 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.deepEqual(wayfinder?.workflowIds, ["wayfinder"]);
     NodeAssert.match(wayfinder?.promptText ?? "", /## Fog of war/);
     NodeAssert.match(wayfinder?.promptText ?? "", /never resolve more than one ticket per session/);
-    NodeAssert.ok((wayfinder?.promptText.length ?? 0) > 12_000);
+    NodeAssert.ok((wayfinder?.promptText.length ?? 0) > 11_000);
     const grillWithDocs = catalog.skills.find(
       (skill) => skill.id === "matt-pocock.grill-with-docs",
     );
@@ -94,7 +104,7 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(directGrillWithDocs, /# CONTEXT\.md Format/);
     NodeAssert.deepEqual(
       catalog.skills.find((skill) => skill.id === "matt-pocock.domain-modeling")?.workflowIds,
-      ["full-feature", "wayfinder", "planning"],
+      ["product-planning", "full-feature", "wayfinder", "planning"],
     );
     NodeAssert.match(resolveWorkflowPromptText("matt-pocock.tdd"), /supporting-skill-docs/);
     NodeAssert.match(resolveWorkflowPromptText("matt-pocock.tdd"), /# When to Mock/);
@@ -489,21 +499,24 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /Use \/tdd where possible, at pre-agreed seams/);
     NodeAssert.match(rendered, /use \/code-review to review the work/);
     NodeAssert.match(rendered, /## T3 workflow adapter/);
-    NodeAssert.match(rendered, /worktree and branch created from the branch the user selected/);
-    NodeAssert.match(rendered, /app dev stack is provisioned after integration/);
+    NodeAssert.match(
+      rendered,
+      /worktree and branch, which were created from the branch the user selected/,
+    );
     NodeAssert.match(rendered, /app-dev-stack\.md/);
-    NodeAssert.match(rendered, /worker branches from its blocker's worker branch/);
-    NodeAssert.match(rendered, /global budget of ten fresh .* repair agents/);
-    NodeAssert.match(rendered, /do not consume repair slots/);
-    NodeAssert.match(rendered, /Code Review starts with one comprehensive review-and-fix pass/);
-    NodeAssert.match(rendered, /cycles are capped at three/);
-    NodeAssert.match(rendered, /fresh TDD repair thread on the already-integrated orchestrator/);
-    NodeAssert.match(rendered, /start the next Browser App Review directly/);
-    NodeAssert.match(rendered, /do not rerun the Merge Gate between review cycles/);
     NodeAssert.match(rendered, /never run launch-level complete validation commands/);
     NodeAssert.match(rendered, /sub-minute fast checks/);
     NodeAssert.match(rendered, /final gate runs each launch validation command once/);
     NodeAssert.match(rendered, /after Code Review/);
+    NodeAssert.match(rendered, /When Planning supplied tickets, use them as-is/);
+    NodeAssert.match(rendered, /derive one or more tracer-bullet tickets from the user's prompt/);
+    NodeAssert.match(rendered, /fresh prompt-originated Implementation thread/);
+    NodeAssert.match(rendered, /T3 launches implementation automatically/);
+    NodeAssert.match(rendered, /up to ten complete cycles when eligible/);
+    NodeAssert.match(rendered, /exactly one Code Review/);
+    NodeAssert.match(rendered, /create one integration thread/);
+    NodeAssert.match(rendered, /Run exactly one Code Review on the combined changes/);
+    NodeAssert.match(rendered, /Run one final Code Review/);
   });
 
   it("renders Planning Tickets with to-tickets vertical-slice drafting instructions", () => {
@@ -520,6 +533,8 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /<local-ticket-template>/);
     NodeAssert.match(rendered, /<issue-template>/);
     NodeAssert.match(rendered, /Store tickets through the planning-tickets-artifact/);
+    NodeAssert.match(rendered, /appReviewEligible/);
+    NodeAssert.match(rendered, /appReviewPlanMarkdown/);
     NodeAssert.match(rendered, /actual compile-time, data, or behavioral prerequisites/);
     NodeAssert.match(rendered, /dependency frontier as wide as correctness allows/);
     NodeAssert.match(rendered, /extension-point\/foundation ticket/);
@@ -562,7 +577,7 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /Apply corrections directly/);
     NodeAssert.match(rendered, /`ticketEdits` array of your planning-reviewer-verdict/);
     NodeAssert.match(rendered, /`replacesPlanningTicketIds` when splitting or replacing/);
-    NodeAssert.match(rendered, /at most three cycles/);
+    NodeAssert.match(rendered, /at most five cycles/);
     NodeAssert.match(rendered, /each cycle runs in its own reviewer sub-thread/);
     // Publication happened at drafting time; approval finalizes the durable set.
     NodeAssert.match(rendered, /already stored through planning-tickets-artifact/);
@@ -582,7 +597,10 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.equal(codeReview.stage, "code-review");
     NodeAssert.equal(codeReview.role, "implementation-code-reviewer");
     NodeAssert.equal(codeReview.title, "6. Code Review");
-    NodeAssert.equal(codeReview.associatedDocs, undefined);
+    NodeAssert.deepEqual(
+      codeReview.associatedDocs?.map((doc) => doc.id),
+      ["app-dev-stack"],
+    );
 
     const rendered = resolveWorkflowPromptText(WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex);
     NodeAssert.match(rendered, /name: code-review/);
@@ -621,12 +639,14 @@ describe("WorkflowPromptRegistry", () => {
         WORKFLOW_PROMPT_IDS.productFixCodex,
         WORKFLOW_PROMPT_IDS.productFastFeatureCodex,
         WORKFLOW_PROMPT_IDS.productFullFeatureCodex,
+        WORKFLOW_PROMPT_IDS.productPlanningCodex,
       ],
     );
     for (const [id, intentKind] of [
       [WORKFLOW_PROMPT_IDS.productFixCodex, "fix"],
       [WORKFLOW_PROMPT_IDS.productFastFeatureCodex, "feature"],
       [WORKFLOW_PROMPT_IDS.productFullFeatureCodex, "feature"],
+      [WORKFLOW_PROMPT_IDS.productPlanningCodex, "feature"],
     ] as const) {
       const preset = contracts.find((contract) => contract.id === id);
       NodeAssert.ok(preset);
@@ -680,7 +700,10 @@ describe("WorkflowPromptRegistry", () => {
       NodeAssert.match(preset.promptText, /until the user confirms/);
       NodeAssert.match(preset.promptText, new RegExp(`intentKind.*"${intentKind}"`));
       NodeAssert.match(preset.promptText, /"type": "product-intent-locked"/);
-      NodeAssert.equal(preset.associatedDocs, undefined);
+      NodeAssert.deepEqual(
+        preset.associatedDocs?.map((doc) => doc.id),
+        id === WORKFLOW_PROMPT_IDS.productFixCodex ? undefined : ["app-dev-stack"],
+      );
       NodeAssert.equal(
         resolveWorkflowPromptId({
           interactionMode: "product-workflow",
@@ -692,9 +715,6 @@ describe("WorkflowPromptRegistry", () => {
         /single human gate/i,
         /CLI Plan/i,
         /Build child/i,
-        /worktree/i,
-        /app dev stack/i,
-        /App Review/i,
         /Code Review/i,
         /Planning workflow/i,
         /Implementation workflow/i,

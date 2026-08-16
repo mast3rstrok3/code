@@ -329,7 +329,9 @@ export function ImplementationTicketFlow({
     [run.ticketStates],
   );
   const runningTicketIds = run.ticketStates
-    .filter((ticketState) => ticketState.status === "running")
+    .filter((ticketState) =>
+      ["running", "app-reviewing", "code-reviewing"].includes(ticketState.status),
+    )
     .map((ticketState) => ticketState.ticketId);
   const readyTicketIds = run.ticketStates
     .filter((ticketState) => ticketState.status === "ready")
@@ -383,6 +385,17 @@ export function ImplementationTicketFlow({
             <ExternalLinkIcon className="size-3" />
             Open worker
           </Button>
+        ) : null}
+        {ticketState.appReviewOutcome != null || ticketState.codeReviewOutcome != null ? (
+          <div className="mt-1.5 space-y-0.5 border-t border-border/40 pt-1 text-[10px] leading-4 text-muted-foreground/65">
+            <p>App Review: {ticketState.appReviewOutcome ?? "not completed"}</p>
+            <p>Code Review: {ticketState.codeReviewOutcome ?? "not completed"}</p>
+          </div>
+        ) : null}
+        {ticketState.warningMarkdown ? (
+          <p className="mt-1 text-[10px] leading-4 text-destructive/80">
+            {ticketState.warningMarkdown}
+          </p>
         ) : null}
       </div>
     );

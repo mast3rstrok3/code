@@ -9,6 +9,7 @@ import {
 describe("workflow presets", () => {
   it("defines every preset once in canonical display order", () => {
     expect(WORKFLOW_PRESET_DEFINITIONS.map((definition) => definition.id)).toEqual([
+      "product-planning",
       "fast-feature",
       "full-feature",
       "wayfinder",
@@ -52,9 +53,26 @@ describe("workflow presets", () => {
 
   it("maps presets to provider modes and intent kinds", () => {
     expect(interactionModeForWorkflowPreset("fast-feature")).toBe("product-workflow");
+    expect(interactionModeForWorkflowPreset("product-planning")).toBe("product-workflow");
     expect(interactionModeForWorkflowPreset("implementation")).toBe("implementation-workflow");
     expect(expectedIntentKindForWorkflowPreset("fix")).toBe("fix");
     expect(expectedIntentKindForWorkflowPreset("full-feature")).toBe("feature");
+  });
+
+  it("offers product and engineering planning as explicit entries", () => {
+    const productPlanning = WORKFLOW_PRESET_DEFINITIONS.find(
+      (definition) => definition.id === "product-planning",
+    );
+    const engineeringPlanning = WORKFLOW_PRESET_DEFINITIONS.find(
+      (definition) => definition.id === "planning",
+    );
+    expect(productPlanning?.label).toBe("Product planning");
+    expect(productPlanning?.helpSteps.map((step) => step.skillId)).toContain(
+      "planning.product-context.codex",
+    );
+    expect(productPlanning?.helpSteps.at(-1)?.label).toBe("Start Implementation");
+    expect(engineeringPlanning?.label).toBe("Engineering planning");
+    expect(engineeringPlanning?.helpSteps.at(-1)?.label).toBe("Start Implementation");
   });
 
   it("runs Product Grill before Engineering Grill for Full Feature", () => {

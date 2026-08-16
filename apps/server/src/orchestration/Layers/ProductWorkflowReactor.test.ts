@@ -633,6 +633,80 @@ describe("ProductWorkflowReactor", () => {
     ),
   );
 
+  it.effect("uses product context modeling instead of Engineering Grill for Product Planning", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        yield* seedProjectAndThread(system, {
+          workflowPreset: "product-planning",
+          runtimeMode: "approval-required",
+        });
+        yield* lockProductIntent(system);
+
+        const events = yield* Stream.runCollect(system.engine.readEvents(0)).pipe(
+          Effect.map((chunk) => Array.from(chunk)),
+        );
+        const contextTurn = events.find(
+          (event) =>
+            event.type === "thread.turn-start-requested" &&
+            event.payload.threadId === productThreadId &&
+            event.payload.workflowPromptId === WORKFLOW_PROMPT_IDS.planningProductContextCodex,
+        );
+        expect(contextTurn).toBeDefined();
+        const contextPrompt = events.find(
+          (event) =>
+            event.type === "thread.message-sent" &&
+            event.payload.threadId === productThreadId &&
+            event.payload.text.includes("Build durable product and domain context"),
+        );
+        expect(contextPrompt).toBeDefined();
+        expect(
+          events.some(
+            (event) =>
+              event.type === "thread.turn-start-requested" &&
+              event.payload.workflowPromptId ===
+                WORKFLOW_PROMPT_IDS.planningAutomaticEngineeringGrillCodex,
+          ),
+        ).toBe(false);
+      }),
+    ),
+  );
+
+  it.effect("starts Implementation after standalone Engineering Planning passes review", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        yield* seedProjectAndThread(system, {
+          interactionMode: "planning-workflow",
+          workflowPreset: "planning",
+          branch: "t3code/engineering-planning",
+          worktreePath: "/tmp/product-reactor.worktrees/engineering-planning",
+        });
+        const spec = yield* seedProductSpecAndTickets(system, productThreadId);
+        const beforeVerdict = yield* system.query.getSnapshot();
+        const activeReview = beforeVerdict.threads.find((thread) => thread.id === productThreadId)
+          ?.planningWorkflow?.activeReview;
+        if (activeReview == null) throw new Error("Review was not active.");
+
+        yield* system.engine.dispatch({
+          type: "thread.planning-reviewer-verdict.apply",
+          commandId: commandId("standalone-planning-pass"),
+          threadId: productThreadId,
+          reviewerThreadId: activeReview.reviewerThreadId,
+          reviewerMessageId: messageId("standalone-planning-reviewer"),
+          cycleNumber: activeReview.cycleNumber,
+          mode: activeReview.mode,
+          targetPlanningTicketIds: [...activeReview.targetPlanningTicketIds],
+          verdictMarkdown: "passed",
+          passed: true,
+          createdAt: "2026-01-01T00:00:10.000Z",
+        });
+        yield* system.reactor.drain;
+
+        const snapshot = yield* system.query.getSnapshot();
+        expect(snapshot.implementationRuns.some((run) => run.specId === spec.id)).toBe(true);
+      }),
+    ),
+  );
+
   it.effect("recovers an automatic Engineering Grill turn that omits its directive", () =>
     withSystem((system) =>
       Effect.gen(function* () {

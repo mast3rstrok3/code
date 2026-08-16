@@ -162,6 +162,7 @@ export const WorkflowPreset = Schema.Literals([
   "fix",
   "fast-feature",
   "full-feature",
+  "product-planning",
   "wayfinder",
   "implementation",
   "planning",
@@ -396,6 +397,8 @@ export const OrchestrationPlanningTicket = Schema.Struct({
   dependencies: Schema.Array(OrchestrationPlanningTicketDependency).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
+  appReviewEligible: Schema.optionalKey(Schema.Boolean),
+  appReviewPlanMarkdown: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
   status: TrimmedNonEmptyString.pipe(Schema.withDecodingDefault(Effect.succeed("open"))),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -410,7 +413,7 @@ export const OrchestrationPlanningReviewTicketFeedback = Schema.Struct({
 export type OrchestrationPlanningReviewTicketFeedback =
   typeof OrchestrationPlanningReviewTicketFeedback.Type;
 
-export const PLANNING_REVIEW_MAX_CYCLES = 3;
+export const PLANNING_REVIEW_MAX_CYCLES = 5;
 
 export const OrchestrationPlanningReviewMode = Schema.Literals(["full", "targeted"]);
 export type OrchestrationPlanningReviewMode = typeof OrchestrationPlanningReviewMode.Type;
@@ -860,6 +863,8 @@ export const OrchestrationImplementationTicketStateStatus = Schema.Literals([
   "blocked",
   "ready",
   "running",
+  "app-reviewing",
+  "code-reviewing",
   "succeeded",
   "failed",
 ]);
@@ -882,6 +887,15 @@ export const OrchestrationImplementationTicketState = Schema.Struct({
   workerResult: Schema.NullOr(OrchestrationImplementationWorkerResult).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  appReviewWorkflowRunId: Schema.optionalKey(Schema.NullOr(AppReviewWorkflowRunId)),
+  appReviewOutcome: Schema.optionalKey(
+    Schema.NullOr(Schema.Literals(["passed", "exhausted", "blocked", "canceled", "skipped"])),
+  ),
+  codeReviewThreadId: Schema.optionalKey(Schema.NullOr(ThreadId)),
+  codeReviewOutcome: Schema.optionalKey(
+    Schema.NullOr(Schema.Literals(["clean", "findings", "blocked"])),
+  ),
+  warningMarkdown: Schema.optionalKey(Schema.NullOr(Schema.String)),
   attemptCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
   updatedAt: IsoDateTime,
 });
@@ -1796,6 +1810,8 @@ export const ThreadPlanningTicketArtifactInput = Schema.Struct({
   dependencyKeys: Schema.Array(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
+  appReviewEligible: Schema.optionalKey(Schema.Boolean),
+  appReviewPlanMarkdown: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
 });
 export type ThreadPlanningTicketArtifactInput = typeof ThreadPlanningTicketArtifactInput.Type;
 
@@ -1807,6 +1823,8 @@ export const PlanningReviewerTicketEdit = Schema.Union([
     bodyMarkdown: Schema.optional(TrimmedNonEmptyString),
     plannedFileChanges: Schema.optional(NonEmptyOrchestrationPlanningFileChanges),
     dependencyKeys: Schema.optional(Schema.Array(OrchestrationPlanningTicketKey)),
+    appReviewEligible: Schema.optional(Schema.Boolean),
+    appReviewPlanMarkdown: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   }),
   Schema.Struct({
     type: Schema.Literal("create"),
@@ -1816,6 +1834,10 @@ export const PlanningReviewerTicketEdit = Schema.Union([
     plannedFileChanges: NonEmptyOrchestrationPlanningFileChanges,
     dependencyKeys: Schema.Array(OrchestrationPlanningTicketKey).pipe(
       Schema.withDecodingDefault(Effect.succeed([])),
+    ),
+    appReviewEligible: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+    appReviewPlanMarkdown: Schema.NullOr(TrimmedNonEmptyString).pipe(
+      Schema.withDecodingDefault(Effect.succeed(null)),
     ),
     replacesPlanningTicketIds: Schema.Array(OrchestrationPlanningTicketId).pipe(
       Schema.withDecodingDefault(Effect.succeed([])),
@@ -2658,6 +2680,7 @@ export const ThreadPlanningSpecCreatedPayload = Schema.Struct({
 export const ThreadPlanningTicketsCreatedPayload = Schema.Struct({
   threadId: ThreadId,
   specId: OrchestrationPlanningSpecId,
+  spec: Schema.optionalKey(OrchestrationPlanningSpec),
   tickets: Schema.Array(OrchestrationPlanningTicket),
   stage: Schema.optional(OrchestrationPlanningWorkflowStage),
 });

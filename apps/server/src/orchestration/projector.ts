@@ -669,6 +669,7 @@ export function projectEvent(
             threads: updateThread(nextBase.threads, payload.threadId, {
               planningWorkflow: {
                 ...workflow,
+                ...(payload.spec === undefined ? {} : { spec: payload.spec }),
                 stage,
                 createTicketsAvailable: false,
                 tickets: [

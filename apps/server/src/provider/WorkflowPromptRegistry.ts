@@ -17,6 +17,7 @@ export const WORKFLOW_PROMPT_IDS = {
   sharedGrillingCodex: "shared.grilling.codex",
   planningGrillStageCodex: "planning.grill-stage.codex",
   planningAutomaticEngineeringGrillCodex: "planning.engineering-grill-automatic.codex",
+  planningProductContextCodex: "planning.product-context.codex",
   planningSpecCodex: "planning.spec.codex",
   planningTicketsCodex: "planning.tickets.codex",
   planningTicketReviewerCodex: "planning.ticket-reviewer.codex",
@@ -29,6 +30,7 @@ export const WORKFLOW_PROMPT_IDS = {
   productFixCodex: "product.fix.codex",
   productFastFeatureCodex: "product.fast-feature.codex",
   productFullFeatureCodex: "product.full-feature.codex",
+  productPlanningCodex: "product.planning.codex",
   planningDomainModelingCodex: "planning.domain-modeling.codex",
   planningPrototypeCodex: "planning.prototype.codex",
   planningWayfinderCodex: "planning.wayfinder.codex",
@@ -39,7 +41,9 @@ const WORKFLOW_AGENT_COMMUNICATIONS_PROMPT = WORKFLOW_SUBAGENT_INSTRUCTIONS_PROM
 
 const APP_DEV_STACK_ASSOCIATED_DOC_CONTENT = `# AppDevStack
 
-An AppDevStack is T3's Kubernetes-backed development environment for one workflow worktree: service pods mount that worktree at \`/app\`, while dependency paths such as \`node_modules\` can be separate pod volumes. Planning, Full Feature, and Fast Feature create their shared worktree before the first model turn, run its repository-declared dependency setup, and start AppDevStack immediately after that setup succeeds. The workflow thread itself starts immediately while this happens. Every later Planning, Build, Implementation, and App Review stage reuses that exact worktree, branch, and stack. Treat the injected stack status, id, and Feature URL as authoritative; do not use another worktree's runtime, start a competing dev server, or replace dependency paths in the shared worktree while its stack is active. Implementation TDD workers branch downward into child worktrees and may perform repository-declared setup needed for focused tests, but must not start a competing app server.`;
+An AppDevStack is T3's Kubernetes-backed development environment for one workflow worktree: service pods mount that worktree at \`/app\`, while dependency paths such as \`node_modules\` can be separate pod volumes. Planning, Full Feature, and Fast Feature create their shared worktree before the first model turn, run its repository-declared dependency setup, and start AppDevStack immediately after that setup succeeds. The workflow thread itself starts immediately while this happens. Every later Planning, Build, Integration, and combined App Review stage reuses that exact worktree, branch, and stack. Treat the injected stack status, id, and Feature URL as authoritative; do not use another worktree's runtime, start a competing dev server, or replace dependency paths in the shared worktree while its stack is active.
+
+Implementation ticket workers branch downward into child worktrees. A ticket with \`appReviewEligible: true\` receives its own worktree-owned AppDevStack after implementation so its attached \`appReviewPlanMarkdown\` can be exercised in isolation. Ineligible tickets do not start a ticket stack. Ticket stacks never replace the shared integration stack, which remains the authoritative target after integration for cross-ticket App Review.`;
 
 const APP_DEV_STACK_ASSOCIATED_DOC = {
   id: "app-dev-stack",
@@ -702,6 +706,23 @@ This automation adapter overrides the Grilling blueprint's user-question, user-d
 const ENGINEERING_GRILL_PROMPT = buildEngineeringGrillPrompt({ automatic: false });
 const AUTOMATIC_ENGINEERING_GRILL_PROMPT = buildEngineeringGrillPrompt({ automatic: true });
 
+const PRODUCT_CONTEXT_PROMPT = `<collaboration_mode># Product Context Modeling
+
+Translate the locked Product Grill decisions into durable planning context without opening an Engineering Grill.
+
+- Treat the locked product intent and repository as authoritative.
+- Do not ask the user questions and do not introduce architecture, implementation, testing, or operations decisions.
+- Update the domain glossary in CONTEXT.md and create CONTEXT-MAP.md only when the repository has multiple bounded contexts.
+- Record only product/domain decisions that are genuinely durable as ADRs. Leave later engineering choices for implementation planning.
+- Preserve the Product Grill's scope, non-goals, language, visible behaviors, and success criteria for Spec authoring.
+
+When the product context is complete, finish with exactly one fenced JSON directive:
+
+\`\`\`json
+{ "type": "planning-grill-complete" }
+\`\`\`
+</collaboration_mode>`;
+
 const PLANNING_SPEC_PROMPT = `<collaboration_mode># Planning Workflow: Spec
 
 ---
@@ -904,6 +925,8 @@ T3's Planning workflow owns publication and approval:
 - Treat the current durable Spec as the upstream source reference.
 - Draft the complete tracer-bullet set and blocking graph using the upstream process and templates.
 - Store tickets through the planning-tickets-artifact requested by the stage launch prompt; do not create local files or external tracker issues.
+- Classify every ticket programmatically with \`appReviewEligible\`. Set it only when a human-style UI review can verify the ticket in isolation.
+- Every eligible ticket must carry a concrete \`appReviewPlanMarkdown\`: which App Dev Stack surface to start, the UI entry point, user actions, visible assertions, and required evidence. Use \`null\` for ineligible tickets. This is T3's programmatic attachment to the upstream ticket shape.
 - Stop after drafting. The separate automatic Ticket Review stage owns completeness review, adjustment cycles, and final approval.
 - Do not quiz or ask the user. The preceding Product Grill or interactive Engineering Grill is the workflow's only user gate.
 - Use the repository glossary and ADRs, loading supporting documents through workflow_doc_get only when needed.
@@ -926,6 +949,7 @@ Review the Spec, conversation context, durable project context, and drafted plan
 - When several slices share a central registry or service seam, prefer an early extension-point/foundation ticket, parallel isolated feature modules, and one small final assembly ticket.
 - Reject any remaining long serial chain unless every edge is justified in the dependent ticket body.
 - Check that ticket bodies are ready for AFK agents: concrete outcome, clear acceptance criteria, useful tests, and no stale implementation path prescriptions.
+- Check every ticket's App Review classification. UI-verifiable tickets require \`appReviewEligible: true\` and a concrete \`appReviewPlanMarkdown\`; non-UI tickets use false and null. Preserve or correct these fields in reviewer ticket edits.
 
 ## Review cycle
 
@@ -934,7 +958,7 @@ Review the Spec, conversation context, durable project context, and drafted plan
 3. Return one \`perTicketFeedback\` entry per targeted ticket, and name every ticket that still needs authoring-thread rework in \`failingPlanningTicketIds\`. Prefer direct ticket edits over bouncing feedback; reserve failures for corrections that genuinely need the authoring thread.
 4. If anything is missing, too broad, too narrow, horizontally sliced, incorrectly blocked, or vague, correct it or return concrete corrections. Do not quiz the user while the ticket set still needs review corrections.
 5. In later cycles, retrieve and review only the failed, reworked, or replacement tickets named in the target scope. Previously passed tickets stay out of scope.
-6. Repeat targeted review until those tickets pass. Ticket review runs at most three cycles, and each cycle runs in its own reviewer sub-thread. A clean targeted pass completes ticket review; do not request another full-review cycle.
+6. Repeat targeted review until those tickets pass. Ticket review runs at most five cycles, and each cycle runs in its own reviewer sub-thread. A clean targeted pass completes ticket review; do not request another full-review cycle.
 
 ## Automatic approval
 
@@ -1192,17 +1216,20 @@ Commit your work to the current branch.
 
 This stage orchestrates the upstream implement loop across sub-threads instead of doing the work inline:
 
-- Load the durable Spec with workflow_spec_get and the tickets with workflow_tickets_list and workflow_ticket_get. The Spec is the node that binds the tickets and later app reviews together.
+- First inspect the workflow's durable tickets. When Planning supplied tickets, use them as-is. When it did not, derive one or more tracer-bullet tickets from the user's prompt with the To Tickets skill and store them in T3 application state before implementation. Specs, plans, and tickets never move to GitHub or local scratch files.
+- On a fresh prompt-originated Implementation thread with no tickets, do not implement code in this turn. Apply the complete To Tickets discipline, inspect exact planned file paths, and finish with one \`planning-tickets-artifact\` directive. Use a stable prompt-derived \`specId\`, and include \`appReviewEligible\` plus \`appReviewPlanMarkdown\` on every ticket. T3 launches implementation automatically after persisting the ticket graph.
+- Load the durable Spec when present with workflow_spec_get and load tickets with workflow_tickets_list and workflow_ticket_get. The ticket set binds implementation and reviews; a Spec is optional for prompt-originated runs.
 - The run reuses the Planning workflow's dedicated worktree and branch, which were created from the branch the user selected before Planning began. The finished change request is filed back into that original branch.
-- Reuse the AppDevStack created for the Planning worktree during workspace bootstrap. Implementation must not create a replacement stack. Load \`app-dev-stack.md\` before diagnosing it; do not start another server.
-- Tickets are implemented dependency-aware by TDD worker sub-threads (the TDD Implementation skill), each in its own worktree and branch. A dependent ticket's worker branches from its blocker's worker branch so chained tickets build on each other, and every worker commits to its own branch.
-- Worker branches are merged programmatically back into the orchestrator worktree; the Merge Gate stage always runs once for the integrated HEAD, whether integration was clean or required conflict resolution.
-- A Browser App Review finding launches a fresh TDD repair thread on the already-integrated orchestrator worktree. After that repair commits and passes focused checks, start the next Browser App Review directly; do not rerun the Merge Gate between review cycles.
-- Automated QA has one global budget of ten fresh AppDevStack/App Review repair agents after integration. Initial stack probes and Browser App Review launches do not consume repair slots; replacing a malformed, failed, blocked, or interrupted repair does. After the cap, a clean integration-gated HEAD proceeds through best-effort Code Review with the unresolved gate flagged in the change request.
-- Code Review starts with one comprehensive review-and-fix pass. If complete final validation needs a repair, the next pass reviews only that repair delta. Review/final-validation cycles are capped at three; exhaustion publishes the clean branch with an explicit work-in-progress warning instead of looping indefinitely.
-- Ticket workers never run launch-level complete validation commands or full test suites, but may run documented sub-minute fast checks. After each bounded Code Review pass, the final gate runs each launch validation command once on the reviewed HEAD before publication.
+- Reuse the AppDevStack created for the Planning worktree as the combined integration stack. Load \`app-dev-stack.md\` before diagnosing it. Ticket App Dev Stacks are separate, worktree-owned runtimes and must never substitute for the combined stack.
+- Run every currently unblocked ticket in parallel. Each ticket owns a child thread, worktree, branch, and—when \`appReviewEligible\`—an App Dev Stack started from that ticket worktree.
+- A ticket runs TDD implementation, then its attached App Review for up to ten complete cycles when eligible, then exactly one Code Review. App Review failures, exhaustion, or blockers are recorded on the ticket and in workflow activity but never stop the frontier; Code Review still runs once. Ineligible tickets skip only App Review.
+- After every ticket reaches a terminal best-effort state, create one integration thread in the original workflow worktree and branch. Merge all usable ticket branches there, retaining recorded warnings for branches that could not be integrated.
+- Run exactly one Code Review on the combined changes. Then run the combined App Review for up to ten cycles, focused on cross-ticket flows plus ticket reviews that failed, exhausted, or were blocked. Continue after exhaustion or blockers.
+- Run one final Code Review after the combined App Review. That final review owns change-request publication and must include all ticket-level and combined App Review warnings in the PR body.
+- Code Review is intentionally bounded: once per ticket, once immediately after integration, and once after the combined App Review. Do not add a review/validation feedback loop between those fixed passes.
+- Ticket workers never run launch-level complete validation commands or full test suites, but may run documented sub-minute fast checks. The final gate runs each launch validation command once on the final reviewed HEAD before publication.
 
-Plan the implementation run from the Spec and planning tickets. Identify worktree strategy, ticket order, validation commands, required app-dev/browser review surfaces, merge gates, and how progress will be reported. These rules override only upstream single-thread mechanics; TDD at pre-agreed seams, regular typechecking, review before publication, and committed work remain authoritative.
+Plan the implementation run from the available tickets or create them from the prompt first. Identify the dependency frontier, worktrees, ticket App Review eligibility and attached plans, integration strategy, combined-review focus, validation commands, and warning reporting. Only PR publication is externally visible; intermediate review problems stay in the workflow panel until summarized in that PR. These rules override only upstream single-thread mechanics; TDD at pre-agreed seams, regular typechecking, review before publication, and committed work remain authoritative.
 </collaboration_mode>`;
 
 const IMPLEMENTATION_TDD_MOCKING_ASSOCIATED_DOC_CONTENT = `# When to Mock
@@ -1905,6 +1932,31 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     ],
   },
   {
+    id: WORKFLOW_PROMPT_IDS.planningProductContextCodex,
+    order: 2,
+    workflow: "planning",
+    role: "planning-thread",
+    stage: "grill",
+    title: "Product Context Modeling",
+    description:
+      "Builds domain context from locked product decisions without an Engineering Grill.",
+    promptText: PRODUCT_CONTEXT_PROMPT,
+    associatedDocs: [
+      {
+        id: "context-format",
+        title: "CONTEXT.md Format",
+        path: "CONTEXT-FORMAT.md",
+        content: CONTEXT_FORMAT_ASSOCIATED_DOC_CONTENT,
+      },
+      {
+        id: "adr-format",
+        title: "ADR Format",
+        path: "ADR-FORMAT.md",
+        content: PLANNING_ADR_FORMAT_ASSOCIATED_DOC_CONTENT,
+      },
+    ],
+  },
+  {
     id: WORKFLOW_PROMPT_IDS.planningPrototypeCodex,
     order: 3,
     workflow: "planning",
@@ -2154,6 +2206,17 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     promptText: PRODUCT_FULL_FEATURE_WORKFLOW_PROMPT,
     associatedDocs: [APP_DEV_STACK_ASSOCIATED_DOC],
   },
+  {
+    id: WORKFLOW_PROMPT_IDS.productPlanningCodex,
+    order: 1,
+    workflow: "product",
+    role: "planning-thread",
+    stage: "intent",
+    title: "Product Grill — Planning",
+    description: "Locks product intent before product context, Spec, tickets, and Implementation.",
+    promptText: PRODUCT_FULL_FEATURE_WORKFLOW_PROMPT,
+    associatedDocs: [APP_DEV_STACK_ASSOCIATED_DOC],
+  },
 ] as const satisfies ReadonlyArray<WorkflowPromptContract>;
 
 function cloneWorkflowPromptContract(contract: WorkflowPromptContract): WorkflowPromptContract {
@@ -2170,6 +2233,7 @@ export function listWorkflowPromptContracts(): WorkflowPromptContract[] {
 const CATALOG_SKILL_ID_BY_PROMPT_ID: Readonly<Record<string, string>> = {
   [WORKFLOW_PROMPT_IDS.planningGrillStageCodex]: "matt-pocock.grill-with-docs",
   [WORKFLOW_PROMPT_IDS.planningAutomaticEngineeringGrillCodex]: "matt-pocock.grill-with-docs",
+  [WORKFLOW_PROMPT_IDS.planningProductContextCodex]: "matt-pocock.domain-modeling",
   [WORKFLOW_PROMPT_IDS.planningDomainModelingCodex]: "matt-pocock.domain-modeling",
   [WORKFLOW_PROMPT_IDS.planningPrototypeCodex]: "matt-pocock.prototype",
   [WORKFLOW_PROMPT_IDS.planningWayfinderCodex]: "matt-pocock.wayfinder",
@@ -2184,6 +2248,7 @@ const CATALOG_SKILL_ID_BY_PROMPT_ID: Readonly<Record<string, string>> = {
 const VISIBLE_T3_SKILL_IDS = new Set<string>([
   WORKFLOW_PROMPT_IDS.productFastFeatureCodex,
   WORKFLOW_PROMPT_IDS.productFullFeatureCodex,
+  WORKFLOW_PROMPT_IDS.productPlanningCodex,
   WORKFLOW_PROMPT_IDS.planningTicketReviewerCodex,
   WORKFLOW_PROMPT_IDS.implementationMergeGateCodex,
   WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
@@ -2220,7 +2285,14 @@ function summarizeWorkflowDoc(content: string): string {
 function buildWorkflowCatalog(): WorkflowCatalog {
   const promptContracts: ReadonlyArray<WorkflowPromptContract> = WORKFLOW_PROMPT_REGISTRY;
   const promptContractById = new Map(promptContracts.map((contract) => [contract.id, contract]));
-  const workflowOrder = ["fast-feature", "full-feature", "wayfinder", "planning", "implementation"];
+  const workflowOrder = [
+    "fast-feature",
+    "full-feature",
+    "product-planning",
+    "wayfinder",
+    "planning",
+    "implementation",
+  ];
   const workflows = WORKFLOW_PRESET_DEFINITIONS.toSorted(
     (left, right) => workflowOrder.indexOf(left.id) - workflowOrder.indexOf(right.id),
   ).map((definition, workflowIndex) => ({
@@ -2257,7 +2329,7 @@ function buildWorkflowCatalog(): WorkflowCatalog {
   }
   const implicitWorkflowIdsBySkill: Readonly<Record<string, readonly string[]>> = {
     "matt-pocock.grill-with-docs": ["planning"],
-    "matt-pocock.domain-modeling": ["full-feature", "wayfinder", "planning"],
+    "matt-pocock.domain-modeling": ["full-feature", "product-planning", "wayfinder", "planning"],
     "matt-pocock.implement": ["full-feature", "implementation"],
     [WORKFLOW_PROMPT_IDS.implementationFixCodex]: [
       "fast-feature",
@@ -2409,6 +2481,7 @@ export function isInteractiveStructuredInputWorkflowPromptId(
     workflowPromptId === WORKFLOW_PROMPT_IDS.planningGrillStageCodex ||
     workflowPromptId === WORKFLOW_PROMPT_IDS.productFixCodex ||
     workflowPromptId === WORKFLOW_PROMPT_IDS.productFastFeatureCodex ||
+    workflowPromptId === WORKFLOW_PROMPT_IDS.productPlanningCodex ||
     workflowPromptId === WORKFLOW_PROMPT_IDS.productFullFeatureCodex
   );
 }

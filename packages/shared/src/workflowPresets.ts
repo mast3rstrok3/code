@@ -43,6 +43,35 @@ const LEGACY_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
 
 export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition> = [
   {
+    id: "product-planning",
+    label: "Product planning",
+    description: "Grill product decisions, then create reviewed tickets and start Implementation.",
+    route: "product",
+    interactionMode: "product-workflow",
+    workflowPromptId: "product.planning.codex",
+    helpSteps: [
+      { label: "Create shared worktree", note: "automatic" },
+      {
+        label: "Product Grill",
+        skillId: "product.planning.codex",
+        note: "human-guided",
+      },
+      {
+        label: "Build product context, glossary, and ADRs",
+        skillId: "planning.product-context.codex",
+        note: "automatic",
+      },
+      { label: "Spec authoring", skillId: "planning.spec.codex", note: "automatic" },
+      { label: "Planning tickets", skillId: "planning.tickets.codex", note: "automatic" },
+      {
+        label: "Ticket review and revision cycles",
+        skillId: "planning.ticket-reviewer.codex",
+        note: "automatic; up to five cycles",
+      },
+      { label: "Start Implementation", note: "automatic" },
+    ],
+  },
+  {
     id: "fast-feature",
     label: "Fast feature",
     description: "Plan and build a focused feature, then run both review loops.",
@@ -102,7 +131,7 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
       {
         label: "Ticket review and revision cycles",
         skillId: "planning.ticket-reviewer.codex",
-        note: "automatic; up to three cycles",
+        note: "automatic; up to five cycles",
       },
       {
         label: "TDD implementation workers",
@@ -149,40 +178,54 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
   {
     id: "implementation",
     label: "Implementation",
-    description: "Implement a selected Spec through validation and review.",
+    description: "Implement durable tickets—or create them from the prompt—through review and PR.",
     route: "implementation",
     interactionMode: "implementation-workflow",
+    workflowPromptId: "implementation.orchestrator-planning.codex",
     helpSteps: [
       {
-        label: "Load the selected Spec and reuse its Planning workspace",
+        label: "Load Planning tickets or create tickets from the prompt",
         skillId: "implementation.orchestrator-planning.codex",
       },
       {
-        label: "Run dependency-aware TDD implementation workers",
+        label: "Run unblocked ticket workers in parallel worktrees",
         skillId: "implementation.tdd.codex",
       },
       {
-        label: "Integrate worker branches and run the merge gate",
+        label: "Run eligible per-ticket App Reviews",
+        skillId: "implementation.browser-app-review.codex",
+        note: "up to ten cycles per ticket; failures do not stop the workflow",
+      },
+      {
+        label: "Run one Code Review per ticket",
+        skillId: "implementation.code-review.codex",
+      },
+      {
+        label: "Merge ticket branches into the starting worktree",
         skillId: "implementation.merge-gate.codex",
       },
-      { label: "Start and probe AppDevStack from the integrated worktree" },
       {
-        label: "Run nested App Review against the shared AppDevStack",
+        label: "Run combined Code Review",
+        skillId: "implementation.code-review.codex",
+      },
+      { label: "Start and probe the combined App Dev Stack" },
+      {
+        label: "Run combined App Review",
         skillId: "implementation.browser-app-review.codex",
-        note: "App Review has its own cycle budget",
+        note: "up to ten cycles; covers cross-ticket flows and earlier review problems",
       },
       {
-        label: "Run Code Review",
+        label: "Run final Code Review",
         skillId: "implementation.code-review.codex",
-        note: "single pass, applies fixes and commits",
       },
       { label: "Publish the change request" },
     ],
   },
   {
     id: "planning",
-    label: "Planning",
-    description: "Create a reviewed Spec and dependency-aware planning tickets.",
+    label: "Engineering planning",
+    description:
+      "Grill engineering decisions, then create reviewed tickets and start Implementation.",
     route: "planning",
     interactionMode: "planning-workflow",
     helpSteps: [
@@ -201,8 +244,9 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
       {
         label: "Ticket review and revision cycles",
         skillId: "planning.ticket-reviewer.codex",
-        note: "automatic; up to three cycles",
+        note: "automatic; up to five cycles",
       },
+      { label: "Start Implementation", note: "automatic" },
     ],
   },
 ];
@@ -241,15 +285,21 @@ export function inferDisplayedWorkflowPreset(input: {
 
 export function isProductWorkflowPreset(
   preset: WorkflowPreset | null | undefined,
-): preset is "fix" | "fast-feature" | "full-feature" {
-  return preset === "fix" || preset === "fast-feature" || preset === "full-feature";
+): preset is "fix" | "fast-feature" | "full-feature" | "product-planning" {
+  return (
+    preset === "fix" ||
+    preset === "fast-feature" ||
+    preset === "full-feature" ||
+    preset === "product-planning"
+  );
 }
 
 export function expectedIntentKindForWorkflowPreset(
   preset: WorkflowPreset | null | undefined,
 ): "fix" | "feature" | null {
   if (preset === "fix") return "fix";
-  if (preset === "fast-feature" || preset === "full-feature") return "feature";
+  if (preset === "fast-feature" || preset === "full-feature" || preset === "product-planning")
+    return "feature";
   return null;
 }
 

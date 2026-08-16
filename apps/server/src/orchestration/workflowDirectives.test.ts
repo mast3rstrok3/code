@@ -114,7 +114,9 @@ describe("workflowDirectives", () => {
       { "path": "src/cart.ts", "action": "update" },
       { "path": "src/legacy.ts", "action": "delete" }
     ],
-    "dependencyKeys": []
+    "dependencyKeys": [],
+    "appReviewEligible": true,
+    "appReviewPlanMarkdown": "Open checkout, submit a valid cart, and capture the confirmation state."
   }]
 }
 \`\`\``);
@@ -164,6 +166,52 @@ ${JSON.stringify({ type: "planning-tickets-artifact", specId: "spec-1", tickets:
 \`\`\``);
       NodeAssert.equal(result.kind, "error");
     }
+  });
+
+  it("requires an attached plan for App Review eligible tickets", () => {
+    const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
+${JSON.stringify({
+  type: "planning-tickets-artifact",
+  specId: "spec-1",
+  tickets: [
+    {
+      key: "ticket-1",
+      title: "Implement checkout",
+      bodyMarkdown: "Build checkout.",
+      plannedFileChanges: [{ path: "src/checkout.ts", action: "create" }],
+      dependencyKeys: [],
+      appReviewEligible: true,
+      appReviewPlanMarkdown: null,
+    },
+  ],
+})}
+\`\`\``);
+
+    NodeAssert.equal(result.kind, "error");
+    if (result.kind !== "error") return;
+    NodeAssert.equal(
+      result.message,
+      "planning-tickets-artifact App Review eligible tickets require appReviewPlanMarkdown.",
+    );
+  });
+
+  it("parses ticket-scoped Code Review results", () => {
+    const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
+{
+  "type": "implementation-code-review-result",
+  "runId": "run-1",
+  "ticketId": "ticket-1",
+  "status": "clean",
+  "validations": [],
+  "reportMarkdown": "No findings."
+}
+\`\`\``);
+
+    NodeAssert.equal(result.kind, "parsed");
+    if (result.kind !== "parsed") return;
+    NodeAssert.equal(result.directive.type, "implementation-code-review-result");
+    if (result.directive.type !== "implementation-code-review-result") return;
+    NodeAssert.equal(result.directive.ticketId, "ticket-1");
   });
 
   it("requires planned files for reviewer-created tickets and accepts replacement updates", () => {

@@ -50,6 +50,8 @@ export type WorkflowDirective =
         readonly bodyMarkdown: string;
         readonly plannedFileChanges: ReadonlyArray<OrchestrationPlanningFileChange>;
         readonly dependencyKeys: ReadonlyArray<string>;
+        readonly appReviewEligible: boolean;
+        readonly appReviewPlanMarkdown: string | null;
       }>;
     }
   | {
@@ -73,6 +75,8 @@ export type WorkflowDirective =
             readonly bodyMarkdown?: string;
             readonly plannedFileChanges?: ReadonlyArray<OrchestrationPlanningFileChange>;
             readonly dependencyKeys?: ReadonlyArray<string>;
+            readonly appReviewEligible?: boolean;
+            readonly appReviewPlanMarkdown?: string | null;
           }
         | {
             readonly type: "create";
@@ -81,6 +85,8 @@ export type WorkflowDirective =
             readonly bodyMarkdown: string;
             readonly plannedFileChanges: ReadonlyArray<OrchestrationPlanningFileChange>;
             readonly dependencyKeys: ReadonlyArray<string>;
+            readonly appReviewEligible: boolean;
+            readonly appReviewPlanMarkdown: string | null;
             readonly replacesPlanningTicketIds: ReadonlyArray<string>;
           }
         | { readonly type: "delete"; readonly ticketId: string }
@@ -129,6 +135,7 @@ export type WorkflowDirective =
   | {
       readonly type: "implementation-code-review-result";
       readonly runId: string;
+      readonly ticketId?: string;
       readonly status: "clean" | "findings" | "blocked";
       readonly commitSha?: string;
       readonly validations: ReadonlyArray<OrchestrationImplementationValidationResult>;
@@ -403,6 +410,8 @@ function parsePlanningTickets(value: unknown):
       readonly bodyMarkdown: string;
       readonly plannedFileChanges: ReadonlyArray<OrchestrationPlanningFileChange>;
       readonly dependencyKeys: ReadonlyArray<string>;
+      readonly appReviewEligible: boolean;
+      readonly appReviewPlanMarkdown: string | null;
     }>
   | string {
   if (!Array.isArray(value)) {
@@ -419,12 +428,34 @@ function parsePlanningTickets(value: unknown):
     const bodyMarkdown = requiredString(record, "bodyMarkdown");
     const plannedFileChanges = parsePlanningFileChanges(record["plannedFileChanges"]);
     const dependencyKeys = stringArray(record["dependencyKeys"] ?? []);
+    const appReviewEligible = record["appReviewEligible"] ?? false;
+    const appReviewPlanMarkdown = record["appReviewPlanMarkdown"] ?? null;
     if (key.startsWith("Directive field")) return key;
     if (title.startsWith("Directive field")) return title;
     if (bodyMarkdown.startsWith("Directive field")) return bodyMarkdown;
     if (typeof plannedFileChanges === "string") return plannedFileChanges;
     if (typeof dependencyKeys === "string") return dependencyKeys;
-    tickets.push({ key, title, bodyMarkdown, plannedFileChanges, dependencyKeys });
+    if (typeof appReviewEligible !== "boolean") {
+      return "planning-tickets-artifact appReviewEligible must be boolean.";
+    }
+    if (
+      appReviewPlanMarkdown !== null &&
+      (typeof appReviewPlanMarkdown !== "string" || appReviewPlanMarkdown.trim().length === 0)
+    ) {
+      return "planning-tickets-artifact appReviewPlanMarkdown must be a non-empty string or null.";
+    }
+    if (appReviewEligible && appReviewPlanMarkdown === null) {
+      return "planning-tickets-artifact App Review eligible tickets require appReviewPlanMarkdown.";
+    }
+    tickets.push({
+      key,
+      title,
+      bodyMarkdown,
+      plannedFileChanges,
+      dependencyKeys,
+      appReviewEligible,
+      appReviewPlanMarkdown,
+    });
   }
   return tickets;
 }
@@ -492,12 +523,23 @@ function parsePlanningTicketEdits(
       const plannedFileChanges = parsePlanningFileChanges(record["plannedFileChanges"]);
       const dependencyKeys = stringArray(record["dependencyKeys"] ?? []);
       const replacesPlanningTicketIds = stringArray(record["replacesPlanningTicketIds"] ?? []);
+      const appReviewEligible = record["appReviewEligible"] ?? false;
+      const appReviewPlanMarkdown = record["appReviewPlanMarkdown"] ?? null;
       for (const required of [key, title, bodyMarkdown]) {
         if (required.startsWith("Directive field")) return required;
       }
       if (typeof plannedFileChanges === "string") return plannedFileChanges;
       if (typeof dependencyKeys === "string") return dependencyKeys;
       if (typeof replacesPlanningTicketIds === "string") return replacesPlanningTicketIds;
+      if (typeof appReviewEligible !== "boolean")
+        return "ticket edit appReviewEligible must be boolean.";
+      if (
+        appReviewPlanMarkdown !== null &&
+        (typeof appReviewPlanMarkdown !== "string" || appReviewPlanMarkdown.trim().length === 0)
+      )
+        return "ticket edit appReviewPlanMarkdown must be a non-empty string or null.";
+      if (appReviewEligible && appReviewPlanMarkdown === null)
+        return "App Review eligible ticket edits require appReviewPlanMarkdown.";
       edits.push({
         type,
         key,
@@ -506,6 +548,8 @@ function parsePlanningTicketEdits(
         plannedFileChanges,
         dependencyKeys,
         replacesPlanningTicketIds,
+        appReviewEligible,
+        appReviewPlanMarkdown,
       });
       continue;
     }
@@ -519,6 +563,8 @@ function parsePlanningTicketEdits(
           : parsePlanningFileChanges(record["plannedFileChanges"]);
       const dependencyKeys =
         record["dependencyKeys"] === undefined ? undefined : stringArray(record["dependencyKeys"]);
+      const appReviewEligible = record["appReviewEligible"];
+      const appReviewPlanMarkdown = record["appReviewPlanMarkdown"];
       if (ticketId.startsWith("Directive field")) return ticketId;
       if (typeof title === "string" && title.startsWith("Directive field")) return title;
       if (typeof bodyMarkdown === "string" && bodyMarkdown.startsWith("Directive field")) {
@@ -526,6 +572,14 @@ function parsePlanningTicketEdits(
       }
       if (typeof plannedFileChanges === "string") return plannedFileChanges;
       if (typeof dependencyKeys === "string") return dependencyKeys;
+      if (appReviewEligible !== undefined && typeof appReviewEligible !== "boolean")
+        return "ticket edit appReviewEligible must be boolean.";
+      if (
+        appReviewPlanMarkdown !== undefined &&
+        appReviewPlanMarkdown !== null &&
+        (typeof appReviewPlanMarkdown !== "string" || appReviewPlanMarkdown.trim().length === 0)
+      )
+        return "ticket edit appReviewPlanMarkdown must be a non-empty string or null.";
       edits.push({
         type,
         ticketId,
@@ -533,6 +587,8 @@ function parsePlanningTicketEdits(
         ...(bodyMarkdown === undefined ? {} : { bodyMarkdown }),
         ...(plannedFileChanges === undefined ? {} : { plannedFileChanges }),
         ...(dependencyKeys === undefined ? {} : { dependencyKeys }),
+        ...(appReviewEligible === undefined ? {} : { appReviewEligible }),
+        ...(appReviewPlanMarkdown === undefined ? {} : { appReviewPlanMarkdown }),
       });
       continue;
     }
@@ -787,6 +843,7 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
       const status = record["status"];
       const validations = parseValidationResults(record["validations"] ?? []);
       const commitSha = optionalString(record, "commitSha");
+      const ticketId = optionalString(record, "ticketId");
       if (runId.startsWith("Directive field")) return runId;
       if (reportMarkdown.startsWith("Directive field")) return reportMarkdown;
       if (status !== "clean" && status !== "findings" && status !== "blocked") {
@@ -795,6 +852,7 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
       if (typeof validations === "string") return validations;
       if (typeof commitSha === "string" && commitSha.startsWith("Directive field"))
         return commitSha;
+      if (typeof ticketId === "string" && ticketId.startsWith("Directive field")) return ticketId;
       // Code Review is a single review-and-fix pass, so "findings" means the reviewer landed its own
       // fixes and must name the commit they produced.
       if (status === "findings" && commitSha === undefined) {
@@ -803,6 +861,7 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
       return {
         type: "implementation-code-review-result",
         runId,
+        ...(ticketId === undefined ? {} : { ticketId }),
         status,
         ...(commitSha === undefined ? {} : { commitSha }),
         validations,

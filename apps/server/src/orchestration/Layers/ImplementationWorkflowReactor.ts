@@ -59,6 +59,7 @@ type ImplementationWorkflowEvent = Extract<
   {
     type:
       | "thread.implementation-run-launched"
+      | "thread.planning-tickets-created"
       | "thread.activity-appended"
       | "thread.app-review-updated"
       | "thread.implementation-change-request-retry-requested"
@@ -112,6 +113,7 @@ export function passedAppReviewContinuation(
 type CodeReviewDirective = {
   readonly type: "implementation-code-review-result";
   readonly runId: string;
+  readonly ticketId?: string;
   readonly status: "clean" | "findings" | "blocked";
   /** Set when the single review-and-fix pass landed fixes; names the commit it produced. */
   readonly commitSha?: string;
@@ -262,13 +264,78 @@ function markDependentsReady(
   };
 }
 
+export function implementationTicketStateIsTerminal(status: string): boolean {
+  return status === "succeeded" || status === "failed";
+}
+
+export function implementationTicketReviewWarningLines(
+  run: Pick<OrchestrationImplementationRun, "ticketStates">,
+): ReadonlyArray<string> {
+  return run.ticketStates
+    .filter((state) => state.status === "failed" || (state.warningMarkdown?.trim().length ?? 0) > 0)
+    .map(
+      (state) =>
+        `- ⚠️ ${state.ticketId}: ${state.warningMarkdown?.trim() || "implementation did not complete"}`,
+    );
+}
+
+export function failImplementationTickets(
+  run: OrchestrationImplementationRun,
+  failures: ReadonlyMap<string, string>,
+  updatedAt: string,
+): OrchestrationImplementationRun {
+  const failedIds = new Set(failures.keys());
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const state of run.ticketStates) {
+      if (
+        !failedIds.has(state.ticketId) &&
+        state.dependencyTicketIds.some((ticketId) => failedIds.has(ticketId))
+      ) {
+        failedIds.add(state.ticketId);
+        changed = true;
+      }
+    }
+  }
+  return {
+    ...run,
+    ticketStates: run.ticketStates.map((state) =>
+      failedIds.has(state.ticketId)
+        ? {
+            ...state,
+            status: "failed" as const,
+            warningMarkdown:
+              failures.get(state.ticketId) ??
+              `Blocked by failed dependency${
+                state.dependencyTicketIds.filter((ticketId) => failedIds.has(ticketId)).length === 1
+                  ? ""
+                  : " chain"
+              }: ${state.dependencyTicketIds
+                .filter((ticketId) => failedIds.has(ticketId))
+                .map((ticketId) => `'${ticketId}'`)
+                .join(", ")}.`,
+            updatedAt,
+          }
+        : state,
+    ),
+    retryableFailure: null,
+    updatedAt,
+  };
+}
+
 function terminalLineageTicketIds(run: OrchestrationImplementationRun): ReadonlyArray<string> {
   if (run.terminalLineageTicketIds.length > 0) {
-    return run.terminalLineageTicketIds;
+    const succeeded = new Set(
+      run.ticketStates
+        .filter((state) => state.status === "succeeded")
+        .map((state) => state.ticketId),
+    );
+    return run.terminalLineageTicketIds.filter((ticketId) => succeeded.has(ticketId));
   }
   const dependencyIds = new Set(run.ticketStates.flatMap((state) => state.dependencyTicketIds));
   return run.ticketStates
-    .filter((state) => !dependencyIds.has(state.ticketId))
+    .filter((state) => state.status === "succeeded" && !dependencyIds.has(state.ticketId))
     .map((state) => state.ticketId);
 }
 
@@ -418,10 +485,20 @@ function buildBrowserAppReviewPrompt(input: {
   readonly frontendUrl: string | null;
   readonly artifactMarkdown?: string;
 }): string {
+  const ticketWarnings = input.run.ticketStates
+    .filter((state) => state.status === "failed" || (state.warningMarkdown?.trim().length ?? 0) > 0)
+    .map(
+      (state) =>
+        `- ${state.ticketId}: ${state.warningMarkdown?.trim() || "implementation did not complete"}`,
+    );
   return [
     `Perform browser app review for implementation run ${input.run.id}.`,
     "",
     "Open the app with preview_open, record the session with app_review_recording_start/stop, exercise the product with the preview_* tools, and capture captioned screenshots with app_review_capture_screenshot. Do not ask the user questions.",
+    "Review cross-ticket and multi-step behavior across the complete integrated change. Recheck every ticket-level App Review that failed, exhausted, was blocked, or could not run.",
+    ...(ticketWarnings.length === 0
+      ? []
+      : ["", "Ticket-level warnings requiring combined review focus:", ...ticketWarnings]),
     "",
     input.frontendUrl === null
       ? "No frontend URL was resolved. If the app cannot be opened, mark the review blocked with concrete details."
@@ -484,13 +561,13 @@ function buildCodeReviewPrompt(input: {
 }): string {
   const changeRequest = input.run.changeRequest;
   const reviewBaseSha = input.reviewBaseSha ?? input.run.pinnedCommit;
-  const isDeltaReview = input.reviewBaseSha !== undefined;
+  const isFinalReview = input.run.codeReviewAttemptCount > 1;
   return [
-    `Perform implementation Code Review ${input.run.codeReviewAttemptCount} of ${IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES} for run ${input.run.id}.`,
+    `Perform the ${isFinalReview ? "final post-App-Review" : "combined pre-App-Review"} Code Review for run ${input.run.id}. This is a single pass.`,
     "",
-    isDeltaReview
-      ? "This is a delta review after a final-validation repair. Review only the changes since the previously reviewed commit. Do not reopen unchanged implementation scope or invent additional product work unless the delta itself introduces a regression."
-      : "This is the comprehensive review pass. Review the change along the Standards and Spec axes described in your workflow instructions.",
+    isFinalReview
+      ? "Review the complete combined HEAD after App Review, including App Review repairs and unresolved warnings. This is the last Code Review; do not request another review cycle."
+      : "Review the complete integrated ticket set along the Standards and Spec axes described in your workflow instructions.",
     "Apply required fixes yourself and commit them. Do not ask the user questions.",
     "",
     input.run.qaExhaustedAt === null && input.run.appReviewExhaustedAt === null
@@ -743,7 +820,7 @@ function buildFastFeaturePrompt(input: {
 function reviewGateExhaustionReason(run: OrchestrationImplementationRun): string {
   const lastValidation = run.finalValidation?.outputMarkdown.trim();
   return [
-    `Automated Code Review and final validation reached the ${IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES}-cycle limit.`,
+    "The fixed Code Review sequence completed, but final validation did not pass on the resulting HEAD.",
     lastValidation === undefined || lastValidation.length === 0
       ? "The latest complete validation did not produce a usable summary."
       : `Latest validation: ${lastValidation.slice(0, 1_000)}`,
@@ -752,10 +829,12 @@ function reviewGateExhaustionReason(run: OrchestrationImplementationRun): string
 
 function changeRequestReviewNote(run: OrchestrationImplementationRun): string {
   const lines = [];
+  const ticketWarnings = implementationTicketReviewWarningLines(run);
+  if (ticketWarnings.length > 0) lines.push("## Ticket review warnings", ...ticketWarnings, "");
   if (run.reviewGateExhaustedAt !== null) {
     lines.push(
       "## Work in progress",
-      `- ⚠️ Automated review stopped after ${run.codeReviewAttemptCount}/${IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES} Code Review/final-validation cycles.`,
+      `- ⚠️ The fixed Code Review sequence completed after ${run.codeReviewAttemptCount} combined pass(es); final validation remains unresolved.`,
       `- ${run.reviewGateExhaustionReason ?? reviewGateExhaustionReason(run)}`,
       "- Complete validation has not passed on this HEAD. Keep this change request as work in progress and resolve the recorded findings before merging.",
       "",
@@ -1459,23 +1538,311 @@ const make = Effect.gen(function* () {
       }
       const failedStarts = startResults.filter(({ result }) => result._tag === "Failure");
       if (failedStarts.length > 0) {
-        return yield* blockRun({
-          sourceThreadId: input.sourceThreadId,
-          run: nextRun,
-          retryableStage: "worker-setup",
-          reasonMarkdown: [
-            "Ticket worker setup failed.",
-            "",
-            ...failedStarts.map(({ ticketId, result }) =>
+        const continuedRun = failImplementationTickets(
+          nextRun,
+          new Map(
+            failedStarts.map(({ ticketId, result }) => [
+              ticketId,
               result._tag === "Failure"
-                ? `- ${ticketId}: ${errorDetail(result.failure)}`
-                : `- ${ticketId}: unknown setup failure`,
-            ),
-          ].join("\n"),
-          updatedAt: input.createdAt,
+                ? `Ticket worker setup failed: ${errorDetail(result.failure)}`
+                : "Ticket worker setup failed for an unknown reason.",
+            ]),
+          ),
+          input.createdAt,
+        );
+        yield* updateRun({
+          sourceThreadId: input.sourceThreadId,
+          run: continuedRun,
+          createdAt: input.createdAt,
         });
+        yield* appendActivity({
+          threadId: input.run.orchestratorThreadId,
+          tone: "error",
+          kind: "implementation-ticket-setup-failed",
+          summary: "Ticket setup failures recorded; implementation is continuing",
+          payload: {
+            runId: input.run.id,
+            ticketIds: failedStarts.map(({ ticketId }) => ticketId),
+          },
+          createdAt: input.createdAt,
+        });
+        if (
+          continuedRun.ticketStates.every((state) =>
+            implementationTicketStateIsTerminal(state.status),
+          )
+        ) {
+          yield* integrateCompletedRun({
+            sourceThreadId: input.sourceThreadId,
+            run: continuedRun,
+            createdAt: input.createdAt,
+          });
+        }
+        return continuedRun;
       }
       return nextRun;
+    },
+  );
+
+  const finishTicketReviewChain = Effect.fn(
+    "ImplementationWorkflowReactor.finishTicketReviewChain",
+  )(function* (input: {
+    readonly sourceThreadId: ThreadId;
+    readonly run: OrchestrationImplementationRun;
+    readonly ticketId: string;
+    readonly commitSha: string;
+    readonly codeReviewOutcome: "clean" | "findings" | "blocked";
+    readonly usableBranch?: boolean;
+    readonly warningMarkdown: string | null;
+    readonly createdAt: string;
+  }) {
+    const usableBranch = input.usableBranch ?? true;
+    const reviewedRun: OrchestrationImplementationRun = {
+      ...input.run,
+      ticketStates: input.run.ticketStates.map((state) =>
+        state.ticketId === input.ticketId
+          ? {
+              ...state,
+              status: usableBranch ? ("succeeded" as const) : ("failed" as const),
+              codeReviewOutcome: input.codeReviewOutcome,
+              codeReviewThreadId: null,
+              warningMarkdown: input.warningMarkdown,
+              workerResult:
+                usableBranch && state.workerResult?.status === "succeeded"
+                  ? { ...state.workerResult, commitSha: input.commitSha }
+                  : state.workerResult,
+              updatedAt: input.createdAt,
+            }
+          : state,
+      ),
+      workerResults: input.run.workerResults.map((result) =>
+        usableBranch && result.ticketId === input.ticketId && result.status === "succeeded"
+          ? { ...result, commitSha: input.commitSha }
+          : result,
+      ),
+      updatedAt: input.createdAt,
+    };
+    const failedIds = new Set(usableBranch ? [] : [input.ticketId]);
+    if (!usableBranch) {
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (const state of reviewedRun.ticketStates) {
+          if (
+            !failedIds.has(state.ticketId) &&
+            state.dependencyTicketIds.some((ticketId) => failedIds.has(ticketId))
+          ) {
+            failedIds.add(state.ticketId);
+            changed = true;
+          }
+        }
+      }
+    }
+    const completed = usableBranch
+      ? markDependentsReady(reviewedRun, input.createdAt)
+      : {
+          ...reviewedRun,
+          ticketStates: reviewedRun.ticketStates.map((state) =>
+            failedIds.has(state.ticketId)
+              ? {
+                  ...state,
+                  status: "failed" as const,
+                  warningMarkdown:
+                    state.ticketId === input.ticketId
+                      ? (state.warningMarkdown ?? null)
+                      : `Blocked by unusable reviewed dependency '${input.ticketId}'.`,
+                  updatedAt: input.createdAt,
+                }
+              : state,
+          ),
+        };
+    yield* updateRun({
+      sourceThreadId: input.sourceThreadId,
+      run: completed,
+      createdAt: input.createdAt,
+    });
+    const terminal = completed.ticketStates.every(
+      (state) => state.status === "succeeded" || state.status === "failed",
+    );
+    if (terminal) {
+      yield* integrateCompletedRun({
+        sourceThreadId: input.sourceThreadId,
+        run: completed,
+        createdAt: input.createdAt,
+      });
+      return;
+    }
+    yield* startReadyWorkers({
+      sourceThreadId: input.sourceThreadId,
+      run: completed,
+      createdAt: input.createdAt,
+    });
+  });
+
+  const startTicketCodeReview = Effect.fn("ImplementationWorkflowReactor.startTicketCodeReview")(
+    function* (input: {
+      readonly sourceThreadId: ThreadId;
+      readonly run: OrchestrationImplementationRun;
+      readonly ticketId: string;
+      readonly warningMarkdown?: string;
+      readonly createdAt: string;
+    }) {
+      const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+      const orchestratorThread = findThread(readModel, input.run.orchestratorThreadId);
+      const state = input.run.ticketStates.find(
+        (candidate) => candidate.ticketId === input.ticketId,
+      );
+      if (orchestratorThread === null || state?.worktreePath == null || state.branch == null)
+        return;
+      const ticket = ticketsById(
+        findThread(readModel, input.sourceThreadId) ?? orchestratorThread,
+      ).get(input.ticketId);
+      const reviewerThreadId = yield* serverThreadId("implementation-code-reviewer");
+      const reviewingRun: OrchestrationImplementationRun = {
+        ...input.run,
+        ticketStates: input.run.ticketStates.map((candidate) =>
+          candidate.ticketId === input.ticketId
+            ? {
+                ...candidate,
+                status: "code-reviewing" as const,
+                appReviewOutcome:
+                  candidate.appReviewOutcome ??
+                  (input.warningMarkdown === undefined ? "skipped" : "blocked"),
+                codeReviewThreadId: reviewerThreadId,
+                codeReviewOutcome: null,
+                warningMarkdown: input.warningMarkdown ?? candidate.warningMarkdown ?? null,
+                updatedAt: input.createdAt,
+              }
+            : candidate,
+        ),
+        updatedAt: input.createdAt,
+      };
+      yield* updateRun({
+        sourceThreadId: input.sourceThreadId,
+        run: reviewingRun,
+        createdAt: input.createdAt,
+      });
+      yield* orchestrationEngine.dispatch({
+        type: "thread.create",
+        commandId: yield* serverCommandId("implementation-ticket-code-review-create"),
+        threadId: reviewerThreadId,
+        projectId: orchestratorThread.projectId,
+        ownerUserId: orchestratorThread.ownerUserId,
+        parentThreadId: state.workerThreadId ?? input.run.orchestratorThreadId,
+        workflowRole: "implementation-code-reviewer",
+        title: `Code review ${ticket?.title ?? input.ticketId}`,
+        modelSelection: orchestratorThread.modelSelection,
+        runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
+        interactionMode: "implementation-workflow",
+        branch: state.branch,
+        worktreePath: state.worktreePath,
+        createdAt: input.createdAt,
+      });
+      const baseRef =
+        state.dependencyTicketIds.length === 0
+          ? input.run.pinnedCommit
+          : (input.run.ticketStates.find(
+              (candidate) => candidate.ticketId === state.dependencyTicketIds[0],
+            )?.workerResult?.commitSha ?? input.run.pinnedCommit);
+      yield* orchestrationEngine.dispatch({
+        type: "thread.turn.start",
+        commandId: yield* serverCommandId("implementation-ticket-code-review-turn"),
+        threadId: reviewerThreadId,
+        message: {
+          messageId: yield* serverMessageId("implementation-ticket-code-review"),
+          role: "user",
+          text: appendWorkflowSkillCommandSection(
+            [
+              `Run exactly one Code Review for ticket ${input.ticketId} in implementation run ${input.run.id}.`,
+              `Worktree: ${state.worktreePath}`,
+              `Branch: ${state.branch}`,
+              `Review base: ${baseRef}`,
+              `Retrieve the durable ticket with workflow_ticket_get. Review Standards and Spec, apply and commit clear fixes, and leave the worktree clean.`,
+              input.warningMarkdown === undefined
+                ? ""
+                : `Earlier App Review warning:\n\n${input.warningMarkdown}`,
+              `Finish with one implementation-code-review-result JSON directive containing runId ${input.run.id} and ticketId ${input.ticketId}.`,
+            ].join("\n\n"),
+            WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+          ),
+          attachments: [],
+        },
+        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+        runtimeMode: orchestratorThread.runtimeMode,
+        interactionMode: "implementation-workflow",
+        createdAt: input.createdAt,
+      });
+    },
+  );
+
+  const startTicketAppReview = Effect.fn("ImplementationWorkflowReactor.startTicketAppReview")(
+    function* (input: {
+      readonly sourceThreadId: ThreadId;
+      readonly run: OrchestrationImplementationRun;
+      readonly ticketId: string;
+      readonly createdAt: string;
+    }) {
+      const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+      const orchestratorThread = findThread(readModel, input.run.orchestratorThreadId);
+      const sourceThread = findThread(readModel, input.sourceThreadId);
+      const state = input.run.ticketStates.find(
+        (candidate) => candidate.ticketId === input.ticketId,
+      );
+      if (
+        orchestratorThread === null ||
+        state?.worktreePath == null ||
+        state.workerThreadId == null
+      )
+        return;
+      const ticket = ticketsById(sourceThread ?? orchestratorThread).get(input.ticketId);
+      if (ticket === undefined) return;
+      if (ticket.appReviewEligible !== true || !ticket.appReviewPlanMarkdown) {
+        yield* startTicketCodeReview({
+          sourceThreadId: input.sourceThreadId,
+          run: input.run,
+          ticketId: input.ticketId,
+          createdAt: input.createdAt,
+        });
+        return;
+      }
+      const stackResult = yield* appDevStackManager
+        .autoCreate({
+          worktreePath: state.worktreePath,
+          displayName: `Ticket ${ticket.key ?? ticket.id}`,
+          gitBranch: state.branch ?? input.run.orchestratorBranch,
+          workflowId: orchestratorThread.workflowContext?.workflowId,
+        })
+        .pipe(Effect.result);
+      const frontendUrl = stackResult._tag === "Success" ? stackResult.success.frontendUrl : null;
+      if (frontendUrl === null) {
+        const warning = `Ticket App Review blocked because its App Dev Stack did not provide a frontend URL${stackResult._tag === "Failure" ? `: ${errorDetail(stackResult.failure)}` : "."}`;
+        yield* startTicketCodeReview({
+          sourceThreadId: input.sourceThreadId,
+          run: input.run,
+          ticketId: input.ticketId,
+          warningMarkdown: warning,
+          createdAt: input.createdAt,
+        });
+        return;
+      }
+      const controllerThreadId = yield* serverThreadId("app-review-orchestrator");
+      yield* orchestrationEngine.dispatch({
+        type: "thread.app-review-workflow.launch",
+        commandId: yield* serverCommandId("implementation-ticket-app-review-launch"),
+        targetThreadId: state.workerThreadId,
+        controllerThreadId,
+        caller: {
+          type: "implementation",
+          implementationRunId: input.run.id,
+          orchestratorThreadId: input.run.orchestratorThreadId,
+          ticketId: input.ticketId,
+        },
+        briefMarkdown: ticket.appReviewPlanMarkdown,
+        supportingContextMarkdown: `Review only ticket ${input.ticketId}: ${ticket.title}. Treat its attached plan and acceptance criteria as authoritative.`,
+        previewTargets: [frontendUrl],
+        cycleBudget: 10,
+        modelSelection: orchestratorThread.modelSelection,
+        createdAt: input.createdAt,
+      });
     },
   );
 
@@ -1595,15 +1962,10 @@ const make = Effect.gen(function* () {
       cwd: run.orchestratorWorktreePath,
       ref: "HEAD",
     });
-    for (const state of run.ticketStates) {
-      if (state.status !== "succeeded" || state.workerResult?.status !== "succeeded") {
-        return yield* new GitCommandError({
-          operation: "ImplementationWorkflowReactor.verifyIntegratedWorkerCommits",
-          command: "git merge-base --is-ancestor",
-          cwd: run.orchestratorWorktreePath,
-          detail: `Ticket '${state.ticketId}' has no accepted worker commit.`,
-        });
-      }
+    // Failed tickets are terminal warnings, not integration blockers. Only branches that survived
+    // implementation and ticket Code Review are candidates for the combined change.
+    for (const state of run.ticketStates.filter((candidate) => candidate.status === "succeeded")) {
+      if (state.workerResult?.status !== "succeeded") continue;
       const accepted = yield* verifiedDependency({ run, ticketId: state.ticketId });
       const integrated = yield* gitWorkflow.isAncestor({
         cwd: run.orchestratorWorktreePath,
@@ -1643,7 +2005,7 @@ const make = Effect.gen(function* () {
       const terminalBranches = yield* Effect.forEach(terminalIds, (ticketId) =>
         verifiedDependency({ run: integratingRun, ticketId }),
       );
-      const integration = yield* integrateRefs({
+      const integrationResult = yield* integrateRefs({
         cwd: integratingRun.orchestratorWorktreePath,
         baseTicketId: null,
         baseRefName: integratingRun.orchestratorBranch,
@@ -1651,7 +2013,53 @@ const make = Effect.gen(function* () {
           ticketId: terminal.ticketId,
           refName: terminal.commitSha,
         })),
-      });
+      }).pipe(Effect.result);
+      if (integrationResult._tag === "Failure") {
+        const detail = `Ticket integration failed: ${errorDetail(integrationResult.failure)}`;
+        const head = yield* gitWorkflow.resolveCommit({
+          cwd: integratingRun.orchestratorWorktreePath,
+          ref: "HEAD",
+        });
+        const continuedRun: OrchestrationImplementationRun = {
+          ...integratingRun,
+          integrationHeadSha: head.commitSha,
+          reviewGateExhaustedAt: input.createdAt,
+          reviewGateExhaustionReason: detail,
+          retryableFailure: null,
+          updatedAt: input.createdAt,
+        };
+        yield* updateRun({
+          sourceThreadId: input.sourceThreadId,
+          run: continuedRun,
+          createdAt: input.createdAt,
+        });
+        yield* appendActivity({
+          threadId: integratingRun.orchestratorThreadId,
+          tone: "error",
+          kind: "implementation-integration-warning",
+          summary: "Ticket integration failed; reviews are continuing from the usable HEAD",
+          payload: { runId: integratingRun.id, detail },
+          createdAt: input.createdAt,
+        });
+        yield* startMergeGate({
+          sourceThreadId: input.sourceThreadId,
+          run: continuedRun,
+          integration: {
+            baseTicketId: null,
+            baseRefName: continuedRun.orchestratorBranch,
+            mergedTicketIds: [],
+            conflictedTicketId: null,
+            conflictedRefName: null,
+            conflictedFiles: [],
+            remainingTicketIds: [],
+            remainingRefNames: [],
+          },
+          kind: "integration",
+          createdAt: input.createdAt,
+        });
+        return;
+      }
+      const integration = integrationResult.success;
 
       yield* appendActivity({
         threadId: integratingRun.orchestratorThreadId,
@@ -2724,6 +3132,38 @@ const make = Effect.gen(function* () {
     },
   );
 
+  const handlePromptTicketsCreated = Effect.fn(
+    "ImplementationWorkflowReactor.handlePromptTicketsCreated",
+  )(function* (
+    event: Extract<ImplementationWorkflowEvent, { type: "thread.planning-tickets-created" }>,
+  ) {
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    const thread = findThread(readModel, event.payload.threadId);
+    if (
+      thread === null ||
+      thread.interactionMode !== "implementation-workflow" ||
+      thread.workflowRole !== null ||
+      thread.worktreePath === null ||
+      thread.branch === null
+    ) {
+      return;
+    }
+    if (readModel.implementationRuns.some((run) => run.specId === event.payload.specId)) return;
+    const head = yield* gitWorkflow.resolveCommit({ cwd: thread.worktreePath, ref: "HEAD" });
+    yield* orchestrationEngine.dispatch({
+      type: "thread.implementation-run.launch",
+      commandId: yield* serverCommandId("implementation-prompt-tickets-launch"),
+      threadId: thread.id,
+      specId: event.payload.specId,
+      baseBranch: thread.branch,
+      pinnedCommit: head.commitSha,
+      orchestratorBranch: thread.branch,
+      orchestratorWorktreePath: thread.worktreePath,
+      validationCommands: [],
+      createdAt: event.occurredAt,
+    });
+  });
+
   const handleRunLaunched = Effect.fn("ImplementationWorkflowReactor.handleRunLaunched")(function* (
     event: Extract<ImplementationWorkflowEvent, { type: "thread.implementation-run-launched" }>,
   ) {
@@ -2898,31 +3338,62 @@ const make = Effect.gen(function* () {
       });
 
       if (directive.status === "failed") {
+        const failedIds = new Set([directive.ticketId]);
+        let changed = true;
+        while (changed) {
+          changed = false;
+          for (const state of run.ticketStates) {
+            if (
+              !failedIds.has(state.ticketId) &&
+              state.dependencyTicketIds.some((id) => failedIds.has(id))
+            ) {
+              failedIds.add(state.ticketId);
+              changed = true;
+            }
+          }
+        }
         const failedRun: OrchestrationImplementationRun = {
           ...run,
-          status: "needs-human-attention",
+          status: "running",
           ticketStates: run.ticketStates.map((state) =>
-            state.workerThreadId === event.payload.threadId
+            failedIds.has(state.ticketId)
               ? {
                   ...state,
                   status: "failed" as const,
-                  workerResult: directive,
+                  workerResult:
+                    state.workerThreadId === event.payload.threadId
+                      ? directive
+                      : state.workerResult,
+                  warningMarkdown:
+                    state.workerThreadId === event.payload.threadId
+                      ? directive.notesMarkdown || `Worker '${directive.ticketId}' failed.`
+                      : `Blocked by failed dependency '${directive.ticketId}'.`,
                   updatedAt: directive.reportedAt,
                 }
               : state,
           ),
           workerResults: [...run.workerResults, directive],
-          retryableFailure: {
-            stage: "worker-execution",
-            detail: directive.notesMarkdown || `Worker '${directive.ticketId}' failed.`,
-            failedAt: directive.reportedAt,
-            attemptCount: (run.retryableFailure?.attemptCount ?? 0) + 1,
-            maxAttempts: 3,
-            humanBlocked: false,
-          },
+          retryableFailure: null,
           updatedAt: directive.reportedAt,
         };
         yield* updateRun({ sourceThreadId, run: failedRun, createdAt: directive.reportedAt });
+        if (
+          failedRun.ticketStates.every(
+            (state) => state.status === "succeeded" || state.status === "failed",
+          )
+        ) {
+          yield* integrateCompletedRun({
+            sourceThreadId,
+            run: failedRun,
+            createdAt: directive.reportedAt,
+          });
+        } else {
+          yield* startReadyWorkers({
+            sourceThreadId,
+            run: failedRun,
+            createdAt: directive.reportedAt,
+          });
+        }
         return;
       }
 
@@ -2955,52 +3426,63 @@ const make = Effect.gen(function* () {
       );
       if (acceptedDirective === null) return;
 
-      const succeededRun = markDependentsReady(
-        {
-          ...run,
-          ticketStates: run.ticketStates.map((state) =>
-            state.workerThreadId === event.payload.threadId
-              ? {
-                  ...state,
-                  status: "succeeded" as const,
-                  branch: directive.branch,
-                  worktreePath: directive.worktreePath,
-                  workerResult: acceptedDirective,
-                  updatedAt: directive.reportedAt,
-                }
-              : state,
-          ),
-          workerResults: [...run.workerResults, acceptedDirective],
-          retryableFailure: null,
-          updatedAt: directive.reportedAt,
-        },
-        directive.reportedAt,
-      );
+      const succeededRun: OrchestrationImplementationRun = {
+        ...run,
+        ticketStates: run.ticketStates.map((state) =>
+          state.workerThreadId === event.payload.threadId
+            ? {
+                ...state,
+                status: "app-reviewing" as const,
+                branch: directive.branch,
+                worktreePath: directive.worktreePath,
+                workerResult: acceptedDirective,
+                updatedAt: directive.reportedAt,
+              }
+            : state,
+        ),
+        workerResults: [...run.workerResults, acceptedDirective],
+        retryableFailure: null,
+        updatedAt: directive.reportedAt,
+      };
 
-      yield* updateRun({ sourceThreadId, run: succeededRun, createdAt: directive.reportedAt });
-      if (succeededRun.ticketStates.every((state) => state.status === "succeeded")) {
-        yield* integrateCompletedRun({
-          sourceThreadId,
-          run: succeededRun,
-          createdAt: directive.reportedAt,
-        }).pipe(
-          Effect.catchCause((cause) => {
-            if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause);
-            return blockRun({
-              sourceThreadId,
-              run: { ...succeededRun, status: "integrating" },
-              retryableStage: "integration",
-              reasonMarkdown: `Final branch integration failed.\n\n\`\`\`\n${Cause.pretty(cause)}\n\`\`\``,
-              updatedAt: directive.reportedAt,
-            });
-          }),
+      if (run.appReviewStrategy === "legacy-inline") {
+        const reviewedRun = markDependentsReady(
+          {
+            ...succeededRun,
+            ticketStates: succeededRun.ticketStates.map((state) =>
+              state.workerThreadId === event.payload.threadId
+                ? { ...state, status: "succeeded" as const }
+                : state,
+            ),
+          },
+          directive.reportedAt,
         );
+        yield* updateRun({ sourceThreadId, run: reviewedRun, createdAt: directive.reportedAt });
+        if (
+          reviewedRun.ticketStates.every((state) =>
+            implementationTicketStateIsTerminal(state.status),
+          )
+        ) {
+          yield* integrateCompletedRun({
+            sourceThreadId,
+            run: reviewedRun,
+            createdAt: directive.reportedAt,
+          });
+        } else {
+          yield* startReadyWorkers({
+            sourceThreadId,
+            run: reviewedRun,
+            createdAt: directive.reportedAt,
+          });
+        }
         return;
       }
 
-      yield* startReadyWorkers({
+      yield* updateRun({ sourceThreadId, run: succeededRun, createdAt: directive.reportedAt });
+      yield* startTicketAppReview({
         sourceThreadId,
         run: succeededRun,
+        ticketId: directive.ticketId,
         createdAt: directive.reportedAt,
       });
     },
@@ -3225,10 +3707,7 @@ const make = Effect.gen(function* () {
           activeValidationKind: gateKind,
           updatedAt,
         };
-        if (
-          gateKind === "final" &&
-          run.codeReviewAttemptCount >= IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES
-        ) {
+        if (gateKind === "final") {
           const exhaustionReason = reviewGateExhaustionReason(failedRun);
           const exhaustedRun: OrchestrationImplementationRun = {
             ...failedRun,
@@ -3242,7 +3721,8 @@ const make = Effect.gen(function* () {
             threadId: run.orchestratorThreadId,
             tone: "error",
             kind: "implementation-review-gate-exhausted",
-            summary: `Review and validation stopped after ${run.codeReviewAttemptCount}/${IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES} cycles; publishing work in progress`,
+            summary:
+              "Final validation failed after the final Code Review; publishing work in progress",
             payload: {
               runId: run.id,
               cycles: run.codeReviewAttemptCount,
@@ -3259,7 +3739,7 @@ const make = Effect.gen(function* () {
           run: failedRun,
           status: "fixing",
           origin: "merge-gate",
-          title: gateKind === "final" ? "Fix final validation" : "Fix merge gate",
+          title: "Fix merge gate",
           promptText: buildMergeGateFixPrompt({
             run,
             reportMarkdown: directive.summaryMarkdown,
@@ -3298,6 +3778,19 @@ const make = Effect.gen(function* () {
         retryableFailure: null,
         updatedAt,
       };
+      if (
+        run.artifactSource === "planning-spec" &&
+        run.appReviewStrategy === "nested-workflow" &&
+        run.codeReviewAttemptCount === 0
+      ) {
+        yield* startCodeReview({
+          sourceThreadId,
+          run: validatedRun,
+          createdAt: updatedAt,
+          skipAppReviewRequirement: true,
+        });
+        return;
+      }
       if (run.qaExhaustedAt !== null || run.appReviewExhaustedAt !== null) {
         yield* startCodeReview({
           sourceThreadId,
@@ -3308,7 +3801,10 @@ const make = Effect.gen(function* () {
       }
       yield* startBrowserReview({
         sourceThreadId,
-        run: validatedRun,
+        run:
+          validatedRun.appReviewedHeadSha === null
+            ? { ...validatedRun, codeReviewedHeadSha: null }
+            : validatedRun,
         createdAt: updatedAt,
       });
     },
@@ -3390,62 +3886,36 @@ const make = Effect.gen(function* () {
     }
 
     if (run.activeValidationKind === "final") {
-      if (run.codeReviewAttemptCount >= IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES) {
-        const exhaustionReason = reviewGateExhaustionReason(run);
-        const exhaustedRun: OrchestrationImplementationRun = {
-          ...run,
-          status: "publishing-change-request",
-          integrationHeadSha: head.commitSha,
-          activeValidationHeadSha: null,
-          activeValidationKind: null,
-          activeValidatorThreadId: null,
-          activeFixerThreadId: null,
-          fixOrigin: null,
-          reviewGateExhaustedAt: updatedAt,
-          reviewGateExhaustionReason: exhaustionReason,
-          retryableFailure: null,
-          updatedAt,
-        };
-        yield* appendActivity({
-          threadId: run.orchestratorThreadId,
-          tone: "error",
-          kind: "implementation-review-gate-exhausted",
-          summary: `Review and validation stopped after ${run.codeReviewAttemptCount}/${IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES} cycles; publishing work in progress`,
-          payload: {
-            runId: run.id,
-            cycles: run.codeReviewAttemptCount,
-            maxCycles: IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES,
-            reasonMarkdown: exhaustionReason,
-          },
-          createdAt: updatedAt,
-        });
-        yield* fileChangeRequest({ sourceThreadId, run: exhaustedRun, createdAt: updatedAt });
-        return;
-      }
-      const reviewBaseSha = run.codeReviewedHeadSha;
-      const repairedRun: OrchestrationImplementationRun = {
+      const exhaustionReason = reviewGateExhaustionReason(run);
+      const exhaustedRun: OrchestrationImplementationRun = {
         ...run,
-        status: "code-reviewing",
+        status: "publishing-change-request",
         integrationHeadSha: head.commitSha,
-        validatedHeadSha: null,
         activeValidationHeadSha: null,
         activeValidationKind: null,
         activeValidatorThreadId: null,
         activeFixerThreadId: null,
         fixOrigin: null,
-        codeReviewedHeadSha: null,
-        activeCodeReviewHeadSha: null,
-        activeCodeReviewThreadId: null,
+        reviewGateExhaustedAt: updatedAt,
+        reviewGateExhaustionReason: exhaustionReason,
         retryableFailure: null,
         updatedAt,
       };
-      yield* startCodeReview({
-        sourceThreadId,
-        run: repairedRun,
+      yield* appendActivity({
+        threadId: run.orchestratorThreadId,
+        tone: "error",
+        kind: "implementation-review-gate-exhausted",
+        summary:
+          "Final validation repair completed; publishing work in progress without another Code Review",
+        payload: {
+          runId: run.id,
+          cycles: run.codeReviewAttemptCount,
+          maxCycles: IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES,
+          reasonMarkdown: exhaustionReason,
+        },
         createdAt: updatedAt,
-        skipAppReviewRequirement: true,
-        ...(reviewBaseSha === null ? {} : { reviewBaseSha }),
       });
+      yield* fileChangeRequest({ sourceThreadId, run: exhaustedRun, createdAt: updatedAt });
       return;
     }
 
@@ -3794,6 +4264,63 @@ const make = Effect.gen(function* () {
     ) {
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
       const run = findRunById(readModel, directive.runId);
+      if (run !== null && directive.ticketId !== undefined) {
+        const sourceThreadId = findRunSourceThreadId({ readModel, run });
+        const state = run.ticketStates.find(
+          (candidate) =>
+            candidate.ticketId === directive.ticketId &&
+            candidate.codeReviewThreadId === event.payload.threadId,
+        );
+        if (sourceThreadId === null || state?.worktreePath == null || state.branch == null) return;
+        const updatedAt = event.payload.activity.createdAt;
+        const [head, status] = yield* Effect.all([
+          gitWorkflow.resolveCommit({ cwd: state.worktreePath, ref: "HEAD" }),
+          gitWorkflow.localStatus({ cwd: state.worktreePath }),
+        ]);
+        const identityValid =
+          status.isRepo && status.refName === state.branch && !status.hasWorkingTreeChanges;
+        const reportedCommit =
+          directive.commitSha === undefined
+            ? null
+            : yield* gitWorkflow
+                .resolveCommit({ cwd: state.worktreePath, ref: directive.commitSha })
+                .pipe(Effect.option);
+        const findingsCommitValid =
+          directive.status !== "findings" ||
+          (reportedCommit !== null &&
+            Option.isSome(reportedCommit) &&
+            reportedCommit.value.commitSha === head.commitSha);
+        const warningParts = [state.warningMarkdown ?? ""];
+        if (directive.status === "blocked") warningParts.push(directive.reportMarkdown);
+        if (!identityValid)
+          warningParts.push(
+            `Ticket Code Review left an invalid worktree state on '${state.branch}'.`,
+          );
+        if (!findingsCommitValid)
+          warningParts.push("Ticket Code Review findings did not identify the resulting HEAD.");
+        yield* appendActivity({
+          threadId: run.orchestratorThreadId,
+          tone:
+            directive.status === "blocked" || !identityValid || !findingsCommitValid
+              ? "error"
+              : "info",
+          kind: "implementation-ticket-code-review-finished",
+          summary: `Ticket ${directive.ticketId} code review ${directive.status}`,
+          payload: { runId: run.id, ticketId: directive.ticketId, status: directive.status },
+          createdAt: updatedAt,
+        });
+        yield* finishTicketReviewChain({
+          sourceThreadId,
+          run,
+          ticketId: directive.ticketId,
+          commitSha: head.commitSha,
+          codeReviewOutcome: directive.status,
+          usableBranch: identityValid && findingsCommitValid,
+          warningMarkdown: warningParts.filter(Boolean).join("\n\n") || null,
+          createdAt: updatedAt,
+        });
+        return;
+      }
       if (
         run === null ||
         run.status !== "code-reviewing" ||
@@ -3819,42 +4346,26 @@ const make = Effect.gen(function* () {
       });
 
       if (directive.status === "blocked") {
-        if (run.codeReviewAttemptCount >= IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES) {
-          const exhaustionReason = `Code Review remained blocked after ${run.codeReviewAttemptCount}/${IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES} bounded attempts. Latest report: ${directive.reportMarkdown.slice(0, 1_000)}`;
-          const exhaustedRun: OrchestrationImplementationRun = {
-            ...run,
-            status: "publishing-change-request",
-            activeCodeReviewHeadSha: null,
-            activeCodeReviewThreadId: null,
-            latestCodeReviewReportMarkdown: directive.reportMarkdown,
-            reviewGateExhaustedAt: updatedAt,
-            reviewGateExhaustionReason: exhaustionReason,
-            retryableFailure: null,
-            updatedAt,
-          };
-          yield* appendActivity({
-            threadId: run.orchestratorThreadId,
-            tone: "error",
-            kind: "implementation-review-gate-exhausted",
-            summary: `Code Review stopped after ${run.codeReviewAttemptCount}/${IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES} attempts; publishing work in progress`,
-            payload: {
-              runId: run.id,
-              cycles: run.codeReviewAttemptCount,
-              maxCycles: IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES,
-              reasonMarkdown: exhaustionReason,
-            },
-            createdAt: updatedAt,
-          });
-          yield* fileChangeRequest({ sourceThreadId, run: exhaustedRun, createdAt: updatedAt });
-          return;
-        }
-        yield* blockRun({
-          sourceThreadId,
-          run,
-          retryableStage: "code-review",
-          reasonMarkdown: directive.reportMarkdown,
+        const blockedRun: OrchestrationImplementationRun = {
+          ...run,
+          status: run.appReviewedHeadSha === null ? "qa-reviewing" : "publishing-change-request",
+          activeCodeReviewHeadSha: null,
+          activeCodeReviewThreadId: null,
+          latestCodeReviewReportMarkdown: directive.reportMarkdown,
+          reviewGateExhaustedAt: updatedAt,
+          reviewGateExhaustionReason: directive.reportMarkdown,
+          retryableFailure: null,
           updatedAt,
-        });
+        };
+        if (
+          run.appReviewedHeadSha === null &&
+          run.qaExhaustedAt === null &&
+          run.appReviewExhaustedAt === null
+        ) {
+          yield* startBrowserReview({ sourceThreadId, run: blockedRun, createdAt: updatedAt });
+        } else {
+          yield* fileChangeRequest({ sourceThreadId, run: blockedRun, createdAt: updatedAt });
+        }
         return;
       }
 
@@ -3887,17 +4398,30 @@ const make = Effect.gen(function* () {
           });
           return;
         }
+        const reviewedRun: OrchestrationImplementationRun = {
+          ...run,
+          codeReviewedHeadSha: head.commitSha,
+          activeCodeReviewHeadSha: null,
+          activeCodeReviewThreadId: null,
+          latestCodeReviewReportMarkdown: directive.reportMarkdown,
+          validatedHeadSha: null,
+          updatedAt,
+        };
+        if (
+          run.appReviewedHeadSha === null &&
+          run.qaExhaustedAt === null &&
+          run.appReviewExhaustedAt === null
+        ) {
+          yield* startBrowserReview({
+            sourceThreadId,
+            run: { ...reviewedRun, codeReviewedHeadSha: null, status: "qa-reviewing" },
+            createdAt: updatedAt,
+          });
+          return;
+        }
         yield* startMergeGate({
           sourceThreadId,
-          run: {
-            ...run,
-            codeReviewedHeadSha: head.commitSha,
-            activeCodeReviewHeadSha: null,
-            activeCodeReviewThreadId: null,
-            latestCodeReviewReportMarkdown: directive.reportMarkdown,
-            validatedHeadSha: null,
-            updatedAt,
-          },
+          run: reviewedRun,
           integration: {
             baseTicketId: null,
             baseRefName: run.orchestratorBranch,
@@ -3970,7 +4494,10 @@ const make = Effect.gen(function* () {
         validatedHeadSha: null,
         updatedAt,
       };
-      const needsFreshAppReview = codeReviewNeedsFreshAppReview(reviewedRun, head.commitSha);
+      const needsFreshAppReview =
+        run.appReviewedHeadSha === null &&
+        run.qaExhaustedAt === null &&
+        run.appReviewExhaustedAt === null;
       yield* startMergeGate({
         sourceThreadId,
         run: reviewedRun,
@@ -4487,6 +5014,69 @@ const make = Effect.gen(function* () {
     if (run === null || run.appReviewStrategy !== "nested-workflow") return;
     const sourceThreadId = findRunSourceThreadId({ readModel, run });
     if (sourceThreadId === null) return;
+    const ticketId = nestedRun.caller.ticketId;
+    if (ticketId !== undefined) {
+      const ticketState = run.ticketStates.find((state) => state.ticketId === ticketId);
+      if (ticketState === undefined) return;
+      const linkedTicketRun: OrchestrationImplementationRun = {
+        ...run,
+        ticketStates: run.ticketStates.map((state) =>
+          state.ticketId === ticketId
+            ? {
+                ...state,
+                status: "app-reviewing" as const,
+                appReviewWorkflowRunId: nestedRun.id,
+                updatedAt: event.occurredAt,
+              }
+            : state,
+        ),
+        updatedAt: event.occurredAt,
+      };
+      if (event.type === "thread.app-review-workflow-launched" || nestedRun.status === "running") {
+        yield* updateRun({ sourceThreadId, run: linkedTicketRun, createdAt: event.occurredAt });
+        return;
+      }
+      const outcome = nestedRun.outcome ?? nestedRun.status;
+      const warningMarkdown =
+        outcome === "passed"
+          ? undefined
+          : (nestedRun.failure?.detailMarkdown ??
+            nestedRun.cycles.at(-1)?.actionableFindingsMarkdown ??
+            `Ticket App Review ended ${outcome}.`);
+      const reviewedTicketRun: OrchestrationImplementationRun = {
+        ...linkedTicketRun,
+        ticketStates: linkedTicketRun.ticketStates.map((state) =>
+          state.ticketId === ticketId
+            ? {
+                ...state,
+                appReviewOutcome: outcome,
+                warningMarkdown: warningMarkdown ?? null,
+                workerResult:
+                  state.workerResult?.status === "succeeded" && nestedRun.finalHeadSha !== null
+                    ? { ...state.workerResult, commitSha: nestedRun.finalHeadSha }
+                    : state.workerResult,
+                updatedAt: event.occurredAt,
+              }
+            : state,
+        ),
+        workerResults: linkedTicketRun.workerResults.map((result) =>
+          result.ticketId === ticketId &&
+          result.status === "succeeded" &&
+          nestedRun.finalHeadSha !== null
+            ? { ...result, commitSha: nestedRun.finalHeadSha }
+            : result,
+        ),
+        updatedAt: event.occurredAt,
+      };
+      yield* startTicketCodeReview({
+        sourceThreadId,
+        run: reviewedTicketRun,
+        ticketId,
+        ...(warningMarkdown === undefined ? {} : { warningMarkdown }),
+        createdAt: event.occurredAt,
+      });
+      return;
+    }
     if (
       event.type === "thread.app-review-workflow-updated" &&
       nestedRun.status === "blocked" &&
@@ -4591,106 +5181,151 @@ const make = Effect.gen(function* () {
       return;
     }
     if (nestedRun.status === "blocked") {
-      // A reviewer can load a cached/static frontend shell while the worktree backend has stopped
-      // serving. That is an actionable runtime/code failure, not browser-automation blockage.
-      // Diagnose it here, attach pod logs to a TDD repair, and keep the retry inside this Dev
-      // Review step. Only genuinely unavailable review automation uses the bounded unblock path
-      // below.
-      const frontendUrl = linkedRun.appDevStack.frontendUrl;
-      if (frontendUrl !== null) {
-        const healthUrl = appDevStackBackendHealthUrl(frontendUrl);
-        const backendHealth = yield* probeFrontend(healthUrl);
-        if (!backendHealth.ok) {
-          const failureDetail =
-            nestedRun.failure?.detailMarkdown ?? "Nested App Review was blocked.";
-          const diagnostics = yield* appDevStackDiagnostics({
-            run: linkedRun,
-            stackId: linkedRun.appDevStack.stackId,
-            detail: [failureDetail, `Backend health ${healthUrl} ${backendHealth.detail}.`].join(
-              "\n\n",
-            ),
-          });
-          const headSha = yield* resolveQaHeadSha(linkedRun);
-          yield* startQaFixer({
-            sourceThreadId,
-            run: {
-              ...linkedRun,
-              appReviewUnblockAttemptCount: 0,
-              lastQaFailure: {
-                kind: "app-dev-stack",
-                status: "backend-unreachable",
-                detailMarkdown: diagnostics,
-                reviewId: nestedRun.cycles.at(-1)?.reviewId ?? null,
-                headSha,
-                occurredAt: event.occurredAt,
+      if (run.artifactSource === "proposed-plan") {
+        const frontendUrl = linkedRun.appDevStack.frontendUrl;
+        if (frontendUrl !== null) {
+          const healthUrl = appDevStackBackendHealthUrl(frontendUrl);
+          const backendHealth = yield* probeFrontend(healthUrl);
+          if (!backendHealth.ok) {
+            const diagnostics = yield* appDevStackDiagnostics({
+              run: linkedRun,
+              stackId: linkedRun.appDevStack.stackId,
+              detail: [
+                nestedRun.failure?.detailMarkdown ?? "Nested App Review was blocked.",
+                `Backend health ${healthUrl} ${backendHealth.detail}.`,
+              ].join("\n\n"),
+            });
+            const headSha = yield* resolveQaHeadSha(linkedRun);
+            yield* startQaFixer({
+              sourceThreadId,
+              run: {
+                ...linkedRun,
+                appReviewUnblockAttemptCount: 0,
+                lastQaFailure: {
+                  kind: "app-dev-stack",
+                  status: "backend-unreachable",
+                  detailMarkdown: diagnostics,
+                  reviewId: nestedRun.cycles.at(-1)?.reviewId ?? null,
+                  headSha,
+                  occurredAt: event.occurredAt,
+                },
+                retryableFailure: null,
+                updatedAt: event.occurredAt,
               },
-              retryableFailure: null,
-              updatedAt: event.occurredAt,
+              origin: "app-dev-stack",
+              failureMarkdown: diagnostics,
+              createdAt: event.occurredAt,
+            });
+            return;
+          }
+        }
+        if (runIds.at(-1) !== nestedRun.id) return;
+        if (
+          linkedRun.appReviewUnblockAttemptCount <
+          IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS
+        ) {
+          const unblockAttempt = linkedRun.appReviewUnblockAttemptCount + 1;
+          const recoveringRun: OrchestrationImplementationRun = {
+            ...linkedRun,
+            status: "qa-reviewing",
+            appReviewUnblockAttemptCount: unblockAttempt,
+            retryableFailure: null,
+            updatedAt: event.occurredAt,
+          };
+          yield* updateRun({ sourceThreadId, run: recoveringRun, createdAt: event.occurredAt });
+          yield* appendActivity({
+            threadId: recoveringRun.orchestratorThreadId,
+            tone: "info",
+            kind: "implementation-app-review-unblock-attempted",
+            summary: `Retrying blocked App Review (${unblockAttempt}/${IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS})`,
+            payload: {
+              runId: recoveringRun.id,
+              nestedAppReviewRunId: nestedRun.id,
+              attempt: unblockAttempt,
+              maxAttempts: IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS,
+              reasonMarkdown: nestedRun.failure?.detailMarkdown ?? "Nested App Review was blocked.",
             },
-            origin: "app-dev-stack",
-            failureMarkdown: diagnostics,
+            createdAt: event.occurredAt,
+          });
+          yield* startBrowserReview({
+            sourceThreadId,
+            run: recoveringRun,
             createdAt: event.occurredAt,
           });
           return;
         }
-      }
-      // A blocked review means its automation could not produce a trustworthy verdict; it does
-      // not consume the separate ten-repair product budget. Re-ensuring the inherited stack here
-      // also probes the exact frontend before a fresh nested run receives a fresh browser runtime.
-      // Ignore terminal updates from superseded nested runs so duplicate/stale events cannot spend
-      // the bounded recovery budget.
-      if (runIds.at(-1) !== nestedRun.id) return;
-      if (
-        linkedRun.appReviewUnblockAttemptCount < IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS
-      ) {
-        const unblockAttempt = linkedRun.appReviewUnblockAttemptCount + 1;
-        const recoveringRun: OrchestrationImplementationRun = {
-          ...linkedRun,
-          status: "qa-reviewing",
-          appReviewUnblockAttemptCount: unblockAttempt,
-          retryableFailure: null,
-          updatedAt: event.occurredAt,
-        };
-        yield* updateRun({ sourceThreadId, run: recoveringRun, createdAt: event.occurredAt });
-        yield* appendActivity({
-          threadId: recoveringRun.orchestratorThreadId,
-          tone: "info",
-          kind: "implementation-app-review-unblock-attempted",
-          summary: `Retrying blocked App Review (${unblockAttempt}/${IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS})`,
-          payload: {
-            runId: recoveringRun.id,
-            nestedAppReviewRunId: nestedRun.id,
-            attempt: unblockAttempt,
-            maxAttempts: IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS,
-            reasonMarkdown: nestedRun.failure?.detailMarkdown ?? "Nested App Review was blocked.",
-          },
-          createdAt: event.occurredAt,
-        });
-        yield* startBrowserReview({
+        yield* blockRun({
           sourceThreadId,
-          run: recoveringRun,
-          createdAt: event.occurredAt,
+          run: linkedRun,
+          retryableStage: "app-review",
+          reasonMarkdown: `Nested App Review remained blocked after ${IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS} automatic unblock attempts. Latest failure:\n\n${nestedRun.failure?.detailMarkdown ?? "Nested App Review was blocked without failure details."}`,
+          updatedAt: event.occurredAt,
+          humanBlocked: true,
         });
         return;
       }
-      yield* blockRun({
-        sourceThreadId,
-        run: linkedRun,
-        retryableStage: "app-review",
-        reasonMarkdown: `Nested App Review remained blocked after ${IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS} automatic unblock attempts. Latest failure:\n\n${nestedRun.failure?.detailMarkdown ?? "Nested App Review was blocked without failure details."}`,
+      const blockedHeadSha = nestedRun.finalHeadSha ?? nestedRun.workspaceRevision.headSha;
+      const blockedRun: OrchestrationImplementationRun = {
+        ...linkedRun,
+        status: "qa-reviewing",
+        integrationHeadSha: blockedHeadSha,
+        qaAttemptCount: nestedRun.cyclesUsed,
+        appReviewExhaustedAt: event.occurredAt,
+        lastQaFailure: {
+          kind: "app-review",
+          status: "blocked",
+          detailMarkdown: nestedRun.failure?.detailMarkdown ?? "Combined App Review was blocked.",
+          reviewId: nestedRun.cycles.at(-1)?.reviewId ?? null,
+          headSha: blockedHeadSha,
+          occurredAt: event.occurredAt,
+        },
+        retryableFailure: null,
         updatedAt: event.occurredAt,
-        humanBlocked: true,
+      };
+      yield* updateRun({ sourceThreadId, run: blockedRun, createdAt: event.occurredAt });
+      yield* startCodeReview({
+        sourceThreadId,
+        run: blockedRun,
+        createdAt: event.occurredAt,
+        skipAppReviewRequirement: true,
       });
       return;
     }
     if (nestedRun.status === "canceled") {
-      yield* blockRun({
-        sourceThreadId,
-        run: linkedRun,
-        retryableStage: "app-review",
-        reasonMarkdown: nestedRun.failure?.detailMarkdown ?? "Nested App Review was canceled.",
+      if (run.artifactSource === "proposed-plan") {
+        yield* blockRun({
+          sourceThreadId,
+          run: linkedRun,
+          retryableStage: "app-review",
+          reasonMarkdown: nestedRun.failure?.detailMarkdown ?? "Nested App Review was canceled.",
+          updatedAt: event.occurredAt,
+          humanBlocked: true,
+        });
+        return;
+      }
+      const canceledHeadSha = nestedRun.finalHeadSha ?? nestedRun.workspaceRevision.headSha;
+      const canceledRun: OrchestrationImplementationRun = {
+        ...linkedRun,
+        status: "qa-reviewing",
+        integrationHeadSha: canceledHeadSha,
+        appReviewExhaustedAt: event.occurredAt,
+        lastQaFailure: {
+          kind: "app-review",
+          status: "canceled",
+          detailMarkdown: nestedRun.failure?.detailMarkdown ?? "Combined App Review was canceled.",
+          reviewId: nestedRun.cycles.at(-1)?.reviewId ?? null,
+          headSha: canceledHeadSha,
+          occurredAt: event.occurredAt,
+        },
+        retryableFailure: null,
         updatedAt: event.occurredAt,
-        humanBlocked: true,
+      };
+      yield* updateRun({ sourceThreadId, run: canceledRun, createdAt: event.occurredAt });
+      yield* startCodeReview({
+        sourceThreadId,
+        run: canceledRun,
+        createdAt: event.occurredAt,
+        skipAppReviewRequirement: true,
       });
     }
   });
@@ -4733,6 +5368,9 @@ const make = Effect.gen(function* () {
     event: ImplementationWorkflowEvent,
   ) {
     switch (event.type) {
+      case "thread.planning-tickets-created":
+        yield* handlePromptTicketsCreated(event);
+        return;
       case "thread.implementation-run-launched":
         yield* handleRunLaunched(event);
         return;
@@ -4940,7 +5578,9 @@ const make = Effect.gen(function* () {
         run.status === "canceled" ||
         run.artifactSource !== "planning-spec" ||
         (run.status !== "running" && run.status !== "integrating" && run.status !== "validating") ||
-        !run.ticketStates.every((state) => state.status === "succeeded")
+        !run.ticketStates.every(
+          (state) => state.status === "succeeded" || state.status === "failed",
+        )
       ) {
         continue;
       }
@@ -5146,6 +5786,46 @@ const make = Effect.gen(function* () {
       }
 
       if (run.artifactSource === "planning-spec" && run.status === "running") {
+        const pendingTicketReview = run.ticketStates.find(
+          (state) => state.status === "app-reviewing" && state.appReviewWorkflowRunId == null,
+        );
+        if (pendingTicketReview !== undefined) {
+          yield* recoverRunStage(
+            run.id,
+            "ticket-app-review",
+            startTicketAppReview({
+              sourceThreadId,
+              run,
+              ticketId: pendingTicketReview.ticketId,
+              createdAt,
+            }),
+          );
+          continue;
+        }
+        const interruptedTicketCodeReview = run.ticketStates.find((state) => {
+          if (state.status !== "code-reviewing") return false;
+          const thread =
+            state.codeReviewThreadId == null
+              ? undefined
+              : readModel.threads.find((candidate) => candidate.id === state.codeReviewThreadId);
+          return thread?.session?.status !== "starting" && thread?.session?.status !== "running";
+        });
+        if (interruptedTicketCodeReview !== undefined) {
+          yield* recoverRunStage(
+            run.id,
+            "ticket-code-review",
+            startTicketCodeReview({
+              sourceThreadId,
+              run,
+              ticketId: interruptedTicketCodeReview.ticketId,
+              ...(interruptedTicketCodeReview.warningMarkdown == null
+                ? {}
+                : { warningMarkdown: interruptedTicketCodeReview.warningMarkdown }),
+              createdAt,
+            }),
+          );
+          continue;
+        }
         const interruptedWorkerIds = new Set(
           run.ticketStates
             .filter((state) => {
@@ -5375,6 +6055,7 @@ const make = Effect.gen(function* () {
     yield* Effect.forkScoped(
       Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
         if (
+          event.type !== "thread.planning-tickets-created" &&
           event.type !== "thread.implementation-run-launched" &&
           event.type !== "thread.activity-appended" &&
           event.type !== "thread.app-review-updated" &&

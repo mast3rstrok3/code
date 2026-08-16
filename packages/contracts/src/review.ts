@@ -57,6 +57,7 @@ export const AppReviewWorkflowCaller = Schema.Union([
     type: Schema.Literal("implementation"),
     implementationRunId: TrimmedNonEmptyString,
     orchestratorThreadId: ThreadId,
+    ticketId: Schema.optionalKey(TrimmedNonEmptyString),
   }),
 ]);
 export type AppReviewWorkflowCaller = typeof AppReviewWorkflowCaller.Type;

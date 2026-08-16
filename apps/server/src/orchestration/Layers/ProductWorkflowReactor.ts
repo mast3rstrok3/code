@@ -62,6 +62,8 @@ const PRODUCT_GRILL_RECOVERY_MAX_ATTEMPTS = 2;
 const ENGINEERING_GRILL_RECOVERY_MAX_ATTEMPTS = 2;
 const ENGINEERING_GRILL_RECOVERY_PROMPT_PREFIX =
   "The previous automatic Engineering Grill turn completed without its required workflow directive.";
+const PRODUCT_CONTEXT_RECOVERY_PROMPT_PREFIX =
+  "The previous automatic Product Context turn completed without its required workflow directive.";
 
 const isProductWorkflowThread = isProductWorkflowRoot;
 
@@ -141,9 +143,11 @@ const buildProductGrillRecoveryPrompt = (thread: OrchestrationThread) => {
   ].join("\n");
 };
 
-const buildEngineeringGrillRecoveryPrompt = () =>
+const buildEngineeringGrillRecoveryPrompt = (productContextOnly = false) =>
   [
-    ENGINEERING_GRILL_RECOVERY_PROMPT_PREFIX,
+    productContextOnly
+      ? PRODUCT_CONTEXT_RECOVERY_PROMPT_PREFIX
+      : ENGINEERING_GRILL_RECOVERY_PROMPT_PREFIX,
     "",
     "Keep the locked Product Grill intent and the engineering decisions already resolved in the conversation authoritative. Do not repeat the Product Grill, ask the user questions, or wait for confirmation.",
     "",
@@ -404,7 +408,12 @@ const make = Effect.gen(function* () {
   ) {
     const thread = yield* resolveThread(event.payload.threadId);
     if (!thread) return;
-    const context = yield* resolveProductPlanningContext(thread);
+    const productContext = yield* resolveProductPlanningContext(thread);
+    const context =
+      productContext ??
+      (thread.workflowRole === null && thread.workflowPreset === "planning"
+        ? { planningThread: thread, productRootThread: thread }
+        : null);
     if (context === null) return;
     yield* launchImplementationForContext({
       context,
@@ -429,7 +438,12 @@ const make = Effect.gen(function* () {
       ) {
         continue;
       }
-      const context = yield* resolveProductPlanningContext(planningThread);
+      const productContext = yield* resolveProductPlanningContext(planningThread);
+      const context =
+        productContext ??
+        (planningThread.workflowRole === null && planningThread.workflowPreset === "planning"
+          ? { planningThread, productRootThread: planningThread }
+          : null);
       if (context === null) continue;
       yield* launchImplementationForContext({
         context,
@@ -448,7 +462,10 @@ const make = Effect.gen(function* () {
     if (!thread) return;
     const context = yield* resolveProductPlanningContext(thread);
 
-    if (cycle.status === "passed" && context !== null) {
+    const startsImplementation =
+      context !== null || (thread.workflowRole === null && thread.workflowPreset === "planning");
+
+    if (cycle.status === "passed" && startsImplementation) {
       yield* launchImplementation(event);
       return;
     }
@@ -460,7 +477,7 @@ const make = Effect.gen(function* () {
         cycle,
         createdAt: event.payload.revisedAt,
       });
-      if (context !== null) {
+      if (startsImplementation) {
         yield* launchImplementation(event);
       }
       return;
@@ -908,12 +925,20 @@ const make = Effect.gen(function* () {
     readonly relaunchPendingRecovery?: boolean;
   }) {
     const { thread } = input;
-    if (!isProductWorkflowThread(thread) || thread.workflowPreset !== "full-feature") return;
+    if (
+      !isProductWorkflowThread(thread) ||
+      (thread.workflowPreset !== "full-feature" && thread.workflowPreset !== "product-planning")
+    )
+      return;
     if (thread.planningWorkflow?.stage !== "grill") return;
+    const productContextOnly = thread.workflowPreset === "product-planning";
+    const recoveryPrefix = productContextOnly
+      ? PRODUCT_CONTEXT_RECOVERY_PROMPT_PREFIX
+      : ENGINEERING_GRILL_RECOVERY_PROMPT_PREFIX;
     const latestUserMessageAt = thread.messages.reduce<string | null>(
       (latest, message) =>
         message.role === "user" &&
-        !message.text.startsWith(ENGINEERING_GRILL_RECOVERY_PROMPT_PREFIX) &&
+        !message.text.startsWith(recoveryPrefix) &&
         (latest === null || message.createdAt > latest)
           ? message.createdAt
           : latest,
@@ -930,9 +955,7 @@ const make = Effect.gen(function* () {
     }
 
     const recoveryMessages = thread.messages.filter(
-      (message) =>
-        message.role === "user" &&
-        message.text.startsWith(ENGINEERING_GRILL_RECOVERY_PROMPT_PREFIX),
+      (message) => message.role === "user" && message.text.startsWith(recoveryPrefix),
     );
     const recoveryAlreadyLaunched = recoveryMessages.some(
       (message) => message.createdAt >= (thread.latestTurn?.completedAt ?? input.createdAt),
@@ -971,12 +994,15 @@ const make = Effect.gen(function* () {
       message: {
         messageId: yield* serverMessageId("engineering-grill-recovery"),
         role: "user",
-        text: buildEngineeringGrillRecoveryPrompt(),
+        text: buildEngineeringGrillRecoveryPrompt(productContextOnly),
         attachments: [],
       },
       runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
       interactionMode: "planning-workflow",
-      workflowPromptId: WORKFLOW_PROMPT_IDS.planningAutomaticEngineeringGrillCodex,
+      workflowPromptId:
+        thread.workflowPreset === "product-planning"
+          ? WORKFLOW_PROMPT_IDS.planningProductContextCodex
+          : WORKFLOW_PROMPT_IDS.planningAutomaticEngineeringGrillCodex,
       createdAt: input.createdAt,
     });
     yield* appendActivity({
@@ -1014,7 +1040,8 @@ const make = Effect.gen(function* () {
     for (const candidate of readModel.threads) {
       if (
         !isProductWorkflowThread(candidate) ||
-        candidate.workflowPreset !== "full-feature" ||
+        (candidate.workflowPreset !== "full-feature" &&
+          candidate.workflowPreset !== "product-planning") ||
         candidate.planningWorkflow?.stage !== "grill" ||
         candidate.latestTurn?.state !== "completed"
       ) {

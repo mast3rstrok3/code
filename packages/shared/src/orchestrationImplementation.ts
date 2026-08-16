@@ -12,7 +12,12 @@ export interface WorkflowWorkspaceIdentity {
 export function workflowPresetStartsInDedicatedWorkspace(
   preset: WorkflowPreset | null | undefined,
 ): boolean {
-  return preset === "planning" || preset === "full-feature" || preset === "fast-feature";
+  return (
+    preset === "planning" ||
+    preset === "product-planning" ||
+    preset === "full-feature" ||
+    preset === "fast-feature"
+  );
 }
 
 export function resolveWorkflowWorkspaceIdentity(
