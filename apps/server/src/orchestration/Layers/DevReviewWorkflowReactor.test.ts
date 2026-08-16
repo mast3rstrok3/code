@@ -10,9 +10,11 @@ import {
 
 import {
   nextDevReviewWorkflowAction,
+  selectReviewRunToStart,
   selectStandalonePreviewTargets,
   terminalReviewAction,
   terminalReviewEvidenceFailure,
+  terminalReviewPassFailure,
 } from "./DevReviewWorkflowReactor.ts";
 
 const now = "2026-01-01T00:00:00.000Z";
@@ -96,6 +98,19 @@ function review(
 
 it("always begins a nonterminal run with Browser Dev Review", () => {
   expect(nextDevReviewWorkflowAction(run())).toBe("review");
+});
+
+it("selects only the latest idle run for a new review cycle", () => {
+  const staleEventRun = run({ updatedAt: "2026-01-01T00:00:01.000Z" });
+  const reviewing = run({
+    activePhase: "review",
+    activeThreadId: ThreadId.make("thread-reviewer"),
+    attemptsUsed: 1,
+    updatedAt: "2026-01-01T00:00:02.000Z",
+  });
+
+  expect(selectReviewRunToStart(staleEventRun.id, [reviewing])).toBeNull();
+  expect(selectReviewRunToStart(staleEventRun.id, [staleEventRun])).toBe(staleEventRun);
 });
 
 it("resolves standalone previews from the matching running App Dev Stack", () => {
@@ -210,6 +225,119 @@ it("waits for Implementation to refresh AppDevStack after an embedded repair", (
 it("passes on cycle one and plans a repair after an ordinary failed review", () => {
   expect(terminalReviewAction(run({ attemptsUsed: 1 }), review("passed"))).toBe("passed");
   expect(terminalReviewAction(run({ attemptsUsed: 1 }), review("failed"))).toBe("planning");
+});
+
+it("rejects passed reviews that defer or omit required checks", () => {
+  const passed = review("passed");
+  expect(terminalReviewPassFailure({ run: run(), review: passed, priorReviews: [] })).toContain(
+    "without a check matrix",
+  );
+
+  const deferred = {
+    ...passed,
+    document: {
+      ...passed.document,
+      checks: [
+        {
+          id: "delete-confirmation",
+          label: "Delete confirmation",
+          status: "not-applicable" as const,
+          notes: "Deferred to another cycle.",
+        },
+      ],
+    },
+  } satisfies DevReviewRecord;
+  expect(terminalReviewPassFailure({ run: run(), review: deferred, priorReviews: [] })).toContain(
+    "delete-confirmation=not-applicable",
+  );
+});
+
+it("requires repair cycles to verify every prior actionable finding by id", () => {
+  const failed = review("failed");
+  const passed = {
+    ...review("passed"),
+    id: DevReviewId.make("dev-review-2"),
+    reviewThreadId: ThreadId.make("thread-reviewer-2"),
+  } satisfies DevReviewRecord;
+  const secondCycleRun = run({
+    attemptsUsed: 2,
+    cycles: [
+      {
+        cycleNumber: 1,
+        status: "completed",
+        reviewId: failed.id,
+        reviewerThreadId: failed.reviewThreadId,
+        reviewVerdict: "failed",
+        actionableFindingsMarkdown: "Submit does not recover.",
+        planId: "plan-1",
+        plannerTurnId: null,
+        fixerThreadId: ThreadId.make("thread-fixer"),
+        fixResult: null,
+        workspaceRevision: run().workspaceRevision,
+        startedAt: now,
+        completedAt: now,
+      },
+      {
+        cycleNumber: 2,
+        status: "reviewing",
+        reviewId: passed.id,
+        reviewerThreadId: passed.reviewThreadId,
+        reviewVerdict: null,
+        actionableFindingsMarkdown: null,
+        planId: null,
+        plannerTurnId: null,
+        fixerThreadId: null,
+        fixResult: null,
+        workspaceRevision: run().workspaceRevision,
+        startedAt: now,
+        completedAt: null,
+      },
+    ],
+  });
+  const unrelatedPass = {
+    ...passed,
+    document: {
+      ...passed.document,
+      checks: [
+        {
+          id: "happy-path",
+          label: "Happy path",
+          status: "passed" as const,
+          notes: "Passed.",
+        },
+      ],
+    },
+  } satisfies DevReviewRecord;
+  expect(
+    terminalReviewPassFailure({
+      run: secondCycleRun,
+      review: unrelatedPass,
+      priorReviews: [failed],
+    }),
+  ).toContain("finding-1");
+
+  const verifiedPass = {
+    ...unrelatedPass,
+    document: {
+      ...unrelatedPass.document,
+      checks: [
+        ...unrelatedPass.document.checks,
+        {
+          id: "finding-1",
+          label: "Submit recovery regression",
+          status: "passed" as const,
+          notes: "The button recovers after rejection.",
+        },
+      ],
+    },
+  } satisfies DevReviewRecord;
+  expect(
+    terminalReviewPassFailure({
+      run: secondCycleRun,
+      review: verifiedPass,
+      priorReviews: [failed],
+    }),
+  ).toBeNull();
 });
 
 it("exhausts on the final failed review without scheduling another repair", () => {

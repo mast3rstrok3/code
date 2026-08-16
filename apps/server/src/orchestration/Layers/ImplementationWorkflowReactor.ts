@@ -90,6 +90,25 @@ type FixDirective = {
   readonly notesMarkdown: string;
 };
 
+export function codeReviewNeedsFreshDevReview(
+  run: OrchestrationImplementationRun,
+  reviewedHeadSha: string,
+): boolean {
+  return (
+    run.qaExhaustedAt === null &&
+    run.devReviewExhaustedAt === null &&
+    run.devReviewedHeadSha !== null &&
+    run.devReviewedHeadSha !== reviewedHeadSha
+  );
+}
+
+export function passedDevReviewContinuation(
+  run: OrchestrationImplementationRun,
+  reviewedHeadSha: string,
+): "code-review" | "final-validation" {
+  return run.codeReviewedHeadSha === reviewedHeadSha ? "final-validation" : "code-review";
+}
+
 type CodeReviewDirective = {
   readonly type: "implementation-code-review-result";
   readonly runId: string;
@@ -1464,6 +1483,7 @@ const make = Effect.gen(function* () {
       readonly run: OrchestrationImplementationRun;
       readonly integration: BranchIntegration;
       readonly kind: "integration" | "final";
+      readonly preserveCodeReviewedHead?: boolean;
       readonly createdAt: string;
     }) {
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
@@ -1497,7 +1517,9 @@ const make = Effect.gen(function* () {
               devReviewedHeadSha: null,
               activeDevReviewHeadSha: null,
               activeDevReviewThreadId: null,
-              codeReviewedHeadSha: null,
+              codeReviewedHeadSha: input.preserveCodeReviewedHead
+                ? input.run.codeReviewedHeadSha
+                : null,
               activeCodeReviewHeadSha: null,
               activeCodeReviewThreadId: null,
             }
@@ -3937,17 +3959,19 @@ const make = Effect.gen(function* () {
         return;
       }
 
+      const reviewedRun: OrchestrationImplementationRun = {
+        ...run,
+        codeReviewedHeadSha: head.commitSha,
+        activeCodeReviewHeadSha: null,
+        activeCodeReviewThreadId: null,
+        latestCodeReviewReportMarkdown: directive.reportMarkdown,
+        validatedHeadSha: null,
+        updatedAt,
+      };
+      const needsFreshDevReview = codeReviewNeedsFreshDevReview(reviewedRun, head.commitSha);
       yield* startMergeGate({
         sourceThreadId,
-        run: {
-          ...run,
-          codeReviewedHeadSha: head.commitSha,
-          activeCodeReviewHeadSha: null,
-          activeCodeReviewThreadId: null,
-          latestCodeReviewReportMarkdown: directive.reportMarkdown,
-          validatedHeadSha: null,
-          updatedAt,
-        },
+        run: reviewedRun,
         integration: {
           baseTicketId: null,
           baseRefName: run.orchestratorBranch,
@@ -3958,7 +3982,10 @@ const make = Effect.gen(function* () {
           remainingTicketIds: [],
           remainingRefNames: [],
         },
-        kind: "final",
+        // Code Review owns its fixes, but those fixes have not been exercised by the browser. Run
+        // the focused integration gate and Dev Review on the new HEAD before complete validation.
+        kind: needsFreshDevReview ? "integration" : "final",
+        preserveCodeReviewedHead: needsFreshDevReview,
         createdAt: updatedAt,
       });
     },
@@ -4022,19 +4049,39 @@ const make = Effect.gen(function* () {
       }
 
       if (event.payload.status === "passed") {
-        yield* startCodeReview({
-          sourceThreadId,
-          run: {
-            ...run,
-            devReviewedHeadSha: head.commitSha,
-            activeDevReviewHeadSha: null,
-            activeDevReviewThreadId: null,
-            lastQaFailure: null,
-            retryableFailure: null,
-            updatedAt: event.payload.updatedAt,
-          },
-          createdAt: event.payload.updatedAt,
-        });
+        const passedRun: OrchestrationImplementationRun = {
+          ...run,
+          devReviewedHeadSha: head.commitSha,
+          activeDevReviewHeadSha: null,
+          activeDevReviewThreadId: null,
+          lastQaFailure: null,
+          retryableFailure: null,
+          updatedAt: event.payload.updatedAt,
+        };
+        if (passedDevReviewContinuation(passedRun, head.commitSha) === "final-validation") {
+          yield* startMergeGate({
+            sourceThreadId,
+            run: passedRun,
+            integration: {
+              baseTicketId: null,
+              baseRefName: passedRun.orchestratorBranch,
+              mergedTicketIds: [],
+              conflictedTicketId: null,
+              conflictedRefName: null,
+              conflictedFiles: [],
+              remainingTicketIds: [],
+              remainingRefNames: [],
+            },
+            kind: "final",
+            createdAt: event.payload.updatedAt,
+          });
+        } else {
+          yield* startCodeReview({
+            sourceThreadId,
+            run: passedRun,
+            createdAt: event.payload.updatedAt,
+          });
+        }
         return;
       }
 
@@ -4480,18 +4527,38 @@ const make = Effect.gen(function* () {
       return;
     }
     if (nestedRun.status === "passed") {
+      const reviewedHeadSha = nestedRun.finalHeadSha ?? nestedRun.workspaceRevision.headSha;
       const passedRun: OrchestrationImplementationRun = {
         ...linkedRun,
         status: "qa-reviewing",
-        integrationHeadSha: nestedRun.finalHeadSha ?? nestedRun.workspaceRevision.headSha,
-        devReviewedHeadSha: nestedRun.finalHeadSha ?? nestedRun.workspaceRevision.headSha,
+        integrationHeadSha: reviewedHeadSha,
+        devReviewedHeadSha: reviewedHeadSha,
         qaAttemptCount: nestedRun.attemptsUsed,
         devReviewUnblockAttemptCount: 0,
         retryableFailure: null,
         updatedAt: event.occurredAt,
       };
       yield* updateRun({ sourceThreadId, run: passedRun, createdAt: event.occurredAt });
-      yield* startCodeReview({ sourceThreadId, run: passedRun, createdAt: event.occurredAt });
+      if (passedDevReviewContinuation(passedRun, reviewedHeadSha) === "final-validation") {
+        yield* startMergeGate({
+          sourceThreadId,
+          run: passedRun,
+          integration: {
+            baseTicketId: null,
+            baseRefName: passedRun.orchestratorBranch,
+            mergedTicketIds: [],
+            conflictedTicketId: null,
+            conflictedRefName: null,
+            conflictedFiles: [],
+            remainingTicketIds: [],
+            remainingRefNames: [],
+          },
+          kind: "final",
+          createdAt: event.occurredAt,
+        });
+      } else {
+        yield* startCodeReview({ sourceThreadId, run: passedRun, createdAt: event.occurredAt });
+      }
       return;
     }
     if (nestedRun.status === "exhausted") {

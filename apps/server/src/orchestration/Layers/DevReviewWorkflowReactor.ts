@@ -155,6 +155,22 @@ export function nextDevReviewWorkflowAction(
   }
 }
 
+export function selectReviewRunToStart(
+  runId: DevReviewWorkflowRun["id"],
+  runs: ReadonlyArray<DevReviewWorkflowRun>,
+): DevReviewWorkflowRun | null {
+  const run = runs.find((candidate) => candidate.id === runId);
+  if (
+    run === undefined ||
+    run.status !== "running" ||
+    run.activePhase !== null ||
+    run.attemptsUsed >= run.cycleBudget
+  ) {
+    return null;
+  }
+  return run;
+}
+
 export function terminalReviewAction(
   run: DevReviewWorkflowRun,
   review: DevReviewRecord,
@@ -163,6 +179,58 @@ export function terminalReviewAction(
   if (review.status === "passed" && review.document.verdict === "passed") return "passed";
   if (review.document.findings.length === 0) return "blocked";
   return run.attemptsUsed >= run.cycleBudget ? "exhausted" : "planning";
+}
+
+/**
+ * A reviewer-authored verdict is not enough to close the workflow. Passing reviews must contain a
+ * complete, internally consistent check matrix and must explicitly verify every actionable finding
+ * from earlier cycles. This prevents a narrow happy-path rerun from silently closing a broader
+ * failed review.
+ */
+export function terminalReviewPassFailure(input: {
+  readonly run: DevReviewWorkflowRun;
+  readonly review: DevReviewRecord;
+  readonly priorReviews: ReadonlyArray<DevReviewRecord>;
+}): string | null {
+  if (input.review.status !== "passed" || input.review.document.verdict !== "passed") return null;
+  const checks = input.review.document.checks;
+  if (checks.length === 0) {
+    return "Browser Dev Review reported a pass without a check matrix.";
+  }
+  const incompleteChecks = checks.filter((check) => check.status !== "passed");
+  if (incompleteChecks.length > 0) {
+    return `Browser Dev Review reported a pass with incomplete checks: ${incompleteChecks
+      .map((check) => `${check.id}=${check.status}`)
+      .join(", ")}.`;
+  }
+  const actionableFindings = input.review.document.findings.filter(
+    (finding) => finding.severity !== "note",
+  );
+  if (actionableFindings.length > 0) {
+    return `Browser Dev Review reported a pass with unresolved findings: ${actionableFindings
+      .map((finding) => finding.id)
+      .join(", ")}.`;
+  }
+
+  const currentCycle = input.run.cycles.at(-1)?.cycleNumber ?? 0;
+  const priorReviewIds = new Set(
+    input.run.cycles
+      .filter((cycle) => cycle.cycleNumber < currentCycle)
+      .map((cycle) => cycle.reviewId),
+  );
+  const priorFindingIds = input.priorReviews
+    .filter((review) => priorReviewIds.has(review.id))
+    .flatMap((review) => review.document.findings)
+    .filter((finding) => finding.severity !== "note")
+    .map((finding) => finding.id);
+  const passedCheckIds = new Set(checks.map((check) => check.id));
+  const missingFindingChecks = priorFindingIds.filter(
+    (findingId) => !passedCheckIds.has(findingId),
+  );
+  if (missingFindingChecks.length > 0) {
+    return `Browser Dev Review did not explicitly verify prior findings: ${missingFindingChecks.join(", ")}.`;
+  }
+  return null;
 }
 
 export function terminalReviewEvidenceFailure(
@@ -363,7 +431,11 @@ const make = Effect.gen(function* () {
     }).modelSelection;
   });
 
-  const buildReviewPrompt = (run: DevReviewWorkflowRun, cycle: DevReviewWorkflowCycle) =>
+  const buildReviewPrompt = (
+    run: DevReviewWorkflowRun,
+    cycle: DevReviewWorkflowCycle,
+    priorFindingIds: ReadonlyArray<string>,
+  ) =>
     appendWorkflowSkillCommandSection(
       [
         `Run Browser Dev Review cycle ${cycle.cycleNumber} of ${run.cycleBudget}.`,
@@ -379,6 +451,14 @@ const make = Effect.gen(function* () {
         "These preview targets are authoritative for this Dev Review cycle. Do not substitute deployment URLs from repository documentation, supporting source context, browser history, or environment conventions. If every listed target is unavailable, report the review blocked.",
         "",
         "Use the linked durable Dev Review record. Record the complete flow, capture captioned screenshots, and report every actionable finding. A missing or unavailable preview is blocked, not failed.",
+        "A passed verdict requires a non-empty check matrix in which every check is passed. Do not mark required or deferred acceptance work not-applicable; use failed or blocked with concrete detail.",
+        ...(priorFindingIds.length === 0
+          ? []
+          : [
+              "",
+              "This is a repair verification cycle. Add one passed check with the exact same id for every prior actionable finding before reporting passed:",
+              ...priorFindingIds.map((findingId) => `- ${findingId}`),
+            ]),
       ].join("\n"),
       WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
     );
@@ -399,6 +479,16 @@ const make = Effect.gen(function* () {
       });
       return;
     }
+    const priorReviewIds = new Set(
+      run.cycles
+        .filter((candidate) => candidate.cycleNumber < cycle.cycleNumber)
+        .map((candidate) => candidate.reviewId),
+    );
+    const priorFindingIds = controller.devReviews
+      .filter((review) => priorReviewIds.has(review.id))
+      .flatMap((review) => review.document.findings)
+      .filter((finding) => finding.severity !== "note")
+      .map((finding) => finding.id);
     yield* orchestrationEngine.dispatch({
       type: "thread.dev-review.launch",
       commandId: yield* serverCommandId("dev-review-workflow-review-launch"),
@@ -409,7 +499,7 @@ const make = Effect.gen(function* () {
       message: {
         messageId: yield* serverMessageId("dev-review-workflow-review"),
         role: "user",
-        text: buildReviewPrompt(run, cycle),
+        text: buildReviewPrompt(run, cycle, priorFindingIds),
         attachments: [],
       },
       modelSelection: yield* modelForPrompt(
@@ -426,11 +516,16 @@ const make = Effect.gen(function* () {
     inputRun: DevReviewWorkflowRun,
     occurredAt: string,
   ) {
-    if (inputRun.status !== "running" || inputRun.attemptsUsed >= inputRun.cycleBudget) return;
-    const target = yield* resolveTarget(inputRun.targetThreadId);
+    // Resume/launch requests can be duplicated while projections and sibling reactors settle. Use
+    // the latest persisted run, not the event's stale payload, so only one reviewer can claim the
+    // next cycle.
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    const currentRun = selectReviewRunToStart(inputRun.id, readModel.devReviewWorkflowRuns ?? []);
+    if (currentRun === null) return;
+    const target = yield* resolveTarget(currentRun.targetThreadId);
     if (target === null) {
       yield* blockRun({
-        run: inputRun,
+        run: currentRun,
         reason: "unknown",
         detailMarkdown: "The target worktree is unavailable.",
         occurredAt,
@@ -438,7 +533,7 @@ const make = Effect.gen(function* () {
       return;
     }
     const cwd = target.cwd;
-    const stableRun = yield* assertStableRevision(inputRun, cwd, occurredAt);
+    const stableRun = yield* assertStableRevision(currentRun, cwd, occurredAt);
     if (stableRun === null) return;
     const run = yield* resolveStandalonePreviewTargetsForRun(stableRun, cwd, occurredAt);
     if (run === null) return;
@@ -693,6 +788,20 @@ const make = Effect.gen(function* () {
         run: stableRun,
         reason: "review-blocked",
         detailMarkdown: review.document.summary || "Browser Dev Review was blocked.",
+        occurredAt,
+      });
+      return;
+    }
+    const passFailure = terminalReviewPassFailure({
+      run: stableRun,
+      review,
+      priorReviews: controller?.devReviews ?? [],
+    });
+    if (passFailure !== null) {
+      yield* blockRun({
+        run: stableRun,
+        reason: "review-blocked",
+        detailMarkdown: passFailure,
         occurredAt,
       });
       return;

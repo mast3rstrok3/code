@@ -40,8 +40,10 @@ import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
 import {
   appDevStackBackendHealthUrl,
+  codeReviewNeedsFreshDevReview,
   fastFeatureBuildContractProblems,
   ImplementationWorkflowReactorLive,
+  passedDevReviewContinuation,
   workflowIdForRun,
 } from "./ImplementationWorkflowReactor.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
@@ -1126,6 +1128,26 @@ describe("ImplementationWorkflowReactor", () => {
       appDevStackBackendHealthUrl("https://feature-frontend.example.test/calendar?view=month"),
     ).toBe("https://feature-frontend.example.test/api/health");
   });
+
+  it.effect("requires browser review when Code Review advances a previously reviewed HEAD", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        const reviewedRun: OrchestrationImplementationRun = {
+          ...run,
+          devReviewedHeadSha: "reviewed-head",
+          codeReviewedHeadSha: "code-reviewed-head",
+        };
+
+        expect(codeReviewNeedsFreshDevReview(reviewedRun, "new-head")).toBe(true);
+        expect(codeReviewNeedsFreshDevReview(reviewedRun, "reviewed-head")).toBe(false);
+        expect(passedDevReviewContinuation(reviewedRun, "code-reviewed-head")).toBe(
+          "final-validation",
+        );
+        expect(passedDevReviewContinuation(reviewedRun, "other-head")).toBe("code-review");
+      }),
+    ),
+  );
 
   it.effect("gives an Implementation run its own workflow identity and parent link", () =>
     withSystem((system) =>
