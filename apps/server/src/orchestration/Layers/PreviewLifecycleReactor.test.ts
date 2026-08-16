@@ -14,7 +14,7 @@ const sourceThreadId = ThreadId.make("source-thread");
 
 describe("PreviewLifecycleReactor", () => {
   it("closes terminal App Review and workflow-child threads", () => {
-    for (const status of ["passed", "failed", "blocked"] as const) {
+    for (const status of ["passed", "failed"] as const) {
       expect(
         previewThreadIdForEvent(asEvent("thread.app-review-updated", { status, reviewThreadId })),
       ).toBe(reviewThreadId);

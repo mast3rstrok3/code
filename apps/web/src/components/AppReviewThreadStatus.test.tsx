@@ -5,12 +5,12 @@ import { describe, expect, it } from "vite-plus/test";
 import { AppReviewThreadStatus } from "./AppReviewThreadStatus";
 
 describe("AppReviewThreadStatus", () => {
-  it("shows a blocked launch, its brief, and a concise failure without the stack trace", () => {
+  it("shows a failed launch, its brief, and a concise failure without the stack trace", () => {
     const markup = renderToStaticMarkup(
-      <AppReviewThreadStatus run={blockedRun()} onOpenDetails={() => {}} />,
+      <AppReviewThreadStatus run={failedRun()} onOpenDetails={() => {}} />,
     );
 
-    expect(markup).toContain("App Review is blocked");
+    expect(markup).toContain("App Review failed");
     expect(markup).toContain("Review the email test seams");
     expect(markup).toContain("VcsRepositoryDetectionError: Workspace rejected.");
     expect(markup).not.toContain("internal.ts:10:2");
@@ -18,7 +18,7 @@ describe("AppReviewThreadStatus", () => {
   });
 });
 
-function blockedRun(): AppReviewWorkflowRun {
+function failedRun(): AppReviewWorkflowRun {
   return {
     id: AppReviewWorkflowRunId.make("app-review-workflow-controller"),
     targetThreadId: ThreadId.make("thread-controller"),
@@ -29,7 +29,7 @@ function blockedRun(): AppReviewWorkflowRun {
     previewTargets: ["https://preview.example.test"],
     cycleBudget: 10,
     cyclesUsed: 0,
-    status: "blocked",
+    status: "failed",
     cycles: [],
     activePhase: null,
     activeThreadId: null,
@@ -40,7 +40,7 @@ function blockedRun(): AppReviewWorkflowRun {
       fingerprint: "pending",
     },
     finalHeadSha: null,
-    outcome: "blocked",
+    outcome: "failed",
     failure: {
       reason: "automation-unavailable",
       phase: null,

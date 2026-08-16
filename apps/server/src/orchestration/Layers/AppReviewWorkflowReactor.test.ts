@@ -51,10 +51,7 @@ function run(overrides: Partial<AppReviewWorkflowRun> = {}): AppReviewWorkflowRu
   };
 }
 
-function review(
-  verdict: "passed" | "failed" | "blocked",
-  withFinding = verdict === "failed",
-): AppReviewRecord {
+function review(verdict: "passed" | "failed", withFinding = verdict === "failed"): AppReviewRecord {
   return {
     id: AppReviewId.make("app-review-1"),
     sourceThreadId: ThreadId.make("thread-controller"),
@@ -366,14 +363,14 @@ it("exhausts only after the final cycle implements its repair plan", () => {
   ).toBe("await-preview-refresh");
 });
 
-it("treats blocked reviews and failures without actionable findings as blocked", () => {
-  expect(terminalReviewAction(review("blocked"))).toBe("blocked");
-  expect(terminalReviewAction(review("failed", false))).toBe("blocked");
+it("routes every non-passing review through gap analysis", () => {
+  expect(terminalReviewAction(review("failed"))).toBe("planning");
+  expect(terminalReviewAction(review("failed", false))).toBe("planning");
 });
 
-it("preserves a blocked review reason when browser evidence could not be captured", () => {
-  const blocked = {
-    ...review("blocked"),
+it("treats a review without browser evidence as a failed gap to plan", () => {
+  const failed = {
+    ...review("failed"),
     evidence: {
       recording: {
         status: "not-started" as const,
@@ -388,10 +385,10 @@ it("preserves a blocked review reason when browser evidence could not be capture
     },
   } satisfies AppReviewRecord;
 
-  const action = terminalReviewAction(blocked);
+  const action = terminalReviewAction(failed);
 
-  expect(action).toBe("blocked");
-  expect(terminalReviewEvidenceFailure(action, blocked)).toBeNull();
+  expect(action).toBe("planning");
+  expect(terminalReviewEvidenceFailure(action, failed)).toContain("without a saved recording");
 });
 
 it("still requires complete recording evidence for passed reviews", () => {

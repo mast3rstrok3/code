@@ -983,11 +983,8 @@ function passAppReview(system: ImplementationSystem, run: OrchestrationImplement
   });
 }
 
-function failAppReview(
-  system: ImplementationSystem,
-  run: OrchestrationImplementationRun,
-  status: "failed" | "blocked" = "failed",
-) {
+function failAppReview(system: ImplementationSystem, run: OrchestrationImplementationRun) {
+  const status = "failed" as const;
   return Effect.gen(function* () {
     const snapshot = yield* system.query.getSnapshot();
     const reviewingRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
@@ -1392,174 +1389,6 @@ describe("ImplementationWorkflowReactor", () => {
         ),
       ),
       { concurrency: 1 },
-    ),
-  );
-
-  it.effect("tries to unblock App Review three times before requiring a human", () =>
-    withSystem((system) =>
-      Effect.gen(function* () {
-        const { run, nestedRun: firstNestedRun } = yield* launchFastFeatureNestedReview(system);
-        let nestedRun = firstNestedRun;
-        for (
-          let attempt = 1;
-          attempt <= IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS;
-          attempt += 1
-        ) {
-          const occurredAt = `2026-01-01T00:00:0${attempt + 2}.000Z`;
-          yield* system.engine.dispatch({
-            type: "thread.app-review-workflow.update",
-            commandId: commandId(`nested-blocked-${attempt}`),
-            threadId: nestedRun.controllerThreadId,
-            run: {
-              ...nestedRun,
-              status: "blocked",
-              activePhase: null,
-              activeThreadId: null,
-              outcome: "blocked",
-              failure: {
-                reason: "automation-unavailable",
-                phase: "review",
-                cycleNumber: 1,
-                detailMarkdown: "Browser automation was unavailable.",
-                failedAt: occurredAt,
-              },
-              updatedAt: occurredAt,
-              completedAt: occurredAt,
-            },
-            createdAt: occurredAt,
-          });
-          yield* system.reactor.drain;
-
-          const snapshot = yield* system.query.getSnapshot();
-          const recovering = snapshot.implementationRuns.find(
-            (candidate) => candidate.id === run.id,
-          );
-          expect(recovering?.status).toBe("qa-reviewing");
-          expect(recovering?.appReviewUnblockAttemptCount).toBe(attempt);
-          expect(recovering?.retryableFailure).toBeNull();
-          const nextNestedRunId = recovering?.appReviewWorkflowRunIds.at(-1);
-          const nextNestedRun = (snapshot.appReviewWorkflowRuns ?? []).find(
-            (candidate) => candidate.id === nextNestedRunId,
-          );
-          if (!nextNestedRun || nextNestedRun.status !== "running") {
-            throw new Error(`Automatic unblock attempt ${attempt} did not launch App Review.`);
-          }
-          nestedRun = nextNestedRun;
-        }
-
-        const gateAt = "2026-01-01T00:00:06.000Z";
-        yield* system.engine.dispatch({
-          type: "thread.app-review-workflow.update",
-          commandId: commandId("nested-blocked-human-gate"),
-          threadId: nestedRun.controllerThreadId,
-          run: {
-            ...nestedRun,
-            status: "blocked",
-            activePhase: null,
-            activeThreadId: null,
-            outcome: "blocked",
-            failure: {
-              reason: "automation-unavailable",
-              phase: "review",
-              cycleNumber: 1,
-              detailMarkdown: "Browser automation was still unavailable.",
-              failedAt: gateAt,
-            },
-            updatedAt: gateAt,
-            completedAt: gateAt,
-          },
-          createdAt: gateAt,
-        });
-        yield* system.reactor.drain;
-
-        const updated = (yield* system.query.getSnapshot()).implementationRuns.find(
-          (candidate) => candidate.id === run.id,
-        );
-        expect(updated?.status).toBe("needs-human-attention");
-        expect(updated?.latestAppReviewWorkflowOutcome).toBe("blocked");
-        expect(updated?.appReviewUnblockAttemptCount).toBe(
-          IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS,
-        );
-        expect(updated?.qaCycleCount).toBe(0);
-        expect(updated?.retryableFailure?.stage).toBe("app-review");
-        expect(updated?.retryableFailure?.humanBlocked).toBe(true);
-        expect(updated?.retryableFailure?.detail).toContain(
-          "remained blocked after 3 automatic unblock attempts",
-        );
-
-        yield* system.engine.dispatch({
-          type: "thread.implementation-run.retry",
-          commandId: commandId("nested-blocked-human-retry"),
-          threadId: sourceThreadId,
-          runId: run.id,
-          createdAt: "2026-01-01T00:00:07.000Z",
-        });
-        yield* system.reactor.drain;
-
-        const resumedSnapshot = yield* system.query.getSnapshot();
-        const resumed = resumedSnapshot.implementationRuns.find(
-          (candidate) => candidate.id === run.id,
-        );
-        expect(resumed?.status).toBe("qa-reviewing");
-        expect(resumed?.appReviewUnblockAttemptCount).toBe(0);
-        expect(resumed?.retryableFailure).toBeNull();
-        expect(resumed?.appReviewWorkflowRunIds).toHaveLength(
-          IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS + 2,
-        );
-      }),
-    ),
-  );
-
-  it.effect("turns a blocked review with a failed backend into a TDD repair cycle", () =>
-    withSystem(
-      (system) =>
-        Effect.gen(function* () {
-          const { run, nestedRun } = yield* launchFastFeatureNestedReview(system);
-          const blockedAt = "2026-01-01T00:00:03.000Z";
-          yield* system.engine.dispatch({
-            type: "thread.app-review-workflow.update",
-            commandId: commandId("nested-backend-blocked"),
-            threadId: nestedRun.controllerThreadId,
-            run: {
-              ...nestedRun,
-              status: "blocked",
-              activePhase: null,
-              activeThreadId: null,
-              outcome: "blocked",
-              failure: {
-                reason: "review-blocked",
-                phase: "review",
-                cycleNumber: 1,
-                detailMarkdown:
-                  "The frontend loaded, but login and backend API requests returned HTTP 502.",
-                failedAt: blockedAt,
-              },
-              updatedAt: blockedAt,
-              completedAt: blockedAt,
-            },
-            createdAt: blockedAt,
-          });
-          yield* system.reactor.drain;
-
-          const snapshot = yield* system.query.getSnapshot();
-          const repairing = snapshot.implementationRuns.find(
-            (candidate) => candidate.id === run.id,
-          );
-          expect(repairing?.status).toBe("fixing");
-          expect(repairing?.fixOrigin).toBe("app-dev-stack");
-          expect(repairing?.qaCycleCount).toBe(1);
-          expect(repairing?.appReviewUnblockAttemptCount).toBe(0);
-          expect(repairing?.lastQaFailure?.status).toBe("backend-unreachable");
-          expect(repairing?.lastQaFailure?.detailMarkdown).toContain("HTTP 502");
-          expect(
-            snapshot.threads.some(
-              (thread) =>
-                thread.workflowRole === "implementation-fixer" &&
-                thread.title.includes("AppDevStack"),
-            ),
-          ).toBe(true);
-        }),
-      { backendProbeStatuses: [200, 502] },
     ),
   );
 
@@ -2229,9 +2058,9 @@ describe("ImplementationWorkflowReactor", () => {
           commandId: commandId("legacy-nested-review-blocked"),
           threadId: canonicalReviewer.id,
           reviewId: nestedReviewId,
-          status: "blocked",
+          status: "failed",
           document: {
-            verdict: "blocked",
+            verdict: "failed",
             summary: "Connected-account and mailbox fixtures are unavailable.",
             checks: [],
             findings: [],
@@ -2307,7 +2136,7 @@ describe("ImplementationWorkflowReactor", () => {
         const canonicalReview = orchestrator?.appReviews.find(
           (review) => review.id === canonicalReviewId,
         );
-        expect(canonicalReview?.status).toBe("blocked");
+        expect(canonicalReview?.status).toBe("failed");
         expect(canonicalReview?.document.summary).toContain("mailbox fixtures");
         expect(canonicalReview?.evidence).toEqual(nestedEvidence);
         expect(orchestrator?.appReviews.find((review) => review.id === laterReviewId)?.status).toBe(
@@ -3974,19 +3803,19 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("routes a blocked App Review through a fresh TDD repair thread", () =>
+  it.effect("routes a failed App Review through a fresh TDD repair thread", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         const { run } = yield* launchRun(system);
         yield* appendWorkerResult(system, { run, status: "succeeded" });
         yield* passMergeGate(system, run);
-        yield* failAppReview(system, run, "blocked");
+        yield* failAppReview(system, run);
 
         const snapshot = yield* system.query.getSnapshot();
         const repairing = snapshot.implementationRuns.find((entry) => entry.id === run.id);
         expect(repairing?.status).toBe("fixing");
         expect(repairing?.fixOrigin).toBe("app-review");
-        expect(repairing?.lastQaFailure?.status).toBe("blocked");
+        expect(repairing?.lastQaFailure?.status).toBe("failed");
         expect(repairing?.qaCycleCount).toBe(1);
         expect(
           snapshot.threads.filter((thread) => thread.workflowRole === "implementation-fixer"),
@@ -4141,7 +3970,7 @@ describe("ImplementationWorkflowReactor", () => {
         const { run } = yield* launchRun(system);
         yield* appendWorkerResult(system, { run, status: "succeeded" });
         yield* passMergeGate(system, run);
-        yield* failAppReview(system, run, "blocked");
+        yield* failAppReview(system, run);
 
         for (let index = 2; index <= 24; index += 1) {
           yield* system.engine.dispatch({
@@ -4257,7 +4086,7 @@ describe("ImplementationWorkflowReactor", () => {
           },
           createdAt: "2026-01-01T00:00:03.000Z",
         });
-        yield* failAppReview(system, run, "blocked");
+        yield* failAppReview(system, run);
 
         snapshot = yield* system.query.getSnapshot();
         const exhausted = snapshot.implementationRuns.find((entry) => entry.id === run.id);

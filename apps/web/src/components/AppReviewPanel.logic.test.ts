@@ -165,10 +165,10 @@ describe("App Review workflow panel logic", () => {
 
   it("summarizes a launch failure without exposing its stack trace", () => {
     const run = makeAppReviewWorkflowRun();
-    const blocked: AppReviewWorkflowRun = {
+    const failed: AppReviewWorkflowRun = {
       ...run,
-      status: "blocked",
-      outcome: "blocked",
+      status: "failed",
+      outcome: "failed",
       activePhase: null,
       failure: {
         reason: "automation-unavailable",
@@ -180,7 +180,7 @@ describe("App Review workflow panel logic", () => {
       },
     };
 
-    expect(appReviewRunFailureSummary(blocked)).toBe(
+    expect(appReviewRunFailureSummary(failed)).toBe(
       "App Review automation failed.\nVcsRepositoryDetectionError: Workspace rejected.",
     );
     expect(appReviewRunFailureSummary(run)).toBeNull();

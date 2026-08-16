@@ -3210,11 +3210,17 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       }
       const run: AppReviewWorkflowRun = {
         ...existing,
-        status: "canceled",
-        outcome: "canceled",
+        status: "failed",
+        outcome: "failed",
         activePhase: null,
         activeThreadId: null,
-        failure: null,
+        failure: {
+          reason: "unknown",
+          phase: existing.activePhase,
+          cycleNumber: existing.cycles.at(-1)?.cycleNumber ?? null,
+          detailMarkdown: command.reason ?? "App Review was stopped before it passed.",
+          failedAt: command.createdAt,
+        },
         finalHeadSha:
           existing.workspaceRevision.headSha === "pending"
             ? null

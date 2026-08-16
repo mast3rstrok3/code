@@ -310,7 +310,7 @@ describe("app-review toolkit handlers", () => {
       assert.strictEqual(error._tag, "AppReviewError");
       assert.match(error.message, /saved screen recording/);
       assert.match(error.message, /app_review_recording_start/);
-      assert.match(error.message, /blocked/);
+      assert.match(error.message, /failed/);
       assert.strictEqual(harness.dispatched.length, 0);
     }).pipe(Effect.provide(harness.layer));
   });
@@ -347,7 +347,7 @@ describe("app-review toolkit handlers", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
-  it.effect("rejects recording-degraded failed findings without linked screenshot evidence", () => {
+  it.effect("preserves a failed verdict when browser evidence is unavailable", () => {
     const harness = makeHarness({
       review: makeReview({
         recording: { ...EMPTY_APP_REVIEW_EVIDENCE.recording, status: "failed" },
@@ -356,17 +356,13 @@ describe("app-review toolkit handlers", () => {
     });
 
     return Effect.gen(function* () {
-      const error = yield* handlers
-        .app_review_update({
-          reviewId,
-          status: "failed",
-          document: screenshotBackedFailureDocument,
-        })
-        .pipe(Effect.flip);
-      assert.strictEqual(error._tag, "AppReviewError");
-      assert.match(error.message, /failed check/);
-      assert.match(error.message, /captured screenshot/);
-      assert.strictEqual(harness.dispatched.length, 0);
+      const updated = yield* handlers.app_review_update({
+        reviewId,
+        status: "failed",
+        document: screenshotBackedFailureDocument,
+      });
+      assert.strictEqual(updated.status, "failed");
+      assert.strictEqual(harness.dispatched.length, 1);
     }).pipe(Effect.provide(harness.layer));
   });
 
@@ -402,12 +398,12 @@ describe("app-review toolkit handlers", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
-  it.effect("still allows blocked without evidence", () => {
+  it.effect("allows a diagnostic failure without browser evidence", () => {
     const harness = makeHarness({ review: makeReview(EMPTY_APP_REVIEW_EVIDENCE) });
 
     return Effect.gen(function* () {
-      const updated = yield* handlers.app_review_update({ reviewId, status: "blocked" });
-      assert.strictEqual(updated.status, "blocked");
+      const updated = yield* handlers.app_review_update({ reviewId, status: "failed" });
+      assert.strictEqual(updated.status, "failed");
       assert.strictEqual(harness.dispatched.length, 1);
     }).pipe(Effect.provide(harness.layer));
   });

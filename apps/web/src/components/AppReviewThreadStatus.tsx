@@ -21,15 +21,10 @@ const STATUS_COPY = {
     icon: AlertTriangleIcon,
     tone: "text-amber-600 dark:text-amber-400",
   },
-  blocked: {
-    title: "App Review is blocked",
-    icon: AlertTriangleIcon,
+  failed: {
+    title: "App Review failed",
     tone: "text-destructive",
-  },
-  canceled: {
-    title: "App Review was canceled",
     icon: XCircleIcon,
-    tone: "text-muted-foreground",
   },
 } as const;
 

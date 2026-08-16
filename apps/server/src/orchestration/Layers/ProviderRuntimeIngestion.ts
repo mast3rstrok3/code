@@ -1135,7 +1135,7 @@ const make = Effect.gen(function* () {
       threadId: parent.id,
       batchId: batch.id,
       childIndex: child.index,
-      status: review.status === "blocked" ? "blocked" : "completed",
+      status: "completed",
       resultMarkdown,
       completedAt,
       createdAt: completedAt,
@@ -1159,7 +1159,7 @@ const make = Effect.gen(function* () {
 
     if (child.appReviewMode === "full" && child.appReviewId !== null) {
       const review = parent.appReviews.find((entry) => entry.id === child.appReviewId);
-      if (review && ["passed", "failed", "blocked"].includes(review.status)) {
+      if (review && ["passed", "failed"].includes(review.status)) {
         yield* completeFullAppReviewBatchChild(review.id, completedAt);
         return;
       }
@@ -1169,10 +1169,10 @@ const make = Effect.gen(function* () {
           commandId: workflowCommandId(batch.id, "app-review-missing-evidence", child.index),
           threadId: parent.id,
           reviewId: review.id,
-          status: "blocked",
+          status: "failed",
           document: {
             ...review.document,
-            verdict: "blocked",
+            verdict: "failed",
             summary:
               review.document.summary ||
               "Full Browser App Review ended without the required terminal evidence.",
@@ -1219,10 +1219,7 @@ const make = Effect.gen(function* () {
     if (reviewer === undefined || parent === undefined || canonical === undefined) return;
 
     const nestedTerminal = [...reviewer.appReviews]
-      .filter(
-        (review) =>
-          review.status === "passed" || review.status === "failed" || review.status === "blocked",
-      )
+      .filter((review) => review.status === "passed" || review.status === "failed")
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
     if (nestedTerminal !== undefined) {
       yield* orchestrationEngine.dispatch({
@@ -1240,10 +1237,10 @@ const make = Effect.gen(function* () {
       commandId: yield* providerCommandId(input.event, "canonical-review-settle"),
       threadId: parent.id,
       reviewId: canonical.id,
-      status: nestedTerminal?.status ?? "blocked",
+      status: nestedTerminal?.status ?? "failed",
       document: nestedTerminal?.document ?? {
         ...canonical.document,
-        verdict: "blocked",
+        verdict: "failed",
         summary:
           canonical.document.summary ||
           "Browser App Review agent completed without terminally updating its canonical review.",
@@ -3914,11 +3911,7 @@ const make = Effect.gen(function* () {
         return;
       }
       if (event.type === "thread.app-review-updated") {
-        if (
-          event.payload.status !== "passed" &&
-          event.payload.status !== "failed" &&
-          event.payload.status !== "blocked"
-        ) {
+        if (event.payload.status !== "passed" && event.payload.status !== "failed") {
           return;
         }
         yield* completeFullAppReviewBatchChild(event.payload.reviewId, event.occurredAt);

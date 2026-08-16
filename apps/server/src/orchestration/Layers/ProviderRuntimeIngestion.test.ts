@@ -4088,7 +4088,7 @@ describe("ProviderRuntimeIngestion", () => {
     const source = await waitForThread(
       harness.readModel,
       (thread) =>
-        thread.appReviews.some((review) => review.id === reviewId && review.status === "blocked"),
+        thread.appReviews.some((review) => review.id === reviewId && review.status === "failed"),
       10_000,
       sourceThreadId,
     );
@@ -4170,9 +4170,9 @@ describe("ProviderRuntimeIngestion", () => {
           commandId: CommandId.make("cmd-legacy-nested-blocked"),
           threadId: reviewerThreadId,
           reviewId: nestedId,
-          status: "blocked",
+          status: "failed",
           document: {
-            verdict: "blocked",
+            verdict: "failed",
             summary: "Connected-account and mailbox fixtures are unavailable.",
             checks: [],
             findings: [],
@@ -4210,9 +4210,7 @@ describe("ProviderRuntimeIngestion", () => {
     const source = await waitForThread(
       harness.readModel,
       (thread) =>
-        thread.appReviews.some(
-          (review) => review.id === canonicalId && review.status === "blocked",
-        ),
+        thread.appReviews.some((review) => review.id === canonicalId && review.status === "failed"),
       10_000,
       sourceThreadId,
     );

@@ -889,7 +889,7 @@ export const OrchestrationImplementationTicketState = Schema.Struct({
   ),
   appReviewWorkflowRunId: Schema.optionalKey(Schema.NullOr(AppReviewWorkflowRunId)),
   appReviewOutcome: Schema.optionalKey(
-    Schema.NullOr(Schema.Literals(["passed", "exhausted", "blocked", "canceled", "skipped"])),
+    Schema.NullOr(Schema.Literals(["passed", "failed", "exhausted", "skipped"])),
   ),
   codeReviewThreadId: Schema.optionalKey(Schema.NullOr(ThreadId)),
   codeReviewOutcome: Schema.optionalKey(
@@ -987,7 +987,7 @@ export const OrchestrationImplementationRun = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   latestAppReviewWorkflowOutcome: Schema.NullOr(
-    Schema.Literals(["passed", "exhausted", "blocked", "canceled"]),
+    Schema.Literals(["passed", "failed", "exhausted"]),
   ).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   appReviewUnblockAttemptCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
   appReviews: Schema.Array(OrchestrationImplementationAppReviewArtifact).pipe(

@@ -1224,7 +1224,7 @@ This stage orchestrates the upstream implement loop across sub-threads instead o
 - Run every currently unblocked ticket in parallel. Each ticket owns a child thread, worktree, branch, and—when \`appReviewEligible\`—an App Dev Stack started from that ticket worktree.
 - A ticket runs TDD implementation, then its attached App Review for up to ten complete cycles when eligible, then exactly one Code Review. App Review failures, exhaustion, or blockers are recorded on the ticket and in workflow activity but never stop the frontier; Code Review still runs once. Ineligible tickets skip only App Review.
 - After every ticket reaches a terminal best-effort state, create one integration thread in the original workflow worktree and branch. Merge all usable ticket branches there, retaining recorded warnings for branches that could not be integrated.
-- Run exactly one Code Review on the combined changes. Then run the combined App Review for up to ten cycles, focused on cross-ticket flows plus ticket reviews that failed, exhausted, or were blocked. Continue after exhaustion or blockers.
+- Run exactly one Code Review on the combined changes. Then run the combined App Review for up to ten cycles, focused on cross-ticket flows plus ticket reviews that failed or exhausted their budgets. Continue after either result.
 - Run one final Code Review after the combined App Review. That final review owns change-request publication and must include all ticket-level and combined App Review warnings in the PR body.
 - Code Review is intentionally bounded: once per ticket, once immediately after integration, and once after the combined App Review. Do not add a review/validation feedback loop between those fixed passes.
 - Ticket workers never run launch-level complete validation commands or full test suites, but may run documented sub-minute fast checks. The final gate runs each launch validation command once on the final reviewed HEAD before publication.
@@ -1566,14 +1566,14 @@ When this Browser App Review is linked to a durable App Review record:
 
 1. Call app_review_get first to load the durable App Review record before testing.
 2. Read the source thread context and identify the behavior under review.
-3. Call preview_open to initialize the collaborative browser tab. If the launch message provides a Feature URL, navigate there with preview_navigate. If no URL is provided, inspect the current preview state; if no usable app target is available, mark the review blocked with concrete details.
+3. Call preview_open to initialize the collaborative browser tab. If the launch message provides a Feature URL, navigate there with preview_navigate. If no URL is provided, inspect the current preview state; if no usable app target is available, mark the review failed with concrete details.
 4. Start the screen recording with app_review_recording_start before exercising the feature.
 5. Exercise the product with the preview tools: preview_snapshot to inspect the page, then preview_click, preview_type, preview_press, preview_scroll, and preview_wait_for to interact. Re-run preview_snapshot after the DOM changes; element references from an old snapshot go stale. Do not rely on static assumptions.
 6. Capture a captioned screenshot with app_review_capture_screenshot at each meaningful application state (initial load, after key interactions, any failure states). Findings should reference these screenshot ids in evidenceIds.
 7. Stop the recording with app_review_recording_stop after browser testing.
-8. Treat evidence as required. Passed requires a saved recording and at least one screenshot. Failed normally uses the same evidence, but if recording finalization fails after product testing, keep a failed verdict when at least one check failed and every actionable finding references a captured screenshot. Do not turn evidenced product defects into blocked solely because video saving failed. Use blocked only when trustworthy product evidence could not be captured.
+8. Treat evidence as required. Passed requires a saved recording and at least one screenshot. Failed normally uses the same evidence, but tooling or evidence problems are also failed reviews with concrete diagnostic detail.
 9. Update the App Review record with app_review_update, including verdict, summary, checks, findings, questions, next steps, and evidence IDs.
-10. Mark the review status passed, failed, or blocked.
+10. Mark the review status passed or failed. Tooling, preview, and evidence problems are failed reviews with concrete diagnostic detail, never a third verdict.
 
 If no durable App Review record is linked, this is focused feedback mode. Use preview_* tools only, call preview_open with show: false, do not call app_review_* tools, and do not record or capture evidence unless the focused question itself requires a screenshot. Finish with exactly one workflow-subagent-result directive containing concise observations, reproduction steps, blockers, and recommendations.
 

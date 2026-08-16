@@ -167,7 +167,7 @@ One complete App Review budget unit: UI review, same-thread gap analysis and pla
 
 #### App Review outcome
 
-The terminal result of an App Review Workflow: `passed`, `exhausted`, `blocked`, or `canceled`. Exhausted means every complete cycle in the configured budget was consumed and the final implemented repair has no remaining verification cycle; blocked means review, planning, or implementation could not run validly.
+The terminal result of an App Review Workflow: `passed`, `failed`, or `exhausted`. Exhausted means every complete cycle in the configured budget was consumed and the final implemented repair has no remaining verification cycle. Failed means automation could not complete a valid cycle; cancellation is recorded as a failed run with diagnostic detail rather than as a separate verdict.
 
 #### Skill (workflow prompt)
 

@@ -519,7 +519,7 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
               ),
               threadId: run.orchestratorThreadId,
               reviewId: AppReviewId.make(reviewId),
-              status: "blocked",
+              status: "failed",
               updatedAt: createdAt,
               createdAt,
             });

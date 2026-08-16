@@ -26,7 +26,7 @@ type PreviewLifecycleEvent = Extract<
   }
 >;
 
-const terminalAppReviewStatuses = new Set(["passed", "failed", "blocked"]);
+const terminalAppReviewStatuses = new Set(["passed", "failed"]);
 const terminalWorkflowChildStatuses = new Set([
   "completed",
   "blocked",

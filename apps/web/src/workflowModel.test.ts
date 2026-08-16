@@ -481,9 +481,9 @@ describe("buildWorkflowViewModel", () => {
 
     expect(selectWorkflowRootForThread(model, reviewer)?.root.id).toBe("root");
     expect(workflow?.members.map((candidate) => candidate.id).sort()).toEqual([
-      "build",
       "app-review-controller",
       "app-review-reviewer",
+      "build",
       "root",
     ]);
     expect(

@@ -4,7 +4,6 @@ import {
   AppReviewId,
   EventId,
   GitCommandError,
-  IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS,
   IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
   IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES,
   MessageId,
@@ -1706,7 +1705,7 @@ const make = Effect.gen(function* () {
                 status: "code-reviewing" as const,
                 appReviewOutcome:
                   candidate.appReviewOutcome ??
-                  (input.warningMarkdown === undefined ? "skipped" : "blocked"),
+                  (input.warningMarkdown === undefined ? "skipped" : "failed"),
                 codeReviewThreadId: reviewerThreadId,
                 codeReviewOutcome: null,
                 warningMarkdown: input.warningMarkdown ?? candidate.warningMarkdown ?? null,
@@ -1814,7 +1813,7 @@ const make = Effect.gen(function* () {
         .pipe(Effect.result);
       const frontendUrl = stackResult._tag === "Success" ? stackResult.success.frontendUrl : null;
       if (frontendUrl === null) {
-        const warning = `Ticket App Review blocked because its App Dev Stack did not provide a frontend URL${stackResult._tag === "Failure" ? `: ${errorDetail(stackResult.failure)}` : "."}`;
+        const warning = `Ticket App Review failed because its App Dev Stack did not provide a frontend URL${stackResult._tag === "Failure" ? `: ${errorDetail(stackResult.failure)}` : "."}`;
         yield* startTicketCodeReview({
           sourceThreadId: input.sourceThreadId,
           run: input.run,
@@ -4558,11 +4557,7 @@ const make = Effect.gen(function* () {
         return;
       }
 
-      if (
-        event.payload.status === "passed" ||
-        event.payload.status === "failed" ||
-        event.payload.status === "blocked"
-      ) {
+      if (event.payload.status === "passed" || event.payload.status === "failed") {
         yield* appendActivity({
           threadId: run.orchestratorThreadId,
           tone: event.payload.status === "passed" ? "info" : "error",
@@ -4614,7 +4609,7 @@ const make = Effect.gen(function* () {
         return;
       }
 
-      if (event.payload.status !== "failed" && event.payload.status !== "blocked") return;
+      if (event.payload.status !== "failed") return;
 
       // Record the failure before the shared QA repair launcher consumes another fresh slot or
       // continues best-effort after the repair budget is exhausted.
@@ -4758,7 +4753,7 @@ const make = Effect.gen(function* () {
             : findThread(readModel, input.run.orchestratorThreadId)?.appReviews.find(
                 (review) => review.id === reviewId,
               );
-        if (latestReview?.status === "failed" || latestReview?.status === "blocked") {
+        if (latestReview?.status === "failed") {
           yield* restartAfterAppReviewFindings({
             sourceThreadId: input.sourceThreadId,
             run: {
@@ -5077,14 +5072,6 @@ const make = Effect.gen(function* () {
       });
       return;
     }
-    if (
-      event.type === "thread.app-review-workflow-updated" &&
-      nestedRun.status === "blocked" &&
-      run.appReviewWorkflowRunIds.at(-1) === nestedRun.id &&
-      run.latestAppReviewWorkflowOutcome === "blocked"
-    ) {
-      return;
-    }
     const runIds = run.appReviewWorkflowRunIds.includes(nestedRun.id)
       ? run.appReviewWorkflowRunIds
       : [...run.appReviewWorkflowRunIds, nestedRun.id];
@@ -5153,180 +5140,43 @@ const make = Effect.gen(function* () {
       }
       return;
     }
-    if (nestedRun.status === "exhausted") {
-      const exhaustedRun: OrchestrationImplementationRun = {
+    if (nestedRun.status === "failed" || nestedRun.status === "exhausted") {
+      const failedHeadSha = nestedRun.finalHeadSha ?? nestedRun.workspaceRevision.headSha;
+      const failedRun: OrchestrationImplementationRun = {
         ...linkedRun,
         status: "qa-reviewing",
-        integrationHeadSha: nestedRun.finalHeadSha ?? nestedRun.workspaceRevision.headSha,
+        integrationHeadSha: failedHeadSha,
         qaAttemptCount: nestedRun.cyclesUsed,
         appReviewUnblockAttemptCount: 0,
-        qaExhaustedAt: event.occurredAt,
-        qaExhaustionReason: "app-review",
-        appReviewExhaustedAt: event.occurredAt,
+        ...(nestedRun.status === "exhausted"
+          ? {
+              qaExhaustedAt: event.occurredAt,
+              qaExhaustionReason: "app-review" as const,
+              appReviewExhaustedAt: event.occurredAt,
+            }
+          : {}),
         lastQaFailure: {
           kind: "app-review",
-          status: "exhausted",
+          status: nestedRun.status,
           detailMarkdown:
+            nestedRun.failure?.detailMarkdown ??
             nestedRun.cycles.at(-1)?.actionableFindingsMarkdown ??
-            "Nested App Review exhausted with unresolved findings.",
+            "App Review failed with unresolved findings.",
           reviewId: nestedRun.cycles.at(-1)?.reviewId ?? null,
-          headSha: nestedRun.finalHeadSha ?? nestedRun.workspaceRevision.headSha,
+          headSha: failedHeadSha,
           occurredAt: event.occurredAt,
         },
         retryableFailure: null,
         updatedAt: event.occurredAt,
       };
-      yield* updateRun({ sourceThreadId, run: exhaustedRun, createdAt: event.occurredAt });
-      yield* startCodeReview({ sourceThreadId, run: exhaustedRun, createdAt: event.occurredAt });
-      return;
-    }
-    if (nestedRun.status === "blocked") {
-      if (run.artifactSource === "proposed-plan") {
-        const frontendUrl = linkedRun.appDevStack.frontendUrl;
-        if (frontendUrl !== null) {
-          const healthUrl = appDevStackBackendHealthUrl(frontendUrl);
-          const backendHealth = yield* probeFrontend(healthUrl);
-          if (!backendHealth.ok) {
-            const diagnostics = yield* appDevStackDiagnostics({
-              run: linkedRun,
-              stackId: linkedRun.appDevStack.stackId,
-              detail: [
-                nestedRun.failure?.detailMarkdown ?? "Nested App Review was blocked.",
-                `Backend health ${healthUrl} ${backendHealth.detail}.`,
-              ].join("\n\n"),
-            });
-            const headSha = yield* resolveQaHeadSha(linkedRun);
-            yield* startQaFixer({
-              sourceThreadId,
-              run: {
-                ...linkedRun,
-                appReviewUnblockAttemptCount: 0,
-                lastQaFailure: {
-                  kind: "app-dev-stack",
-                  status: "backend-unreachable",
-                  detailMarkdown: diagnostics,
-                  reviewId: nestedRun.cycles.at(-1)?.reviewId ?? null,
-                  headSha,
-                  occurredAt: event.occurredAt,
-                },
-                retryableFailure: null,
-                updatedAt: event.occurredAt,
-              },
-              origin: "app-dev-stack",
-              failureMarkdown: diagnostics,
-              createdAt: event.occurredAt,
-            });
-            return;
-          }
-        }
-        if (runIds.at(-1) !== nestedRun.id) return;
-        if (
-          linkedRun.appReviewUnblockAttemptCount <
-          IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS
-        ) {
-          const unblockAttempt = linkedRun.appReviewUnblockAttemptCount + 1;
-          const recoveringRun: OrchestrationImplementationRun = {
-            ...linkedRun,
-            status: "qa-reviewing",
-            appReviewUnblockAttemptCount: unblockAttempt,
-            retryableFailure: null,
-            updatedAt: event.occurredAt,
-          };
-          yield* updateRun({ sourceThreadId, run: recoveringRun, createdAt: event.occurredAt });
-          yield* appendActivity({
-            threadId: recoveringRun.orchestratorThreadId,
-            tone: "info",
-            kind: "implementation-app-review-unblock-attempted",
-            summary: `Retrying blocked App Review (${unblockAttempt}/${IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS})`,
-            payload: {
-              runId: recoveringRun.id,
-              nestedAppReviewRunId: nestedRun.id,
-              attempt: unblockAttempt,
-              maxAttempts: IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS,
-              reasonMarkdown: nestedRun.failure?.detailMarkdown ?? "Nested App Review was blocked.",
-            },
-            createdAt: event.occurredAt,
-          });
-          yield* startBrowserReview({
-            sourceThreadId,
-            run: recoveringRun,
-            createdAt: event.occurredAt,
-          });
-          return;
-        }
-        yield* blockRun({
-          sourceThreadId,
-          run: linkedRun,
-          retryableStage: "app-review",
-          reasonMarkdown: `Nested App Review remained blocked after ${IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS} automatic unblock attempts. Latest failure:\n\n${nestedRun.failure?.detailMarkdown ?? "Nested App Review was blocked without failure details."}`,
-          updatedAt: event.occurredAt,
-          humanBlocked: true,
-        });
-        return;
-      }
-      const blockedHeadSha = nestedRun.finalHeadSha ?? nestedRun.workspaceRevision.headSha;
-      const blockedRun: OrchestrationImplementationRun = {
-        ...linkedRun,
-        status: "qa-reviewing",
-        integrationHeadSha: blockedHeadSha,
-        qaAttemptCount: nestedRun.cyclesUsed,
-        appReviewExhaustedAt: event.occurredAt,
-        lastQaFailure: {
-          kind: "app-review",
-          status: "blocked",
-          detailMarkdown: nestedRun.failure?.detailMarkdown ?? "Combined App Review was blocked.",
-          reviewId: nestedRun.cycles.at(-1)?.reviewId ?? null,
-          headSha: blockedHeadSha,
-          occurredAt: event.occurredAt,
-        },
-        retryableFailure: null,
-        updatedAt: event.occurredAt,
-      };
-      yield* updateRun({ sourceThreadId, run: blockedRun, createdAt: event.occurredAt });
+      yield* updateRun({ sourceThreadId, run: failedRun, createdAt: event.occurredAt });
       yield* startCodeReview({
         sourceThreadId,
-        run: blockedRun,
+        run: failedRun,
         createdAt: event.occurredAt,
         skipAppReviewRequirement: true,
       });
       return;
-    }
-    if (nestedRun.status === "canceled") {
-      if (run.artifactSource === "proposed-plan") {
-        yield* blockRun({
-          sourceThreadId,
-          run: linkedRun,
-          retryableStage: "app-review",
-          reasonMarkdown: nestedRun.failure?.detailMarkdown ?? "Nested App Review was canceled.",
-          updatedAt: event.occurredAt,
-          humanBlocked: true,
-        });
-        return;
-      }
-      const canceledHeadSha = nestedRun.finalHeadSha ?? nestedRun.workspaceRevision.headSha;
-      const canceledRun: OrchestrationImplementationRun = {
-        ...linkedRun,
-        status: "qa-reviewing",
-        integrationHeadSha: canceledHeadSha,
-        appReviewExhaustedAt: event.occurredAt,
-        lastQaFailure: {
-          kind: "app-review",
-          status: "canceled",
-          detailMarkdown: nestedRun.failure?.detailMarkdown ?? "Combined App Review was canceled.",
-          reviewId: nestedRun.cycles.at(-1)?.reviewId ?? null,
-          headSha: canceledHeadSha,
-          occurredAt: event.occurredAt,
-        },
-        retryableFailure: null,
-        updatedAt: event.occurredAt,
-      };
-      yield* updateRun({ sourceThreadId, run: canceledRun, createdAt: event.occurredAt });
-      yield* startCodeReview({
-        sourceThreadId,
-        run: canceledRun,
-        createdAt: event.occurredAt,
-        skipAppReviewRequirement: true,
-      });
     }
   });
 
@@ -5473,12 +5323,7 @@ const make = Effect.gen(function* () {
             reviewer.session.status !== "running";
           if (reviewer === undefined || !reviewerCompleted) continue;
           const nestedTerminal = [...reviewer.appReviews]
-            .filter(
-              (review) =>
-                review.status === "passed" ||
-                review.status === "failed" ||
-                review.status === "blocked",
-            )
+            .filter((review) => review.status === "passed" || review.status === "failed")
             .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
           if (nestedTerminal !== undefined) {
             yield* orchestrationEngine.dispatch({
@@ -5496,10 +5341,10 @@ const make = Effect.gen(function* () {
             commandId: yield* serverCommandId("implementation-reconcile-review"),
             threadId: run.orchestratorThreadId,
             reviewId: canonicalReview.id,
-            status: nestedTerminal?.status ?? "blocked",
+            status: nestedTerminal?.status ?? "failed",
             document: nestedTerminal?.document ?? {
               ...canonicalReview.document,
-              verdict: "blocked",
+              verdict: "failed",
               summary:
                 canonicalReview.document.summary ||
                 "Browser App Review agent completed without terminally updating its canonical review.",

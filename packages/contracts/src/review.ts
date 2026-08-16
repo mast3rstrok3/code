@@ -28,20 +28,14 @@ export const AppReviewWorkflowCycleBudget = PositiveInt.check(
 );
 export type AppReviewWorkflowCycleBudget = typeof AppReviewWorkflowCycleBudget.Type;
 
-export const AppReviewWorkflowOutcome = Schema.Literals([
-  "passed",
-  "exhausted",
-  "blocked",
-  "canceled",
-]);
+export const AppReviewWorkflowOutcome = Schema.Literals(["passed", "failed", "exhausted"]);
 export type AppReviewWorkflowOutcome = typeof AppReviewWorkflowOutcome.Type;
 
 export const AppReviewWorkflowRunStatus = Schema.Literals([
   "running",
   "passed",
+  "failed",
   "exhausted",
-  "blocked",
-  "canceled",
 ]);
 export type AppReviewWorkflowRunStatus = typeof AppReviewWorkflowRunStatus.Type;
 
@@ -95,7 +89,6 @@ export const AppReviewWorkflowCycleStatus = Schema.Literals([
   "planning",
   "fixing",
   "completed",
-  "blocked",
 ]);
 export type AppReviewWorkflowCycleStatus = typeof AppReviewWorkflowCycleStatus.Type;
 
@@ -104,7 +97,7 @@ export const AppReviewWorkflowCycle = Schema.Struct({
   status: AppReviewWorkflowCycleStatus,
   reviewId: AppReviewId,
   reviewerThreadId: ThreadId,
-  reviewVerdict: Schema.NullOr(Schema.Literals(["pending", "passed", "failed", "blocked"])),
+  reviewVerdict: Schema.NullOr(Schema.Literals(["pending", "passed", "failed"])),
   actionableFindingsMarkdown: Schema.NullOr(Schema.String),
   planId: Schema.NullOr(TrimmedNonEmptyString),
   plannerTurnId: Schema.NullOr(TurnId),
@@ -167,13 +160,7 @@ export const AppReviewWorkflowRun = Schema.Struct({
 });
 export type AppReviewWorkflowRun = typeof AppReviewWorkflowRun.Type;
 
-export const AppReviewStatus = Schema.Literals([
-  "pending",
-  "running",
-  "passed",
-  "failed",
-  "blocked",
-]);
+export const AppReviewStatus = Schema.Literals(["pending", "running", "passed", "failed"]);
 export type AppReviewStatus = typeof AppReviewStatus.Type;
 
 export const AppReviewRecordingStatus = Schema.Literals([
@@ -196,7 +183,7 @@ export const AppReviewCheckStatus = Schema.Literals([
 ]);
 export type AppReviewCheckStatus = typeof AppReviewCheckStatus.Type;
 
-export const AppReviewVerdict = Schema.Literals(["pending", "passed", "failed", "blocked"]);
+export const AppReviewVerdict = Schema.Literals(["pending", "passed", "failed"]);
 export type AppReviewVerdict = typeof AppReviewVerdict.Type;
 
 export const AppReviewDocument = Schema.Struct({

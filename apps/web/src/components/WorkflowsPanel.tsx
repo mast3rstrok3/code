@@ -273,12 +273,10 @@ function appReviewRunPresentation(run: AppReviewWorkflowRun | null): {
       return { status: "working", label: "Running" };
     case "passed":
       return { status: "completed", label: "Passed" };
-    case "blocked":
-      return { status: "failed", label: "Blocked" };
+    case "failed":
+      return { status: "failed", label: "Failed" };
     case "exhausted":
       return { status: "failed", label: "Exhausted" };
-    case "canceled":
-      return { status: "stopped", label: "Canceled" };
   }
 }
 

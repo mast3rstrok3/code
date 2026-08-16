@@ -62,7 +62,7 @@ type AppReviewWorkflowEvent = Extract<
   }
 >;
 
-const terminalStatuses = new Set(["passed", "exhausted", "blocked", "canceled"]);
+const terminalStatuses = new Set(["passed", "failed", "exhausted"]);
 const APP_REVIEW_IMPLEMENT_SKILL_ID = "matt-pocock.implement";
 
 interface AppDevStackPreviewLookup {
@@ -172,10 +172,8 @@ export function selectReviewRunToStart(
   return run;
 }
 
-export function terminalReviewAction(review: AppReviewRecord): "passed" | "blocked" | "planning" {
-  if (review.status === "blocked" || review.document.verdict === "blocked") return "blocked";
+export function terminalReviewAction(review: AppReviewRecord): "passed" | "planning" {
   if (review.status === "passed" && review.document.verdict === "passed") return "passed";
-  if (review.document.findings.length === 0) return "blocked";
   return "planning";
 }
 
@@ -242,10 +240,6 @@ export function terminalReviewEvidenceFailure(
   action: ReturnType<typeof terminalReviewAction>,
   review: AppReviewRecord,
 ): string | null {
-  // A blocked reviewer may be unable to open the preview at all, so requiring browser evidence
-  // before preserving its block reason replaces the actionable infrastructure failure with a
-  // misleading "missing evidence" error. Evidence remains mandatory for every product verdict.
-  if (action === "blocked") return null;
   if (hasCompleteAppReviewEvidence(review.evidence)) return null;
   if (
     action === "planning" &&
@@ -324,7 +318,7 @@ const make = Effect.gen(function* () {
     },
   );
 
-  const blockRun = Effect.fn("AppReviewWorkflowReactor.blockRun")(function* (input: {
+  const failRun = Effect.fn("AppReviewWorkflowReactor.failRun")(function* (input: {
     readonly run: AppReviewWorkflowRun;
     readonly reason: AppReviewWorkflowFailureReason;
     readonly detailMarkdown: string;
@@ -334,8 +328,8 @@ const make = Effect.gen(function* () {
     const cycleNumber = input.run.cycles.at(-1)?.cycleNumber ?? null;
     yield* updateRun({
       ...input.run,
-      status: "blocked",
-      outcome: "blocked",
+      status: "failed",
+      outcome: "failed",
       activePhase: null,
       activeThreadId: null,
       finalHeadSha:
@@ -351,7 +345,12 @@ const make = Effect.gen(function* () {
       },
       cycles: input.run.cycles.map((cycle) =>
         cycle.cycleNumber === cycleNumber
-          ? { ...cycle, status: "blocked", completedAt: input.occurredAt }
+          ? {
+              ...cycle,
+              status: "completed",
+              reviewVerdict: cycle.reviewVerdict === "passed" ? "passed" : "failed",
+              completedAt: input.occurredAt,
+            }
           : cycle,
       ),
       updatedAt: input.occurredAt,
@@ -368,7 +367,7 @@ const make = Effect.gen(function* () {
         return next;
       }
       if (current.fingerprint !== run.workspaceRevision.fingerprint) {
-        yield* blockRun({
+        yield* failRun({
           run,
           reason: "workspace-stale",
           detailMarkdown:
@@ -399,7 +398,7 @@ const make = Effect.gen(function* () {
       fallbackTargets: [...extractPreviewUrls(run.briefMarkdown), ...run.previewTargets],
     });
     if (resolution._tag === "Blocked") {
-      yield* blockRun({
+      yield* failRun({
         run,
         reason: "preview-unavailable",
         detailMarkdown: resolution.detailMarkdown,
@@ -453,9 +452,9 @@ const make = Effect.gen(function* () {
         "",
         "Preview targets (try in order):",
         ...run.previewTargets.map((target) => `- ${target}`),
-        "These preview targets are authoritative for this App Review cycle. Do not substitute deployment URLs from repository documentation, supporting source context, browser history, or environment conventions. If every listed target is unavailable, report the review blocked.",
+        "These preview targets are authoritative for this App Review cycle. Do not substitute deployment URLs from repository documentation, supporting source context, browser history, or environment conventions. If every listed target is unavailable, report the review failed with concrete details.",
         "",
-        "Use the linked durable App Review record. Record the complete flow, capture captioned screenshots, and report every actionable finding. A missing or unavailable preview is blocked, not failed.",
+        "Use the linked durable App Review record. Record the complete flow, capture captioned screenshots, and report every actionable finding. A missing or unavailable preview is a failed review.",
         "A passed verdict requires a non-empty check matrix in which every check is passed. Do not mark required or deferred acceptance work not-applicable; use failed or blocked with concrete detail.",
         ...(priorFindingIds.length === 0
           ? []
@@ -476,7 +475,7 @@ const make = Effect.gen(function* () {
     if (reviewer !== undefined) return;
     const controller = yield* resolveThread(run.controllerThreadId);
     if (controller === undefined) {
-      yield* blockRun({
+      yield* failRun({
         run,
         reason: "unknown",
         detailMarkdown: "The App Review controller thread is unavailable.",
@@ -529,7 +528,7 @@ const make = Effect.gen(function* () {
     if (currentRun === null) return;
     const target = yield* resolveTarget(currentRun.targetThreadId);
     if (target === null) {
-      yield* blockRun({
+      yield* failRun({
         run: currentRun,
         reason: "unknown",
         detailMarkdown: "The target worktree is unavailable.",
@@ -545,7 +544,7 @@ const make = Effect.gen(function* () {
     if (run.caller.type === "implementation") {
       const status = yield* gitWorkflow.status({ cwd });
       if (!status.isRepo || status.hasWorkingTreeChanges) {
-        yield* blockRun({
+        yield* failRun({
           run,
           reason: "embedded-worktree-dirty",
           detailMarkdown:
@@ -632,7 +631,7 @@ const make = Effect.gen(function* () {
           ? {
               ...entry,
               status: "completed",
-              reviewVerdict: review.document.verdict,
+              reviewVerdict: "passed",
               completedAt: occurredAt,
             }
           : entry,
@@ -669,7 +668,7 @@ const make = Effect.gen(function* () {
     const target = yield* resolveTarget(input.run.targetThreadId);
     const cycle = input.run.cycles.at(-1);
     if (reviewer === undefined || cycle === undefined || target === null) {
-      yield* blockRun({
+      yield* failRun({
         run: input.run,
         reason: "unknown",
         detailMarkdown: "The App Review thread or target worktree disappeared.",
@@ -689,7 +688,7 @@ const make = Effect.gen(function* () {
           ? {
               ...entry,
               status: "planning",
-              reviewVerdict: input.review.document.verdict,
+              reviewVerdict: "failed",
               actionableFindingsMarkdown: input.actionableFindingsMarkdown,
             }
           : entry,
@@ -753,10 +752,10 @@ const make = Effect.gen(function* () {
     }
     const review = controller === undefined ? null : reviewRecordForCycle(controller, cycle);
     if (
-      (review === null || !["passed", "failed", "blocked"].includes(review.status)) &&
+      (review === null || !["passed", "failed"].includes(review.status)) &&
       threadTurnFailed(reviewer)
     ) {
-      yield* blockRun({
+      yield* failRun({
         run,
         reason: "review-blocked",
         detailMarkdown:
@@ -766,42 +765,33 @@ const make = Effect.gen(function* () {
       });
       return;
     }
-    if (review === null || !["passed", "failed", "blocked"].includes(review.status)) return;
+    if (review === null || !["passed", "failed"].includes(review.status)) return;
     if (!hasSettledCheckpoint(reviewer)) return;
     const target = yield* resolveTarget(run.targetThreadId);
     if (target === null) return;
     const stableRun = yield* assertStableRevision(run, target.cwd, occurredAt);
     if (stableRun === null) return;
     const action = terminalReviewAction(review);
-    if (action === "blocked") {
-      yield* blockRun({
-        run: stableRun,
-        reason: "review-blocked",
-        detailMarkdown: review.document.summary || "Browser App Review was blocked.",
-        occurredAt,
-      });
-      return;
-    }
     const passFailure = terminalReviewPassFailure({
       run: stableRun,
       review,
       priorReviews: controller?.appReviews ?? [],
     });
     if (passFailure !== null) {
-      yield* blockRun({
+      yield* startPlanning({
         run: stableRun,
-        reason: "review-blocked",
-        detailMarkdown: passFailure,
+        review,
+        actionableFindingsMarkdown: passFailure,
         occurredAt,
       });
       return;
     }
     const evidenceFailure = terminalReviewEvidenceFailure(action, review);
     if (evidenceFailure !== null) {
-      yield* blockRun({
+      yield* startPlanning({
         run: stableRun,
-        reason: "review-blocked",
-        detailMarkdown: evidenceFailure,
+        review,
+        actionableFindingsMarkdown: evidenceFailure,
         occurredAt,
       });
       return;
@@ -810,7 +800,10 @@ const make = Effect.gen(function* () {
       yield* finishPassed(stableRun, review, occurredAt);
       return;
     }
-    const actionableFindingsMarkdown = findingsMarkdown(review);
+    const actionableFindingsMarkdown =
+      findingsMarkdown(review) ||
+      review.document.summary ||
+      "The App Review failed without details.";
     yield* startPlanning({
       run: stableRun,
       review,
@@ -967,7 +960,7 @@ const make = Effect.gen(function* () {
     const reviewer = yield* resolveThread(cycle.reviewerThreadId);
     if (reviewer === undefined) return;
     if (threadTurnFailed(reviewer) && !hasSettledCheckpoint(reviewer)) {
-      yield* blockRun({
+      yield* failRun({
         run,
         reason: "plan-missing",
         detailMarkdown:
@@ -981,7 +974,7 @@ const make = Effect.gen(function* () {
     const turn = reviewer.latestTurn;
     if (turn === null) return;
     if (turn.state === "error" || turn.state === "interrupted") {
-      yield* blockRun({
+      yield* failRun({
         run,
         reason: "plan-missing",
         detailMarkdown: "The non-interactive planning turn did not complete successfully.",
@@ -991,7 +984,7 @@ const make = Effect.gen(function* () {
     }
     const plans = reviewer.proposedPlans.filter((candidate) => candidate.turnId === turn.turnId);
     if (plans.length === 0) {
-      yield* blockRun({
+      yield* failRun({
         run,
         reason: "plan-missing",
         detailMarkdown:
@@ -1002,7 +995,7 @@ const make = Effect.gen(function* () {
     }
     const plan = plans[0]!;
     if (plans.length !== 1 || plan.planMarkdown.trim().length === 0) {
-      yield* blockRun({
+      yield* failRun({
         run,
         reason: "plan-malformed",
         detailMarkdown:
@@ -1064,7 +1057,7 @@ const make = Effect.gen(function* () {
     }
     const result = parseFixResult(fixer, run, cycle);
     if (result === null && threadTurnFailed(fixer)) {
-      yield* blockRun({
+      yield* failRun({
         run,
         reason: "fixer-failed",
         detailMarkdown:
@@ -1076,7 +1069,7 @@ const make = Effect.gen(function* () {
     }
     if (result === null || !hasSettledCheckpoint(fixer)) return;
     if (result.status !== "succeeded") {
-      yield* blockRun({
+      yield* failRun({
         run,
         reason: "fixer-failed",
         detailMarkdown: result.notesMarkdown || `The App Review implementation ${result.status}.`,
@@ -1088,7 +1081,7 @@ const make = Effect.gen(function* () {
       result.validations.length === 0 ||
       result.validations.some((validation) => validation.status !== "passed")
     ) {
-      yield* blockRun({
+      yield* failRun({
         run,
         reason: "fixer-failed",
         detailMarkdown:
@@ -1103,7 +1096,7 @@ const make = Effect.gen(function* () {
     if (run.caller.type === "implementation") {
       const status = yield* gitWorkflow.status({ cwd: target.cwd });
       if (!status.isRepo || status.hasWorkingTreeChanges) {
-        yield* blockRun({
+        yield* failRun({
           run,
           reason: "embedded-worktree-dirty",
           detailMarkdown: "The embedded fixer did not leave a clean orchestrator worktree.",
@@ -1116,7 +1109,7 @@ const make = Effect.gen(function* () {
         result.commitSha === undefined ||
         result.commitSha !== revision.headSha
       ) {
-        yield* blockRun({
+        yield* failRun({
           run,
           reason: "embedded-head-mismatch",
           detailMarkdown: "The embedded fixer commit does not match the orchestrator HEAD.",
@@ -1238,7 +1231,7 @@ const make = Effect.gen(function* () {
         event.payload.activity.kind === "approval.requested" ||
         event.payload.activity.kind === "user-input.requested"
       ) {
-        yield* blockRun({
+        yield* failRun({
           run,
           reason:
             event.payload.activity.kind === "approval.requested"
@@ -1253,7 +1246,7 @@ const make = Effect.gen(function* () {
     if (event.type === "thread.session-set" && event.payload.session.status === "error") {
       const run = yield* runForEvent(event);
       if (run !== null && run.activeThreadId === event.payload.threadId) {
-        yield* blockRun({
+        yield* failRun({
           run,
           reason:
             run.activePhase === "fixing"
@@ -1281,7 +1274,7 @@ const make = Effect.gen(function* () {
           : Effect.gen(function* () {
               const run = yield* runForEvent(event).pipe(Effect.orElseSucceed(() => null));
               if (run !== null && run.status === "running") {
-                yield* blockRun({
+                yield* failRun({
                   run,
                   reason: "automation-unavailable",
                   detailMarkdown: `App Review automation failed while processing ${event.type}.\n\n${Cause.pretty(cause)}`,
@@ -1308,7 +1301,7 @@ const make = Effect.gen(function* () {
         Effect.catchCause((cause) =>
           Cause.hasInterruptsOnly(cause)
             ? Effect.failCause(cause)
-            : blockRun({
+            : failRun({
                 run,
                 reason: "automation-unavailable",
                 detailMarkdown: `App Review automation was unavailable during restart recovery.\n\n${Cause.pretty(cause)}`,

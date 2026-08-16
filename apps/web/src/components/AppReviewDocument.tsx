@@ -5,7 +5,7 @@ import type {
   EnvironmentId,
 } from "@t3tools/contracts";
 import { APP_REVIEW_RECORDING_EVIDENCE_ID } from "@t3tools/contracts";
-import { AlertTriangle, CheckCircle2, Circle, CircleDot, Info, XCircle } from "lucide-react";
+import { CheckCircle2, Circle, CircleDot, Info, XCircle } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { useAssetUrls } from "~/assets/assetUrls";
@@ -19,7 +19,6 @@ const statusClassName = {
   running: "text-info",
   passed: "text-success",
   failed: "text-destructive",
-  blocked: "text-warning",
 } as const;
 
 const severityClassName = {
@@ -35,8 +34,6 @@ function statusIcon(status: AppReviewRecord["status"]) {
       return <CheckCircle2 className="size-4 text-success" />;
     case "failed":
       return <XCircle className="size-4 text-destructive" />;
-    case "blocked":
-      return <AlertTriangle className="size-4 text-warning" />;
     case "running":
       return <CircleDot className="size-4 text-info" />;
     case "pending":

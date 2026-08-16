@@ -329,7 +329,7 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(previewQaDoc.content, /preview_evaluate/);
     NodeAssert.match(previewQaDoc.content, /app_review_recording_start/);
     NodeAssert.match(previewQaDoc.content, /app_review_capture_screenshot/);
-    NodeAssert.match(previewQaDoc.content, /Do not erase evidenced defects/);
+    NodeAssert.match(previewQaDoc.content, /using a third verdict/);
     NodeAssert.match(previewQaDoc.content, /go stale/i);
     NodeAssert.doesNotMatch(previewQaDoc.content, /agent-browser/i);
     NodeAssert.doesNotMatch(previewQaDoc.content, /rrweb/i);
@@ -375,7 +375,7 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /app_review_recording_start/);
     NodeAssert.match(rendered, /app_review_recording_stop/);
     NodeAssert.match(rendered, /app_review_capture_screenshot/);
-    NodeAssert.match(rendered, /Do not turn evidenced product defects into blocked/);
+    NodeAssert.match(rendered, /status passed or failed/);
     NodeAssert.doesNotMatch(rendered, /agent-browser/i);
     NodeAssert.doesNotMatch(rendered, /rrweb/i);
     NodeAssert.doesNotMatch(rendered, /Chrome DevTools MCP/);

@@ -2,7 +2,6 @@ import {
   CommandId,
   AppReviewError,
   hasCompleteAppReviewEvidence,
-  hasScreenshotBackedAppReviewFailure,
   OrchestrationDispatchCommandError,
   OrchestrationGetSnapshotError,
   type AppReviewEvidence,
@@ -145,19 +144,7 @@ export const handlers = {
             review.id,
             `Cannot set status 'passed' without browser evidence: a saved screen recording (current recording status is '${recording.status}') and at least one screenshot (currently ${screenshots.length}) are required. ` +
               "Run app_review_recording_start, exercise the app with the preview_* tools, capture screenshots with app_review_capture_screenshot, then app_review_recording_stop. " +
-              "If the browser tools are unavailable, set status 'blocked' instead.",
-          );
-        }
-      }
-      if (input.status === "failed") {
-        const document = input.document ?? review.document;
-        if (
-          !hasCompleteAppReviewEvidence(review.evidence) &&
-          !hasScreenshotBackedAppReviewFailure(document, review.evidence)
-        ) {
-          return yield* reviewError(
-            review.id,
-            "Cannot set status 'failed' without trustworthy browser evidence. Provide either a saved recording plus a captured screenshot, or—when recording finalization failed—at least one failed check and actionable findings that each reference a captured screenshot. If no product behavior could be evidenced, set status 'blocked' instead.",
+              "If the browser tools are unavailable, set status 'failed' with concrete diagnostic detail instead.",
           );
         }
       }
