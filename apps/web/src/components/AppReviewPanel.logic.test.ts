@@ -1,92 +1,93 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
-  DevReviewId,
-  DevReviewWorkflowRunId,
-  EMPTY_DEV_REVIEW_EVIDENCE,
+  AppReviewId,
+  AppReviewWorkflowRunId,
+  EMPTY_APP_REVIEW_EVIDENCE,
   ThreadId,
-  type DevReviewRecord,
-  type DevReviewWorkflowRun,
+  type AppReviewRecord,
+  type AppReviewWorkflowRun,
 } from "@t3tools/contracts";
 
 import {
-  devReviewRunContainsThread,
-  devReviewRunFailureSummary,
-  devReviewRunStatusLabel,
-  isValidDevReviewWorkflowLaunch,
-  selectActiveDevReviewRecord,
-  selectDevReviewRunsForPanel,
-  selectLatestDevReviewControllerRun,
-} from "./DevReviewPanel.logic";
+  appReviewRunContainsThread,
+  appReviewCycleStepStatuses,
+  appReviewRunFailureSummary,
+  appReviewRunStatusLabel,
+  isValidAppReviewWorkflowLaunch,
+  selectActiveAppReviewRecord,
+  selectAppReviewRunsForPanel,
+  selectLatestAppReviewControllerRun,
+} from "./AppReviewPanel.logic";
 
-describe("selectActiveDevReviewRecord", () => {
+describe("selectActiveAppReviewRecord", () => {
   it("prefers the record whose review thread is open", () => {
     const sourceThreadId = ThreadId.make("thread-source");
     const openedReviewThreadId = ThreadId.make("thread-review-open");
     const records = [
-      makeDevReviewRecord({
-        id: DevReviewId.make("dev-review-latest"),
+      makeAppReviewRecord({
+        id: AppReviewId.make("app-review-latest"),
         sourceThreadId,
         reviewThreadId: ThreadId.make("thread-review-latest"),
         createdAt: "2026-03-09T12:00:00.000Z",
       }),
-      makeDevReviewRecord({
-        id: DevReviewId.make("dev-review-open"),
+      makeAppReviewRecord({
+        id: AppReviewId.make("app-review-open"),
         sourceThreadId,
         reviewThreadId: openedReviewThreadId,
         createdAt: "2026-03-09T11:00:00.000Z",
       }),
     ];
 
-    expect(selectActiveDevReviewRecord(records, openedReviewThreadId)?.id).toBe("dev-review-open");
+    expect(selectActiveAppReviewRecord(records, openedReviewThreadId)?.id).toBe("app-review-open");
   });
 
   it("falls back to the latest source-thread record", () => {
     const records = [
-      makeDevReviewRecord({
-        id: DevReviewId.make("dev-review-old"),
+      makeAppReviewRecord({
+        id: AppReviewId.make("app-review-old"),
         createdAt: "2026-03-09T11:00:00.000Z",
       }),
-      makeDevReviewRecord({
-        id: DevReviewId.make("dev-review-new"),
+      makeAppReviewRecord({
+        id: AppReviewId.make("app-review-new"),
         createdAt: "2026-03-09T12:00:00.000Z",
       }),
     ];
 
-    expect(selectActiveDevReviewRecord(records, ThreadId.make("thread-source"))?.id).toBe(
-      "dev-review-new",
+    expect(selectActiveAppReviewRecord(records, ThreadId.make("thread-source"))?.id).toBe(
+      "app-review-new",
     );
   });
 });
 
-describe("Dev Review workflow panel logic", () => {
-  it("accepts settled launches with a 1-50 attempt budget before preview resolution", () => {
+describe("App Review workflow panel logic", () => {
+  it("accepts settled launches with a dynamic 1-50 cycle budget before preview resolution", () => {
     const valid = {
       brief: "Review checkout",
       cycleBudget: 10,
       sourceSettled: true,
       worktreeOwned: false,
     };
-    expect(isValidDevReviewWorkflowLaunch(valid)).toBe(true);
-    expect(isValidDevReviewWorkflowLaunch({ ...valid, brief: " " })).toBe(false);
-    expect(isValidDevReviewWorkflowLaunch({ ...valid, cycleBudget: 0 })).toBe(false);
-    expect(isValidDevReviewWorkflowLaunch({ ...valid, cycleBudget: 51 })).toBe(false);
-    expect(isValidDevReviewWorkflowLaunch({ ...valid, sourceSettled: false })).toBe(false);
-    expect(isValidDevReviewWorkflowLaunch({ ...valid, worktreeOwned: true })).toBe(false);
+    expect(isValidAppReviewWorkflowLaunch(valid)).toBe(true);
+    expect(isValidAppReviewWorkflowLaunch({ ...valid, brief: " " })).toBe(false);
+    expect(isValidAppReviewWorkflowLaunch({ ...valid, cycleBudget: 0 })).toBe(false);
+    expect(isValidAppReviewWorkflowLaunch({ ...valid, cycleBudget: 51 })).toBe(false);
+    expect(isValidAppReviewWorkflowLaunch({ ...valid, sourceSettled: false })).toBe(false);
+    expect(isValidAppReviewWorkflowLaunch({ ...valid, worktreeOwned: true })).toBe(false);
   });
 
   it("shows phase and cycle progress and resolves every workflow child", () => {
-    const run = makeDevReviewWorkflowRun();
-    expect(devReviewRunStatusLabel(run)).toBe("planning · Cycle 1 of 10");
+    const run = makeAppReviewWorkflowRun();
+    expect(appReviewRunStatusLabel(run)).toBe("Gap analysis & plan · Cycle 1 of 10");
     for (const threadId of [
       run.targetThreadId,
       run.controllerThreadId,
       run.cycles[0]!.reviewerThreadId,
       run.cycles[0]!.fixerThreadId!,
     ]) {
-      expect(devReviewRunContainsThread(run, threadId)).toBe(true);
+      expect(appReviewRunContainsThread(run, threadId)).toBe(true);
     }
     expect(
-      devReviewRunStatusLabel({
+      appReviewRunStatusLabel({
         ...run,
         status: "exhausted",
         outcome: "exhausted",
@@ -95,45 +96,66 @@ describe("Dev Review workflow panel logic", () => {
     ).toBe("exhausted");
   });
 
+  it("shows review and planning in one cycle before implementation", () => {
+    const run = makeAppReviewWorkflowRun();
+    expect(appReviewCycleStepStatuses(run.cycles[0]!)).toEqual(["complete", "complete", "pending"]);
+    expect(
+      appReviewCycleStepStatuses({
+        ...run.cycles[0]!,
+        status: "fixing",
+        fixerThreadId: ThreadId.make("thread-fixer"),
+      }),
+    ).toEqual(["complete", "complete", "current"]);
+    expect(
+      appReviewCycleStepStatuses({
+        ...run.cycles[0]!,
+        status: "completed",
+        reviewVerdict: "passed",
+        planId: null,
+        fixerThreadId: null,
+      }),
+    ).toEqual(["complete", "not-needed", "not-needed"]);
+  });
+
   it("selects the latest run controlled by the open thread", () => {
     const threadId = ThreadId.make("thread-controller");
-    const older = makeDevReviewWorkflowRun();
+    const older = makeAppReviewWorkflowRun();
     const newer = {
       ...older,
-      id: DevReviewWorkflowRunId.make("dev-review-workflow-newer"),
+      id: AppReviewWorkflowRunId.make("app-review-workflow-newer"),
       updatedAt: "2026-08-11T00:02:00.000Z",
     };
     const unrelated = {
       ...newer,
-      id: DevReviewWorkflowRunId.make("dev-review-workflow-unrelated"),
+      id: AppReviewWorkflowRunId.make("app-review-workflow-unrelated"),
       controllerThreadId: ThreadId.make("thread-other"),
       updatedAt: "2026-08-11T00:03:00.000Z",
     };
 
-    expect(selectLatestDevReviewControllerRun([older, unrelated, newer], threadId)?.id).toBe(
+    expect(selectLatestAppReviewControllerRun([older, unrelated, newer], threadId)?.id).toBe(
       newer.id,
     );
   });
 
   it("shows every run from a workflow-scoped artifact response", () => {
-    const older = makeDevReviewWorkflowRun();
+    const older = makeAppReviewWorkflowRun();
     const newer = {
       ...older,
-      id: DevReviewWorkflowRunId.make("dev-review-workflow-newer"),
+      id: AppReviewWorkflowRunId.make("app-review-workflow-newer"),
       targetThreadId: ThreadId.make("thread-other-target"),
       controllerThreadId: ThreadId.make("thread-other-controller"),
       createdAt: "2026-08-11T00:02:00.000Z",
     };
 
     expect(
-      selectDevReviewRunsForPanel({
+      selectAppReviewRunsForPanel({
         runs: [older, newer],
         openedThreadId: ThreadId.make("workflow-root"),
         workflowScoped: true,
       }).map((run) => run.id),
     ).toEqual([newer.id, older.id]);
     expect(
-      selectDevReviewRunsForPanel({
+      selectAppReviewRunsForPanel({
         runs: [older, newer],
         openedThreadId: older.targetThreadId,
         workflowScoped: false,
@@ -142,8 +164,8 @@ describe("Dev Review workflow panel logic", () => {
   });
 
   it("summarizes a launch failure without exposing its stack trace", () => {
-    const run = makeDevReviewWorkflowRun();
-    const blocked: DevReviewWorkflowRun = {
+    const run = makeAppReviewWorkflowRun();
+    const blocked: AppReviewWorkflowRun = {
       ...run,
       status: "blocked",
       outcome: "blocked",
@@ -153,21 +175,21 @@ describe("Dev Review workflow panel logic", () => {
         phase: null,
         cycleNumber: null,
         detailMarkdown:
-          "Dev Review automation failed.\n\nVcsRepositoryDetectionError: Workspace rejected.\n    at internal.ts:10:2",
+          "App Review automation failed.\n\nVcsRepositoryDetectionError: Workspace rejected.\n    at internal.ts:10:2",
         failedAt: "2026-08-11T00:02:00.000Z",
       },
     };
 
-    expect(devReviewRunFailureSummary(blocked)).toBe(
-      "Dev Review automation failed.\nVcsRepositoryDetectionError: Workspace rejected.",
+    expect(appReviewRunFailureSummary(blocked)).toBe(
+      "App Review automation failed.\nVcsRepositoryDetectionError: Workspace rejected.",
     );
-    expect(devReviewRunFailureSummary(run)).toBeNull();
+    expect(appReviewRunFailureSummary(run)).toBeNull();
   });
 });
 
-function makeDevReviewRecord(overrides: Partial<DevReviewRecord> = {}): DevReviewRecord {
+function makeAppReviewRecord(overrides: Partial<AppReviewRecord> = {}): AppReviewRecord {
   return {
-    id: DevReviewId.make("dev-review-1"),
+    id: AppReviewId.make("app-review-1"),
     sourceThreadId: ThreadId.make("thread-source"),
     reviewThreadId: ThreadId.make("thread-review"),
     sourceTurnId: null,
@@ -180,14 +202,14 @@ function makeDevReviewRecord(overrides: Partial<DevReviewRecord> = {}): DevRevie
       questions: [],
       nextSteps: [],
     },
-    evidence: EMPTY_DEV_REVIEW_EVIDENCE,
+    evidence: EMPTY_APP_REVIEW_EVIDENCE,
     createdAt: "2026-03-09T10:00:00.000Z",
     updatedAt: "2026-03-09T10:00:00.000Z",
     ...overrides,
   };
 }
 
-function makeDevReviewWorkflowRun(): DevReviewWorkflowRun {
+function makeAppReviewWorkflowRun(): AppReviewWorkflowRun {
   const revision = {
     headSha: "abc123",
     workingTreeDiffHash: "working-hash",
@@ -195,7 +217,7 @@ function makeDevReviewWorkflowRun(): DevReviewWorkflowRun {
     fingerprint: "fingerprint",
   };
   return {
-    id: DevReviewWorkflowRunId.make("dev-review-workflow-controller"),
+    id: AppReviewWorkflowRunId.make("app-review-workflow-controller"),
     targetThreadId: ThreadId.make("thread-target"),
     controllerThreadId: ThreadId.make("thread-controller"),
     caller: { type: "standalone", sourceThreadId: ThreadId.make("thread-target") },
@@ -203,13 +225,13 @@ function makeDevReviewWorkflowRun(): DevReviewWorkflowRun {
     supportingContextMarkdown: null,
     previewTargets: ["https://preview.example.test"],
     cycleBudget: 10,
-    attemptsUsed: 1,
+    cyclesUsed: 1,
     status: "running",
     cycles: [
       {
         cycleNumber: 1,
         status: "planning",
-        reviewId: DevReviewId.make("review-1"),
+        reviewId: AppReviewId.make("review-1"),
         reviewerThreadId: ThreadId.make("thread-reviewer"),
         reviewVerdict: "failed",
         actionableFindingsMarkdown: "Fix validation.",
@@ -223,7 +245,7 @@ function makeDevReviewWorkflowRun(): DevReviewWorkflowRun {
       },
     ],
     activePhase: "planning",
-    activeThreadId: ThreadId.make("thread-controller"),
+    activeThreadId: ThreadId.make("thread-reviewer"),
     workspaceRevision: revision,
     finalHeadSha: null,
     outcome: null,

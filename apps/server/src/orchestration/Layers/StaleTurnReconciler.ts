@@ -1,6 +1,6 @@
 import {
   CommandId,
-  DevReviewId,
+  AppReviewId,
   EventId,
   MessageId,
   type OrchestrationProposedPlanId,
@@ -176,7 +176,7 @@ function resolveResumeTarget(
       if (run === undefined) return null;
       return {
         workflowPromptId:
-          run.fixOrigin === "app-dev-stack" || run.fixOrigin === "dev-review"
+          run.fixOrigin === "app-dev-stack" || run.fixOrigin === "app-review"
             ? WORKFLOW_PROMPT_IDS.implementationTddCodex
             : WORKFLOW_PROMPT_IDS.implementationFixCodex,
         interactionMode: "implementation-workflow",
@@ -199,11 +199,11 @@ function resolveResumeTarget(
         (candidate) =>
           candidate.orchestratorThreadId === thread.parentThreadId &&
           candidate.status === "qa-reviewing" &&
-          candidate.devReviewIds.length > 0,
+          candidate.appReviewIds.length > 0,
       );
       if (run === undefined) return null;
       return {
-        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
+        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
         interactionMode: "implementation-workflow",
       };
     }
@@ -506,19 +506,19 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
               (candidate) =>
                 candidate.orchestratorThreadId === thread.parentThreadId &&
                 candidate.status === "qa-reviewing" &&
-                candidate.activeDevReviewThreadId === thread.id,
+                candidate.activeAppReviewThreadId === thread.id,
             );
-            const reviewId = run?.devReviewIds.at(-1);
+            const reviewId = run?.appReviewIds.at(-1);
             if (run === undefined || reviewId === undefined) return;
             yield* orchestrationEngine.dispatch({
-              type: "thread.dev-review.update",
+              type: "thread.app-review.update",
               commandId: yield* staleTurnCommandId(
                 "browser-review-runtime-failure",
                 thread.id,
                 pinnedTurnId,
               ),
               threadId: run.orchestratorThreadId,
-              reviewId: DevReviewId.make(reviewId),
+              reviewId: AppReviewId.make(reviewId),
               status: "blocked",
               updatedAt: createdAt,
               createdAt,

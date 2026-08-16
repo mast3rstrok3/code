@@ -34,7 +34,7 @@ export const getWorkflowArtifactsForThread = Effect.fn("getWorkflowArtifactsForT
         message: "Workflow artifacts belong to a different project.",
       });
     }
-    const relatedDevReviewRun = (readModel.devReviewWorkflowRuns ?? []).find(
+    const relatedAppReviewRun = (readModel.appReviewWorkflowRuns ?? []).find(
       (run) =>
         run.targetThreadId === thread.id ||
         run.controllerThreadId === thread.id ||
@@ -43,19 +43,19 @@ export const getWorkflowArtifactsForThread = Effect.fn("getWorkflowArtifactsForT
         ),
     );
     const targetThread =
-      relatedDevReviewRun === undefined
+      relatedAppReviewRun === undefined
         ? thread
         : (readModel.threads.find(
-            (candidate) => candidate.id === relatedDevReviewRun.targetThreadId,
+            (candidate) => candidate.id === relatedAppReviewRun.targetThreadId,
           ) ?? thread);
     const controllerThread =
-      relatedDevReviewRun === undefined
+      relatedAppReviewRun === undefined
         ? thread
         : (readModel.threads.find(
-            (candidate) => candidate.id === relatedDevReviewRun.controllerThreadId,
+            (candidate) => candidate.id === relatedAppReviewRun.controllerThreadId,
           ) ?? thread);
     const context =
-      relatedDevReviewRun === undefined
+      relatedAppReviewRun === undefined
         ? thread.workflowContext
         : (targetThread.workflowContext ?? controllerThread.workflowContext);
     if (context == null) {
@@ -105,9 +105,9 @@ export const getWorkflowArtifactsForThread = Effect.fn("getWorkflowArtifactsForT
         (spec !== null && run.specId === spec.id) ||
         run.sourceProposedPlan?.threadId === context.rootThreadId,
     );
-    const devReviewWorkflowRuns = (readModel.devReviewWorkflowRuns ?? []).filter(
+    const appReviewWorkflowRuns = (readModel.appReviewWorkflowRuns ?? []).filter(
       (run) =>
-        run.id === relatedDevReviewRun?.id ||
+        run.id === relatedAppReviewRun?.id ||
         workflowThreads.some(
           (candidate) =>
             candidate.id === run.targetThreadId || candidate.id === run.controllerThreadId,
@@ -115,12 +115,12 @@ export const getWorkflowArtifactsForThread = Effect.fn("getWorkflowArtifactsForT
     );
     const reviewsById = new Map(
       [...workflowThreads, targetThread, controllerThread]
-        .flatMap((candidate) => candidate.devReviews)
+        .flatMap((candidate) => candidate.appReviews)
         .concat(
-          devReviewWorkflowRuns.flatMap((run) =>
+          appReviewWorkflowRuns.flatMap((run) =>
             run.cycles.flatMap((cycle) =>
               readModel.threads.flatMap((candidate) =>
-                candidate.devReviews.filter((review) => review.id === cycle.reviewId),
+                candidate.appReviews.filter((review) => review.id === cycle.reviewId),
               ),
             ),
           ),
@@ -136,8 +136,8 @@ export const getWorkflowArtifactsForThread = Effect.fn("getWorkflowArtifactsForT
       tickets: planningWorkflow?.tickets ?? [],
       reviewCycles: planningWorkflow?.reviewCycles ?? [],
       implementationRuns,
-      devReviewWorkflowRuns,
-      devReviews: Array.from(reviewsById.values()),
+      appReviewWorkflowRuns,
+      appReviews: Array.from(reviewsById.values()),
     } satisfies WorkflowArtifactsSnapshot;
   },
 );

@@ -1,14 +1,14 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import {
-  DevReviewId,
-  EMPTY_DEV_REVIEW_EVIDENCE,
+  AppReviewId,
+  EMPTY_APP_REVIEW_EVIDENCE,
   EnvironmentId,
   PreviewAutomationExecutionError,
   ProviderInstanceId,
   ThreadId,
-  type DevReviewEvidence,
-  type DevReviewRecord,
+  type AppReviewEvidence,
+  type AppReviewRecord,
   type OrchestrationCommand,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -24,7 +24,7 @@ import { OrchestrationEngineService } from "../../../orchestration/Services/Orch
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { handlers } from "./handlers.ts";
 
-const reviewId = DevReviewId.make("dev-review-1");
+const reviewId = AppReviewId.make("app-review-1");
 const threadId = ThreadId.make("thread-review");
 const environmentId = EnvironmentId.make("environment-1");
 const providerInstanceId = ProviderInstanceId.make("codex");
@@ -67,7 +67,7 @@ const screenshotBackedFailureDocument = {
   nextSteps: ["Repair checkout submission."],
 } as const;
 
-const makeReview = (evidence: DevReviewEvidence): DevReviewRecord => ({
+const makeReview = (evidence: AppReviewEvidence): AppReviewRecord => ({
   id: reviewId,
   sourceThreadId: ThreadId.make("thread-source"),
   reviewThreadId: threadId,
@@ -80,7 +80,7 @@ const makeReview = (evidence: DevReviewEvidence): DevReviewRecord => ({
 });
 
 const makeHarness = (input: {
-  readonly review: DevReviewRecord;
+  readonly review: AppReviewRecord;
   readonly brokerResults?: Partial<Record<string, unknown>>;
   readonly brokerFailure?: PreviewAutomationExecutionError;
 }) => {
@@ -97,7 +97,7 @@ const makeHarness = (input: {
       threadId,
       providerSessionId: "provider-session-1",
       providerInstanceId,
-      capabilities: new Set(["preview", "dev-review"] as const),
+      capabilities: new Set(["preview", "app-review"] as const),
       issuedAt: 1,
     }),
     Layer.mock(ProjectionSnapshotQuery)({
@@ -105,7 +105,7 @@ const makeHarness = (input: {
         Effect.succeed(
           Option.some({
             id: threadId,
-            devReviews: [input.review],
+            appReviews: [input.review],
           } as never),
         ),
     }),
@@ -133,7 +133,7 @@ const makeHarness = (input: {
       }),
     ),
     ServerConfig.ServerConfig.layerTest(process.cwd(), {
-      prefix: "t3-dev-review-handlers-test-",
+      prefix: "t3-app-review-handlers-test-",
     }),
   ).pipe(Layer.provideMerge(NodeServices.layer));
 
@@ -155,10 +155,10 @@ const brokerFailure = new PreviewAutomationExecutionError({
   cause: new Error("no active recording"),
 });
 
-describe("dev-review toolkit handlers", () => {
+describe("app-review toolkit handlers", () => {
   it.effect("recording start invokes the broker and persists recording evidence", () => {
     const harness = makeHarness({
-      review: makeReview(EMPTY_DEV_REVIEW_EVIDENCE),
+      review: makeReview(EMPTY_APP_REVIEW_EVIDENCE),
       brokerResults: {
         recordingStart: {
           tabId: "tab-1",
@@ -169,7 +169,7 @@ describe("dev-review toolkit handlers", () => {
     });
 
     return Effect.gen(function* () {
-      const recording = yield* handlers.dev_review_recording_start({ reviewId });
+      const recording = yield* handlers.app_review_recording_start({ reviewId });
       assert.strictEqual(recording.status, "recording");
       assert.strictEqual(recording.startedAt, "2026-01-01T00:00:10.000Z");
       assert.deepStrictEqual(harness.brokerInvocations, [
@@ -177,8 +177,8 @@ describe("dev-review toolkit handlers", () => {
       ]);
       assert.strictEqual(harness.dispatched.length, 1);
       const command = harness.dispatched[0];
-      assert.strictEqual(command?.type, "thread.dev-review.evidence.update");
-      if (command?.type === "thread.dev-review.evidence.update") {
+      assert.strictEqual(command?.type, "thread.app-review.evidence.update");
+      if (command?.type === "thread.app-review.evidence.update") {
         assert.strictEqual(command.evidence.recording.status, "recording");
       }
     }).pipe(Effect.provide(harness.layer));
@@ -187,9 +187,9 @@ describe("dev-review toolkit handlers", () => {
   it.effect("recording stop persists the saved artifact without echoing the path", () => {
     const harness = makeHarness({
       review: makeReview({
-        ...EMPTY_DEV_REVIEW_EVIDENCE,
+        ...EMPTY_APP_REVIEW_EVIDENCE,
         recording: {
-          ...EMPTY_DEV_REVIEW_EVIDENCE.recording,
+          ...EMPTY_APP_REVIEW_EVIDENCE.recording,
           status: "recording",
           startedAt: "2026-01-01T00:00:10.000Z",
         },
@@ -207,7 +207,7 @@ describe("dev-review toolkit handlers", () => {
     });
 
     return Effect.gen(function* () {
-      const recording = yield* handlers.dev_review_recording_stop({ reviewId });
+      const recording = yield* handlers.app_review_recording_stop({ reviewId });
       assert.strictEqual(recording.status, "saved");
       assert.strictEqual(recording.mimeType, "video/webm");
       assert.strictEqual(recording.sizeBytes, 2048);
@@ -216,8 +216,8 @@ describe("dev-review toolkit handlers", () => {
         { operation: "recordingStop", tabId: undefined, timeoutMs: 60_000 },
       ]);
       const command = harness.dispatched[0];
-      assert.strictEqual(command?.type, "thread.dev-review.evidence.update");
-      if (command?.type === "thread.dev-review.evidence.update") {
+      assert.strictEqual(command?.type, "thread.app-review.evidence.update");
+      if (command?.type === "thread.app-review.evidence.update") {
         assert.strictEqual(
           command.evidence.recording.path,
           "/state/preview-artifacts/browser-recording-abc.webm",
@@ -228,17 +228,17 @@ describe("dev-review toolkit handlers", () => {
 
   it.effect("recording stop records a failure instead of erroring", () => {
     const harness = makeHarness({
-      review: makeReview(EMPTY_DEV_REVIEW_EVIDENCE),
+      review: makeReview(EMPTY_APP_REVIEW_EVIDENCE),
       brokerFailure,
     });
 
     return Effect.gen(function* () {
-      const recording = yield* handlers.dev_review_recording_stop({ reviewId });
+      const recording = yield* handlers.app_review_recording_stop({ reviewId });
       assert.strictEqual(recording.status, "failed");
       assert.isNotNull(recording.error);
       const command = harness.dispatched[0];
-      assert.strictEqual(command?.type, "thread.dev-review.evidence.update");
-      if (command?.type === "thread.dev-review.evidence.update") {
+      assert.strictEqual(command?.type, "thread.app-review.evidence.update");
+      if (command?.type === "thread.app-review.evidence.update") {
         assert.strictEqual(command.evidence.recording.status, "failed");
       }
     }).pipe(Effect.provide(harness.layer));
@@ -246,7 +246,7 @@ describe("dev-review toolkit handlers", () => {
 
   it.effect("capture screenshot writes the PNG and persists gallery evidence", () => {
     const harness = makeHarness({
-      review: makeReview(EMPTY_DEV_REVIEW_EVIDENCE),
+      review: makeReview(EMPTY_APP_REVIEW_EVIDENCE),
       brokerResults: {
         snapshot: {
           url: "http://127.0.0.1:5173/",
@@ -269,7 +269,7 @@ describe("dev-review toolkit handlers", () => {
     });
 
     return Effect.gen(function* () {
-      const result = yield* handlers.dev_review_capture_screenshot({
+      const result = yield* handlers.app_review_capture_screenshot({
         reviewId,
         caption: "Initial load",
       });
@@ -280,8 +280,8 @@ describe("dev-review toolkit handlers", () => {
       ]);
 
       const command = harness.dispatched[0];
-      assert.strictEqual(command?.type, "thread.dev-review.evidence.update");
-      if (command?.type !== "thread.dev-review.evidence.update") return;
+      assert.strictEqual(command?.type, "thread.app-review.evidence.update");
+      if (command?.type !== "thread.app-review.evidence.update") return;
       const screenshot = command.evidence.screenshots[0];
       assert.ok(screenshot);
       assert.strictEqual(screenshot.id, "shot-1");
@@ -298,18 +298,18 @@ describe("dev-review toolkit handlers", () => {
   it.effect("rejects a passed verdict without saved recording and screenshots", () => {
     const harness = makeHarness({
       review: makeReview({
-        recording: { ...EMPTY_DEV_REVIEW_EVIDENCE.recording, status: "failed" },
+        recording: { ...EMPTY_APP_REVIEW_EVIDENCE.recording, status: "failed" },
         screenshots: [],
       }),
     });
 
     return Effect.gen(function* () {
       const error = yield* handlers
-        .dev_review_update({ reviewId, status: "passed" })
+        .app_review_update({ reviewId, status: "passed" })
         .pipe(Effect.flip);
-      assert.strictEqual(error._tag, "DevReviewError");
+      assert.strictEqual(error._tag, "AppReviewError");
       assert.match(error.message, /saved screen recording/);
-      assert.match(error.message, /dev_review_recording_start/);
+      assert.match(error.message, /app_review_recording_start/);
       assert.match(error.message, /blocked/);
       assert.strictEqual(harness.dispatched.length, 0);
     }).pipe(Effect.provide(harness.layer));
@@ -319,14 +319,14 @@ describe("dev-review toolkit handlers", () => {
     const harness = makeHarness({
       review: makeReview({
         recording: {
-          ...EMPTY_DEV_REVIEW_EVIDENCE.recording,
+          ...EMPTY_APP_REVIEW_EVIDENCE.recording,
           status: "failed",
           error: "ffmpeg did not finalize in time",
         },
         screenshots: [
           {
             id: "shot-1",
-            path: "/state/preview-artifacts/dev-review/dev-review-1/shot-1.png",
+            path: "/state/preview-artifacts/app-review/app-review-1/shot-1.png",
             mimeType: "image/png",
             caption: "Checkout submit remains disabled",
             capturedAt: "2026-01-01T00:00:30.000Z",
@@ -336,34 +336,34 @@ describe("dev-review toolkit handlers", () => {
     });
 
     return Effect.gen(function* () {
-      const updated = yield* handlers.dev_review_update({
+      const updated = yield* handlers.app_review_update({
         reviewId,
         status: "failed",
         document: screenshotBackedFailureDocument,
       });
       assert.strictEqual(updated.status, "failed");
       assert.strictEqual(harness.dispatched.length, 1);
-      assert.strictEqual(harness.dispatched[0]?.type, "thread.dev-review.update");
+      assert.strictEqual(harness.dispatched[0]?.type, "thread.app-review.update");
     }).pipe(Effect.provide(harness.layer));
   });
 
   it.effect("rejects recording-degraded failed findings without linked screenshot evidence", () => {
     const harness = makeHarness({
       review: makeReview({
-        recording: { ...EMPTY_DEV_REVIEW_EVIDENCE.recording, status: "failed" },
+        recording: { ...EMPTY_APP_REVIEW_EVIDENCE.recording, status: "failed" },
         screenshots: [],
       }),
     });
 
     return Effect.gen(function* () {
       const error = yield* handlers
-        .dev_review_update({
+        .app_review_update({
           reviewId,
           status: "failed",
           document: screenshotBackedFailureDocument,
         })
         .pipe(Effect.flip);
-      assert.strictEqual(error._tag, "DevReviewError");
+      assert.strictEqual(error._tag, "AppReviewError");
       assert.match(error.message, /failed check/);
       assert.match(error.message, /captured screenshot/);
       assert.strictEqual(harness.dispatched.length, 0);
@@ -385,7 +385,7 @@ describe("dev-review toolkit handlers", () => {
         screenshots: [
           {
             id: "shot-1",
-            path: "/state/preview-artifacts/dev-review/dev-review-1/shot-1.png",
+            path: "/state/preview-artifacts/app-review/app-review-1/shot-1.png",
             mimeType: "image/png",
             caption: "Initial load",
             capturedAt: "2026-01-01T00:00:30.000Z",
@@ -395,18 +395,18 @@ describe("dev-review toolkit handlers", () => {
     });
 
     return Effect.gen(function* () {
-      const updated = yield* handlers.dev_review_update({ reviewId, status: "passed" });
+      const updated = yield* handlers.app_review_update({ reviewId, status: "passed" });
       assert.strictEqual(updated.status, "passed");
       assert.strictEqual(harness.dispatched.length, 1);
-      assert.strictEqual(harness.dispatched[0]?.type, "thread.dev-review.update");
+      assert.strictEqual(harness.dispatched[0]?.type, "thread.app-review.update");
     }).pipe(Effect.provide(harness.layer));
   });
 
   it.effect("still allows blocked without evidence", () => {
-    const harness = makeHarness({ review: makeReview(EMPTY_DEV_REVIEW_EVIDENCE) });
+    const harness = makeHarness({ review: makeReview(EMPTY_APP_REVIEW_EVIDENCE) });
 
     return Effect.gen(function* () {
-      const updated = yield* handlers.dev_review_update({ reviewId, status: "blocked" });
+      const updated = yield* handlers.app_review_update({ reviewId, status: "blocked" });
       assert.strictEqual(updated.status, "blocked");
       assert.strictEqual(harness.dispatched.length, 1);
     }).pipe(Effect.provide(harness.layer));

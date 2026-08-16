@@ -119,10 +119,10 @@ describe("ProviderSessionStartInput", () => {
       threadId: "thread-1",
       provider: "codex",
       runtimeMode: "full-access",
-      workflowPromptId: "implementation.browser-dev-review.codex",
+      workflowPromptId: "implementation.browser-app-review.codex",
     });
 
-    expect(parsed.workflowPromptId).toBe("implementation.browser-dev-review.codex");
+    expect(parsed.workflowPromptId).toBe("implementation.browser-app-review.codex");
   });
 });
 
@@ -169,10 +169,10 @@ describe("ProviderSendTurnInput", () => {
     const parsed = decodeProviderSendTurnInput({
       threadId: "thread-1",
       input: "review in browser",
-      workflowPromptId: "implementation.browser-dev-review.codex",
+      workflowPromptId: "implementation.browser-app-review.codex",
     });
 
-    expect(parsed.workflowPromptId).toBe("implementation.browser-dev-review.codex");
+    expect(parsed.workflowPromptId).toBe("implementation.browser-app-review.codex");
   });
 });
 

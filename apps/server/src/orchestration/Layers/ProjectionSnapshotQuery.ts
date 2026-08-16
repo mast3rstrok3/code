@@ -3,10 +3,10 @@ import {
   CheckpointRef,
   DEFAULT_WORKSPACE_USER_ID,
   DEFAULT_WORKSPACE_USER_VIEW,
-  DevReviewDocument,
-  DevReviewEvidence,
-  DevReviewWorkflowRun,
-  DevReviewSourceProposedPlan,
+  AppReviewDocument,
+  AppReviewEvidence,
+  AppReviewWorkflowRun,
+  AppReviewSourceProposedPlan,
   IsoDateTime,
   MessageId,
   NonNegativeInt,
@@ -38,14 +38,14 @@ import {
   type OrchestrationSession,
   type OrchestrationThreadActivity,
   type OrchestrationThreadShell,
-  type DevReviewRecord,
+  type AppReviewRecord,
   ModelSelection,
   ProjectId,
   ThreadId,
   WorkflowSubagentBatchId,
   ThreadWorkflowContext,
   OrchestrationPlanningActiveReviewRequest,
-  DevReviewId,
+  AppReviewId,
   type WorkspaceUserView,
 } from "@t3tools/contracts";
 import * as Arr from "effect/Array";
@@ -70,10 +70,10 @@ import { ThreadPlanProgressService } from "../ThreadPlanProgress.ts";
 import { ProjectionProject } from "../../persistence/Services/ProjectionProjects.ts";
 import { ProjectionState } from "../../persistence/Services/ProjectionState.ts";
 import { ProjectionThreadActivity } from "../../persistence/Services/ProjectionThreadActivities.ts";
-import { ProjectionThreadDevReview } from "../../persistence/Services/ProjectionThreadDevReviews.ts";
+import { ProjectionThreadAppReview } from "../../persistence/Services/ProjectionThreadAppReviews.ts";
 import { ProjectionThreadMessage } from "../../persistence/Services/ProjectionThreadMessages.ts";
 import { ProjectionImplementationRun } from "../../persistence/Services/ProjectionImplementationRuns.ts";
-import { ProjectionDevReviewWorkflowRun } from "../../persistence/Services/ProjectionDevReviewWorkflowRuns.ts";
+import { ProjectionAppReviewWorkflowRun } from "../../persistence/Services/ProjectionAppReviewWorkflowRuns.ts";
 import {
   ProjectionThreadPlanningTicket,
   projectionTicketToContract,
@@ -116,12 +116,12 @@ const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
   }),
 );
 const ProjectionThreadProposedPlanDbRowSchema = ProjectionThreadProposedPlan;
-const ProjectionThreadDevReviewDbRowSchema = ProjectionThreadDevReview.mapFields(
+const ProjectionThreadAppReviewDbRowSchema = ProjectionThreadAppReview.mapFields(
   Struct.assign({
-    document: Schema.fromJsonString(DevReviewDocument),
-    evidence: Schema.fromJsonString(DevReviewEvidence),
+    document: Schema.fromJsonString(AppReviewDocument),
+    evidence: Schema.fromJsonString(AppReviewEvidence),
     planningTicketIds: Schema.fromJsonString(Schema.Array(Schema.String)),
-    sourceProposedPlan: Schema.NullOr(Schema.fromJsonString(DevReviewSourceProposedPlan)),
+    sourceProposedPlan: Schema.NullOr(Schema.fromJsonString(AppReviewSourceProposedPlan)),
   }),
 );
 const ProjectionThreadSpecDbRowSchema = ProjectionThreadSpec.mapFields(
@@ -152,9 +152,9 @@ const ProjectionImplementationRunDbRowSchema = ProjectionImplementationRun.mapFi
     run: Schema.fromJsonString(OrchestrationImplementationRun),
   }),
 );
-const ProjectionDevReviewWorkflowRunDbRowSchema = ProjectionDevReviewWorkflowRun.mapFields(
+const ProjectionAppReviewWorkflowRunDbRowSchema = ProjectionAppReviewWorkflowRun.mapFields(
   Struct.assign({
-    run: Schema.fromJsonString(DevReviewWorkflowRun),
+    run: Schema.fromJsonString(AppReviewWorkflowRun),
   }),
 );
 const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
@@ -180,9 +180,9 @@ const ProjectionWorkflowSubagentBatchChildDbRowSchema = Schema.Struct({
   workflowPromptId: OrchestrationWorkflowSubagentBatchChild.fields.workflowPromptId,
   title: OrchestrationWorkflowSubagentBatchChild.fields.title,
   expectedResult: OrchestrationWorkflowSubagentBatchChild.fields.expectedResult,
-  devReviewMode: OrchestrationWorkflowSubagentBatchChild.fields.devReviewMode,
+  appReviewMode: OrchestrationWorkflowSubagentBatchChild.fields.appReviewMode,
   childThreadId: Schema.NullOr(ThreadId),
-  devReviewId: Schema.NullOr(DevReviewId),
+  appReviewId: Schema.NullOr(AppReviewId),
   status: OrchestrationWorkflowSubagentBatchChild.fields.status,
   resultMarkdown: Schema.NullOr(Schema.String),
   failureDetail: Schema.NullOr(Schema.String),
@@ -295,14 +295,14 @@ const REQUIRED_SNAPSHOT_PROJECTORS = [
   ORCHESTRATION_PROJECTOR_NAMES.threads,
   ORCHESTRATION_PROJECTOR_NAMES.threadMessages,
   ORCHESTRATION_PROJECTOR_NAMES.threadProposedPlans,
-  ORCHESTRATION_PROJECTOR_NAMES.threadDevReviews,
+  ORCHESTRATION_PROJECTOR_NAMES.threadAppReviews,
   ORCHESTRATION_PROJECTOR_NAMES.workflowSubagentBatches,
   ORCHESTRATION_PROJECTOR_NAMES.threadSpecs,
   ORCHESTRATION_PROJECTOR_NAMES.threadPlanningTickets,
   ORCHESTRATION_PROJECTOR_NAMES.threadPlanningReviewCycles,
   ORCHESTRATION_PROJECTOR_NAMES.threadLoadedSpecBundles,
   ORCHESTRATION_PROJECTOR_NAMES.implementationRuns,
-  ORCHESTRATION_PROJECTOR_NAMES.devReviewWorkflowRuns,
+  ORCHESTRATION_PROJECTOR_NAMES.appReviewWorkflowRuns,
   ORCHESTRATION_PROJECTOR_NAMES.threadActivities,
   ORCHESTRATION_PROJECTOR_NAMES.threadSessions,
   ORCHESTRATION_PROJECTOR_NAMES.checkpoints,
@@ -448,9 +448,9 @@ function mapProposedPlanRow(
   };
 }
 
-function mapDevReviewRow(
-  row: Schema.Schema.Type<typeof ProjectionThreadDevReviewDbRowSchema>,
-): DevReviewRecord {
+function mapAppReviewRow(
+  row: Schema.Schema.Type<typeof ProjectionThreadAppReviewDbRowSchema>,
+): AppReviewRecord {
   return {
     id: row.reviewId,
     sourceThreadId: row.sourceThreadId,
@@ -480,9 +480,9 @@ function buildWorkflowSubagentBatches(
       workflowPromptId: row.workflowPromptId,
       title: row.title,
       expectedResult: row.expectedResult,
-      devReviewMode: row.devReviewMode,
+      appReviewMode: row.appReviewMode,
       childThreadId: row.childThreadId,
-      devReviewId: row.devReviewId,
+      appReviewId: row.appReviewId,
       status: row.status,
       resultMarkdown: row.resultMarkdown,
       failureDetail: row.failureDetail,
@@ -932,9 +932,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
-  const listThreadDevReviewRows = SqlSchema.findAll({
+  const listThreadAppReviewRows = SqlSchema.findAll({
     Request: Schema.Void,
-    Result: ProjectionThreadDevReviewDbRowSchema,
+    Result: ProjectionThreadAppReviewDbRowSchema,
     execute: () =>
       sql`
         SELECT
@@ -949,7 +949,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           evidence_json AS "evidence",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
-        FROM projection_thread_dev_reviews
+        FROM projection_thread_app_reviews
         ORDER BY created_at ASC, review_id ASC
       `,
   });
@@ -974,8 +974,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       sql`
         SELECT batch_id AS "batchId", child_index AS "childIndex",
           workflow_prompt_id AS "workflowPromptId", title, expected_result AS "expectedResult",
-          dev_review_mode AS "devReviewMode", child_thread_id AS "childThreadId",
-          dev_review_id AS "devReviewId", status, result_markdown AS "resultMarkdown",
+          app_review_mode AS "appReviewMode", child_thread_id AS "childThreadId",
+          app_review_id AS "appReviewId", status, result_markdown AS "resultMarkdown",
           failure_detail AS "failureDetail", created_at AS "createdAt", completed_at AS "completedAt"
         FROM projection_thread_workflow_subagent_batch_children
         ORDER BY batch_id ASC, child_index ASC
@@ -1068,16 +1068,16 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
-  const listDevReviewWorkflowRunRows = SqlSchema.findAll({
+  const listAppReviewWorkflowRunRows = SqlSchema.findAll({
     Request: Schema.Void,
-    Result: ProjectionDevReviewWorkflowRunDbRowSchema,
+    Result: ProjectionAppReviewWorkflowRunDbRowSchema,
     execute: () =>
       sql`
         SELECT
           run_id AS "runId",
           target_thread_id AS "sourceThreadId",
           run_json AS "run"
-        FROM projection_dev_review_workflow_runs
+        FROM projection_app_review_workflow_runs
         ORDER BY created_at ASC, run_id ASC
       `,
   });
@@ -1539,9 +1539,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
-  const listThreadDevReviewRowsByThread = SqlSchema.findAll({
+  const listThreadAppReviewRowsByThread = SqlSchema.findAll({
     Request: ThreadIdLookupInput,
-    Result: ProjectionThreadDevReviewDbRowSchema,
+    Result: ProjectionThreadAppReviewDbRowSchema,
     execute: ({ threadId }) =>
       sql`
         SELECT
@@ -1556,7 +1556,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           evidence_json AS "evidence",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
-        FROM projection_thread_dev_reviews
+        FROM projection_thread_app_reviews
         WHERE source_thread_id = ${threadId}
            OR review_thread_id = ${threadId}
         ORDER BY created_at ASC, review_id ASC
@@ -1584,8 +1584,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       sql`
         SELECT child.batch_id AS "batchId", child.child_index AS "childIndex",
           child.workflow_prompt_id AS "workflowPromptId", child.title,
-          child.expected_result AS "expectedResult", child.dev_review_mode AS "devReviewMode",
-          child.child_thread_id AS "childThreadId", child.dev_review_id AS "devReviewId",
+          child.expected_result AS "expectedResult", child.app_review_mode AS "appReviewMode",
+          child.child_thread_id AS "childThreadId", child.app_review_id AS "appReviewId",
           child.status, child.result_markdown AS "resultMarkdown",
           child.failure_detail AS "failureDetail", child.created_at AS "createdAt",
           child.completed_at AS "completedAt"
@@ -2034,11 +2034,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               ),
             ),
           ),
-          listThreadDevReviewRows(undefined).pipe(
+          listThreadAppReviewRows(undefined).pipe(
             Effect.mapError(
               toPersistenceSqlOrDecodeError(
-                "ProjectionSnapshotQuery.getSnapshot:listThreadDevReviews:query",
-                "ProjectionSnapshotQuery.getSnapshot:listThreadDevReviews:decodeRows",
+                "ProjectionSnapshotQuery.getSnapshot:listThreadAppReviews:query",
+                "ProjectionSnapshotQuery.getSnapshot:listThreadAppReviews:decodeRows",
               ),
             ),
           ),
@@ -2090,11 +2090,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               ),
             ),
           ),
-          listDevReviewWorkflowRunRows(undefined).pipe(
+          listAppReviewWorkflowRunRows(undefined).pipe(
             Effect.mapError(
               toPersistenceSqlOrDecodeError(
-                "ProjectionSnapshotQuery.getSnapshot:listDevReviewWorkflowRuns:query",
-                "ProjectionSnapshotQuery.getSnapshot:listDevReviewWorkflowRuns:decodeRows",
+                "ProjectionSnapshotQuery.getSnapshot:listAppReviewWorkflowRuns:query",
+                "ProjectionSnapshotQuery.getSnapshot:listAppReviewWorkflowRuns:decodeRows",
               ),
             ),
           ),
@@ -2147,14 +2147,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             threadRows,
             messageRows,
             proposedPlanRows,
-            devReviewRows,
+            appReviewRows,
             workflowSubagentBatchRows,
             workflowSubagentBatchChildRows,
             specRows,
             planningTicketRows,
             planningReviewCycleRows,
             implementationRunRows,
-            devReviewWorkflowRunRows,
+            appReviewWorkflowRunRows,
             activityRows,
             sessionRows,
             checkpointRows,
@@ -2164,7 +2164,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             Effect.gen(function* () {
               const messagesByThread = new Map<string, Array<OrchestrationMessage>>();
               const proposedPlansByThread = new Map<string, Array<OrchestrationProposedPlan>>();
-              const devReviewsByThread = new Map<string, Array<DevReviewRecord>>();
+              const appReviewsByThread = new Map<string, Array<AppReviewRecord>>();
               const workflowSubagentBatchesByThread = buildWorkflowSubagentBatches(
                 workflowSubagentBatchRows,
                 workflowSubagentBatchChildRows,
@@ -2227,16 +2227,16 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 proposedPlansByThread.set(row.threadId, threadProposedPlans);
               }
 
-              for (const row of devReviewRows) {
+              for (const row of appReviewRows) {
                 updatedAt = maxIso(updatedAt, row.updatedAt);
-                const record = mapDevReviewRow(row);
-                const sourceDevReviews = devReviewsByThread.get(row.sourceThreadId) ?? [];
-                sourceDevReviews.push(record);
-                devReviewsByThread.set(row.sourceThreadId, sourceDevReviews);
+                const record = mapAppReviewRow(row);
+                const sourceAppReviews = appReviewsByThread.get(row.sourceThreadId) ?? [];
+                sourceAppReviews.push(record);
+                appReviewsByThread.set(row.sourceThreadId, sourceAppReviews);
                 if (row.reviewThreadId !== row.sourceThreadId) {
-                  const reviewDevReviews = devReviewsByThread.get(row.reviewThreadId) ?? [];
-                  reviewDevReviews.push(record);
-                  devReviewsByThread.set(row.reviewThreadId, reviewDevReviews);
+                  const reviewAppReviews = appReviewsByThread.get(row.reviewThreadId) ?? [];
+                  reviewAppReviews.push(record);
+                  appReviewsByThread.set(row.reviewThreadId, reviewAppReviews);
                 }
               }
 
@@ -2426,7 +2426,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                         : (reviewCyclesBySpec.get(spec.id) ?? []),
                   });
                 })(),
-                devReviews: devReviewsByThread.get(row.threadId) ?? [],
+                appReviews: appReviewsByThread.get(row.threadId) ?? [],
                 workflowSubagentBatches: workflowSubagentBatchesByThread.get(row.threadId) ?? [],
                 activities: activitiesByThread.get(row.threadId) ?? [],
                 checkpoints: checkpointsByThread.get(row.threadId) ?? [],
@@ -2438,7 +2438,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 projects,
                 threads,
                 implementationRuns: implementationRunRows.map((row) => row.run),
-                devReviewWorkflowRuns: devReviewWorkflowRunRows.map((row) => row.run),
+                appReviewWorkflowRuns: appReviewWorkflowRunRows.map((row) => row.run),
                 updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
               };
 
@@ -2485,11 +2485,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               ),
             ),
           ),
-          listThreadDevReviewRows(undefined).pipe(
+          listThreadAppReviewRows(undefined).pipe(
             Effect.mapError(
               toPersistenceSqlOrDecodeError(
-                "ProjectionSnapshotQuery.getCommandReadModel:listThreadDevReviews:query",
-                "ProjectionSnapshotQuery.getCommandReadModel:listThreadDevReviews:decodeRows",
+                "ProjectionSnapshotQuery.getCommandReadModel:listThreadAppReviews:query",
+                "ProjectionSnapshotQuery.getCommandReadModel:listThreadAppReviews:decodeRows",
               ),
             ),
           ),
@@ -2541,11 +2541,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               ),
             ),
           ),
-          listDevReviewWorkflowRunRows(undefined).pipe(
+          listAppReviewWorkflowRunRows(undefined).pipe(
             Effect.mapError(
               toPersistenceSqlOrDecodeError(
-                "ProjectionSnapshotQuery.getCommandReadModel:listDevReviewWorkflowRuns:query",
-                "ProjectionSnapshotQuery.getCommandReadModel:listDevReviewWorkflowRuns:decodeRows",
+                "ProjectionSnapshotQuery.getCommandReadModel:listAppReviewWorkflowRuns:query",
+                "ProjectionSnapshotQuery.getCommandReadModel:listAppReviewWorkflowRuns:decodeRows",
               ),
             ),
           ),
@@ -2581,14 +2581,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             projectRows,
             threadRows,
             proposedPlanRows,
-            devReviewRows,
+            appReviewRows,
             workflowSubagentBatchRows,
             workflowSubagentBatchChildRows,
             specRows,
             planningTicketRows,
             planningReviewCycleRows,
             implementationRunRows,
-            devReviewWorkflowRunRows,
+            appReviewWorkflowRunRows,
             sessionRows,
             latestTurnRows,
             stateRows,
@@ -2631,8 +2631,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 }
                 updatedAt = maxIso(updatedAt, row.updatedAt);
               }
-              for (let index = 0; index < devReviewRows.length; index += 1) {
-                const row = devReviewRows[index];
+              for (let index = 0; index < appReviewRows.length; index += 1) {
+                const row = appReviewRows[index];
                 if (!row) {
                   continue;
                 }
@@ -2703,7 +2703,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 latestTurnByThread.set(row.threadId, mapLatestTurn(row));
               }
               const proposedPlansByThread = new Map<string, Array<OrchestrationProposedPlan>>();
-              const devReviewsByThread = new Map<string, Array<DevReviewRecord>>();
+              const appReviewsByThread = new Map<string, Array<AppReviewRecord>>();
               const workflowSubagentBatchesByThread = buildWorkflowSubagentBatches(
                 workflowSubagentBatchRows,
                 workflowSubagentBatchChildRows,
@@ -2738,19 +2738,19 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 proposedPlansByThread.set(row.threadId, threadProposedPlans);
               }
 
-              for (let index = 0; index < devReviewRows.length; index += 1) {
-                const row = devReviewRows[index];
+              for (let index = 0; index < appReviewRows.length; index += 1) {
+                const row = appReviewRows[index];
                 if (!row) {
                   continue;
                 }
-                const record = mapDevReviewRow(row);
-                const sourceDevReviews = devReviewsByThread.get(row.sourceThreadId) ?? [];
-                sourceDevReviews.push(record);
-                devReviewsByThread.set(row.sourceThreadId, sourceDevReviews);
+                const record = mapAppReviewRow(row);
+                const sourceAppReviews = appReviewsByThread.get(row.sourceThreadId) ?? [];
+                sourceAppReviews.push(record);
+                appReviewsByThread.set(row.sourceThreadId, sourceAppReviews);
                 if (row.reviewThreadId !== row.sourceThreadId) {
-                  const reviewDevReviews = devReviewsByThread.get(row.reviewThreadId) ?? [];
-                  reviewDevReviews.push(record);
-                  devReviewsByThread.set(row.reviewThreadId, reviewDevReviews);
+                  const reviewAppReviews = appReviewsByThread.get(row.reviewThreadId) ?? [];
+                  reviewAppReviews.push(record);
+                  appReviewsByThread.set(row.reviewThreadId, reviewAppReviews);
                 }
               }
 
@@ -2852,7 +2852,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                           : (reviewCyclesBySpec.get(spec.id) ?? []),
                     });
                   })(),
-                  devReviews: devReviewsByThread.get(row.threadId) ?? [],
+                  appReviews: appReviewsByThread.get(row.threadId) ?? [],
                   workflowSubagentBatches: workflowSubagentBatchesByThread.get(row.threadId) ?? [],
                   activities: [],
                   checkpoints: [],
@@ -2865,7 +2865,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 projects,
                 threads,
                 implementationRuns: implementationRunRows.map((row) => row.run),
-                devReviewWorkflowRuns: devReviewWorkflowRunRows.map((row) => row.run),
+                appReviewWorkflowRuns: appReviewWorkflowRunRows.map((row) => row.run),
                 updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
               } satisfies OrchestrationReadModel;
             }),
@@ -2930,11 +2930,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               ),
             ),
           ),
-          listDevReviewWorkflowRunRows(undefined).pipe(
+          listAppReviewWorkflowRunRows(undefined).pipe(
             Effect.mapError(
               toPersistenceSqlOrDecodeError(
-                "ProjectionSnapshotQuery.getShellSnapshot:listDevReviewWorkflowRuns:query",
-                "ProjectionSnapshotQuery.getShellSnapshot:listDevReviewWorkflowRuns:decodeRows",
+                "ProjectionSnapshotQuery.getShellSnapshot:listAppReviewWorkflowRuns:query",
+                "ProjectionSnapshotQuery.getShellSnapshot:listAppReviewWorkflowRuns:decodeRows",
               ),
             ),
           ),
@@ -2957,7 +2957,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             latestTurnRows,
             specRows,
             implementationRunRows,
-            devReviewWorkflowRunRows,
+            appReviewWorkflowRunRows,
             stateRows,
           ]) =>
             Effect.gen(function* () {
@@ -2975,7 +2975,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                     visibleThreadIds.has(row.run.orchestratorThreadId),
                 )
                 .map((row) => row.run);
-              const visibleDevReviewWorkflowRuns = devReviewWorkflowRunRows
+              const visibleAppReviewWorkflowRuns = appReviewWorkflowRunRows
                 .filter(
                   (row) =>
                     visibleThreadIds.has(row.run.targetThreadId) ||
@@ -3051,7 +3051,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                     : Result.failVoid,
                 ),
                 implementationRuns: visibleImplementationRuns,
-                devReviewWorkflowRuns: visibleDevReviewWorkflowRuns,
+                appReviewWorkflowRuns: visibleAppReviewWorkflowRuns,
                 updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
               };
 
@@ -3126,11 +3126,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               ),
             ),
           ),
-          listDevReviewWorkflowRunRows(undefined).pipe(
+          listAppReviewWorkflowRunRows(undefined).pipe(
             Effect.mapError(
               toPersistenceSqlOrDecodeError(
-                "ProjectionSnapshotQuery.getArchivedShellSnapshot:listDevReviewWorkflowRuns:query",
-                "ProjectionSnapshotQuery.getArchivedShellSnapshot:listDevReviewWorkflowRuns:decodeRows",
+                "ProjectionSnapshotQuery.getArchivedShellSnapshot:listAppReviewWorkflowRuns:query",
+                "ProjectionSnapshotQuery.getArchivedShellSnapshot:listAppReviewWorkflowRuns:decodeRows",
               ),
             ),
           ),
@@ -3153,7 +3153,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             latestTurnRows,
             specRows,
             implementationRunRows,
-            devReviewWorkflowRunRows,
+            appReviewWorkflowRunRows,
             stateRows,
           ]) =>
             Effect.gen(function* () {
@@ -3171,7 +3171,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                     visibleThreadIds.has(row.run.orchestratorThreadId),
                 )
                 .map((row) => row.run);
-              const visibleDevReviewWorkflowRuns = devReviewWorkflowRunRows
+              const visibleAppReviewWorkflowRuns = appReviewWorkflowRunRows
                 .filter(
                   (row) =>
                     visibleThreadIds.has(row.run.targetThreadId) ||
@@ -3246,7 +3246,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                     }),
                 ),
                 implementationRuns: visibleImplementationRuns,
-                devReviewWorkflowRuns: visibleDevReviewWorkflowRuns,
+                appReviewWorkflowRuns: visibleAppReviewWorkflowRuns,
                 updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
               };
 
@@ -3542,7 +3542,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         threadRow,
         messageRows,
         proposedPlanRows,
-        devReviewRows,
+        appReviewRows,
         workflowSubagentBatchRows,
         workflowSubagentBatchChildRows,
         specRows,
@@ -3580,11 +3580,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             ),
           ),
         ),
-        listThreadDevReviewRowsByThread({ threadId }).pipe(
+        listThreadAppReviewRowsByThread({ threadId }).pipe(
           Effect.mapError(
             toPersistenceSqlOrDecodeError(
-              "ProjectionSnapshotQuery.getThreadDetailById:listDevReviews:query",
-              "ProjectionSnapshotQuery.getThreadDetailById:listDevReviews:decodeRows",
+              "ProjectionSnapshotQuery.getThreadDetailById:listAppReviews:query",
+              "ProjectionSnapshotQuery.getThreadDetailById:listAppReviews:decodeRows",
             ),
           ),
         ),
@@ -3739,7 +3739,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           tickets: planningTicketRows.map(projectionTicketToContract),
           reviewCycles: planningReviewCycleRows.map(projectionReviewCycleToContract),
         }),
-        devReviews: devReviewRows.map(mapDevReviewRow),
+        appReviews: appReviewRows.map(mapAppReviewRow),
         workflowSubagentBatches:
           buildWorkflowSubagentBatches(
             workflowSubagentBatchRows,

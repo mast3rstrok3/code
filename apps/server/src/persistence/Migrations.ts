@@ -72,6 +72,7 @@ import Migration0039 from "./Migrations/039_ProjectionProjectsDefaultThreadEnvMo
 import Migration0040 from "./Migrations/040_ProjectionProjectFaviconPath.ts";
 import Migration0069 from "./Migrations/069_ProjectionDevReviewWorkflowRuns.ts";
 import Migration0070 from "./Migrations/070_WorkflowParentIdentity.ts";
+import Migration0071 from "./Migrations/071_AppReviewRename.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -155,6 +156,7 @@ export const migrationEntries = [
   [68, "ProjectionProjectFaviconPathCompatibility", Migration0040],
   [69, "ProjectionDevReviewWorkflowRuns", Migration0069],
   [70, "WorkflowParentIdentity", Migration0070],
+  [71, "AppReviewRename", Migration0071],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

@@ -1,10 +1,10 @@
 import type {
   AssetResource,
-  DevReviewRecord,
-  DevReviewRecordingEvidence,
+  AppReviewRecord,
+  AppReviewRecordingEvidence,
   EnvironmentId,
 } from "@t3tools/contracts";
-import { DEV_REVIEW_RECORDING_EVIDENCE_ID } from "@t3tools/contracts";
+import { APP_REVIEW_RECORDING_EVIDENCE_ID } from "@t3tools/contracts";
 import { AlertTriangle, CheckCircle2, Circle, CircleDot, Info, XCircle } from "lucide-react";
 import { useMemo, useState } from "react";
 
@@ -29,7 +29,7 @@ const severityClassName = {
   note: "border-border bg-muted/50 text-muted-foreground",
 } as const;
 
-function statusIcon(status: DevReviewRecord["status"]) {
+function statusIcon(status: AppReviewRecord["status"]) {
   switch (status) {
     case "passed":
       return <CheckCircle2 className="size-4 text-success" />;
@@ -44,7 +44,7 @@ function statusIcon(status: DevReviewRecord["status"]) {
   }
 }
 
-export function recordingEvidenceLabel(recording: DevReviewRecordingEvidence): string {
+export function recordingEvidenceLabel(recording: AppReviewRecordingEvidence): string {
   const pieces: string[] = [recording.status];
   if (recording.sizeBytes !== null) {
     pieces.push(`${(recording.sizeBytes / (1024 * 1024)).toFixed(1)} MB`);
@@ -53,7 +53,7 @@ export function recordingEvidenceLabel(recording: DevReviewRecordingEvidence): s
 }
 
 function RecordingSection(props: {
-  recording: DevReviewRecordingEvidence;
+  recording: AppReviewRecordingEvidence;
   recordingUrl: string | null;
 }) {
   const { recording } = props;
@@ -94,8 +94,8 @@ function RecordingSection(props: {
   );
 }
 
-export function DevReviewDocument(props: {
-  record: DevReviewRecord;
+export function AppReviewDocument(props: {
+  record: AppReviewRecord;
   environmentId: EnvironmentId;
 }) {
   const { record } = props;
@@ -112,14 +112,14 @@ export function DevReviewDocument(props: {
     const resources: AssetResource[] = [];
     if (recordingSaved) {
       resources.push({
-        _tag: "dev-review-evidence",
+        _tag: "app-review-evidence",
         reviewId: record.id,
-        evidenceId: DEV_REVIEW_RECORDING_EVIDENCE_ID,
+        evidenceId: APP_REVIEW_RECORDING_EVIDENCE_ID,
       });
     }
     for (const screenshot of screenshots) {
       resources.push({
-        _tag: "dev-review-evidence",
+        _tag: "app-review-evidence",
         reviewId: record.id,
         evidenceId: screenshot.id,
       });

@@ -13,7 +13,7 @@ import type {
   WorkflowPreset,
 } from "@t3tools/contracts";
 import {
-  DEV_REVIEW_WORKFLOW_MAX_CYCLES,
+  APP_REVIEW_WORKFLOW_MAX_CYCLES,
   ProviderDriverKind,
   ProviderInstanceId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
@@ -90,7 +90,7 @@ import { ProviderModelPicker } from "./ProviderModelPicker";
 import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommandMenu";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
-import { ComposerModePicker } from "./ComposerModePicker";
+import { type ComposerBuildSkill, ComposerModePicker } from "./ComposerModePicker";
 import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
 import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
@@ -109,6 +109,7 @@ import { buildExpandedImagePreview, type ExpandedImagePreview } from "./Expanded
 import { basenameOfPath } from "../../pierre-icons";
 import { cn, randomUUID } from "~/lib/utils";
 import { Separator } from "../ui/separator";
+import { useWorkflowCatalog } from "../../workflowCatalogState";
 
 type ComposerCommandMenuPosition = {
   bottom: number;
@@ -116,6 +117,8 @@ type ComposerCommandMenuPosition = {
   maxHeight: number;
   width: number;
 };
+
+const EMPTY_COMPOSER_BUILD_SKILLS: ComposerBuildSkill[] = [];
 
 function composerCommandMenuPositionsEqual(
   a: ComposerCommandMenuPosition,
@@ -306,11 +309,14 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
   workflowPreset: WorkflowPreset | null;
   lastWorkflowPreset: WorkflowPreset | null;
   planningWorkflowAvailable: boolean;
+  buildSkills: ReadonlyArray<ComposerBuildSkill>;
+  selectedBuildSkillId: string | null;
   runtimeMode: RuntimeMode;
   showPlanToggle: boolean;
   planSidebarLabel: string;
   planSidebarOpen: boolean;
   onInteractionModeChange: (mode: ProviderInteractionMode, preset: WorkflowPreset | null) => void;
+  onBuildSkillChange: (skillId: string | null) => void;
   onTogglePlanSidebar: () => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
 }) {
@@ -327,10 +333,13 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
       {props.showInteractionModeToggle ? (
         <>
           <ComposerModePicker
+            buildSkills={props.buildSkills}
             interactionMode={props.interactionMode}
+            selectedBuildSkillId={props.selectedBuildSkillId}
             workflowPreset={props.workflowPreset}
             lastWorkflowPreset={props.lastWorkflowPreset}
             workflowAvailable={props.planningWorkflowAvailable}
+            onBuildSkillChange={props.onBuildSkillChange}
             onChange={props.onInteractionModeChange}
           />
 
@@ -489,6 +498,7 @@ export interface ChatComposerHandle {
   }) => void;
   /** Insert a terminal context from the terminal drawer. */
   addTerminalContext: (selection: TerminalContextSelection) => void;
+  clearSelectedBuildSkill: () => void;
   /** Get the current prompt/effort/model state for use in send. */
   getSendContext: () => {
     prompt: string;
@@ -504,6 +514,7 @@ export interface ChatComposerHandle {
     selectedProvider: ProviderDriverKind;
     selectedModel: string;
     selectedProviderModels: ReadonlyArray<ServerProvider["models"][number]>;
+    selectedBuildSkillId: string | null;
   };
 }
 
@@ -567,7 +578,7 @@ export interface ChatComposerProps {
   interactionMode: ProviderInteractionMode;
   workflowPreset: WorkflowPreset | null;
   lastWorkflowPreset: WorkflowPreset | null;
-  devReviewCycleBudget: number;
+  appReviewCycleBudget: number;
 
   // Provider / model
   lockedProvider: ProviderDriverKind | null;
@@ -619,7 +630,7 @@ export interface ChatComposerProps {
     mode: ProviderInteractionMode,
     preset: WorkflowPreset | null,
   ) => void;
-  onDevReviewCycleBudgetChange: (budget: number) => void;
+  onAppReviewCycleBudgetChange: (budget: number) => void;
   togglePlanSidebar: () => void;
 
   focusComposer: () => void;
@@ -670,7 +681,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     interactionMode,
     workflowPreset,
     lastWorkflowPreset,
-    devReviewCycleBudget,
+    appReviewCycleBudget,
     lockedProvider,
     providerStatuses,
     activeProjectDefaultModelSelection,
@@ -699,7 +710,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     toggleInteractionMode,
     handleRuntimeModeChange,
     handleInteractionModeChange,
-    onDevReviewCycleBudgetChange,
+    onAppReviewCycleBudgetChange,
     togglePlanSidebar,
     focusComposer,
     scheduleComposerFocus,
@@ -719,6 +730,32 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const composerPreviewAnnotations = composerDraft.previewAnnotations;
   const composerReviewComments = composerDraft.reviewComments;
   const nonPersistedComposerImageIds = composerDraft.nonPersistedImageIds;
+  const workflowCatalogState = useWorkflowCatalog(environmentId);
+  const catalogSkills =
+    workflowCatalogState.status === "loaded" ? workflowCatalogState.catalog.skills : null;
+  const buildSkills = useMemo<ComposerBuildSkill[]>(
+    () =>
+      catalogSkills?.filter((skill) => skill.buildModes.includes("build")) ??
+      EMPTY_COMPOSER_BUILD_SKILLS,
+    [catalogSkills],
+  );
+  const [selectedBuildSkillId, setSelectedBuildSkillId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (workflowCatalogState.status !== "loaded") return;
+    if (
+      selectedBuildSkillId !== null &&
+      !buildSkills.some((skill) => skill.id === selectedBuildSkillId)
+    ) {
+      setSelectedBuildSkillId(null);
+    }
+  }, [buildSkills, selectedBuildSkillId, workflowCatalogState.status]);
+
+  useEffect(() => {
+    if (interactionMode !== "default" || workflowPreset !== null) {
+      setSelectedBuildSkillId(null);
+    }
+  }, [interactionMode, workflowPreset]);
 
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
   const addComposerDraftImage = useComposerDraftStore((store) => store.addImage);
@@ -2666,6 +2703,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           composerEditorRef.current?.focusAt(nextCollapsedCursor);
         });
       },
+      clearSelectedBuildSkill: () => setSelectedBuildSkillId(null),
       getSendContext: () => ({
         prompt: promptRef.current,
         images: composerImagesRef.current,
@@ -2680,6 +2718,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         selectedProvider,
         selectedModel,
         selectedProviderModels,
+        selectedBuildSkillId,
       }),
     }),
     [
@@ -2708,6 +2747,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       selectedPromptEffort,
       selectedProvider,
       selectedProviderModels,
+      selectedBuildSkillId,
     ],
   );
 
@@ -3213,7 +3253,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
                 {isComposerFooterCompact ? (
                   <CompactComposerControlsMenu
+                    buildSkills={buildSkills}
                     interactionMode={interactionMode}
+                    selectedBuildSkillId={selectedBuildSkillId}
                     workflowPreset={workflowPreset}
                     lastWorkflowPreset={lastWorkflowPreset}
                     planSidebarLabel={planSidebarLabel}
@@ -3223,6 +3265,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     runtimeMode={runtimeMode}
                     showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
                     traitsMenuContent={providerTraitsMenuContent}
+                    onBuildSkillChange={setSelectedBuildSkillId}
                     onInteractionModeChange={handleInteractionModeChange}
                     onTogglePlanSidebar={togglePlanSidebar}
                     onRuntimeModeChange={handleRuntimeModeChange}
@@ -3236,8 +3279,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       </>
                     ) : null}
                     <ComposerFooterModeControls
+                      buildSkills={buildSkills}
                       showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
                       interactionMode={interactionMode}
+                      selectedBuildSkillId={selectedBuildSkillId}
                       workflowPreset={workflowPreset}
                       lastWorkflowPreset={lastWorkflowPreset}
                       runtimeMode={runtimeMode}
@@ -3246,23 +3291,24 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       planSidebarOpen={planSidebarOpen}
                       planningWorkflowAvailable={planningWorkflowAvailable}
                       onInteractionModeChange={handleInteractionModeChange}
+                      onBuildSkillChange={setSelectedBuildSkillId}
                       onTogglePlanSidebar={togglePlanSidebar}
                       onRuntimeModeChange={handleRuntimeModeChange}
                     />
                   </>
                 )}
-                {workflowPreset === "dev-review" ? (
+                {workflowPreset === "app-review" ? (
                   <label className="ml-1 flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
                     <span>Attempts</span>
                     <input
-                      aria-label="Dev Review attempts"
+                      aria-label="App Review attempts"
                       className="h-7 w-12 rounded-md border border-input bg-transparent px-1.5 text-center text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       type="number"
                       min={1}
-                      max={DEV_REVIEW_WORKFLOW_MAX_CYCLES}
-                      value={devReviewCycleBudget}
+                      max={APP_REVIEW_WORKFLOW_MAX_CYCLES}
+                      value={appReviewCycleBudget}
                       onChange={(event) =>
-                        onDevReviewCycleBudgetChange(Number(event.currentTarget.value))
+                        onAppReviewCycleBudgetChange(Number(event.currentTarget.value))
                       }
                     />
                   </label>

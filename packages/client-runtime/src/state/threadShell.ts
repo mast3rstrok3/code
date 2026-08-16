@@ -1,7 +1,7 @@
 import type {
   EnvironmentId,
   OrchestrationImplementationRun,
-  OrchestrationDevReviewWorkflowRun,
+  OrchestrationAppReviewWorkflowRun,
   OrchestrationPlanningSpecId,
   OrchestrationShellSnapshot,
   OrchestrationThreadShell,
@@ -26,7 +26,7 @@ import {
 
 const EMPTY_THREADS: ReadonlyArray<OrchestrationThreadShell> = Object.freeze([]);
 const EMPTY_IMPLEMENTATION_RUNS: ReadonlyArray<OrchestrationImplementationRun> = Object.freeze([]);
-const EMPTY_DEV_REVIEW_WORKFLOW_RUNS: ReadonlyArray<OrchestrationDevReviewWorkflowRun> =
+const EMPTY_APP_REVIEW_WORKFLOW_RUNS: ReadonlyArray<OrchestrationAppReviewWorkflowRun> =
   Object.freeze([]);
 const EMPTY_SCOPED_THREAD_REFS: ReadonlyArray<ScopedThreadRef> = Object.freeze([]);
 const EMPTY_THREAD_INDEX: ReadonlyMap<ThreadId, OrchestrationThreadShell> = new Map();
@@ -55,12 +55,12 @@ export function createEnvironmentThreadShellAtoms(input: {
     ).pipe(Atom.withLabel(`environment-implementation-runs:${environmentId}`)),
   );
 
-  const environmentDevReviewWorkflowRunsAtom = Atom.family((environmentId: EnvironmentId) =>
+  const environmentAppReviewWorkflowRunsAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make(
-      (get): ReadonlyArray<OrchestrationDevReviewWorkflowRun> =>
-        get(input.snapshotAtom(environmentId))?.devReviewWorkflowRuns ??
-        EMPTY_DEV_REVIEW_WORKFLOW_RUNS,
-    ).pipe(Atom.withLabel(`environment-dev-review-workflow-runs:${environmentId}`)),
+      (get): ReadonlyArray<OrchestrationAppReviewWorkflowRun> =>
+        get(input.snapshotAtom(environmentId))?.appReviewWorkflowRuns ??
+        EMPTY_APP_REVIEW_WORKFLOW_RUNS,
+    ).pipe(Atom.withLabel(`environment-app-review-workflow-runs:${environmentId}`)),
   );
 
   const implementationRunsBySpecAtomFamily = Atom.family((key: string) => {
@@ -216,7 +216,7 @@ export function createEnvironmentThreadShellAtoms(input: {
   return {
     environmentThreadsAtom,
     environmentImplementationRunsAtom,
-    environmentDevReviewWorkflowRunsAtom,
+    environmentAppReviewWorkflowRunsAtom,
     implementationRunsBySpecAtom: (input: {
       readonly environmentId: EnvironmentId;
       readonly specId: OrchestrationPlanningSpecId;

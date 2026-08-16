@@ -34,7 +34,7 @@ const WorkflowPromptWorkflow = Schema.Literals([
   "shared",
   "planning",
   "implementation",
-  "dev-review",
+  "app-review",
   "product",
 ]);
 
@@ -52,9 +52,9 @@ export const WorkflowPromptContract = Schema.Struct({
     "implementation-qa-reviewer",
     "implementation-fixer",
     "implementation-code-reviewer",
-    "dev-review-orchestrator",
-    "dev-review-reviewer",
-    "dev-review-fixer",
+    "app-review-orchestrator",
+    "app-review-reviewer",
+    "app-review-fixer",
   ]),
   stage: TrimmedNonEmptyString,
   title: TrimmedNonEmptyString,
@@ -97,7 +97,11 @@ export const WorkflowSkillContract = Schema.Struct({
   description: TrimmedNonEmptyString,
   promptText: TrimmedNonEmptyString,
   docIds: Schema.Array(TrimmedNonEmptyString),
+  buildModes: Schema.Array(Schema.Literal("build")).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
   workflowIds: Schema.Array(TrimmedNonEmptyString),
+  sourceUrl: Schema.optional(TrimmedNonEmptyString),
 });
 export type WorkflowSkillContract = typeof WorkflowSkillContract.Type;
 
@@ -105,6 +109,9 @@ export const WorkflowDocContract = Schema.Struct({
   id: TrimmedNonEmptyString,
   title: TrimmedNonEmptyString,
   path: TrimmedNonEmptyString,
+  description: TrimmedNonEmptyString.pipe(
+    Schema.withDecodingDefault(Effect.succeed("Supporting reference for a workflow skill.")),
+  ),
   content: TrimmedNonEmptyString,
   skillIds: Schema.Array(TrimmedNonEmptyString),
 });

@@ -104,7 +104,7 @@ export interface PullRequestTabStatus {
 const SURFACE_DISABLED_REASONS = {
   browser: "Browser preview is unavailable for this environment.",
   terminal: "Terminal surfaces are only available from a project thread.",
-  review: "Dev review is only available for server threads in Git repositories.",
+  review: "App review is only available for server threads in Git repositories.",
   logs: "App Stack pod logs require a project with an app-stack context.",
   appDevStack: "App stacks are only available when a project is open.",
   files: "Files are only available when a project is open.",
@@ -182,7 +182,7 @@ function RightPanelEmptyState(props: {
       badgeCount: 0,
     },
     {
-      label: "Dev Review",
+      label: "App Review",
       description: "Inspect and annotate the current implementation diff.",
       icon: EyeIcon,
       available: props.reviewAvailable,
@@ -361,7 +361,7 @@ function surfaceTitle(
     case "plan":
       return "Plan";
     case "review":
-      return "Dev Review";
+      return "App Review";
     case "logs":
       return "Logs";
     case "pull-request":
@@ -665,7 +665,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                     onClick={props.onAddReview}
                   >
                     <EyeIcon />
-                    Dev Review
+                    App Review
                   </SurfaceMenuItem>
                   <SurfaceMenuItem
                     available={props.logsAvailable}

@@ -3,17 +3,17 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import {
-  DEV_REVIEW_WORKFLOW_DEFAULT_CYCLES,
-  DevReviewEvidence,
-  DevReviewRecord,
-  DevReviewWorkflowRun,
-  EMPTY_DEV_REVIEW_EVIDENCE,
+  APP_REVIEW_WORKFLOW_DEFAULT_CYCLES,
+  AppReviewEvidence,
+  AppReviewRecord,
+  AppReviewWorkflowRun,
+  EMPTY_APP_REVIEW_EVIDENCE,
 } from "./review.ts";
 
-const decodeDevReviewRecord = Schema.decodeUnknownEffect(DevReviewRecord);
-const encodeDevReviewRecord = Schema.encodeEffect(DevReviewRecord);
-const decodeDevReviewEvidence = Schema.decodeUnknownEffect(DevReviewEvidence);
-const decodeDevReviewWorkflowRun = Schema.decodeUnknownEffect(DevReviewWorkflowRun);
+const decodeAppReviewRecord = Schema.decodeUnknownEffect(AppReviewRecord);
+const encodeAppReviewRecord = Schema.encodeEffect(AppReviewRecord);
+const decodeAppReviewEvidence = Schema.decodeUnknownEffect(AppReviewEvidence);
+const decodeAppReviewWorkflowRun = Schema.decodeUnknownEffect(AppReviewWorkflowRun);
 
 const emptyDocument = {
   verdict: "pending",
@@ -45,10 +45,10 @@ const savedEvidence = {
   ],
 } as const;
 
-it.effect("round-trips Dev Review records with browser evidence", () =>
+it.effect("round-trips App Review records with browser evidence", () =>
   Effect.gen(function* () {
-    const record = yield* decodeDevReviewRecord({
-      id: " dev-review-1 ",
+    const record = yield* decodeAppReviewRecord({
+      id: " app-review-1 ",
       sourceThreadId: "thread-source",
       reviewThreadId: "thread-review",
       sourceTurnId: null,
@@ -58,21 +58,21 @@ it.effect("round-trips Dev Review records with browser evidence", () =>
       createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-01T00:00:01.000Z",
     });
-    assert.strictEqual(record.id, "dev-review-1");
+    assert.strictEqual(record.id, "app-review-1");
     assert.strictEqual(record.evidence.recording.status, "saved");
     assert.strictEqual(record.evidence.recording.sizeBytes, 2048);
     assert.strictEqual(record.evidence.screenshots[0]?.id, "shot-1");
     assert.strictEqual(record.evidence.screenshots[0]?.mimeType, "image/png");
 
-    const encoded = yield* encodeDevReviewRecord(record);
+    const encoded = yield* encodeAppReviewRecord(record);
     assert.deepStrictEqual(encoded.evidence, savedEvidence);
   }),
 );
 
-it.effect("decodes EMPTY_DEV_REVIEW_EVIDENCE against DevReviewEvidence", () =>
+it.effect("decodes EMPTY_APP_REVIEW_EVIDENCE against AppReviewEvidence", () =>
   Effect.gen(function* () {
-    const decoded = yield* decodeDevReviewEvidence(EMPTY_DEV_REVIEW_EVIDENCE);
-    assert.deepStrictEqual(decoded, EMPTY_DEV_REVIEW_EVIDENCE);
+    const decoded = yield* decodeAppReviewEvidence(EMPTY_APP_REVIEW_EVIDENCE);
+    assert.deepStrictEqual(decoded, EMPTY_APP_REVIEW_EVIDENCE);
     assert.strictEqual(decoded.recording.status, "not-started");
     assert.deepStrictEqual(decoded.screenshots, []);
   }),
@@ -81,8 +81,8 @@ it.effect("decodes EMPTY_DEV_REVIEW_EVIDENCE against DevReviewEvidence", () =>
 it.effect("rejects screenshot evidence whose mimeType is not image/png", () =>
   Effect.gen(function* () {
     const result = yield* Effect.exit(
-      decodeDevReviewEvidence({
-        recording: EMPTY_DEV_REVIEW_EVIDENCE.recording,
+      decodeAppReviewEvidence({
+        recording: EMPTY_APP_REVIEW_EVIDENCE.recording,
         screenshots: [
           {
             id: "shot-1",
@@ -98,11 +98,11 @@ it.effect("rejects screenshot evidence whose mimeType is not image/png", () =>
   }),
 );
 
-it.effect("rejects malformed Dev Review recording evidence", () =>
+it.effect("rejects malformed App Review recording evidence", () =>
   Effect.gen(function* () {
     const result = yield* Effect.exit(
-      decodeDevReviewRecord({
-        id: "dev-review-1",
+      decodeAppReviewRecord({
+        id: "app-review-1",
         sourceThreadId: "thread-source",
         reviewThreadId: "thread-review",
         sourceTurnId: null,
@@ -129,14 +129,14 @@ it.effect("rejects malformed Dev Review recording evidence", () =>
 );
 
 const workflowRun = {
-  id: "dev-review-workflow-1",
+  id: "app-review-workflow-1",
   targetThreadId: "thread-source",
   controllerThreadId: "thread-controller",
   caller: { type: "standalone", sourceThreadId: "thread-source" },
   briefMarkdown: "Review checkout.",
   supportingContextMarkdown: null,
   previewTargets: ["http://localhost:3000"],
-  attemptsUsed: 0,
+  cyclesUsed: 0,
   status: "running",
   cycles: [],
   activePhase: null,
@@ -155,28 +155,28 @@ const workflowRun = {
   completedAt: null,
 } as const;
 
-it.effect("defaults Dev Review runs to ten attempts", () =>
+it.effect("defaults App Review runs to ten attempts", () =>
   Effect.gen(function* () {
-    const run = yield* decodeDevReviewWorkflowRun(workflowRun);
-    assert.strictEqual(run.cycleBudget, DEV_REVIEW_WORKFLOW_DEFAULT_CYCLES);
+    const run = yield* decodeAppReviewWorkflowRun(workflowRun);
+    assert.strictEqual(run.cycleBudget, APP_REVIEW_WORKFLOW_DEFAULT_CYCLES);
   }),
 );
 
-it.effect("allows Dev Review to resolve preview targets after launch", () =>
+it.effect("allows App Review to resolve preview targets after launch", () =>
   Effect.gen(function* () {
-    const run = yield* decodeDevReviewWorkflowRun({ ...workflowRun, previewTargets: [] });
+    const run = yield* decodeAppReviewWorkflowRun({ ...workflowRun, previewTargets: [] });
     assert.deepStrictEqual(run.previewTargets, []);
   }),
 );
 
-it.effect("rejects Dev Review attempt budgets outside 1 through 50", () =>
+it.effect("rejects App Review cycle budgets outside 1 through 50", () =>
   Effect.gen(function* () {
     for (const cycleBudget of [0, 51]) {
-      const exit = yield* Effect.exit(decodeDevReviewWorkflowRun({ ...workflowRun, cycleBudget }));
+      const exit = yield* Effect.exit(decodeAppReviewWorkflowRun({ ...workflowRun, cycleBudget }));
       assert.strictEqual(exit._tag, "Failure");
     }
     for (const cycleBudget of [1, 50]) {
-      const run = yield* decodeDevReviewWorkflowRun({ ...workflowRun, cycleBudget });
+      const run = yield* decodeAppReviewWorkflowRun({ ...workflowRun, cycleBudget });
       assert.strictEqual(run.cycleBudget, cycleBudget);
     }
   }),

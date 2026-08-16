@@ -1,26 +1,26 @@
-import { DevReviewWorkflowRunId, ThreadId, type DevReviewWorkflowRun } from "@t3tools/contracts";
+import { AppReviewWorkflowRunId, ThreadId, type AppReviewWorkflowRun } from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
-import { DevReviewThreadStatus } from "./DevReviewThreadStatus";
+import { AppReviewThreadStatus } from "./AppReviewThreadStatus";
 
-describe("DevReviewThreadStatus", () => {
+describe("AppReviewThreadStatus", () => {
   it("shows a blocked launch, its brief, and a concise failure without the stack trace", () => {
     const markup = renderToStaticMarkup(
-      <DevReviewThreadStatus run={blockedRun()} onOpenDetails={() => {}} />,
+      <AppReviewThreadStatus run={blockedRun()} onOpenDetails={() => {}} />,
     );
 
-    expect(markup).toContain("Dev Review is blocked");
+    expect(markup).toContain("App Review is blocked");
     expect(markup).toContain("Review the email test seams");
     expect(markup).toContain("VcsRepositoryDetectionError: Workspace rejected.");
     expect(markup).not.toContain("internal.ts:10:2");
-    expect(markup).toContain("Open Dev Review details");
+    expect(markup).toContain("Open App Review details");
   });
 });
 
-function blockedRun(): DevReviewWorkflowRun {
+function blockedRun(): AppReviewWorkflowRun {
   return {
-    id: DevReviewWorkflowRunId.make("dev-review-workflow-controller"),
+    id: AppReviewWorkflowRunId.make("app-review-workflow-controller"),
     targetThreadId: ThreadId.make("thread-controller"),
     controllerThreadId: ThreadId.make("thread-controller"),
     caller: { type: "standalone", sourceThreadId: ThreadId.make("thread-controller") },
@@ -28,7 +28,7 @@ function blockedRun(): DevReviewWorkflowRun {
     supportingContextMarkdown: null,
     previewTargets: ["https://preview.example.test"],
     cycleBudget: 10,
-    attemptsUsed: 0,
+    cyclesUsed: 0,
     status: "blocked",
     cycles: [],
     activePhase: null,
@@ -46,7 +46,7 @@ function blockedRun(): DevReviewWorkflowRun {
       phase: null,
       cycleNumber: null,
       detailMarkdown:
-        "Dev Review automation failed.\n\nVcsRepositoryDetectionError: Workspace rejected.\n    at internal.ts:10:2",
+        "App Review automation failed.\n\nVcsRepositoryDetectionError: Workspace rejected.\n    at internal.ts:10:2",
       failedAt: "2026-08-13T00:00:00.000Z",
     },
     createdAt: "2026-08-13T00:00:00.000Z",

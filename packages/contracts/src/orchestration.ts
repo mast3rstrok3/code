@@ -7,21 +7,21 @@ import { ProviderOptionSelections } from "./model.ts";
 import { RepositoryIdentity, ThreadEnvMode } from "./environment.ts";
 import { ChangeRequest } from "./sourceControl.ts";
 import {
-  DEV_REVIEW_WORKFLOW_DEFAULT_CYCLES,
-  DevReviewDocument,
-  DevReviewEvidence,
-  DevReviewId,
-  DevReviewRecord,
-  DevReviewWorkflowCaller,
-  DevReviewWorkflowCycleBudget,
-  DevReviewWorkflowRun,
-  DevReviewWorkflowRunId,
-  DevReviewWorkflowWorkspaceRevision,
+  APP_REVIEW_WORKFLOW_DEFAULT_CYCLES,
+  AppReviewDocument,
+  AppReviewEvidence,
+  AppReviewId,
+  AppReviewRecord,
+  AppReviewWorkflowCaller,
+  AppReviewWorkflowCycleBudget,
+  AppReviewWorkflowRun,
+  AppReviewWorkflowRunId,
+  AppReviewWorkflowWorkspaceRevision,
 } from "./review.ts";
 
-export { DEV_REVIEW_WORKFLOW_DEFAULT_CYCLES, DEV_REVIEW_WORKFLOW_MAX_CYCLES } from "./review.ts";
-export const OrchestrationDevReviewWorkflowRun = DevReviewWorkflowRun;
-export type OrchestrationDevReviewWorkflowRun = DevReviewWorkflowRun;
+export { APP_REVIEW_WORKFLOW_DEFAULT_CYCLES, APP_REVIEW_WORKFLOW_MAX_CYCLES } from "./review.ts";
+export const OrchestrationAppReviewWorkflowRun = AppReviewWorkflowRun;
+export type OrchestrationAppReviewWorkflowRun = AppReviewWorkflowRun;
 import {
   ApprovalRequestId,
   CheckpointRef,
@@ -165,7 +165,7 @@ export const WorkflowPreset = Schema.Literals([
   "wayfinder",
   "implementation",
   "planning",
-  "dev-review",
+  "app-review",
 ]);
 export type WorkflowPreset = typeof WorkflowPreset.Type;
 export const isPlanningWorkflowInteractionMode = (
@@ -500,10 +500,10 @@ export const OrchestrationPlanningSpecBundle = Schema.Struct({
 });
 export type OrchestrationPlanningSpecBundle = typeof OrchestrationPlanningSpecBundle.Type;
 
-/** Maximum number of fresh automated AppDevStack/Dev Review repair agents per run. */
+/** Maximum number of fresh automated AppDevStack/App Review repair agents per run. */
 export const IMPLEMENTATION_RUN_MAX_QA_REPAIRS = 10;
-/** Maximum number of fresh nested Dev Review runs launched after consecutive blocked outcomes. */
-export const IMPLEMENTATION_RUN_MAX_DEV_REVIEW_UNBLOCK_ATTEMPTS = 3;
+/** Maximum number of fresh nested App Review runs launched after consecutive blocked outcomes. */
+export const IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS = 3;
 /** Maximum number of complete Code Review and final-validation cycles before WIP publication. */
 export const IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES = 3;
 /** @deprecated Use IMPLEMENTATION_RUN_MAX_QA_REPAIRS. */
@@ -576,7 +576,7 @@ export const OrchestrationImplementationRetryableFailure = Schema.Struct({
     "integration",
     "merge-gate",
     "app-dev-stack",
-    "dev-review",
+    "app-review",
     "code-review",
     "fixer",
     "build",
@@ -613,7 +613,7 @@ export const OrchestrationImplementationPlannedWorker = Schema.Struct({
 export type OrchestrationImplementationPlannedWorker =
   typeof OrchestrationImplementationPlannedWorker.Type;
 
-export const OrchestrationImplementationFinalDevReviewPlan = Schema.Struct({
+export const OrchestrationImplementationFinalAppReviewPlan = Schema.Struct({
   required: Schema.Boolean,
   completionBlocking: Schema.Literal(true).pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   appDevStackSource: Schema.Literal("orchestrator-worktree"),
@@ -621,12 +621,12 @@ export const OrchestrationImplementationFinalDevReviewPlan = Schema.Struct({
   browserMcpProfile: Schema.Literal("agent-browser").pipe(
     Schema.withDecodingDefault(Effect.succeed("agent-browser" as const)),
   ),
-  maxAttempts: NonNegativeInt.pipe(
+  maxCycles: NonNegativeInt.pipe(
     Schema.withDecodingDefault(Effect.succeed(IMPLEMENTATION_RUN_MAX_QA_REPAIRS)),
   ),
 });
-export type OrchestrationImplementationFinalDevReviewPlan =
-  typeof OrchestrationImplementationFinalDevReviewPlan.Type;
+export type OrchestrationImplementationFinalAppReviewPlan =
+  typeof OrchestrationImplementationFinalAppReviewPlan.Type;
 
 export const OrchestrationImplementationAppDevStackState = Schema.Struct({
   status: Schema.Literals(["not-requested", "ensuring", "ready", "failed"]).pipe(
@@ -688,7 +688,7 @@ export const OrchestrationImplementationLaunchSummary = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   validationCommands: Schema.Array(TrimmedNonEmptyString),
-  finalDevReview: OrchestrationImplementationFinalDevReviewPlan,
+  finalAppReview: OrchestrationImplementationFinalAppReviewPlan,
   createdAt: IsoDateTime,
 });
 export type OrchestrationImplementationLaunchSummary =
@@ -733,22 +733,22 @@ export const OrchestrationImplementationFastBuildResult = Schema.Union([
 export type OrchestrationImplementationFastBuildResult =
   typeof OrchestrationImplementationFastBuildResult.Type;
 
-export const OrchestrationImplementationDevReviewEvidence = Schema.Struct({
+export const OrchestrationImplementationAppReviewEvidence = Schema.Struct({
   label: TrimmedNonEmptyString,
   value: Schema.String,
 });
-export type OrchestrationImplementationDevReviewEvidence =
-  typeof OrchestrationImplementationDevReviewEvidence.Type;
+export type OrchestrationImplementationAppReviewEvidence =
+  typeof OrchestrationImplementationAppReviewEvidence.Type;
 
-export const OrchestrationImplementationDevReviewVerdict = Schema.Literals(["pass", "fail"]);
-export type OrchestrationImplementationDevReviewVerdict =
-  typeof OrchestrationImplementationDevReviewVerdict.Type;
+export const OrchestrationImplementationAppReviewVerdict = Schema.Literals(["pass", "fail"]);
+export type OrchestrationImplementationAppReviewVerdict =
+  typeof OrchestrationImplementationAppReviewVerdict.Type;
 
-export const OrchestrationImplementationDevReviewDocument = Schema.Struct({
+export const OrchestrationImplementationAppReviewDocument = Schema.Struct({
   kind: Schema.Literal("react-document-preset"),
-  preset: Schema.Literal("implementation-dev-review"),
+  preset: Schema.Literal("implementation-app-review"),
   version: Schema.Literal(1),
-  verdict: OrchestrationImplementationDevReviewVerdict,
+  verdict: OrchestrationImplementationAppReviewVerdict,
   runId: OrchestrationImplementationRunId,
   reviewerThreadId: ThreadId,
   featureUrl: Schema.NullOr(TrimmedNonEmptyString),
@@ -796,27 +796,27 @@ export const OrchestrationImplementationDevReviewDocument = Schema.Struct({
   ).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   nextAction: Schema.Literals(["complete", "fix-and-rerun", "blocked"]),
 });
-export type OrchestrationImplementationDevReviewDocument =
-  typeof OrchestrationImplementationDevReviewDocument.Type;
+export type OrchestrationImplementationAppReviewDocument =
+  typeof OrchestrationImplementationAppReviewDocument.Type;
 
-export const OrchestrationImplementationDevReviewArtifact = Schema.Struct({
+export const OrchestrationImplementationAppReviewArtifact = Schema.Struct({
   id: TrimmedNonEmptyString,
   runId: OrchestrationImplementationRunId,
   reviewerThreadId: ThreadId,
-  verdict: OrchestrationImplementationDevReviewVerdict,
-  devReviewMarkdown: Schema.String,
-  document: Schema.optionalKey(OrchestrationImplementationDevReviewDocument),
+  verdict: OrchestrationImplementationAppReviewVerdict,
+  appReviewMarkdown: Schema.String,
+  document: Schema.optionalKey(OrchestrationImplementationAppReviewDocument),
   featureUrl: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
-  evidence: Schema.Array(OrchestrationImplementationDevReviewEvidence).pipe(
+  evidence: Schema.Array(OrchestrationImplementationAppReviewEvidence).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   createdAt: IsoDateTime,
 });
-export type OrchestrationImplementationDevReviewArtifact =
-  typeof OrchestrationImplementationDevReviewArtifact.Type;
+export type OrchestrationImplementationAppReviewArtifact =
+  typeof OrchestrationImplementationAppReviewArtifact.Type;
 
 export const OrchestrationImplementationQaFailure = Schema.Struct({
-  kind: Schema.Literals(["app-dev-stack", "dev-review"]),
+  kind: Schema.Literals(["app-dev-stack", "app-review"]),
   status: TrimmedNonEmptyString,
   detailMarkdown: Schema.String,
   reviewId: Schema.NullOr(TrimmedNonEmptyString).pipe(
@@ -963,36 +963,36 @@ export const OrchestrationImplementationRun = Schema.Struct({
       }),
     ),
   ),
-  devReviewIds: Schema.Array(TrimmedNonEmptyString).pipe(
+  appReviewIds: Schema.Array(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
-  devReviewStrategy: Schema.Literals(["legacy-inline", "nested-workflow"]).pipe(
+  appReviewStrategy: Schema.Literals(["legacy-inline", "nested-workflow"]).pipe(
     Schema.withDecodingDefault(Effect.succeed("legacy-inline" as const)),
   ),
-  devReviewWorkflowRunIds: Schema.Array(DevReviewWorkflowRunId).pipe(
+  appReviewWorkflowRunIds: Schema.Array(AppReviewWorkflowRunId).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
-  latestDevReviewWorkflowOutcome: Schema.NullOr(
+  latestAppReviewWorkflowOutcome: Schema.NullOr(
     Schema.Literals(["passed", "exhausted", "blocked", "canceled"]),
   ).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
-  devReviewUnblockAttemptCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
-  devReviews: Schema.Array(OrchestrationImplementationDevReviewArtifact).pipe(
+  appReviewUnblockAttemptCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+  appReviews: Schema.Array(OrchestrationImplementationAppReviewArtifact).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
-  devReviewedHeadSha: Schema.NullOr(TrimmedNonEmptyString).pipe(
+  appReviewedHeadSha: Schema.NullOr(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
-  activeDevReviewHeadSha: Schema.NullOr(TrimmedNonEmptyString).pipe(
+  activeAppReviewHeadSha: Schema.NullOr(TrimmedNonEmptyString).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
-  activeDevReviewThreadId: Schema.NullOr(ThreadId).pipe(
+  activeAppReviewThreadId: Schema.NullOr(ThreadId).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   // Wire-compatible legacy name: this counts consumed fresh QA repair-agent slots.
   qaCycleCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
   qaAttemptCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
   qaExhaustedAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
-  qaExhaustionReason: Schema.NullOr(Schema.Literals(["app-dev-stack", "dev-review"])).pipe(
+  qaExhaustionReason: Schema.NullOr(Schema.Literals(["app-dev-stack", "app-review"])).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   lastQaFailure: Schema.NullOr(OrchestrationImplementationQaFailure).pipe(
@@ -1000,7 +1000,7 @@ export const OrchestrationImplementationRun = Schema.Struct({
   ),
   // Set when automated QA used every allowed repair without passing. The run still continues to
   // Code Review and change-request publication; the unpassed review is surfaced instead of blocking.
-  devReviewExhaustedAt: Schema.NullOr(IsoDateTime).pipe(
+  appReviewExhaustedAt: Schema.NullOr(IsoDateTime).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   codeReviewedHeadSha: Schema.NullOr(TrimmedNonEmptyString).pipe(
@@ -1023,7 +1023,7 @@ export const OrchestrationImplementationRun = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   fixOrigin: Schema.NullOr(
-    Schema.Literals(["merge-gate", "app-dev-stack", "dev-review", "code-review"]),
+    Schema.Literals(["merge-gate", "app-dev-stack", "app-review", "code-review"]),
   ).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   latestCodeReviewReportMarkdown: Schema.NullOr(Schema.String).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
@@ -1076,9 +1076,9 @@ export const OrchestrationThreadWorkflowRole = Schema.Literals([
   "implementation-code-reviewer",
   "product-fix-implementer",
   "fast-feature-implementer",
-  "dev-review-orchestrator",
-  "dev-review-reviewer",
-  "dev-review-fixer",
+  "app-review-orchestrator",
+  "app-review-reviewer",
+  "app-review-fixer",
 ]);
 export type OrchestrationThreadWorkflowRole = typeof OrchestrationThreadWorkflowRole.Type;
 
@@ -1087,8 +1087,8 @@ export const WorkflowSubagentBatchId = TrimmedNonEmptyString.pipe(
 );
 export type WorkflowSubagentBatchId = typeof WorkflowSubagentBatchId.Type;
 
-export const WorkflowSubagentDevReviewMode = Schema.Literals(["feedback", "full"]);
-export type WorkflowSubagentDevReviewMode = typeof WorkflowSubagentDevReviewMode.Type;
+export const WorkflowSubagentAppReviewMode = Schema.Literals(["feedback", "full"]);
+export type WorkflowSubagentAppReviewMode = typeof WorkflowSubagentAppReviewMode.Type;
 
 export const OrchestrationWorkflowSubagentBatchChildStatus = Schema.Literals([
   "pending",
@@ -1115,11 +1115,11 @@ export const OrchestrationWorkflowSubagentBatchChild = Schema.Struct({
   workflowPromptId: TrimmedNonEmptyString,
   title: TrimmedNonEmptyString,
   expectedResult: TrimmedNonEmptyString,
-  devReviewMode: Schema.NullOr(WorkflowSubagentDevReviewMode).pipe(
+  appReviewMode: Schema.NullOr(WorkflowSubagentAppReviewMode).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   childThreadId: Schema.NullOr(ThreadId).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
-  devReviewId: Schema.NullOr(DevReviewId).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  appReviewId: Schema.NullOr(AppReviewId).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   status: OrchestrationWorkflowSubagentBatchChildStatus,
   resultMarkdown: Schema.NullOr(Schema.String).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
@@ -1285,7 +1285,7 @@ export const OrchestrationThread = Schema.Struct({
   planningWorkflow: Schema.NullOr(OrchestrationPlanningWorkflow).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
-  devReviews: Schema.Array(DevReviewRecord).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  appReviews: Schema.Array(AppReviewRecord).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   workflowSubagentBatches: Schema.optionalKey(Schema.Array(OrchestrationWorkflowSubagentBatch)),
   activities: Schema.Array(OrchestrationThreadActivity),
   checkpoints: Schema.Array(OrchestrationCheckpointSummary),
@@ -1300,7 +1300,7 @@ export const OrchestrationReadModel = Schema.Struct({
   implementationRuns: Schema.Array(OrchestrationImplementationRun).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
-  devReviewWorkflowRuns: Schema.optionalKey(Schema.Array(DevReviewWorkflowRun)),
+  appReviewWorkflowRuns: Schema.optionalKey(Schema.Array(AppReviewWorkflowRun)),
   updatedAt: IsoDateTime,
 });
 export type OrchestrationReadModel = typeof OrchestrationReadModel.Type;
@@ -1401,7 +1401,7 @@ export const OrchestrationShellSnapshot = Schema.Struct({
   projects: Schema.Array(OrchestrationProjectShell),
   threads: Schema.Array(OrchestrationThreadShell),
   implementationRuns: Schema.optionalKey(Schema.Array(OrchestrationImplementationRun)),
-  devReviewWorkflowRuns: Schema.optionalKey(Schema.Array(DevReviewWorkflowRun)),
+  appReviewWorkflowRuns: Schema.optionalKey(Schema.Array(AppReviewWorkflowRun)),
   updatedAt: IsoDateTime,
 });
 export type OrchestrationShellSnapshot = typeof OrchestrationShellSnapshot.Type;
@@ -1433,9 +1433,9 @@ export const OrchestrationShellStreamEvent = Schema.Union([
     run: OrchestrationImplementationRun,
   }),
   Schema.Struct({
-    kind: Schema.Literal("dev-review-workflow-run-upserted"),
+    kind: Schema.Literal("app-review-workflow-run-upserted"),
     sequence: NonNegativeInt,
-    run: DevReviewWorkflowRun,
+    run: AppReviewWorkflowRun,
   }),
 ]);
 export type OrchestrationShellStreamEvent = typeof OrchestrationShellStreamEvent.Type;
@@ -1548,7 +1548,7 @@ export const OrchestrationThreadDetailSnapshot = Schema.Struct({
   snapshotSequence: NonNegativeInt,
   thread: OrchestrationThread,
   implementationRuns: Schema.optionalKey(Schema.Array(OrchestrationImplementationRun)),
-  devReviewWorkflowRuns: Schema.optionalKey(Schema.Array(DevReviewWorkflowRun)),
+  appReviewWorkflowRuns: Schema.optionalKey(Schema.Array(AppReviewWorkflowRun)),
   // Present only on windowed responses. Absent on full snapshots (and from
   // pre-pagination servers), which clients treat as fully loaded.
   page: Schema.optional(OrchestrationThreadDetailPage),
@@ -1999,49 +1999,49 @@ export const ThreadTurnStartCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
-export const ThreadDevReviewWorkflowLaunchCommand = Schema.Struct({
-  type: Schema.Literal("thread.dev-review-workflow.launch"),
+export const ThreadAppReviewWorkflowLaunchCommand = Schema.Struct({
+  type: Schema.Literal("thread.app-review-workflow.launch"),
   commandId: CommandId,
   targetThreadId: ThreadId,
   controllerThreadId: ThreadId,
-  caller: DevReviewWorkflowCaller,
+  caller: AppReviewWorkflowCaller,
   briefMarkdown: TrimmedNonEmptyString,
   supportingContextMarkdown: Schema.optionalKey(Schema.NullOr(Schema.String)),
   previewTargets: Schema.Array(TrimmedNonEmptyString),
-  cycleBudget: DevReviewWorkflowCycleBudget.pipe(
-    Schema.withDecodingDefault(Effect.succeed(DEV_REVIEW_WORKFLOW_DEFAULT_CYCLES)),
+  cycleBudget: AppReviewWorkflowCycleBudget.pipe(
+    Schema.withDecodingDefault(Effect.succeed(APP_REVIEW_WORKFLOW_DEFAULT_CYCLES)),
   ),
   modelSelection: ModelSelection,
-  workspaceRevision: Schema.optionalKey(DevReviewWorkflowWorkspaceRevision),
+  workspaceRevision: Schema.optionalKey(AppReviewWorkflowWorkspaceRevision),
   bootstrap: Schema.optional(ThreadTurnStartBootstrap),
   createdAt: IsoDateTime,
 });
 
-const ThreadDevReviewWorkflowCancelCommand = Schema.Struct({
-  type: Schema.Literal("thread.dev-review-workflow.cancel"),
+const ThreadAppReviewWorkflowCancelCommand = Schema.Struct({
+  type: Schema.Literal("thread.app-review-workflow.cancel"),
   commandId: CommandId,
   threadId: ThreadId,
-  runId: DevReviewWorkflowRunId,
+  runId: AppReviewWorkflowRunId,
   reason: Schema.optional(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
 });
 
-const ThreadDevReviewWorkflowResumeCommand = Schema.Struct({
-  type: Schema.Literal("thread.dev-review-workflow.resume"),
+const ThreadAppReviewWorkflowResumeCommand = Schema.Struct({
+  type: Schema.Literal("thread.app-review-workflow.resume"),
   commandId: CommandId,
   threadId: ThreadId,
-  runId: DevReviewWorkflowRunId,
+  runId: AppReviewWorkflowRunId,
   previewTargets: Schema.Array(TrimmedNonEmptyString).check(Schema.isMinLength(1)),
-  workspaceRevision: DevReviewWorkflowWorkspaceRevision,
+  workspaceRevision: AppReviewWorkflowWorkspaceRevision,
   createdAt: IsoDateTime,
 });
 
-const ThreadDevReviewLaunchCommand = Schema.Struct({
-  type: Schema.Literal("thread.dev-review.launch"),
+const ThreadAppReviewLaunchCommand = Schema.Struct({
+  type: Schema.Literal("thread.app-review.launch"),
   commandId: CommandId,
   sourceThreadId: ThreadId,
   reviewThreadId: ThreadId,
-  reviewId: DevReviewId,
+  reviewId: AppReviewId,
   planningTicketIds: Schema.optional(Schema.Array(OrchestrationPlanningTicketId)),
   message: Schema.Struct({
     messageId: MessageId,
@@ -2232,10 +2232,10 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadImplementationRunRetryCommand,
   ThreadImplementationRunCancelCommand,
   ThreadImplementationChangeRequestRetryCommand,
-  ThreadDevReviewWorkflowLaunchCommand,
-  ThreadDevReviewWorkflowCancelCommand,
-  ThreadDevReviewWorkflowResumeCommand,
-  ThreadDevReviewLaunchCommand,
+  ThreadAppReviewWorkflowLaunchCommand,
+  ThreadAppReviewWorkflowCancelCommand,
+  ThreadAppReviewWorkflowResumeCommand,
+  ThreadAppReviewLaunchCommand,
   ThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
   ThreadApprovalRespondCommand,
@@ -2275,10 +2275,10 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadImplementationRunRetryCommand,
   ThreadImplementationRunCancelCommand,
   ThreadImplementationChangeRequestRetryCommand,
-  ThreadDevReviewWorkflowLaunchCommand,
-  ThreadDevReviewWorkflowCancelCommand,
-  ThreadDevReviewWorkflowResumeCommand,
-  ThreadDevReviewLaunchCommand,
+  ThreadAppReviewWorkflowLaunchCommand,
+  ThreadAppReviewWorkflowCancelCommand,
+  ThreadAppReviewWorkflowResumeCommand,
+  ThreadAppReviewLaunchCommand,
   ClientThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
   ThreadApprovalRespondCommand,
@@ -2345,32 +2345,32 @@ const ThreadActivityAppendCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
-const ThreadDevReviewUpdateCommand = Schema.Struct({
-  type: Schema.Literal("thread.dev-review.update"),
+const ThreadAppReviewUpdateCommand = Schema.Struct({
+  type: Schema.Literal("thread.app-review.update"),
   commandId: CommandId,
   threadId: ThreadId,
-  reviewId: DevReviewId,
-  status: Schema.optional(DevReviewRecord.fields.status),
-  document: Schema.optional(DevReviewDocument),
+  reviewId: AppReviewId,
+  status: Schema.optional(AppReviewRecord.fields.status),
+  document: Schema.optional(AppReviewDocument),
   updatedAt: IsoDateTime,
   createdAt: IsoDateTime,
 });
 
-const ThreadDevReviewEvidenceUpdateCommand = Schema.Struct({
-  type: Schema.Literal("thread.dev-review.evidence.update"),
+const ThreadAppReviewEvidenceUpdateCommand = Schema.Struct({
+  type: Schema.Literal("thread.app-review.evidence.update"),
   commandId: CommandId,
   threadId: ThreadId,
-  reviewId: DevReviewId,
-  evidence: DevReviewEvidence,
+  reviewId: AppReviewId,
+  evidence: AppReviewEvidence,
   updatedAt: IsoDateTime,
   createdAt: IsoDateTime,
 });
 
-const ThreadDevReviewWorkflowUpdateCommand = Schema.Struct({
-  type: Schema.Literal("thread.dev-review-workflow.update"),
+const ThreadAppReviewWorkflowUpdateCommand = Schema.Struct({
+  type: Schema.Literal("thread.app-review-workflow.update"),
   commandId: CommandId,
   threadId: ThreadId,
-  run: DevReviewWorkflowRun,
+  run: AppReviewWorkflowRun,
   createdAt: IsoDateTime,
 });
 
@@ -2402,9 +2402,9 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadImplementationRunUpdateCommand,
   ThreadTurnDiffCompleteCommand,
   ThreadActivityAppendCommand,
-  ThreadDevReviewUpdateCommand,
-  ThreadDevReviewEvidenceUpdateCommand,
-  ThreadDevReviewWorkflowUpdateCommand,
+  ThreadAppReviewUpdateCommand,
+  ThreadAppReviewEvidenceUpdateCommand,
+  ThreadAppReviewWorkflowUpdateCommand,
   ThreadWorkflowSubagentBatchCreateCommand,
   ThreadWorkflowSubagentLaunchCommand,
   ThreadWorkflowSubagentBatchChildRejectCommand,
@@ -2453,10 +2453,10 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.implementation-run-retry-requested",
   "thread.implementation-run-cancel-requested",
   "thread.implementation-change-request-retry-requested",
-  "thread.dev-review-workflow-launched",
-  "thread.dev-review-workflow-updated",
-  "thread.dev-review-workflow-cancel-requested",
-  "thread.dev-review-workflow-resume-requested",
+  "thread.app-review-workflow-launched",
+  "thread.app-review-workflow-updated",
+  "thread.app-review-workflow-cancel-requested",
+  "thread.app-review-workflow-resume-requested",
   "thread.message-sent",
   "thread.turn-start-requested",
   "thread.turn-interrupt-requested",
@@ -2467,9 +2467,9 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.session-stop-requested",
   "thread.session-set",
   "thread.proposed-plan-upserted",
-  "thread.dev-review-created",
-  "thread.dev-review-updated",
-  "thread.dev-review-evidence-updated",
+  "thread.app-review-created",
+  "thread.app-review-updated",
+  "thread.app-review-evidence-updated",
   "thread.workflow-subagent-batch-created",
   "thread.workflow-subagent-batch-child-updated",
   "thread.workflow-subagent-batch-completed",
@@ -2726,25 +2726,25 @@ export const ThreadImplementationRunCancelRequestedPayload = Schema.Struct({
   reason: Schema.optional(Schema.String),
 });
 
-export const ThreadDevReviewWorkflowLaunchedPayload = Schema.Struct({
+export const ThreadAppReviewWorkflowLaunchedPayload = Schema.Struct({
   sourceThreadId: ThreadId,
-  run: DevReviewWorkflowRun,
+  run: AppReviewWorkflowRun,
 });
 
-export const ThreadDevReviewWorkflowUpdatedPayload = Schema.Struct({
+export const ThreadAppReviewWorkflowUpdatedPayload = Schema.Struct({
   sourceThreadId: ThreadId,
-  run: DevReviewWorkflowRun,
+  run: AppReviewWorkflowRun,
 });
 
-export const ThreadDevReviewWorkflowCancelRequestedPayload = Schema.Struct({
+export const ThreadAppReviewWorkflowCancelRequestedPayload = Schema.Struct({
   sourceThreadId: ThreadId,
-  run: DevReviewWorkflowRun,
+  run: AppReviewWorkflowRun,
   reason: Schema.optional(Schema.String),
 });
 
-export const ThreadDevReviewWorkflowResumeRequestedPayload = Schema.Struct({
+export const ThreadAppReviewWorkflowResumeRequestedPayload = Schema.Struct({
   sourceThreadId: ThreadId,
-  run: DevReviewWorkflowRun,
+  run: AppReviewWorkflowRun,
 });
 
 export const ThreadMessageSentPayload = Schema.Struct({
@@ -2819,27 +2819,27 @@ export const ThreadProposedPlanUpsertedPayload = Schema.Struct({
   proposedPlan: OrchestrationProposedPlan,
 });
 
-export const ThreadDevReviewCreatedPayload = Schema.Struct({
+export const ThreadAppReviewCreatedPayload = Schema.Struct({
   threadId: ThreadId,
-  devReview: DevReviewRecord,
+  appReview: AppReviewRecord,
 });
 
-export const ThreadDevReviewUpdatedPayload = Schema.Struct({
+export const ThreadAppReviewUpdatedPayload = Schema.Struct({
   threadId: ThreadId,
-  reviewId: DevReviewId,
+  reviewId: AppReviewId,
   sourceThreadId: ThreadId,
   reviewThreadId: ThreadId,
-  status: Schema.optional(DevReviewRecord.fields.status),
-  document: Schema.optional(DevReviewDocument),
+  status: Schema.optional(AppReviewRecord.fields.status),
+  document: Schema.optional(AppReviewDocument),
   updatedAt: IsoDateTime,
 });
 
-export const ThreadDevReviewEvidenceUpdatedPayload = Schema.Struct({
+export const ThreadAppReviewEvidenceUpdatedPayload = Schema.Struct({
   threadId: ThreadId,
-  reviewId: DevReviewId,
+  reviewId: AppReviewId,
   sourceThreadId: ThreadId,
   reviewThreadId: ThreadId,
-  evidence: DevReviewEvidence,
+  evidence: AppReviewEvidence,
   updatedAt: IsoDateTime,
 });
 
@@ -3051,23 +3051,23 @@ export const OrchestrationEvent = Schema.Union([
   }),
   Schema.Struct({
     ...EventBaseFields,
-    type: Schema.Literal("thread.dev-review-workflow-launched"),
-    payload: ThreadDevReviewWorkflowLaunchedPayload,
+    type: Schema.Literal("thread.app-review-workflow-launched"),
+    payload: ThreadAppReviewWorkflowLaunchedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
-    type: Schema.Literal("thread.dev-review-workflow-updated"),
-    payload: ThreadDevReviewWorkflowUpdatedPayload,
+    type: Schema.Literal("thread.app-review-workflow-updated"),
+    payload: ThreadAppReviewWorkflowUpdatedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
-    type: Schema.Literal("thread.dev-review-workflow-cancel-requested"),
-    payload: ThreadDevReviewWorkflowCancelRequestedPayload,
+    type: Schema.Literal("thread.app-review-workflow-cancel-requested"),
+    payload: ThreadAppReviewWorkflowCancelRequestedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
-    type: Schema.Literal("thread.dev-review-workflow-resume-requested"),
-    payload: ThreadDevReviewWorkflowResumeRequestedPayload,
+    type: Schema.Literal("thread.app-review-workflow-resume-requested"),
+    payload: ThreadAppReviewWorkflowResumeRequestedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
@@ -3121,18 +3121,18 @@ export const OrchestrationEvent = Schema.Union([
   }),
   Schema.Struct({
     ...EventBaseFields,
-    type: Schema.Literal("thread.dev-review-created"),
-    payload: ThreadDevReviewCreatedPayload,
+    type: Schema.Literal("thread.app-review-created"),
+    payload: ThreadAppReviewCreatedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
-    type: Schema.Literal("thread.dev-review-updated"),
-    payload: ThreadDevReviewUpdatedPayload,
+    type: Schema.Literal("thread.app-review-updated"),
+    payload: ThreadAppReviewUpdatedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
-    type: Schema.Literal("thread.dev-review-evidence-updated"),
-    payload: ThreadDevReviewEvidenceUpdatedPayload,
+    type: Schema.Literal("thread.app-review-evidence-updated"),
+    payload: ThreadAppReviewEvidenceUpdatedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

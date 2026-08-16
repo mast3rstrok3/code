@@ -11,44 +11,44 @@ import {
 import { GitCommandError } from "./git.ts";
 import { VcsError } from "./vcs.ts";
 
-export const DevReviewId = TrimmedNonEmptyString.pipe(Schema.brand("DevReviewId"));
-export type DevReviewId = typeof DevReviewId.Type;
+export const AppReviewId = TrimmedNonEmptyString.pipe(Schema.brand("AppReviewId"));
+export type AppReviewId = typeof AppReviewId.Type;
 
-/** Default and hard limit for the number of Browser Dev Review attempts in one run. */
-export const DEV_REVIEW_WORKFLOW_DEFAULT_CYCLES = 10;
-export const DEV_REVIEW_WORKFLOW_MAX_CYCLES = 50;
+/** Default and hard limit for complete review, gap-analysis, and implementation cycles. */
+export const APP_REVIEW_WORKFLOW_DEFAULT_CYCLES = 10;
+export const APP_REVIEW_WORKFLOW_MAX_CYCLES = 50;
 
-export const DevReviewWorkflowRunId = TrimmedNonEmptyString.pipe(
-  Schema.brand("DevReviewWorkflowRunId"),
+export const AppReviewWorkflowRunId = TrimmedNonEmptyString.pipe(
+  Schema.brand("AppReviewWorkflowRunId"),
 );
-export type DevReviewWorkflowRunId = typeof DevReviewWorkflowRunId.Type;
+export type AppReviewWorkflowRunId = typeof AppReviewWorkflowRunId.Type;
 
-export const DevReviewWorkflowCycleBudget = PositiveInt.check(
-  Schema.isLessThanOrEqualTo(DEV_REVIEW_WORKFLOW_MAX_CYCLES),
+export const AppReviewWorkflowCycleBudget = PositiveInt.check(
+  Schema.isLessThanOrEqualTo(APP_REVIEW_WORKFLOW_MAX_CYCLES),
 );
-export type DevReviewWorkflowCycleBudget = typeof DevReviewWorkflowCycleBudget.Type;
+export type AppReviewWorkflowCycleBudget = typeof AppReviewWorkflowCycleBudget.Type;
 
-export const DevReviewWorkflowOutcome = Schema.Literals([
+export const AppReviewWorkflowOutcome = Schema.Literals([
   "passed",
   "exhausted",
   "blocked",
   "canceled",
 ]);
-export type DevReviewWorkflowOutcome = typeof DevReviewWorkflowOutcome.Type;
+export type AppReviewWorkflowOutcome = typeof AppReviewWorkflowOutcome.Type;
 
-export const DevReviewWorkflowRunStatus = Schema.Literals([
+export const AppReviewWorkflowRunStatus = Schema.Literals([
   "running",
   "passed",
   "exhausted",
   "blocked",
   "canceled",
 ]);
-export type DevReviewWorkflowRunStatus = typeof DevReviewWorkflowRunStatus.Type;
+export type AppReviewWorkflowRunStatus = typeof AppReviewWorkflowRunStatus.Type;
 
-export const DevReviewWorkflowPhase = Schema.Literals(["review", "planning", "fixing"]);
-export type DevReviewWorkflowPhase = typeof DevReviewWorkflowPhase.Type;
+export const AppReviewWorkflowPhase = Schema.Literals(["review", "planning", "fixing"]);
+export type AppReviewWorkflowPhase = typeof AppReviewWorkflowPhase.Type;
 
-export const DevReviewWorkflowCaller = Schema.Union([
+export const AppReviewWorkflowCaller = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("standalone"),
     sourceThreadId: ThreadId,
@@ -59,36 +59,36 @@ export const DevReviewWorkflowCaller = Schema.Union([
     orchestratorThreadId: ThreadId,
   }),
 ]);
-export type DevReviewWorkflowCaller = typeof DevReviewWorkflowCaller.Type;
+export type AppReviewWorkflowCaller = typeof AppReviewWorkflowCaller.Type;
 
 /** HEAD plus ReviewService's two canonical diff hashes. */
-export const DevReviewWorkflowWorkspaceRevision = Schema.Struct({
+export const AppReviewWorkflowWorkspaceRevision = Schema.Struct({
   headSha: TrimmedNonEmptyString,
   workingTreeDiffHash: TrimmedNonEmptyString,
   branchDiffHash: TrimmedNonEmptyString,
   fingerprint: TrimmedNonEmptyString,
 });
-export type DevReviewWorkflowWorkspaceRevision = typeof DevReviewWorkflowWorkspaceRevision.Type;
+export type AppReviewWorkflowWorkspaceRevision = typeof AppReviewWorkflowWorkspaceRevision.Type;
 
-export const DevReviewWorkflowFixValidation = Schema.Struct({
+export const AppReviewWorkflowFixValidation = Schema.Struct({
   command: TrimmedNonEmptyString,
   status: Schema.Literals(["passed", "failed"]),
   outputMarkdown: Schema.String,
   completedAt: IsoDateTime,
 });
-export type DevReviewWorkflowFixValidation = typeof DevReviewWorkflowFixValidation.Type;
+export type AppReviewWorkflowFixValidation = typeof AppReviewWorkflowFixValidation.Type;
 
-export const DevReviewWorkflowFixResult = Schema.Struct({
-  runId: DevReviewWorkflowRunId,
+export const AppReviewWorkflowFixResult = Schema.Struct({
+  runId: AppReviewWorkflowRunId,
   planId: TrimmedNonEmptyString,
   status: Schema.Literals(["succeeded", "failed", "blocked"]),
   commitSha: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
-  validations: Schema.Array(DevReviewWorkflowFixValidation),
+  validations: Schema.Array(AppReviewWorkflowFixValidation),
   notesMarkdown: Schema.String,
 });
-export type DevReviewWorkflowFixResult = typeof DevReviewWorkflowFixResult.Type;
+export type AppReviewWorkflowFixResult = typeof AppReviewWorkflowFixResult.Type;
 
-export const DevReviewWorkflowCycleStatus = Schema.Literals([
+export const AppReviewWorkflowCycleStatus = Schema.Literals([
   "reviewing",
   "review-failed",
   "planning",
@@ -96,26 +96,26 @@ export const DevReviewWorkflowCycleStatus = Schema.Literals([
   "completed",
   "blocked",
 ]);
-export type DevReviewWorkflowCycleStatus = typeof DevReviewWorkflowCycleStatus.Type;
+export type AppReviewWorkflowCycleStatus = typeof AppReviewWorkflowCycleStatus.Type;
 
-export const DevReviewWorkflowCycle = Schema.Struct({
+export const AppReviewWorkflowCycle = Schema.Struct({
   cycleNumber: PositiveInt,
-  status: DevReviewWorkflowCycleStatus,
-  reviewId: DevReviewId,
+  status: AppReviewWorkflowCycleStatus,
+  reviewId: AppReviewId,
   reviewerThreadId: ThreadId,
   reviewVerdict: Schema.NullOr(Schema.Literals(["pending", "passed", "failed", "blocked"])),
   actionableFindingsMarkdown: Schema.NullOr(Schema.String),
   planId: Schema.NullOr(TrimmedNonEmptyString),
   plannerTurnId: Schema.NullOr(TurnId),
   fixerThreadId: Schema.NullOr(ThreadId),
-  fixResult: Schema.NullOr(DevReviewWorkflowFixResult),
-  workspaceRevision: DevReviewWorkflowWorkspaceRevision,
+  fixResult: Schema.NullOr(AppReviewWorkflowFixResult),
+  workspaceRevision: AppReviewWorkflowWorkspaceRevision,
   startedAt: IsoDateTime,
   completedAt: Schema.NullOr(IsoDateTime),
 });
-export type DevReviewWorkflowCycle = typeof DevReviewWorkflowCycle.Type;
+export type AppReviewWorkflowCycle = typeof AppReviewWorkflowCycle.Type;
 
-export const DevReviewWorkflowFailureReason = Schema.Literals([
+export const AppReviewWorkflowFailureReason = Schema.Literals([
   "review-blocked",
   "plan-missing",
   "plan-malformed",
@@ -129,90 +129,90 @@ export const DevReviewWorkflowFailureReason = Schema.Literals([
   "preview-unavailable",
   "unknown",
 ]);
-export type DevReviewWorkflowFailureReason = typeof DevReviewWorkflowFailureReason.Type;
+export type AppReviewWorkflowFailureReason = typeof AppReviewWorkflowFailureReason.Type;
 
-export const DevReviewWorkflowFailure = Schema.Struct({
-  reason: DevReviewWorkflowFailureReason,
-  phase: Schema.NullOr(DevReviewWorkflowPhase),
+export const AppReviewWorkflowFailure = Schema.Struct({
+  reason: AppReviewWorkflowFailureReason,
+  phase: Schema.NullOr(AppReviewWorkflowPhase),
   cycleNumber: Schema.NullOr(PositiveInt),
   detailMarkdown: TrimmedNonEmptyString,
   failedAt: IsoDateTime,
 });
-export type DevReviewWorkflowFailure = typeof DevReviewWorkflowFailure.Type;
+export type AppReviewWorkflowFailure = typeof AppReviewWorkflowFailure.Type;
 
-export const DevReviewWorkflowRun = Schema.Struct({
-  id: DevReviewWorkflowRunId,
+export const AppReviewWorkflowRun = Schema.Struct({
+  id: AppReviewWorkflowRunId,
   targetThreadId: ThreadId,
   controllerThreadId: ThreadId,
-  caller: DevReviewWorkflowCaller,
+  caller: AppReviewWorkflowCaller,
   briefMarkdown: TrimmedNonEmptyString,
   supportingContextMarkdown: Schema.NullOr(Schema.String),
   previewTargets: Schema.Array(TrimmedNonEmptyString),
-  cycleBudget: DevReviewWorkflowCycleBudget.pipe(
-    Schema.withDecodingDefault(Effect.succeed(DEV_REVIEW_WORKFLOW_DEFAULT_CYCLES)),
+  cycleBudget: AppReviewWorkflowCycleBudget.pipe(
+    Schema.withDecodingDefault(Effect.succeed(APP_REVIEW_WORKFLOW_DEFAULT_CYCLES)),
   ),
-  attemptsUsed: NonNegativeInt,
-  status: DevReviewWorkflowRunStatus,
-  cycles: Schema.Array(DevReviewWorkflowCycle),
-  activePhase: Schema.NullOr(DevReviewWorkflowPhase),
+  cyclesUsed: NonNegativeInt,
+  status: AppReviewWorkflowRunStatus,
+  cycles: Schema.Array(AppReviewWorkflowCycle),
+  activePhase: Schema.NullOr(AppReviewWorkflowPhase),
   activeThreadId: Schema.NullOr(ThreadId),
-  workspaceRevision: DevReviewWorkflowWorkspaceRevision,
+  workspaceRevision: AppReviewWorkflowWorkspaceRevision,
   finalHeadSha: Schema.NullOr(TrimmedNonEmptyString),
-  outcome: Schema.NullOr(DevReviewWorkflowOutcome),
-  failure: Schema.NullOr(DevReviewWorkflowFailure),
+  outcome: Schema.NullOr(AppReviewWorkflowOutcome),
+  failure: Schema.NullOr(AppReviewWorkflowFailure),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   completedAt: Schema.NullOr(IsoDateTime),
 });
-export type DevReviewWorkflowRun = typeof DevReviewWorkflowRun.Type;
+export type AppReviewWorkflowRun = typeof AppReviewWorkflowRun.Type;
 
-export const DevReviewStatus = Schema.Literals([
+export const AppReviewStatus = Schema.Literals([
   "pending",
   "running",
   "passed",
   "failed",
   "blocked",
 ]);
-export type DevReviewStatus = typeof DevReviewStatus.Type;
+export type AppReviewStatus = typeof AppReviewStatus.Type;
 
-export const DevReviewRecordingStatus = Schema.Literals([
+export const AppReviewRecordingStatus = Schema.Literals([
   "not-started",
   "recording",
   "saved",
   "failed",
 ]);
-export type DevReviewRecordingStatus = typeof DevReviewRecordingStatus.Type;
+export type AppReviewRecordingStatus = typeof AppReviewRecordingStatus.Type;
 
-export const DevReviewFindingSeverity = Schema.Literals(["blocker", "major", "minor", "note"]);
-export type DevReviewFindingSeverity = typeof DevReviewFindingSeverity.Type;
+export const AppReviewFindingSeverity = Schema.Literals(["blocker", "major", "minor", "note"]);
+export type AppReviewFindingSeverity = typeof AppReviewFindingSeverity.Type;
 
-export const DevReviewCheckStatus = Schema.Literals([
+export const AppReviewCheckStatus = Schema.Literals([
   "pending",
   "passed",
   "failed",
   "blocked",
   "not-applicable",
 ]);
-export type DevReviewCheckStatus = typeof DevReviewCheckStatus.Type;
+export type AppReviewCheckStatus = typeof AppReviewCheckStatus.Type;
 
-export const DevReviewVerdict = Schema.Literals(["pending", "passed", "failed", "blocked"]);
-export type DevReviewVerdict = typeof DevReviewVerdict.Type;
+export const AppReviewVerdict = Schema.Literals(["pending", "passed", "failed", "blocked"]);
+export type AppReviewVerdict = typeof AppReviewVerdict.Type;
 
-export const DevReviewDocument = Schema.Struct({
-  verdict: DevReviewVerdict,
+export const AppReviewDocument = Schema.Struct({
+  verdict: AppReviewVerdict,
   summary: Schema.String,
   checks: Schema.Array(
     Schema.Struct({
       id: TrimmedNonEmptyString,
       label: TrimmedNonEmptyString,
-      status: DevReviewCheckStatus,
+      status: AppReviewCheckStatus,
       notes: Schema.String,
     }),
   ),
   findings: Schema.Array(
     Schema.Struct({
       id: TrimmedNonEmptyString,
-      severity: DevReviewFindingSeverity,
+      severity: AppReviewFindingSeverity,
       title: TrimmedNonEmptyString,
       details: Schema.String,
       reproduction: Schema.String,
@@ -222,10 +222,10 @@ export const DevReviewDocument = Schema.Struct({
   questions: Schema.Array(Schema.String),
   nextSteps: Schema.Array(Schema.String),
 });
-export type DevReviewDocument = typeof DevReviewDocument.Type;
+export type AppReviewDocument = typeof AppReviewDocument.Type;
 
-export const DevReviewRecordingEvidence = Schema.Struct({
-  status: DevReviewRecordingStatus,
+export const AppReviewRecordingEvidence = Schema.Struct({
+  status: AppReviewRecordingStatus,
   path: Schema.NullOr(TrimmedNonEmptyString),
   mimeType: Schema.NullOr(TrimmedNonEmptyString),
   sizeBytes: Schema.NullOr(NonNegativeInt),
@@ -233,29 +233,29 @@ export const DevReviewRecordingEvidence = Schema.Struct({
   completedAt: Schema.NullOr(IsoDateTime),
   error: Schema.NullOr(Schema.String),
 });
-export type DevReviewRecordingEvidence = typeof DevReviewRecordingEvidence.Type;
+export type AppReviewRecordingEvidence = typeof AppReviewRecordingEvidence.Type;
 
-export const DevReviewScreenshotEvidence = Schema.Struct({
+export const AppReviewScreenshotEvidence = Schema.Struct({
   id: TrimmedNonEmptyString,
   path: TrimmedNonEmptyString,
   mimeType: Schema.Literal("image/png"),
   caption: Schema.String,
   capturedAt: IsoDateTime,
 });
-export type DevReviewScreenshotEvidence = typeof DevReviewScreenshotEvidence.Type;
+export type AppReviewScreenshotEvidence = typeof AppReviewScreenshotEvidence.Type;
 
 /**
- * Browser evidence captured during a Dev Review: one screen recording plus a
+ * Browser evidence captured during an App Review: one screen recording plus a
  * captioned screenshot gallery (gallery order = array order; findings'
  * `evidenceIds` reference screenshot ids).
  */
-export const DevReviewEvidence = Schema.Struct({
-  recording: DevReviewRecordingEvidence,
-  screenshots: Schema.Array(DevReviewScreenshotEvidence),
+export const AppReviewEvidence = Schema.Struct({
+  recording: AppReviewRecordingEvidence,
+  screenshots: Schema.Array(AppReviewScreenshotEvidence),
 });
-export type DevReviewEvidence = typeof DevReviewEvidence.Type;
+export type AppReviewEvidence = typeof AppReviewEvidence.Type;
 
-export const hasCompleteDevReviewEvidence = (evidence: DevReviewEvidence): boolean =>
+export const hasCompleteAppReviewEvidence = (evidence: AppReviewEvidence): boolean =>
   evidence.recording.status === "saved" && evidence.screenshots.length > 0;
 
 /**
@@ -263,9 +263,9 @@ export const hasCompleteDevReviewEvidence = (evidence: DevReviewEvidence): boole
  * Every actionable finding stays traceable to a captured screenshot and the check matrix records
  * at least one actual failure, so orchestration can safely repair rather than retrying tooling.
  */
-export const hasScreenshotBackedDevReviewFailure = (
-  document: DevReviewDocument,
-  evidence: DevReviewEvidence,
+export const hasScreenshotBackedAppReviewFailure = (
+  document: AppReviewDocument,
+  evidence: AppReviewEvidence,
 ): boolean => {
   const screenshotIds = new Set(evidence.screenshots.map((screenshot) => screenshot.id));
   return (
@@ -278,9 +278,9 @@ export const hasScreenshotBackedDevReviewFailure = (
 };
 
 /** Evidence id used to mint asset URLs for the review's screen recording. */
-export const DEV_REVIEW_RECORDING_EVIDENCE_ID = "recording";
+export const APP_REVIEW_RECORDING_EVIDENCE_ID = "recording";
 
-export const EMPTY_DEV_REVIEW_EVIDENCE: DevReviewEvidence = {
+export const EMPTY_APP_REVIEW_EVIDENCE: AppReviewEvidence = {
   recording: {
     status: "not-started",
     path: null,
@@ -294,33 +294,33 @@ export const EMPTY_DEV_REVIEW_EVIDENCE: DevReviewEvidence = {
 };
 
 /**
- * The proposed plan a Dev Review anchors to when no Spec exists. Specs anchor
+ * The proposed plan an App Review anchors to when no Spec exists. Specs anchor
  * reviews through their planning tickets; fast-feature and plan-mode threads
  * only have a proposed plan, so the plan itself is the review's anchor node.
  */
-export const DevReviewSourceProposedPlan = Schema.Struct({
+export const AppReviewSourceProposedPlan = Schema.Struct({
   threadId: ThreadId,
   planId: TrimmedNonEmptyString,
 });
-export type DevReviewSourceProposedPlan = typeof DevReviewSourceProposedPlan.Type;
+export type AppReviewSourceProposedPlan = typeof AppReviewSourceProposedPlan.Type;
 
-export const DevReviewRecord = Schema.Struct({
-  id: DevReviewId,
+export const AppReviewRecord = Schema.Struct({
+  id: AppReviewId,
   sourceThreadId: ThreadId,
   reviewThreadId: ThreadId,
   planningTicketIds: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
-  sourceProposedPlan: Schema.optionalKey(DevReviewSourceProposedPlan),
+  sourceProposedPlan: Schema.optionalKey(AppReviewSourceProposedPlan),
   sourceTurnId: Schema.NullOr(TurnId),
-  status: DevReviewStatus,
-  document: DevReviewDocument,
-  evidence: DevReviewEvidence,
+  status: AppReviewStatus,
+  document: AppReviewDocument,
+  evidence: AppReviewEvidence,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
-export type DevReviewRecord = typeof DevReviewRecord.Type;
+export type AppReviewRecord = typeof AppReviewRecord.Type;
 
-export class DevReviewError extends Schema.TaggedErrorClass<DevReviewError>()("DevReviewError", {
-  reviewId: Schema.optional(DevReviewId),
+export class AppReviewError extends Schema.TaggedErrorClass<AppReviewError>()("AppReviewError", {
+  reviewId: Schema.optional(AppReviewId),
   message: TrimmedNonEmptyString,
   cause: Schema.optional(Schema.Defect()),
 }) {}

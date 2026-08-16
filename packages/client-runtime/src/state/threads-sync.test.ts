@@ -79,7 +79,7 @@ const BASE_THREAD: OrchestrationThread = {
   messages: [],
   proposedPlans: [],
   planningWorkflow: null,
-  devReviews: [],
+  appReviews: [],
   activities: [],
   checkpoints: [],
   session: null,

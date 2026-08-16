@@ -112,7 +112,7 @@ const BASE_THREAD: OrchestrationThread = {
   messages: [RECENT_MESSAGE],
   proposedPlans: [],
   planningWorkflow: null,
-  devReviews: [],
+  appReviews: [],
   activities: [],
   checkpoints: [checkpoint("turn-2", 2)],
   session: null,

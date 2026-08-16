@@ -1,8 +1,8 @@
-import type { AssetResource, DevReviewId } from "@t3tools/contracts";
+import type { AssetResource, AppReviewId } from "@t3tools/contracts";
 import {
   AssetAttachmentNotFoundError,
-  AssetDevReviewEvidenceNotFoundError,
-  AssetDevReviewEvidenceResolutionError,
+  AssetAppReviewEvidenceNotFoundError,
+  AssetAppReviewEvidenceResolutionError,
   AssetPreviewTypeValidationError,
   AssetProjectFaviconInspectionError,
   AssetProjectFaviconNotFoundError,
@@ -14,7 +14,7 @@ import {
   AssetWorkspacePathValidationError,
   AssetWorkspaceResolutionError,
   AssetWorkspaceRootNormalizationError,
-  DEV_REVIEW_RECORDING_EVIDENCE_ID,
+  APP_REVIEW_RECORDING_EVIDENCE_ID,
 } from "@t3tools/contracts";
 import {
   isWorkspaceImagePreviewPath,
@@ -44,7 +44,7 @@ import {
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { resolveAttachmentPathById } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
-import { ProjectionThreadDevReviewRepository } from "../persistence/Services/ProjectionThreadDevReviews.ts";
+import { ProjectionThreadAppReviewRepository } from "../persistence/Services/ProjectionThreadAppReviews.ts";
 import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 
@@ -97,7 +97,7 @@ const AssetClaimsSchema = Schema.Union([
   }),
   Schema.Struct({
     version: Schema.Literal(1),
-    kind: Schema.Literal("dev-review-evidence"),
+    kind: Schema.Literal("app-review-evidence"),
     reviewId: Schema.String,
     evidenceId: Schema.String,
     expiresAt: Schema.Number,
@@ -181,23 +181,23 @@ const resolveCanonicalWorkspaceFileForRequest = (input: {
   );
 
 /**
- * Resolve a Dev Review evidence file server-side from the review projection.
+ * Resolve an App Review evidence file server-side from the review projection.
  * The stored evidence path is authoritative — clients never supply paths — and
  * must sit under `stateDir/preview-artifacts`.
  */
-const resolveDevReviewEvidenceFile = Effect.fn("AssetAccess.resolveDevReviewEvidenceFile")(
+const resolveAppReviewEvidenceFile = Effect.fn("AssetAccess.resolveAppReviewEvidenceFile")(
   function* (input: { readonly reviewId: string; readonly evidenceId: string }) {
-    const repository = yield* ProjectionThreadDevReviewRepository;
+    const repository = yield* ProjectionThreadAppReviewRepository;
     const config = yield* ServerConfig.ServerConfig;
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
 
-    const review = yield* repository.getById({ reviewId: input.reviewId as DevReviewId });
+    const review = yield* repository.getById({ reviewId: input.reviewId as AppReviewId });
     if (Option.isNone(review)) return null;
 
     const evidence = review.value.evidence;
     const evidencePath =
-      input.evidenceId === DEV_REVIEW_RECORDING_EVIDENCE_ID
+      input.evidenceId === APP_REVIEW_RECORDING_EVIDENCE_ID
         ? evidence.recording.status === "saved"
           ? evidence.recording.path
           : null
@@ -418,26 +418,26 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       }
       break;
     }
-    case "dev-review-evidence": {
+    case "app-review-evidence": {
       const resource = input.resource;
-      const evidenceFile = yield* resolveDevReviewEvidenceFile({
+      const evidenceFile = yield* resolveAppReviewEvidenceFile({
         reviewId: resource.reviewId,
         evidenceId: resource.evidenceId,
       }).pipe(
         Effect.mapError(
           (cause) =>
-            new AssetDevReviewEvidenceResolutionError({
+            new AssetAppReviewEvidenceResolutionError({
               resource,
               cause,
             }),
         ),
       );
       if (!evidenceFile) {
-        return yield* new AssetDevReviewEvidenceNotFoundError({ resource });
+        return yield* new AssetAppReviewEvidenceNotFoundError({ resource });
       }
       claims = {
         version: 1,
-        kind: "dev-review-evidence",
+        kind: "app-review-evidence",
         reviewId: resource.reviewId,
         evidenceId: resource.evidenceId,
         expiresAt,
@@ -523,13 +523,13 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
     return faviconPath ? ({ kind: "file", path: faviconPath } satisfies ResolvedAsset) : null;
   }
 
-  if (claims.kind === "dev-review-evidence") {
-    const evidenceFile = yield* resolveDevReviewEvidenceFile({
+  if (claims.kind === "app-review-evidence") {
+    const evidenceFile = yield* resolveAppReviewEvidenceFile({
       reviewId: claims.reviewId,
       evidenceId: claims.evidenceId,
     }).pipe(
       Effect.tapError((cause) =>
-        Effect.logError("Failed to resolve Dev Review evidence asset.", {
+        Effect.logError("Failed to resolve App Review evidence asset.", {
           reviewId: claims.reviewId,
           evidenceId: claims.evidenceId,
           cause,

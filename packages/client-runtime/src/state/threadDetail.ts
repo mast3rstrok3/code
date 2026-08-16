@@ -7,7 +7,7 @@ import type {
   OrchestrationSession,
   OrchestrationThread,
   OrchestrationThreadActivity,
-  DevReviewRecord,
+  AppReviewRecord,
   ScopedThreadRef,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
@@ -22,7 +22,7 @@ import { THREAD_STATE_IDLE_TTL_MS } from "./threadRetention.ts";
 const EMPTY_MESSAGES: ReadonlyArray<OrchestrationMessage> = Object.freeze([]);
 const EMPTY_ACTIVITIES: ReadonlyArray<OrchestrationThreadActivity> = Object.freeze([]);
 const EMPTY_PROPOSED_PLANS: ReadonlyArray<OrchestrationProposedPlan> = Object.freeze([]);
-const EMPTY_DEV_REVIEWS: ReadonlyArray<DevReviewRecord> = Object.freeze([]);
+const EMPTY_APP_REVIEWS: ReadonlyArray<AppReviewRecord> = Object.freeze([]);
 const EMPTY_CHECKPOINTS: ReadonlyArray<OrchestrationCheckpointSummary> = Object.freeze([]);
 
 /**
@@ -163,13 +163,13 @@ export function createEnvironmentThreadDetailAtoms<E>(
     ),
   );
 
-  const threadDevReviewsAtomFamily = Atom.family((key: string) =>
+  const threadAppReviewsAtomFamily = Atom.family((key: string) =>
     Atom.make(
-      (get): ReadonlyArray<DevReviewRecord> =>
-        get(threadDetailAtomFamily(key))?.devReviews ?? EMPTY_DEV_REVIEWS,
+      (get): ReadonlyArray<AppReviewRecord> =>
+        get(threadDetailAtomFamily(key))?.appReviews ?? EMPTY_APP_REVIEWS,
     ).pipe(
       Atom.setIdleTTL(THREAD_STATE_IDLE_TTL_MS),
-      Atom.withLabel(`environment-thread-dev-reviews:${key}`),
+      Atom.withLabel(`environment-thread-app-reviews:${key}`),
     ),
   );
 
@@ -211,7 +211,7 @@ export function createEnvironmentThreadDetailAtoms<E>(
     proposedPlansAtom: (ref: ScopedThreadRef) => threadProposedPlansAtomFamily(threadKey(ref)),
     planningWorkflowAtom: (ref: ScopedThreadRef) =>
       threadPlanningWorkflowAtomFamily(threadKey(ref)),
-    devReviewsAtom: (ref: ScopedThreadRef) => threadDevReviewsAtomFamily(threadKey(ref)),
+    appReviewsAtom: (ref: ScopedThreadRef) => threadAppReviewsAtomFamily(threadKey(ref)),
     checkpointsAtom: (ref: ScopedThreadRef) => threadCheckpointsAtomFamily(threadKey(ref)),
     sessionAtom: (ref: ScopedThreadRef) => threadSessionAtomFamily(threadKey(ref)),
     latestTurnAtom: (ref: ScopedThreadRef) => threadLatestTurnAtomFamily(threadKey(ref)),

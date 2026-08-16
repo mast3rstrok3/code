@@ -1,8 +1,8 @@
 import {
-  type DevReviewDocument,
-  DevReviewWorkflowRunId,
-  type DevReviewWorkflowRun,
-  EMPTY_DEV_REVIEW_EVIDENCE,
+  type AppReviewDocument,
+  AppReviewWorkflowRunId,
+  type AppReviewWorkflowRun,
+  EMPTY_APP_REVIEW_EVIDENCE,
   EventId,
   IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
   MessageId,
@@ -48,7 +48,7 @@ import { isProductWorkflowPreset, isProductWorkflowRoot } from "@t3tools/shared/
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
-const EMPTY_DEV_REVIEW_DOCUMENT: DevReviewDocument = {
+const EMPTY_APP_REVIEW_DOCUMENT: AppReviewDocument = {
   verdict: "pending",
   summary: "",
   checks: [],
@@ -541,13 +541,13 @@ function buildImplementationRun(input: {
         .map((state) => state.ticketId),
       plannedWorkers,
       validationCommands,
-      finalDevReview: {
+      finalAppReview: {
         required: true,
         completionBlocking: true,
         appDevStackSource: "orchestrator-worktree",
         autoStartAppDevStack: true,
         browserMcpProfile: "agent-browser",
-        maxAttempts: IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
+        maxCycles: IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
       },
       createdAt: input.command.createdAt,
     },
@@ -579,21 +579,21 @@ function buildImplementationRun(input: {
       lastErrorMarkdown: null,
       checkedAt: "",
     },
-    devReviewIds: [],
-    devReviewStrategy: "nested-workflow",
-    devReviewWorkflowRunIds: [],
-    latestDevReviewWorkflowOutcome: null,
-    devReviewUnblockAttemptCount: 0,
-    devReviews: [],
-    devReviewedHeadSha: null,
-    activeDevReviewHeadSha: null,
-    activeDevReviewThreadId: null,
+    appReviewIds: [],
+    appReviewStrategy: "nested-workflow",
+    appReviewWorkflowRunIds: [],
+    latestAppReviewWorkflowOutcome: null,
+    appReviewUnblockAttemptCount: 0,
+    appReviews: [],
+    appReviewedHeadSha: null,
+    activeAppReviewHeadSha: null,
+    activeAppReviewThreadId: null,
     qaCycleCount: 0,
     qaAttemptCount: 0,
     qaExhaustedAt: null,
     qaExhaustionReason: null,
     lastQaFailure: null,
-    devReviewExhaustedAt: null,
+    appReviewExhaustedAt: null,
     codeReviewedHeadSha: null,
     activeCodeReviewHeadSha: null,
     activeCodeReviewThreadId: null,
@@ -2553,13 +2553,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           initialReadyTicketIds: [],
           plannedWorkers: [],
           validationCommands,
-          finalDevReview: {
+          finalAppReview: {
             required: true,
             completionBlocking: true,
             appDevStackSource: "orchestrator-worktree",
             autoStartAppDevStack: true,
             browserMcpProfile: "agent-browser",
-            maxAttempts: IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
+            maxCycles: IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
           },
           createdAt: command.createdAt,
         },
@@ -2591,21 +2591,21 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           lastErrorMarkdown: null,
           checkedAt: "",
         },
-        devReviewIds: [],
-        devReviewStrategy: "nested-workflow",
-        devReviewWorkflowRunIds: [],
-        latestDevReviewWorkflowOutcome: null,
-        devReviewUnblockAttemptCount: 0,
-        devReviews: [],
-        devReviewedHeadSha: null,
-        activeDevReviewHeadSha: null,
-        activeDevReviewThreadId: null,
+        appReviewIds: [],
+        appReviewStrategy: "nested-workflow",
+        appReviewWorkflowRunIds: [],
+        latestAppReviewWorkflowOutcome: null,
+        appReviewUnblockAttemptCount: 0,
+        appReviews: [],
+        appReviewedHeadSha: null,
+        activeAppReviewHeadSha: null,
+        activeAppReviewThreadId: null,
         qaCycleCount: 0,
         qaAttemptCount: 0,
         qaExhaustedAt: null,
         qaExhaustionReason: null,
         lastQaFailure: null,
-        devReviewExhaustedAt: null,
+        appReviewExhaustedAt: null,
         codeReviewedHeadSha: null,
         activeCodeReviewHeadSha: null,
         activeCodeReviewThreadId: null,
@@ -2914,7 +2914,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
-    case "thread.dev-review-workflow.launch": {
+    case "thread.app-review-workflow.launch": {
       const targetThread = yield* requireThread({
         readModel,
         command,
@@ -2927,7 +2927,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       if (targetPath === null) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: "Dev Review requires a prepared worktree.",
+          detail: "App Review requires a prepared worktree.",
         });
       }
       const canonicalTargetPath = normalizeProjectPathForComparison(targetPath);
@@ -2941,7 +2941,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       ) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: "Standalone Dev Review requires the source turn to be settled.",
+          detail: "Standalone App Review requires the source turn to be settled.",
         });
       }
       if (
@@ -2950,7 +2950,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       ) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: "Standalone Dev Review caller must reference the target thread.",
+          detail: "Standalone App Review caller must reference the target thread.",
         });
       }
       if (command.caller.type === "implementation") {
@@ -2965,11 +2965,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         ) {
           return yield* new OrchestrationCommandInvariantError({
             commandType: command.type,
-            detail: "Embedded Dev Review caller does not match an Implementation orchestrator.",
+            detail: "Embedded App Review caller does not match an Implementation orchestrator.",
           });
         }
       }
-      const duplicate = (readModel.devReviewWorkflowRuns ?? []).find((run) => {
+      const duplicate = (readModel.appReviewWorkflowRuns ?? []).find((run) => {
         if (run.status !== "running") return false;
         const runTarget = readModel.threads.find((thread) => thread.id === run.targetThreadId);
         if (runTarget === undefined) return false;
@@ -2982,7 +2982,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       if (duplicate !== undefined) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Dev Review Workflow '${duplicate.id}' already owns this worktree.`,
+          detail: `App Review Workflow '${duplicate.id}' already owns this worktree.`,
         });
       }
       if (command.controllerThreadId !== command.targetThreadId) {
@@ -2992,10 +2992,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.controllerThreadId,
         });
       }
-      const runId = DevReviewWorkflowRunId.make(
-        `dev-review-workflow-${command.controllerThreadId}`,
+      const runId = AppReviewWorkflowRunId.make(
+        `app-review-workflow-${command.controllerThreadId}`,
       );
-      const run: DevReviewWorkflowRun = {
+      const run: AppReviewWorkflowRun = {
         id: runId,
         targetThreadId: command.targetThreadId,
         controllerThreadId: command.controllerThreadId,
@@ -3004,7 +3004,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         supportingContextMarkdown: command.supportingContextMarkdown ?? null,
         previewTargets: command.previewTargets,
         cycleBudget: command.cycleBudget,
-        attemptsUsed: 0,
+        cyclesUsed: 0,
         status: "running",
         cycles: [],
         activePhase: null,
@@ -3038,15 +3038,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
                 projectId: targetThread.projectId,
                 ownerUserId: targetThread.ownerUserId,
                 parentThreadId: targetThread.id,
-                workflowRole: "dev-review-orchestrator",
+                workflowRole: "app-review-orchestrator",
                 workflowContext: {
                   workflowId: WorkflowId.make(runId),
                   parentWorkflowId: targetThread.workflowContext?.workflowId ?? null,
                   rootThreadId: targetThread.workflowContext?.rootThreadId ?? targetThread.id,
                   ticketScope: targetThread.workflowContext?.ticketScope ?? [],
                 },
-                workflowPreset: "dev-review",
-                title: "Dev Review",
+                workflowPreset: "app-review",
+                title: "App Review",
                 modelSelection: command.modelSelection,
                 runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
                 interactionMode: "default",
@@ -3064,21 +3064,21 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           commandId: command.commandId,
         })),
         ...(controllerCreated === null ? {} : { causationEventId: controllerCreated.eventId }),
-        type: "thread.dev-review-workflow-launched",
+        type: "thread.app-review-workflow-launched",
         payload: { sourceThreadId: command.targetThreadId, run },
       } satisfies Omit<OrchestrationEvent, "sequence">;
       return controllerCreated === null ? launched : [controllerCreated, launched];
     }
 
-    case "thread.dev-review-workflow.update": {
+    case "thread.app-review-workflow.update": {
       yield* requireThread({ readModel, command, threadId: command.threadId });
-      const existing = (readModel.devReviewWorkflowRuns ?? []).find(
+      const existing = (readModel.appReviewWorkflowRuns ?? []).find(
         (run) => run.id === command.run.id,
       );
       if (existing === undefined || existing.controllerThreadId !== command.threadId) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Dev Review Workflow '${command.run.id}' does not belong to this controller.`,
+          detail: `App Review Workflow '${command.run.id}' does not belong to this controller.`,
         });
       }
       return {
@@ -3088,23 +3088,23 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           occurredAt: command.createdAt,
           commandId: command.commandId,
         })),
-        type: "thread.dev-review-workflow-updated",
+        type: "thread.app-review-workflow-updated",
         payload: { sourceThreadId: existing.targetThreadId, run: command.run },
       };
     }
 
-    case "thread.dev-review-workflow.cancel": {
+    case "thread.app-review-workflow.cancel": {
       yield* requireThread({ readModel, command, threadId: command.threadId });
-      const existing = (readModel.devReviewWorkflowRuns ?? []).find(
+      const existing = (readModel.appReviewWorkflowRuns ?? []).find(
         (run) => run.id === command.runId,
       );
       if (existing === undefined || existing.status !== "running") {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Dev Review Workflow '${command.runId}' is not active.`,
+          detail: `App Review Workflow '${command.runId}' is not active.`,
         });
       }
-      const run: DevReviewWorkflowRun = {
+      const run: AppReviewWorkflowRun = {
         ...existing,
         status: "canceled",
         outcome: "canceled",
@@ -3125,7 +3125,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           occurredAt: command.createdAt,
           commandId: command.commandId,
         })),
-        type: "thread.dev-review-workflow-cancel-requested",
+        type: "thread.app-review-workflow-cancel-requested",
         payload: {
           sourceThreadId: existing.targetThreadId,
           run,
@@ -3134,9 +3134,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
-    case "thread.dev-review-workflow.resume": {
+    case "thread.app-review-workflow.resume": {
       yield* requireThread({ readModel, command, threadId: command.threadId });
-      const existing = (readModel.devReviewWorkflowRuns ?? []).find(
+      const existing = (readModel.appReviewWorkflowRuns ?? []).find(
         (run) => run.id === command.runId,
       );
       if (
@@ -3147,10 +3147,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       ) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Dev Review Workflow '${command.runId}' is not waiting for an embedded preview refresh.`,
+          detail: `App Review Workflow '${command.runId}' is not waiting for an embedded preview refresh.`,
         });
       }
-      const run: DevReviewWorkflowRun = {
+      const run: AppReviewWorkflowRun = {
         ...existing,
         previewTargets: command.previewTargets,
         workspaceRevision: command.workspaceRevision,
@@ -3164,12 +3164,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           occurredAt: command.createdAt,
           commandId: command.commandId,
         })),
-        type: "thread.dev-review-workflow-resume-requested",
+        type: "thread.app-review-workflow-resume-requested",
         payload: { sourceThreadId: existing.targetThreadId, run },
       };
     }
 
-    case "thread.dev-review.launch": {
+    case "thread.app-review.launch": {
       const sourceThread = yield* requireThread({
         readModel,
         command,
@@ -3181,12 +3181,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadId: command.reviewThreadId,
       });
       const existingReview = readModel.threads.some((thread) =>
-        thread.devReviews.some((review) => review.id === command.reviewId),
+        thread.appReviews.some((review) => review.id === command.reviewId),
       );
       if (existingReview) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Dev Review '${command.reviewId}' already exists and cannot be created twice.`,
+          detail: `App Review '${command.reviewId}' already exists and cannot be created twice.`,
         });
       }
 
@@ -3211,7 +3211,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const planningTicketIds =
         command.planningTicketIds ??
         (inheritedTicketScope.length > 0 ? inheritedTicketScope : workflowTicketScope);
-      // A Dev Review anchors to the Spec through its planning tickets. When
+      // An App Review anchors to the Spec through its planning tickets. When
       // the source has no Spec — fast-feature runs and plan-mode threads —
       // the proposed plan itself is the review's anchor node.
       const runProposedPlan =
@@ -3235,8 +3235,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         ...(sourceProposedPlan === null ? {} : { sourceProposedPlan }),
         sourceTurnId: sourceThread.latestTurn?.turnId ?? null,
         status: "running" as const,
-        document: EMPTY_DEV_REVIEW_DOCUMENT,
-        evidence: EMPTY_DEV_REVIEW_EVIDENCE,
+        document: EMPTY_APP_REVIEW_DOCUMENT,
+        evidence: EMPTY_APP_REVIEW_EVIDENCE,
         createdAt: command.createdAt,
         updatedAt: command.createdAt,
       };
@@ -3254,9 +3254,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ownerUserId: sourceThread.ownerUserId,
           parentThreadId: sourceThread.id,
           workflowRole:
-            sourceThread.workflowRole === "dev-review-orchestrator" ||
-            sourceThread.workflowPreset === "dev-review"
-              ? "dev-review-reviewer"
+            sourceThread.workflowRole === "app-review-orchestrator" ||
+            sourceThread.workflowPreset === "app-review"
+              ? "app-review-reviewer"
               : "implementation-qa-reviewer",
           workflowContext:
             sourceThread.workflowContext == null
@@ -3265,12 +3265,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.batchProvenance !== undefined
             ? { workflowSubagentBatchProvenance: command.batchProvenance }
             : {}),
-          title: "Browser Dev Review",
+          title: "Browser App Review",
           modelSelection: command.modelSelection,
           runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
           interactionMode:
-            sourceThread.workflowRole === "dev-review-orchestrator" ||
-            sourceThread.workflowPreset === "dev-review"
+            sourceThread.workflowRole === "app-review-orchestrator" ||
+            sourceThread.workflowPreset === "app-review"
               ? "default"
               : "implementation-workflow",
           branch: sourceThread.branch,
@@ -3287,10 +3287,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           commandId: command.commandId,
         })),
         causationEventId: threadCreatedEvent.eventId,
-        type: "thread.dev-review-created",
+        type: "thread.app-review-created",
         payload: {
           threadId: command.sourceThreadId,
-          devReview: reviewRecord,
+          appReview: reviewRecord,
         },
       };
       const userMessageEvent: Omit<OrchestrationEvent, "sequence"> = {
@@ -3327,11 +3327,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.reviewThreadId,
           messageId: command.message.messageId,
           modelSelection: command.modelSelection,
-          titleSeed: "Browser Dev Review",
+          titleSeed: "Browser App Review",
           runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
           interactionMode:
-            sourceThread.workflowRole === "dev-review-orchestrator" ||
-            sourceThread.workflowPreset === "dev-review"
+            sourceThread.workflowRole === "app-review-orchestrator" ||
+            sourceThread.workflowPreset === "app-review"
               ? "default"
               : "implementation-workflow",
           workflowPromptId: command.workflowPromptId,
@@ -3350,7 +3350,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       if (!batch || !child || child.status !== "pending") {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: "Browser Dev Review batch child is missing or is not pending.",
+          detail: "Browser App Review batch child is missing or is not pending.",
         });
       }
       const childUpdatedEvent: Omit<OrchestrationEvent, "sequence"> = {
@@ -3370,7 +3370,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ...child,
             status: "running",
             childThreadId: command.reviewThreadId,
-            devReviewId: command.reviewId,
+            appReviewId: command.reviewId,
           },
         },
       };
@@ -3649,7 +3649,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const targetPath = targetThread.worktreePath ?? targetProject?.workspaceRoot ?? null;
       const canonicalTargetPath =
         targetPath === null ? null : normalizeProjectPathForComparison(targetPath);
-      const worktreeOwner = (readModel.devReviewWorkflowRuns ?? []).find((run) => {
+      const worktreeOwner = (readModel.appReviewWorkflowRuns ?? []).find((run) => {
         if (run.status !== "running") return false;
         const runTarget = readModel.threads.find((thread) => thread.id === run.targetThreadId);
         if (runTarget === undefined) return false;
@@ -3664,7 +3664,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       if (worktreeOwner !== undefined && !command.commandId.startsWith("server:")) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Dev Review Workflow '${worktreeOwner.id}' currently owns this worktree.`,
+          detail: `App Review Workflow '${worktreeOwner.id}' currently owns this worktree.`,
         });
       }
       const sourceProposedPlan = command.sourceProposedPlan;
@@ -4143,23 +4143,23 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       return [unsettledEvent, activityAppendedEvent];
     }
 
-    case "thread.dev-review.update": {
+    case "thread.app-review.update": {
       const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
-      const review = thread.devReviews.find((entry) => entry.id === command.reviewId);
+      const review = thread.appReviews.find((entry) => entry.id === command.reviewId);
       if (!review) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Dev Review '${command.reviewId}' does not exist on thread '${command.threadId}'.`,
+          detail: `App Review '${command.reviewId}' does not exist on thread '${command.threadId}'.`,
         });
       }
       if (command.status === undefined && command.document === undefined) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: "Dev Review update must include status or document.",
+          detail: "App Review update must include status or document.",
         });
       }
       return {
@@ -4169,7 +4169,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           occurredAt: command.createdAt,
           commandId: command.commandId,
         })),
-        type: "thread.dev-review-updated",
+        type: "thread.app-review-updated",
         payload: {
           threadId: command.threadId,
           reviewId: command.reviewId,
@@ -4182,17 +4182,17 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
-    case "thread.dev-review.evidence.update": {
+    case "thread.app-review.evidence.update": {
       const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
-      const review = thread.devReviews.find((entry) => entry.id === command.reviewId);
+      const review = thread.appReviews.find((entry) => entry.id === command.reviewId);
       if (!review) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Dev Review '${command.reviewId}' does not exist on thread '${command.threadId}'.`,
+          detail: `App Review '${command.reviewId}' does not exist on thread '${command.threadId}'.`,
         });
       }
       return {
@@ -4202,7 +4202,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           occurredAt: command.createdAt,
           commandId: command.commandId,
         })),
-        type: "thread.dev-review-evidence-updated",
+        type: "thread.app-review-evidence-updated",
         payload: {
           threadId: command.threadId,
           reviewId: command.reviewId,

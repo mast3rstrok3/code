@@ -3,7 +3,7 @@ import { expect, it } from "@effect/vitest";
 import {
   CommandId,
   DEFAULT_WORKSPACE_USER_ID,
-  DevReviewWorkflowCycleBudget,
+  AppReviewWorkflowCycleBudget,
   EventId,
   ProjectId,
   ProviderInstanceId,
@@ -17,7 +17,7 @@ import { decideOrchestrationCommand } from "./decider.ts";
 import { projectEvent } from "./projector.ts";
 
 const now = "2026-01-01T00:00:00.000Z";
-const projectId = ProjectId.make("project-dev-review");
+const projectId = ProjectId.make("project-app-review");
 const sourceThreadId = ThreadId.make("thread-source");
 
 function thread(
@@ -47,7 +47,7 @@ function thread(
     messages: [],
     proposedPlans: [],
     planningWorkflow: null,
-    devReviews: [],
+    appReviews: [],
     activities: [],
     checkpoints: [],
     session: null,
@@ -61,8 +61,8 @@ function readModel(): OrchestrationReadModel {
     projects: [
       {
         id: projectId,
-        title: "Dev Review",
-        workspaceRoot: "/tmp/dev-review",
+        title: "App Review",
+        workspaceRoot: "/tmp/app-review",
         repositoryIdentity: null,
         defaultModelSelection: null,
         defaultThreadEnvMode: null,
@@ -72,16 +72,16 @@ function readModel(): OrchestrationReadModel {
         deletedAt: null,
       },
     ],
-    threads: [thread(sourceThreadId, "/tmp/dev-review-worktree")],
+    threads: [thread(sourceThreadId, "/tmp/app-review-worktree")],
     implementationRuns: [],
-    devReviewWorkflowRuns: [],
+    appReviewWorkflowRuns: [],
     updatedAt: now,
   };
 }
 
 function launchCommand(controllerThreadId: ThreadId, targetThreadId = sourceThreadId) {
   return {
-    type: "thread.dev-review-workflow.launch" as const,
+    type: "thread.app-review-workflow.launch" as const,
     commandId: CommandId.make(`cmd-${controllerThreadId}`),
     targetThreadId,
     controllerThreadId,
@@ -89,13 +89,13 @@ function launchCommand(controllerThreadId: ThreadId, targetThreadId = sourceThre
     briefMarkdown: "Review checkout.",
     supportingContextMarkdown: null,
     previewTargets: ["http://localhost:3000"],
-    cycleBudget: DevReviewWorkflowCycleBudget.make(10),
+    cycleBudget: AppReviewWorkflowCycleBudget.make(10),
     modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.6" },
     createdAt: now,
   };
 }
 
-it.layer(NodeServices.layer)("Dev Review workflow decider", (it) => {
+it.layer(NodeServices.layer)("App Review workflow decider", (it) => {
   it.effect("creates one persistent controller and a distinct workflow run", () =>
     Effect.gen(function* () {
       const controllerThreadId = ThreadId.make("thread-controller");
@@ -106,14 +106,14 @@ it.layer(NodeServices.layer)("Dev Review workflow decider", (it) => {
       const events = Array.isArray(decided) ? decided : [decided];
       expect(events.map((event) => event.type)).toEqual([
         "thread.created",
-        "thread.dev-review-workflow-launched",
+        "thread.app-review-workflow-launched",
       ]);
       const launched = events[1];
-      if (launched?.type !== "thread.dev-review-workflow-launched") return;
+      if (launched?.type !== "thread.app-review-workflow-launched") return;
       expect(launched.payload.run.controllerThreadId).toBe(controllerThreadId);
       expect(launched.payload.run.activePhase).toBeNull();
-      expect(launched.payload.run.attemptsUsed).toBe(0);
-      expect(launched.payload.run.id).toBe(`dev-review-workflow-${controllerThreadId}`);
+      expect(launched.payload.run.cyclesUsed).toBe(0);
+      expect(launched.payload.run.id).toBe(`app-review-workflow-${controllerThreadId}`);
     }),
   );
 
@@ -132,7 +132,7 @@ it.layer(NodeServices.layer)("Dev Review workflow decider", (it) => {
       const equivalentTarget = ThreadId.make("thread-equivalent-target");
       projected = {
         ...projected,
-        threads: [...projected.threads, thread(equivalentTarget, "/tmp/dev-review-worktree/")],
+        threads: [...projected.threads, thread(equivalentTarget, "/tmp/app-review-worktree/")],
       };
       const duplicate = yield* Effect.exit(
         decideOrchestrationCommand({
@@ -149,7 +149,7 @@ it.layer(NodeServices.layer)("Dev Review workflow decider", (it) => {
       const model: OrchestrationReadModel = {
         ...readModel(),
         threads: [
-          thread(sourceThreadId, "/tmp/dev-review-worktree", {
+          thread(sourceThreadId, "/tmp/app-review-worktree", {
             activities: [
               {
                 id: EventId.make("activity-user-input"),

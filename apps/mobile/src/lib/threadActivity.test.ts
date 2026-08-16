@@ -153,7 +153,7 @@ function makeThread(
     parentThreadId: input.parentThreadId ?? null,
     workflowRole: input.workflowRole ?? null,
     planningWorkflow: input.planningWorkflow ?? null,
-    devReviews: input.devReviews ?? [],
+    appReviews: input.appReviews ?? [],
     settledOverride: input.settledOverride ?? null,
     settledAt: input.settledAt ?? null,
   };

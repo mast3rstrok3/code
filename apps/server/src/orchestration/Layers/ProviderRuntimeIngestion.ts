@@ -19,7 +19,7 @@ import {
   type OrchestrationThread,
   type OrchestrationThreadActivity,
   type ProviderRuntimeEvent,
-  DevReviewId,
+  AppReviewId,
   WorkflowSubagentBatchId,
 } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
@@ -136,7 +136,7 @@ type IngestionDomainEvent = Extract<
     type:
       | "thread.turn-start-requested"
       | "thread.workflow-subagent-batch-child-updated"
-      | "thread.dev-review-updated";
+      | "thread.app-review-updated";
   }
 >;
 
@@ -957,7 +957,7 @@ const make = Effect.gen(function* () {
   const workflowChildMessageId = (batchId: WorkflowSubagentBatchId, childIndex: number) =>
     MessageId.make(`workflow-child-message:${batchId}:${childIndex}`);
   const workflowChildReviewId = (batchId: WorkflowSubagentBatchId, childIndex: number) =>
-    DevReviewId.make(`workflow-child-review:${batchId}:${childIndex}`);
+    AppReviewId.make(`workflow-child-review:${batchId}:${childIndex}`);
   const workflowCommandId = (batchId: WorkflowSubagentBatchId, tag: string, childIndex?: number) =>
     CommandId.make(`workflow:${batchId}:${tag}${childIndex === undefined ? "" : `:${childIndex}`}`);
 
@@ -1058,7 +1058,7 @@ const make = Effect.gen(function* () {
           `## ${child.index + 1}. ${child.title}`,
           `- Status: ${child.status}`,
           `- Source thread: ${child.childThreadId ?? "not created"}`,
-          ...(child.devReviewId === null ? [] : [`- Dev Review: ${child.devReviewId}`]),
+          ...(child.appReviewId === null ? [] : [`- App Review: ${child.appReviewId}`]),
           "",
           child.resultMarkdown ?? child.failureDetail ?? "No result detail was provided.",
           "",
@@ -1092,20 +1092,20 @@ const make = Effect.gen(function* () {
       );
   });
 
-  const completeFullDevReviewBatchChild = Effect.fn(
-    "ProviderRuntimeIngestion.completeFullDevReviewBatchChild",
-  )(function* (reviewId: DevReviewId, completedAt: string) {
+  const completeFullAppReviewBatchChild = Effect.fn(
+    "ProviderRuntimeIngestion.completeFullAppReviewBatchChild",
+  )(function* (reviewId: AppReviewId, completedAt: string) {
     const snapshot = yield* projectionSnapshotQuery.getCommandReadModel();
     const parent = snapshot.threads.find((thread) =>
       thread.workflowSubagentBatches?.some((batch) =>
-        batch.children.some((child) => child.devReviewId === reviewId),
+        batch.children.some((child) => child.appReviewId === reviewId),
       ),
     );
     const batch = parent?.workflowSubagentBatches?.find((entry) =>
-      entry.children.some((child) => child.devReviewId === reviewId),
+      entry.children.some((child) => child.appReviewId === reviewId),
     );
-    const child = batch?.children.find((entry) => entry.devReviewId === reviewId);
-    const review = parent?.devReviews.find((entry) => entry.id === reviewId);
+    const child = batch?.children.find((entry) => entry.appReviewId === reviewId);
+    const review = parent?.appReviews.find((entry) => entry.id === reviewId);
     if (
       !parent ||
       !batch ||
@@ -1131,7 +1131,7 @@ const make = Effect.gen(function* () {
       .join("\n\n");
     yield* orchestrationEngine.dispatch({
       type: "thread.workflow-subagent-batch.child.complete",
-      commandId: workflowCommandId(batch.id, `dev-review:${review.id}`, child.index),
+      commandId: workflowCommandId(batch.id, `app-review:${review.id}`, child.index),
       threadId: parent.id,
       batchId: batch.id,
       childIndex: child.index,
@@ -1157,16 +1157,16 @@ const make = Effect.gen(function* () {
     const child = batch?.children.find((entry) => entry.index === provenance.childIndex);
     if (!parent || !batch || !child || child.status !== "running") return;
 
-    if (child.devReviewMode === "full" && child.devReviewId !== null) {
-      const review = parent.devReviews.find((entry) => entry.id === child.devReviewId);
+    if (child.appReviewMode === "full" && child.appReviewId !== null) {
+      const review = parent.appReviews.find((entry) => entry.id === child.appReviewId);
       if (review && ["passed", "failed", "blocked"].includes(review.status)) {
-        yield* completeFullDevReviewBatchChild(review.id, completedAt);
+        yield* completeFullAppReviewBatchChild(review.id, completedAt);
         return;
       }
       if (review) {
         yield* orchestrationEngine.dispatch({
-          type: "thread.dev-review.update",
-          commandId: workflowCommandId(batch.id, "dev-review-missing-evidence", child.index),
+          type: "thread.app-review.update",
+          commandId: workflowCommandId(batch.id, "app-review-missing-evidence", child.index),
           threadId: parent.id,
           reviewId: review.id,
           status: "blocked",
@@ -1175,7 +1175,7 @@ const make = Effect.gen(function* () {
             verdict: "blocked",
             summary:
               review.document.summary ||
-              "Full Browser Dev Review ended without the required terminal evidence.",
+              "Full Browser App Review ended without the required terminal evidence.",
           },
           updatedAt: completedAt,
           createdAt: completedAt,
@@ -1196,8 +1196,8 @@ const make = Effect.gen(function* () {
     });
   });
 
-  const settleCanonicalDevReviewAfterTermination = Effect.fn(
-    "ProviderRuntimeIngestion.settleCanonicalDevReviewAfterTermination",
+  const settleCanonicalAppReviewAfterTermination = Effect.fn(
+    "ProviderRuntimeIngestion.settleCanonicalAppReviewAfterTermination",
   )(function* (input: {
     readonly event: ProviderRuntimeEvent;
     readonly thread: OrchestrationThreadShell;
@@ -1213,12 +1213,12 @@ const make = Effect.gen(function* () {
       resolveThreadDetail(input.thread.id),
       resolveThreadDetail(input.thread.parentThreadId),
     ]);
-    const canonical = parent?.devReviews.find(
+    const canonical = parent?.appReviews.find(
       (review) => review.reviewThreadId === input.thread.id && review.status === "running",
     );
     if (reviewer === undefined || parent === undefined || canonical === undefined) return;
 
-    const nestedTerminal = [...reviewer.devReviews]
+    const nestedTerminal = [...reviewer.appReviews]
       .filter(
         (review) =>
           review.status === "passed" || review.status === "failed" || review.status === "blocked",
@@ -1226,7 +1226,7 @@ const make = Effect.gen(function* () {
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
     if (nestedTerminal !== undefined) {
       yield* orchestrationEngine.dispatch({
-        type: "thread.dev-review.evidence.update",
+        type: "thread.app-review.evidence.update",
         commandId: yield* providerCommandId(input.event, "canonical-review-adopt-evidence"),
         threadId: parent.id,
         reviewId: canonical.id,
@@ -1236,7 +1236,7 @@ const make = Effect.gen(function* () {
       });
     }
     yield* orchestrationEngine.dispatch({
-      type: "thread.dev-review.update",
+      type: "thread.app-review.update",
       commandId: yield* providerCommandId(input.event, "canonical-review-settle"),
       threadId: parent.id,
       reviewId: canonical.id,
@@ -1246,7 +1246,7 @@ const make = Effect.gen(function* () {
         verdict: "blocked",
         summary:
           canonical.document.summary ||
-          "Browser Dev Review agent completed without terminally updating its canonical review.",
+          "Browser App Review agent completed without terminally updating its canonical review.",
       },
       updatedAt: input.completedAt,
       createdAt: input.completedAt,
@@ -1634,10 +1634,10 @@ const make = Effect.gen(function* () {
     const persistedChildren = input.children.map((child, index) => {
       const definition = resolveWorkflowSubagentSpawnDefinition(child.workflowPromptId);
       const isBrowser =
-        child.workflowPromptId === WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex;
-      const devReviewMode = isBrowser ? (child.devReviewMode ?? "feedback") : null;
+        child.workflowPromptId === WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex;
+      const appReviewMode = isBrowser ? (child.appReviewMode ?? "feedback") : null;
       const expectedResult =
-        isBrowser && devReviewMode === "feedback"
+        isBrowser && appReviewMode === "feedback"
           ? "workflow-subagent-result"
           : (child.expectedResult ?? definition?.expectedResult ?? "workflow-subagent-result");
       return {
@@ -1645,9 +1645,9 @@ const make = Effect.gen(function* () {
         workflowPromptId: child.workflowPromptId,
         title: child.title,
         expectedResult,
-        devReviewMode,
+        appReviewMode,
         childThreadId: null,
-        devReviewId: null,
+        appReviewId: null,
         status: "pending" as const,
         resultMarkdown: null,
         failureDetail: null,
@@ -1696,11 +1696,11 @@ const make = Effect.gen(function* () {
             return;
           }
           if (
-            child.workflowPromptId === WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex &&
+            child.workflowPromptId === WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex &&
             productWorkflowOwnsBrowserReview
           ) {
             yield* reject(
-              `The selected ${input.thread.workflowPreset === "fast-feature" ? "Fast Feature" : "Full Feature"} workflow owns Product Grill, Planning, Build, Dev Review, Code Review, and change-request sequencing. Continue or recover that workflow instead of launching an ad hoc Browser Dev Review child.`,
+              `The selected ${input.thread.workflowPreset === "fast-feature" ? "Fast Feature" : "Full Feature"} workflow owns Product Grill, Planning, Build, App Review, Code Review, and change-request sequencing. Continue or recover that workflow instead of launching an ad hoc Browser App Review child.`,
             );
             return;
           }
@@ -1752,11 +1752,11 @@ const make = Effect.gen(function* () {
 
           if (
             definition.workflowPromptId ===
-              WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex &&
-            persistedChild.devReviewMode === "full"
+              WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex &&
+            persistedChild.appReviewMode === "full"
           ) {
             yield* orchestrationEngine.dispatch({
-              type: "thread.dev-review.launch",
+              type: "thread.app-review.launch",
               commandId: workflowCommandId(batchId, "full-review-launch", index),
               sourceThreadId: input.thread.id,
               reviewThreadId: childThreadId,
@@ -1766,7 +1766,7 @@ const make = Effect.gen(function* () {
                 role: "user",
                 text: appendWorkflowSkillCommandSection(
                   [
-                    `Run Browser Dev Review (full durable mode) for source thread ${input.thread.id}.`,
+                    `Run Browser App Review (full durable mode) for source thread ${input.thread.id}.`,
                     `Source title: ${input.thread.title}`,
                     `Review request:\n${child.promptMarkdown}`,
                   ].join("\n\n"),
@@ -1803,8 +1803,8 @@ const make = Effect.gen(function* () {
               messageId: childMessageId,
               role: "user",
               text:
-                persistedChild.devReviewMode === "feedback"
-                  ? `${childPrompt}\n\nThis is focused feedback mode. Use preview_* tools only, open previews with show: false, do not call dev_review_* tools, and finish with exactly one fenced JSON directive shaped as { "type": "workflow-subagent-result", "status": "completed" | "blocked", "resultMarkdown": "concise findings, reproduction steps, blockers, and recommendations" }. Recording and screenshots are not required.`
+                persistedChild.appReviewMode === "feedback"
+                  ? `${childPrompt}\n\nThis is focused feedback mode. Use preview_* tools only, open previews with show: false, do not call app_review_* tools, and finish with exactly one fenced JSON directive shaped as { "type": "workflow-subagent-result", "status": "completed" | "blocked", "resultMarkdown": "concise findings, reproduction steps, blockers, and recommendations" }. Recording and screenshots are not required.`
                   : childPrompt,
               attachments: [],
             },
@@ -2320,10 +2320,10 @@ const make = Effect.gen(function* () {
           return;
         }
 
-        case "dev-review-fix-result": {
-          if (thread.workflowRole !== "dev-review-fixer") {
+        case "app-review-fix-result": {
+          if (thread.workflowRole !== "app-review-fixer") {
             yield* Effect.logWarning(
-              "provider Dev Review fix result ignored for non-fixer thread",
+              "provider App Review fix result ignored for non-fixer thread",
               {
                 directiveType: input.directive.type,
                 threadId: thread.id,
@@ -2335,13 +2335,13 @@ const make = Effect.gen(function* () {
 
           yield* orchestrationEngine.dispatch({
             type: "thread.activity.append",
-            commandId: yield* providerCommandId(input.event, "dev-review-fix-result"),
+            commandId: yield* providerCommandId(input.event, "app-review-fix-result"),
             threadId: thread.id,
             activity: {
               id: EventId.make(yield* crypto.randomUUIDv4),
               tone: input.directive.status === "succeeded" ? "info" : "error",
-              kind: "dev-review-fix-result",
-              summary: `Dev Review fix ${input.directive.status}`,
+              kind: "app-review-fix-result",
+              summary: `App Review fix ${input.directive.status}`,
               payload: input.directive,
               turnId: null,
               createdAt: input.createdAt,
@@ -2547,8 +2547,8 @@ const make = Effect.gen(function* () {
     });
   });
 
-  const consumeDevReviewFixerFailure = Effect.fn(
-    "ProviderRuntimeIngestion.consumeDevReviewFixerFailure",
+  const consumeAppReviewFixerFailure = Effect.fn(
+    "ProviderRuntimeIngestion.consumeAppReviewFixerFailure",
   )(function* (input: {
     readonly event: ProviderRuntimeEvent;
     readonly threadId: ThreadId;
@@ -2558,9 +2558,9 @@ const make = Effect.gen(function* () {
     readonly dedupeScope?: string;
   }) {
     const thread = yield* resolveThreadDetail(input.threadId);
-    if (thread?.workflowRole !== "dev-review-fixer") return;
+    if (thread?.workflowRole !== "app-review-fixer") return;
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
-    const run = (readModel.devReviewWorkflowRuns ?? []).find(
+    const run = (readModel.appReviewWorkflowRuns ?? []).find(
       (candidate) =>
         candidate.status === "running" &&
         candidate.activePhase === "fixing" &&
@@ -2568,21 +2568,21 @@ const make = Effect.gen(function* () {
     );
     const cycle = run?.cycles.at(-1);
     if (run === undefined || cycle?.planId === null || cycle?.planId === undefined) return;
-    const failureKey = `${input.threadId}:${input.dedupeScope ?? input.messageId}:dev-review-fix-failure`;
+    const failureKey = `${input.threadId}:${input.dedupeScope ?? input.messageId}:app-review-fix-failure`;
     const existing = yield* Cache.getOption(processedWorkflowDirectiveKeys, failureKey);
     if (Option.getOrElse(existing, () => false)) return;
     yield* Cache.set(processedWorkflowDirectiveKeys, failureKey, true);
     yield* orchestrationEngine.dispatch({
       type: "thread.activity.append",
-      commandId: yield* providerCommandId(input.event, "dev-review-fix-failure"),
+      commandId: yield* providerCommandId(input.event, "app-review-fix-failure"),
       threadId: thread.id,
       activity: {
         id: EventId.make(yield* crypto.randomUUIDv4),
         tone: "error",
-        kind: "dev-review-fix-result",
-        summary: "Dev Review fix result was missing or malformed",
+        kind: "app-review-fix-result",
+        summary: "App Review fix result was missing or malformed",
         payload: {
-          type: "dev-review-fix-result",
+          type: "app-review-fix-result",
           runId: run.id,
           planId: cycle.planId,
           status: "blocked",
@@ -2634,10 +2634,10 @@ const make = Effect.gen(function* () {
             ...failureInput,
             detail: "QA fixer completed without the required implementation-fix-result directive.",
           });
-          yield* consumeDevReviewFixerFailure({
+          yield* consumeAppReviewFixerFailure({
             ...failureInput,
             detail:
-              "Dev Review fixer completed without the required dev-review-fix-result directive.",
+              "App Review fixer completed without the required app-review-fix-result directive.",
           });
         }
         return;
@@ -2661,9 +2661,9 @@ const make = Effect.gen(function* () {
             ...failureInput,
             detail: `QA fixer directive was rejected: ${parseResult.message}`,
           });
-          yield* consumeDevReviewFixerFailure({
+          yield* consumeAppReviewFixerFailure({
             ...failureInput,
-            detail: `Dev Review fixer directive was rejected: ${parseResult.message}`,
+            detail: `App Review fixer directive was rejected: ${parseResult.message}`,
           });
         }
         return;
@@ -2716,9 +2716,9 @@ const make = Effect.gen(function* () {
         }
       }
 
-      if (thread.workflowRole === "dev-review-fixer") {
+      if (thread.workflowRole === "app-review-fixer") {
         const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
-        const run = (readModel.devReviewWorkflowRuns ?? []).find(
+        const run = (readModel.appReviewWorkflowRuns ?? []).find(
           (candidate) =>
             candidate.status === "running" &&
             candidate.activePhase === "fixing" &&
@@ -2726,7 +2726,7 @@ const make = Effect.gen(function* () {
         );
         const cycle = run?.cycles.at(-1);
         if (
-          parseResult.directive.type !== "dev-review-fix-result" ||
+          parseResult.directive.type !== "app-review-fix-result" ||
           run === undefined ||
           cycle?.planId === null ||
           cycle?.planId === undefined ||
@@ -2734,10 +2734,10 @@ const make = Effect.gen(function* () {
           parseResult.directive.planId !== cycle.planId
         ) {
           if (synthesizeFailure) {
-            yield* consumeDevReviewFixerFailure({
+            yield* consumeAppReviewFixerFailure({
               ...failureInput,
               detail:
-                "Dev Review fixer completed with a directive for the wrong run or proposed plan.",
+                "App Review fixer completed with a directive for the wrong run or proposed plan.",
             });
           }
           return;
@@ -2777,9 +2777,9 @@ const make = Effect.gen(function* () {
           ...input,
           detail: `QA fixer directive was rejected: ${detail}`,
         });
-        yield* consumeDevReviewFixerFailure({
+        yield* consumeAppReviewFixerFailure({
           ...input,
-          detail: `Dev Review fixer directive was rejected: ${detail}`,
+          detail: `App Review fixer directive was rejected: ${detail}`,
         });
         return;
       }
@@ -2798,7 +2798,7 @@ const make = Effect.gen(function* () {
       if (!parent || !batch || !child || child.status !== "running") {
         return;
       }
-      if (child.devReviewMode === "full") {
+      if (child.appReviewMode === "full") {
         return;
       }
       if (parseResult.directive.type !== child.expectedResult) {
@@ -2808,7 +2808,7 @@ const make = Effect.gen(function* () {
         parseResult.directive.type === "workflow-subagent-result"
           ? parseResult.directive.status === "blocked"
           : parseResult.directive.type === "implementation-fix-result" ||
-              parseResult.directive.type === "dev-review-fix-result" ||
+              parseResult.directive.type === "app-review-fix-result" ||
               parseResult.directive.type === "implementation-code-review-result"
             ? parseResult.directive.status === "blocked"
             : false;
@@ -3796,7 +3796,7 @@ const make = Effect.gen(function* () {
             ? (event.payload.errorMessage ?? "Workflow sub-agent turn failed.")
             : "Workflow sub-agent turn completed without its required result directive.",
         );
-        yield* settleCanonicalDevReviewAfterTermination({ event, thread, completedAt: now });
+        yield* settleCanonicalAppReviewAfterTermination({ event, thread, completedAt: now });
       } else if (event.type === "session.exited") {
         yield* settleRunningBatchChildAfterTermination(
           thread,
@@ -3804,7 +3804,7 @@ const make = Effect.gen(function* () {
           "canceled",
           "Workflow sub-agent session exited before producing its required result.",
         );
-        yield* settleCanonicalDevReviewAfterTermination({ event, thread, completedAt: now });
+        yield* settleCanonicalAppReviewAfterTermination({ event, thread, completedAt: now });
       } else if (event.type === "runtime.error") {
         yield* settleRunningBatchChildAfterTermination(
           thread,
@@ -3812,7 +3812,7 @@ const make = Effect.gen(function* () {
           "failed",
           event.payload.message,
         );
-        yield* settleCanonicalDevReviewAfterTermination({ event, thread, completedAt: now });
+        yield* settleCanonicalAppReviewAfterTermination({ event, thread, completedAt: now });
       }
 
       if (event.type === "task.started" || event.type === "task.progress") {
@@ -3908,7 +3908,7 @@ const make = Effect.gen(function* () {
         );
         return;
       }
-      if (event.type === "thread.dev-review-updated") {
+      if (event.type === "thread.app-review-updated") {
         if (
           event.payload.status !== "passed" &&
           event.payload.status !== "failed" &&
@@ -3916,7 +3916,7 @@ const make = Effect.gen(function* () {
         ) {
           return;
         }
-        yield* completeFullDevReviewBatchChild(event.payload.reviewId, event.occurredAt);
+        yield* completeFullAppReviewBatchChild(event.payload.reviewId, event.occurredAt);
       }
     });
 
@@ -3952,7 +3952,7 @@ const make = Effect.gen(function* () {
           if (
             event.type !== "thread.turn-start-requested" &&
             event.type !== "thread.workflow-subagent-batch-child-updated" &&
-            event.type !== "thread.dev-review-updated"
+            event.type !== "thread.app-review-updated"
           ) {
             return Effect.void;
           }

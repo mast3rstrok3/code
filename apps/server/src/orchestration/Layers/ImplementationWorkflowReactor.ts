@@ -1,10 +1,10 @@
 import {
   type AppDevStackAutoCreateResult,
   CommandId,
-  DevReviewId,
+  AppReviewId,
   EventId,
   GitCommandError,
-  IMPLEMENTATION_RUN_MAX_DEV_REVIEW_UNBLOCK_ATTEMPTS,
+  IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS,
   IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
   IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES,
   MessageId,
@@ -60,12 +60,12 @@ type ImplementationWorkflowEvent = Extract<
     type:
       | "thread.implementation-run-launched"
       | "thread.activity-appended"
-      | "thread.dev-review-updated"
+      | "thread.app-review-updated"
       | "thread.implementation-change-request-retry-requested"
       | "thread.implementation-run-retry-requested"
       | "thread.implementation-run-cancel-requested"
-      | "thread.dev-review-workflow-launched"
-      | "thread.dev-review-workflow-updated";
+      | "thread.app-review-workflow-launched"
+      | "thread.app-review-workflow-updated";
   }
 >;
 
@@ -90,19 +90,19 @@ type FixDirective = {
   readonly notesMarkdown: string;
 };
 
-export function codeReviewNeedsFreshDevReview(
+export function codeReviewNeedsFreshAppReview(
   run: OrchestrationImplementationRun,
   reviewedHeadSha: string,
 ): boolean {
   return (
     run.qaExhaustedAt === null &&
-    run.devReviewExhaustedAt === null &&
-    run.devReviewedHeadSha !== null &&
-    run.devReviewedHeadSha !== reviewedHeadSha
+    run.appReviewExhaustedAt === null &&
+    run.appReviewedHeadSha !== null &&
+    run.appReviewedHeadSha !== reviewedHeadSha
   );
 }
 
-export function passedDevReviewContinuation(
+export function passedAppReviewContinuation(
   run: OrchestrationImplementationRun,
   reviewedHeadSha: string,
 ): "code-review" | "final-validation" {
@@ -219,16 +219,16 @@ function findRunByWorkerThreadId(
   );
 }
 
-function findRunByDevReview(
+function findRunByAppReview(
   readModel: OrchestrationReadModel,
-  reviewId: DevReviewId,
+  reviewId: AppReviewId,
   sourceThreadId: ThreadId,
 ): OrchestrationImplementationRun | null {
   return (
     readModel.implementationRuns.find(
       (run) =>
         run.orchestratorThreadId === sourceThreadId &&
-        run.devReviewIds.some((candidate) => candidate === reviewId),
+        run.appReviewIds.some((candidate) => candidate === reviewId),
     ) ?? null
   );
 }
@@ -396,7 +396,7 @@ function buildMergeGatePrompt(input: {
           "Never repeat a successful complete gate on an unchanged commit.",
         ]
       : [
-          "This is the integration gate before Dev Review and Code Review. Run focused tests and fast static checks that finish in under a minute; a repository-provided fast command such as `pnpm check` is appropriate when documented as sub-minute.",
+          "This is the integration gate before App Review and Code Review. Run focused tests and fast static checks that finish in under a minute; a repository-provided fast command such as `pnpm check` is appropriate when documented as sub-minute.",
           "Do not run the configured complete validation commands at this stage:",
           ...input.run.launchSummary.validationCommands.map((command) => `- ${command}`),
           "The sole complete gate runs after Code Review.",
@@ -413,15 +413,15 @@ function buildMergeGatePrompt(input: {
   ].join("\n");
 }
 
-function buildBrowserDevReviewPrompt(input: {
+function buildBrowserAppReviewPrompt(input: {
   readonly run: OrchestrationImplementationRun;
   readonly frontendUrl: string | null;
   readonly artifactMarkdown?: string;
 }): string {
   return [
-    `Perform browser dev review for implementation run ${input.run.id}.`,
+    `Perform browser app review for implementation run ${input.run.id}.`,
     "",
-    "Open the app with preview_open, record the session with dev_review_recording_start/stop, exercise the product with the preview_* tools, and capture captioned screenshots with dev_review_capture_screenshot. Do not ask the user questions.",
+    "Open the app with preview_open, record the session with app_review_recording_start/stop, exercise the product with the preview_* tools, and capture captioned screenshots with app_review_capture_screenshot. Do not ask the user questions.",
     "",
     input.frontendUrl === null
       ? "No frontend URL was resolved. If the app cannot be opened, mark the review blocked with concrete details."
@@ -433,23 +433,23 @@ function buildBrowserDevReviewPrompt(input: {
     input.run.artifactSource === "proposed-plan"
       ? `Review against the locked product intent and proposed plan below, as well as the actual diff and app behavior.\n\n${input.artifactMarkdown ?? "Proposed-plan context unavailable."}`
       : "Review against the Spec and planning tickets loaded on this implementation thread.",
-    "Update the dev-review record with passed, failed, or blocked status and a document.",
+    "Update the app-review record with passed, failed, or blocked status and a document.",
   ].join("\n");
 }
 
 function buildFixPrompt(input: {
   readonly run: OrchestrationImplementationRun;
-  readonly reviewId: DevReviewId;
+  readonly reviewId: AppReviewId;
   readonly artifactMarkdown?: string;
 }): string {
   return [
-    `Fix browser dev-review failures for implementation run ${input.run.id}.`,
+    `Fix browser app-review failures for implementation run ${input.run.id}.`,
     "",
     `This is QA repair ${input.run.qaCycleCount} of ${IMPLEMENTATION_RUN_MAX_QA_REPAIRS}. Do not ask the user questions. Use a focused red-green TDD loop, make the smallest implementation changes needed in the orchestrator worktree, run focused validation only, commit the repair, and report the fix result.`,
     "",
     input.run.artifactSource === "proposed-plan"
-      ? `Retrieve Dev Review ${input.reviewId} with workflow_dev_review_get before applying its findings. Review against the proposed-plan context below; do not load a missing Spec or tickets.\n\n${input.artifactMarkdown ?? "Proposed-plan context unavailable."}`
-      : `Retrieve Dev Review ${input.reviewId} with workflow_dev_review_get before applying its findings. Use workflow_tickets_list and workflow_ticket_get for the linked tickets.`,
+      ? `Retrieve App Review ${input.reviewId} with workflow_app_review_get before applying its findings. Review against the proposed-plan context below; do not load a missing Spec or tickets.\n\n${input.artifactMarkdown ?? "Proposed-plan context unavailable."}`
+      : `Retrieve App Review ${input.reviewId} with workflow_app_review_get before applying its findings. Use workflow_tickets_list and workflow_ticket_get for the linked tickets.`,
     "",
     "Do not run launch-level complete validation commands or full test suites. A documented sub-minute fast check is allowed. The final gate after Code Review owns complete validation on the new HEAD.",
     "",
@@ -493,11 +493,11 @@ function buildCodeReviewPrompt(input: {
       : "This is the comprehensive review pass. Review the change along the Standards and Spec axes described in your workflow instructions.",
     "Apply required fixes yourself and commit them. Do not ask the user questions.",
     "",
-    input.run.qaExhaustedAt === null && input.run.devReviewExhaustedAt === null
-      ? "Dev Review passed at this commit."
-      : input.run.devReviewStrategy === "nested-workflow"
-        ? `Nested Dev Review '${input.run.devReviewWorkflowRunIds.at(-1) ?? "unknown"}' exhausted after ${input.run.qaAttemptCount} review attempt(s). Latest review: ${input.run.lastQaFailure?.reviewId ?? "unknown"}. Unresolved findings:\n\n${input.run.lastQaFailure?.detailMarkdown ?? "Unavailable"}\n\nTreat unresolved user-visible defects as review findings and fix what you reasonably can.`
-        : `Automated QA did not pass after ${IMPLEMENTATION_RUN_MAX_QA_REPAIRS} fresh repair agents. Last unsatisfied gate: ${input.run.qaExhaustionReason ?? "dev-review"}. Treat unresolved stack or user-visible defects as review findings and fix what you reasonably can.`,
+    input.run.qaExhaustedAt === null && input.run.appReviewExhaustedAt === null
+      ? "App Review passed at this commit."
+      : input.run.appReviewStrategy === "nested-workflow"
+        ? `Nested App Review '${input.run.appReviewWorkflowRunIds.at(-1) ?? "unknown"}' exhausted after ${input.run.qaAttemptCount} review attempt(s). Latest review: ${input.run.lastQaFailure?.reviewId ?? "unknown"}. Unresolved findings:\n\n${input.run.lastQaFailure?.detailMarkdown ?? "Unavailable"}\n\nTreat unresolved user-visible defects as review findings and fix what you reasonably can.`
+        : `Automated QA did not pass after ${IMPLEMENTATION_RUN_MAX_QA_REPAIRS} fresh repair agents. Last unsatisfied gate: ${input.run.qaExhaustionReason ?? "app-review"}. Treat unresolved stack or user-visible defects as review findings and fix what you reasonably can.`,
     "",
     "Review scope:",
     `- worktree: ${input.run.orchestratorWorktreePath}`,
@@ -608,7 +608,7 @@ function completeValidationCommandsForFiles(
 /**
  * `ready` has to mean "the frontend is serving", not "the controller accepted the request".
  * Recording a still-`starting` stack as ready froze that state on the run and made every later
- * Dev Review skip provisioning, so reviewers were sent at a URL that never came up. A reserved
+ * App Review skip provisioning, so reviewers were sent at a URL that never came up. A reserved
  * branch has no stack of its own — a standing deployment serves it, so a URL is enough.
  */
 function appDevStackReadiness(result: AppDevStackAutoCreateResult): "ready" | "ensuring" {
@@ -737,7 +737,7 @@ function buildFastFeaturePrompt(input: {
 }
 
 /**
- * Automated-review provenance for the published change request. A run that exhausted Dev Review is
+ * Automated-review provenance for the published change request. A run that exhausted App Review is
  * still published, so the unpassed review has to be visible on the change request itself.
  */
 function reviewGateExhaustionReason(run: OrchestrationImplementationRun): string {
@@ -762,22 +762,24 @@ function changeRequestReviewNote(run: OrchestrationImplementationRun): string {
     );
   }
   lines.push("## Automated review");
-  const exhaustedAt = run.qaExhaustedAt ?? run.devReviewExhaustedAt;
+  const exhaustedAt = run.qaExhaustedAt ?? run.appReviewExhaustedAt;
   if (exhaustedAt === null) {
     lines.push(
-      `- QA: passed after ${run.qaCycleCount} repair(s) and ${run.qaAttemptCount} Browser Dev Review attempt(s).`,
+      run.appReviewStrategy === "nested-workflow"
+        ? `- QA: passed after ${run.qaAttemptCount} App Review cycle(s).`
+        : `- QA: passed after ${run.qaCycleCount} repair(s) and ${run.qaAttemptCount} Browser App Review attempt(s).`,
     );
   } else {
-    const gate = run.qaExhaustionReason ?? "dev-review";
+    const gate = run.qaExhaustionReason ?? "app-review";
     lines.push(
-      run.devReviewStrategy === "nested-workflow" && gate === "dev-review"
-        ? `- ⚠️ Nested Dev Review '${run.devReviewWorkflowRunIds.at(-1) ?? "unknown"}' **exhausted after ${run.qaAttemptCount} review attempt(s)**. Latest review: ${run.lastQaFailure?.reviewId ?? "unknown"}. This change request was published best-effort with unresolved findings; manually verify the affected flow before merging.`
-        : `- ⚠️ Automated QA: **did not pass; exhausted ${run.qaCycleCount}/${IMPLEMENTATION_RUN_MAX_QA_REPAIRS} fresh repairs**. Last unsatisfied gate: ${gate === "app-dev-stack" ? "AppDevStack" : "Browser Dev Review"}. This change request was published best-effort; manually verify the affected flow before merging.`,
+      run.appReviewStrategy === "nested-workflow" && gate === "app-review"
+        ? `- ⚠️ Nested App Review '${run.appReviewWorkflowRunIds.at(-1) ?? "unknown"}' **exhausted after ${run.qaAttemptCount} complete cycle(s)**. Latest review: ${run.lastQaFailure?.reviewId ?? "unknown"}. This change request was published best-effort with unresolved findings; manually verify the affected flow before merging.`
+        : `- ⚠️ Automated QA: **did not pass; exhausted ${run.qaCycleCount}/${IMPLEMENTATION_RUN_MAX_QA_REPAIRS} fresh repairs**. Last unsatisfied gate: ${gate === "app-dev-stack" ? "AppDevStack" : "Browser App Review"}. This change request was published best-effort; manually verify the affected flow before merging.`,
     );
     if (run.lastQaFailure !== null) {
       lines.push(`- Last QA failure: ${run.lastQaFailure.detailMarkdown.slice(0, 1_000)}`);
       if (run.lastQaFailure.reviewId !== null) {
-        lines.push(`- Dev Review: ${run.lastQaFailure.reviewId}`);
+        lines.push(`- App Review: ${run.lastQaFailure.reviewId}`);
       }
     }
   }
@@ -800,7 +802,7 @@ function changeRequestFailure(input: {
   };
 }
 
-/** Dev Review is already slow; a hung edge must not hold the reactor's queue. */
+/** App Review is already slow; a hung edge must not hold the reactor's queue. */
 const FRONTEND_PROBE_TIMEOUT = Duration.seconds(10);
 const APP_DEV_STACK_DIAGNOSTIC_LIMIT = 24 * 1_024;
 
@@ -826,7 +828,7 @@ const make = Effect.gen(function* () {
 
   /**
    * Asks the frontend URL itself whether a reviewer could load it. Deliberately cheap and
-   * fail-closed: anything other than a real answer below 400 blocks Dev Review on the retryable
+   * fail-closed: anything other than a real answer below 400 blocks App Review on the retryable
    * `app-dev-stack` stage, so a stack still coming up gets the sweep's retries before a human is
    * involved. 4xx and 5xx both count as down — at an app root they mean Traefik has no route or no
    * healthy backend, not a page worth reviewing.
@@ -922,8 +924,8 @@ const make = Effect.gen(function* () {
     crypto.randomUUIDv4.pipe(Effect.map((uuid) => MessageId.make(`message-${tag}-${uuid}`)));
   const serverThreadId = (tag: string) =>
     crypto.randomUUIDv4.pipe(Effect.map((uuid) => ThreadId.make(`thread-${tag}-${uuid}`)));
-  const serverDevReviewId = () =>
-    crypto.randomUUIDv4.pipe(Effect.map((uuid) => DevReviewId.make(`dev-review-${uuid}`)));
+  const serverAppReviewId = () =>
+    crypto.randomUUIDv4.pipe(Effect.map((uuid) => AppReviewId.make(`app-review-${uuid}`)));
 
   const updateRun = Effect.fn("ImplementationWorkflowReactor.updateRun")(function* (input: {
     readonly sourceThreadId: ThreadId;
@@ -1005,7 +1007,7 @@ const make = Effect.gen(function* () {
       | "integration"
       | "merge-gate"
       | "app-dev-stack"
-      | "dev-review"
+      | "app-review"
       | "code-review"
       | "fixer"
       | "build"
@@ -1514,9 +1516,9 @@ const make = Effect.gen(function* () {
         validatedHeadSha: null,
         ...(input.kind === "integration"
           ? {
-              devReviewedHeadSha: null,
-              activeDevReviewHeadSha: null,
-              activeDevReviewThreadId: null,
+              appReviewedHeadSha: null,
+              activeAppReviewHeadSha: null,
+              activeAppReviewThreadId: null,
               codeReviewedHeadSha: input.preserveCodeReviewedHead
                 ? input.run.codeReviewedHeadSha
                 : null,
@@ -1704,16 +1706,16 @@ const make = Effect.gen(function* () {
         cycleRun.artifactSource === "proposed-plan" && artifactSourceThread !== null
           ? fastFeatureArtifactMarkdown({ run: cycleRun, sourceThread: artifactSourceThread })
           : undefined;
-      const activeNestedDevReview =
-        cycleRun.devReviewStrategy === "nested-workflow"
-          ? (readModel.devReviewWorkflowRuns ?? []).find(
+      const activeNestedAppReview =
+        cycleRun.appReviewStrategy === "nested-workflow"
+          ? (readModel.appReviewWorkflowRuns ?? []).find(
               (candidate) =>
                 candidate.caller.type === "implementation" &&
                 candidate.caller.implementationRunId === cycleRun.id &&
                 candidate.status === "running",
             )
           : undefined;
-      if (activeNestedDevReview !== undefined && activeNestedDevReview.activePhase !== null) {
+      if (activeNestedAppReview !== undefined && activeNestedAppReview.activePhase !== null) {
         return;
       }
 
@@ -1806,9 +1808,9 @@ const make = Effect.gen(function* () {
       }
       const frontendUrl = stack?.frontendUrl ?? null;
 
-      // Dev Review is a browser session against `frontendUrl`. Launching one before the stack is
+      // App Review is a browser session against `frontendUrl`. Launching one before the stack is
       // actually running only produces a reviewer that correctly reports "no available server",
-      // burning a Dev Review attempt on an infrastructure problem it cannot fix. Blocking on the
+      // burning an App Review cycle on an infrastructure problem it cannot fix. Blocking on the
       // retryable `app-dev-stack` stage gives the stack the sweep's retries to finish coming up,
       // then surfaces it as a stack failure instead of a review failure.
       const pendingStackStatus =
@@ -1888,7 +1890,7 @@ const make = Effect.gen(function* () {
       // can keep serving its static shell while its backend has no ready pod, so probing only `/`
       // sends reviewers into a login flow that can only return 502. Probe both surfaces on the
       // cached path too; a failed runtime probe is routed through AppDevStack diagnostics and TDD
-      // repair before another Browser Dev Review is launched.
+      // repair before another Browser App Review is launched.
       if (frontendUrl !== null) {
         const probes = [
           { label: "frontend", url: frontendUrl },
@@ -1959,14 +1961,14 @@ const make = Effect.gen(function* () {
         yield* blockRun({
           sourceThreadId: input.sourceThreadId,
           run: cycleRun,
-          retryableStage: "dev-review",
-          reasonMarkdown: `Dev Review requires the current integrated orchestrator HEAD '${reviewHead.commitSha}', but the recorded integrated HEAD is '${cycleRun.integrationHeadSha ?? "missing"}'.`,
+          retryableStage: "app-review",
+          reasonMarkdown: `App Review requires the current integrated orchestrator HEAD '${reviewHead.commitSha}', but the recorded integrated HEAD is '${cycleRun.integrationHeadSha ?? "missing"}'.`,
           updatedAt: input.createdAt,
         });
         return;
       }
 
-      if (cycleRun.devReviewStrategy === "nested-workflow") {
+      if (cycleRun.appReviewStrategy === "nested-workflow") {
         const readyRun: OrchestrationImplementationRun = {
           ...ensuringRun,
           appDevStack:
@@ -1992,22 +1994,22 @@ const make = Effect.gen(function* () {
           run: readyRun,
           createdAt: input.createdAt,
         });
-        if (activeNestedDevReview !== undefined) {
+        if (activeNestedAppReview !== undefined) {
           yield* orchestrationEngine.dispatch({
-            type: "thread.dev-review-workflow.resume",
-            commandId: yield* serverCommandId("implementation-dev-review-preview-refresh"),
-            threadId: activeNestedDevReview.controllerThreadId,
-            runId: activeNestedDevReview.id,
+            type: "thread.app-review-workflow.resume",
+            commandId: yield* serverCommandId("implementation-app-review-preview-refresh"),
+            threadId: activeNestedAppReview.controllerThreadId,
+            runId: activeNestedAppReview.id,
             previewTargets: [frontendUrl],
-            workspaceRevision: activeNestedDevReview.workspaceRevision,
+            workspaceRevision: activeNestedAppReview.workspaceRevision,
             createdAt: input.createdAt,
           });
           return;
         }
-        const controllerThreadId = yield* serverThreadId("dev-review-orchestrator");
+        const controllerThreadId = yield* serverThreadId("app-review-orchestrator");
         yield* orchestrationEngine.dispatch({
-          type: "thread.dev-review-workflow.launch",
-          commandId: yield* serverCommandId("implementation-dev-review-workflow-launch"),
+          type: "thread.app-review-workflow.launch",
+          commandId: yield* serverCommandId("implementation-app-review-workflow-launch"),
           targetThreadId: cycleRun.orchestratorThreadId,
           controllerThreadId,
           caller: {
@@ -2018,20 +2020,20 @@ const make = Effect.gen(function* () {
           briefMarkdown:
             artifactMarkdown ??
             `Verify Implementation run '${cycleRun.id}' against its complete Spec and Planning Tickets. Treat every acceptance criterion as required.`,
-          supportingContextMarkdown: buildBrowserDevReviewPrompt({
+          supportingContextMarkdown: buildBrowserAppReviewPrompt({
             run: readyRun,
             frontendUrl,
             ...(artifactMarkdown === undefined ? {} : { artifactMarkdown }),
           }),
           previewTargets: [frontendUrl],
-          cycleBudget: Math.min(50, Math.max(1, cycleRun.launchSummary.finalDevReview.maxAttempts)),
+          cycleBudget: Math.min(50, Math.max(1, cycleRun.launchSummary.finalAppReview.maxCycles)),
           modelSelection: orchestratorThread.modelSelection,
           createdAt: input.createdAt,
         });
         return;
       }
 
-      const reviewId = yield* serverDevReviewId();
+      const reviewId = yield* serverAppReviewId();
       const reviewThreadId = yield* serverThreadId("implementation-qa-reviewer");
       const reviewRun: OrchestrationImplementationRun = {
         ...ensuringRun,
@@ -2049,9 +2051,9 @@ const make = Effect.gen(function* () {
                 requestedAt: ensuringRun.appDevStack.requestedAt || input.createdAt,
                 updatedAt: input.createdAt,
               },
-        devReviewIds: [...ensuringRun.devReviewIds, reviewId],
-        activeDevReviewHeadSha: reviewHead.commitSha,
-        activeDevReviewThreadId: reviewThreadId,
+        appReviewIds: [...ensuringRun.appReviewIds, reviewId],
+        activeAppReviewHeadSha: reviewHead.commitSha,
+        activeAppReviewThreadId: reviewThreadId,
         qaAttemptCount: ensuringRun.qaAttemptCount + 1,
         lastQaFailure: null,
         retryableFailure: null,
@@ -2068,7 +2070,7 @@ const make = Effect.gen(function* () {
         Effect.orElseSucceed(() => undefined),
       );
       const spawnDefinition = resolveWorkflowSubagentSpawnDefinition(
-        WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
+        WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
       );
       const resolved = resolveWorkflowSubagentModelSelection({
         definition: spawnDefinition,
@@ -2080,7 +2082,7 @@ const make = Effect.gen(function* () {
           threadId: cycleRun.orchestratorThreadId,
           tone: "info",
           kind: "implementation-workflow.model-hardlock-fallback",
-          summary: "Browser dev review model hardlock not honored",
+          summary: "Browser app review model hardlock not honored",
           payload: {
             runId: cycleRun.id,
             detail: resolved.fallbackDetail,
@@ -2092,7 +2094,7 @@ const make = Effect.gen(function* () {
       }
 
       yield* orchestrationEngine.dispatch({
-        type: "thread.dev-review.launch",
+        type: "thread.app-review.launch",
         commandId: yield* serverCommandId("implementation-browser-review-launch"),
         sourceThreadId: cycleRun.orchestratorThreadId,
         reviewThreadId,
@@ -2102,18 +2104,18 @@ const make = Effect.gen(function* () {
           messageId: yield* serverMessageId("implementation-browser-review"),
           role: "user",
           text: appendWorkflowSkillCommandSection(
-            buildBrowserDevReviewPrompt({
+            buildBrowserAppReviewPrompt({
               run: reviewRun,
               frontendUrl,
               ...(artifactMarkdown === undefined ? {} : { artifactMarkdown }),
             }),
-            WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
+            WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
           ),
           attachments: [],
         },
         modelSelection: resolved.modelSelection,
         runtimeMode: orchestratorThread.runtimeMode,
-        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
+        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
         createdAt: input.createdAt,
       });
 
@@ -2121,7 +2123,7 @@ const make = Effect.gen(function* () {
         threadId: cycleRun.orchestratorThreadId,
         tone: "info",
         kind: "implementation-browser-review-started",
-        summary: `Browser dev review started (attempt ${reviewRun.qaAttemptCount})`,
+        summary: `Browser app review started (attempt ${reviewRun.qaAttemptCount})`,
         payload: {
           runId: cycleRun.id,
           reviewId,
@@ -2139,7 +2141,7 @@ const make = Effect.gen(function* () {
       readonly sourceThreadId: ThreadId;
       readonly run: OrchestrationImplementationRun;
       readonly createdAt: string;
-      readonly skipDevReviewRequirement?: boolean;
+      readonly skipAppReviewRequirement?: boolean;
       readonly reviewBaseSha?: string;
     }) {
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
@@ -2163,7 +2165,7 @@ const make = Effect.gen(function* () {
         ref: "HEAD",
       });
       if (
-        input.skipDevReviewRequirement !== true &&
+        input.skipAppReviewRequirement !== true &&
         input.run.integrationHeadSha !== reviewHead.commitSha
       ) {
         yield* blockRun({
@@ -2175,28 +2177,28 @@ const make = Effect.gen(function* () {
         });
         return;
       }
-      // Code Review normally requires a passing Dev Review at this exact HEAD. When Dev Review used
+      // Code Review normally requires a passing App Review at this exact HEAD. When App Review used
       // every attempt without passing, the run still continues — but only from a build-validated,
       // clean commit, so the reviewer never starts from unvalidated work.
       if (
-        input.skipDevReviewRequirement !== true &&
+        input.skipAppReviewRequirement !== true &&
         input.run.qaExhaustedAt === null &&
-        input.run.devReviewExhaustedAt === null
+        input.run.appReviewExhaustedAt === null
       ) {
         if (
-          input.run.devReviewedHeadSha === null ||
-          input.run.devReviewedHeadSha !== reviewHead.commitSha
+          input.run.appReviewedHeadSha === null ||
+          input.run.appReviewedHeadSha !== reviewHead.commitSha
         ) {
           yield* blockRun({
             sourceThreadId: input.sourceThreadId,
             run: input.run,
-            retryableStage: "dev-review",
-            reasonMarkdown: `Code Review requires a passing Dev Review for current HEAD '${reviewHead.commitSha}', but the dev-reviewed HEAD is '${input.run.devReviewedHeadSha ?? "missing"}'.`,
+            retryableStage: "app-review",
+            reasonMarkdown: `Code Review requires a passing App Review for current HEAD '${reviewHead.commitSha}', but the app-reviewed HEAD is '${input.run.appReviewedHeadSha ?? "missing"}'.`,
             updatedAt: input.createdAt,
           });
           return;
         }
-      } else if (input.skipDevReviewRequirement !== true) {
+      } else if (input.skipAppReviewRequirement !== true) {
         const reviewStatus = yield* gitWorkflow.localStatus({
           cwd: input.run.orchestratorWorktreePath,
         });
@@ -2209,8 +2211,8 @@ const make = Effect.gen(function* () {
           yield* blockRun({
             sourceThreadId: input.sourceThreadId,
             run: input.run,
-            retryableStage: "dev-review",
-            reasonMarkdown: `Dev Review did not pass, so Code Review requires an integrated, clean HEAD on '${input.run.orchestratorBranch}'. Current HEAD is '${reviewHead.commitSha}' and the integrated HEAD is '${input.run.integrationHeadSha ?? "missing"}'.`,
+            retryableStage: "app-review",
+            reasonMarkdown: `App Review did not pass, so Code Review requires an integrated, clean HEAD on '${input.run.orchestratorBranch}'. Current HEAD is '${reviewHead.commitSha}' and the integrated HEAD is '${input.run.integrationHeadSha ?? "missing"}'.`,
             updatedAt: input.createdAt,
             humanBlocked: true,
           });
@@ -2313,8 +2315,8 @@ const make = Effect.gen(function* () {
       yield* blockRun({
         sourceThreadId: input.sourceThreadId,
         run: input.run,
-        retryableStage: "dev-review",
-        reasonMarkdown: `Dev Review did not pass, so Code Review requires a clean integrated HEAD on '${input.run.orchestratorBranch}'. Current HEAD is '${head.commitSha}' and the integrated HEAD is '${input.run.integrationHeadSha ?? "missing"}'.`,
+        retryableStage: "app-review",
+        reasonMarkdown: `App Review did not pass, so Code Review requires a clean integrated HEAD on '${input.run.orchestratorBranch}'. Current HEAD is '${head.commitSha}' and the integrated HEAD is '${input.run.integrationHeadSha ?? "missing"}'.`,
         updatedAt: input.createdAt,
         humanBlocked: true,
       });
@@ -3020,7 +3022,7 @@ const make = Effect.gen(function* () {
       ) {
         return;
       }
-      // Build owns dev-review fixes too, so a run legitimately reports several successful builds.
+      // Build owns app-review fixes too, so a run legitimately reports several successful builds.
       // Only ignore a repeat result once the branch has moved past Build into review or publication.
       // A blocked Build has not moved past Build — it is stuck at it — so a real result that lands
       // after the retry budget was spent must still be accepted, or the run is stranded for good.
@@ -3296,7 +3298,7 @@ const make = Effect.gen(function* () {
         retryableFailure: null,
         updatedAt,
       };
-      if (run.qaExhaustedAt !== null || run.devReviewExhaustedAt !== null) {
+      if (run.qaExhaustedAt !== null || run.appReviewExhaustedAt !== null) {
         yield* startCodeReview({
           sourceThreadId,
           run: validatedRun,
@@ -3441,13 +3443,13 @@ const make = Effect.gen(function* () {
         sourceThreadId,
         run: repairedRun,
         createdAt: updatedAt,
-        skipDevReviewRequirement: true,
+        skipAppReviewRequirement: true,
         ...(reviewBaseSha === null ? {} : { reviewBaseSha }),
       });
       return;
     }
 
-    if (run.fixOrigin === "app-dev-stack" || run.fixOrigin === "dev-review") {
+    if (run.fixOrigin === "app-dev-stack" || run.fixOrigin === "app-review") {
       const repairedRun: OrchestrationImplementationRun = {
         ...run,
         status: "qa-reviewing",
@@ -3458,9 +3460,9 @@ const make = Effect.gen(function* () {
         activeValidatorThreadId: null,
         activeFixerThreadId: null,
         fixOrigin: null,
-        devReviewedHeadSha: null,
-        activeDevReviewHeadSha: null,
-        activeDevReviewThreadId: null,
+        appReviewedHeadSha: null,
+        activeAppReviewHeadSha: null,
+        activeAppReviewThreadId: null,
         codeReviewedHeadSha: null,
         activeCodeReviewHeadSha: null,
         activeCodeReviewThreadId: null,
@@ -3507,7 +3509,7 @@ const make = Effect.gen(function* () {
     readonly sourceThreadId: ThreadId;
     readonly run: OrchestrationImplementationRun;
     readonly status: "fixing" | "code-review-fixing";
-    readonly origin: "merge-gate" | "app-dev-stack" | "dev-review" | "code-review";
+    readonly origin: "merge-gate" | "app-dev-stack" | "app-review" | "code-review";
     readonly title: string;
     readonly promptText: string;
     readonly createdAt: string;
@@ -3516,7 +3518,7 @@ const make = Effect.gen(function* () {
     const orchestratorThread = findThread(readModel, input.run.orchestratorThreadId);
     if (orchestratorThread === null) return;
     const fixerThreadId = yield* serverThreadId("implementation-fixer");
-    const usesTdd = input.origin === "app-dev-stack" || input.origin === "dev-review";
+    const usesTdd = input.origin === "app-dev-stack" || input.origin === "app-review";
     const preservesReviewedBase =
       input.origin === "merge-gate" && input.run.activeValidationKind === "final";
     const fixingRun: OrchestrationImplementationRun = {
@@ -3524,7 +3526,7 @@ const make = Effect.gen(function* () {
       status: input.status,
       activeFixerThreadId: fixerThreadId,
       fixOrigin: input.origin,
-      devReviewedHeadSha: null,
+      appReviewedHeadSha: null,
       codeReviewedHeadSha: preservesReviewedBase ? input.run.codeReviewedHeadSha : null,
       ...(usesTdd
         ? {
@@ -3601,7 +3603,7 @@ const make = Effect.gen(function* () {
   const exhaustQa = Effect.fn("ImplementationWorkflowReactor.exhaustQa")(function* (input: {
     readonly sourceThreadId: ThreadId;
     readonly run: OrchestrationImplementationRun;
-    readonly gate: "app-dev-stack" | "dev-review";
+    readonly gate: "app-dev-stack" | "app-review";
     readonly createdAt: string;
   }) {
     const exhaustedRun: OrchestrationImplementationRun = {
@@ -3609,13 +3611,13 @@ const make = Effect.gen(function* () {
       qaCycleCount: IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
       qaExhaustedAt: input.run.qaExhaustedAt ?? input.createdAt,
       qaExhaustionReason: input.gate,
-      devReviewExhaustedAt:
-        input.gate === "dev-review"
-          ? (input.run.devReviewExhaustedAt ?? input.createdAt)
-          : input.run.devReviewExhaustedAt,
+      appReviewExhaustedAt:
+        input.gate === "app-review"
+          ? (input.run.appReviewExhaustedAt ?? input.createdAt)
+          : input.run.appReviewExhaustedAt,
       activeFixerThreadId: null,
-      activeDevReviewHeadSha: null,
-      activeDevReviewThreadId: null,
+      activeAppReviewHeadSha: null,
+      activeAppReviewThreadId: null,
       fixOrigin: null,
       retryableFailure: null,
       updatedAt: input.createdAt,
@@ -3646,9 +3648,9 @@ const make = Effect.gen(function* () {
   const startQaFixer = Effect.fn("ImplementationWorkflowReactor.startQaFixer")(function* (input: {
     readonly sourceThreadId: ThreadId;
     readonly run: OrchestrationImplementationRun;
-    readonly origin: "app-dev-stack" | "dev-review";
+    readonly origin: "app-dev-stack" | "app-review";
     readonly createdAt: string;
-    readonly reviewId?: DevReviewId;
+    readonly reviewId?: AppReviewId;
     readonly artifactMarkdown?: string;
     readonly failureMarkdown: string;
   }) {
@@ -3668,11 +3670,11 @@ const make = Effect.gen(function* () {
       retryableFailure: null,
       updatedAt: input.createdAt,
     };
-    if (input.origin === "dev-review" && input.reviewId === undefined) {
+    if (input.origin === "app-review" && input.reviewId === undefined) {
       yield* blockRun({
         sourceThreadId: input.sourceThreadId,
         run: repairRun,
-        reasonMarkdown: "Cannot launch a Browser Dev Review repair without a Dev Review record.",
+        reasonMarkdown: "Cannot launch a Browser App Review repair without an App Review record.",
         updatedAt: input.createdAt,
       });
       return;
@@ -3682,7 +3684,7 @@ const make = Effect.gen(function* () {
       run: repairRun,
       status: "fixing",
       origin: input.origin,
-      title: `TDD repair ${repairRun.qaCycleCount}/${IMPLEMENTATION_RUN_MAX_QA_REPAIRS} · ${input.origin === "app-dev-stack" ? "AppDevStack" : "Dev Review"}`,
+      title: `TDD repair ${repairRun.qaCycleCount}/${IMPLEMENTATION_RUN_MAX_QA_REPAIRS} · ${input.origin === "app-dev-stack" ? "AppDevStack" : "App Review"}`,
       promptText:
         input.origin === "app-dev-stack"
           ? buildAppDevStackFixPrompt({
@@ -3707,7 +3709,7 @@ const make = Effect.gen(function* () {
       readonly detailMarkdown: string;
       readonly createdAt: string;
     }) {
-      if (input.run.fixOrigin !== "app-dev-stack" && input.run.fixOrigin !== "dev-review") {
+      if (input.run.fixOrigin !== "app-dev-stack" && input.run.fixOrigin !== "app-review") {
         yield* blockRun({
           sourceThreadId: input.sourceThreadId,
           run: input.run,
@@ -3726,8 +3728,8 @@ const make = Effect.gen(function* () {
           status: "fixer-blocked",
           detailMarkdown: input.detailMarkdown,
           reviewId:
-            origin === "dev-review"
-              ? (input.run.lastQaFailure?.reviewId ?? input.run.devReviewIds.at(-1) ?? null)
+            origin === "app-review"
+              ? (input.run.lastQaFailure?.reviewId ?? input.run.appReviewIds.at(-1) ?? null)
               : null,
           headSha,
           occurredAt: input.createdAt,
@@ -3735,7 +3737,7 @@ const make = Effect.gen(function* () {
         activeFixerThreadId: null,
         updatedAt: input.createdAt,
       };
-      const reviewId = failedRun.devReviewIds.at(-1);
+      const reviewId = failedRun.appReviewIds.at(-1);
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
       const sourceThread = findThread(readModel, input.sourceThreadId);
       const artifactMarkdown =
@@ -3747,7 +3749,7 @@ const make = Effect.gen(function* () {
         run: failedRun,
         origin,
         failureMarkdown: input.detailMarkdown,
-        ...(reviewId === undefined ? {} : { reviewId: DevReviewId.make(reviewId) }),
+        ...(reviewId === undefined ? {} : { reviewId: AppReviewId.make(reviewId) }),
         ...(artifactMarkdown === undefined ? {} : { artifactMarkdown }),
         createdAt: input.createdAt,
       });
@@ -3755,16 +3757,16 @@ const make = Effect.gen(function* () {
   );
 
   /**
-   * Send Dev Review findings to a fresh TDD repair thread. The repair commits directly on the
-   * already-integrated orchestrator branch, then the workflow re-enters Dev Review; there are no
+   * Send App Review findings to a fresh TDD repair thread. The repair commits directly on the
+   * already-integrated orchestrator branch, then the workflow re-enters App Review; there are no
    * worker branches left to merge at this point.
    */
-  const restartAfterDevReviewFindings = Effect.fn(
-    "ImplementationWorkflowReactor.restartAfterDevReviewFindings",
+  const restartAfterAppReviewFindings = Effect.fn(
+    "ImplementationWorkflowReactor.restartAfterAppReviewFindings",
   )(function* (input: {
     readonly sourceThreadId: ThreadId;
     readonly run: OrchestrationImplementationRun;
-    readonly reviewId: DevReviewId;
+    readonly reviewId: AppReviewId;
     readonly createdAt: string;
   }) {
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
@@ -3776,10 +3778,10 @@ const make = Effect.gen(function* () {
     yield* startQaFixer({
       sourceThreadId: input.sourceThreadId,
       run: input.run,
-      origin: "dev-review",
+      origin: "app-review",
       reviewId: input.reviewId,
       failureMarkdown:
-        input.run.lastQaFailure?.detailMarkdown ?? "Browser Dev Review did not pass.",
+        input.run.lastQaFailure?.detailMarkdown ?? "Browser App Review did not pass.",
       ...(artifactMarkdown === undefined ? {} : { artifactMarkdown }),
       createdAt: input.createdAt,
     });
@@ -3968,7 +3970,7 @@ const make = Effect.gen(function* () {
         validatedHeadSha: null,
         updatedAt,
       };
-      const needsFreshDevReview = codeReviewNeedsFreshDevReview(reviewedRun, head.commitSha);
+      const needsFreshAppReview = codeReviewNeedsFreshAppReview(reviewedRun, head.commitSha);
       yield* startMergeGate({
         sourceThreadId,
         run: reviewedRun,
@@ -3983,19 +3985,19 @@ const make = Effect.gen(function* () {
           remainingRefNames: [],
         },
         // Code Review owns its fixes, but those fixes have not been exercised by the browser. Run
-        // the focused integration gate and Dev Review on the new HEAD before complete validation.
-        kind: needsFreshDevReview ? "integration" : "final",
-        preserveCodeReviewedHead: needsFreshDevReview,
+        // the focused integration gate and App Review on the new HEAD before complete validation.
+        kind: needsFreshAppReview ? "integration" : "final",
+        preserveCodeReviewedHead: needsFreshAppReview,
         createdAt: updatedAt,
       });
     },
   );
 
-  const handleDevReviewUpdated = Effect.fn("ImplementationWorkflowReactor.handleDevReviewUpdated")(
-    function* (event: Extract<ImplementationWorkflowEvent, { type: "thread.dev-review-updated" }>) {
+  const handleAppReviewUpdated = Effect.fn("ImplementationWorkflowReactor.handleAppReviewUpdated")(
+    function* (event: Extract<ImplementationWorkflowEvent, { type: "thread.app-review-updated" }>) {
       if (event.payload.status === undefined) return;
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
-      const run = findRunByDevReview(
+      const run = findRunByAppReview(
         readModel,
         event.payload.reviewId,
         event.payload.sourceThreadId,
@@ -4003,7 +4005,7 @@ const make = Effect.gen(function* () {
       if (
         run === null ||
         run.status !== "qa-reviewing" ||
-        run.devReviewIds.at(-1) !== event.payload.reviewId
+        run.appReviewIds.at(-1) !== event.payload.reviewId
       ) {
         return;
       }
@@ -4014,7 +4016,7 @@ const make = Effect.gen(function* () {
         gitWorkflow.localStatus({ cwd: run.orchestratorWorktreePath }),
       ]);
       if (
-        run.activeDevReviewHeadSha !== head.commitSha ||
+        run.activeAppReviewHeadSha !== head.commitSha ||
         !status.isRepo ||
         status.refName !== run.orchestratorBranch ||
         status.hasWorkingTreeChanges
@@ -4022,8 +4024,8 @@ const make = Effect.gen(function* () {
         yield* blockRun({
           sourceThreadId,
           run,
-          retryableStage: "dev-review",
-          reasonMarkdown: `Dev Review result is stale or the orchestrator worktree is not clean at reviewed HEAD '${run.activeDevReviewHeadSha ?? "unknown"}'.`,
+          retryableStage: "app-review",
+          reasonMarkdown: `App Review result is stale or the orchestrator worktree is not clean at reviewed HEAD '${run.activeAppReviewHeadSha ?? "unknown"}'.`,
           updatedAt: event.payload.updatedAt,
         });
         return;
@@ -4038,7 +4040,7 @@ const make = Effect.gen(function* () {
           threadId: run.orchestratorThreadId,
           tone: event.payload.status === "passed" ? "info" : "error",
           kind: "implementation-browser-review-finished",
-          summary: `Browser dev review ${event.payload.status}`,
+          summary: `Browser app review ${event.payload.status}`,
           payload: {
             runId: run.id,
             reviewId: event.payload.reviewId,
@@ -4051,14 +4053,14 @@ const make = Effect.gen(function* () {
       if (event.payload.status === "passed") {
         const passedRun: OrchestrationImplementationRun = {
           ...run,
-          devReviewedHeadSha: head.commitSha,
-          activeDevReviewHeadSha: null,
-          activeDevReviewThreadId: null,
+          appReviewedHeadSha: head.commitSha,
+          activeAppReviewHeadSha: null,
+          activeAppReviewThreadId: null,
           lastQaFailure: null,
           retryableFailure: null,
           updatedAt: event.payload.updatedAt,
         };
-        if (passedDevReviewContinuation(passedRun, head.commitSha) === "final-validation") {
+        if (passedAppReviewContinuation(passedRun, head.commitSha) === "final-validation") {
           yield* startMergeGate({
             sourceThreadId,
             run: passedRun,
@@ -4092,24 +4094,24 @@ const make = Effect.gen(function* () {
       const failedRun: OrchestrationImplementationRun = {
         ...run,
         lastQaFailure: {
-          kind: "dev-review",
+          kind: "app-review",
           status: event.payload.status,
           detailMarkdown:
-            findThread(readModel, run.orchestratorThreadId)?.devReviews.find(
+            findThread(readModel, run.orchestratorThreadId)?.appReviews.find(
               (review) => review.id === event.payload.reviewId,
-            )?.document.summary ?? `Browser Dev Review ${event.payload.status}.`,
+            )?.document.summary ?? `Browser App Review ${event.payload.status}.`,
           reviewId: event.payload.reviewId,
           headSha: head.commitSha,
           occurredAt: event.payload.updatedAt,
         },
       };
 
-      yield* restartAfterDevReviewFindings({
+      yield* restartAfterAppReviewFindings({
         sourceThreadId,
         run: {
           ...failedRun,
-          activeDevReviewHeadSha: null,
-          activeDevReviewThreadId: null,
+          activeAppReviewHeadSha: null,
+          activeAppReviewThreadId: null,
         },
         reviewId: event.payload.reviewId,
         createdAt: event.payload.updatedAt,
@@ -4192,17 +4194,17 @@ const make = Effect.gen(function* () {
         });
         return;
       }
-      if (failure.stage === "dev-review") {
-        if (input.run.devReviewStrategy === "nested-workflow") {
+      if (failure.stage === "app-review") {
+        if (input.run.appReviewStrategy === "nested-workflow") {
           yield* startBrowserReview({
             sourceThreadId: input.sourceThreadId,
             run: {
               ...input.run,
               status: "qa-reviewing",
-              latestDevReviewWorkflowOutcome: null,
-              devReviewUnblockAttemptCount: failure.humanBlocked
+              latestAppReviewWorkflowOutcome: null,
+              appReviewUnblockAttemptCount: failure.humanBlocked
                 ? 0
-                : input.run.devReviewUnblockAttemptCount,
+                : input.run.appReviewUnblockAttemptCount,
               retryableFailure: null,
               updatedAt: input.createdAt,
             },
@@ -4210,7 +4212,7 @@ const make = Effect.gen(function* () {
           });
           return;
         }
-        if (input.run.qaExhaustedAt !== null || input.run.devReviewExhaustedAt !== null) {
+        if (input.run.qaExhaustedAt !== null || input.run.appReviewExhaustedAt !== null) {
           yield* continueAfterQaExhaustion({
             sourceThreadId: input.sourceThreadId,
             run: {
@@ -4222,20 +4224,20 @@ const make = Effect.gen(function* () {
           });
           return;
         }
-        const reviewId = input.run.devReviewIds.at(-1);
+        const reviewId = input.run.appReviewIds.at(-1);
         const latestReview =
           reviewId === undefined
             ? undefined
-            : findThread(readModel, input.run.orchestratorThreadId)?.devReviews.find(
+            : findThread(readModel, input.run.orchestratorThreadId)?.appReviews.find(
                 (review) => review.id === reviewId,
               );
         if (latestReview?.status === "failed" || latestReview?.status === "blocked") {
-          yield* restartAfterDevReviewFindings({
+          yield* restartAfterAppReviewFindings({
             sourceThreadId: input.sourceThreadId,
             run: {
               ...input.run,
-              activeDevReviewThreadId: null,
-              activeDevReviewHeadSha: null,
+              activeAppReviewThreadId: null,
+              activeAppReviewHeadSha: null,
             },
             reviewId: latestReview.id,
             createdAt: input.createdAt,
@@ -4246,8 +4248,8 @@ const make = Effect.gen(function* () {
           sourceThreadId: input.sourceThreadId,
           run: {
             ...input.run,
-            activeDevReviewThreadId: null,
-            activeDevReviewHeadSha: null,
+            activeAppReviewThreadId: null,
+            activeAppReviewHeadSha: null,
           },
           createdAt: input.createdAt,
         });
@@ -4259,8 +4261,8 @@ const make = Effect.gen(function* () {
             sourceThreadId: input.sourceThreadId,
             run: {
               ...input.run,
-              activeDevReviewThreadId: null,
-              activeDevReviewHeadSha: null,
+              activeAppReviewThreadId: null,
+              activeAppReviewHeadSha: null,
             },
             createdAt: input.createdAt,
           });
@@ -4303,19 +4305,19 @@ const make = Effect.gen(function* () {
       if (failure.stage === "fixer") {
         const origin =
           input.run.fixOrigin ??
-          (input.run.status === "code-review-fixing" ? "code-review" : "dev-review");
-        const reviewId = input.run.devReviewIds.at(-1);
-        if (origin === "dev-review" && reviewId === undefined) {
+          (input.run.status === "code-review-fixing" ? "code-review" : "app-review");
+        const reviewId = input.run.appReviewIds.at(-1);
+        if (origin === "app-review" && reviewId === undefined) {
           yield* blockRun({
             sourceThreadId: input.sourceThreadId,
             run: input.run,
             reasonMarkdown:
-              "Cannot retry the Browser Dev Review fixer without a Dev Review record.",
+              "Cannot retry the Browser App Review fixer without an App Review record.",
             updatedAt: input.createdAt,
           });
           return;
         }
-        if (origin === "app-dev-stack" || origin === "dev-review") {
+        if (origin === "app-dev-stack" || origin === "app-review") {
           yield* handleFixerFailure({
             sourceThreadId: input.sourceThreadId,
             run: { ...input.run, fixOrigin: origin },
@@ -4416,18 +4418,18 @@ const make = Effect.gen(function* () {
   ) {
     const run = event.payload.run;
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
-    const activeNestedDevReview = (readModel.devReviewWorkflowRuns ?? []).find(
+    const activeNestedAppReview = (readModel.appReviewWorkflowRuns ?? []).find(
       (candidate) =>
         candidate.caller.type === "implementation" &&
         candidate.caller.implementationRunId === run.id &&
         candidate.status === "running",
     );
-    if (activeNestedDevReview !== undefined) {
+    if (activeNestedAppReview !== undefined) {
       yield* orchestrationEngine.dispatch({
-        type: "thread.dev-review-workflow.cancel",
-        commandId: yield* serverCommandId("implementation-nested-dev-review-cancel"),
-        threadId: activeNestedDevReview.controllerThreadId,
-        runId: activeNestedDevReview.id,
+        type: "thread.app-review-workflow.cancel",
+        commandId: yield* serverCommandId("implementation-nested-app-review-cancel"),
+        threadId: activeNestedAppReview.controllerThreadId,
+        runId: activeNestedAppReview.id,
         reason: "Parent Implementation workflow was canceled.",
         createdAt: event.occurredAt,
       });
@@ -4470,39 +4472,39 @@ const make = Effect.gen(function* () {
     });
   });
 
-  const handleNestedDevReviewWorkflow = Effect.fn(
-    "ImplementationWorkflowReactor.handleNestedDevReviewWorkflow",
+  const handleNestedAppReviewWorkflow = Effect.fn(
+    "ImplementationWorkflowReactor.handleNestedAppReviewWorkflow",
   )(function* (
     event: Extract<
       ImplementationWorkflowEvent,
-      { type: "thread.dev-review-workflow-launched" | "thread.dev-review-workflow-updated" }
+      { type: "thread.app-review-workflow-launched" | "thread.app-review-workflow-updated" }
     >,
   ) {
     const nestedRun = event.payload.run;
     if (nestedRun.caller.type !== "implementation") return;
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
     const run = findRunById(readModel, nestedRun.caller.implementationRunId);
-    if (run === null || run.devReviewStrategy !== "nested-workflow") return;
+    if (run === null || run.appReviewStrategy !== "nested-workflow") return;
     const sourceThreadId = findRunSourceThreadId({ readModel, run });
     if (sourceThreadId === null) return;
     if (
-      event.type === "thread.dev-review-workflow-updated" &&
+      event.type === "thread.app-review-workflow-updated" &&
       nestedRun.status === "blocked" &&
-      run.devReviewWorkflowRunIds.at(-1) === nestedRun.id &&
-      run.latestDevReviewWorkflowOutcome === "blocked"
+      run.appReviewWorkflowRunIds.at(-1) === nestedRun.id &&
+      run.latestAppReviewWorkflowOutcome === "blocked"
     ) {
       return;
     }
-    const runIds = run.devReviewWorkflowRunIds.includes(nestedRun.id)
-      ? run.devReviewWorkflowRunIds
-      : [...run.devReviewWorkflowRunIds, nestedRun.id];
+    const runIds = run.appReviewWorkflowRunIds.includes(nestedRun.id)
+      ? run.appReviewWorkflowRunIds
+      : [...run.appReviewWorkflowRunIds, nestedRun.id];
     const linkedRun: OrchestrationImplementationRun = {
       ...run,
-      devReviewWorkflowRunIds: runIds,
-      latestDevReviewWorkflowOutcome: nestedRun.outcome,
+      appReviewWorkflowRunIds: runIds,
+      latestAppReviewWorkflowOutcome: nestedRun.outcome,
       updatedAt: event.occurredAt,
     };
-    if (event.type === "thread.dev-review-workflow-launched") {
+    if (event.type === "thread.app-review-workflow-launched") {
       yield* updateRun({ sourceThreadId, run: linkedRun, createdAt: event.occurredAt });
       return;
     }
@@ -4532,14 +4534,14 @@ const make = Effect.gen(function* () {
         ...linkedRun,
         status: "qa-reviewing",
         integrationHeadSha: reviewedHeadSha,
-        devReviewedHeadSha: reviewedHeadSha,
-        qaAttemptCount: nestedRun.attemptsUsed,
-        devReviewUnblockAttemptCount: 0,
+        appReviewedHeadSha: reviewedHeadSha,
+        qaAttemptCount: nestedRun.cyclesUsed,
+        appReviewUnblockAttemptCount: 0,
         retryableFailure: null,
         updatedAt: event.occurredAt,
       };
       yield* updateRun({ sourceThreadId, run: passedRun, createdAt: event.occurredAt });
-      if (passedDevReviewContinuation(passedRun, reviewedHeadSha) === "final-validation") {
+      if (passedAppReviewContinuation(passedRun, reviewedHeadSha) === "final-validation") {
         yield* startMergeGate({
           sourceThreadId,
           run: passedRun,
@@ -4566,17 +4568,17 @@ const make = Effect.gen(function* () {
         ...linkedRun,
         status: "qa-reviewing",
         integrationHeadSha: nestedRun.finalHeadSha ?? nestedRun.workspaceRevision.headSha,
-        qaAttemptCount: nestedRun.attemptsUsed,
-        devReviewUnblockAttemptCount: 0,
+        qaAttemptCount: nestedRun.cyclesUsed,
+        appReviewUnblockAttemptCount: 0,
         qaExhaustedAt: event.occurredAt,
-        qaExhaustionReason: "dev-review",
-        devReviewExhaustedAt: event.occurredAt,
+        qaExhaustionReason: "app-review",
+        appReviewExhaustedAt: event.occurredAt,
         lastQaFailure: {
-          kind: "dev-review",
+          kind: "app-review",
           status: "exhausted",
           detailMarkdown:
             nestedRun.cycles.at(-1)?.actionableFindingsMarkdown ??
-            "Nested Dev Review exhausted with unresolved findings.",
+            "Nested App Review exhausted with unresolved findings.",
           reviewId: nestedRun.cycles.at(-1)?.reviewId ?? null,
           headSha: nestedRun.finalHeadSha ?? nestedRun.workspaceRevision.headSha,
           occurredAt: event.occurredAt,
@@ -4600,7 +4602,7 @@ const make = Effect.gen(function* () {
         const backendHealth = yield* probeFrontend(healthUrl);
         if (!backendHealth.ok) {
           const failureDetail =
-            nestedRun.failure?.detailMarkdown ?? "Nested Dev Review was blocked.";
+            nestedRun.failure?.detailMarkdown ?? "Nested App Review was blocked.";
           const diagnostics = yield* appDevStackDiagnostics({
             run: linkedRun,
             stackId: linkedRun.appDevStack.stackId,
@@ -4613,7 +4615,7 @@ const make = Effect.gen(function* () {
             sourceThreadId,
             run: {
               ...linkedRun,
-              devReviewUnblockAttemptCount: 0,
+              appReviewUnblockAttemptCount: 0,
               lastQaFailure: {
                 kind: "app-dev-stack",
                 status: "backend-unreachable",
@@ -4639,13 +4641,13 @@ const make = Effect.gen(function* () {
       // the bounded recovery budget.
       if (runIds.at(-1) !== nestedRun.id) return;
       if (
-        linkedRun.devReviewUnblockAttemptCount < IMPLEMENTATION_RUN_MAX_DEV_REVIEW_UNBLOCK_ATTEMPTS
+        linkedRun.appReviewUnblockAttemptCount < IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS
       ) {
-        const unblockAttempt = linkedRun.devReviewUnblockAttemptCount + 1;
+        const unblockAttempt = linkedRun.appReviewUnblockAttemptCount + 1;
         const recoveringRun: OrchestrationImplementationRun = {
           ...linkedRun,
           status: "qa-reviewing",
-          devReviewUnblockAttemptCount: unblockAttempt,
+          appReviewUnblockAttemptCount: unblockAttempt,
           retryableFailure: null,
           updatedAt: event.occurredAt,
         };
@@ -4653,14 +4655,14 @@ const make = Effect.gen(function* () {
         yield* appendActivity({
           threadId: recoveringRun.orchestratorThreadId,
           tone: "info",
-          kind: "implementation-dev-review-unblock-attempted",
-          summary: `Retrying blocked Dev Review (${unblockAttempt}/${IMPLEMENTATION_RUN_MAX_DEV_REVIEW_UNBLOCK_ATTEMPTS})`,
+          kind: "implementation-app-review-unblock-attempted",
+          summary: `Retrying blocked App Review (${unblockAttempt}/${IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS})`,
           payload: {
             runId: recoveringRun.id,
-            nestedDevReviewRunId: nestedRun.id,
+            nestedAppReviewRunId: nestedRun.id,
             attempt: unblockAttempt,
-            maxAttempts: IMPLEMENTATION_RUN_MAX_DEV_REVIEW_UNBLOCK_ATTEMPTS,
-            reasonMarkdown: nestedRun.failure?.detailMarkdown ?? "Nested Dev Review was blocked.",
+            maxAttempts: IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS,
+            reasonMarkdown: nestedRun.failure?.detailMarkdown ?? "Nested App Review was blocked.",
           },
           createdAt: event.occurredAt,
         });
@@ -4674,8 +4676,8 @@ const make = Effect.gen(function* () {
       yield* blockRun({
         sourceThreadId,
         run: linkedRun,
-        retryableStage: "dev-review",
-        reasonMarkdown: `Nested Dev Review remained blocked after ${IMPLEMENTATION_RUN_MAX_DEV_REVIEW_UNBLOCK_ATTEMPTS} automatic unblock attempts. Latest failure:\n\n${nestedRun.failure?.detailMarkdown ?? "Nested Dev Review was blocked without failure details."}`,
+        retryableStage: "app-review",
+        reasonMarkdown: `Nested App Review remained blocked after ${IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS} automatic unblock attempts. Latest failure:\n\n${nestedRun.failure?.detailMarkdown ?? "Nested App Review was blocked without failure details."}`,
         updatedAt: event.occurredAt,
         humanBlocked: true,
       });
@@ -4685,8 +4687,8 @@ const make = Effect.gen(function* () {
       yield* blockRun({
         sourceThreadId,
         run: linkedRun,
-        retryableStage: "dev-review",
-        reasonMarkdown: nestedRun.failure?.detailMarkdown ?? "Nested Dev Review was canceled.",
+        retryableStage: "app-review",
+        reasonMarkdown: nestedRun.failure?.detailMarkdown ?? "Nested App Review was canceled.",
         updatedAt: event.occurredAt,
         humanBlocked: true,
       });
@@ -4737,8 +4739,8 @@ const make = Effect.gen(function* () {
       case "thread.activity-appended":
         yield* processActivity(event);
         return;
-      case "thread.dev-review-updated":
-        yield* handleDevReviewUpdated(event);
+      case "thread.app-review-updated":
+        yield* handleAppReviewUpdated(event);
         return;
       case "thread.implementation-change-request-retry-requested":
         yield* handleChangeRequestRetry(event);
@@ -4749,9 +4751,9 @@ const make = Effect.gen(function* () {
       case "thread.implementation-run-cancel-requested":
         yield* handleRunCancel(event);
         return;
-      case "thread.dev-review-workflow-launched":
-      case "thread.dev-review-workflow-updated":
-        yield* handleNestedDevReviewWorkflow(event);
+      case "thread.app-review-workflow-launched":
+      case "thread.app-review-workflow-updated":
+        yield* handleNestedAppReviewWorkflow(event);
         return;
     }
   });
@@ -4792,15 +4794,15 @@ const make = Effect.gen(function* () {
       const createdAt = DateTime.formatIso(yield* DateTime.now);
       for (const persistedRun of readModel.implementationRuns) {
         if (persistedRun.status === "completed" || persistedRun.status === "canceled") continue;
-        if (persistedRun.devReviewStrategy === "nested-workflow") continue;
+        if (persistedRun.appReviewStrategy === "nested-workflow") continue;
         const sourceThreadId = findRunSourceThreadId({ readModel, run: persistedRun });
         if (sourceThreadId === null) continue;
         const qaFixers = readModel.threads.filter(
           (thread) =>
             thread.parentThreadId === persistedRun.orchestratorThreadId &&
             thread.workflowRole === "implementation-fixer" &&
-            (/^TDD repair \d+\/10 · (?:AppDevStack|Dev Review)$/u.test(thread.title) ||
-              /(?:AppDevStack|browser dev review)/iu.test(thread.title)),
+            (/^TDD repair \d+\/10 · (?:AppDevStack|App Review)$/u.test(thread.title) ||
+              /(?:AppDevStack|browser app review)/iu.test(thread.title)),
         );
         const normalizedRepairCount = Math.min(
           IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
@@ -4819,8 +4821,8 @@ const make = Effect.gen(function* () {
         }
 
         const orchestratorThread = findThread(readModel, run.orchestratorThreadId);
-        const canonicalReviews = (orchestratorThread?.devReviews ?? []).filter(
-          (review) => run.devReviewIds.includes(review.id) && review.status === "running",
+        const canonicalReviews = (orchestratorThread?.appReviews ?? []).filter(
+          (review) => run.appReviewIds.includes(review.id) && review.status === "running",
         );
         for (const canonicalReview of canonicalReviews) {
           const reviewer = readModel.threads.find(
@@ -4832,7 +4834,7 @@ const make = Effect.gen(function* () {
             reviewer.session.status !== "starting" &&
             reviewer.session.status !== "running";
           if (reviewer === undefined || !reviewerCompleted) continue;
-          const nestedTerminal = [...reviewer.devReviews]
+          const nestedTerminal = [...reviewer.appReviews]
             .filter(
               (review) =>
                 review.status === "passed" ||
@@ -4842,7 +4844,7 @@ const make = Effect.gen(function* () {
             .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0];
           if (nestedTerminal !== undefined) {
             yield* orchestrationEngine.dispatch({
-              type: "thread.dev-review.evidence.update",
+              type: "thread.app-review.evidence.update",
               commandId: yield* serverCommandId("implementation-reconcile-review-evidence"),
               threadId: run.orchestratorThreadId,
               reviewId: canonicalReview.id,
@@ -4852,7 +4854,7 @@ const make = Effect.gen(function* () {
             });
           }
           yield* orchestrationEngine.dispatch({
-            type: "thread.dev-review.update",
+            type: "thread.app-review.update",
             commandId: yield* serverCommandId("implementation-reconcile-review"),
             threadId: run.orchestratorThreadId,
             reviewId: canonicalReview.id,
@@ -4862,7 +4864,7 @@ const make = Effect.gen(function* () {
               verdict: "blocked",
               summary:
                 canonicalReview.document.summary ||
-                "Browser Dev Review agent completed without terminally updating its canonical review.",
+                "Browser App Review agent completed without terminally updating its canonical review.",
             },
             updatedAt: createdAt,
             createdAt,
@@ -4898,7 +4900,7 @@ const make = Effect.gen(function* () {
         run.status === "needs-human-attention" &&
         run.appDevStack.status === "failed" &&
         run.integrationHeadSha !== null &&
-        run.devReviewIds.length === 0;
+        run.appReviewIds.length === 0;
       const reviewThreads = readModel.threads.filter(
         (thread) =>
           thread.parentThreadId === run.orchestratorThreadId &&
@@ -4910,7 +4912,7 @@ const make = Effect.gen(function* () {
       )[0];
       const recoverInterruptedReview =
         run.status === "qa-reviewing" &&
-        run.devReviewIds.length > 0 &&
+        run.appReviewIds.length > 0 &&
         (latestReviewThread?.session?.status === "error" ||
           latestReviewThread?.session?.status === "stopped");
       if (!recoverStackFailure && !recoverInterruptedReview) continue;
@@ -5067,9 +5069,9 @@ const make = Effect.gen(function* () {
           role: "implementation-fixer",
         })
       ) {
-        const reviewId = run.devReviewIds.at(-1);
-        if (run.fixOrigin === "dev-review" && reviewId === undefined) continue;
-        if (run.fixOrigin === "app-dev-stack" || run.fixOrigin === "dev-review") {
+        const reviewId = run.appReviewIds.at(-1);
+        if (run.fixOrigin === "app-review" && reviewId === undefined) continue;
+        if (run.fixOrigin === "app-dev-stack" || run.fixOrigin === "app-review") {
           yield* recoverRunStage(
             run.id,
             "legacy-qa-fixer",
@@ -5230,15 +5232,15 @@ const make = Effect.gen(function* () {
         );
         continue;
       }
-      // A reviewer sitting at `ready` is idle between turns, not dead — it is still the live Dev
+      // A reviewer sitting at `ready` is idle between turns, not dead — it is still the live App
       // Review. Reading idle as dead relaunched a fresh reviewer on every sweep and burned the
       // whole attempt budget in minutes, so only a missing, errored, or stopped reviewer is
       // relaunched here, and never past the attempt limit `recoverIncompleteBrowserReviews`
       // already respects.
       const activeReviewer =
-        run.activeDevReviewThreadId === null
+        run.activeAppReviewThreadId === null
           ? undefined
-          : childThreads.find((thread) => thread.id === run.activeDevReviewThreadId);
+          : childThreads.find((thread) => thread.id === run.activeAppReviewThreadId);
       const reviewerNeedsRelaunch =
         activeReviewer === undefined ||
         activeReviewer.session?.status === "error" ||
@@ -5246,13 +5248,13 @@ const make = Effect.gen(function* () {
       if (run.status === "qa-reviewing" && reviewerNeedsRelaunch) {
         yield* startBrowserReview({
           sourceThreadId,
-          run: { ...run, activeDevReviewThreadId: null, activeDevReviewHeadSha: null },
+          run: { ...run, activeAppReviewThreadId: null, activeAppReviewHeadSha: null },
           createdAt,
         }).pipe(
           Effect.catchCause((cause) =>
             Effect.logWarning("implementation workflow run stage recovery failed", {
               runId: run.id,
-              stage: "dev-review",
+              stage: "app-review",
               cause: Cause.pretty(cause),
             }),
           ),
@@ -5281,10 +5283,10 @@ const make = Effect.gen(function* () {
         (run.status === "fixing" || run.status === "code-review-fixing") &&
         !hasActiveChild({ threadId: run.activeFixerThreadId, role: "implementation-fixer" })
       ) {
-        const origin = run.fixOrigin ?? (run.status === "fixing" ? "dev-review" : "code-review");
-        const reviewId = run.devReviewIds.at(-1);
-        if (origin === "app-dev-stack" || origin === "dev-review") {
-          if (origin === "dev-review" && reviewId === undefined) continue;
+        const origin = run.fixOrigin ?? (run.status === "fixing" ? "app-review" : "code-review");
+        const reviewId = run.appReviewIds.at(-1);
+        if (origin === "app-dev-stack" || origin === "app-review") {
+          if (origin === "app-review" && reviewId === undefined) continue;
           yield* recoverRunStage(
             run.id,
             "qa-fixer",
@@ -5375,12 +5377,12 @@ const make = Effect.gen(function* () {
         if (
           event.type !== "thread.implementation-run-launched" &&
           event.type !== "thread.activity-appended" &&
-          event.type !== "thread.dev-review-updated" &&
+          event.type !== "thread.app-review-updated" &&
           event.type !== "thread.implementation-change-request-retry-requested" &&
           event.type !== "thread.implementation-run-retry-requested" &&
           event.type !== "thread.implementation-run-cancel-requested" &&
-          event.type !== "thread.dev-review-workflow-launched" &&
-          event.type !== "thread.dev-review-workflow-updated"
+          event.type !== "thread.app-review-workflow-launched" &&
+          event.type !== "thread.app-review-workflow-updated"
         ) {
           return Effect.void;
         }

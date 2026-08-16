@@ -482,7 +482,7 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("includes Dev Review MCP server for Browser Dev Review sessions", () => {
+  it.effect("includes App Review MCP server for Browser App Review sessions", () => {
     const harness = makeHarness();
     const threadId = ThreadId.make("thread-claude-mcp-browser-review");
     return Effect.gen(function* () {
@@ -499,7 +499,7 @@ describe("ClaudeAdapterLive", () => {
         threadId,
         provider: ProviderDriverKind.make("claudeAgent"),
         runtimeMode: "full-access",
-        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
+        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
       });
 
       const mcpServers = harness.getLastCreateQueryInput()?.options.mcpServers as

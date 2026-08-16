@@ -17,10 +17,13 @@ import {
   resolveComposerPrimaryMode,
   resolveWorkflowPresetForPicker,
   type ComposerModePickerView,
+  type ComposerBuildSkill,
 } from "./ComposerModePicker";
 
 export const CompactComposerControlsMenu = memo(function CompactComposerControlsMenu(props: {
+  buildSkills: ReadonlyArray<ComposerBuildSkill>;
   interactionMode: ProviderInteractionMode;
+  selectedBuildSkillId: string | null;
   workflowPreset: WorkflowPreset | null;
   lastWorkflowPreset: WorkflowPreset | null;
   planSidebarLabel: string;
@@ -30,6 +33,7 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
   runtimeMode: RuntimeMode;
   showInteractionModeToggle: boolean;
   traitsMenuContent?: ReactNode;
+  onBuildSkillChange: (skillId: string | null) => void;
   onInteractionModeChange: (mode: ProviderInteractionMode, preset: WorkflowPreset | null) => void;
   onTogglePlanSidebar: () => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
@@ -73,14 +77,24 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
             <ComposerModePickerContent
               activeMode={activeMode}
               activePreset={activeMode === "workflow" ? displayedPreset : null}
+              buildSkills={props.buildSkills}
+              selectedBuildSkillId={props.selectedBuildSkillId}
               onBack={() => setModeView("primary")}
+              onOpenSkills={() => setModeView("skills")}
               onOpenWorkflow={() => setModeView("workflow")}
               onSelectPrimary={(mode) => {
+                props.onBuildSkillChange(null);
                 props.onInteractionModeChange(mode === "build" ? "default" : "plan", null);
                 setOpen(false);
               }}
               onSelectPreset={(preset) => {
+                props.onBuildSkillChange(null);
                 props.onInteractionModeChange(interactionModeForWorkflowPreset(preset), preset);
+                setOpen(false);
+              }}
+              onSelectSkill={(skillId) => {
+                props.onInteractionModeChange("default", null);
+                props.onBuildSkillChange(skillId);
                 setOpen(false);
               }}
               view={modeView}

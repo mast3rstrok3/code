@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
 import { ImplementationWorkflowReactor } from "../Services/ImplementationWorkflowReactor.ts";
-import { DevReviewWorkflowReactor } from "../Services/DevReviewWorkflowReactor.ts";
+import { AppReviewWorkflowReactor } from "../Services/AppReviewWorkflowReactor.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { ProductWorkflowReactor } from "../Services/ProductWorkflowReactor.ts";
@@ -79,9 +79,9 @@ describe("OrchestrationReactor", () => {
           }),
         ),
         Layer.provideMerge(
-          Layer.succeed(DevReviewWorkflowReactor, {
+          Layer.succeed(AppReviewWorkflowReactor, {
             start: () => {
-              started.push("dev-review-workflow-reactor");
+              started.push("app-review-workflow-reactor");
               return Effect.void;
             },
             drain: Effect.void,
@@ -128,7 +128,7 @@ describe("OrchestrationReactor", () => {
       "checkpoint-reactor",
       "product-workflow-reactor",
       "implementation-workflow-reactor",
-      "dev-review-workflow-reactor",
+      "app-review-workflow-reactor",
       "preview-lifecycle-reactor",
       "thread-deletion-reactor",
       "agent-awareness-relay",

@@ -1,16 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  DEV_REVIEW_WORKFLOW_DEFAULT_CYCLES,
-  DEV_REVIEW_WORKFLOW_MAX_CYCLES,
+  APP_REVIEW_WORKFLOW_DEFAULT_CYCLES,
+  APP_REVIEW_WORKFLOW_MAX_CYCLES,
 } from "@t3tools/contracts";
 import { truncate } from "@t3tools/shared/String";
 import { extractPreviewUrls } from "@t3tools/shared/preview";
 
 import type {
-  BrowserDevReviewSourceContext,
-  DevReviewWorkflowLaunchRequest,
+  BrowserAppReviewSourceContext,
+  AppReviewWorkflowLaunchRequest,
 } from "./ChatView.logic";
-import { isValidDevReviewWorkflowLaunch } from "./DevReviewPanel.logic";
+import { isValidAppReviewWorkflowLaunch } from "./AppReviewPanel.logic";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -24,29 +24,29 @@ import {
 import { Input } from "./ui/input";
 import { Textarea } from "./ui/textarea";
 
-interface DevReviewLaunchDialogProps {
+interface AppReviewLaunchDialogProps {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly launchInFlight: boolean;
   readonly launchDisabled: boolean;
   readonly sourceSettled: boolean;
-  readonly sourceContext: BrowserDevReviewSourceContext | null;
+  readonly sourceContext: BrowserAppReviewSourceContext | null;
   readonly previewTargets: ReadonlyArray<string>;
   readonly initialCycleBudget?: number;
-  readonly onLaunch: (request: DevReviewWorkflowLaunchRequest) => void;
+  readonly onLaunch: (request: AppReviewWorkflowLaunchRequest) => void;
 }
 
-export function DevReviewLaunchDialog(props: DevReviewLaunchDialogProps) {
+export function AppReviewLaunchDialog(props: AppReviewLaunchDialogProps) {
   const [brief, setBrief] = useState("");
   const [cycleBudget, setCycleBudget] = useState(
-    props.initialCycleBudget ?? DEV_REVIEW_WORKFLOW_DEFAULT_CYCLES,
+    props.initialCycleBudget ?? APP_REVIEW_WORKFLOW_DEFAULT_CYCLES,
   );
   const normalizedBrief = brief.trim();
   const resolvedPreviewTargets = useMemo(
     () => Array.from(new Set([...extractPreviewUrls(normalizedBrief), ...props.previewTargets])),
     [normalizedBrief, props.previewTargets],
   );
-  const validLaunch = isValidDevReviewWorkflowLaunch({
+  const validLaunch = isValidAppReviewWorkflowLaunch({
     brief: normalizedBrief,
     cycleBudget,
     sourceSettled: props.sourceSettled,
@@ -59,7 +59,7 @@ export function DevReviewLaunchDialog(props: DevReviewLaunchDialogProps) {
 
   useEffect(() => {
     if (!props.open) return;
-    setCycleBudget(props.initialCycleBudget ?? DEV_REVIEW_WORKFLOW_DEFAULT_CYCLES);
+    setCycleBudget(props.initialCycleBudget ?? APP_REVIEW_WORKFLOW_DEFAULT_CYCLES);
   }, [props.initialCycleBudget, props.open]);
 
   return (
@@ -71,10 +71,10 @@ export function DevReviewLaunchDialog(props: DevReviewLaunchDialogProps) {
     >
       <DialogPopup className="max-w-xl overflow-hidden">
         <DialogHeader>
-          <DialogTitle>Launch Dev Review</DialogTitle>
+          <DialogTitle>Launch App Review</DialogTitle>
           <DialogDescription>
-            Review, plan repairs, and fix in fresh threads until the feature passes or the budget is
-            exhausted.
+            Each cycle reviews the app, analyzes gaps and plans in that same thread, then implements
+            the plan in a new thread.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-4">
@@ -89,15 +89,15 @@ export function DevReviewLaunchDialog(props: DevReviewLaunchDialogProps) {
             />
           </label>
           <label className="grid gap-2">
-            <span className="text-xs font-medium text-foreground">Review attempts</span>
+            <span className="text-xs font-medium text-foreground">App Review cycle budget</span>
             <Input
               type="number"
               min={1}
-              max={DEV_REVIEW_WORKFLOW_MAX_CYCLES}
+              max={APP_REVIEW_WORKFLOW_MAX_CYCLES}
               value={cycleBudget}
               onChange={(event) => setCycleBudget(Number(event.currentTarget.value))}
             />
-            <span className="text-xs text-muted-foreground">Between 1 and 50 attempts.</span>
+            <span className="text-xs text-muted-foreground">Between 1 and 50 complete cycles.</span>
           </label>
           <div className="rounded-lg border bg-muted/30 p-3">
             <p className="text-xs font-medium text-foreground">Supporting source context</p>
@@ -140,7 +140,7 @@ export function DevReviewLaunchDialog(props: DevReviewLaunchDialogProps) {
             disabled={props.launchInFlight || !validLaunch}
             onClick={() => props.onLaunch({ brief: normalizedBrief, cycleBudget })}
           >
-            Launch Dev Review
+            Launch App Review
           </Button>
         </DialogFooter>
       </DialogPopup>
@@ -148,7 +148,7 @@ export function DevReviewLaunchDialog(props: DevReviewLaunchDialogProps) {
   );
 }
 
-function formatSourcePreview(context: BrowserDevReviewSourceContext | null): string {
+function formatSourcePreview(context: BrowserAppReviewSourceContext | null): string {
   if (context === null) return "No settled source-turn context is available.";
   return context.messages
     .map((message) => `${message.role}: ${truncate(message.text, 280)}`)

@@ -2112,14 +2112,14 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       const result = yield* runStackedAction(manager, {
         cwd: repoDir,
         action: "commit_push_pr",
-        pullRequestBodyNote: "## Automated review\n- ⚠️ Dev Review: **did not pass**",
+        pullRequestBodyNote: "## Automated review\n- ⚠️ App Review: **did not pass**",
       });
 
       expect(result.pr.status).toBe("created");
       const body = prBodies.at(-1) ?? "";
       // The generated body is preserved and the note is appended after it.
       expect(body).toContain("## Summary");
-      expect(body).toContain("- ⚠️ Dev Review: **did not pass**");
+      expect(body).toContain("- ⚠️ App Review: **did not pass**");
       expect(body.indexOf("## Summary")).toBeLessThan(body.indexOf("## Automated review"));
     }),
   );

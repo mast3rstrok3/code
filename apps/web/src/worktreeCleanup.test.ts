@@ -33,7 +33,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     activities: [],
     proposedPlans: [],
     planningWorkflow: null,
-    devReviews: [],
+    appReviews: [],
     createdAt: "2026-02-13T00:00:00.000Z",
     updatedAt: "2026-02-13T00:00:00.000Z",
     archivedAt: null,

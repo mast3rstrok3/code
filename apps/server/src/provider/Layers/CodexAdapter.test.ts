@@ -351,7 +351,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
     }),
   );
 
-  it.effect("includes Dev Review MCP app-server args for Browser Dev Review sessions", () =>
+  it.effect("includes App Review MCP app-server args for Browser App Review sessions", () =>
     Effect.gen(function* () {
       validationRuntimeFactory.factory.mockClear();
       const adapter = yield* CodexAdapter;
@@ -370,7 +370,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
         threadId,
         modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.3-codex", []),
         runtimeMode: "full-access",
-        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
+        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
       });
 
       const appServerArgs = validationRuntimeFactory.factory.mock.calls[0]?.[0].appServerArgs;
@@ -458,7 +458,7 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
     }),
   );
 
-  it.effect("sends the browser dev review hardlock selection as gpt-5.5 at xhigh effort", () =>
+  it.effect("sends the browser app review hardlock selection as gpt-5.5 at xhigh effort", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
       yield* adapter.startSession({
@@ -477,7 +477,7 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
           modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.5", [
             { id: "reasoningEffort", value: "xhigh" },
           ]),
-          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
+          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
           attachments: [],
         }),
       );
@@ -486,7 +486,7 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
         input: "review the app",
         model: "gpt-5.5",
         effort: "xhigh",
-        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
+        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
       });
     }),
   );

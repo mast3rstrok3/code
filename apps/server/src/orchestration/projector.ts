@@ -1,7 +1,7 @@
 import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@t3tools/contracts";
 import {
-  type DevReviewRecord,
-  type DevReviewWorkflowRun,
+  type AppReviewRecord,
+  type AppReviewWorkflowRun,
   type OrchestrationImplementationRun,
   OrchestrationCheckpointSummary,
   OrchestrationMessage,
@@ -22,13 +22,13 @@ import {
   ThreadArchivedPayload,
   ThreadCreatedPayload,
   ThreadDeletedPayload,
-  ThreadDevReviewCreatedPayload,
-  ThreadDevReviewEvidenceUpdatedPayload,
-  ThreadDevReviewUpdatedPayload,
-  ThreadDevReviewWorkflowLaunchedPayload,
-  ThreadDevReviewWorkflowUpdatedPayload,
-  ThreadDevReviewWorkflowCancelRequestedPayload,
-  ThreadDevReviewWorkflowResumeRequestedPayload,
+  ThreadAppReviewCreatedPayload,
+  ThreadAppReviewEvidenceUpdatedPayload,
+  ThreadAppReviewUpdatedPayload,
+  ThreadAppReviewWorkflowLaunchedPayload,
+  ThreadAppReviewWorkflowUpdatedPayload,
+  ThreadAppReviewWorkflowCancelRequestedPayload,
+  ThreadAppReviewWorkflowResumeRequestedPayload,
   ThreadWorkflowSubagentBatchCreatedPayload,
   ThreadWorkflowSubagentBatchChildUpdatedPayload,
   ThreadWorkflowSubagentBatchCompletedPayload,
@@ -211,7 +211,7 @@ function compareThreadActivities(
   return left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id);
 }
 
-function compareDevReviews(left: DevReviewRecord, right: DevReviewRecord): number {
+function compareAppReviews(left: AppReviewRecord, right: AppReviewRecord): number {
   return left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id);
 }
 
@@ -222,12 +222,12 @@ function compareImplementationRuns(
   return left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id);
 }
 
-function upsertDevReview(
-  devReviews: ReadonlyArray<DevReviewRecord>,
-  devReview: DevReviewRecord,
-): DevReviewRecord[] {
-  return [...devReviews.filter((entry) => entry.id !== devReview.id), devReview]
-    .toSorted(compareDevReviews)
+function upsertAppReview(
+  appReviews: ReadonlyArray<AppReviewRecord>,
+  appReview: AppReviewRecord,
+): AppReviewRecord[] {
+  return [...appReviews.filter((entry) => entry.id !== appReview.id), appReview]
+    .toSorted(compareAppReviews)
     .slice(-200);
 }
 
@@ -238,10 +238,10 @@ function upsertImplementationRun(
   return [...runs.filter((entry) => entry.id !== run.id), run].toSorted(compareImplementationRuns);
 }
 
-function upsertDevReviewWorkflowRun(
-  runs: ReadonlyArray<DevReviewWorkflowRun>,
-  run: DevReviewWorkflowRun,
-): DevReviewWorkflowRun[] {
+function upsertAppReviewWorkflowRun(
+  runs: ReadonlyArray<AppReviewWorkflowRun>,
+  run: AppReviewWorkflowRun,
+): AppReviewWorkflowRun[] {
   return [...runs.filter((entry) => entry.id !== run.id), run].toSorted(
     (left, right) =>
       left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
@@ -266,7 +266,7 @@ export function createEmptyReadModel(nowIso: string): OrchestrationReadModel {
     projects: [],
     threads: [],
     implementationRuns: [],
-    devReviewWorkflowRuns: [],
+    appReviewWorkflowRuns: [],
     updatedAt: nowIso,
   };
 }
@@ -394,7 +394,7 @@ export function projectEvent(
             messages: [],
             proposedPlans: [],
             planningWorkflow: null,
-            devReviews: [],
+            appReviews: [],
             workflowSubagentBatches: [],
             activities: [],
             checkpoints: [],
@@ -856,65 +856,65 @@ export function projectEvent(
         })),
       );
 
-    case "thread.dev-review-workflow-launched":
+    case "thread.app-review-workflow-launched":
       return decodeForEvent(
-        ThreadDevReviewWorkflowLaunchedPayload,
+        ThreadAppReviewWorkflowLaunchedPayload,
         event.payload,
         event.type,
         "payload",
       ).pipe(
         Effect.map((payload) => ({
           ...nextBase,
-          devReviewWorkflowRuns: upsertDevReviewWorkflowRun(
-            nextBase.devReviewWorkflowRuns ?? [],
+          appReviewWorkflowRuns: upsertAppReviewWorkflowRun(
+            nextBase.appReviewWorkflowRuns ?? [],
             payload.run,
           ),
         })),
       );
 
-    case "thread.dev-review-workflow-updated":
+    case "thread.app-review-workflow-updated":
       return decodeForEvent(
-        ThreadDevReviewWorkflowUpdatedPayload,
+        ThreadAppReviewWorkflowUpdatedPayload,
         event.payload,
         event.type,
         "payload",
       ).pipe(
         Effect.map((payload) => ({
           ...nextBase,
-          devReviewWorkflowRuns: upsertDevReviewWorkflowRun(
-            nextBase.devReviewWorkflowRuns ?? [],
+          appReviewWorkflowRuns: upsertAppReviewWorkflowRun(
+            nextBase.appReviewWorkflowRuns ?? [],
             payload.run,
           ),
         })),
       );
 
-    case "thread.dev-review-workflow-cancel-requested":
+    case "thread.app-review-workflow-cancel-requested":
       return decodeForEvent(
-        ThreadDevReviewWorkflowCancelRequestedPayload,
+        ThreadAppReviewWorkflowCancelRequestedPayload,
         event.payload,
         event.type,
         "payload",
       ).pipe(
         Effect.map((payload) => ({
           ...nextBase,
-          devReviewWorkflowRuns: upsertDevReviewWorkflowRun(
-            nextBase.devReviewWorkflowRuns ?? [],
+          appReviewWorkflowRuns: upsertAppReviewWorkflowRun(
+            nextBase.appReviewWorkflowRuns ?? [],
             payload.run,
           ),
         })),
       );
 
-    case "thread.dev-review-workflow-resume-requested":
+    case "thread.app-review-workflow-resume-requested":
       return decodeForEvent(
-        ThreadDevReviewWorkflowResumeRequestedPayload,
+        ThreadAppReviewWorkflowResumeRequestedPayload,
         event.payload,
         event.type,
         "payload",
       ).pipe(
         Effect.map((payload) => ({
           ...nextBase,
-          devReviewWorkflowRuns: upsertDevReviewWorkflowRun(
-            nextBase.devReviewWorkflowRuns ?? [],
+          appReviewWorkflowRuns: upsertAppReviewWorkflowRun(
+            nextBase.appReviewWorkflowRuns ?? [],
             payload.run,
           ),
         })),
@@ -1076,22 +1076,22 @@ export function projectEvent(
         };
       });
 
-    case "thread.dev-review-created":
+    case "thread.app-review-created":
       return Effect.gen(function* () {
         const payload = yield* decodeForEvent(
-          ThreadDevReviewCreatedPayload,
+          ThreadAppReviewCreatedPayload,
           event.payload,
           event.type,
           "payload",
         );
-        const review = payload.devReview;
+        const review = payload.appReview;
         return {
           ...nextBase,
           threads: nextBase.threads.map((thread) =>
             thread.id === review.sourceThreadId || thread.id === review.reviewThreadId
               ? {
                   ...thread,
-                  devReviews: upsertDevReview(thread.devReviews, review),
+                  appReviews: upsertAppReview(thread.appReviews, review),
                   updatedAt: event.occurredAt,
                 }
               : thread,
@@ -1099,10 +1099,10 @@ export function projectEvent(
         };
       });
 
-    case "thread.dev-review-updated":
+    case "thread.app-review-updated":
       return Effect.gen(function* () {
         const payload = yield* decodeForEvent(
-          ThreadDevReviewUpdatedPayload,
+          ThreadAppReviewUpdatedPayload,
           event.payload,
           event.type,
           "payload",
@@ -1113,7 +1113,7 @@ export function projectEvent(
             if (thread.id !== payload.sourceThreadId && thread.id !== payload.reviewThreadId) {
               return thread;
             }
-            const existing = thread.devReviews.find((entry) => entry.id === payload.reviewId);
+            const existing = thread.appReviews.find((entry) => entry.id === payload.reviewId);
             if (!existing) return thread;
             const updated = {
               ...existing,
@@ -1123,17 +1123,17 @@ export function projectEvent(
             };
             return {
               ...thread,
-              devReviews: upsertDevReview(thread.devReviews, updated),
+              appReviews: upsertAppReview(thread.appReviews, updated),
               updatedAt: event.occurredAt,
             };
           }),
         };
       });
 
-    case "thread.dev-review-evidence-updated":
+    case "thread.app-review-evidence-updated":
       return Effect.gen(function* () {
         const payload = yield* decodeForEvent(
-          ThreadDevReviewEvidenceUpdatedPayload,
+          ThreadAppReviewEvidenceUpdatedPayload,
           event.payload,
           event.type,
           "payload",
@@ -1144,7 +1144,7 @@ export function projectEvent(
             if (thread.id !== payload.sourceThreadId && thread.id !== payload.reviewThreadId) {
               return thread;
             }
-            const existing = thread.devReviews.find((entry) => entry.id === payload.reviewId);
+            const existing = thread.appReviews.find((entry) => entry.id === payload.reviewId);
             if (!existing) return thread;
             const updated = {
               ...existing,
@@ -1153,7 +1153,7 @@ export function projectEvent(
             };
             return {
               ...thread,
-              devReviews: upsertDevReview(thread.devReviews, updated),
+              appReviews: upsertAppReview(thread.appReviews, updated),
               updatedAt: event.occurredAt,
             };
           }),

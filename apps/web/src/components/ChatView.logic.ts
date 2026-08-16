@@ -1,6 +1,6 @@
 import {
-  DEV_REVIEW_WORKFLOW_DEFAULT_CYCLES,
-  DEV_REVIEW_WORKFLOW_MAX_CYCLES,
+  APP_REVIEW_WORKFLOW_DEFAULT_CYCLES,
+  APP_REVIEW_WORKFLOW_MAX_CYCLES,
   type EnvironmentId,
   isProviderDriverKind,
   type OrchestrationImplementationRun,
@@ -32,12 +32,12 @@ export const MAX_HIDDEN_MOUNTED_TERMINAL_THREADS = 10;
 export const MAX_HIDDEN_MOUNTED_PREVIEW_THREADS = 3;
 export const ENVIRONMENT_RECONNECT_WARNING_GRACE_MS = 2_000;
 
-export function normalizeDevReviewCycleBudget(value: number): number {
-  if (!Number.isFinite(value)) return DEV_REVIEW_WORKFLOW_DEFAULT_CYCLES;
-  return Math.min(DEV_REVIEW_WORKFLOW_MAX_CYCLES, Math.max(1, Math.round(value)));
+export function normalizeAppReviewCycleBudget(value: number): number {
+  if (!Number.isFinite(value)) return APP_REVIEW_WORKFLOW_DEFAULT_CYCLES;
+  return Math.min(APP_REVIEW_WORKFLOW_MAX_CYCLES, Math.max(1, Math.round(value)));
 }
 
-export function collectDevReviewLaunchPreviewTargets(input: {
+export function collectAppReviewLaunchPreviewTargets(input: {
   readonly brief: string;
   readonly activeBrowserUrl: string | null;
 }): ReadonlyArray<string> {
@@ -133,7 +133,7 @@ export function buildLocalDraftThread(
     activities: [],
     proposedPlans: [],
     planningWorkflow: null,
-    devReviews: [],
+    appReviews: [],
   };
 }
 
@@ -146,7 +146,7 @@ export function buildLoadingThreadFromShell(shell: ThreadShell): Thread {
     checkpoints: [],
     deletedAt: null,
     planningWorkflow: null,
-    devReviews: [],
+    appReviews: [],
   };
 }
 
@@ -300,26 +300,26 @@ export function collectUserMessageBlobPreviewUrls(message: ChatMessage): string[
   return previewUrls;
 }
 
-export interface DevReviewWorkflowLaunchRequest {
+export interface AppReviewWorkflowLaunchRequest {
   readonly brief: string;
   readonly cycleBudget: number;
 }
 
-export interface BrowserDevReviewSourceContextMessage {
+export interface BrowserAppReviewSourceContextMessage {
   readonly role: ChatMessage["role"];
   readonly text: string;
   readonly createdAt: string;
 }
 
-export interface BrowserDevReviewSourceContext {
+export interface BrowserAppReviewSourceContext {
   readonly turnId: TurnId | null;
-  readonly messages: ReadonlyArray<BrowserDevReviewSourceContextMessage>;
+  readonly messages: ReadonlyArray<BrowserAppReviewSourceContextMessage>;
 }
 
-export function selectBrowserDevReviewAutoContext(input: {
+export function selectBrowserAppReviewAutoContext(input: {
   readonly messages: ReadonlyArray<ChatMessage>;
   readonly latestTurn: Thread["latestTurn"] | null;
-}): BrowserDevReviewSourceContext | null {
+}): BrowserAppReviewSourceContext | null {
   const runningTurnId =
     input.latestTurn?.state === "running" ? (input.latestTurn.turnId as TurnId) : null;
   for (let index = input.messages.length - 1; index >= 0; index -= 1) {

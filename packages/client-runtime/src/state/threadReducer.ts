@@ -11,7 +11,7 @@ import type {
   OrchestrationSession,
   OrchestrationThread,
   OrchestrationThreadActivity,
-  DevReviewRecord,
+  AppReviewRecord,
   TurnId,
 } from "@t3tools/contracts";
 
@@ -25,7 +25,7 @@ const proposedPlanOrder = O.combine<OrchestrationThread["proposedPlans"][number]
   O.mapInput(O.String, (p) => p.id),
 );
 
-const devReviewOrder = O.combine<DevReviewRecord>(
+const appReviewOrder = O.combine<AppReviewRecord>(
   O.mapInput(O.String, (review) => review.createdAt),
   O.mapInput(O.String, (review) => review.id),
 );
@@ -115,7 +115,7 @@ export function applyThreadDetailEvent(
           messages: [],
           proposedPlans: [],
           planningWorkflow: null,
-          devReviews: [],
+          appReviews: [],
           workflowSubagentBatches: [],
           activities: [],
           checkpoints: [],
@@ -632,73 +632,73 @@ export function applyThreadDetailEvent(
       };
     }
 
-    case "thread.dev-review-created": {
-      const review = event.payload.devReview;
+    case "thread.app-review-created": {
+      const review = event.payload.appReview;
       if (review.sourceThreadId !== thread.id && review.reviewThreadId !== thread.id) {
         return { kind: "unchanged" };
       }
-      const devReviews = pipe(
-        thread.devReviews,
+      const appReviews = pipe(
+        thread.appReviews,
         Arr.filter((entry) => entry.id !== review.id),
         Arr.append(review),
-        Arr.sort(devReviewOrder),
+        Arr.sort(appReviewOrder),
       );
       return {
         kind: "updated",
-        thread: { ...thread, devReviews, updatedAt: event.occurredAt },
+        thread: { ...thread, appReviews, updatedAt: event.occurredAt },
       };
     }
 
-    case "thread.dev-review-updated": {
+    case "thread.app-review-updated": {
       if (
         event.payload.sourceThreadId !== thread.id &&
         event.payload.reviewThreadId !== thread.id
       ) {
         return { kind: "unchanged" };
       }
-      const existing = thread.devReviews.find((entry) => entry.id === event.payload.reviewId);
+      const existing = thread.appReviews.find((entry) => entry.id === event.payload.reviewId);
       if (!existing) return { kind: "unchanged" };
-      const updated: DevReviewRecord = {
+      const updated: AppReviewRecord = {
         ...existing,
         ...(event.payload.status !== undefined ? { status: event.payload.status } : {}),
         ...(event.payload.document !== undefined ? { document: event.payload.document } : {}),
         updatedAt: event.payload.updatedAt,
       };
-      const devReviews = pipe(
-        thread.devReviews,
+      const appReviews = pipe(
+        thread.appReviews,
         Arr.filter((entry) => entry.id !== updated.id),
         Arr.append(updated),
-        Arr.sort(devReviewOrder),
+        Arr.sort(appReviewOrder),
       );
       return {
         kind: "updated",
-        thread: { ...thread, devReviews, updatedAt: event.occurredAt },
+        thread: { ...thread, appReviews, updatedAt: event.occurredAt },
       };
     }
 
-    case "thread.dev-review-evidence-updated": {
+    case "thread.app-review-evidence-updated": {
       if (
         event.payload.sourceThreadId !== thread.id &&
         event.payload.reviewThreadId !== thread.id
       ) {
         return { kind: "unchanged" };
       }
-      const existing = thread.devReviews.find((entry) => entry.id === event.payload.reviewId);
+      const existing = thread.appReviews.find((entry) => entry.id === event.payload.reviewId);
       if (!existing) return { kind: "unchanged" };
-      const updated: DevReviewRecord = {
+      const updated: AppReviewRecord = {
         ...existing,
         evidence: event.payload.evidence,
         updatedAt: event.payload.updatedAt,
       };
-      const devReviews = pipe(
-        thread.devReviews,
+      const appReviews = pipe(
+        thread.appReviews,
         Arr.filter((entry) => entry.id !== updated.id),
         Arr.append(updated),
-        Arr.sort(devReviewOrder),
+        Arr.sort(appReviewOrder),
       );
       return {
         kind: "updated",
-        thread: { ...thread, devReviews, updatedAt: event.occurredAt },
+        thread: { ...thread, appReviews, updatedAt: event.occurredAt },
       };
     }
 

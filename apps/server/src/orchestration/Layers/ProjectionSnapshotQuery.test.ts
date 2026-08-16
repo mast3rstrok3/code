@@ -357,7 +357,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             },
           ],
           planningWorkflow: null,
-          devReviews: [],
+          appReviews: [],
           workflowSubagentBatches: [],
           activities: [
             {
@@ -487,14 +487,14 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
     }),
   );
 
-  it.effect("hydrates atomic thread detail snapshots with dev reviews for source and review", () =>
+  it.effect("hydrates atomic thread detail snapshots with app reviews for source and review", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;
       const sql = yield* SqlClient.SqlClient;
 
       yield* sql`DELETE FROM projection_projects`;
       yield* sql`DELETE FROM projection_threads`;
-      yield* sql`DELETE FROM projection_thread_dev_reviews`;
+      yield* sql`DELETE FROM projection_thread_app_reviews`;
       yield* sql`DELETE FROM projection_state`;
 
       yield* sql`
@@ -509,9 +509,9 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           deleted_at
         )
         VALUES (
-          'project-dev-review',
-          'Dev Review Project',
-          '/tmp/dev-review-project',
+          'project-app-review',
+          'App Review Project',
+          '/tmp/app-review-project',
           '{"provider":"codex","model":"gpt-5-codex"}',
           '[]',
           '2026-05-01T00:00:00.000Z',
@@ -543,8 +543,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         )
         VALUES
           (
-            'thread-dev-review-source',
-            'project-dev-review',
+            'thread-app-review-source',
+            'project-app-review',
             NULL,
             NULL,
             'Implementation',
@@ -563,11 +563,11 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             NULL
           ),
           (
-            'thread-dev-review-review',
-            'project-dev-review',
-            'thread-dev-review-source',
+            'thread-app-review-review',
+            'project-app-review',
+            'thread-app-review-source',
             'implementation-qa-reviewer',
-            'Browser Dev Review',
+            'Browser App Review',
             '{"provider":"codex","model":"gpt-5-codex"}',
             'full-access',
             'implementation-workflow',
@@ -585,7 +585,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       `;
 
       yield* sql`
-        INSERT INTO projection_thread_dev_reviews (
+        INSERT INTO projection_thread_app_reviews (
           review_id,
           source_thread_id,
           review_thread_id,
@@ -597,9 +597,9 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           updated_at
         )
         VALUES (
-          'dev-review-1',
-          'thread-dev-review-source',
-          'thread-dev-review-review',
+          'app-review-1',
+          'thread-app-review-source',
+          'thread-app-review-review',
           NULL,
           'running',
           '{"verdict":"pending","summary":"","checks":[],"findings":[],"questions":[],"nextSteps":[]}',
@@ -625,13 +625,13 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       }
 
       const sourceSnapshot = yield* snapshotQuery.getThreadDetailSnapshotById(
-        ThreadId.make("thread-dev-review-source"),
+        ThreadId.make("thread-app-review-source"),
       );
       const sourceDetail = yield* snapshotQuery.getThreadDetailById(
-        ThreadId.make("thread-dev-review-source"),
+        ThreadId.make("thread-app-review-source"),
       );
       const reviewSnapshot = yield* snapshotQuery.getThreadDetailSnapshotById(
-        ThreadId.make("thread-dev-review-review"),
+        ThreadId.make("thread-app-review-review"),
       );
 
       assert.equal(sourceSnapshot._tag, "Some");
@@ -646,11 +646,11 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         assert.equal(reviewSnapshot.value.snapshotSequence, 42);
         assert.deepEqual(sourceSnapshot.value.thread, sourceDetail.value);
         assert.deepEqual(
-          sourceSnapshot.value.thread.devReviews,
-          reviewSnapshot.value.thread.devReviews,
+          sourceSnapshot.value.thread.appReviews,
+          reviewSnapshot.value.thread.appReviews,
         );
-        assert.equal(sourceSnapshot.value.thread.devReviews[0]?.id, "dev-review-1");
-        assert.equal(reviewSnapshot.value.thread.parentThreadId, "thread-dev-review-source");
+        assert.equal(sourceSnapshot.value.thread.appReviews[0]?.id, "app-review-1");
+        assert.equal(reviewSnapshot.value.thread.parentThreadId, "thread-app-review-source");
       }
     }),
   );

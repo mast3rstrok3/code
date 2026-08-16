@@ -17,16 +17,16 @@ type PreviewLifecycleEvent = Extract<
   OrchestrationEvent,
   {
     type:
-      | "thread.dev-review-updated"
+      | "thread.app-review-updated"
       | "thread.workflow-subagent-batch-child-updated"
       | "thread.implementation-run-cancel-requested"
-      | "thread.dev-review-workflow-cancel-requested"
-      | "thread.dev-review-workflow-updated"
+      | "thread.app-review-workflow-cancel-requested"
+      | "thread.app-review-workflow-updated"
       | "thread.deleted";
   }
 >;
 
-const terminalDevReviewStatuses = new Set(["passed", "failed", "blocked"]);
+const terminalAppReviewStatuses = new Set(["passed", "failed", "blocked"]);
 const terminalWorkflowChildStatuses = new Set([
   "completed",
   "blocked",
@@ -37,9 +37,9 @@ const terminalWorkflowChildStatuses = new Set([
 
 export const previewThreadIdForEvent = (event: OrchestrationEvent): ThreadId | null => {
   switch (event.type) {
-    case "thread.dev-review-updated":
+    case "thread.app-review-updated":
       return event.payload.status !== undefined &&
-        terminalDevReviewStatuses.has(event.payload.status)
+        terminalAppReviewStatuses.has(event.payload.status)
         ? event.payload.reviewThreadId
         : null;
     case "thread.workflow-subagent-batch-child-updated":
@@ -47,10 +47,10 @@ export const previewThreadIdForEvent = (event: OrchestrationEvent): ThreadId | n
         ? event.payload.child.childThreadId
         : null;
     case "thread.implementation-run-cancel-requested":
-      return event.payload.run.activeDevReviewThreadId;
-    case "thread.dev-review-workflow-cancel-requested":
+      return event.payload.run.activeAppReviewThreadId;
+    case "thread.app-review-workflow-cancel-requested":
       return event.payload.run.cycles.at(-1)?.reviewerThreadId ?? null;
-    case "thread.dev-review-workflow-updated":
+    case "thread.app-review-workflow-updated":
       return event.payload.run.status === "running"
         ? null
         : (event.payload.run.cycles.at(-1)?.reviewerThreadId ?? null);

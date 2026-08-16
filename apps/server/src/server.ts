@@ -66,7 +66,7 @@ import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletion
 import { PreviewLifecycleReactorLive } from "./orchestration/Layers/PreviewLifecycleReactor.ts";
 import { ProductWorkflowReactorLive } from "./orchestration/Layers/ProductWorkflowReactor.ts";
 import { ImplementationWorkflowReactorLive } from "./orchestration/Layers/ImplementationWorkflowReactor.ts";
-import { DevReviewWorkflowReactorLive } from "./orchestration/Layers/DevReviewWorkflowReactor.ts";
+import { AppReviewWorkflowReactorLive } from "./orchestration/Layers/AppReviewWorkflowReactor.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
@@ -254,7 +254,7 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(CheckpointReactorLive),
   Layer.provideMerge(ProductWorkflowReactorLive),
   Layer.provideMerge(ImplementationWorkflowReactorLive),
-  Layer.provideMerge(DevReviewWorkflowReactorLive),
+  Layer.provideMerge(AppReviewWorkflowReactorLive),
   Layer.provideMerge(PreviewLifecycleReactorLive),
   Layer.provideMerge(ThreadDeletionReactorLive),
   Layer.provideMerge(AgentAwarenessRelay.layer.pipe(Layer.provide(ServerSecretStore.layer))),

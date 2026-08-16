@@ -29,7 +29,7 @@ describe("workflow presets", () => {
       "Start and probe AppDevStack from the completed Build",
     );
     expect(definition?.helpSteps.map((step) => step.label)).toContain(
-      "Run nested Dev Review against AppDevStack",
+      "Run nested App Review against AppDevStack",
     );
   });
 

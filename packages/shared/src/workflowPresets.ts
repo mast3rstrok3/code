@@ -32,8 +32,8 @@ const LEGACY_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
     helpSteps: [],
   },
   {
-    id: "dev-review",
-    label: "Dev Review",
+    id: "app-review",
+    label: "App Review",
     description: "Nested or panel-launched browser review workflow.",
     route: "review",
     interactionMode: "default",
@@ -64,10 +64,10 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
       },
       { label: "Start and probe AppDevStack from the completed Build" },
       {
-        label: "Run nested Dev Review against AppDevStack",
-        skillId: "implementation.browser-dev-review.codex",
+        label: "Run nested App Review against AppDevStack",
+        skillId: "implementation.browser-app-review.codex",
         threadBoundary: "new review thread",
-        note: "Dev Review owns its review, plan, and fresh TDD repair cycles",
+        note: "App Review owns UI review, same-thread planning, and fresh Implement cycles",
       },
       {
         label: "Code Review",
@@ -116,9 +116,9 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
       },
       { label: "Start and probe AppDevStack from the integrated worktree", note: "automatic" },
       {
-        label: "Nested Dev Review against the shared AppDevStack",
-        skillId: "implementation.browser-dev-review.codex",
-        note: "automatic; Dev Review has its own cycle budget",
+        label: "Nested App Review against the shared AppDevStack",
+        skillId: "implementation.browser-app-review.codex",
+        note: "automatic; App Review has its own cycle budget",
       },
       {
         label: "Code Review",
@@ -167,9 +167,9 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
       },
       { label: "Start and probe AppDevStack from the integrated worktree" },
       {
-        label: "Run nested Dev Review against the shared AppDevStack",
-        skillId: "implementation.browser-dev-review.codex",
-        note: "Dev Review has its own cycle budget",
+        label: "Run nested App Review against the shared AppDevStack",
+        skillId: "implementation.browser-app-review.codex",
+        note: "App Review has its own cycle budget",
       },
       {
         label: "Run Code Review",

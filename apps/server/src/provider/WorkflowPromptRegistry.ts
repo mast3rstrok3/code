@@ -10,6 +10,7 @@ import { WORKFLOW_PRESET_DEFINITIONS } from "@t3tools/shared/workflowPresets";
 
 import { PREVIEW_BROWSER_QA_ASSOCIATED_DOC_CONTENT } from "./PreviewBrowserQa.ts";
 import { WORKFLOW_SUBAGENT_INSTRUCTIONS_PROMPT } from "./WorkflowSubagentInstructions.ts";
+import mattPocockEngineeringSkills from "./mattPocockEngineeringSkills.generated.json" with { type: "json" };
 
 export const WORKFLOW_PROMPT_IDS = {
   workflowAgentCommunications: "workflow.agent-communications",
@@ -22,7 +23,7 @@ export const WORKFLOW_PROMPT_IDS = {
   implementationOrchestratorPlanningCodex: "implementation.orchestrator-planning.codex",
   implementationTddCodex: "implementation.tdd.codex",
   implementationMergeGateCodex: "implementation.merge-gate.codex",
-  implementationBrowserDevReviewCodex: "implementation.browser-dev-review.codex",
+  implementationBrowserAppReviewCodex: "implementation.browser-app-review.codex",
   implementationFixCodex: "implementation.fix.codex",
   implementationCodeReviewCodex: "implementation.code-review.codex",
   productFixCodex: "product.fix.codex",
@@ -38,7 +39,7 @@ const WORKFLOW_AGENT_COMMUNICATIONS_PROMPT = WORKFLOW_SUBAGENT_INSTRUCTIONS_PROM
 
 const APP_DEV_STACK_ASSOCIATED_DOC_CONTENT = `# AppDevStack
 
-An AppDevStack is T3's Kubernetes-backed development environment for one workflow worktree: service pods mount that worktree at \`/app\`, while dependency paths such as \`node_modules\` can be separate pod volumes. Planning, Full Feature, and Fast Feature create their shared worktree before the first model turn, run its repository-declared dependency setup, and start AppDevStack immediately after that setup succeeds. The workflow thread itself starts immediately while this happens. Every later Planning, Build, Implementation, and Dev Review stage reuses that exact worktree, branch, and stack. Treat the injected stack status, id, and Feature URL as authoritative; do not use another worktree's runtime, start a competing dev server, or replace dependency paths in the shared worktree while its stack is active. Implementation TDD workers branch downward into child worktrees and may perform repository-declared setup needed for focused tests, but must not start a competing app server.`;
+An AppDevStack is T3's Kubernetes-backed development environment for one workflow worktree: service pods mount that worktree at \`/app\`, while dependency paths such as \`node_modules\` can be separate pod volumes. Planning, Full Feature, and Fast Feature create their shared worktree before the first model turn, run its repository-declared dependency setup, and start AppDevStack immediately after that setup succeeds. The workflow thread itself starts immediately while this happens. Every later Planning, Build, Implementation, and App Review stage reuses that exact worktree, branch, and stack. Treat the injected stack status, id, and Feature URL as authoritative; do not use another worktree's runtime, start a competing dev server, or replace dependency paths in the shared worktree while its stack is active. Implementation TDD workers branch downward into child worktrees and may perform repository-declared setup needed for focused tests, but must not start a competing app server.`;
 
 const APP_DEV_STACK_ASSOCIATED_DOC = {
   id: "app-dev-stack",
@@ -1191,13 +1192,13 @@ Commit your work to the current branch.
 
 This stage orchestrates the upstream implement loop across sub-threads instead of doing the work inline:
 
-- Load the durable Spec with workflow_spec_get and the tickets with workflow_tickets_list and workflow_ticket_get. The Spec is the node that binds the tickets and later dev reviews together.
+- Load the durable Spec with workflow_spec_get and the tickets with workflow_tickets_list and workflow_ticket_get. The Spec is the node that binds the tickets and later app reviews together.
 - The run reuses the Planning workflow's dedicated worktree and branch, which were created from the branch the user selected before Planning began. The finished change request is filed back into that original branch.
 - Reuse the AppDevStack created for the Planning worktree during workspace bootstrap. Implementation must not create a replacement stack. Load \`app-dev-stack.md\` before diagnosing it; do not start another server.
 - Tickets are implemented dependency-aware by TDD worker sub-threads (the TDD Implementation skill), each in its own worktree and branch. A dependent ticket's worker branches from its blocker's worker branch so chained tickets build on each other, and every worker commits to its own branch.
 - Worker branches are merged programmatically back into the orchestrator worktree; the Merge Gate stage always runs once for the integrated HEAD, whether integration was clean or required conflict resolution.
-- A Browser Dev Review finding launches a fresh TDD repair thread on the already-integrated orchestrator worktree. After that repair commits and passes focused checks, start the next Browser Dev Review directly; do not rerun the Merge Gate between review cycles.
-- Automated QA has one global budget of ten fresh AppDevStack/Dev Review repair agents after integration. Initial stack probes and Browser Dev Review launches do not consume repair slots; replacing a malformed, failed, blocked, or interrupted repair does. After the cap, a clean integration-gated HEAD proceeds through best-effort Code Review with the unresolved gate flagged in the change request.
+- A Browser App Review finding launches a fresh TDD repair thread on the already-integrated orchestrator worktree. After that repair commits and passes focused checks, start the next Browser App Review directly; do not rerun the Merge Gate between review cycles.
+- Automated QA has one global budget of ten fresh AppDevStack/App Review repair agents after integration. Initial stack probes and Browser App Review launches do not consume repair slots; replacing a malformed, failed, blocked, or interrupted repair does. After the cap, a clean integration-gated HEAD proceeds through best-effort Code Review with the unresolved gate flagged in the change request.
 - Code Review starts with one comprehensive review-and-fix pass. If complete final validation needs a repair, the next pass reviews only that repair delta. Review/final-validation cycles are capped at three; exhaustion publishes the clean branch with an explicit work-in-progress warning instead of looping indefinitely.
 - Ticket workers never run launch-level complete validation commands or full test suites, but may run documented sub-minute fast checks. After each bounded Code Review pass, the final gate runs each launch validation command once on the reviewed HEAD before publication.
 
@@ -1479,7 +1480,7 @@ When this prompt is run by an automatic implementation-worker thread, do not ask
 
 ## Orchestrated QA Repair Result
 
-When the launch message identifies an AppDevStack or Browser Dev Review failure, this is a QA repair thread rather than a planning-ticket worker. Load \`app-dev-stack.md\` before changing dependency or runtime setup. The programmatic diagnostics, original Spec/tickets or proposed plan, and the failed review are the pre-agreed seams. Do not ask the user to confirm them. Work red then green in the orchestrator worktree, run focused validation or a documented sub-minute fast check, commit the repair, leave the worktree clean, and finish with exactly one fenced JSON block using this shape. The final gate after Code Review owns complete validation on the new HEAD; do not run launch-level complete validation commands here.
+When the launch message identifies an AppDevStack or Browser App Review failure, this is a QA repair thread rather than a planning-ticket worker. Load \`app-dev-stack.md\` before changing dependency or runtime setup. The programmatic diagnostics, original Spec/tickets or proposed plan, and the failed review are the pre-agreed seams. Do not ask the user to confirm them. Work red then green in the orchestrator worktree, run focused validation or a documented sub-minute fast check, commit the repair, leave the worktree clean, and finish with exactly one fenced JSON block using this shape. The final gate after Code Review owns complete validation on the new HEAD; do not run launch-level complete validation commands here.
 
 \`\`\`json
 {
@@ -1526,35 +1527,35 @@ When ready, finish with exactly one fenced JSON block using this shape:
 \`\`\`
 </collaboration_mode>`;
 
-const IMPLEMENTATION_BROWSER_DEV_REVIEW_PROMPT = `<collaboration_mode># Browser Dev Review
+const IMPLEMENTATION_BROWSER_APP_REVIEW_PROMPT = `<collaboration_mode># Browser App Review
 
-Exercise the supplied preview target from the selected worktree. Verify the relevant UI flows in-browser, capture concrete failures with reproduction steps, and create durable Dev Review findings against the launch brief. This review may run standalone or as a nested stage of Implementation.
+Exercise the supplied preview target from the selected worktree. Verify the relevant UI flows in-browser, capture concrete failures with reproduction steps, and create durable App Review findings against the launch brief. This review may run standalone or as a nested stage of Implementation.
 
 If the preview is unavailable, stuck on startup recovery, or has dependency/runtime failures, load \`app-dev-stack.md\` before diagnosing it.
 
-This thread is already the Browser Dev Review agent. Use the linked preview_* and dev_review_* tools directly. Never delegate to or launch another Browser Dev Review.
+This thread is already the Browser App Review agent. Use the linked preview_* and app_review_* tools directly. Never delegate to or launch another Browser App Review.
 
-When this Browser Dev Review is linked to a durable Dev Review record:
+When this Browser App Review is linked to a durable App Review record:
 
-1. Call dev_review_get first to load the durable Dev Review record before testing.
+1. Call app_review_get first to load the durable App Review record before testing.
 2. Read the source thread context and identify the behavior under review.
 3. Call preview_open to initialize the collaborative browser tab. If the launch message provides a Feature URL, navigate there with preview_navigate. If no URL is provided, inspect the current preview state; if no usable app target is available, mark the review blocked with concrete details.
-4. Start the screen recording with dev_review_recording_start before exercising the feature.
+4. Start the screen recording with app_review_recording_start before exercising the feature.
 5. Exercise the product with the preview tools: preview_snapshot to inspect the page, then preview_click, preview_type, preview_press, preview_scroll, and preview_wait_for to interact. Re-run preview_snapshot after the DOM changes; element references from an old snapshot go stale. Do not rely on static assumptions.
-6. Capture a captioned screenshot with dev_review_capture_screenshot at each meaningful application state (initial load, after key interactions, any failure states). Findings should reference these screenshot ids in evidenceIds.
-7. Stop the recording with dev_review_recording_stop after browser testing.
+6. Capture a captioned screenshot with app_review_capture_screenshot at each meaningful application state (initial load, after key interactions, any failure states). Findings should reference these screenshot ids in evidenceIds.
+7. Stop the recording with app_review_recording_stop after browser testing.
 8. Treat evidence as required. Passed requires a saved recording and at least one screenshot. Failed normally uses the same evidence, but if recording finalization fails after product testing, keep a failed verdict when at least one check failed and every actionable finding references a captured screenshot. Do not turn evidenced product defects into blocked solely because video saving failed. Use blocked only when trustworthy product evidence could not be captured.
-9. Update the Dev Review record with dev_review_update, including verdict, summary, checks, findings, questions, next steps, and evidence IDs.
+9. Update the App Review record with app_review_update, including verdict, summary, checks, findings, questions, next steps, and evidence IDs.
 10. Mark the review status passed, failed, or blocked.
 
-If no durable Dev Review record is linked, this is focused feedback mode. Use preview_* tools only, call preview_open with show: false, do not call dev_review_* tools, and do not record or capture evidence unless the focused question itself requires a screenshot. Finish with exactly one workflow-subagent-result directive containing concise observations, reproduction steps, blockers, and recommendations.
+If no durable App Review record is linked, this is focused feedback mode. Use preview_* tools only, call preview_open with show: false, do not call app_review_* tools, and do not record or capture evidence unless the focused question itself requires a screenshot. Finish with exactly one workflow-subagent-result directive containing concise observations, reproduction steps, blockers, and recommendations.
 
-Use only the preview_* tools in feedback mode and preview_* plus dev_review_* tools in full mode. Do not use external browsers, browser MCP servers, standalone Playwright scripts, or shell-driven browser automation. See preview-browser-qa.md for the full preview toolset guidance.
+Use only the preview_* tools in feedback mode and preview_* plus app_review_* tools in full mode. Do not use external browsers, browser MCP servers, standalone Playwright scripts, or shell-driven browser automation. See preview-browser-qa.md for the full preview toolset guidance.
 </collaboration_mode>`;
 
 const IMPLEMENTATION_FIX_PROMPT = `<collaboration_mode># Implementation Workflow: Fix
 
-Fix the Browser Dev Review, integration-gate, final-gate, or code-review failures in the orchestrator worktree. Do not ask the user questions. Make the smallest reliable change, run focused validation or a documented sub-minute fast check, commit the repair, and report whether the run can continue. Do not run launch-level complete validation commands. The final gate after Code Review owns complete validation on the new HEAD.
+Fix the Browser App Review, integration-gate, final-gate, or code-review failures in the orchestrator worktree. Do not ask the user questions. Make the smallest reliable change, run focused validation or a documented sub-minute fast check, commit the repair, and report whether the run can continue. Do not run launch-level complete validation commands. The final gate after Code Review owns complete validation on the new HEAD.
 
 When the failure involves an AppDevStack, Feature URL, or preview runtime, load \`app-dev-stack.md\` before changing dependency or runtime setup.
 
@@ -1723,7 +1724,7 @@ Before asking questions, ground yourself in the codebase and existing product co
 
 ${
   input.workspacePrepared
-    ? "This workflow already owns the current worktree. Every later Plan, Build, Implementation, and Dev Review stage reuses that shared workspace and its AppDevStack. The stack starts programmatically as soon as repository-declared dependency setup succeeds; do not start a competing development server or use another worktree's runtime."
+    ? "This workflow already owns the current worktree. Every later Plan, Build, Implementation, and App Review stage reuses that shared workspace and its AppDevStack. The stack starts programmatically as soon as repository-declared dependency setup succeeds; do not start a competing development server or use another worktree's runtime."
     : ""
 }
 
@@ -1758,7 +1759,53 @@ const PRODUCT_FULL_FEATURE_WORKFLOW_PROMPT = buildPresetProductWorkflowPrompt({
   workspacePrepared: true,
 });
 
+const mattPocockDomainModelingSkill = mattPocockEngineeringSkills.skills.find(
+  (skill) => skill.id === "matt-pocock.domain-modeling",
+);
+if (mattPocockDomainModelingSkill === undefined) {
+  throw new Error("The Matt Pocock engineering skill snapshot is missing domain-modeling");
+}
+
+const MATT_POCOCK_ENGINEERING_SKILL_PROMPTS: ReadonlyArray<WorkflowPromptContract> =
+  mattPocockEngineeringSkills.skills.map((skill, index) => ({
+    id: skill.id,
+    order: 100 + index,
+    workflow: "shared",
+    role: "implementation-worker",
+    stage: "build",
+    title: skill.title,
+    description: skill.description,
+    promptText:
+      skill.id === "matt-pocock.grill-with-docs"
+        ? `${skill.promptText}
+
+## T3 direct Build adapter
+
+This invocation runs through T3's provider-independent skill catalog, so do not call a provider-local Skill tool. Apply both the Grilling and Domain Modeling instructions below directly.
+
+<grilling-skill>
+${GRILLING_BLUEPRINT}
+</grilling-skill>
+
+<domain-modeling-skill>
+${mattPocockDomainModelingSkill.promptText}
+</domain-modeling-skill>`
+        : skill.promptText,
+    associatedDocs: (skill.id === "matt-pocock.grill-with-docs"
+      ? [skill, mattPocockDomainModelingSkill]
+      : [skill]
+    ).flatMap((referencedSkill) =>
+      referencedSkill.docs.map((doc) => ({
+        id: doc.id,
+        title: doc.title,
+        path: `${referencedSkill.name}/${doc.path}`,
+        content: doc.content,
+      })),
+    ),
+  }));
+
 export const WORKFLOW_PROMPT_REGISTRY = [
+  ...MATT_POCOCK_ENGINEERING_SKILL_PROMPTS,
   {
     id: WORKFLOW_PROMPT_IDS.workflowAgentCommunications,
     order: 1,
@@ -2034,14 +2081,14 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     associatedDocs: [APP_DEV_STACK_ASSOCIATED_DOC],
   },
   {
-    id: WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
+    id: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
     order: 1,
-    workflow: "dev-review",
-    role: "dev-review-reviewer",
-    stage: "browser-dev-review",
-    title: "Browser Dev Review",
-    description: "Tests a preview target and creates concrete durable Dev Review findings.",
-    promptText: IMPLEMENTATION_BROWSER_DEV_REVIEW_PROMPT,
+    workflow: "app-review",
+    role: "app-review-reviewer",
+    stage: "browser-app-review",
+    title: "Browser App Review",
+    description: "Tests a preview target and creates concrete durable App Review findings.",
+    promptText: IMPLEMENTATION_BROWSER_APP_REVIEW_PROMPT,
     associatedDocs: [
       APP_DEV_STACK_ASSOCIATED_DOC,
       {
@@ -2120,27 +2167,59 @@ export function listWorkflowPromptContracts(): WorkflowPromptContract[] {
   return WORKFLOW_PROMPT_REGISTRY.map(cloneWorkflowPromptContract);
 }
 
-const VISIBLE_SKILL_IDS = new Set<string>([
+const CATALOG_SKILL_ID_BY_PROMPT_ID: Readonly<Record<string, string>> = {
+  [WORKFLOW_PROMPT_IDS.planningGrillStageCodex]: "matt-pocock.grill-with-docs",
+  [WORKFLOW_PROMPT_IDS.planningAutomaticEngineeringGrillCodex]: "matt-pocock.grill-with-docs",
+  [WORKFLOW_PROMPT_IDS.planningDomainModelingCodex]: "matt-pocock.domain-modeling",
+  [WORKFLOW_PROMPT_IDS.planningPrototypeCodex]: "matt-pocock.prototype",
+  [WORKFLOW_PROMPT_IDS.planningWayfinderCodex]: "matt-pocock.wayfinder",
+  [WORKFLOW_PROMPT_IDS.planningResearchCodex]: "matt-pocock.research",
+  [WORKFLOW_PROMPT_IDS.planningSpecCodex]: "matt-pocock.to-spec",
+  [WORKFLOW_PROMPT_IDS.planningTicketsCodex]: "matt-pocock.to-tickets",
+  [WORKFLOW_PROMPT_IDS.implementationOrchestratorPlanningCodex]: "matt-pocock.implement",
+  [WORKFLOW_PROMPT_IDS.implementationTddCodex]: "matt-pocock.tdd",
+  [WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex]: "matt-pocock.code-review",
+};
+
+const VISIBLE_T3_SKILL_IDS = new Set<string>([
   WORKFLOW_PROMPT_IDS.productFastFeatureCodex,
   WORKFLOW_PROMPT_IDS.productFullFeatureCodex,
-  WORKFLOW_PROMPT_IDS.planningGrillStageCodex,
-  WORKFLOW_PROMPT_IDS.planningAutomaticEngineeringGrillCodex,
-  WORKFLOW_PROMPT_IDS.planningSpecCodex,
-  WORKFLOW_PROMPT_IDS.planningTicketsCodex,
   WORKFLOW_PROMPT_IDS.planningTicketReviewerCodex,
-  WORKFLOW_PROMPT_IDS.planningPrototypeCodex,
-  WORKFLOW_PROMPT_IDS.planningWayfinderCodex,
-  WORKFLOW_PROMPT_IDS.planningResearchCodex,
-  WORKFLOW_PROMPT_IDS.implementationOrchestratorPlanningCodex,
-  WORKFLOW_PROMPT_IDS.implementationTddCodex,
   WORKFLOW_PROMPT_IDS.implementationMergeGateCodex,
-  WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
+  WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
   WORKFLOW_PROMPT_IDS.implementationFixCodex,
-  WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
 ]);
+
+const MATT_POCOCK_SKILL_IDS = new Set(mattPocockEngineeringSkills.skills.map((skill) => skill.id));
+
+function catalogSkillIdForPromptId(promptId: string): string {
+  return CATALOG_SKILL_ID_BY_PROMPT_ID[promptId] ?? promptId;
+}
+
+function summarizeWorkflowDoc(content: string): string {
+  const paragraph = content
+    .replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, "")
+    .replace(/```[\s\S]*?```/g, "")
+    .split(/\r?\n\s*\r?\n/)
+    .filter(
+      (candidate) => !candidate.trim().startsWith("```") && !candidate.trim().startsWith("#!"),
+    )
+    .map((candidate) =>
+      candidate
+        .replace(/^#+\s+.*$/gm, "")
+        .replace(/\s+/g, " ")
+        .trim(),
+    )
+    .find((candidate) => candidate.length >= 20);
+  if (paragraph === undefined) {
+    return "Supporting instructions loaded by this skill when needed.";
+  }
+  return paragraph.length > 240 ? `${paragraph.slice(0, 237).trimEnd()}…` : paragraph;
+}
 
 function buildWorkflowCatalog(): WorkflowCatalog {
   const promptContracts: ReadonlyArray<WorkflowPromptContract> = WORKFLOW_PROMPT_REGISTRY;
+  const promptContractById = new Map(promptContracts.map((contract) => [contract.id, contract]));
   const workflowOrder = ["fast-feature", "full-feature", "wayfinder", "planning", "implementation"];
   const workflows = WORKFLOW_PRESET_DEFINITIONS.toSorted(
     (left, right) => workflowOrder.indexOf(left.id) - workflowOrder.indexOf(right.id),
@@ -2150,12 +2229,21 @@ function buildWorkflowCatalog(): WorkflowCatalog {
     title: definition.label,
     description: definition.description,
     interactionMode: definition.interactionMode,
-    steps: definition.helpSteps.map((step) => ({
-      label: step.label,
-      ...(step.skillId ? { skillId: step.skillId } : {}),
-      ...(step.threadBoundary ? { threadBoundary: step.threadBoundary } : {}),
-      ...(step.note ? { note: step.note } : {}),
-    })),
+    steps: definition.helpSteps.map((step) => {
+      const skillId = step.skillId ? catalogSkillIdForPromptId(step.skillId) : undefined;
+      const skillTitle = skillId
+        ? promptContractById.get(skillId)?.title.replace(/^\d+\.\s+/, "")
+        : undefined;
+      const stepContext = skillTitle && skillTitle !== step.label ? step.label : undefined;
+      return {
+        label: skillTitle ?? step.label,
+        ...(skillId ? { skillId } : {}),
+        ...(step.threadBoundary ? { threadBoundary: step.threadBoundary } : {}),
+        ...(stepContext || step.note
+          ? { note: [stepContext, step.note].filter(Boolean).join(" · ") }
+          : {}),
+      };
+    }),
   }));
 
   const workflowIdsBySkill = new Map<string, string[]>();
@@ -2168,20 +2256,10 @@ function buildWorkflowCatalog(): WorkflowCatalog {
     }
   }
   const implicitWorkflowIdsBySkill: Readonly<Record<string, readonly string[]>> = {
-    [WORKFLOW_PROMPT_IDS.planningGrillStageCodex]: ["planning"],
-    [WORKFLOW_PROMPT_IDS.planningPrototypeCodex]: ["wayfinder"],
-    [WORKFLOW_PROMPT_IDS.planningWayfinderCodex]: ["wayfinder"],
-    [WORKFLOW_PROMPT_IDS.planningResearchCodex]: ["wayfinder"],
-    [WORKFLOW_PROMPT_IDS.implementationOrchestratorPlanningCodex]: [
-      "full-feature",
-      "implementation",
-    ],
+    "matt-pocock.grill-with-docs": ["planning"],
+    "matt-pocock.domain-modeling": ["full-feature", "wayfinder", "planning"],
+    "matt-pocock.implement": ["full-feature", "implementation"],
     [WORKFLOW_PROMPT_IDS.implementationFixCodex]: [
-      "fast-feature",
-      "full-feature",
-      "implementation",
-    ],
-    [WORKFLOW_PROMPT_IDS.implementationTddCodex]: [
       "fast-feature",
       "full-feature",
       "implementation",
@@ -2195,28 +2273,49 @@ function buildWorkflowCatalog(): WorkflowCatalog {
     workflowIdsBySkill.set(skillId, ids);
   }
 
-  const skills: WorkflowSkillContract[] = promptContracts
-    .filter((contract) => VISIBLE_SKILL_IDS.has(contract.id))
+  type MutableCatalogSkill = Omit<WorkflowSkillContract, "docIds"> & { docIds: string[] };
+  const skills: MutableCatalogSkill[] = promptContracts
+    .filter(
+      (contract) => MATT_POCOCK_SKILL_IDS.has(contract.id) || VISIBLE_T3_SKILL_IDS.has(contract.id),
+    )
     .map((contract) => ({
       id: contract.id,
       order: contract.order,
       workflow: contract.workflow,
       role: contract.role,
       stage: contract.stage,
-      title: contract.title,
+      title: contract.title.replace(/^\d+\.\s+/, ""),
       description: contract.description,
       promptText: contract.promptText,
-      docIds: contract.associatedDocs?.map((doc) => doc.id) ?? [],
+      docIds: [],
+      buildModes: MATT_POCOCK_SKILL_IDS.has(contract.id) ? (["build"] as const) : [],
       workflowIds: workflowIdsBySkill.get(contract.id) ?? [],
-    }));
+      ...(MATT_POCOCK_SKILL_IDS.has(contract.id)
+        ? {
+            sourceUrl: `${mattPocockEngineeringSkills.source.url.replace("/tree/", "/blob/")}/${mattPocockEngineeringSkills.skills.find((skill) => skill.id === contract.id)?.name}/SKILL.md`,
+          }
+        : {}),
+    }))
+    .toSorted(
+      (left, right) => left.title.localeCompare(right.title) || left.id.localeCompare(right.id),
+    )
+    .map((skill, index) => ({ ...skill, order: index + 1 }));
 
   const docsById = new Map<
     string,
     Omit<WorkflowDocContract, "skillIds"> & { skillIds: string[] }
   >();
-  for (const skill of skills) {
-    const contract = promptContracts.find((candidate) => candidate.id === skill.id);
-    for (const doc of contract?.associatedDocs ?? []) {
+  const skillsById = new Map(skills.map((skill) => [skill.id, skill]));
+  const generatedDocDescriptionById = new Map(
+    mattPocockEngineeringSkills.skills.flatMap((skill) =>
+      skill.docs.map((doc) => [doc.id, doc.description] as const),
+    ),
+  );
+  for (const contract of promptContracts) {
+    const catalogSkillId = catalogSkillIdForPromptId(contract.id);
+    const skill = skillsById.get(catalogSkillId);
+    if (skill === undefined) continue;
+    for (const doc of contract.associatedDocs ?? []) {
       const existing = docsById.get(doc.id);
       if (existing !== undefined) {
         if (
@@ -2226,10 +2325,15 @@ function buildWorkflowCatalog(): WorkflowCatalog {
         ) {
           throw new Error(`Conflicting workflow doc '${doc.id}'`);
         }
-        existing.skillIds.push(skill.id);
+        if (!existing.skillIds.includes(skill.id)) existing.skillIds.push(skill.id);
       } else {
-        docsById.set(doc.id, { ...doc, skillIds: [skill.id] });
+        docsById.set(doc.id, {
+          ...doc,
+          description: generatedDocDescriptionById.get(doc.id) ?? summarizeWorkflowDoc(doc.content),
+          skillIds: [skill.id],
+        });
       }
+      if (!skill.docIds.includes(doc.id)) skill.docIds.push(doc.id);
     }
   }
 
@@ -2242,7 +2346,27 @@ function buildWorkflowCatalog(): WorkflowCatalog {
     }
   }
 
-  return { workflows, skills, docs: [...docsById.values()] };
+  const docs = [...docsById.values()].map((doc, _index, allDocs) => {
+    const duplicatesAnUpstreamDocForSkill =
+      !doc.id.startsWith("matt-pocock.") &&
+      doc.skillIds.some((skillId) =>
+        allDocs.some(
+          (candidate) =>
+            candidate.id.startsWith("matt-pocock.") &&
+            candidate.title === doc.title &&
+            candidate.skillIds.includes(skillId),
+        ),
+      );
+    return duplicatesAnUpstreamDocForSkill ? { ...doc, title: `${doc.title} (T3 workflow)` } : doc;
+  });
+
+  return {
+    workflows,
+    skills,
+    docs: docs.toSorted(
+      (left, right) => left.title.localeCompare(right.title) || left.id.localeCompare(right.id),
+    ),
+  };
 }
 
 const WORKFLOW_CATALOG = buildWorkflowCatalog();
@@ -2268,13 +2392,13 @@ export function isRegisteredWorkflowPromptId(id: string): boolean {
   return WORKFLOW_PROMPT_REGISTRY.some((entry) => entry.id === id);
 }
 
-export function isBrowserDevReviewWorkflowPromptId(
+export function isBrowserAppReviewWorkflowPromptId(
   workflowPromptId: string | null | undefined,
 ): boolean {
   return (
     workflowPromptId !== null &&
     workflowPromptId !== undefined &&
-    workflowPromptId === WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex
+    workflowPromptId === WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex
   );
 }
 
@@ -2303,13 +2427,13 @@ export function isInteractiveStructuredInputWorkflow(input: {
 }
 
 export function isPreviewMcpWorkflowPromptId(workflowPromptId: string | null | undefined): boolean {
-  return isBrowserDevReviewWorkflowPromptId(workflowPromptId);
+  return isBrowserAppReviewWorkflowPromptId(workflowPromptId);
 }
 
-export function isDevReviewMcpWorkflowPromptId(
+export function isAppReviewMcpWorkflowPromptId(
   workflowPromptId: string | null | undefined,
 ): boolean {
-  return isBrowserDevReviewWorkflowPromptId(workflowPromptId);
+  return isBrowserAppReviewWorkflowPromptId(workflowPromptId);
 }
 
 function renderAssociatedDocReference(
@@ -2322,6 +2446,17 @@ export function resolveWorkflowPromptText(id: string): string {
   const contract = resolveWorkflowPromptContract(id);
   if (contract.associatedDocs === undefined || contract.associatedDocs.length === 0) {
     return contract.promptText;
+  }
+
+  if (MATT_POCOCK_SKILL_IDS.has(contract.id)) {
+    const docs = contract.associatedDocs
+      .map(
+        (doc) => `<skill-doc id="${doc.id}" path="${doc.path}">
+${doc.content}
+</skill-doc>`,
+      )
+      .join("\n\n");
+    return `${contract.promptText}\n\n<supporting-skill-docs>\nThe referenced supporting files are bundled below for this Build invocation.\n${docs}\n</supporting-skill-docs>`;
   }
 
   const docs = contract.associatedDocs.map(renderAssociatedDocReference).join("\n");

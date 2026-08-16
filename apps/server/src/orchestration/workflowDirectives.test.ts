@@ -5,11 +5,11 @@ import { describe, it } from "vite-plus/test";
 import { parseWorkflowDirectiveFromMarkdown } from "./workflowDirectives.ts";
 
 describe("workflowDirectives", () => {
-  it("parses Dev Review fixer results with focused validations", () => {
+  it("parses App Review fixer results with focused validations", () => {
     const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
 {
-  "type": "dev-review-fix-result",
-  "runId": "dev-review-workflow-thread-controller",
+  "type": "app-review-fix-result",
+  "runId": "app-review-workflow-thread-controller",
   "planId": "plan-1",
   "status": "succeeded",
   "commitSha": "abc123",
@@ -25,7 +25,7 @@ describe("workflowDirectives", () => {
 
     NodeAssert.equal(result.kind, "parsed");
     if (result.kind !== "parsed") return;
-    NodeAssert.equal(result.directive.type, "dev-review-fix-result");
+    NodeAssert.equal(result.directive.type, "app-review-fix-result");
   });
 
   it("parses Wayfinder Map artifacts", () => {
@@ -405,10 +405,10 @@ ${JSON.stringify({
       index === 17
         ? { title: "Invalid child", promptMarkdown: "Missing a workflow prompt." }
         : {
-            workflowPromptId: "implementation.browser-dev-review.codex",
+            workflowPromptId: "implementation.browser-app-review.codex",
             title: `Browser reviewer ${index}`,
             promptMarkdown: `Review browser concern ${index}.`,
-            devReviewMode: index % 2 === 0 ? "feedback" : "full",
+            appReviewMode: index % 2 === 0 ? "feedback" : "full",
           },
     );
     const result = parseWorkflowDirectiveFromMarkdown(
@@ -419,7 +419,7 @@ ${JSON.stringify({
     if (result.kind !== "parsed" || result.directive.type !== "workflow-subagents-create") return;
     NodeAssert.equal(result.directive.children.length, 50);
     NodeAssert.match(result.directive.children[17]?.validationError ?? "", /workflowPromptId/);
-    NodeAssert.equal(result.directive.children[49]?.devReviewMode, "full");
+    NodeAssert.equal(result.directive.children[49]?.appReviewMode, "full");
   });
 
   it("parses focused workflow sub-agent results", () => {

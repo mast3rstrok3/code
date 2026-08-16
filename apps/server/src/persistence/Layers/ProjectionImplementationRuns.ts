@@ -21,7 +21,7 @@ const makeProjectionImplementationRunRepository = Effect.gen(function* () {
         orchestrator_thread_id, source_thread_id, status,
         base_branch, pinned_commit, orchestrator_branch, orchestrator_worktree_path,
         launch_summary_json, ticket_states_json, worker_results_json,
-        terminal_lineage_ticket_ids_json, final_validation_json, dev_review_ids_json,
+        terminal_lineage_ticket_ids_json, final_validation_json, app_review_ids_json,
         qa_attempt_count, handoff_target, base_branch_merge_policy, run_json,
         created_at, updated_at
       )
@@ -34,7 +34,7 @@ const makeProjectionImplementationRunRepository = Effect.gen(function* () {
         ${JSON.stringify(row.run.launchSummary)}, ${JSON.stringify(row.run.ticketStates)},
         ${JSON.stringify(row.run.workerResults)}, ${JSON.stringify(row.run.terminalLineageTicketIds)},
         ${row.run.finalValidation === null ? null : JSON.stringify(row.run.finalValidation)},
-        ${JSON.stringify(row.run.devReviewIds)}, ${row.run.qaAttemptCount}, ${row.run.handoffTarget},
+        ${JSON.stringify(row.run.appReviewIds)}, ${row.run.qaAttemptCount}, ${row.run.handoffTarget},
         ${row.run.baseBranchMergePolicy}, ${JSON.stringify(row.run)}, ${row.run.createdAt},
         ${row.run.updatedAt}
       )
@@ -56,7 +56,7 @@ const makeProjectionImplementationRunRepository = Effect.gen(function* () {
         worker_results_json = excluded.worker_results_json,
         terminal_lineage_ticket_ids_json = excluded.terminal_lineage_ticket_ids_json,
         final_validation_json = excluded.final_validation_json,
-        dev_review_ids_json = excluded.dev_review_ids_json,
+        app_review_ids_json = excluded.app_review_ids_json,
         qa_attempt_count = excluded.qa_attempt_count,
         handoff_target = excluded.handoff_target,
         base_branch_merge_policy = excluded.base_branch_merge_policy,

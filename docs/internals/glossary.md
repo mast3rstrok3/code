@@ -147,27 +147,27 @@ Workflows are the server-orchestrated automation paths that chain planning and i
 
 #### Workflow (preset)
 
-One of the five selectable orchestration paths — Fast Feature, Full Feature, Wayfinder, Planning, or Implementation — defined in [workflowPresets.ts][25]. Each preset maps to an interaction mode and an ordered list of skill-backed steps. Legacy Fix and Dev Review preset values remain decodable but are not selectable; Dev Review is launched as a nested or panel-owned run.
+One of the five selectable orchestration paths — Fast Feature, Full Feature, Wayfinder, Planning, or Implementation — defined in [workflowPresets.ts][25]. Each preset maps to an interaction mode and an ordered list of skill-backed steps. Legacy Fix and App Review preset values remain decodable but are not selectable; App Review is launched as a nested or panel-owned run.
 
 #### Workflow ID
 
 The durable identity of one workflow run. A top-level controller creates the ID and its owned children inherit it. A nested workflow creates a new ID and records its enclosing run as `parentWorkflowId`. Workflow links and AppDevStack ownership use this identity rather than a thread ID or preset name.
 
-#### Dev Review Workflow
+#### App Review Workflow
 
-A durable workflow that alternates fresh Browser Dev Review attempts with non-interactive repair planning and fresh TDD fixer children. It can run standalone against an in-place worktree or as a nested workflow below Implementation.
+A durable workflow made of budgeted three-step cycles: human-style Browser App Review, same-thread gap analysis and repair planning, then plan implementation in a fresh child thread using the Implement skill. It can run standalone against an in-place worktree or as a nested workflow below Implementation.
 
-#### Dev Review controller
+#### App Review controller
 
-The persistent thread that owns one Dev Review run. It keeps the original brief across cycles and switches to CLI Plan mode only after a failed review. Reviewer and fixer threads are fresh for every cycle.
+The persistent thread that owns one App Review run and keeps the original brief across cycles. Each cycle gets a fresh reviewer thread; that reviewer switches to CLI Plan mode after a failed review so its evidence, gap analysis, and plan remain together. Implementation happens in a new child thread.
 
-#### Dev Review cycle
+#### App Review cycle
 
-One Browser Dev Review attempt. A failed cycle below budget also records its proposed plan and fixer child before the next cycle begins. The initial review is cycle 1; the last allowed failed review does not launch another repair.
+One complete App Review budget unit: UI review, same-thread gap analysis and plan after a failure, and implementation in a new thread. The initial review is cycle 1. A pass completes its cycle without the unnecessary planning and implementation steps; the final failed cycle still implements its plan before the run becomes exhausted.
 
-#### Dev Review outcome
+#### App Review outcome
 
-The terminal result of a Dev Review Workflow: `passed`, `exhausted`, `blocked`, or `canceled`. Exhausted means the review-attempt budget was consumed by failed reviews; blocked means review, planning, or repair could not run validly.
+The terminal result of an App Review Workflow: `passed`, `exhausted`, `blocked`, or `canceled`. Exhausted means every complete cycle in the configured budget was consumed and the final implemented repair has no remaining verification cycle; blocked means review, planning, or implementation could not run validly.
 
 #### Skill (workflow prompt)
 
@@ -187,7 +187,7 @@ The Planning composition of the shared Grilling primitive and the full domain-mo
 
 #### Spec
 
-The durable planning artifact synthesized after the grill — a PRD stored in the projection, not the repository. It is the node that binds planning tickets and dev reviews together. Typed in [the contracts][1].
+The durable planning artifact synthesized after the grill — a PRD stored in the projection, not the repository. It is the node that binds planning tickets and app reviews together. Typed in [the contracts][1].
 
 #### Planning ticket
 
@@ -201,9 +201,9 @@ The planning stage where reviewer sub-threads check the ticket set against the S
 
 The durable map of decision tickets for efforts too large to specify in one pass. Written by the `wayfinder-map-artifact` directive, read through `workflow_wayfinder_map_get`, and shown above the Spec in the Planning side panel.
 
-#### Dev review
+#### App review
 
-The bounded QA stage of an implementation run. AppDevStack and Dev Review failures share up to `IMPLEMENTATION_RUN_MAX_QA_REPAIRS` (10) fresh automated repair agents in [the contracts][1]. Initial probes and Browser Dev Reviews do not consume slots; replacing a malformed, failed, blocked, or interrupted repair does. A successful AppDevStack repair re-ensures the stack directly; the final merge gate after Code Review owns complete validation instead of rerunning the integration gate after every stack repair. Exhaustion proceeds through best-effort Code Review and flagged publication only from a clean, merge-gate-validated HEAD. A clean legacy HEAD without a validation receipt reruns the merge gate; dirty, wrong-branch, non-repository, or controller-invisible worktrees require human attention. The persisted `qaCycleCount` name remains for compatibility but records consumed repair slots; `qaAttemptCount` records Browser Dev Review launches.
+The bounded QA stage of an implementation run. AppDevStack and App Review failures share up to `IMPLEMENTATION_RUN_MAX_QA_REPAIRS` (10) fresh automated repair agents in [the contracts][1]. Initial probes and Browser App Reviews do not consume slots; replacing a malformed, failed, blocked, or interrupted repair does. A successful AppDevStack repair re-ensures the stack directly; the final merge gate after Code Review owns complete validation instead of rerunning the integration gate after every stack repair. Exhaustion proceeds through best-effort Code Review and flagged publication only from a clean, merge-gate-validated HEAD. A clean legacy HEAD without a validation receipt reruns the merge gate; dirty, wrong-branch, non-repository, or controller-invisible worktrees require human attention. The persisted `qaCycleCount` name remains for compatibility but records consumed repair slots; `qaAttemptCount` records Browser App Review launches.
 
 #### Code review
 
@@ -211,7 +211,7 @@ The final automated review stage: one comprehensive review-and-fix pass along th
 
 #### Implementation run
 
-One orchestrated execution of a Spec's tickets: a dedicated worktree, dependency-chained TDD workers, programmatic merges, dev review, and code review, driven by [ImplementationWorkflowReactor.ts][29].
+One orchestrated execution of a Spec's tickets: a dedicated worktree, dependency-chained TDD workers, programmatic merges, app review, and code review, driven by [ImplementationWorkflowReactor.ts][29].
 
 #### App dev stack
 
@@ -219,7 +219,7 @@ A Kubernetes development deployment for a worktree. Workflow orchestration may o
 time through its durable workflow ID. A matching pre-existing or standing stack can be reused but
 is not adopted, replaced, or deleted by that workflow.
 
-The per-worktree development stack (dev servers, preview) that implementation runs start only after Build or worker integration has produced a stable worktree. Transitional `pending` and `starting` states are retried as waiting states, while controller visibility failures and unhealthy non-optional services block before Browser Dev Review. Dev Review then uses its live surface. See [app-dev-stacks.md][30].
+The per-worktree development stack (dev servers, preview) that implementation runs start only after Build or worker integration has produced a stable worktree. Transitional `pending` and `starting` states are retried as waiting states, while controller visibility failures and unhealthy non-optional services block before Browser App Review. App Review then uses its live surface. See [app-dev-stacks.md][30].
 
 ## Practical Shortcuts
 

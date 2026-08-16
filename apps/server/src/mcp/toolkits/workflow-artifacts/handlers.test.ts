@@ -1,7 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import {
   DEFAULT_WORKSPACE_USER_ID,
-  DevReviewId,
+  AppReviewId,
   EnvironmentId,
   ProjectId,
   ProviderInstanceId,
@@ -22,28 +22,28 @@ const otherProjectId = ProjectId.make("project-other");
 const rootThreadId = ThreadId.make("thread-workflow-root");
 const childThreadId = ThreadId.make("thread-workflow-child");
 const implementationThreadId = ThreadId.make("thread-implementation-orchestrator");
-const devReviewControllerThreadId = ThreadId.make("thread-dev-review-orchestrator");
-const nestedReviewerThreadId = ThreadId.make("thread-dev-review-reviewer");
+const appReviewControllerThreadId = ThreadId.make("thread-app-review-orchestrator");
+const nestedReviewerThreadId = ThreadId.make("thread-app-review-reviewer");
 const detachedThreadId = ThreadId.make("thread-detached-workflow");
 const workflowId = WorkflowId.make("workflow-artifacts-1");
 const implementationWorkflowId = WorkflowId.make("implementation-run-1");
-const devReviewWorkflowId = WorkflowId.make("dev-review-workflow-1");
+const appReviewWorkflowId = WorkflowId.make("app-review-workflow-1");
 const ticketId = "planning-ticket-1";
 
 const readModel = {
   snapshotSequence: 1,
   projects: [],
   implementationRuns: [],
-  devReviewWorkflowRuns: [
+  appReviewWorkflowRuns: [
     {
-      id: devReviewWorkflowId,
+      id: appReviewWorkflowId,
       targetThreadId: implementationThreadId,
-      controllerThreadId: devReviewControllerThreadId,
+      controllerThreadId: appReviewControllerThreadId,
       cycles: [
         {
           reviewerThreadId: nestedReviewerThreadId,
           fixerThreadId: null,
-          reviewId: DevReviewId.make("dev-review-nested"),
+          reviewId: AppReviewId.make("app-review-nested"),
         },
       ],
     },
@@ -96,7 +96,7 @@ const readModel = {
         ],
         reviewCycles: [],
       },
-      devReviews: [],
+      appReviews: [],
     },
     {
       id: childThreadId,
@@ -104,9 +104,9 @@ const readModel = {
       ownerUserId: DEFAULT_WORKSPACE_USER_ID,
       workflowContext: { workflowId, rootThreadId, ticketScope: [ticketId] },
       planningWorkflow: null,
-      devReviews: [
+      appReviews: [
         {
-          id: DevReviewId.make("dev-review-1"),
+          id: AppReviewId.make("app-review-1"),
           sourceThreadId: rootThreadId,
           reviewThreadId: childThreadId,
           sourceTurnId: null,
@@ -149,22 +149,22 @@ const readModel = {
         ticketScope: [ticketId],
       },
       planningWorkflow: null,
-      devReviews: [],
+      appReviews: [],
     },
     {
-      id: devReviewControllerThreadId,
+      id: appReviewControllerThreadId,
       projectId,
       ownerUserId: DEFAULT_WORKSPACE_USER_ID,
       workflowContext: {
-        workflowId: devReviewWorkflowId,
+        workflowId: appReviewWorkflowId,
         parentWorkflowId: implementationWorkflowId,
         rootThreadId,
         ticketScope: [ticketId],
       },
       planningWorkflow: null,
-      devReviews: [
+      appReviews: [
         {
-          id: DevReviewId.make("dev-review-nested"),
+          id: AppReviewId.make("app-review-nested"),
           sourceThreadId: implementationThreadId,
           reviewThreadId: nestedReviewerThreadId,
           sourceTurnId: null,
@@ -201,13 +201,13 @@ const readModel = {
       projectId,
       ownerUserId: DEFAULT_WORKSPACE_USER_ID,
       workflowContext: {
-        workflowId: devReviewWorkflowId,
+        workflowId: appReviewWorkflowId,
         parentWorkflowId: implementationWorkflowId,
         rootThreadId,
         ticketScope: [ticketId],
       },
       planningWorkflow: null,
-      devReviews: [],
+      appReviews: [],
     },
     {
       id: detachedThreadId,
@@ -220,7 +220,7 @@ const readModel = {
         ticketScope: [ticketId],
       },
       planningWorkflow: null,
-      devReviews: [],
+      appReviews: [],
     },
   ],
 } as unknown as OrchestrationReadModel;
@@ -248,14 +248,14 @@ const nestedReviewerInvocationLayer = Layer.succeed(McpInvocationContext.McpInvo
 });
 
 describe("workflow-artifacts toolkit handlers", () => {
-  it.effect("resolves canonical artifacts and many-to-many Dev Review links from a child", () =>
+  it.effect("resolves canonical artifacts and many-to-many App Review links from a child", () =>
     Effect.gen(function* () {
       const context = yield* handlers.workflow_context_get();
       const wayfinderMap = yield* handlers.workflow_wayfinder_map_get();
       const spec = yield* handlers.workflow_spec_get();
       const tickets = yield* handlers.workflow_tickets_list();
-      const review = yield* handlers.workflow_dev_review_get({
-        reviewId: DevReviewId.make("dev-review-1"),
+      const review = yield* handlers.workflow_app_review_get({
+        reviewId: AppReviewId.make("app-review-1"),
       });
 
       assert.strictEqual(context.workflowId, workflowId);

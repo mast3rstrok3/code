@@ -13,10 +13,10 @@ const childThreadId = ThreadId.make("workflow-child");
 const sourceThreadId = ThreadId.make("source-thread");
 
 describe("PreviewLifecycleReactor", () => {
-  it("closes terminal Dev Review and workflow-child threads", () => {
+  it("closes terminal App Review and workflow-child threads", () => {
     for (const status of ["passed", "failed", "blocked"] as const) {
       expect(
-        previewThreadIdForEvent(asEvent("thread.dev-review-updated", { status, reviewThreadId })),
+        previewThreadIdForEvent(asEvent("thread.app-review-updated", { status, reviewThreadId })),
       ).toBe(reviewThreadId);
     }
     for (const status of ["completed", "blocked", "rejected", "failed", "canceled"] as const) {
@@ -33,7 +33,7 @@ describe("PreviewLifecycleReactor", () => {
   it("keeps pending and running workflow previews open", () => {
     expect(
       previewThreadIdForEvent(
-        asEvent("thread.dev-review-updated", { status: "running", reviewThreadId }),
+        asEvent("thread.app-review-updated", { status: "running", reviewThreadId }),
       ),
     ).toBeNull();
     for (const status of ["pending", "running"] as const) {
@@ -47,11 +47,11 @@ describe("PreviewLifecycleReactor", () => {
     }
   });
 
-  it("closes the active Dev Review on cancellation and any deleted thread", () => {
+  it("closes the active App Review on cancellation and any deleted thread", () => {
     expect(
       previewThreadIdForEvent(
         asEvent("thread.implementation-run-cancel-requested", {
-          run: { activeDevReviewThreadId: reviewThreadId },
+          run: { activeAppReviewThreadId: reviewThreadId },
         }),
       ),
     ).toBe(reviewThreadId);
@@ -68,7 +68,7 @@ describe("PreviewLifecycleReactor", () => {
           closed.push(threadId);
         }),
     } as unknown as PreviewCoordinator.PreviewCoordinator["Service"];
-    const event = asEvent("thread.dev-review-updated", {
+    const event = asEvent("thread.app-review-updated", {
       status: "passed",
       reviewThreadId,
     });

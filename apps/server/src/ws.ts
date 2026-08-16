@@ -389,9 +389,9 @@ export function isThreadDetailEvent(event: OrchestrationEvent): event is Extract
     type:
       | "thread.message-sent"
       | "thread.proposed-plan-upserted"
-      | "thread.dev-review-created"
-      | "thread.dev-review-updated"
-      | "thread.dev-review-evidence-updated"
+      | "thread.app-review-created"
+      | "thread.app-review-updated"
+      | "thread.app-review-evidence-updated"
       | "thread.workflow-subagent-batch-created"
       | "thread.workflow-subagent-batch-child-updated"
       | "thread.workflow-subagent-batch-completed"
@@ -413,9 +413,9 @@ export function isThreadDetailEvent(event: OrchestrationEvent): event is Extract
   return (
     event.type === "thread.message-sent" ||
     event.type === "thread.proposed-plan-upserted" ||
-    event.type === "thread.dev-review-created" ||
-    event.type === "thread.dev-review-updated" ||
-    event.type === "thread.dev-review-evidence-updated" ||
+    event.type === "thread.app-review-created" ||
+    event.type === "thread.app-review-updated" ||
+    event.type === "thread.app-review-evidence-updated" ||
     event.type === "thread.workflow-subagent-batch-created" ||
     event.type === "thread.workflow-subagent-batch-child-updated" ||
     event.type === "thread.workflow-subagent-batch-completed" ||
@@ -443,13 +443,13 @@ function threadDetailEventMatchesThread(event: OrchestrationEvent, threadId: str
     return true;
   }
   switch (event.type) {
-    case "thread.dev-review-created":
+    case "thread.app-review-created":
       return (
-        event.payload.devReview.sourceThreadId === threadId ||
-        event.payload.devReview.reviewThreadId === threadId
+        event.payload.appReview.sourceThreadId === threadId ||
+        event.payload.appReview.reviewThreadId === threadId
       );
-    case "thread.dev-review-updated":
-    case "thread.dev-review-evidence-updated":
+    case "thread.app-review-updated":
+    case "thread.app-review-evidence-updated":
       return event.payload.sourceThreadId === threadId || event.payload.reviewThreadId === threadId;
     case "thread.implementation-run-updated":
     case "thread.implementation-run-cancel-requested":
@@ -871,10 +871,10 @@ const makeWsRpcLayer = (
               }),
             );
           }
-          case "thread.dev-review-workflow-launched":
-          case "thread.dev-review-workflow-updated":
-          case "thread.dev-review-workflow-cancel-requested":
-          case "thread.dev-review-workflow-resume-requested": {
+          case "thread.app-review-workflow-launched":
+          case "thread.app-review-workflow-updated":
+          case "thread.app-review-workflow-cancel-requested":
+          case "thread.app-review-workflow-resume-requested": {
             const run = event.payload.run;
             if (
               visibleThreadIds !== undefined &&
@@ -890,7 +890,7 @@ const makeWsRpcLayer = (
             }
             return Effect.succeed(
               Option.some({
-                kind: "dev-review-workflow-run-upserted" as const,
+                kind: "app-review-workflow-run-upserted" as const,
                 sequence: event.sequence,
                 run,
               }),
@@ -987,11 +987,11 @@ const makeWsRpcLayer = (
                 case "thread.implementation-run-cancel-requested":
                 case "thread.implementation-change-request-retry-requested":
                   return `implementation-run:${event.payload.run.id}`;
-                case "thread.dev-review-workflow-launched":
-                case "thread.dev-review-workflow-updated":
-                case "thread.dev-review-workflow-cancel-requested":
-                case "thread.dev-review-workflow-resume-requested":
-                  return `dev-review-workflow-run:${event.payload.run.id}`;
+                case "thread.app-review-workflow-launched":
+                case "thread.app-review-workflow-updated":
+                case "thread.app-review-workflow-cancel-requested":
+                case "thread.app-review-workflow-resume-requested":
+                  return `app-review-workflow-run:${event.payload.run.id}`;
                 default:
                   return `${event.aggregateKind}:${event.aggregateId}`;
               }
@@ -1073,7 +1073,7 @@ const makeWsRpcLayer = (
       const dispatchBootstrapTurnStart = (
         command: Extract<
           OrchestrationCommand,
-          { type: "thread.turn.start" | "thread.dev-review-workflow.launch" }
+          { type: "thread.turn.start" | "thread.app-review-workflow.launch" }
         >,
       ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> =>
         Effect.gen(function* () {
@@ -1489,7 +1489,7 @@ const makeWsRpcLayer = (
       ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> => {
         const dispatchEffect =
           (normalizedCommand.type === "thread.turn.start" ||
-            normalizedCommand.type === "thread.dev-review-workflow.launch") &&
+            normalizedCommand.type === "thread.app-review-workflow.launch") &&
           normalizedCommand.bootstrap
             ? dispatchBootstrapTurnStart(normalizedCommand)
             : orchestrationEngine
@@ -2486,7 +2486,7 @@ const makeWsRpcLayer = (
             Effect.gen(function* () {
               if (
                 input.resource._tag === "attachment" ||
-                input.resource._tag === "dev-review-evidence"
+                input.resource._tag === "app-review-evidence"
               ) {
                 return yield* issueAssetUrl({ resource: input.resource });
               }

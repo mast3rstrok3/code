@@ -122,8 +122,8 @@ export function workflowStepMatchesImplementationFailure<TThread extends Workflo
       return label.includes("integrat") || label.includes("merge gate");
     case "app-dev-stack":
       return label.startsWith("start and probe appdevstack");
-    case "dev-review":
-      return label.includes("dev review");
+    case "app-review":
+      return label.includes("app review");
     case "code-review":
       return label.includes("code review");
     case "fixer":
@@ -192,8 +192,8 @@ function entrySkillIds<TThread extends WorkflowModelThread>(
   entry: WorkflowTimelineEntry<TThread>,
 ): ReadonlySet<string> {
   if (entry.kind === "workflow") {
-    return entry.group.preset === "dev-review"
-      ? new Set(["implementation.browser-dev-review.codex"])
+    return entry.group.preset === "app-review"
+      ? new Set(["implementation.browser-app-review.codex"])
       : new Set();
   }
   switch (entry.row.thread.workflowRole) {
@@ -215,14 +215,15 @@ function entrySkillIds<TThread extends WorkflowModelThread>(
     case "implementation-fixer":
     case "product-fix-implementer":
     case "fast-feature-implementer":
-    case "dev-review-fixer":
       return new Set(["implementation.tdd.codex"]);
+    case "app-review-fixer":
+      return new Set(["matt-pocock.implement"]);
     case "implementation-validator":
       return new Set(["implementation.merge-gate.codex"]);
     case "implementation-qa-reviewer":
-    case "dev-review-reviewer":
-    case "dev-review-orchestrator":
-      return new Set(["implementation.browser-dev-review.codex"]);
+    case "app-review-reviewer":
+    case "app-review-orchestrator":
+      return new Set(["implementation.browser-app-review.codex"]);
     case "implementation-code-reviewer":
       return new Set(["implementation.code-review.codex"]);
     case null:
@@ -251,7 +252,7 @@ function entryMatchesDefinedStep<TThread extends WorkflowModelThread>(
 function definedStepRepeatsAsCycles(step: WorkflowPresetHelpStep): boolean {
   const label = step.label.toLowerCase();
   return (
-    step.skillId === "implementation.browser-dev-review.codex" ||
+    step.skillId === "implementation.browser-app-review.codex" ||
     step.skillId === "planning.ticket-reviewer.codex" ||
     label.includes("cycle")
   );
@@ -281,8 +282,8 @@ function fallbackStepRepeatsAsCycles<TThread extends WorkflowModelThread>(
       (entry.row.thread.workflowRole === "planning-reviewer" ||
         entry.row.thread.workflowRole === "implementation-qa-reviewer" ||
         entry.row.thread.workflowRole === "implementation-fixer" ||
-        entry.row.thread.workflowRole === "dev-review-reviewer" ||
-        entry.row.thread.workflowRole === "dev-review-fixer"),
+        entry.row.thread.workflowRole === "app-review-reviewer" ||
+        entry.row.thread.workflowRole === "app-review-fixer"),
   );
 }
 
@@ -509,7 +510,7 @@ function resolveOwner<TThread extends WorkflowModelThread>(
     ? byKey.get(`${thread.environmentId}:${contextRootId}`)
     : undefined;
   // A nested workflow's rootThreadId identifies its local controller (for
-  // example, Dev Review can root at a Fast Feature Build child). Continue up
+  // example, App Review can root at a Fast Feature Build child). Continue up
   // the physical thread ancestry so every nested workflow remains visible from
   // the thread that initiated the complete workflow tree.
   let current = contextRoot ?? thread;

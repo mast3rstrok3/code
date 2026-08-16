@@ -45,7 +45,7 @@ import {
   buildCodexDeveloperInstructions,
 } from "../CodexDeveloperInstructions.ts";
 import {
-  isBrowserDevReviewWorkflowPromptId,
+  isBrowserAppReviewWorkflowPromptId,
   isInteractiveStructuredInputWorkflow,
   isInteractiveStructuredInputWorkflowPromptId,
   resolveWorkflowPromptId,
@@ -546,7 +546,7 @@ function buildCodexCollaborationMode(input: {
       reasoningEffort,
     },
   );
-  const scopedDeveloperInstructions = isBrowserDevReviewWorkflowPromptId(workflowPromptId)
+  const scopedDeveloperInstructions = isBrowserAppReviewWorkflowPromptId(workflowPromptId)
     ? `${baseDeveloperInstructions}\n\n${CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS}`
     : baseDeveloperInstructions;
   const workflowInstructions =

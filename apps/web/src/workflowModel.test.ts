@@ -94,7 +94,7 @@ describe("buildWorkflowViewModel", () => {
     expect(groups?.find((group) => group.id === "batch:batch-a")?.preset).toBeNull();
   });
 
-  it("keeps nested Dev Review as its own workflow group under Implementation", () => {
+  it("keeps nested App Review as its own workflow group under Implementation", () => {
     const root = thread("root", { workflowPreset: "full-feature" });
     const orchestrator = thread("implementation", {
       parentThreadId: "root",
@@ -106,22 +106,22 @@ describe("buildWorkflowViewModel", () => {
         rootThreadId: "root",
       },
     });
-    const controller = thread("dev-review-controller", {
+    const controller = thread("app-review-controller", {
       parentThreadId: "implementation",
-      workflowPreset: "dev-review",
-      workflowRole: "dev-review-orchestrator",
+      workflowPreset: "app-review",
+      workflowRole: "app-review-orchestrator",
       workflowContext: {
-        workflowId: "dev-review-run",
+        workflowId: "app-review-run",
         parentWorkflowId: "implementation-run",
         rootThreadId: "root",
       },
     });
-    const reviewer = thread("dev-review-reviewer", {
-      parentThreadId: "dev-review-controller",
-      workflowPreset: "dev-review",
-      workflowRole: "dev-review-reviewer",
+    const reviewer = thread("app-review-reviewer", {
+      parentThreadId: "app-review-controller",
+      workflowPreset: "app-review",
+      workflowRole: "app-review-reviewer",
       workflowContext: {
-        workflowId: "dev-review-run",
+        workflowId: "app-review-run",
         parentWorkflowId: "implementation-run",
         rootThreadId: "root",
       },
@@ -138,9 +138,9 @@ describe("buildWorkflowViewModel", () => {
       groups?.map((group) => [group.id, group.preset, group.parentGroupId, group.depth]),
     ).toEqual([
       ["workflow:implementation-run", "implementation", null, 0],
-      ["workflow:dev-review-run", "dev-review", "workflow:implementation-run", 1],
+      ["workflow:app-review-run", "app-review", "workflow:implementation-run", 1],
     ]);
-    expect(groups?.find((group) => group.id === "workflow:dev-review-run")?.rows).toHaveLength(2);
+    expect(groups?.find((group) => group.id === "workflow:app-review-run")?.rows).toHaveLength(2);
   });
 
   it("uses explicit parent workflow identity when thread ancestry is incomplete", () => {
@@ -152,7 +152,7 @@ describe("buildWorkflowViewModel", () => {
     const detachedReview = thread("detached-review", {
       parentThreadId: "root",
       workflowContext: {
-        workflowId: "dev-review-run",
+        workflowId: "app-review-run",
         parentWorkflowId: "implementation-run",
         rootThreadId: "root",
       },
@@ -164,7 +164,7 @@ describe("buildWorkflowViewModel", () => {
       implementation,
     ]).rootsByThreadKey.get("env:root")?.groups;
 
-    expect(groups?.find((group) => group.sourceId === "dev-review-run")).toMatchObject({
+    expect(groups?.find((group) => group.sourceId === "app-review-run")).toMatchObject({
       parentGroupId: "workflow:implementation-run",
       depth: 1,
     });
@@ -216,12 +216,12 @@ describe("buildWorkflowViewModel", () => {
       workflowContext: { workflowId: "fast-feature-run", rootThreadId: "root" },
       createdAt: "2026-01-01T00:01:00.000Z",
     });
-    const controller = thread("dev-review-controller", {
+    const controller = thread("app-review-controller", {
       parentThreadId: "build",
-      workflowRole: "dev-review-orchestrator",
-      workflowPreset: "dev-review",
+      workflowRole: "app-review-orchestrator",
+      workflowPreset: "app-review",
       workflowContext: {
-        workflowId: "dev-review-run",
+        workflowId: "app-review-run",
         parentWorkflowId: "fast-feature-run",
         rootThreadId: "root",
       },
@@ -250,7 +250,7 @@ describe("buildWorkflowViewModel", () => {
 
     expect(fastFeature && groups ? buildWorkflowTimeline(fastFeature, groups) : []).toMatchObject([
       { kind: "thread", row: { thread: { id: "build" } } },
-      { kind: "workflow", group: { sourceId: "dev-review-run" } },
+      { kind: "workflow", group: { sourceId: "app-review-run" } },
       { kind: "thread", row: { thread: { id: "code-review" } } },
       { kind: "thread", row: { thread: { id: "final-validation" } } },
     ]);
@@ -339,7 +339,7 @@ describe("buildWorkflowViewModel", () => {
     ]);
   });
 
-  it("uses Settings workflow steps and groups repeated Dev Reviews as cycles", () => {
+  it("uses Settings workflow steps and groups repeated App Reviews as cycles", () => {
     const root = thread("root", { workflowPreset: "fast-feature" });
     const build = thread("build", {
       parentThreadId: "root",
@@ -349,10 +349,10 @@ describe("buildWorkflowViewModel", () => {
     });
     const reviewA = thread("review-a", {
       parentThreadId: "build",
-      workflowRole: "dev-review-orchestrator",
-      workflowPreset: "dev-review",
+      workflowRole: "app-review-orchestrator",
+      workflowPreset: "app-review",
       workflowContext: {
-        workflowId: "dev-review-a",
+        workflowId: "app-review-a",
         parentWorkflowId: "fast-feature-run",
         rootThreadId: "root",
       },
@@ -360,10 +360,10 @@ describe("buildWorkflowViewModel", () => {
     });
     const reviewB = thread("review-b", {
       parentThreadId: "build",
-      workflowRole: "dev-review-orchestrator",
-      workflowPreset: "dev-review",
+      workflowRole: "app-review-orchestrator",
+      workflowPreset: "app-review",
       workflowContext: {
-        workflowId: "dev-review-b",
+        workflowId: "app-review-b",
         parentWorkflowId: "fast-feature-run",
         rootThreadId: "root",
       },
@@ -380,15 +380,15 @@ describe("buildWorkflowViewModel", () => {
       "CLI Plan mode",
       "CLI Build in the shared worktree",
       "Start and probe AppDevStack from the completed Build",
-      "Run nested Dev Review against AppDevStack",
+      "Run nested App Review against AppDevStack",
       "Code Review",
       "Change request publication",
     ]);
     expect(steps[5]).toMatchObject({
       repeatsAsCycles: true,
       entries: [
-        { kind: "workflow", group: { sourceId: "dev-review-a" } },
-        { kind: "workflow", group: { sourceId: "dev-review-b" } },
+        { kind: "workflow", group: { sourceId: "app-review-a" } },
+        { kind: "workflow", group: { sourceId: "app-review-b" } },
       ],
     });
     expect(steps.slice(0, 3).map((step) => step.entries[0]?.id)).toEqual([
@@ -401,7 +401,7 @@ describe("buildWorkflowViewModel", () => {
       row: { thread: { id: "build" } },
     });
     expect(
-      steps.findIndex((step) => workflowStepMatchesImplementationFailure(step, "dev-review")),
+      steps.findIndex((step) => workflowStepMatchesImplementationFailure(step, "app-review")),
     ).toBe(5);
     expect(
       steps.findIndex((step) => workflowStepMatchesImplementationFailure(step, "app-dev-stack")),
@@ -426,7 +426,7 @@ describe("buildWorkflowViewModel", () => {
     });
     const review = thread("review", {
       parentThreadId: "build",
-      workflowRole: "dev-review-reviewer",
+      workflowRole: "app-review-reviewer",
       workflowContext: {
         workflowId: "review-run",
         parentWorkflowId: "implementation-run",
@@ -464,16 +464,16 @@ describe("buildWorkflowViewModel", () => {
       workflowPreset: "fast-feature",
       workflowRole: "fast-feature-implementer",
     });
-    const controller = thread("dev-review-controller", {
+    const controller = thread("app-review-controller", {
       parentThreadId: "build",
-      workflowPreset: "dev-review",
-      workflowRole: "dev-review-orchestrator",
-      workflowContext: { workflowId: "dev-review-run", rootThreadId: "build" },
+      workflowPreset: "app-review",
+      workflowRole: "app-review-orchestrator",
+      workflowContext: { workflowId: "app-review-run", rootThreadId: "build" },
     });
-    const reviewer = thread("dev-review-reviewer", {
-      parentThreadId: "dev-review-controller",
-      workflowRole: "dev-review-reviewer",
-      workflowContext: { workflowId: "dev-review-run", rootThreadId: "build" },
+    const reviewer = thread("app-review-reviewer", {
+      parentThreadId: "app-review-controller",
+      workflowRole: "app-review-reviewer",
+      workflowContext: { workflowId: "app-review-run", rootThreadId: "build" },
     });
 
     const model = buildWorkflowViewModel([reviewer, root, controller, build]);
@@ -482,15 +482,15 @@ describe("buildWorkflowViewModel", () => {
     expect(selectWorkflowRootForThread(model, reviewer)?.root.id).toBe("root");
     expect(workflow?.members.map((candidate) => candidate.id).sort()).toEqual([
       "build",
-      "dev-review-controller",
-      "dev-review-reviewer",
+      "app-review-controller",
+      "app-review-reviewer",
       "root",
     ]);
     expect(
       workflow?.groups.map((group) => [group.id, group.preset, group.parentGroupId, group.depth]),
     ).toEqual([
       ["legacy:build", "fast-feature", null, 0],
-      ["workflow:dev-review-run", "dev-review", "legacy:build", 1],
+      ["workflow:app-review-run", "app-review", "legacy:build", 1],
     ]);
   });
 

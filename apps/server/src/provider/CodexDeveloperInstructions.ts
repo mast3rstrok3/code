@@ -1,13 +1,13 @@
-import { BROWSER_DEV_REVIEW_LAUNCH_DIRECTIVE_INSTRUCTIONS } from "./WorkflowSubagentInstructions.ts";
+import { BROWSER_APP_REVIEW_LAUNCH_DIRECTIVE_INSTRUCTIONS } from "./WorkflowSubagentInstructions.ts";
 
 export const CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS = `
-## Browser Dev Review QA tools
+## Browser App Review QA tools
 
-This browser tooling context is scoped to the Implementation Workflow Browser Dev Review QA role only. It is not available in ordinary implementation, planning, Product Workflow, or default sessions.
+This browser tooling context is scoped to the Implementation Workflow Browser App Review QA role only. It is not available in ordinary implementation, planning, Product Workflow, or default sessions.
 
-Use the \`t3-code\` MCP server for all browser work. Drive the browser with the \`preview_*\` tools (\`preview_open\`, \`preview_navigate\`, \`preview_snapshot\`, \`preview_click\`, \`preview_type\`, \`preview_press\`, \`preview_scroll\`, \`preview_wait_for\`, \`preview_resize\`) and coordinate the durable Dev Review record with \`dev_review_get\`, \`dev_review_recording_start\`, \`dev_review_capture_screenshot\`, \`dev_review_recording_stop\`, and \`dev_review_update\`. Do not use external browsers, browser MCP servers, or standalone Playwright scripts.
+Use the \`t3-code\` MCP server for all browser work. Drive the browser with the \`preview_*\` tools (\`preview_open\`, \`preview_navigate\`, \`preview_snapshot\`, \`preview_click\`, \`preview_type\`, \`preview_press\`, \`preview_scroll\`, \`preview_wait_for\`, \`preview_resize\`) and coordinate the durable App Review record with \`app_review_get\`, \`app_review_recording_start\`, \`app_review_capture_screenshot\`, \`app_review_recording_stop\`, and \`app_review_update\`. Do not use external browsers, browser MCP servers, or standalone Playwright scripts.
 
-Evidence is required. A passed verdict needs a saved screen recording plus at least one captioned screenshot. A failed verdict normally uses the same evidence, but if recording finalization fails after product testing, preserve the failure when there is at least one failed check and every actionable finding references a captured screenshot. Never turn evidenced product defects into blocked solely because video saving failed. If no trustworthy product evidence could be captured, mark the Dev Review blocked. See \`preview-browser-qa.md\` for the full workflow.`;
+Evidence is required. A passed verdict needs a saved screen recording plus at least one captioned screenshot. A failed verdict normally uses the same evidence, but if recording finalization fails after product testing, preserve the failure when there is at least one failed check and every actionable finding references a captured screenshot. Never turn evidenced product defects into blocked solely because video saving failed. If no trustworthy product evidence could be captured, mark the App Review blocked. See \`preview-browser-qa.md\` for the full workflow.`;
 
 export const CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS = `<collaboration_mode># Plan Mode (Conversational)
 
@@ -143,7 +143,7 @@ The \`request_user_input\` tool is unavailable in Default mode. If you call it w
 
 In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.
 
-${BROWSER_DEV_REVIEW_LAUNCH_DIRECTIVE_INSTRUCTIONS}
+${BROWSER_APP_REVIEW_LAUNCH_DIRECTIVE_INSTRUCTIONS}
 </collaboration_mode>`;
 
 export const CODEX_INTERACTIVE_GRILL_DEVELOPER_INSTRUCTIONS = `<collaboration_mode># Collaboration Mode: Interactive T3 Grill

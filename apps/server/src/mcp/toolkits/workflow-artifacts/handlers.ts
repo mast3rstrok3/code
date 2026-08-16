@@ -31,15 +31,15 @@ export const handlers = {
       }
       return ticket;
     }),
-  workflow_dev_reviews_list: () => resolve().pipe(Effect.map((snapshot) => snapshot.devReviews)),
-  workflow_dev_review_get: (input) =>
+  workflow_app_reviews_list: () => resolve().pipe(Effect.map((snapshot) => snapshot.appReviews)),
+  workflow_app_review_get: (input) =>
     Effect.gen(function* () {
       const snapshot = yield* resolve();
-      const review = snapshot.devReviews.find((candidate) => candidate.id === input.reviewId);
+      const review = snapshot.appReviews.find((candidate) => candidate.id === input.reviewId);
       if (review === undefined) {
         return yield* notFound(
           snapshot.context.rootThreadId,
-          `Dev Review '${input.reviewId}' is not in this workflow.`,
+          `App Review '${input.reviewId}' is not in this workflow.`,
         );
       }
       return review;

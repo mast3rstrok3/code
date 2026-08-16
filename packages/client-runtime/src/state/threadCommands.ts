@@ -10,9 +10,9 @@ import {
   type InterruptThreadTurnInput,
   type LaunchThreadImplementationRunInput,
   type LaunchThreadFastFeatureRunInput,
-  type LaunchThreadDevReviewInput,
-  type LaunchThreadDevReviewWorkflowInput,
-  type CancelThreadDevReviewWorkflowInput,
+  type LaunchThreadAppReviewInput,
+  type LaunchThreadAppReviewWorkflowInput,
+  type CancelThreadAppReviewWorkflowInput,
   type LoadThreadPlanningSpecBundleInput,
   type CreateThreadPlanningSpecInput,
   type RequestThreadPlanningTicketReviewInput,
@@ -44,9 +44,9 @@ import {
   interruptThreadTurn,
   launchThreadImplementationRun,
   launchThreadFastFeatureRun,
-  launchThreadDevReview,
-  launchThreadDevReviewWorkflow,
-  cancelThreadDevReviewWorkflow,
+  launchThreadAppReview,
+  launchThreadAppReviewWorkflow,
+  cancelThreadAppReviewWorkflow,
   loadThreadPlanningSpecBundle,
   requestThreadPlanningTicketReview,
   respondToThreadApproval,
@@ -80,9 +80,9 @@ export type {
   InterruptThreadTurnInput,
   LaunchThreadImplementationRunInput,
   LaunchThreadFastFeatureRunInput,
-  LaunchThreadDevReviewInput,
-  LaunchThreadDevReviewWorkflowInput,
-  CancelThreadDevReviewWorkflowInput,
+  LaunchThreadAppReviewInput,
+  LaunchThreadAppReviewWorkflowInput,
+  CancelThreadAppReviewWorkflowInput,
   LoadThreadPlanningSpecBundleInput,
   CreateThreadPlanningSpecInput,
   RequestThreadPlanningTicketReviewInput,
@@ -214,9 +214,9 @@ export function createThreadEnvironmentAtoms<R, E>(
       scheduler,
       concurrency,
     }),
-    launchDevReview: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:launch-dev-review",
-      execute: (input: LaunchThreadDevReviewInput) => launchThreadDevReview(input),
+    launchAppReview: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:launch-app-review",
+      execute: (input: LaunchThreadAppReviewInput) => launchThreadAppReview(input),
       scheduler,
       concurrency: {
         mode: "serial" as const,
@@ -225,13 +225,13 @@ export function createThreadEnvironmentAtoms<R, E>(
           input,
         }: {
           environmentId: string;
-          input: LaunchThreadDevReviewInput;
+          input: LaunchThreadAppReviewInput;
         }) => JSON.stringify([environmentId, input.sourceThreadId, input.reviewThreadId]),
       },
     }),
-    launchDevReviewWorkflow: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:launch-dev-review-workflow",
-      execute: (input: LaunchThreadDevReviewWorkflowInput) => launchThreadDevReviewWorkflow(input),
+    launchAppReviewWorkflow: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:launch-app-review-workflow",
+      execute: (input: LaunchThreadAppReviewWorkflowInput) => launchThreadAppReviewWorkflow(input),
       scheduler,
       concurrency: {
         mode: "serial" as const,
@@ -240,13 +240,13 @@ export function createThreadEnvironmentAtoms<R, E>(
           input,
         }: {
           environmentId: string;
-          input: LaunchThreadDevReviewWorkflowInput;
+          input: LaunchThreadAppReviewWorkflowInput;
         }) => JSON.stringify([environmentId, input.targetThreadId]),
       },
     }),
-    cancelDevReviewWorkflow: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:cancel-dev-review-workflow",
-      execute: (input: CancelThreadDevReviewWorkflowInput) => cancelThreadDevReviewWorkflow(input),
+    cancelAppReviewWorkflow: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:cancel-app-review-workflow",
+      execute: (input: CancelThreadAppReviewWorkflowInput) => cancelThreadAppReviewWorkflow(input),
       scheduler,
       concurrency: {
         mode: "serial" as const,
@@ -255,7 +255,7 @@ export function createThreadEnvironmentAtoms<R, E>(
           input,
         }: {
           environmentId: string;
-          input: CancelThreadDevReviewWorkflowInput;
+          input: CancelThreadAppReviewWorkflowInput;
         }) => JSON.stringify([environmentId, input.runId]),
       },
     }),

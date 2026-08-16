@@ -3,7 +3,7 @@ import { Tool } from "effect/unstable/ai";
 
 import {
   WorkflowContextGetTool,
-  WorkflowDevReviewsListTool,
+  WorkflowAppReviewsListTool,
   WorkflowSpecGetTool,
   WorkflowTicketsListTool,
   WorkflowWayfinderMapGetTool,
@@ -15,7 +15,7 @@ it("publishes object parameter schemas for zero-argument workflow artifact tools
     WorkflowWayfinderMapGetTool,
     WorkflowSpecGetTool,
     WorkflowTicketsListTool,
-    WorkflowDevReviewsListTool,
+    WorkflowAppReviewsListTool,
   ];
 
   for (const tool of tools) {

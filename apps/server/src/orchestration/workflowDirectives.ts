@@ -110,7 +110,7 @@ export type WorkflowDirective =
       readonly notesMarkdown: string;
     }
   | {
-      readonly type: "dev-review-fix-result";
+      readonly type: "app-review-fix-result";
       readonly runId: string;
       readonly planId: string;
       readonly status: "succeeded" | "failed" | "blocked";
@@ -140,7 +140,7 @@ export type WorkflowDirective =
       readonly title: string;
       readonly promptMarkdown: string;
       readonly expectedResult?: string;
-      readonly devReviewMode?: "feedback" | "full";
+      readonly appReviewMode?: "feedback" | "full";
       readonly validationError?: string;
     }
   | {
@@ -164,7 +164,7 @@ export interface WorkflowSubagentCreateChild {
   readonly title: string;
   readonly promptMarkdown: string;
   readonly expectedResult?: string;
-  readonly devReviewMode?: "feedback" | "full";
+  readonly appReviewMode?: "feedback" | "full";
   /** Child-local validation failures are persisted as rejected batch entries. */
   readonly validationError?: string;
 }
@@ -270,13 +270,13 @@ function parseWorkflowSubagentChild(value: unknown, index?: number): WorkflowSub
     errors.push(`${prefix}.expectedResult must be a non-empty string when provided.`);
   }
 
-  const modeValue = record["devReviewMode"];
-  const devReviewMode = modeValue === "feedback" || modeValue === "full" ? modeValue : undefined;
-  if (modeValue !== undefined && devReviewMode === undefined) {
-    errors.push(`${prefix}.devReviewMode must be feedback or full when provided.`);
+  const modeValue = record["appReviewMode"];
+  const appReviewMode = modeValue === "feedback" || modeValue === "full" ? modeValue : undefined;
+  if (modeValue !== undefined && appReviewMode === undefined) {
+    errors.push(`${prefix}.appReviewMode must be feedback or full when provided.`);
   }
-  if (modeValue !== undefined && workflowPromptId !== "implementation.browser-dev-review.codex") {
-    errors.push(`${prefix}.devReviewMode is only valid for Browser Dev Review children.`);
+  if (modeValue !== undefined && workflowPromptId !== "implementation.browser-app-review.codex") {
+    errors.push(`${prefix}.appReviewMode is only valid for Browser App Review children.`);
   }
 
   return {
@@ -284,7 +284,7 @@ function parseWorkflowSubagentChild(value: unknown, index?: number): WorkflowSub
     title,
     promptMarkdown,
     ...(expectedResult !== undefined ? { expectedResult } : {}),
-    ...(devReviewMode !== undefined ? { devReviewMode } : {}),
+    ...(appReviewMode !== undefined ? { appReviewMode } : {}),
     ...(errors.length > 0 ? { validationError: errors.join(" ") } : {}),
   };
 }
@@ -299,9 +299,9 @@ const WORKFLOW_AGENT_MESSAGE_WORKFLOW_ROLES: ReadonlySet<OrchestrationThreadWork
     "implementation-qa-reviewer",
     "implementation-fixer",
     "implementation-code-reviewer",
-    "dev-review-orchestrator",
-    "dev-review-reviewer",
-    "dev-review-fixer",
+    "app-review-orchestrator",
+    "app-review-reviewer",
+    "app-review-fixer",
   ]);
 
 function parseWorkflowAgentMessageTarget(value: unknown): WorkflowAgentMessageTarget | string {
@@ -728,7 +728,7 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
         notesMarkdown,
       };
     }
-    case "dev-review-fix-result": {
+    case "app-review-fix-result": {
       const runId = requiredString(record, "runId");
       const planId = requiredString(record, "planId");
       const notesMarkdown = requiredString(record, "notesMarkdown");
@@ -739,14 +739,14 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
         if (value.startsWith("Directive field")) return value;
       }
       if (status !== "succeeded" && status !== "failed" && status !== "blocked") {
-        return "dev-review-fix-result.status must be succeeded, failed, or blocked.";
+        return "app-review-fix-result.status must be succeeded, failed, or blocked.";
       }
       if (typeof validations === "string") return validations;
       if (typeof commitSha === "string" && commitSha.startsWith("Directive field")) {
         return commitSha;
       }
       return {
-        type: "dev-review-fix-result",
+        type: "app-review-fix-result",
         runId,
         planId,
         status,

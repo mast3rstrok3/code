@@ -82,9 +82,9 @@ export function workflowProgressLabel(input: {
       case "validating":
         return "Implementation · Merge gate";
       case "qa-reviewing":
-        return "Implementation · Browser Dev Review";
+        return "Implementation · Browser App Review";
       case "fixing":
-        if (run.fixOrigin === "app-dev-stack" || run.fixOrigin === "dev-review") {
+        if (run.fixOrigin === "app-dev-stack" || run.fixOrigin === "app-review") {
           return `${run.artifactSource === "proposed-plan" ? "Fast feature" : "Implementation"} · TDD repair · ${run.qaCycleCount}/${IMPLEMENTATION_RUN_MAX_QA_REPAIRS}`;
         }
         return "Implementation · Fix";
@@ -132,13 +132,13 @@ export function workflowProgressLabel(input: {
     case "implementation-validator":
       return "Implementation · Merge gate";
     case "implementation-qa-reviewer":
-      return "Implementation · Browser Dev Review";
-    case "dev-review-orchestrator":
-      return "Dev Review · Controller";
-    case "dev-review-reviewer":
-      return "Dev Review · Browser review";
-    case "dev-review-fixer":
-      return "Dev Review · TDD repair";
+      return "Implementation · Browser App Review";
+    case "app-review-orchestrator":
+      return "App Review · Controller";
+    case "app-review-reviewer":
+      return "App Review · Browser review";
+    case "app-review-fixer":
+      return "App Review · Implement plan";
     case "implementation-fixer":
     case "product-fix-implementer":
       return "Implementation · Fix";

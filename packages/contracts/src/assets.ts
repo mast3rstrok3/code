@@ -2,7 +2,7 @@ import * as Schema from "effect/Schema";
 
 import { ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ProjectFaviconPath } from "./orchestration.ts";
-import { DevReviewId } from "./review.ts";
+import { AppReviewId } from "./review.ts";
 
 const ASSET_PATH_MAX_LENGTH = 1024;
 
@@ -20,8 +20,8 @@ export const AssetResource = Schema.Union([
     // project projection before it issues the signed URL.
     path: Schema.optional(ProjectFaviconPath),
   }),
-  Schema.TaggedStruct("dev-review-evidence", {
-    reviewId: DevReviewId,
+  Schema.TaggedStruct("app-review-evidence", {
+    reviewId: AppReviewId,
     /** Recording id or screenshot id from the review's evidence document. */
     evidenceId: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
   }),
@@ -181,26 +181,26 @@ export class AssetProjectFaviconNotFoundError extends Schema.TaggedErrorClass<As
   }
 }
 
-export class AssetDevReviewEvidenceResolutionError extends Schema.TaggedErrorClass<AssetDevReviewEvidenceResolutionError>()(
-  "AssetDevReviewEvidenceResolutionError",
+export class AssetAppReviewEvidenceResolutionError extends Schema.TaggedErrorClass<AssetAppReviewEvidenceResolutionError>()(
+  "AssetAppReviewEvidenceResolutionError",
   {
     resource: AssetResource,
     cause: Schema.Defect(),
   },
 ) {
   override get message(): string {
-    return "Failed to resolve Dev Review evidence.";
+    return "Failed to resolve App Review evidence.";
   }
 }
 
-export class AssetDevReviewEvidenceNotFoundError extends Schema.TaggedErrorClass<AssetDevReviewEvidenceNotFoundError>()(
-  "AssetDevReviewEvidenceNotFoundError",
+export class AssetAppReviewEvidenceNotFoundError extends Schema.TaggedErrorClass<AssetAppReviewEvidenceNotFoundError>()(
+  "AssetAppReviewEvidenceNotFoundError",
   {
     resource: AssetResource,
   },
 ) {
   override get message(): string {
-    return "Dev Review evidence was not found.";
+    return "App Review evidence was not found.";
   }
 }
 
@@ -229,8 +229,8 @@ export const AssetAccessError = Schema.Union([
   AssetProjectFaviconResolutionError,
   AssetProjectFaviconInspectionError,
   AssetProjectFaviconNotFoundError,
-  AssetDevReviewEvidenceResolutionError,
-  AssetDevReviewEvidenceNotFoundError,
+  AssetAppReviewEvidenceResolutionError,
+  AssetAppReviewEvidenceNotFoundError,
   AssetSigningKeyLoadError,
 ]);
 export type AssetAccessError = typeof AssetAccessError.Type;

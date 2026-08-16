@@ -137,7 +137,7 @@ const buildProductGrillRecoveryPrompt = (thread: OrchestrationThread) => {
     JSON.stringify(settledAnswerState, null, 2),
     "```",
     "",
-    "Do not implement, investigate, or verify the requested work yet. Continue only from the unresolved product-decision frontier with workflow_request_user_input. If the settled answers complete the frontier, ask only for the explicit final lock-in confirmation. If that confirmation is already settled as affirmative, emit product-intent-locked immediately. Only then may the selected workflow continue automatically into Planning, Build, Dev Review, Code Review, and change-request publication.",
+    "Do not implement, investigate, or verify the requested work yet. Continue only from the unresolved product-decision frontier with workflow_request_user_input. If the settled answers complete the frontier, ask only for the explicit final lock-in confirmation. If that confirmation is already settled as affirmative, emit product-intent-locked immediately. Only then may the selected workflow continue automatically into Planning, Build, App Review, Code Review, and change-request publication.",
   ].join("\n");
 };
 

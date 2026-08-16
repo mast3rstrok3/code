@@ -47,9 +47,9 @@ export type SetThreadRuntimeModeInput = CommandInput<"thread.runtime-mode.set">;
 export type SetThreadInteractionModeInput = CommandInput<"thread.interaction-mode.set">;
 export type SetThreadComposerModeInput = CommandInput<"thread.composer-mode.set">;
 export type StartThreadTurnInput = CommandInput<"thread.turn.start">;
-export type LaunchThreadDevReviewInput = CommandInput<"thread.dev-review.launch">;
-export type LaunchThreadDevReviewWorkflowInput = CommandInput<"thread.dev-review-workflow.launch">;
-export type CancelThreadDevReviewWorkflowInput = CommandInput<"thread.dev-review-workflow.cancel">;
+export type LaunchThreadAppReviewInput = CommandInput<"thread.app-review.launch">;
+export type LaunchThreadAppReviewWorkflowInput = CommandInput<"thread.app-review-workflow.launch">;
+export type CancelThreadAppReviewWorkflowInput = CommandInput<"thread.app-review-workflow.cancel">;
 export type CreateThreadPlanningSpecInput = CommandInput<"thread.planning-spec.create">;
 export type StartThreadPlanningStageInput = CommandInput<"thread.planning-stage.start">;
 export type LaunchThreadPlanningWorkflowInput = CommandInput<"thread.planning-workflow.launch">;
@@ -302,39 +302,39 @@ export const startThreadTurn: (input: StartThreadTurnInput) => CommandEffect = E
   });
 });
 
-export const launchThreadDevReview: (input: LaunchThreadDevReviewInput) => CommandEffect =
-  Effect.fn("EnvironmentCommands.launchThreadDevReview")(function* (input) {
+export const launchThreadAppReview: (input: LaunchThreadAppReviewInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.launchThreadAppReview")(function* (input) {
     const metadata = yield* timestampedCommandMetadata(input);
     return yield* dispatch({
       ...input,
-      type: "thread.dev-review.launch",
+      type: "thread.app-review.launch",
       commandId: metadata.commandId,
       createdAt: metadata.createdAt,
     });
   });
 
-export const launchThreadDevReviewWorkflow: (
-  input: LaunchThreadDevReviewWorkflowInput,
-) => CommandEffect = Effect.fn("EnvironmentCommands.launchThreadDevReviewWorkflow")(
+export const launchThreadAppReviewWorkflow: (
+  input: LaunchThreadAppReviewWorkflowInput,
+) => CommandEffect = Effect.fn("EnvironmentCommands.launchThreadAppReviewWorkflow")(
   function* (input) {
     const metadata = yield* timestampedCommandMetadata(input);
     return yield* dispatch({
       ...input,
-      type: "thread.dev-review-workflow.launch",
+      type: "thread.app-review-workflow.launch",
       commandId: metadata.commandId,
       createdAt: metadata.createdAt,
     });
   },
 );
 
-export const cancelThreadDevReviewWorkflow: (
-  input: CancelThreadDevReviewWorkflowInput,
-) => CommandEffect = Effect.fn("EnvironmentCommands.cancelThreadDevReviewWorkflow")(
+export const cancelThreadAppReviewWorkflow: (
+  input: CancelThreadAppReviewWorkflowInput,
+) => CommandEffect = Effect.fn("EnvironmentCommands.cancelThreadAppReviewWorkflow")(
   function* (input) {
     const metadata = yield* timestampedCommandMetadata(input);
     return yield* dispatch({
       ...input,
-      type: "thread.dev-review-workflow.cancel",
+      type: "thread.app-review-workflow.cancel",
       commandId: metadata.commandId,
       createdAt: metadata.createdAt,
     });

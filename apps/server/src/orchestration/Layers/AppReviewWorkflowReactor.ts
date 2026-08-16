@@ -1,15 +1,15 @@
 import {
   type AppDevStackStatus,
   CommandId,
-  DevReviewId,
-  hasCompleteDevReviewEvidence,
-  hasScreenshotBackedDevReviewFailure,
-  type DevReviewRecord,
-  type DevReviewWorkflowCycle,
-  type DevReviewWorkflowFailureReason,
-  type DevReviewWorkflowFixResult,
-  type DevReviewWorkflowRun,
-  type DevReviewWorkflowWorkspaceRevision,
+  AppReviewId,
+  hasCompleteAppReviewEvidence,
+  hasScreenshotBackedAppReviewFailure,
+  type AppReviewRecord,
+  type AppReviewWorkflowCycle,
+  type AppReviewWorkflowFailureReason,
+  type AppReviewWorkflowFixResult,
+  type AppReviewWorkflowRun,
+  type AppReviewWorkflowWorkspaceRevision,
   MessageId,
   ThreadId,
   type OrchestrationEvent,
@@ -37,9 +37,9 @@ import {
 import { ReviewService } from "../../review/ReviewService.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import {
-  DevReviewWorkflowReactor,
-  type DevReviewWorkflowReactorShape,
-} from "../Services/DevReviewWorkflowReactor.ts";
+  AppReviewWorkflowReactor,
+  type AppReviewWorkflowReactorShape,
+} from "../Services/AppReviewWorkflowReactor.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import {
@@ -47,14 +47,14 @@ import {
   resolveWorkflowSubagentSpawnDefinition,
 } from "../workflowSubagents.ts";
 
-type DevReviewWorkflowEvent = Extract<
+type AppReviewWorkflowEvent = Extract<
   OrchestrationEvent,
   {
     type:
-      | "thread.dev-review-workflow-launched"
-      | "thread.dev-review-workflow-resume-requested"
-      | "thread.dev-review-workflow-cancel-requested"
-      | "thread.dev-review-updated"
+      | "thread.app-review-workflow-launched"
+      | "thread.app-review-workflow-resume-requested"
+      | "thread.app-review-workflow-cancel-requested"
+      | "thread.app-review-updated"
       | "thread.proposed-plan-upserted"
       | "thread.turn-diff-completed"
       | "thread.activity-appended"
@@ -63,6 +63,7 @@ type DevReviewWorkflowEvent = Extract<
 >;
 
 const terminalStatuses = new Set(["passed", "exhausted", "blocked", "canceled"]);
+const APP_REVIEW_IMPLEMENT_SKILL_ID = "matt-pocock.implement";
 
 interface AppDevStackPreviewLookup {
   readonly stack: {
@@ -128,13 +129,13 @@ export function selectStandalonePreviewTargets(input: {
     _tag: "Blocked",
     detailMarkdown:
       input.lookupError === null
-        ? "No App Dev Stack or fallback preview URL was found for this worktree. Start the App Dev Stack, then retry Dev Review."
+        ? "No App Dev Stack or fallback preview URL was found for this worktree. Start the App Dev Stack, then retry App Review."
         : `The App Dev Stack for this worktree could not be resolved, and no fallback preview URL is available. ${input.lookupError}`,
   };
 }
 
-export function nextDevReviewWorkflowAction(
-  run: DevReviewWorkflowRun,
+export function nextAppReviewWorkflowAction(
+  run: AppReviewWorkflowRun,
 ): "none" | "review" | "reconcile-review" | "reconcile-plan" | "reconcile-fix" {
   if (run.status !== "running") return "none";
   switch (run.activePhase) {
@@ -145,7 +146,7 @@ export function nextDevReviewWorkflowAction(
       ) {
         return "none";
       }
-      return run.attemptsUsed < run.cycleBudget ? "review" : "none";
+      return run.cyclesUsed < run.cycleBudget ? "review" : "none";
     case "review":
       return "reconcile-review";
     case "planning":
@@ -156,29 +157,33 @@ export function nextDevReviewWorkflowAction(
 }
 
 export function selectReviewRunToStart(
-  runId: DevReviewWorkflowRun["id"],
-  runs: ReadonlyArray<DevReviewWorkflowRun>,
-): DevReviewWorkflowRun | null {
+  runId: AppReviewWorkflowRun["id"],
+  runs: ReadonlyArray<AppReviewWorkflowRun>,
+): AppReviewWorkflowRun | null {
   const run = runs.find((candidate) => candidate.id === runId);
   if (
     run === undefined ||
     run.status !== "running" ||
     run.activePhase !== null ||
-    run.attemptsUsed >= run.cycleBudget
+    run.cyclesUsed >= run.cycleBudget
   ) {
     return null;
   }
   return run;
 }
 
-export function terminalReviewAction(
-  run: DevReviewWorkflowRun,
-  review: DevReviewRecord,
-): "passed" | "blocked" | "exhausted" | "planning" {
+export function terminalReviewAction(review: AppReviewRecord): "passed" | "blocked" | "planning" {
   if (review.status === "blocked" || review.document.verdict === "blocked") return "blocked";
   if (review.status === "passed" && review.document.verdict === "passed") return "passed";
   if (review.document.findings.length === 0) return "blocked";
-  return run.attemptsUsed >= run.cycleBudget ? "exhausted" : "planning";
+  return "planning";
+}
+
+export function successfulFixAction(
+  run: AppReviewWorkflowRun,
+): "exhausted" | "review" | "await-preview-refresh" {
+  if (run.cyclesUsed >= run.cycleBudget) return "exhausted";
+  return run.caller.type === "standalone" ? "review" : "await-preview-refresh";
 }
 
 /**
@@ -188,18 +193,18 @@ export function terminalReviewAction(
  * failed review.
  */
 export function terminalReviewPassFailure(input: {
-  readonly run: DevReviewWorkflowRun;
-  readonly review: DevReviewRecord;
-  readonly priorReviews: ReadonlyArray<DevReviewRecord>;
+  readonly run: AppReviewWorkflowRun;
+  readonly review: AppReviewRecord;
+  readonly priorReviews: ReadonlyArray<AppReviewRecord>;
 }): string | null {
   if (input.review.status !== "passed" || input.review.document.verdict !== "passed") return null;
   const checks = input.review.document.checks;
   if (checks.length === 0) {
-    return "Browser Dev Review reported a pass without a check matrix.";
+    return "Browser App Review reported a pass without a check matrix.";
   }
   const incompleteChecks = checks.filter((check) => check.status !== "passed");
   if (incompleteChecks.length > 0) {
-    return `Browser Dev Review reported a pass with incomplete checks: ${incompleteChecks
+    return `Browser App Review reported a pass with incomplete checks: ${incompleteChecks
       .map((check) => `${check.id}=${check.status}`)
       .join(", ")}.`;
   }
@@ -207,7 +212,7 @@ export function terminalReviewPassFailure(input: {
     (finding) => finding.severity !== "note",
   );
   if (actionableFindings.length > 0) {
-    return `Browser Dev Review reported a pass with unresolved findings: ${actionableFindings
+    return `Browser App Review reported a pass with unresolved findings: ${actionableFindings
       .map((finding) => finding.id)
       .join(", ")}.`;
   }
@@ -228,29 +233,29 @@ export function terminalReviewPassFailure(input: {
     (findingId) => !passedCheckIds.has(findingId),
   );
   if (missingFindingChecks.length > 0) {
-    return `Browser Dev Review did not explicitly verify prior findings: ${missingFindingChecks.join(", ")}.`;
+    return `Browser App Review did not explicitly verify prior findings: ${missingFindingChecks.join(", ")}.`;
   }
   return null;
 }
 
 export function terminalReviewEvidenceFailure(
   action: ReturnType<typeof terminalReviewAction>,
-  review: DevReviewRecord,
+  review: AppReviewRecord,
 ): string | null {
   // A blocked reviewer may be unable to open the preview at all, so requiring browser evidence
   // before preserving its block reason replaces the actionable infrastructure failure with a
   // misleading "missing evidence" error. Evidence remains mandatory for every product verdict.
   if (action === "blocked") return null;
-  if (hasCompleteDevReviewEvidence(review.evidence)) return null;
+  if (hasCompleteAppReviewEvidence(review.evidence)) return null;
   if (
-    (action === "planning" || action === "exhausted") &&
-    hasScreenshotBackedDevReviewFailure(review.document, review.evidence)
+    action === "planning" &&
+    hasScreenshotBackedAppReviewFailure(review.document, review.evidence)
   ) {
     return null;
   }
   return action === "passed"
-    ? "Browser Dev Review completed without the required durable recording and screenshot evidence."
-    : "Browser Dev Review reported product findings without a saved recording or screenshot-backed failed checks.";
+    ? "Browser App Review completed without the required durable recording and screenshot evidence."
+    : "Browser App Review reported product findings without a saved recording or screenshot-backed failed checks.";
 }
 
 const make = Effect.gen(function* () {
@@ -270,12 +275,12 @@ const make = Effect.gen(function* () {
   const serverThreadId = (tag: string) =>
     crypto.randomUUIDv4.pipe(Effect.map((uuid) => ThreadId.make(`thread-${tag}-${uuid}`)));
   const serverReviewId = () =>
-    crypto.randomUUIDv4.pipe(Effect.map((uuid) => DevReviewId.make(`dev-review-${uuid}`)));
+    crypto.randomUUIDv4.pipe(Effect.map((uuid) => AppReviewId.make(`app-review-${uuid}`)));
 
   const resolveThread = (threadId: ThreadId) =>
     projectionSnapshotQuery.getThreadDetailById(threadId).pipe(Effect.map(Option.getOrUndefined));
 
-  const resolveTarget = Effect.fn("DevReviewWorkflowReactor.resolveTarget")(function* (
+  const resolveTarget = Effect.fn("AppReviewWorkflowReactor.resolveTarget")(function* (
     threadId: ThreadId,
   ) {
     const [thread, readModel] = yield* Effect.all([
@@ -288,19 +293,19 @@ const make = Effect.gen(function* () {
     return cwd === null ? null : { thread, cwd };
   });
 
-  const updateRun = Effect.fn("DevReviewWorkflowReactor.updateRun")(function* (
-    run: DevReviewWorkflowRun,
+  const updateRun = Effect.fn("AppReviewWorkflowReactor.updateRun")(function* (
+    run: AppReviewWorkflowRun,
   ) {
     yield* orchestrationEngine.dispatch({
-      type: "thread.dev-review-workflow.update",
-      commandId: yield* serverCommandId("dev-review-workflow-update"),
+      type: "thread.app-review-workflow.update",
+      commandId: yield* serverCommandId("app-review-workflow-update"),
       threadId: run.controllerThreadId,
       run,
       createdAt: run.updatedAt,
     });
   });
 
-  const computeWorkspaceRevision = Effect.fn("DevReviewWorkflowReactor.computeWorkspaceRevision")(
+  const computeWorkspaceRevision = Effect.fn("AppReviewWorkflowReactor.computeWorkspaceRevision")(
     function* (cwd: string) {
       const [head, preview] = yield* Effect.all([
         gitWorkflow.resolveCommit({ cwd, ref: "HEAD" }),
@@ -315,13 +320,13 @@ const make = Effect.gen(function* () {
         workingTreeDiffHash,
         branchDiffHash,
         fingerprint: `${head.commitSha}:${workingTreeDiffHash}:${branchDiffHash}`,
-      } satisfies DevReviewWorkflowWorkspaceRevision;
+      } satisfies AppReviewWorkflowWorkspaceRevision;
     },
   );
 
-  const blockRun = Effect.fn("DevReviewWorkflowReactor.blockRun")(function* (input: {
-    readonly run: DevReviewWorkflowRun;
-    readonly reason: DevReviewWorkflowFailureReason;
+  const blockRun = Effect.fn("AppReviewWorkflowReactor.blockRun")(function* (input: {
+    readonly run: AppReviewWorkflowRun;
+    readonly reason: AppReviewWorkflowFailureReason;
     readonly detailMarkdown: string;
     readonly occurredAt: string;
   }) {
@@ -354,8 +359,8 @@ const make = Effect.gen(function* () {
     });
   });
 
-  const assertStableRevision = Effect.fn("DevReviewWorkflowReactor.assertStableRevision")(
-    function* (run: DevReviewWorkflowRun, cwd: string, occurredAt: string) {
+  const assertStableRevision = Effect.fn("AppReviewWorkflowReactor.assertStableRevision")(
+    function* (run: AppReviewWorkflowRun, cwd: string, occurredAt: string) {
       const current = yield* computeWorkspaceRevision(cwd);
       if (run.workspaceRevision.fingerprint === "pending") {
         const next = { ...run, workspaceRevision: current, updatedAt: occurredAt };
@@ -367,7 +372,7 @@ const make = Effect.gen(function* () {
           run,
           reason: "workspace-stale",
           detailMarkdown:
-            "The worktree changed outside the active Dev Review phase. Start a fresh run against the new workspace revision.",
+            "The worktree changed outside the active App Review phase. Start a fresh run against the new workspace revision.",
           occurredAt,
         });
         return null;
@@ -377,8 +382,8 @@ const make = Effect.gen(function* () {
   );
 
   const resolveStandalonePreviewTargetsForRun = Effect.fn(
-    "DevReviewWorkflowReactor.resolveStandalonePreviewTargetsForRun",
-  )(function* (run: DevReviewWorkflowRun, cwd: string, occurredAt: string) {
+    "AppReviewWorkflowReactor.resolveStandalonePreviewTargetsForRun",
+  )(function* (run: AppReviewWorkflowRun, cwd: string, occurredAt: string) {
     if (run.caller.type !== "standalone") return run;
     const lookupResult = yield* appDevStackManager
       .getByWorktree({ worktreePath: cwd })
@@ -412,12 +417,12 @@ const make = Effect.gen(function* () {
       ...run,
       previewTargets: [...resolution.previewTargets],
       updatedAt: occurredAt,
-    } satisfies DevReviewWorkflowRun;
+    } satisfies AppReviewWorkflowRun;
     yield* updateRun(updatedRun);
     return updatedRun;
   });
 
-  const modelForPrompt = Effect.fn("DevReviewWorkflowReactor.modelForPrompt")(function* (
+  const modelForPrompt = Effect.fn("AppReviewWorkflowReactor.modelForPrompt")(function* (
     workflowPromptId: string,
     parent: OrchestrationThread,
   ) {
@@ -432,13 +437,13 @@ const make = Effect.gen(function* () {
   });
 
   const buildReviewPrompt = (
-    run: DevReviewWorkflowRun,
-    cycle: DevReviewWorkflowCycle,
+    run: AppReviewWorkflowRun,
+    cycle: AppReviewWorkflowCycle,
     priorFindingIds: ReadonlyArray<string>,
   ) =>
     appendWorkflowSkillCommandSection(
       [
-        `Run Browser Dev Review cycle ${cycle.cycleNumber} of ${run.cycleBudget}.`,
+        `Run Browser App Review cycle ${cycle.cycleNumber} of ${run.cycleBudget}.`,
         "",
         "The original brief is the acceptance boundary for every cycle:",
         run.briefMarkdown,
@@ -448,9 +453,9 @@ const make = Effect.gen(function* () {
         "",
         "Preview targets (try in order):",
         ...run.previewTargets.map((target) => `- ${target}`),
-        "These preview targets are authoritative for this Dev Review cycle. Do not substitute deployment URLs from repository documentation, supporting source context, browser history, or environment conventions. If every listed target is unavailable, report the review blocked.",
+        "These preview targets are authoritative for this App Review cycle. Do not substitute deployment URLs from repository documentation, supporting source context, browser history, or environment conventions. If every listed target is unavailable, report the review blocked.",
         "",
-        "Use the linked durable Dev Review record. Record the complete flow, capture captioned screenshots, and report every actionable finding. A missing or unavailable preview is blocked, not failed.",
+        "Use the linked durable App Review record. Record the complete flow, capture captioned screenshots, and report every actionable finding. A missing or unavailable preview is blocked, not failed.",
         "A passed verdict requires a non-empty check matrix in which every check is passed. Do not mark required or deferred acceptance work not-applicable; use failed or blocked with concrete detail.",
         ...(priorFindingIds.length === 0
           ? []
@@ -460,12 +465,12 @@ const make = Effect.gen(function* () {
               ...priorFindingIds.map((findingId) => `- ${findingId}`),
             ]),
       ].join("\n"),
-      WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
+      WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
     );
 
-  const ensureReviewLaunch = Effect.fn("DevReviewWorkflowReactor.ensureReviewLaunch")(function* (
-    run: DevReviewWorkflowRun,
-    cycle: DevReviewWorkflowCycle,
+  const ensureReviewLaunch = Effect.fn("AppReviewWorkflowReactor.ensureReviewLaunch")(function* (
+    run: AppReviewWorkflowRun,
+    cycle: AppReviewWorkflowCycle,
   ) {
     const reviewer = yield* resolveThread(cycle.reviewerThreadId);
     if (reviewer !== undefined) return;
@@ -474,7 +479,7 @@ const make = Effect.gen(function* () {
       yield* blockRun({
         run,
         reason: "unknown",
-        detailMarkdown: "The Dev Review controller thread is unavailable.",
+        detailMarkdown: "The App Review controller thread is unavailable.",
         occurredAt: run.updatedAt,
       });
       return;
@@ -484,43 +489,43 @@ const make = Effect.gen(function* () {
         .filter((candidate) => candidate.cycleNumber < cycle.cycleNumber)
         .map((candidate) => candidate.reviewId),
     );
-    const priorFindingIds = controller.devReviews
+    const priorFindingIds = controller.appReviews
       .filter((review) => priorReviewIds.has(review.id))
       .flatMap((review) => review.document.findings)
       .filter((finding) => finding.severity !== "note")
       .map((finding) => finding.id);
     yield* orchestrationEngine.dispatch({
-      type: "thread.dev-review.launch",
-      commandId: yield* serverCommandId("dev-review-workflow-review-launch"),
+      type: "thread.app-review.launch",
+      commandId: yield* serverCommandId("app-review-workflow-review-launch"),
       sourceThreadId: run.controllerThreadId,
       reviewThreadId: cycle.reviewerThreadId,
       reviewId: cycle.reviewId,
       planningTicketIds: [...(controller.workflowContext?.ticketScope ?? [])],
       message: {
-        messageId: yield* serverMessageId("dev-review-workflow-review"),
+        messageId: yield* serverMessageId("app-review-workflow-review"),
         role: "user",
         text: buildReviewPrompt(run, cycle, priorFindingIds),
         attachments: [],
       },
       modelSelection: yield* modelForPrompt(
-        WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
+        WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
         controller,
       ),
       runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
-      workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
+      workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
       createdAt: run.updatedAt,
     });
   });
 
-  const startReview = Effect.fn("DevReviewWorkflowReactor.startReview")(function* (
-    inputRun: DevReviewWorkflowRun,
+  const startReview = Effect.fn("AppReviewWorkflowReactor.startReview")(function* (
+    inputRun: AppReviewWorkflowRun,
     occurredAt: string,
   ) {
     // Resume/launch requests can be duplicated while projections and sibling reactors settle. Use
     // the latest persisted run, not the event's stale payload, so only one reviewer can claim the
     // next cycle.
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
-    const currentRun = selectReviewRunToStart(inputRun.id, readModel.devReviewWorkflowRuns ?? []);
+    const currentRun = selectReviewRunToStart(inputRun.id, readModel.appReviewWorkflowRuns ?? []);
     if (currentRun === null) return;
     const target = yield* resolveTarget(currentRun.targetThreadId);
     if (target === null) {
@@ -544,18 +549,18 @@ const make = Effect.gen(function* () {
           run,
           reason: "embedded-worktree-dirty",
           detailMarkdown:
-            "Embedded Dev Review requires a clean Implementation orchestrator branch.",
+            "Embedded App Review requires a clean Implementation orchestrator branch.",
           occurredAt,
         });
         return;
       }
     }
-    const cycleNumber = run.attemptsUsed + 1;
-    const cycle: DevReviewWorkflowCycle = {
+    const cycleNumber = run.cyclesUsed + 1;
+    const cycle: AppReviewWorkflowCycle = {
       cycleNumber,
       status: "reviewing",
       reviewId: yield* serverReviewId(),
-      reviewerThreadId: yield* serverThreadId("dev-review-reviewer"),
+      reviewerThreadId: yield* serverThreadId("app-review-reviewer"),
       reviewVerdict: null,
       actionableFindingsMarkdown: null,
       planId: null,
@@ -566,9 +571,9 @@ const make = Effect.gen(function* () {
       startedAt: occurredAt,
       completedAt: null,
     };
-    const reviewingRun: DevReviewWorkflowRun = {
+    const reviewingRun: AppReviewWorkflowRun = {
       ...run,
-      attemptsUsed: cycleNumber,
+      cyclesUsed: cycleNumber,
       cycles: [...run.cycles, cycle],
       activePhase: "review",
       activeThreadId: cycle.reviewerThreadId,
@@ -580,9 +585,9 @@ const make = Effect.gen(function* () {
 
   const reviewRecordForCycle = (
     controller: OrchestrationThread,
-    cycle: DevReviewWorkflowCycle,
-  ): DevReviewRecord | null =>
-    controller.devReviews.find((review) => review.id === cycle.reviewId) ?? null;
+    cycle: AppReviewWorkflowCycle,
+  ): AppReviewRecord | null =>
+    controller.appReviews.find((review) => review.id === cycle.reviewId) ?? null;
 
   const hasSettledCheckpoint = (thread: OrchestrationThread): boolean => {
     const turn = thread.latestTurn;
@@ -599,7 +604,7 @@ const make = Effect.gen(function* () {
     thread.session?.status === "error" ||
     thread.session?.status === "stopped";
 
-  const findingsMarkdown = (review: DevReviewRecord) =>
+  const findingsMarkdown = (review: AppReviewRecord) =>
     review.document.findings
       .map(
         (finding, index) =>
@@ -607,9 +612,9 @@ const make = Effect.gen(function* () {
       )
       .join("\n\n");
 
-  const finishPassed = Effect.fn("DevReviewWorkflowReactor.finishPassed")(function* (
-    run: DevReviewWorkflowRun,
-    review: DevReviewRecord,
+  const finishPassed = Effect.fn("AppReviewWorkflowReactor.finishPassed")(function* (
+    run: AppReviewWorkflowRun,
+    review: AppReviewRecord,
     occurredAt: string,
   ) {
     const cycle = run.cycles.at(-1);
@@ -637,14 +642,10 @@ const make = Effect.gen(function* () {
     });
   });
 
-  const finishExhausted = Effect.fn("DevReviewWorkflowReactor.finishExhausted")(function* (
-    run: DevReviewWorkflowRun,
-    review: DevReviewRecord,
-    actionableFindingsMarkdown: string,
+  const finishExhausted = Effect.fn("AppReviewWorkflowReactor.finishExhausted")(function* (
+    run: AppReviewWorkflowRun,
     occurredAt: string,
   ) {
-    const cycle = run.cycles.at(-1);
-    if (cycle === undefined) return;
     yield* updateRun({
       ...run,
       status: "exhausted",
@@ -653,36 +654,25 @@ const make = Effect.gen(function* () {
       activeThreadId: null,
       finalHeadSha: run.workspaceRevision.headSha,
       failure: null,
-      cycles: run.cycles.map((entry) =>
-        entry.cycleNumber === cycle.cycleNumber
-          ? {
-              ...entry,
-              status: "completed",
-              reviewVerdict: review.document.verdict,
-              actionableFindingsMarkdown,
-              completedAt: occurredAt,
-            }
-          : entry,
-      ),
       updatedAt: occurredAt,
       completedAt: occurredAt,
     });
   });
 
-  const startPlanning = Effect.fn("DevReviewWorkflowReactor.startPlanning")(function* (input: {
-    readonly run: DevReviewWorkflowRun;
-    readonly review: DevReviewRecord;
+  const startPlanning = Effect.fn("AppReviewWorkflowReactor.startPlanning")(function* (input: {
+    readonly run: AppReviewWorkflowRun;
+    readonly review: AppReviewRecord;
     readonly actionableFindingsMarkdown: string;
     readonly occurredAt: string;
   }) {
-    const controller = yield* resolveThread(input.run.controllerThreadId);
+    const reviewer = yield* resolveThread(input.review.reviewThreadId);
     const target = yield* resolveTarget(input.run.targetThreadId);
     const cycle = input.run.cycles.at(-1);
-    if (controller === undefined || cycle === undefined || target === null) {
+    if (reviewer === undefined || cycle === undefined || target === null) {
       yield* blockRun({
         run: input.run,
         reason: "unknown",
-        detailMarkdown: "The Dev Review controller or target worktree disappeared.",
+        detailMarkdown: "The App Review thread or target worktree disappeared.",
         occurredAt: input.occurredAt,
       });
       return;
@@ -690,10 +680,10 @@ const make = Effect.gen(function* () {
     const cwd = target.cwd;
     const stableRun = yield* assertStableRevision(input.run, cwd, input.occurredAt);
     if (stableRun === null) return;
-    const planningRun: DevReviewWorkflowRun = {
+    const planningRun: AppReviewWorkflowRun = {
       ...stableRun,
       activePhase: "planning",
-      activeThreadId: controller.id,
+      activeThreadId: reviewer.id,
       cycles: stableRun.cycles.map((entry) =>
         entry.cycleNumber === cycle.cycleNumber
           ? {
@@ -709,29 +699,29 @@ const make = Effect.gen(function* () {
     yield* updateRun(planningRun);
     yield* orchestrationEngine.dispatch({
       type: "thread.interaction-mode.set",
-      commandId: yield* serverCommandId("dev-review-workflow-plan-mode"),
-      threadId: controller.id,
+      commandId: yield* serverCommandId("app-review-workflow-plan-mode"),
+      threadId: reviewer.id,
       interactionMode: "plan",
       createdAt: input.occurredAt,
     });
     yield* orchestrationEngine.dispatch({
       type: "thread.runtime-mode.set",
-      commandId: yield* serverCommandId("dev-review-workflow-plan-runtime"),
-      threadId: controller.id,
+      commandId: yield* serverCommandId("app-review-workflow-plan-runtime"),
+      threadId: reviewer.id,
       runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
       createdAt: input.occurredAt,
     });
     yield* orchestrationEngine.dispatch({
       type: "thread.turn.start",
-      commandId: yield* serverCommandId("dev-review-workflow-plan-turn"),
-      threadId: controller.id,
+      commandId: yield* serverCommandId("app-review-workflow-plan-turn"),
+      threadId: reviewer.id,
       message: {
-        messageId: yield* serverMessageId("dev-review-workflow-plan"),
+        messageId: yield* serverMessageId("app-review-workflow-plan"),
         role: "user",
         text: [
-          `Create one non-interactive repair plan for Dev Review cycle ${cycle.cycleNumber}.`,
+          `Analyze the product gap and create one non-interactive repair plan for App Review cycle ${cycle.cycleNumber}.`,
           "",
-          "Do not edit files. Do not ask questions. Explore the worktree as needed, cover every actionable finding together, and exit Plan mode with one ordinary persisted proposed plan.",
+          "Stay in this App Review thread so the browser evidence, gap analysis, and plan share one history. Do not edit files. Do not ask questions. Compare the original acceptance brief with the observed UI behavior, cover every actionable finding together, and exit Plan mode with exactly one ordinary persisted proposed plan.",
           "",
           "Original acceptance brief:",
           planningRun.briefMarkdown,
@@ -747,8 +737,8 @@ const make = Effect.gen(function* () {
     });
   });
 
-  const reconcileReview = Effect.fn("DevReviewWorkflowReactor.reconcileReview")(function* (
-    run: DevReviewWorkflowRun,
+  const reconcileReview = Effect.fn("AppReviewWorkflowReactor.reconcileReview")(function* (
+    run: AppReviewWorkflowRun,
     occurredAt: string,
   ) {
     const cycle = run.cycles.at(-1);
@@ -771,7 +761,7 @@ const make = Effect.gen(function* () {
         reason: "review-blocked",
         detailMarkdown:
           reviewer.session?.lastError ??
-          "Browser Dev Review stopped without producing a terminal durable review.",
+          "Browser App Review stopped without producing a terminal durable review.",
         occurredAt,
       });
       return;
@@ -782,12 +772,12 @@ const make = Effect.gen(function* () {
     if (target === null) return;
     const stableRun = yield* assertStableRevision(run, target.cwd, occurredAt);
     if (stableRun === null) return;
-    const action = terminalReviewAction(stableRun, review);
+    const action = terminalReviewAction(review);
     if (action === "blocked") {
       yield* blockRun({
         run: stableRun,
         reason: "review-blocked",
-        detailMarkdown: review.document.summary || "Browser Dev Review was blocked.",
+        detailMarkdown: review.document.summary || "Browser App Review was blocked.",
         occurredAt,
       });
       return;
@@ -795,7 +785,7 @@ const make = Effect.gen(function* () {
     const passFailure = terminalReviewPassFailure({
       run: stableRun,
       review,
-      priorReviews: controller?.devReviews ?? [],
+      priorReviews: controller?.appReviews ?? [],
     });
     if (passFailure !== null) {
       yield* blockRun({
@@ -821,10 +811,6 @@ const make = Effect.gen(function* () {
       return;
     }
     const actionableFindingsMarkdown = findingsMarkdown(review);
-    if (action === "exhausted") {
-      yield* finishExhausted(stableRun, review, actionableFindingsMarkdown, occurredAt);
-      return;
-    }
     yield* startPlanning({
       run: stableRun,
       review,
@@ -834,13 +820,13 @@ const make = Effect.gen(function* () {
   });
 
   const buildFixPrompt = (input: {
-    readonly run: DevReviewWorkflowRun;
-    readonly cycle: DevReviewWorkflowCycle;
+    readonly run: AppReviewWorkflowRun;
+    readonly cycle: AppReviewWorkflowCycle;
     readonly plan: OrchestrationProposedPlan;
   }) =>
     appendWorkflowSkillCommandSection(
       [
-        `Implement the persisted Dev Review repair plan '${input.plan.id}' for run '${input.run.id}'.`,
+        `Implement the persisted App Review repair plan '${input.plan.id}' for run '${input.run.id}'.`,
         "",
         "Use TDD. Address every actionable finding together, preserve unrelated work, and run focused validation. Do not ask the user questions.",
         input.run.caller.type === "implementation"
@@ -860,7 +846,7 @@ const make = Effect.gen(function* () {
         "```json",
         JSON.stringify(
           {
-            type: "dev-review-fix-result",
+            type: "app-review-fix-result",
             runId: input.run.id,
             planId: input.plan.id,
             status: "succeeded",
@@ -880,60 +866,60 @@ const make = Effect.gen(function* () {
         ),
         "```",
       ].join("\n"),
-      WORKFLOW_PROMPT_IDS.implementationTddCodex,
+      APP_REVIEW_IMPLEMENT_SKILL_ID,
     );
 
-  const ensureFixerLaunch = Effect.fn("DevReviewWorkflowReactor.ensureFixerLaunch")(function* (
-    run: DevReviewWorkflowRun,
-    cycle: DevReviewWorkflowCycle,
+  const ensureFixerLaunch = Effect.fn("AppReviewWorkflowReactor.ensureFixerLaunch")(function* (
+    run: AppReviewWorkflowRun,
+    cycle: AppReviewWorkflowCycle,
     plan: OrchestrationProposedPlan,
   ) {
     if (cycle.fixerThreadId === null) return;
     const existing = yield* resolveThread(cycle.fixerThreadId);
     if (existing !== undefined) return;
-    const controller = yield* resolveThread(run.controllerThreadId);
+    const reviewer = yield* resolveThread(cycle.reviewerThreadId);
     const target = yield* resolveThread(run.targetThreadId);
-    if (controller === undefined || target === undefined) return;
+    if (reviewer === undefined || target === undefined) return;
     yield* orchestrationEngine.dispatch({
       type: "thread.create",
-      commandId: yield* serverCommandId("dev-review-workflow-fixer-create"),
+      commandId: yield* serverCommandId("app-review-workflow-fixer-create"),
       threadId: cycle.fixerThreadId,
       projectId: target.projectId,
       ownerUserId: target.ownerUserId,
-      parentThreadId: controller.id,
-      workflowRole: "dev-review-fixer",
-      workflowContext: controller.workflowContext ?? null,
-      title: `Dev Review repair ${cycle.cycleNumber}`,
-      modelSelection: yield* modelForPrompt(WORKFLOW_PROMPT_IDS.implementationTddCodex, controller),
+      parentThreadId: reviewer.id,
+      workflowRole: "app-review-fixer",
+      workflowContext: reviewer.workflowContext ?? null,
+      title: `App Review implementation ${cycle.cycleNumber}`,
+      modelSelection: yield* modelForPrompt(APP_REVIEW_IMPLEMENT_SKILL_ID, reviewer),
       runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
       interactionMode: "default",
-      workflowPreset: "dev-review",
+      workflowPreset: "app-review",
       branch: target.branch,
       worktreePath: target.worktreePath,
       createdAt: run.updatedAt,
     });
     yield* orchestrationEngine.dispatch({
       type: "thread.turn.start",
-      commandId: yield* serverCommandId("dev-review-workflow-fixer-turn"),
+      commandId: yield* serverCommandId("app-review-workflow-fixer-turn"),
       threadId: cycle.fixerThreadId,
       message: {
-        messageId: yield* serverMessageId("dev-review-workflow-fixer"),
+        messageId: yield* serverMessageId("app-review-workflow-fixer"),
         role: "user",
         text: buildFixPrompt({ run, cycle, plan }),
         attachments: [],
       },
       runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
       interactionMode: "default",
-      workflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
-      sourceProposedPlan: { threadId: controller.id, planId: plan.id },
+      workflowPromptId: APP_REVIEW_IMPLEMENT_SKILL_ID,
+      sourceProposedPlan: { threadId: reviewer.id, planId: plan.id },
       createdAt: run.updatedAt,
     });
   });
 
-  const startFixer = Effect.fn("DevReviewWorkflowReactor.startFixer")(function* (input: {
-    readonly run: DevReviewWorkflowRun;
+  const startFixer = Effect.fn("AppReviewWorkflowReactor.startFixer")(function* (input: {
+    readonly run: AppReviewWorkflowRun;
     readonly plan: OrchestrationProposedPlan;
-    readonly plannerTurnId: DevReviewWorkflowCycle["plannerTurnId"];
+    readonly plannerTurnId: AppReviewWorkflowCycle["plannerTurnId"];
     readonly occurredAt: string;
   }) {
     const target = yield* resolveTarget(input.run.targetThreadId);
@@ -945,20 +931,20 @@ const make = Effect.gen(function* () {
     if (stableRun === null) return;
     yield* orchestrationEngine.dispatch({
       type: "thread.interaction-mode.set",
-      commandId: yield* serverCommandId("dev-review-workflow-default-mode"),
-      threadId: stableRun.controllerThreadId,
+      commandId: yield* serverCommandId("app-review-workflow-default-mode"),
+      threadId: cycle.reviewerThreadId,
       interactionMode: "default",
       createdAt: input.occurredAt,
     });
-    const fixerThreadId = yield* serverThreadId("dev-review-fixer");
-    const fixingCycle: DevReviewWorkflowCycle = {
+    const fixerThreadId = yield* serverThreadId("app-review-fixer");
+    const fixingCycle: AppReviewWorkflowCycle = {
       ...cycle,
       status: "fixing",
       planId: input.plan.id,
       plannerTurnId: input.plannerTurnId,
       fixerThreadId,
     };
-    const fixingRun: DevReviewWorkflowRun = {
+    const fixingRun: AppReviewWorkflowRun = {
       ...stableRun,
       activePhase: "fixing",
       activeThreadId: fixerThreadId,
@@ -971,26 +957,28 @@ const make = Effect.gen(function* () {
     yield* ensureFixerLaunch(fixingRun, fixingCycle, input.plan);
   });
 
-  const reconcilePlanning = Effect.fn("DevReviewWorkflowReactor.reconcilePlanning")(function* (
-    run: DevReviewWorkflowRun,
+  const reconcilePlanning = Effect.fn("AppReviewWorkflowReactor.reconcilePlanning")(function* (
+    run: AppReviewWorkflowRun,
     occurredAt: string,
   ) {
     if (run.activePhase !== "planning") return;
-    const controller = yield* resolveThread(run.controllerThreadId);
-    if (controller === undefined) return;
-    if (threadTurnFailed(controller) && !hasSettledCheckpoint(controller)) {
+    const cycle = run.cycles.at(-1);
+    if (cycle === undefined) return;
+    const reviewer = yield* resolveThread(cycle.reviewerThreadId);
+    if (reviewer === undefined) return;
+    if (threadTurnFailed(reviewer) && !hasSettledCheckpoint(reviewer)) {
       yield* blockRun({
         run,
         reason: "plan-missing",
         detailMarkdown:
-          controller.session?.lastError ??
+          reviewer.session?.lastError ??
           "The non-interactive planning turn stopped without a settled plan checkpoint.",
         occurredAt,
       });
       return;
     }
-    if (!hasSettledCheckpoint(controller)) return;
-    const turn = controller.latestTurn;
+    if (!hasSettledCheckpoint(reviewer)) return;
+    const turn = reviewer.latestTurn;
     if (turn === null) return;
     if (turn.state === "error" || turn.state === "interrupted") {
       yield* blockRun({
@@ -1001,12 +989,13 @@ const make = Effect.gen(function* () {
       });
       return;
     }
-    const plans = controller.proposedPlans.filter((candidate) => candidate.turnId === turn.turnId);
+    const plans = reviewer.proposedPlans.filter((candidate) => candidate.turnId === turn.turnId);
     if (plans.length === 0) {
       yield* blockRun({
         run,
         reason: "plan-missing",
-        detailMarkdown: "The controller completed Plan mode without one persisted proposed plan.",
+        detailMarkdown:
+          "The App Review thread completed gap analysis without one persisted proposed plan.",
         occurredAt,
       });
       return;
@@ -1017,7 +1006,7 @@ const make = Effect.gen(function* () {
         run,
         reason: "plan-malformed",
         detailMarkdown:
-          "The controller must persist exactly one non-empty proposed plan for the repair cycle.",
+          "The App Review thread must persist exactly one non-empty proposed plan for the repair cycle.",
         occurredAt,
       });
       return;
@@ -1027,16 +1016,16 @@ const make = Effect.gen(function* () {
 
   const parseFixResult = (
     thread: OrchestrationThread,
-    run: DevReviewWorkflowRun,
-    cycle: DevReviewWorkflowCycle,
-  ): DevReviewWorkflowFixResult | null => {
+    run: AppReviewWorkflowRun,
+    cycle: AppReviewWorkflowCycle,
+  ): AppReviewWorkflowFixResult | null => {
     for (const activity of thread.activities.toReversed()) {
-      if (activity.kind !== "dev-review-fix-result" || !Predicate.isObject(activity.payload)) {
+      if (activity.kind !== "app-review-fix-result" || !Predicate.isObject(activity.payload)) {
         continue;
       }
       const payload = activity.payload as Record<string, unknown>;
       if (
-        payload["type"] !== "dev-review-fix-result" ||
+        payload["type"] !== "app-review-fix-result" ||
         payload["runId"] !== run.id ||
         payload["planId"] !== cycle.planId
       ) {
@@ -1045,7 +1034,7 @@ const make = Effect.gen(function* () {
       const status = payload["status"];
       if (status !== "succeeded" && status !== "failed" && status !== "blocked") return null;
       const validations = Array.isArray(payload["validations"])
-        ? (payload["validations"] as DevReviewWorkflowFixResult["validations"])
+        ? (payload["validations"] as AppReviewWorkflowFixResult["validations"])
         : [];
       return {
         runId: run.id,
@@ -1059,8 +1048,8 @@ const make = Effect.gen(function* () {
     return null;
   };
 
-  const reconcileFixer = Effect.fn("DevReviewWorkflowReactor.reconcileFixer")(function* (
-    run: DevReviewWorkflowRun,
+  const reconcileFixer = Effect.fn("AppReviewWorkflowReactor.reconcileFixer")(function* (
+    run: AppReviewWorkflowRun,
     occurredAt: string,
   ) {
     const cycle = run.cycles.at(-1);
@@ -1068,8 +1057,8 @@ const make = Effect.gen(function* () {
       return;
     const fixer = yield* resolveThread(cycle.fixerThreadId);
     if (fixer === undefined) {
-      const controller = yield* resolveThread(run.controllerThreadId);
-      const plan = controller?.proposedPlans.find((candidate) => candidate.id === cycle.planId);
+      const reviewer = yield* resolveThread(cycle.reviewerThreadId);
+      const plan = reviewer?.proposedPlans.find((candidate) => candidate.id === cycle.planId);
       if (plan !== undefined) yield* ensureFixerLaunch(run, cycle, plan);
       return;
     }
@@ -1080,7 +1069,7 @@ const make = Effect.gen(function* () {
         reason: "fixer-failed",
         detailMarkdown:
           fixer.session?.lastError ??
-          "The Dev Review fixer stopped without the required result directive.",
+          "The App Review implementation thread stopped without the required result directive.",
         occurredAt,
       });
       return;
@@ -1090,7 +1079,7 @@ const make = Effect.gen(function* () {
       yield* blockRun({
         run,
         reason: "fixer-failed",
-        detailMarkdown: result.notesMarkdown || `The Dev Review fixer ${result.status}.`,
+        detailMarkdown: result.notesMarkdown || `The App Review implementation ${result.status}.`,
         occurredAt,
       });
       return;
@@ -1102,7 +1091,8 @@ const make = Effect.gen(function* () {
       yield* blockRun({
         run,
         reason: "fixer-failed",
-        detailMarkdown: "The Dev Review fixer did not report successful focused validation.",
+        detailMarkdown:
+          "The App Review implementation thread did not report successful focused validation.",
         occurredAt,
       });
       return;
@@ -1135,7 +1125,7 @@ const make = Effect.gen(function* () {
         return;
       }
     }
-    const completedRun: DevReviewWorkflowRun = {
+    const completedRun: AppReviewWorkflowRun = {
       ...run,
       activePhase: null,
       activeThreadId: null,
@@ -1148,16 +1138,23 @@ const make = Effect.gen(function* () {
       updatedAt: occurredAt,
     };
     yield* updateRun(completedRun);
-    if (completedRun.caller.type === "standalone") {
-      yield* startReview(completedRun, occurredAt);
+    switch (successfulFixAction(completedRun)) {
+      case "exhausted":
+        yield* finishExhausted(completedRun, occurredAt);
+        return;
+      case "review":
+        yield* startReview(completedRun, occurredAt);
+        return;
+      case "await-preview-refresh":
+        return;
     }
   });
 
-  const reconcileRun = Effect.fn("DevReviewWorkflowReactor.reconcileRun")(function* (
-    run: DevReviewWorkflowRun,
+  const reconcileRun = Effect.fn("AppReviewWorkflowReactor.reconcileRun")(function* (
+    run: AppReviewWorkflowRun,
     occurredAt: string,
   ) {
-    switch (nextDevReviewWorkflowAction(run)) {
+    switch (nextAppReviewWorkflowAction(run)) {
       case "none":
         return;
       case "review":
@@ -1175,19 +1172,19 @@ const make = Effect.gen(function* () {
     }
   });
 
-  const runForEvent = Effect.fn("DevReviewWorkflowReactor.runForEvent")(function* (
-    event: DevReviewWorkflowEvent,
+  const runForEvent = Effect.fn("AppReviewWorkflowReactor.runForEvent")(function* (
+    event: AppReviewWorkflowEvent,
   ) {
     if (
-      event.type === "thread.dev-review-workflow-launched" ||
-      event.type === "thread.dev-review-workflow-resume-requested"
+      event.type === "thread.app-review-workflow-launched" ||
+      event.type === "thread.app-review-workflow-resume-requested"
     ) {
       return event.payload.run;
     }
-    if (event.type === "thread.dev-review-workflow-cancel-requested") return null;
+    if (event.type === "thread.app-review-workflow-cancel-requested") return null;
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
-    const runs = readModel.devReviewWorkflowRuns ?? [];
-    if (event.type === "thread.dev-review-updated") {
+    const runs = readModel.appReviewWorkflowRuns ?? [];
+    if (event.type === "thread.app-review-updated") {
       return (
         runs.find((run) => run.cycles.some((cycle) => cycle.reviewId === event.payload.reviewId)) ??
         null
@@ -1207,10 +1204,10 @@ const make = Effect.gen(function* () {
     );
   });
 
-  const processEvent = Effect.fn("DevReviewWorkflowReactor.processEvent")(function* (
-    event: DevReviewWorkflowEvent,
+  const processEvent = Effect.fn("AppReviewWorkflowReactor.processEvent")(function* (
+    event: AppReviewWorkflowEvent,
   ) {
-    if (event.type === "thread.dev-review-workflow-cancel-requested") {
+    if (event.type === "thread.app-review-workflow-cancel-requested") {
       const cycle = event.payload.run.cycles.at(-1);
       const activeThreadId =
         cycle?.status === "reviewing"
@@ -1223,14 +1220,14 @@ const make = Effect.gen(function* () {
       if (activeThreadId !== null && activeThreadId !== undefined) {
         yield* orchestrationEngine.dispatch({
           type: "thread.turn.interrupt",
-          commandId: yield* serverCommandId("dev-review-workflow-cancel-interrupt"),
+          commandId: yield* serverCommandId("app-review-workflow-cancel-interrupt"),
           threadId: activeThreadId,
           createdAt: event.occurredAt,
         });
       }
       return;
     }
-    if (event.type === "thread.dev-review-workflow-resume-requested") {
+    if (event.type === "thread.app-review-workflow-resume-requested") {
       yield* startReview(event.payload.run, event.occurredAt);
       return;
     }
@@ -1247,7 +1244,7 @@ const make = Effect.gen(function* () {
             event.payload.activity.kind === "approval.requested"
               ? "unexpected-approval"
               : "unexpected-user-input",
-          detailMarkdown: `Unattended Dev Review received an unexpected ${event.payload.activity.kind === "approval.requested" ? "approval" : "user-input"} request.`,
+          detailMarkdown: `Unattended App Review received an unexpected ${event.payload.activity.kind === "approval.requested" ? "approval" : "user-input"} request.`,
           occurredAt: event.occurredAt,
         });
         return;
@@ -1276,7 +1273,7 @@ const make = Effect.gen(function* () {
     if (run !== null) yield* reconcileRun(run, event.occurredAt);
   });
 
-  const processEventSafely = (event: DevReviewWorkflowEvent) =>
+  const processEventSafely = (event: AppReviewWorkflowEvent) =>
     processEvent(event).pipe(
       Effect.catchCause((cause) =>
         Cause.hasInterruptsOnly(cause)
@@ -1287,12 +1284,12 @@ const make = Effect.gen(function* () {
                 yield* blockRun({
                   run,
                   reason: "automation-unavailable",
-                  detailMarkdown: `Dev Review automation failed while processing ${event.type}.\n\n${Cause.pretty(cause)}`,
+                  detailMarkdown: `App Review automation failed while processing ${event.type}.\n\n${Cause.pretty(cause)}`,
                   occurredAt: event.occurredAt,
                 }).pipe(Effect.catch(() => Effect.void));
                 return;
               }
-              yield* Effect.logWarning("Dev Review workflow reactor failed to process event", {
+              yield* Effect.logWarning("App Review workflow reactor failed to process event", {
                 eventType: event.type,
                 cause: Cause.pretty(cause),
               });
@@ -1302,10 +1299,10 @@ const make = Effect.gen(function* () {
 
   const worker = yield* makeDrainableWorker(processEventSafely);
 
-  const reconcileRuns = Effect.fn("DevReviewWorkflowReactor.reconcileRuns")(function* () {
+  const reconcileRuns = Effect.fn("AppReviewWorkflowReactor.reconcileRuns")(function* () {
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
     const occurredAt = yield* nowIso;
-    for (const run of readModel.devReviewWorkflowRuns ?? []) {
+    for (const run of readModel.appReviewWorkflowRuns ?? []) {
       if (run.status !== "running") continue;
       yield* reconcileRun(run, occurredAt).pipe(
         Effect.catchCause((cause) =>
@@ -1314,7 +1311,7 @@ const make = Effect.gen(function* () {
             : blockRun({
                 run,
                 reason: "automation-unavailable",
-                detailMarkdown: `Dev Review automation was unavailable during restart recovery.\n\n${Cause.pretty(cause)}`,
+                detailMarkdown: `App Review automation was unavailable during restart recovery.\n\n${Cause.pretty(cause)}`,
                 occurredAt,
               }).pipe(Effect.catch(() => Effect.void)),
         ),
@@ -1322,24 +1319,24 @@ const make = Effect.gen(function* () {
     }
   });
 
-  const reconcile: DevReviewWorkflowReactorShape["reconcile"] = () =>
+  const reconcile: AppReviewWorkflowReactorShape["reconcile"] = () =>
     reconcileRuns().pipe(
       Effect.catchCause((cause) =>
-        Effect.logWarning("Dev Review workflow reconciliation failed", {
+        Effect.logWarning("App Review workflow reconciliation failed", {
           cause: Cause.pretty(cause),
         }),
       ),
     );
 
-  const start: DevReviewWorkflowReactorShape["start"] = Effect.fn("start")(function* () {
+  const start: AppReviewWorkflowReactorShape["start"] = Effect.fn("start")(function* () {
     yield* reconcile();
     yield* Effect.forkScoped(
       Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
         if (
-          event.type !== "thread.dev-review-workflow-launched" &&
-          event.type !== "thread.dev-review-workflow-resume-requested" &&
-          event.type !== "thread.dev-review-workflow-cancel-requested" &&
-          event.type !== "thread.dev-review-updated" &&
+          event.type !== "thread.app-review-workflow-launched" &&
+          event.type !== "thread.app-review-workflow-resume-requested" &&
+          event.type !== "thread.app-review-workflow-cancel-requested" &&
+          event.type !== "thread.app-review-updated" &&
           event.type !== "thread.proposed-plan-upserted" &&
           event.type !== "thread.turn-diff-completed" &&
           event.type !== "thread.activity-appended" &&
@@ -1352,7 +1349,7 @@ const make = Effect.gen(function* () {
     );
   });
 
-  return { start, drain: worker.drain, reconcile } satisfies DevReviewWorkflowReactorShape;
+  return { start, drain: worker.drain, reconcile } satisfies AppReviewWorkflowReactorShape;
 });
 
-export const DevReviewWorkflowReactorLive = Layer.effect(DevReviewWorkflowReactor, make);
+export const AppReviewWorkflowReactorLive = Layer.effect(AppReviewWorkflowReactor, make);

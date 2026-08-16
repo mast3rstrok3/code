@@ -21,13 +21,13 @@ import { ProjectionStateRepository } from "../../persistence/Services/Projection
 import { ProjectionThreadActivityRepository } from "../../persistence/Services/ProjectionThreadActivities.ts";
 import { type ProjectionThreadActivity } from "../../persistence/Services/ProjectionThreadActivities.ts";
 import {
-  devReviewRecordToProjection,
-  projectionThreadDevReviewToRecord,
-  ProjectionThreadDevReviewRepository,
-  type ProjectionThreadDevReview,
-} from "../../persistence/Services/ProjectionThreadDevReviews.ts";
+  appReviewRecordToProjection,
+  projectionThreadAppReviewToRecord,
+  ProjectionThreadAppReviewRepository,
+  type ProjectionThreadAppReview,
+} from "../../persistence/Services/ProjectionThreadAppReviews.ts";
 import { ProjectionImplementationRunRepository } from "../../persistence/Services/ProjectionImplementationRuns.ts";
-import { ProjectionDevReviewWorkflowRunRepository } from "../../persistence/Services/ProjectionDevReviewWorkflowRuns.ts";
+import { ProjectionAppReviewWorkflowRunRepository } from "../../persistence/Services/ProjectionAppReviewWorkflowRuns.ts";
 import {
   type ProjectionThreadMessage,
   ProjectionThreadMessageRepository,
@@ -57,9 +57,9 @@ import { ProjectionProjectRepositoryLive } from "../../persistence/Layers/Projec
 import { ProjectionStateRepositoryLive } from "../../persistence/Layers/ProjectionState.ts";
 import { ProjectionThreadActivityRepositoryLive } from "../../persistence/Layers/ProjectionThreadActivities.ts";
 import { ProjectionThreadMessageRepositoryLive } from "../../persistence/Layers/ProjectionThreadMessages.ts";
-import { ProjectionThreadDevReviewRepositoryLive } from "../../persistence/Layers/ProjectionThreadDevReviews.ts";
+import { ProjectionThreadAppReviewRepositoryLive } from "../../persistence/Layers/ProjectionThreadAppReviews.ts";
 import { ProjectionImplementationRunRepositoryLive } from "../../persistence/Layers/ProjectionImplementationRuns.ts";
-import { ProjectionDevReviewWorkflowRunRepositoryLive } from "../../persistence/Layers/ProjectionDevReviewWorkflowRuns.ts";
+import { ProjectionAppReviewWorkflowRunRepositoryLive } from "../../persistence/Layers/ProjectionAppReviewWorkflowRuns.ts";
 import { ProjectionThreadProposedPlanRepositoryLive } from "../../persistence/Layers/ProjectionThreadProposedPlans.ts";
 import { ProjectionThreadPlanningTicketRepositoryLive } from "../../persistence/Layers/ProjectionThreadPlanningTickets.ts";
 import { ProjectionThreadPlanningReviewCycleRepositoryLive } from "../../persistence/Layers/ProjectionThreadPlanningReviewCycles.ts";
@@ -85,14 +85,14 @@ export const ORCHESTRATION_PROJECTOR_NAMES = {
   threads: "projection.threads",
   threadMessages: "projection.thread-messages",
   threadProposedPlans: "projection.thread-proposed-plans",
-  threadDevReviews: "projection.thread-dev-reviews",
+  threadAppReviews: "projection.thread-app-reviews",
   workflowSubagentBatches: "projection.workflow-subagent-batches",
   threadSpecs: "projection.thread-specs",
   threadPlanningTickets: "projection.thread-planning-tickets",
   threadPlanningReviewCycles: "projection.thread-planning-review-cycles",
   threadLoadedSpecBundles: "projection.thread-loaded-spec-bundles",
   implementationRuns: "projection.implementation-runs",
-  devReviewWorkflowRuns: "projection.dev-review-workflow-runs",
+  appReviewWorkflowRuns: "projection.app-review-workflow-runs",
   threadActivities: "projection.thread-activities",
   threadSessions: "projection.thread-sessions",
   threadTurns: "projection.thread-turns",
@@ -509,7 +509,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     const projectionThreadRepository = yield* ProjectionThreadRepository;
     const projectionThreadMessageRepository = yield* ProjectionThreadMessageRepository;
     const projectionThreadProposedPlanRepository = yield* ProjectionThreadProposedPlanRepository;
-    const projectionThreadDevReviewRepository = yield* ProjectionThreadDevReviewRepository;
+    const projectionThreadAppReviewRepository = yield* ProjectionThreadAppReviewRepository;
     const projectionThreadSpecRepository = yield* ProjectionThreadSpecRepository;
     const projectionThreadPlanningTicketRepository =
       yield* ProjectionThreadPlanningTicketRepository;
@@ -518,8 +518,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     const projectionThreadLoadedSpecBundleRepository =
       yield* ProjectionThreadLoadedSpecBundleRepository;
     const projectionImplementationRunRepository = yield* ProjectionImplementationRunRepository;
-    const projectionDevReviewWorkflowRunRepository =
-      yield* ProjectionDevReviewWorkflowRunRepository;
+    const projectionAppReviewWorkflowRunRepository =
+      yield* ProjectionAppReviewWorkflowRunRepository;
     const projectionThreadActivityRepository = yield* ProjectionThreadActivityRepository;
     const projectionThreadSessionRepository = yield* ProjectionThreadSessionRepository;
     const projectionTurnRepository = yield* ProjectionTurnRepository;
@@ -1252,53 +1252,53 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       }
     });
 
-    const applyThreadDevReviewsProjection: ProjectorDefinition["apply"] = Effect.fn(
-      "applyThreadDevReviewsProjection",
+    const applyThreadAppReviewsProjection: ProjectorDefinition["apply"] = Effect.fn(
+      "applyThreadAppReviewsProjection",
     )(function* (event, _attachmentSideEffects) {
       switch (event.type) {
-        case "thread.dev-review-created":
-          yield* projectionThreadDevReviewRepository.upsert(
-            devReviewRecordToProjection(event.payload.devReview),
+        case "thread.app-review-created":
+          yield* projectionThreadAppReviewRepository.upsert(
+            appReviewRecordToProjection(event.payload.appReview),
           );
           return;
 
-        case "thread.dev-review-updated": {
-          const existing = yield* projectionThreadDevReviewRepository.getById({
+        case "thread.app-review-updated": {
+          const existing = yield* projectionThreadAppReviewRepository.getById({
             reviewId: event.payload.reviewId,
           });
           if (Option.isNone(existing)) {
             return;
           }
-          const record = projectionThreadDevReviewToRecord(existing.value);
-          const updated: ProjectionThreadDevReview = devReviewRecordToProjection({
+          const record = projectionThreadAppReviewToRecord(existing.value);
+          const updated: ProjectionThreadAppReview = appReviewRecordToProjection({
             ...record,
             ...(event.payload.status === undefined ? {} : { status: event.payload.status }),
             ...(event.payload.document === undefined ? {} : { document: event.payload.document }),
             updatedAt: event.payload.updatedAt,
           });
-          yield* projectionThreadDevReviewRepository.upsert(updated);
+          yield* projectionThreadAppReviewRepository.upsert(updated);
           return;
         }
 
-        case "thread.dev-review-evidence-updated": {
-          const existing = yield* projectionThreadDevReviewRepository.getById({
+        case "thread.app-review-evidence-updated": {
+          const existing = yield* projectionThreadAppReviewRepository.getById({
             reviewId: event.payload.reviewId,
           });
           if (Option.isNone(existing)) {
             return;
           }
-          const record = projectionThreadDevReviewToRecord(existing.value);
-          const updated: ProjectionThreadDevReview = devReviewRecordToProjection({
+          const record = projectionThreadAppReviewToRecord(existing.value);
+          const updated: ProjectionThreadAppReview = appReviewRecordToProjection({
             ...record,
             evidence: event.payload.evidence,
             updatedAt: event.payload.updatedAt,
           });
-          yield* projectionThreadDevReviewRepository.upsert(updated);
+          yield* projectionThreadAppReviewRepository.upsert(updated);
           return;
         }
 
         case "thread.deleted":
-          yield* projectionThreadDevReviewRepository.deleteByThreadId({
+          yield* projectionThreadAppReviewRepository.deleteByThreadId({
             threadId: event.payload.threadId,
           });
           return;
@@ -1329,12 +1329,12 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               sql`
                 INSERT INTO projection_thread_workflow_subagent_batch_children (
                   batch_id, child_index, workflow_prompt_id, title, expected_result,
-                  dev_review_mode, child_thread_id, dev_review_id, status, result_markdown,
+                  app_review_mode, child_thread_id, app_review_id, status, result_markdown,
                   failure_detail, created_at, completed_at
                 ) VALUES (
                   ${batch.id}, ${child.index}, ${child.workflowPromptId}, ${child.title},
-                  ${child.expectedResult}, ${child.devReviewMode}, ${child.childThreadId},
-                  ${child.devReviewId}, ${child.status}, ${child.resultMarkdown},
+                  ${child.expectedResult}, ${child.appReviewMode}, ${child.childThreadId},
+                  ${child.appReviewId}, ${child.status}, ${child.resultMarkdown},
                   ${child.failureDetail}, ${child.createdAt}, ${child.completedAt}
                 )
                 ON CONFLICT(batch_id, child_index) DO NOTHING
@@ -1351,9 +1351,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               workflow_prompt_id = ${child.workflowPromptId},
               title = ${child.title},
               expected_result = ${child.expectedResult},
-              dev_review_mode = ${child.devReviewMode},
+              app_review_mode = ${child.appReviewMode},
               child_thread_id = ${child.childThreadId},
-              dev_review_id = ${child.devReviewId},
+              app_review_id = ${child.appReviewId},
               status = ${child.status},
               result_markdown = ${child.resultMarkdown},
               failure_detail = ${child.failureDetail},
@@ -1550,15 +1550,15 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       }
     });
 
-    const applyDevReviewWorkflowRunsProjection: ProjectorDefinition["apply"] = Effect.fn(
-      "applyDevReviewWorkflowRunsProjection",
+    const applyAppReviewWorkflowRunsProjection: ProjectorDefinition["apply"] = Effect.fn(
+      "applyAppReviewWorkflowRunsProjection",
     )(function* (event, _attachmentSideEffects) {
       switch (event.type) {
-        case "thread.dev-review-workflow-launched":
-        case "thread.dev-review-workflow-updated":
-        case "thread.dev-review-workflow-cancel-requested":
-        case "thread.dev-review-workflow-resume-requested":
-          yield* projectionDevReviewWorkflowRunRepository.upsert({
+        case "thread.app-review-workflow-launched":
+        case "thread.app-review-workflow-updated":
+        case "thread.app-review-workflow-cancel-requested":
+        case "thread.app-review-workflow-resume-requested":
+          yield* projectionAppReviewWorkflowRunRepository.upsert({
             runId: event.payload.run.id,
             sourceThreadId: event.payload.sourceThreadId,
             run: event.payload.run,
@@ -2114,8 +2114,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         apply: applyThreadProposedPlansProjection,
       },
       {
-        name: ORCHESTRATION_PROJECTOR_NAMES.threadDevReviews,
-        apply: applyThreadDevReviewsProjection,
+        name: ORCHESTRATION_PROJECTOR_NAMES.threadAppReviews,
+        apply: applyThreadAppReviewsProjection,
       },
       {
         name: ORCHESTRATION_PROJECTOR_NAMES.workflowSubagentBatches,
@@ -2142,8 +2142,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         apply: applyImplementationRunsProjection,
       },
       {
-        name: ORCHESTRATION_PROJECTOR_NAMES.devReviewWorkflowRuns,
-        apply: applyDevReviewWorkflowRunsProjection,
+        name: ORCHESTRATION_PROJECTOR_NAMES.appReviewWorkflowRuns,
+        apply: applyAppReviewWorkflowRunsProjection,
       },
       {
         name: ORCHESTRATION_PROJECTOR_NAMES.threadActivities,
@@ -2267,13 +2267,13 @@ export const OrchestrationProjectionPipelineLive = Layer.effect(
   Layer.provideMerge(ProjectionThreadRepositoryLive),
   Layer.provideMerge(ProjectionThreadMessageRepositoryLive),
   Layer.provideMerge(ProjectionThreadProposedPlanRepositoryLive),
-  Layer.provideMerge(ProjectionThreadDevReviewRepositoryLive),
+  Layer.provideMerge(ProjectionThreadAppReviewRepositoryLive),
   Layer.provideMerge(ProjectionThreadSpecRepositoryLive),
   Layer.provideMerge(ProjectionThreadPlanningTicketRepositoryLive),
   Layer.provideMerge(ProjectionThreadPlanningReviewCycleRepositoryLive),
   Layer.provideMerge(ProjectionThreadLoadedSpecBundleRepositoryLive),
   Layer.provideMerge(ProjectionImplementationRunRepositoryLive),
-  Layer.provideMerge(ProjectionDevReviewWorkflowRunRepositoryLive),
+  Layer.provideMerge(ProjectionAppReviewWorkflowRunRepositoryLive),
   Layer.provideMerge(ProjectionThreadActivityRepositoryLive),
   Layer.provideMerge(ProjectionThreadSessionRepositoryLive),
   Layer.provideMerge(ProjectionTurnRepositoryLive),

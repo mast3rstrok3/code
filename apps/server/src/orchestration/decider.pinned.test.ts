@@ -55,7 +55,7 @@ function makeReadModel(input: {
         messages: [],
         proposedPlans: [],
         planningWorkflow: null,
-        devReviews: [],
+        appReviews: [],
         activities: [],
         checkpoints: [],
         session: null,

@@ -213,7 +213,7 @@ describe("environment entity projections", () => {
       messages,
       proposedPlans: [],
       planningWorkflow: null,
-      devReviews: [],
+      appReviews: [],
       activities: [],
       checkpoints: [],
     } satisfies OrchestrationThread & { readonly environmentId: EnvironmentId };
@@ -330,7 +330,7 @@ describe("environment entity projections", () => {
       messages: [],
       proposedPlans: [],
       planningWorkflow: null,
-      devReviews: [],
+      appReviews: [],
       activities: [],
       checkpoints: [],
     } satisfies OrchestrationThread;

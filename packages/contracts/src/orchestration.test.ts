@@ -5,7 +5,7 @@ import * as Schema from "effect/Schema";
 import {
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
-  IMPLEMENTATION_RUN_MAX_DEV_REVIEW_UNBLOCK_ATTEMPTS,
+  IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS,
   IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS,
   IMPLEMENTATION_RUN_MAX_QA_CYCLES,
   IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
@@ -70,7 +70,7 @@ const decodeOrchestrationThreadWorkflowRole = Schema.decodeUnknownEffect(
 
 it("exports the QA repair cap with deprecated compatibility aliases", () => {
   assert.strictEqual(IMPLEMENTATION_RUN_MAX_QA_REPAIRS, 10);
-  assert.strictEqual(IMPLEMENTATION_RUN_MAX_DEV_REVIEW_UNBLOCK_ATTEMPTS, 3);
+  assert.strictEqual(IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS, 3);
   assert.strictEqual(IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES, 3);
   assert.strictEqual(IMPLEMENTATION_RUN_MAX_QA_CYCLES, IMPLEMENTATION_RUN_MAX_QA_REPAIRS);
   assert.strictEqual(IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS, IMPLEMENTATION_RUN_MAX_QA_REPAIRS);
@@ -983,25 +983,25 @@ it.effect("accepts workflow prompt metadata in thread.turn.start", () =>
         text: "review in browser",
         attachments: [],
       },
-      workflowPromptId: "implementation.browser-dev-review.codex",
+      workflowPromptId: "implementation.browser-app-review.codex",
       createdAt: "2026-01-01T00:00:00.000Z",
     });
-    assert.strictEqual(parsed.workflowPromptId, "implementation.browser-dev-review.codex");
+    assert.strictEqual(parsed.workflowPromptId, "implementation.browser-app-review.codex");
   }),
 );
 
-it.effect("accepts Browser Dev Review launch commands", () =>
+it.effect("accepts Browser App Review launch commands", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeOrchestrationCommand({
-      type: "thread.dev-review.launch",
-      commandId: "cmd-dev-review-launch",
+      type: "thread.app-review.launch",
+      commandId: "cmd-app-review-launch",
       sourceThreadId: "thread-source",
       reviewThreadId: "thread-review",
-      reviewId: "dev-review-1",
+      reviewId: "app-review-1",
       message: {
-        messageId: "msg-dev-review-launch",
+        messageId: "msg-app-review-launch",
         role: "user",
-        text: "Run Browser Dev Review",
+        text: "Run Browser App Review",
         attachments: [],
       },
       modelSelection: {
@@ -1009,22 +1009,22 @@ it.effect("accepts Browser Dev Review launch commands", () =>
         model: "gpt-5-codex",
       },
       runtimeMode: "full-access",
-      workflowPromptId: "implementation.browser-dev-review.codex",
+      workflowPromptId: "implementation.browser-app-review.codex",
       createdAt: "2026-01-01T00:00:00.000Z",
     });
 
-    assert.strictEqual(parsed.type, "thread.dev-review.launch");
-    if (parsed.type !== "thread.dev-review.launch") return;
-    assert.strictEqual(parsed.reviewId, "dev-review-1");
-    assert.strictEqual(parsed.workflowPromptId, "implementation.browser-dev-review.codex");
+    assert.strictEqual(parsed.type, "thread.app-review.launch");
+    if (parsed.type !== "thread.app-review.launch") return;
+    assert.strictEqual(parsed.reviewId, "app-review-1");
+    assert.strictEqual(parsed.workflowPromptId, "implementation.browser-app-review.codex");
   }),
 );
 
-it.effect("accepts Dev Review Workflow launches before App Dev Stack resolution", () =>
+it.effect("accepts App Review Workflow launches before App Dev Stack resolution", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeOrchestrationCommand({
-      type: "thread.dev-review-workflow.launch",
-      commandId: "cmd-dev-review-workflow-launch",
+      type: "thread.app-review-workflow.launch",
+      commandId: "cmd-app-review-workflow-launch",
       targetThreadId: "thread-source",
       controllerThreadId: "thread-controller",
       caller: { type: "standalone", sourceThreadId: "thread-source" },
@@ -1038,8 +1038,8 @@ it.effect("accepts Dev Review Workflow launches before App Dev Stack resolution"
       createdAt: "2026-01-01T00:00:00.000Z",
     });
 
-    assert.strictEqual(parsed.type, "thread.dev-review-workflow.launch");
-    if (parsed.type !== "thread.dev-review-workflow.launch") return;
+    assert.strictEqual(parsed.type, "thread.app-review-workflow.launch");
+    if (parsed.type !== "thread.app-review-workflow.launch") return;
     assert.deepStrictEqual(parsed.previewTargets, []);
   }),
 );
@@ -1134,30 +1134,30 @@ it.effect("decodes thread.turn-start-requested workflow prompt metadata when pre
     const parsed = yield* decodeThreadTurnStartRequestedPayload({
       threadId: "thread-2",
       messageId: "msg-2",
-      workflowPromptId: "implementation.browser-dev-review.codex",
+      workflowPromptId: "implementation.browser-app-review.codex",
       createdAt: "2026-01-01T00:00:00.000Z",
     });
-    assert.strictEqual(parsed.workflowPromptId, "implementation.browser-dev-review.codex");
+    assert.strictEqual(parsed.workflowPromptId, "implementation.browser-app-review.codex");
   }),
 );
 
-it.effect("decodes Dev Review metadata events", () =>
+it.effect("decodes App Review metadata events", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeOrchestrationEvent({
       sequence: 1,
-      eventId: "event-dev-review-created",
-      type: "thread.dev-review-created",
+      eventId: "event-app-review-created",
+      type: "thread.app-review-created",
       aggregateKind: "thread",
       aggregateId: "thread-source",
-      commandId: "cmd-dev-review-launch",
+      commandId: "cmd-app-review-launch",
       causationEventId: null,
-      correlationId: "cmd-dev-review-launch",
+      correlationId: "cmd-app-review-launch",
       occurredAt: "2026-01-01T00:00:00.000Z",
       metadata: {},
       payload: {
         threadId: "thread-source",
-        devReview: {
-          id: "dev-review-1",
+        appReview: {
+          id: "app-review-1",
           sourceThreadId: "thread-source",
           reviewThreadId: "thread-review",
           sourceTurnId: null,
@@ -1188,9 +1188,9 @@ it.effect("decodes Dev Review metadata events", () =>
       },
     });
 
-    assert.strictEqual(parsed.type, "thread.dev-review-created");
-    if (parsed.type !== "thread.dev-review-created") return;
-    assert.strictEqual(parsed.payload.devReview.evidence.recording.status, "not-started");
+    assert.strictEqual(parsed.type, "thread.app-review-created");
+    if (parsed.type !== "thread.app-review-created") return;
+    assert.strictEqual(parsed.payload.appReview.evidence.recording.status, "not-started");
   }),
 );
 

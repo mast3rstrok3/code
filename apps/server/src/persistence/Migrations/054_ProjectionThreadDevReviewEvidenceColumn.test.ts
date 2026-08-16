@@ -1,8 +1,8 @@
 import { assert, describe, it } from "@effect/vitest";
 import {
-  EMPTY_DEV_REVIEW_EVIDENCE,
-  DevReviewEvidence,
-  DevReviewId,
+  AppReviewEvidence,
+  AppReviewId,
+  EMPTY_APP_REVIEW_EVIDENCE,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -11,28 +11,28 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import { ProjectionThreadDevReviewRepositoryLive } from "../Layers/ProjectionThreadDevReviews.ts";
+import { ProjectionThreadAppReviewRepositoryLive } from "../Layers/ProjectionThreadAppReviews.ts";
 import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "../NodeSqliteClient.ts";
-import { ProjectionThreadDevReviewRepository } from "../Services/ProjectionThreadDevReviews.ts";
+import { ProjectionThreadAppReviewRepository } from "../Services/ProjectionThreadAppReviews.ts";
 
-const decodeDevReviewEvidenceJson = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(DevReviewEvidence),
+const decodeAppReviewEvidenceJson = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(AppReviewEvidence),
 );
 
 const makeLayer = () => {
   const sqliteLayer = NodeSqliteClient.layerMemory();
   return Layer.mergeAll(
     sqliteLayer,
-    ProjectionThreadDevReviewRepositoryLive.pipe(Layer.provideMerge(sqliteLayer)),
+    ProjectionThreadAppReviewRepositoryLive.pipe(Layer.provideMerge(sqliteLayer)),
   );
 };
 
-describe("054_ProjectionThreadDevReviewEvidenceColumn", () => {
-  it.effect("adds evidence_json to legacy Dev Review projection tables", () =>
+describe("054 App Review evidence compatibility", () => {
+  it.effect("adds evidence_json to legacy review projection tables", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      const devReviews = yield* ProjectionThreadDevReviewRepository;
+      const appReviews = yield* ProjectionThreadAppReviewRepository;
 
       yield* runMigrations({ toMigrationInclusive: 44 });
 
@@ -98,18 +98,18 @@ describe("054_ProjectionThreadDevReviewEvidenceColumn", () => {
         FROM projection_thread_dev_reviews
         WHERE review_id = 'dev-review-legacy'
       `;
-      const decodedEvidence = yield* decodeDevReviewEvidenceJson(
+      const decodedEvidence = yield* decodeAppReviewEvidenceJson(
         rawRows[0]?.evidenceJson ?? "null",
       );
-      assert.deepStrictEqual(decodedEvidence, EMPTY_DEV_REVIEW_EVIDENCE);
+      assert.deepStrictEqual(decodedEvidence, EMPTY_APP_REVIEW_EVIDENCE);
 
       // The current repository also reads workflow lineage added after this
       // migration; advance before exercising the repository contract.
-      yield* runMigrations({ toMigrationInclusive: 62 });
-      const persisted = yield* devReviews.getById({
-        reviewId: DevReviewId.make("dev-review-legacy"),
+      yield* runMigrations({ toMigrationInclusive: 71 });
+      const persisted = yield* appReviews.getById({
+        reviewId: AppReviewId.make("dev-review-legacy"),
       });
-      assert.deepStrictEqual(Option.getOrNull(persisted)?.evidence, EMPTY_DEV_REVIEW_EVIDENCE);
+      assert.deepStrictEqual(Option.getOrNull(persisted)?.evidence, EMPTY_APP_REVIEW_EVIDENCE);
     }).pipe(Effect.provide(makeLayer())),
   );
 
@@ -124,10 +124,10 @@ describe("054_ProjectionThreadDevReviewEvidenceColumn", () => {
       `;
       assert.ok(columns.some((column) => column.name === "evidence_json"));
 
-      yield* runMigrations({ toMigrationInclusive: 62 });
-      const devReviews = yield* ProjectionThreadDevReviewRepository;
-      yield* devReviews.upsert({
-        reviewId: DevReviewId.make("dev-review-fresh"),
+      yield* runMigrations({ toMigrationInclusive: 71 });
+      const appReviews = yield* ProjectionThreadAppReviewRepository;
+      yield* appReviews.upsert({
+        reviewId: AppReviewId.make("app-review-fresh"),
         sourceThreadId: ThreadId.make("thread-source-fresh"),
         reviewThreadId: ThreadId.make("thread-review-fresh"),
         sourceProposedPlan: null,
@@ -141,15 +141,15 @@ describe("054_ProjectionThreadDevReviewEvidenceColumn", () => {
           questions: [],
           nextSteps: [],
         },
-        evidence: EMPTY_DEV_REVIEW_EVIDENCE,
+        evidence: EMPTY_APP_REVIEW_EVIDENCE,
         createdAt: "2026-07-02T00:00:00.000Z",
         updatedAt: "2026-07-02T00:00:00.000Z",
       });
 
-      const persisted = yield* devReviews.getById({
-        reviewId: DevReviewId.make("dev-review-fresh"),
+      const persisted = yield* appReviews.getById({
+        reviewId: AppReviewId.make("app-review-fresh"),
       });
-      assert.deepStrictEqual(Option.getOrNull(persisted)?.evidence, EMPTY_DEV_REVIEW_EVIDENCE);
+      assert.deepStrictEqual(Option.getOrNull(persisted)?.evidence, EMPTY_APP_REVIEW_EVIDENCE);
     }).pipe(Effect.provide(makeLayer())),
   );
 });

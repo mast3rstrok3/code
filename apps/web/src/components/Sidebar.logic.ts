@@ -1084,13 +1084,13 @@ export function workflowRoleShortLabel(
     case "implementation-validator":
       return "Merge gate";
     case "implementation-qa-reviewer":
-      return "Dev review";
-    case "dev-review-orchestrator":
-      return "Dev Review";
-    case "dev-review-reviewer":
+      return "App review";
+    case "app-review-orchestrator":
+      return "App Review";
+    case "app-review-reviewer":
       return "Browser review";
-    case "dev-review-fixer":
-      return "Repair";
+    case "app-review-fixer":
+      return "Implement";
     case "implementation-fixer":
     case "product-fix-implementer":
       return "Fix";

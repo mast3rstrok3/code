@@ -629,7 +629,7 @@ describe("Codex developer instructions browser scoping", () => {
     NodeAssert.match(CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS, /workflow-subagent-create/);
     NodeAssert.match(
       CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
-      /implementation\.browser-dev-review\.codex/,
+      /implementation\.browser-app-review\.codex/,
     );
     NodeAssert.match(
       CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
@@ -638,16 +638,16 @@ describe("Codex developer instructions browser scoping", () => {
     NodeAssert.doesNotMatch(CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS, /workflow-subagent-create/);
   });
 
-  it("defines browser QA developer instructions for Browser Dev Review only", () => {
+  it("defines browser QA developer instructions for Browser App Review only", () => {
     NodeAssert.match(CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS, /preview_open/);
     NodeAssert.match(CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS, /preview_navigate/);
-    NodeAssert.match(CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS, /dev_review_recording_start/);
-    NodeAssert.match(CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS, /dev_review_capture_screenshot/);
+    NodeAssert.match(CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS, /app_review_recording_start/);
+    NodeAssert.match(CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS, /app_review_capture_screenshot/);
     NodeAssert.match(CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS, /t3-code/);
     NodeAssert.doesNotMatch(CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS, /agent-browser/i);
     NodeAssert.doesNotMatch(CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS, /rrweb/i);
     NodeAssert.doesNotMatch(CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS, /Chrome DevTools MCP/);
-    NodeAssert.match(CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS, /Browser Dev Review QA role only/);
+    NodeAssert.match(CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS, /Browser App Review QA role only/);
   });
 });
 
@@ -673,7 +673,7 @@ describe("Codex workflow prompt browser scoping", () => {
     }),
   );
 
-  it.effect("includes browser tooling only for Browser Dev Review turns", () =>
+  it.effect("includes browser tooling only for Browser App Review turns", () =>
     Effect.gen(function* () {
       const params = yield* buildTurnStartParams({
         threadId: "provider-thread-1",
@@ -681,15 +681,15 @@ describe("Codex workflow prompt browser scoping", () => {
         prompt: "Review in browser",
         model: "gpt-5.3-codex",
         interactionMode: "implementation-workflow",
-        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
+        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
       });
 
       const instructions = params.collaborationMode?.settings.developer_instructions ?? "";
-      NodeAssert.match(instructions, /Browser Dev Review QA tools/);
+      NodeAssert.match(instructions, /Browser App Review QA tools/);
       NodeAssert.match(instructions, /preview_open/);
       NodeAssert.match(instructions, /preview_snapshot/);
-      NodeAssert.match(instructions, /dev_review_recording_start/);
-      NodeAssert.match(instructions, /dev_review_capture_screenshot/);
+      NodeAssert.match(instructions, /app_review_recording_start/);
+      NodeAssert.match(instructions, /app_review_capture_screenshot/);
       NodeAssert.match(instructions, /preview-browser-qa\.md/);
       NodeAssert.match(instructions, /Never turn evidenced product defects into blocked/);
       NodeAssert.doesNotMatch(instructions, /Agent Browser CLI/);

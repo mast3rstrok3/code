@@ -1,55 +1,59 @@
 import { useMemo, useState } from "react";
 import { ExternalLink, PlayCircle, Square } from "lucide-react";
 import type {
-  DevReviewWorkflowRun,
+  AppReviewWorkflowRun,
   ScopedThreadRef,
   ThreadId,
   WorkflowArtifactsSnapshot,
 } from "@t3tools/contracts";
 
 import {
-  useDevReviewWorkflowRuns,
-  useThreadDevReviews,
+  useAppReviewWorkflowRuns,
+  useThreadAppReviews,
   useThreadPlanningWorkflow,
 } from "~/state/entities";
 import type {
-  BrowserDevReviewSourceContext,
-  DevReviewWorkflowLaunchRequest,
+  BrowserAppReviewSourceContext,
+  AppReviewWorkflowLaunchRequest,
 } from "./ChatView.logic";
-import { devReviewRunStatusLabel, selectDevReviewRunsForPanel } from "./DevReviewPanel.logic";
+import {
+  appReviewCycleStepStatuses,
+  appReviewRunStatusLabel,
+  selectAppReviewRunsForPanel,
+} from "./AppReviewPanel.logic";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
-import { DevReviewDocument } from "./DevReviewDocument";
-import { DevReviewLaunchDialog } from "./DevReviewLaunchDialog";
+import { AppReviewDocument } from "./AppReviewDocument";
+import { AppReviewLaunchDialog } from "./AppReviewLaunchDialog";
 
-export function DevReviewPanel(props: {
+export function AppReviewPanel(props: {
   mode: DiffPanelMode;
   threadRef: ScopedThreadRef;
   launchInFlight: boolean;
   launchDisabled: boolean;
   sourceSettled: boolean;
-  sourceContext: BrowserDevReviewSourceContext | null;
+  sourceContext: BrowserAppReviewSourceContext | null;
   previewTargets: ReadonlyArray<string>;
-  onLaunch: (request: DevReviewWorkflowLaunchRequest) => void;
-  onStop: (run: DevReviewWorkflowRun) => void;
+  onLaunch: (request: AppReviewWorkflowLaunchRequest) => void;
+  onStop: (run: AppReviewWorkflowRun) => void;
   onOpenThread: (threadId: ThreadId) => void;
   onOpenPlanArtifact?: (ticketId: string | null) => void;
   workflowArtifacts?: WorkflowArtifactsSnapshot | null;
 }) {
   const [launchDialogOpen, setLaunchDialogOpen] = useState(false);
-  const localRecords = useThreadDevReviews(props.threadRef);
-  const localRuns = useDevReviewWorkflowRuns(props.threadRef.environmentId);
+  const localRecords = useThreadAppReviews(props.threadRef);
+  const localRuns = useAppReviewWorkflowRuns(props.threadRef.environmentId);
   const localPlanningWorkflow = useThreadPlanningWorkflow(props.threadRef);
-  const records = props.workflowArtifacts?.devReviews ?? localRecords;
-  const runs = props.workflowArtifacts?.devReviewWorkflowRuns ?? localRuns;
+  const records = props.workflowArtifacts?.appReviews ?? localRecords;
+  const runs = props.workflowArtifacts?.appReviewWorkflowRuns ?? localRuns;
   const planningWorkflow =
     props.workflowArtifacts == null
       ? localPlanningWorkflow
       : { spec: props.workflowArtifacts.spec, tickets: props.workflowArtifacts.tickets };
   const relevantRuns = useMemo(
     () =>
-      selectDevReviewRunsForPanel({
+      selectAppReviewRunsForPanel({
         runs,
         openedThreadId: props.threadRef.threadId,
         workflowScoped: props.workflowArtifacts != null,
@@ -69,10 +73,10 @@ export function DevReviewPanel(props: {
         <>
           <div className="min-w-0">
             <h2 className="truncate text-sm font-semibold">
-              {relevantRuns.length > 1 ? `Dev Reviews · ${relevantRuns.length}` : "Dev Review"}
+              {relevantRuns.length > 1 ? `App Reviews · ${relevantRuns.length}` : "App Review"}
             </h2>
             <p className="truncate text-xs text-muted-foreground">
-              {currentRun ? devReviewRunStatusLabel(currentRun) : "No workflow launched"}
+              {currentRun ? appReviewRunStatusLabel(currentRun) : "No workflow launched"}
             </p>
           </div>
           {activeRun ? (
@@ -95,7 +99,7 @@ export function DevReviewPanel(props: {
               onClick={() => setLaunchDialogOpen(true)}
             >
               <PlayCircle className="size-4" />
-              Launch Dev Review
+              Launch App Review
             </Button>
           )}
         </>
@@ -111,14 +115,14 @@ export function DevReviewPanel(props: {
                 records={records}
                 environmentId={props.threadRef.environmentId}
                 onOpenThread={props.onOpenThread}
-                label={relevantRuns.length > 1 ? `Dev Review ${relevantRuns.length - index}` : null}
+                label={relevantRuns.length > 1 ? `App Review ${relevantRuns.length - index}` : null}
               />
             ))}
           </div>
         ) : (
           <div className="flex min-h-52 items-center justify-center p-6 text-center">
             <div className="max-w-sm">
-              <h3 className="text-sm font-medium">No Dev Review workflow</h3>
+              <h3 className="text-sm font-medium">No App Review workflow</h3>
               <p className="mt-2 text-sm text-muted-foreground">
                 Launch a review loop to collect durable browser evidence and repair failed findings.
               </p>
@@ -147,7 +151,7 @@ export function DevReviewPanel(props: {
               </h3>
             </div>
             {legacyRecords.map((record) => (
-              <DevReviewDocument
+              <AppReviewDocument
                 key={record.id}
                 record={record}
                 environmentId={props.threadRef.environmentId}
@@ -157,7 +161,7 @@ export function DevReviewPanel(props: {
         ) : null}
       </div>
 
-      <DevReviewLaunchDialog
+      <AppReviewLaunchDialog
         open={launchDialogOpen}
         onOpenChange={setLaunchDialogOpen}
         launchInFlight={props.launchInFlight}
@@ -175,8 +179,8 @@ export function DevReviewPanel(props: {
 }
 
 function RunDetails(props: {
-  readonly run: DevReviewWorkflowRun;
-  readonly records: WorkflowArtifactsSnapshot["devReviews"];
+  readonly run: AppReviewWorkflowRun;
+  readonly records: WorkflowArtifactsSnapshot["appReviews"];
   readonly environmentId: ScopedThreadRef["environmentId"];
   readonly onOpenThread: (threadId: ThreadId) => void;
   readonly label: string | null;
@@ -188,10 +192,10 @@ function RunDetails(props: {
         {props.label ? <h3 className="text-sm font-semibold">{props.label}</h3> : null}
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant="outline" size="sm">
-            {devReviewRunStatusLabel(props.run)}
+            {appReviewRunStatusLabel(props.run)}
           </Badge>
           <span className="text-xs text-muted-foreground">
-            {props.run.attemptsUsed} of {props.run.cycleBudget} attempts used
+            {props.run.cyclesUsed} of {props.run.cycleBudget} cycles used
           </span>
         </div>
         <div>
@@ -215,6 +219,8 @@ function RunDetails(props: {
       <div className="space-y-3 p-4">
         {props.run.cycles.map((cycle) => {
           const record = recordById.get(cycle.reviewId);
+          const [reviewStatus, planningStatus, implementationStatus] =
+            appReviewCycleStepStatuses(cycle);
           return (
             <article key={cycle.cycleNumber} className="overflow-hidden rounded-lg border">
               <div className="flex items-center justify-between gap-3 border-b px-3 py-2">
@@ -222,48 +228,46 @@ function RunDetails(props: {
                   <h3 className="text-sm font-medium">
                     Cycle {cycle.cycleNumber} of {props.run.cycleBudget}
                   </h3>
-                  <p className="text-xs text-muted-foreground">{cycle.status}</p>
                 </div>
-                <Button
-                  type="button"
-                  size="xs"
-                  variant="ghost"
-                  onClick={() => props.onOpenThread(cycle.reviewerThreadId)}
-                >
-                  Reviewer <ExternalLink className="size-3" />
-                </Button>
+                <Badge variant="outline" size="sm">
+                  {cycle.status}
+                </Badge>
               </div>
+              <ol className="space-y-2 border-b px-3 py-3">
+                <CycleStep
+                  number={1}
+                  title="Human-style UI review"
+                  description="Use the app UI, test the acceptance brief, and save evidence."
+                  status={reviewStatus}
+                  actionLabel="Review thread"
+                  onOpen={() => props.onOpenThread(cycle.reviewerThreadId)}
+                />
+                <CycleStep
+                  number={2}
+                  title="Gap analysis & fix plan"
+                  description="Analyze failures and persist the repair plan in the same review thread."
+                  status={planningStatus}
+                  actionLabel={cycle.planId ? `Plan ${cycle.planId}` : "Review thread"}
+                  onOpen={() => props.onOpenThread(cycle.reviewerThreadId)}
+                />
+                <CycleStep
+                  number={3}
+                  title="Implement the plan"
+                  description="Use the Implement skill in a new thread and validate the repair."
+                  status={implementationStatus}
+                  actionLabel="Implementation thread"
+                  {...(cycle.fixerThreadId
+                    ? { onOpen: () => props.onOpenThread(cycle.fixerThreadId!) }
+                    : {})}
+                />
+              </ol>
               {cycle.actionableFindingsMarkdown ? (
                 <p className="whitespace-pre-wrap border-b px-3 py-2 text-xs text-muted-foreground">
                   {cycle.actionableFindingsMarkdown}
                 </p>
               ) : null}
-              {cycle.planId || cycle.fixerThreadId ? (
-                <div className="flex flex-wrap gap-2 border-b px-3 py-2">
-                  {cycle.planId ? (
-                    <Button
-                      type="button"
-                      size="xs"
-                      variant="outline"
-                      onClick={() => props.onOpenThread(props.run.controllerThreadId)}
-                    >
-                      Plan {cycle.planId}
-                    </Button>
-                  ) : null}
-                  {cycle.fixerThreadId ? (
-                    <Button
-                      type="button"
-                      size="xs"
-                      variant="outline"
-                      onClick={() => props.onOpenThread(cycle.fixerThreadId!)}
-                    >
-                      Fixer thread <ExternalLink className="size-3" />
-                    </Button>
-                  ) : null}
-                </div>
-              ) : null}
               {record ? (
-                <DevReviewDocument record={record} environmentId={props.environmentId} />
+                <AppReviewDocument record={record} environmentId={props.environmentId} />
               ) : (
                 <p className="px-3 py-4 text-xs text-muted-foreground">
                   Review evidence is still being prepared.
@@ -274,5 +278,41 @@ function RunDetails(props: {
         })}
       </div>
     </section>
+  );
+}
+
+function CycleStep(props: {
+  readonly number: number;
+  readonly title: string;
+  readonly description: string;
+  readonly status: ReturnType<typeof appReviewCycleStepStatuses>[number];
+  readonly actionLabel: string;
+  readonly onOpen?: () => void;
+}) {
+  const statusLabel =
+    props.status === "not-needed"
+      ? "Not needed"
+      : props.status === "complete"
+        ? "Complete"
+        : props.status === "current"
+          ? "In progress"
+          : "Pending";
+  return (
+    <li className="flex items-start justify-between gap-3">
+      <div className="min-w-0">
+        <p className="text-xs font-medium text-foreground">
+          {props.number}. {props.title}
+        </p>
+        <p className="mt-0.5 text-xs text-muted-foreground">{props.description}</p>
+      </div>
+      <div className="flex shrink-0 items-center gap-1.5">
+        <span className="text-[11px] text-muted-foreground">{statusLabel}</span>
+        {props.onOpen ? (
+          <Button type="button" size="xs" variant="ghost" onClick={props.onOpen}>
+            {props.actionLabel} <ExternalLink className="size-3" />
+          </Button>
+        ) : null}
+      </div>
+    </li>
   );
 }

@@ -1,8 +1,8 @@
-import { EMPTY_DEV_REVIEW_EVIDENCE } from "@t3tools/contracts";
+import { EMPTY_APP_REVIEW_EVIDENCE } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-const EMPTY_EVIDENCE_JSON = JSON.stringify(EMPTY_DEV_REVIEW_EVIDENCE);
+const EMPTY_EVIDENCE_JSON = JSON.stringify(EMPTY_APP_REVIEW_EVIDENCE);
 const sqlStringLiteral = (value: string): string => `'${value.replaceAll("'", "''")}'`;
 
 export default Effect.gen(function* () {

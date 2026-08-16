@@ -1,6 +1,6 @@
 import {
-  DevReviewId,
-  DevReviewRecord,
+  AppReviewId,
+  AppReviewRecord,
   OrchestrationGetSnapshotError,
   OrchestrationPlanningSpec,
   OrchestrationPlanningTicket,
@@ -80,24 +80,24 @@ export const WorkflowTicketGetTool = readonlyTool(
   }).annotate(Tool.Title, "Get workflow ticket"),
 );
 
-export const WorkflowDevReviewsListTool = readonlyTool(
-  Tool.make("workflow_dev_reviews_list", {
-    description: "List Dev Reviews linked to tickets in the calling thread's workflow.",
+export const WorkflowAppReviewsListTool = readonlyTool(
+  Tool.make("workflow_app_reviews_list", {
+    description: "List App Reviews linked to tickets in the calling thread's workflow.",
     parameters: Tool.EmptyParams,
-    success: Schema.Array(DevReviewRecord),
+    success: Schema.Array(AppReviewRecord),
     failure,
     dependencies,
-  }).annotate(Tool.Title, "List workflow Dev Reviews"),
+  }).annotate(Tool.Title, "List workflow App Reviews"),
 );
 
-export const WorkflowDevReviewGetTool = readonlyTool(
-  Tool.make("workflow_dev_review_get", {
-    description: "Get one Dev Review after workflow and project authorization.",
-    parameters: Schema.Struct({ reviewId: DevReviewId }),
-    success: DevReviewRecord,
+export const WorkflowAppReviewGetTool = readonlyTool(
+  Tool.make("workflow_app_review_get", {
+    description: "Get one App Review after workflow and project authorization.",
+    parameters: Schema.Struct({ reviewId: AppReviewId }),
+    success: AppReviewRecord,
     failure,
     dependencies,
-  }).annotate(Tool.Title, "Get workflow Dev Review"),
+  }).annotate(Tool.Title, "Get workflow App Review"),
 );
 
 export const WorkflowDocGetTool = readonlyTool(
@@ -116,7 +116,7 @@ export const WorkflowArtifactsToolkit = Toolkit.make(
   WorkflowWayfinderMapGetTool,
   WorkflowTicketsListTool,
   WorkflowTicketGetTool,
-  WorkflowDevReviewsListTool,
-  WorkflowDevReviewGetTool,
+  WorkflowAppReviewsListTool,
+  WorkflowAppReviewGetTool,
   WorkflowDocGetTool,
 );

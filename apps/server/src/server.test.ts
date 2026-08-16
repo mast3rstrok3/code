@@ -143,7 +143,7 @@ import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import { ProjectionProjectRepository } from "./persistence/Services/ProjectionProjects.ts";
 import { ProjectionThreadRepository } from "./persistence/Services/ProjectionThreads.ts";
-import { ProjectionThreadDevReviewRepository } from "./persistence/Services/ProjectionThreadDevReviews.ts";
+import { ProjectionThreadAppReviewRepository } from "./persistence/Services/ProjectionThreadAppReviews.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
@@ -245,7 +245,7 @@ const makeDefaultOrchestrationReadModel = () => {
         activities: [],
         proposedPlans: [],
         planningWorkflow: null,
-        devReviews: [],
+        appReviews: [],
         checkpoints: [],
         deletedAt: null,
       },
@@ -615,14 +615,14 @@ const buildAppUnderTest = (options?: {
     const vcsProvisioningLayer = VcsProvisioningService.layer.pipe(
       Layer.provide(vcsDriverRegistryLayer),
     );
-    const projectionThreadDevReviewRepositoryLayer = Layer.succeed(
-      ProjectionThreadDevReviewRepository,
+    const projectionThreadAppReviewRepositoryLayer = Layer.succeed(
+      ProjectionThreadAppReviewRepository,
       {
-        upsert: () => Effect.die("unexpected Dev Review upsert"),
+        upsert: () => Effect.die("unexpected App Review upsert"),
         getById: () => Effect.succeed(Option.none()),
         listByThreadId: () => Effect.succeed([]),
         listAll: () => Effect.succeed([]),
-        deleteByThreadId: () => Effect.die("unexpected Dev Review delete"),
+        deleteByThreadId: () => Effect.die("unexpected App Review delete"),
       },
     );
     const projectionProjectRepositoryLayer = Layer.mock(ProjectionProjectRepository)({
@@ -771,7 +771,7 @@ const buildAppUnderTest = (options?: {
       Layer.provide(gitManagerLayer),
       Layer.provide(gitVcsDriverLayer),
       Layer.provide(gitWorkflowLayer),
-      Layer.provide(Layer.mergeAll(reviewLayer, projectionThreadDevReviewRepositoryLayer)),
+      Layer.provide(Layer.mergeAll(reviewLayer, projectionThreadAppReviewRepositoryLayer)),
       Layer.provide(vcsProvisioningLayer),
       Layer.provide(
         Layer.mock(SourceControlRepositoryService.SourceControlRepositoryService)({
@@ -5972,7 +5972,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             activities: [],
             proposedPlans: [],
             planningWorkflow: null,
-            devReviews: [],
+            appReviews: [],
             checkpoints: [],
             deletedAt: null,
           },

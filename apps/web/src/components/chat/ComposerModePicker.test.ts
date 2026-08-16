@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
-import { resolveComposerPrimaryMode, resolveWorkflowPresetForPicker } from "./ComposerModePicker";
+import {
+  resolveComposerPrimaryMode,
+  resolveWorkflowPresetForPicker,
+  sortComposerBuildSkills,
+} from "./ComposerModePicker";
 
 describe("ComposerModePicker state", () => {
   it("shows only the three primary mode categories", () => {
@@ -44,5 +48,15 @@ describe("ComposerModePicker state", () => {
         lastWorkflowPreset: null,
       }),
     ).toBe("full-feature");
+  });
+
+  it("sorts Build skills alphabetically with stable ID tie-breaking", () => {
+    expect(
+      sortComposerBuildSkills([
+        { id: "z", title: "TDD", description: "TDD", workflowIds: [] },
+        { id: "b", title: "Code Review", description: "Review", workflowIds: [] },
+        { id: "a", title: "Code Review", description: "Review", workflowIds: [] },
+      ]).map((skill) => skill.id),
+    ).toEqual(["a", "b", "z"]);
   });
 });

@@ -17,8 +17,8 @@ import {
 
 const codexDriver = ProviderDriverKind.make("codex");
 
-const browserDevReviewDefinition = resolveWorkflowSubagentSpawnDefinition(
-  WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
+const browserAppReviewDefinition = resolveWorkflowSubagentSpawnDefinition(
+  WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
 );
 const planningReviewerDefinition = resolveWorkflowSubagentSpawnDefinition(
   WORKFLOW_PROMPT_IDS.planningTicketReviewerCodex,
@@ -51,18 +51,18 @@ function settingsWith(input: {
 }
 
 describe("resolveWorkflowSubagentSpawnDefinition", () => {
-  it("rejects nested Browser Dev Review launches from implementation QA reviewers", () => {
-    expect(browserDevReviewDefinition).toBeDefined();
+  it("rejects nested Browser App Review launches from implementation QA reviewers", () => {
+    expect(browserAppReviewDefinition).toBeDefined();
     expect(
       isWorkflowSubagentParentRoleAllowed(
-        browserDevReviewDefinition!,
+        browserAppReviewDefinition!,
         "implementation-qa-reviewer",
       ),
     ).toBe(false);
-    expect(isWorkflowSubagentParentRoleAllowed(browserDevReviewDefinition!, null)).toBe(true);
+    expect(isWorkflowSubagentParentRoleAllowed(browserAppReviewDefinition!, null)).toBe(true);
     expect(
       isWorkflowSubagentParentRoleAllowed(
-        browserDevReviewDefinition!,
+        browserAppReviewDefinition!,
         "implementation-orchestrator",
       ),
     ).toBe(true);
@@ -118,7 +118,7 @@ describe("resolveWorkflowSubagentModelSelection", () => {
       model: "gpt-5.4",
     };
     const resolved = resolveWorkflowSubagentModelSelection({
-      definition: browserDevReviewDefinition,
+      definition: browserAppReviewDefinition,
       parentModelSelection: parentSelection,
       settings: settingsWith({
         providerInstances: {
@@ -138,7 +138,7 @@ describe("resolveWorkflowSubagentModelSelection", () => {
 
   it("picks the default codex instance over other enabled instances", () => {
     const resolved = resolveWorkflowSubagentModelSelection({
-      definition: browserDevReviewDefinition,
+      definition: browserAppReviewDefinition,
       parentModelSelection: claudeParentSelection,
       settings: settingsWith({
         providerInstances: {
@@ -156,7 +156,7 @@ describe("resolveWorkflowSubagentModelSelection", () => {
 
   it("falls back to another enabled codex instance when the default is disabled", () => {
     const resolved = resolveWorkflowSubagentModelSelection({
-      definition: browserDevReviewDefinition,
+      definition: browserAppReviewDefinition,
       parentModelSelection: claudeParentSelection,
       settings: settingsWith({
         providerInstances: {
@@ -174,7 +174,7 @@ describe("resolveWorkflowSubagentModelSelection", () => {
 
   it("falls back to the parent selection when every codex instance is disabled", () => {
     const resolved = resolveWorkflowSubagentModelSelection({
-      definition: browserDevReviewDefinition,
+      definition: browserAppReviewDefinition,
       parentModelSelection: claudeParentSelection,
       settings: settingsWith({
         legacyCodexEnabled: true,
@@ -196,7 +196,7 @@ describe("resolveWorkflowSubagentModelSelection", () => {
 
   it("uses the synthesized legacy codex instance when it is enabled", () => {
     const resolved = resolveWorkflowSubagentModelSelection({
-      definition: browserDevReviewDefinition,
+      definition: browserAppReviewDefinition,
       parentModelSelection: claudeParentSelection,
       settings: settingsWith({ legacyCodexEnabled: true }),
     });
@@ -209,7 +209,7 @@ describe("resolveWorkflowSubagentModelSelection", () => {
 
   it("falls back when only the legacy codex settings exist and are disabled", () => {
     const resolved = resolveWorkflowSubagentModelSelection({
-      definition: browserDevReviewDefinition,
+      definition: browserAppReviewDefinition,
       parentModelSelection: claudeParentSelection,
       settings: settingsWith({ legacyCodexEnabled: false }),
     });
@@ -220,7 +220,7 @@ describe("resolveWorkflowSubagentModelSelection", () => {
 
   it("falls back to the parent selection when settings could not be read", () => {
     const resolved = resolveWorkflowSubagentModelSelection({
-      definition: browserDevReviewDefinition,
+      definition: browserAppReviewDefinition,
       parentModelSelection: claudeParentSelection,
       settings: undefined,
     });

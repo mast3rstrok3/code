@@ -60,7 +60,7 @@ import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import type { McpCapability } from "../../mcp/McpInvocationContext.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
 import {
-  isDevReviewMcpWorkflowPromptId,
+  isAppReviewMcpWorkflowPromptId,
   isRegisteredWorkflowPromptId,
 } from "../WorkflowPromptRegistry.ts";
 const isModelSelection = Schema.is(ModelSelection);
@@ -194,10 +194,10 @@ const dieOnMissingBindingInstanceId = (
 function mcpCapabilitiesForWorkflowPromptId(
   workflowPromptId: string | undefined,
 ): ReadonlySet<McpCapability> | undefined {
-  if (isDevReviewMcpWorkflowPromptId(workflowPromptId)) {
-    // Dev review drives the app through the upstream preview_* browser tools
-    // and attaches evidence via the dev_review_* tools.
-    return new Set<McpCapability>(["preview", "dev-review", "workflow-artifacts"]);
+  if (isAppReviewMcpWorkflowPromptId(workflowPromptId)) {
+    // App review drives the app through the upstream preview_* browser tools
+    // and attaches evidence via the app_review_* tools.
+    return new Set<McpCapability>(["preview", "app-review", "workflow-artifacts"]);
   }
   if (workflowPromptId !== undefined && isRegisteredWorkflowPromptId(workflowPromptId)) {
     return new Set<McpCapability>(["workflow-artifacts"]);

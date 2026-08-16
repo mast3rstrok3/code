@@ -1,14 +1,14 @@
 import {
   CommandId,
-  DevReviewError,
-  hasCompleteDevReviewEvidence,
-  hasScreenshotBackedDevReviewFailure,
+  AppReviewError,
+  hasCompleteAppReviewEvidence,
+  hasScreenshotBackedAppReviewFailure,
   OrchestrationDispatchCommandError,
   OrchestrationGetSnapshotError,
-  type DevReviewEvidence,
-  type DevReviewId,
-  type DevReviewRecord,
-  type DevReviewScreenshotEvidence,
+  type AppReviewEvidence,
+  type AppReviewId,
+  type AppReviewRecord,
+  type AppReviewScreenshotEvidence,
   type PreviewAutomationRecordingArtifact,
   type PreviewAutomationRecordingStatus,
   type PreviewAutomationSnapshot,
@@ -26,12 +26,12 @@ import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
 import * as ServerConfig from "../../../config.ts";
 import { OrchestrationEngineService } from "../../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { DevReviewToolkit } from "./tools.ts";
+import { AppReviewToolkit } from "./tools.ts";
 
 const RECORDING_STOP_TIMEOUT_MS = 60_000;
 
-const reviewError = (reviewId: DevReviewId | undefined, message: string, cause?: unknown) =>
-  new DevReviewError({
+const reviewError = (reviewId: AppReviewId | undefined, message: string, cause?: unknown) =>
+  new AppReviewError({
     ...(reviewId === undefined ? {} : { reviewId }),
     message,
     ...(cause === undefined ? {} : { cause }),
@@ -46,7 +46,7 @@ const dispatchError = (message: string, cause: unknown) =>
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
 let commandIdSequence = 0;
-const newCommandId = (prefix: string, reviewId: DevReviewId) =>
+const newCommandId = (prefix: string, reviewId: AppReviewId) =>
   Effect.sync(() => {
     commandIdSequence += 1;
     return CommandId.make(`${prefix}:${reviewId}:${commandIdSequence.toString(36)}`);
@@ -57,10 +57,10 @@ const sanitizePathSegment = (value: string): string => {
   return normalized.length > 0 ? normalized.slice(0, 72) : "review";
 };
 
-const resolveDevReview = Effect.fn("DevReviewToolkit.resolveDevReview")(function* (
-  reviewId?: DevReviewId,
+const resolveAppReview = Effect.fn("AppReviewToolkit.resolveAppReview")(function* (
+  reviewId?: AppReviewId,
 ) {
-  const scope = yield* McpInvocationContext.requireMcpCapability("dev-review").pipe(
+  const scope = yield* McpInvocationContext.requireMcpCapability("app-review").pipe(
     Effect.mapError((cause) => reviewError(reviewId, cause.message, cause)),
   );
   const snapshotQuery = yield* ProjectionSnapshotQuery;
@@ -79,28 +79,28 @@ const resolveDevReview = Effect.fn("DevReviewToolkit.resolveDevReview")(function
 
   const review =
     reviewId === undefined
-      ? (thread.value.devReviews.find((entry) => entry.reviewThreadId === scope.threadId) ??
-        thread.value.devReviews[0])
-      : thread.value.devReviews.find((entry) => entry.id === reviewId);
+      ? (thread.value.appReviews.find((entry) => entry.reviewThreadId === scope.threadId) ??
+        thread.value.appReviews[0])
+      : thread.value.appReviews.find((entry) => entry.id === reviewId);
   if (review === undefined) {
-    return yield* reviewError(reviewId, "Dev Review record not found for this thread.");
+    return yield* reviewError(reviewId, "App Review record not found for this thread.");
   }
 
   return { scope, review };
 });
 
-const dispatchEvidenceUpdate = Effect.fn("DevReviewToolkit.dispatchEvidenceUpdate")(
+const dispatchEvidenceUpdate = Effect.fn("AppReviewToolkit.dispatchEvidenceUpdate")(
   function* (input: {
     readonly scope: McpInvocationContext.McpInvocationScope;
-    readonly review: DevReviewRecord;
-    readonly evidence: DevReviewEvidence;
+    readonly review: AppReviewRecord;
+    readonly evidence: AppReviewEvidence;
   }) {
     const engine = yield* OrchestrationEngineService;
     const updatedAt = yield* nowIso;
     yield* engine
       .dispatch({
-        type: "thread.dev-review.evidence.update",
-        commandId: yield* newCommandId("dev-review-evidence", input.review.id),
+        type: "thread.app-review.evidence.update",
+        commandId: yield* newCommandId("app-review-evidence", input.review.id),
         threadId: input.scope.threadId,
         reviewId: input.review.id,
         evidence: input.evidence,
@@ -108,12 +108,12 @@ const dispatchEvidenceUpdate = Effect.fn("DevReviewToolkit.dispatchEvidenceUpdat
         updatedAt,
       })
       .pipe(
-        Effect.mapError((cause) => dispatchError("Failed to persist Dev Review evidence.", cause)),
+        Effect.mapError((cause) => dispatchError("Failed to persist App Review evidence.", cause)),
       );
   },
 );
 
-const invokeBrowser = Effect.fn("DevReviewToolkit.invokeBrowser")(function* <A>(
+const invokeBrowser = Effect.fn("AppReviewToolkit.invokeBrowser")(function* <A>(
   scope: McpInvocationContext.McpInvocationScope,
   operation: "recordingStart" | "recordingStop" | "snapshot",
   tabId: PreviewTabId | undefined,
@@ -129,22 +129,22 @@ const invokeBrowser = Effect.fn("DevReviewToolkit.invokeBrowser")(function* <A>(
 });
 
 export const handlers = {
-  dev_review_get: (input) =>
-    resolveDevReview(input.reviewId).pipe(Effect.map(({ review }) => review)),
+  app_review_get: (input) =>
+    resolveAppReview(input.reviewId).pipe(Effect.map(({ review }) => review)),
 
-  dev_review_update: (input) =>
+  app_review_update: (input) =>
     Effect.gen(function* () {
-      const { scope, review } = yield* resolveDevReview(input.reviewId);
+      const { scope, review } = yield* resolveAppReview(input.reviewId);
       if (input.status === undefined && input.document === undefined) {
         return yield* reviewError(review.id, "Provide status, document, or both.");
       }
       if (input.status === "passed") {
         const { recording, screenshots } = review.evidence;
-        if (!hasCompleteDevReviewEvidence(review.evidence)) {
+        if (!hasCompleteAppReviewEvidence(review.evidence)) {
           return yield* reviewError(
             review.id,
             `Cannot set status 'passed' without browser evidence: a saved screen recording (current recording status is '${recording.status}') and at least one screenshot (currently ${screenshots.length}) are required. ` +
-              "Run dev_review_recording_start, exercise the app with the preview_* tools, capture screenshots with dev_review_capture_screenshot, then dev_review_recording_stop. " +
+              "Run app_review_recording_start, exercise the app with the preview_* tools, capture screenshots with app_review_capture_screenshot, then app_review_recording_stop. " +
               "If the browser tools are unavailable, set status 'blocked' instead.",
           );
         }
@@ -152,8 +152,8 @@ export const handlers = {
       if (input.status === "failed") {
         const document = input.document ?? review.document;
         if (
-          !hasCompleteDevReviewEvidence(review.evidence) &&
-          !hasScreenshotBackedDevReviewFailure(document, review.evidence)
+          !hasCompleteAppReviewEvidence(review.evidence) &&
+          !hasScreenshotBackedAppReviewFailure(document, review.evidence)
         ) {
           return yield* reviewError(
             review.id,
@@ -165,8 +165,8 @@ export const handlers = {
       const updatedAt = yield* nowIso;
       yield* engine
         .dispatch({
-          type: "thread.dev-review.update",
-          commandId: yield* newCommandId("dev-review-update", review.id),
+          type: "thread.app-review.update",
+          commandId: yield* newCommandId("app-review-update", review.id),
           threadId: scope.threadId,
           reviewId: review.id,
           ...(input.status === undefined ? {} : { status: input.status }),
@@ -175,7 +175,7 @@ export const handlers = {
           updatedAt,
         })
         .pipe(
-          Effect.mapError((cause) => dispatchError("Failed to persist Dev Review update.", cause)),
+          Effect.mapError((cause) => dispatchError("Failed to persist App Review update.", cause)),
         );
       return {
         ...review,
@@ -185,16 +185,16 @@ export const handlers = {
       };
     }),
 
-  dev_review_recording_start: (input) =>
+  app_review_recording_start: (input) =>
     Effect.gen(function* () {
-      const { scope, review } = yield* resolveDevReview(input.reviewId);
+      const { scope, review } = yield* resolveAppReview(input.reviewId);
       const status = yield* invokeBrowser<PreviewAutomationRecordingStatus>(
         scope,
         "recordingStart",
         input.tabId,
       );
       const startedAt = status.startedAt ?? (yield* nowIso);
-      const evidence: DevReviewEvidence = {
+      const evidence: AppReviewEvidence = {
         ...review.evidence,
         recording: {
           status: "recording",
@@ -210,16 +210,16 @@ export const handlers = {
       return evidence.recording;
     }),
 
-  dev_review_recording_stop: (input) =>
+  app_review_recording_stop: (input) =>
     Effect.gen(function* () {
-      const { scope, review } = yield* resolveDevReview(input.reviewId);
+      const { scope, review } = yield* resolveAppReview(input.reviewId);
       const completedAt = yield* nowIso;
       const stopped = yield* Effect.exit(
         invokeBrowser<PreviewAutomationRecordingArtifact>(scope, "recordingStop", input.tabId),
       );
       // The artifact path never round-trips through the model: it is persisted
       // server-side and served later through signed asset URLs.
-      const evidence: DevReviewEvidence =
+      const evidence: AppReviewEvidence =
         stopped._tag === "Success"
           ? {
               ...review.evidence,
@@ -252,9 +252,9 @@ export const handlers = {
       return evidence.recording;
     }),
 
-  dev_review_capture_screenshot: (input) =>
+  app_review_capture_screenshot: (input) =>
     Effect.gen(function* () {
-      const { scope, review } = yield* resolveDevReview(input.reviewId);
+      const { scope, review } = yield* resolveAppReview(input.reviewId);
       const snapshot = yield* invokeBrowser<PreviewAutomationSnapshot>(
         scope,
         "snapshot",
@@ -266,14 +266,14 @@ export const handlers = {
       const screenshotDir = path.join(
         config.stateDir,
         "preview-artifacts",
-        "dev-review",
+        "app-review",
         sanitizePathSegment(review.id),
       );
       yield* fileSystem
         .makeDirectory(screenshotDir, { recursive: true })
         .pipe(
           Effect.mapError((cause) =>
-            reviewError(review.id, "Failed to create the Dev Review evidence directory.", cause),
+            reviewError(review.id, "Failed to create the App Review evidence directory.", cause),
           ),
         );
 
@@ -289,19 +289,19 @@ export const handlers = {
         .writeFile(artifactPath, bytes)
         .pipe(
           Effect.mapError((cause) =>
-            reviewError(review.id, "Failed to write the Dev Review screenshot.", cause),
+            reviewError(review.id, "Failed to write the App Review screenshot.", cause),
           ),
         );
 
       const capturedAt = yield* nowIso;
-      const screenshot: DevReviewScreenshotEvidence = {
+      const screenshot: AppReviewScreenshotEvidence = {
         id: `shot-${index}`,
         path: artifactPath,
         mimeType: "image/png",
         caption: input.caption,
         capturedAt,
       };
-      const evidence: DevReviewEvidence = {
+      const evidence: AppReviewEvidence = {
         ...review.evidence,
         screenshots: [...review.evidence.screenshots, screenshot],
       };
@@ -310,6 +310,6 @@ export const handlers = {
       // result small for the model.
       return { id: screenshot.id, caption: screenshot.caption, capturedAt };
     }),
-} satisfies Parameters<typeof DevReviewToolkit.toLayer>[0];
+} satisfies Parameters<typeof AppReviewToolkit.toLayer>[0];
 
-export const DevReviewToolkitHandlersLive = DevReviewToolkit.toLayer(handlers);
+export const AppReviewToolkitHandlersLive = AppReviewToolkit.toLayer(handlers);

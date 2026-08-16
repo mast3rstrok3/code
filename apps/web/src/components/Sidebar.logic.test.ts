@@ -1574,7 +1574,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     branch: null,
     worktreePath: null,
     checkpoints: [],
-    devReviews: [],
+    appReviews: [],
     activities: [],
     ...overrides,
   };
@@ -2279,11 +2279,11 @@ describe("resolveHighestPrioritySidebarV2Status", () => {
 describe("workflowRoleShortLabel", () => {
   it("labels workflow sub-threads and leaves plain threads unlabeled", () => {
     expect(workflowRoleShortLabel("implementation-worker")).toBe("Worker");
-    expect(workflowRoleShortLabel("implementation-qa-reviewer")).toBe("Dev review");
+    expect(workflowRoleShortLabel("implementation-qa-reviewer")).toBe("App review");
     expect(workflowRoleShortLabel("planning-orchestrator")).toBe("Planning");
-    expect(workflowRoleShortLabel("dev-review-orchestrator")).toBe("Dev Review");
-    expect(workflowRoleShortLabel("dev-review-reviewer")).toBe("Browser review");
-    expect(workflowRoleShortLabel("dev-review-fixer")).toBe("Repair");
+    expect(workflowRoleShortLabel("app-review-orchestrator")).toBe("App Review");
+    expect(workflowRoleShortLabel("app-review-reviewer")).toBe("Browser review");
+    expect(workflowRoleShortLabel("app-review-fixer")).toBe("Implement");
     expect(workflowRoleShortLabel(null)).toBeNull();
   });
 });

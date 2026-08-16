@@ -11,13 +11,13 @@ import {
 import type {
   OrchestrationMessage,
   OrchestrationImplementationRun,
-  OrchestrationDevReviewWorkflowRun,
+  OrchestrationAppReviewWorkflowRun,
   OrchestrationPlanningSpecId,
   OrchestrationPlanningWorkflow,
   OrchestrationProposedPlan,
   OrchestrationSession,
   OrchestrationThreadActivity,
-  DevReviewRecord,
+  AppReviewRecord,
   ScopedProjectRef,
   ScopedThreadRef,
   ServerConfig,
@@ -37,9 +37,9 @@ const EMPTY_THREAD_REFS: ReadonlyArray<ScopedThreadRef> = Object.freeze([]);
 const EMPTY_MESSAGES: ReadonlyArray<OrchestrationMessage> = Object.freeze([]);
 const EMPTY_ACTIVITIES: ReadonlyArray<OrchestrationThreadActivity> = Object.freeze([]);
 const EMPTY_PROPOSED_PLANS: ReadonlyArray<OrchestrationProposedPlan> = Object.freeze([]);
-const EMPTY_DEV_REVIEWS: ReadonlyArray<DevReviewRecord> = Object.freeze([]);
+const EMPTY_APP_REVIEWS: ReadonlyArray<AppReviewRecord> = Object.freeze([]);
 const EMPTY_IMPLEMENTATION_RUNS: ReadonlyArray<OrchestrationImplementationRun> = Object.freeze([]);
-const EMPTY_DEV_REVIEW_WORKFLOW_RUNS: ReadonlyArray<OrchestrationDevReviewWorkflowRun> =
+const EMPTY_APP_REVIEW_WORKFLOW_RUNS: ReadonlyArray<OrchestrationAppReviewWorkflowRun> =
   Object.freeze([]);
 
 const EMPTY_PROJECT_ATOM = Atom.make<EnvironmentProject | null>(null).pipe(
@@ -69,8 +69,8 @@ const EMPTY_ACTIVITIES_ATOM = Atom.make(EMPTY_ACTIVITIES).pipe(
 const EMPTY_PROPOSED_PLANS_ATOM = Atom.make(EMPTY_PROPOSED_PLANS).pipe(
   Atom.withLabel("web-thread-proposed-plans:empty"),
 );
-const EMPTY_DEV_REVIEWS_ATOM = Atom.make(EMPTY_DEV_REVIEWS).pipe(
-  Atom.withLabel("web-thread-dev-reviews:empty"),
+const EMPTY_APP_REVIEWS_ATOM = Atom.make(EMPTY_APP_REVIEWS).pipe(
+  Atom.withLabel("web-thread-app-reviews:empty"),
 );
 const EMPTY_PLANNING_WORKFLOW_ATOM = Atom.make<OrchestrationPlanningWorkflow | null>(null).pipe(
   Atom.withLabel("web-thread-planning-workflow:empty"),
@@ -78,8 +78,8 @@ const EMPTY_PLANNING_WORKFLOW_ATOM = Atom.make<OrchestrationPlanningWorkflow | n
 const EMPTY_IMPLEMENTATION_RUNS_ATOM = Atom.make(EMPTY_IMPLEMENTATION_RUNS).pipe(
   Atom.withLabel("web-implementation-runs:empty"),
 );
-const EMPTY_DEV_REVIEW_WORKFLOW_RUNS_ATOM = Atom.make(EMPTY_DEV_REVIEW_WORKFLOW_RUNS).pipe(
-  Atom.withLabel("web-dev-review-workflow-runs:empty"),
+const EMPTY_APP_REVIEW_WORKFLOW_RUNS_ATOM = Atom.make(EMPTY_APP_REVIEW_WORKFLOW_RUNS).pipe(
+  Atom.withLabel("web-app-review-workflow-runs:empty"),
 );
 const EMPTY_SESSION_ATOM = Atom.make<OrchestrationSession | null>(null).pipe(
   Atom.withLabel("web-thread-session:empty"),
@@ -240,9 +240,9 @@ export function useThreadPlanningWorkflow(
   );
 }
 
-export function useThreadDevReviews(ref: ScopedThreadRef | null): ReadonlyArray<DevReviewRecord> {
+export function useThreadAppReviews(ref: ScopedThreadRef | null): ReadonlyArray<AppReviewRecord> {
   return useAtomValue(
-    ref === null ? EMPTY_DEV_REVIEWS_ATOM : environmentThreadDetails.devReviewsAtom(ref),
+    ref === null ? EMPTY_APP_REVIEWS_ATOM : environmentThreadDetails.appReviewsAtom(ref),
   );
 }
 
@@ -256,13 +256,13 @@ export function useImplementationRuns(
   );
 }
 
-export function useDevReviewWorkflowRuns(
+export function useAppReviewWorkflowRuns(
   environmentId: EnvironmentId | null,
-): ReadonlyArray<OrchestrationDevReviewWorkflowRun> {
+): ReadonlyArray<OrchestrationAppReviewWorkflowRun> {
   return useAtomValue(
     environmentId === null
-      ? EMPTY_DEV_REVIEW_WORKFLOW_RUNS_ATOM
-      : environmentThreadShells.environmentDevReviewWorkflowRunsAtom(environmentId),
+      ? EMPTY_APP_REVIEW_WORKFLOW_RUNS_ATOM
+      : environmentThreadShells.environmentAppReviewWorkflowRunsAtom(environmentId),
   );
 }
 

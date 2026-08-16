@@ -13,8 +13,8 @@ import packageJson from "../../package.json" with { type: "json" };
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
-import { DevReviewToolkitHandlersLive } from "./toolkits/dev-review/handlers.ts";
-import { DevReviewToolkit } from "./toolkits/dev-review/tools.ts";
+import { AppReviewToolkitHandlersLive } from "./toolkits/app-review/handlers.ts";
+import { AppReviewToolkit } from "./toolkits/app-review/tools.ts";
 import { WorkflowArtifactsToolkitHandlersLive } from "./toolkits/workflow-artifacts/handlers.ts";
 import { WorkflowArtifactsToolkit } from "./toolkits/workflow-artifacts/tools.ts";
 import {
@@ -215,8 +215,8 @@ const PreviewSnapshotRegistrationLive = Layer.effectDiscard(registerPreviewSnaps
   Layer.provide(PreviewSnapshotToolkitHandlersLive),
 );
 
-const DevReviewToolkitRegistrationLive = McpServer.toolkit(DevReviewToolkit).pipe(
-  Layer.provide(DevReviewToolkitHandlersLive),
+const AppReviewToolkitRegistrationLive = McpServer.toolkit(AppReviewToolkit).pipe(
+  Layer.provide(AppReviewToolkitHandlersLive),
 );
 
 const WorkflowArtifactsToolkitRegistrationLive = McpServer.toolkit(WorkflowArtifactsToolkit).pipe(
@@ -230,7 +230,7 @@ export const PreviewToolkitRegistrationLive = Layer.mergeAll(
 
 const McpToolkitRegistrationLive = Layer.mergeAll(
   PreviewToolkitRegistrationLive,
-  DevReviewToolkitRegistrationLive,
+  AppReviewToolkitRegistrationLive,
   WorkflowArtifactsToolkitRegistrationLive,
 );
 

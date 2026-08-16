@@ -131,14 +131,14 @@ const WORKFLOW_SUBAGENT_SPAWN_DEFINITIONS: ReadonlyArray<WorkflowSubagentSpawnDe
     allowedParentWorkflowRoles: [null, "implementation-orchestrator"],
   },
   {
-    workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
+    workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
     interactionMode: "implementation-workflow",
     workflowRole: "implementation-qa-reviewer",
     threadIdTag: "workflow-implementation-qa-reviewer",
-    defaultTitlePrefix: "Browser Dev Review",
-    expectedResult: "dev-review-document",
+    defaultTitlePrefix: "Browser App Review",
+    expectedResult: "app-review-document",
     allowedParentWorkflowRoles: "any",
-    disallowedParentWorkflowRoles: ["implementation-qa-reviewer", "dev-review-reviewer"],
+    disallowedParentWorkflowRoles: ["implementation-qa-reviewer", "app-review-reviewer"],
     modelOverride: {
       driver: ProviderDriverKind.make("codex"),
       model: "gpt-5.6-sol",

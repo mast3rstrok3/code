@@ -1,22 +1,22 @@
-export const BROWSER_DEV_REVIEW_LAUNCH_DIRECTIVE_INSTRUCTIONS = `## Browser DevReview Launch
+export const BROWSER_APP_REVIEW_LAUNCH_DIRECTIVE_INSTRUCTIONS = `## Browser AppReview Launch
 
-If the user explicitly asks to run or launch a Browser DevReview for the current thread, create a browser review sub-agent by emitting exactly one fenced JSON block:
+If the user explicitly asks to run or launch a Browser AppReview for the current thread, create a browser review sub-agent by emitting exactly one fenced JSON block:
 
 \`\`\`json
 {
   "type": "workflow-subagent-create",
-  "workflowPromptId": "implementation.browser-dev-review.codex",
-  "title": "Browser Dev Review",
+  "workflowPromptId": "implementation.browser-app-review.codex",
+  "title": "Browser App Review",
   "promptMarkdown": "Review the current thread in the browser. Include any concrete focus from the user's request.",
-  "devReviewMode": "feedback"
+  "appReviewMode": "feedback"
 }
 \`\`\`
 
-The default \`feedback\` mode creates an ordinary Browser Dev Review child without a durable Dev Review record or evidence requirement. Use \`"devReviewMode": "full"\` only when a structured durable review with recording, screenshots, checks, findings, and verdict is explicitly required. Do not perform browser automation in the parent thread.
+The default \`feedback\` mode creates an ordinary Browser App Review child without a durable App Review record or evidence requirement. Use \`"appReviewMode": "full"\` only when a structured durable review with recording, screenshots, checks, findings, and verdict is explicitly required. Do not perform browser automation in the parent thread.
 
-Do not use this one-shot launch as a substitute for an active Fix, Fast Feature, Full Feature, Implementation, or cycle-based Dev Review workflow. Those workflows own review sequencing, cycle budgets, worktree selection, and authoritative App Dev Stack preview targets. If one of those workflows is active, continue or recover that workflow instead of spawning an ad hoc Browser Dev Review child.
+Do not use this one-shot launch as a substitute for an active Fix, Fast Feature, Full Feature, Implementation, or cycle-based App Review workflow. Those workflows own review sequencing, cycle budgets, worktree selection, and authoritative App Dev Stack preview targets. If one of those workflows is active, continue or recover that workflow instead of spawning an ad hoc Browser App Review child.
 
-Exception: a thread already acting as an \`implementation-qa-reviewer\` or \`dev-review-reviewer\` is the Browser Dev Review. It must use its linked preview_* and dev_review_* tools directly and must never launch a nested Browser Dev Review. The server rejects that nested launch.`;
+Exception: a thread already acting as an \`implementation-qa-reviewer\` or \`app-review-reviewer\` is the Browser App Review. It must use its linked preview_* and app_review_* tools directly and must never launch a nested Browser App Review. The server rejects that nested launch.`;
 
 export const WORKFLOW_SUBAGENT_INSTRUCTIONS_PROMPT = `## T3 Workflow Sub-Agent System
 
@@ -37,11 +37,11 @@ Built-in workflow stages:
 
 - Product: \`product.fix.codex\`, \`product.fast-feature.codex\`, \`product.full-feature.codex\`.
 - Planning: \`planning.grill-stage.codex\` (interactive), \`planning.engineering-grill-automatic.codex\` (Full Feature automation), \`planning.domain-modeling.codex\`, \`planning.wayfinder.codex\`, \`planning.research.codex\`, \`planning.prototype.codex\`, \`planning.spec.codex\`, \`planning.tickets.codex\`, \`planning.ticket-reviewer.codex\`.
-- Implementation: \`implementation.orchestrator-planning.codex\`, \`implementation.tdd.codex\`, \`implementation.merge-gate.codex\`, \`implementation.browser-dev-review.codex\`, \`implementation.fix.codex\`, \`implementation.code-review.codex\`.
+- Implementation: \`implementation.orchestrator-planning.codex\`, \`implementation.tdd.codex\`, \`implementation.merge-gate.codex\`, \`implementation.browser-app-review.codex\`, \`implementation.fix.codex\`, \`implementation.code-review.codex\`.
 
 Workflow thread relationships use \`parentThreadId\`, \`workflowRole\`, \`interactionMode\`, and \`workflowPromptId\`. Parent agents start child agents with a focused first message. Child agents send durable results back to parents with final-result workflow directives, not informal prose.
 
-Workflow prompts carry artifact identifiers and ticket scope, not copied artifact bodies. Use the read-only \`workflow_context_get\`, \`workflow_spec_get\`, \`workflow_wayfinder_map_get\`, \`workflow_tickets_list\`, \`workflow_ticket_get\`, \`workflow_dev_reviews_list\`, \`workflow_dev_review_get\`, and \`workflow_doc_get\` tools to retrieve canonical workflow artifacts and supporting documents on demand. Never treat prompt text as a writable artifact copy.
+Workflow prompts carry artifact identifiers and ticket scope, not copied artifact bodies. Use the read-only \`workflow_context_get\`, \`workflow_spec_get\`, \`workflow_wayfinder_map_get\`, \`workflow_tickets_list\`, \`workflow_ticket_get\`, \`workflow_app_reviews_list\`, \`workflow_app_review_get\`, and \`workflow_doc_get\` tools to retrieve canonical workflow artifacts and supporting documents on demand. Never treat prompt text as a writable artifact copy.
 
 To create a child sub-agent, emit exactly one fenced JSON block:
 
@@ -59,7 +59,7 @@ The server uses the current thread as the parent, validates \`workflowPromptId\`
 
 To launch any number of children concurrently, use one \`workflow-subagents-create\` directive with a non-empty \`children\` array. There is no application child-count or nesting-depth limit. Children settle independently and the parent receives one ordered aggregate after all children are terminal.
 
-${BROWSER_DEV_REVIEW_LAUNCH_DIRECTIVE_INSTRUCTIONS}
+${BROWSER_APP_REVIEW_LAUNCH_DIRECTIVE_INSTRUCTIONS}
 
 To message an existing parent or child agent, emit exactly one fenced JSON block:
 
@@ -91,8 +91,8 @@ Use existing final-result directives for durable handoffs:
 - \`planning-reviewer-verdict\`
 - \`implementation-worker-result\`
 - \`implementation-merge-gate-result\`
-- \`dev-review-document\`
+- \`app-review-document\`
 - \`implementation-fix-result\`
-- \`dev-review-fix-result\`
+- \`app-review-fix-result\`
 - \`implementation-code-review-result\`
 - \`workflow-subagent-result\` for focused feedback children.`;

@@ -1,35 +1,36 @@
 import { expect, it } from "vite-plus/test";
 import {
-  DevReviewId,
-  DevReviewWorkflowCycleBudget,
-  DevReviewWorkflowRunId,
+  AppReviewId,
+  AppReviewWorkflowCycleBudget,
+  AppReviewWorkflowRunId,
   ThreadId,
-  type DevReviewRecord,
-  type DevReviewWorkflowRun,
+  type AppReviewRecord,
+  type AppReviewWorkflowRun,
 } from "@t3tools/contracts";
 
 import {
-  nextDevReviewWorkflowAction,
+  nextAppReviewWorkflowAction,
   selectReviewRunToStart,
   selectStandalonePreviewTargets,
+  successfulFixAction,
   terminalReviewAction,
   terminalReviewEvidenceFailure,
   terminalReviewPassFailure,
-} from "./DevReviewWorkflowReactor.ts";
+} from "./AppReviewWorkflowReactor.ts";
 
 const now = "2026-01-01T00:00:00.000Z";
 
-function run(overrides: Partial<DevReviewWorkflowRun> = {}): DevReviewWorkflowRun {
+function run(overrides: Partial<AppReviewWorkflowRun> = {}): AppReviewWorkflowRun {
   return {
-    id: DevReviewWorkflowRunId.make("dev-review-workflow-thread-controller"),
+    id: AppReviewWorkflowRunId.make("app-review-workflow-thread-controller"),
     targetThreadId: ThreadId.make("thread-target"),
     controllerThreadId: ThreadId.make("thread-controller"),
     caller: { type: "standalone", sourceThreadId: ThreadId.make("thread-target") },
     briefMarkdown: "Review checkout.",
     supportingContextMarkdown: null,
     previewTargets: ["http://localhost:3000"],
-    cycleBudget: DevReviewWorkflowCycleBudget.make(10),
-    attemptsUsed: 0,
+    cycleBudget: AppReviewWorkflowCycleBudget.make(10),
+    cyclesUsed: 0,
     status: "running",
     cycles: [],
     activePhase: null,
@@ -53,9 +54,9 @@ function run(overrides: Partial<DevReviewWorkflowRun> = {}): DevReviewWorkflowRu
 function review(
   verdict: "passed" | "failed" | "blocked",
   withFinding = verdict === "failed",
-): DevReviewRecord {
+): AppReviewRecord {
   return {
-    id: DevReviewId.make("dev-review-1"),
+    id: AppReviewId.make("app-review-1"),
     sourceThreadId: ThreadId.make("thread-controller"),
     reviewThreadId: ThreadId.make("thread-reviewer"),
     sourceTurnId: null,
@@ -96,8 +97,8 @@ function review(
   };
 }
 
-it("always begins a nonterminal run with Browser Dev Review", () => {
-  expect(nextDevReviewWorkflowAction(run())).toBe("review");
+it("always begins a nonterminal run with Browser App Review", () => {
+  expect(nextAppReviewWorkflowAction(run())).toBe("review");
 });
 
 it("selects only the latest idle run for a new review cycle", () => {
@@ -105,7 +106,7 @@ it("selects only the latest idle run for a new review cycle", () => {
   const reviewing = run({
     activePhase: "review",
     activeThreadId: ThreadId.make("thread-reviewer"),
-    attemptsUsed: 1,
+    cyclesUsed: 1,
     updatedAt: "2026-01-01T00:00:02.000Z",
   });
 
@@ -180,12 +181,12 @@ it("waits for Implementation to refresh AppDevStack after an embedded repair", (
       implementationRunId: "implementation-run-1",
       orchestratorThreadId: ThreadId.make("thread-target"),
     },
-    attemptsUsed: 1,
+    cyclesUsed: 1,
     cycles: [
       {
         cycleNumber: 1,
         status: "completed",
-        reviewId: DevReviewId.make("dev-review-1"),
+        reviewId: AppReviewId.make("app-review-1"),
         reviewerThreadId: ThreadId.make("thread-reviewer"),
         reviewVerdict: "failed",
         actionableFindingsMarkdown: "Fix checkout.",
@@ -193,7 +194,7 @@ it("waits for Implementation to refresh AppDevStack after an embedded repair", (
         plannerTurnId: null,
         fixerThreadId: ThreadId.make("thread-fixer"),
         fixResult: {
-          runId: DevReviewWorkflowRunId.make("dev-review-workflow-thread-controller"),
+          runId: AppReviewWorkflowRunId.make("app-review-workflow-thread-controller"),
           planId: "plan-1",
           status: "succeeded",
           commitSha: "def456",
@@ -219,12 +220,12 @@ it("waits for Implementation to refresh AppDevStack after an embedded repair", (
     ],
   });
 
-  expect(nextDevReviewWorkflowAction(embedded)).toBe("none");
+  expect(nextAppReviewWorkflowAction(embedded)).toBe("none");
 });
 
 it("passes on cycle one and plans a repair after an ordinary failed review", () => {
-  expect(terminalReviewAction(run({ attemptsUsed: 1 }), review("passed"))).toBe("passed");
-  expect(terminalReviewAction(run({ attemptsUsed: 1 }), review("failed"))).toBe("planning");
+  expect(terminalReviewAction(review("passed"))).toBe("passed");
+  expect(terminalReviewAction(review("failed"))).toBe("planning");
 });
 
 it("rejects passed reviews that defer or omit required checks", () => {
@@ -246,7 +247,7 @@ it("rejects passed reviews that defer or omit required checks", () => {
         },
       ],
     },
-  } satisfies DevReviewRecord;
+  } satisfies AppReviewRecord;
   expect(terminalReviewPassFailure({ run: run(), review: deferred, priorReviews: [] })).toContain(
     "delete-confirmation=not-applicable",
   );
@@ -256,11 +257,11 @@ it("requires repair cycles to verify every prior actionable finding by id", () =
   const failed = review("failed");
   const passed = {
     ...review("passed"),
-    id: DevReviewId.make("dev-review-2"),
+    id: AppReviewId.make("app-review-2"),
     reviewThreadId: ThreadId.make("thread-reviewer-2"),
-  } satisfies DevReviewRecord;
+  } satisfies AppReviewRecord;
   const secondCycleRun = run({
-    attemptsUsed: 2,
+    cyclesUsed: 2,
     cycles: [
       {
         cycleNumber: 1,
@@ -307,7 +308,7 @@ it("requires repair cycles to verify every prior actionable finding by id", () =
         },
       ],
     },
-  } satisfies DevReviewRecord;
+  } satisfies AppReviewRecord;
   expect(
     terminalReviewPassFailure({
       run: secondCycleRun,
@@ -330,7 +331,7 @@ it("requires repair cycles to verify every prior actionable finding by id", () =
         },
       ],
     },
-  } satisfies DevReviewRecord;
+  } satisfies AppReviewRecord;
   expect(
     terminalReviewPassFailure({
       run: secondCycleRun,
@@ -340,18 +341,34 @@ it("requires repair cycles to verify every prior actionable finding by id", () =
   ).toBeNull();
 });
 
-it("exhausts on the final failed review without scheduling another repair", () => {
+it("plans a repair after the final failed review so the last budget unit is a full cycle", () => {
+  expect(terminalReviewAction(review("failed"))).toBe("planning");
+});
+
+it("exhausts only after the final cycle implements its repair plan", () => {
   expect(
-    terminalReviewAction(
-      run({ attemptsUsed: 10, cycleBudget: DevReviewWorkflowCycleBudget.make(10) }),
-      review("failed"),
+    successfulFixAction(
+      run({ cyclesUsed: 10, cycleBudget: AppReviewWorkflowCycleBudget.make(10) }),
     ),
   ).toBe("exhausted");
+  expect(successfulFixAction(run({ cyclesUsed: 9 }))).toBe("review");
+  expect(
+    successfulFixAction(
+      run({
+        cyclesUsed: 9,
+        caller: {
+          type: "implementation",
+          implementationRunId: "implementation-1",
+          orchestratorThreadId: ThreadId.make("thread-controller"),
+        },
+      }),
+    ),
+  ).toBe("await-preview-refresh");
 });
 
 it("treats blocked reviews and failures without actionable findings as blocked", () => {
-  expect(terminalReviewAction(run({ attemptsUsed: 1 }), review("blocked"))).toBe("blocked");
-  expect(terminalReviewAction(run({ attemptsUsed: 1 }), review("failed", false))).toBe("blocked");
+  expect(terminalReviewAction(review("blocked"))).toBe("blocked");
+  expect(terminalReviewAction(review("failed", false))).toBe("blocked");
 });
 
 it("preserves a blocked review reason when browser evidence could not be captured", () => {
@@ -369,9 +386,9 @@ it("preserves a blocked review reason when browser evidence could not be capture
       },
       screenshots: [],
     },
-  } satisfies DevReviewRecord;
+  } satisfies AppReviewRecord;
 
-  const action = terminalReviewAction(run({ attemptsUsed: 1 }), blocked);
+  const action = terminalReviewAction(blocked);
 
   expect(action).toBe("blocked");
   expect(terminalReviewEvidenceFailure(action, blocked)).toBeNull();
@@ -382,8 +399,8 @@ it("still requires complete recording evidence for passed reviews", () => {
   const terminal = {
     ...original,
     evidence: { ...original.evidence, screenshots: [] },
-  } satisfies DevReviewRecord;
-  const action = terminalReviewAction(run({ attemptsUsed: 1 }), terminal);
+  } satisfies AppReviewRecord;
+  const action = terminalReviewAction(terminal);
 
   expect(terminalReviewEvidenceFailure(action, terminal)).toContain(
     "required durable recording and screenshot evidence",
@@ -428,8 +445,8 @@ it("accepts screenshot-backed failed findings when recording finalization fails"
         },
       ],
     },
-  } satisfies DevReviewRecord;
-  const action = terminalReviewAction(run({ attemptsUsed: 1 }), terminal);
+  } satisfies AppReviewRecord;
+  const action = terminalReviewAction(terminal);
 
   expect(action).toBe("planning");
   expect(terminalReviewEvidenceFailure(action, terminal)).toBeNull();

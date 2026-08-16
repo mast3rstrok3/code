@@ -1,6 +1,6 @@
 import {
   DEFAULT_WORKSPACE_USER_ID,
-  DevReviewId,
+  AppReviewId,
   ProjectId,
   ThreadId,
   ProviderInstanceId,
@@ -14,16 +14,16 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { SqlitePersistenceMemory } from "./Sqlite.ts";
 import { ProjectionProjectRepositoryLive } from "./ProjectionProjects.ts";
 import { ProjectionThreadRepositoryLive } from "./ProjectionThreads.ts";
-import { ProjectionThreadDevReviewRepositoryLive } from "./ProjectionThreadDevReviews.ts";
+import { ProjectionThreadAppReviewRepositoryLive } from "./ProjectionThreadAppReviews.ts";
 import { ProjectionProjectRepository } from "../Services/ProjectionProjects.ts";
 import { ProjectionThreadRepository } from "../Services/ProjectionThreads.ts";
-import { ProjectionThreadDevReviewRepository } from "../Services/ProjectionThreadDevReviews.ts";
+import { ProjectionThreadAppReviewRepository } from "../Services/ProjectionThreadAppReviews.ts";
 
 const projectionRepositoriesLayer = it.layer(
   Layer.mergeAll(
     ProjectionProjectRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     ProjectionThreadRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
-    ProjectionThreadDevReviewRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+    ProjectionThreadAppReviewRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     SqlitePersistenceMemory,
   ),
 );
@@ -148,14 +148,14 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
     }),
   );
 
-  it.effect("round-trips Dev Review evidence through the projection row", () =>
+  it.effect("round-trips App Review evidence through the projection row", () =>
     Effect.gen(function* () {
-      const devReviews = yield* ProjectionThreadDevReviewRepository;
-      const reviewId = DevReviewId.make("dev-review-persisted");
+      const appReviews = yield* ProjectionThreadAppReviewRepository;
+      const reviewId = AppReviewId.make("app-review-persisted");
       const evidence = {
         recording: {
           status: "saved" as const,
-          path: "dev-reviews/dev-review-persisted/recording.webm",
+          path: "app-reviews/app-review-persisted/recording.webm",
           mimeType: "video/webm",
           sizeBytes: 2048,
           startedAt: "2026-03-24T00:00:00.000Z",
@@ -165,7 +165,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         screenshots: [
           {
             id: "screenshot-1",
-            path: "dev-reviews/dev-review-persisted/screenshot-1.png",
+            path: "app-reviews/app-review-persisted/screenshot-1.png",
             mimeType: "image/png" as const,
             caption: "Landing page after load",
             capturedAt: "2026-03-24T00:00:02.000Z",
@@ -173,13 +173,13 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         ],
       };
 
-      yield* devReviews.upsert({
+      yield* appReviews.upsert({
         reviewId,
         sourceThreadId: ThreadId.make("thread-source"),
         reviewThreadId: ThreadId.make("thread-review"),
         sourceProposedPlan: {
           threadId: ThreadId.make("thread-source"),
-          planId: "plan-dev-review-anchor",
+          planId: "plan-app-review-anchor",
         },
         sourceTurnId: null,
         status: "running",
@@ -196,10 +196,10 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         updatedAt: "2026-03-24T00:00:00.000Z",
       });
 
-      const sourceRows = yield* devReviews.listByThreadId({
+      const sourceRows = yield* appReviews.listByThreadId({
         threadId: ThreadId.make("thread-source"),
       });
-      const reviewRows = yield* devReviews.listByThreadId({
+      const reviewRows = yield* appReviews.listByThreadId({
         threadId: ThreadId.make("thread-review"),
       });
       assert.strictEqual(sourceRows.length, 1);
@@ -209,10 +209,10 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
       assert.deepStrictEqual(sourceRows[0]?.evidence, evidence);
       assert.deepStrictEqual(sourceRows[0]?.sourceProposedPlan, {
         threadId: ThreadId.make("thread-source"),
-        planId: "plan-dev-review-anchor",
+        planId: "plan-app-review-anchor",
       });
 
-      const persisted = yield* devReviews.getById({ reviewId });
+      const persisted = yield* appReviews.getById({ reviewId });
       assert.deepStrictEqual(Option.getOrNull(persisted)?.evidence, evidence);
     }),
   );

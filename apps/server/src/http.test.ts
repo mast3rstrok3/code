@@ -12,9 +12,9 @@ import { HttpClient, HttpRouter } from "effect/unstable/http";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as ServerConfig from "./config.ts";
 import {
-  ProjectionThreadDevReviewRepository,
-  type ProjectionThreadDevReview,
-} from "./persistence/Services/ProjectionThreadDevReviews.ts";
+  ProjectionThreadAppReviewRepository,
+  type ProjectionThreadAppReview,
+} from "./persistence/Services/ProjectionThreadAppReviews.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
 import * as T3ProjectFileLoader from "./project/T3ProjectFileLoader.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
@@ -30,11 +30,11 @@ import { issueAssetUrl } from "./assets/AssetAccess.ts";
 const configLayer = ServerConfig.ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-http-asset-test-",
 });
-const devReviewRepositoryLayer = Layer.succeed(
-  ProjectionThreadDevReviewRepository,
-  ProjectionThreadDevReviewRepository.of({
+const appReviewRepositoryLayer = Layer.succeed(
+  ProjectionThreadAppReviewRepository,
+  ProjectionThreadAppReviewRepository.of({
     upsert: () => Effect.void,
-    getById: () => Effect.succeed(Option.none<ProjectionThreadDevReview>()),
+    getById: () => Effect.succeed(Option.none<ProjectionThreadAppReview>()),
     listByThreadId: () => Effect.succeed([]),
     listAll: () => Effect.succeed([]),
     deleteByThreadId: () => Effect.void,
@@ -48,7 +48,7 @@ const assetRouteSupportLayer = Layer.mergeAll(
     Layer.provide(T3ProjectFileLoader.layer),
   ),
   ServerSecretStore.layer.pipe(Layer.provide(configLayer)),
-  devReviewRepositoryLayer,
+  appReviewRepositoryLayer,
 ).pipe(Layer.provideMerge(NodeServices.layer));
 
 function withAssetRoute<A, E, R>(effect: Effect.Effect<A, E, R>) {

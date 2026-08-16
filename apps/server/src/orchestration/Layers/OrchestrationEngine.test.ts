@@ -3,8 +3,8 @@ import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_WORKSPACE_USER_ID,
-  DevReviewId,
-  EMPTY_DEV_REVIEW_EVIDENCE,
+  AppReviewId,
+  EMPTY_APP_REVIEW_EVIDENCE,
   MessageId,
   ProjectId,
   ThreadId,
@@ -162,7 +162,7 @@ describe("OrchestrationEngine", () => {
           messages: [],
           proposedPlans: [],
           planningWorkflow: null,
-          devReviews: [],
+          appReviews: [],
           activities: [],
           checkpoints: [],
           session: null,
@@ -176,7 +176,7 @@ describe("OrchestrationEngine", () => {
         ...thread,
         messages: [],
         proposedPlans: [],
-        devReviews: [],
+        appReviews: [],
         activities: [],
         checkpoints: [],
       })),
@@ -314,7 +314,7 @@ describe("OrchestrationEngine", () => {
     await system.dispose();
   });
 
-  it("launches Browser Dev Review records and linked review threads atomically", async () => {
+  it("launches Browser App Review records and linked review threads atomically", async () => {
     const system = await createOrchestrationSystem();
     const { engine } = system;
     const createdAt = now();
@@ -322,10 +322,10 @@ describe("OrchestrationEngine", () => {
     await system.run(
       engine.dispatch({
         type: "project.create",
-        commandId: CommandId.make("cmd-project-dev-review-create"),
-        projectId: asProjectId("project-dev-review"),
-        title: "Dev Review Project",
-        workspaceRoot: "/tmp/project-dev-review",
+        commandId: CommandId.make("cmd-project-app-review-create"),
+        projectId: asProjectId("project-app-review"),
+        title: "App Review Project",
+        workspaceRoot: "/tmp/project-app-review",
         defaultModelSelection: {
           instanceId: ProviderInstanceId.make("codex"),
           model: "gpt-5-codex",
@@ -336,9 +336,9 @@ describe("OrchestrationEngine", () => {
     await system.run(
       engine.dispatch({
         type: "thread.create",
-        commandId: CommandId.make("cmd-thread-dev-review-source-create"),
-        threadId: ThreadId.make("thread-dev-review-source"),
-        projectId: asProjectId("project-dev-review"),
+        commandId: CommandId.make("cmd-thread-app-review-source-create"),
+        threadId: ThreadId.make("thread-app-review-source"),
+        projectId: asProjectId("project-app-review"),
         ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Implementation",
         modelSelection: {
@@ -354,15 +354,15 @@ describe("OrchestrationEngine", () => {
     );
     await system.run(
       engine.dispatch({
-        type: "thread.dev-review.launch",
-        commandId: CommandId.make("cmd-dev-review-launch"),
-        sourceThreadId: ThreadId.make("thread-dev-review-source"),
-        reviewThreadId: ThreadId.make("thread-dev-review-review"),
-        reviewId: DevReviewId.make("dev-review-1"),
+        type: "thread.app-review.launch",
+        commandId: CommandId.make("cmd-app-review-launch"),
+        sourceThreadId: ThreadId.make("thread-app-review-source"),
+        reviewThreadId: ThreadId.make("thread-app-review-review"),
+        reviewId: AppReviewId.make("app-review-1"),
         message: {
-          messageId: asMessageId("msg-dev-review-launch"),
+          messageId: asMessageId("msg-app-review-launch"),
           role: "user",
-          text: "Run Browser Dev Review",
+          text: "Run Browser App Review",
           attachments: [],
         },
         modelSelection: {
@@ -370,25 +370,25 @@ describe("OrchestrationEngine", () => {
           model: "gpt-5-codex",
         },
         runtimeMode: "full-access",
-        workflowPromptId: "implementation.browser-dev-review.codex",
+        workflowPromptId: "implementation.browser-app-review.codex",
         createdAt,
       }),
     );
 
     const readModel = await system.readModel();
     const sourceThread = readModel.threads.find(
-      (thread) => thread.id === "thread-dev-review-source",
+      (thread) => thread.id === "thread-app-review-source",
     );
     const reviewThread = readModel.threads.find(
-      (thread) => thread.id === "thread-dev-review-review",
+      (thread) => thread.id === "thread-app-review-review",
     );
-    expect(sourceThread?.devReviews).toHaveLength(1);
-    expect(reviewThread?.devReviews).toHaveLength(1);
-    expect(reviewThread?.title).toBe("Browser Dev Review");
-    expect(sourceThread?.devReviews[0]).toEqual(reviewThread?.devReviews[0]);
-    expect(sourceThread?.devReviews[0]?.status).toBe("running");
-    expect(sourceThread?.devReviews[0]?.evidence).toEqual(EMPTY_DEV_REVIEW_EVIDENCE);
-    expect(reviewThread?.messages.map((message) => message.id)).toEqual(["msg-dev-review-launch"]);
+    expect(sourceThread?.appReviews).toHaveLength(1);
+    expect(reviewThread?.appReviews).toHaveLength(1);
+    expect(reviewThread?.title).toBe("Browser App Review");
+    expect(sourceThread?.appReviews[0]).toEqual(reviewThread?.appReviews[0]);
+    expect(sourceThread?.appReviews[0]?.status).toBe("running");
+    expect(sourceThread?.appReviews[0]?.evidence).toEqual(EMPTY_APP_REVIEW_EVIDENCE);
+    expect(reviewThread?.messages.map((message) => message.id)).toEqual(["msg-app-review-launch"]);
 
     const events = await system.run(
       Stream.runCollect(engine.readEvents(0)).pipe(
@@ -399,19 +399,19 @@ describe("OrchestrationEngine", () => {
       "project.created",
       "thread.created",
       "thread.created",
-      "thread.dev-review-created",
+      "thread.app-review-created",
       "thread.message-sent",
       "thread.turn-start-requested",
     ]);
     const turnStartRequested = events.find((event) => event.type === "thread.turn-start-requested");
     expect(turnStartRequested?.payload).toMatchObject({
-      workflowPromptId: "implementation.browser-dev-review.codex",
+      workflowPromptId: "implementation.browser-app-review.codex",
     });
 
     await system.dispose();
   });
 
-  it("anchors a Dev Review to the source thread's proposed plan when no Spec exists", async () => {
+  it("anchors an App Review to the source thread's proposed plan when no Spec exists", async () => {
     const system = await createOrchestrationSystem();
     const { engine } = system;
     const createdAt = now();
@@ -419,10 +419,10 @@ describe("OrchestrationEngine", () => {
     await system.run(
       engine.dispatch({
         type: "project.create",
-        commandId: CommandId.make("cmd-project-dev-review-plan-create"),
-        projectId: asProjectId("project-dev-review-plan"),
-        title: "Dev Review Plan Project",
-        workspaceRoot: "/tmp/project-dev-review-plan",
+        commandId: CommandId.make("cmd-project-app-review-plan-create"),
+        projectId: asProjectId("project-app-review-plan"),
+        title: "App Review Plan Project",
+        workspaceRoot: "/tmp/project-app-review-plan",
         defaultModelSelection: {
           instanceId: ProviderInstanceId.make("codex"),
           model: "gpt-5-codex",
@@ -433,9 +433,9 @@ describe("OrchestrationEngine", () => {
     await system.run(
       engine.dispatch({
         type: "thread.create",
-        commandId: CommandId.make("cmd-thread-dev-review-plan-source-create"),
-        threadId: ThreadId.make("thread-dev-review-plan-source"),
-        projectId: asProjectId("project-dev-review-plan"),
+        commandId: CommandId.make("cmd-thread-app-review-plan-source-create"),
+        threadId: ThreadId.make("thread-app-review-plan-source"),
+        projectId: asProjectId("project-app-review-plan"),
         ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Fast feature",
         modelSelection: {
@@ -452,10 +452,10 @@ describe("OrchestrationEngine", () => {
     await system.run(
       engine.dispatch({
         type: "thread.proposed-plan.upsert",
-        commandId: CommandId.make("cmd-dev-review-plan-upsert"),
-        threadId: ThreadId.make("thread-dev-review-plan-source"),
+        commandId: CommandId.make("cmd-app-review-plan-upsert"),
+        threadId: ThreadId.make("thread-app-review-plan-source"),
         proposedPlan: {
-          id: "plan-dev-review-anchor",
+          id: "plan-app-review-anchor",
           turnId: null,
           planMarkdown: "# Plan\n\nShip the fast feature.",
           implementedAt: null,
@@ -468,15 +468,15 @@ describe("OrchestrationEngine", () => {
     );
     await system.run(
       engine.dispatch({
-        type: "thread.dev-review.launch",
-        commandId: CommandId.make("cmd-dev-review-plan-launch"),
-        sourceThreadId: ThreadId.make("thread-dev-review-plan-source"),
-        reviewThreadId: ThreadId.make("thread-dev-review-plan-review"),
-        reviewId: DevReviewId.make("dev-review-plan-1"),
+        type: "thread.app-review.launch",
+        commandId: CommandId.make("cmd-app-review-plan-launch"),
+        sourceThreadId: ThreadId.make("thread-app-review-plan-source"),
+        reviewThreadId: ThreadId.make("thread-app-review-plan-review"),
+        reviewId: AppReviewId.make("app-review-plan-1"),
         message: {
-          messageId: asMessageId("msg-dev-review-plan-launch"),
+          messageId: asMessageId("msg-app-review-plan-launch"),
           role: "user",
-          text: "Run Browser Dev Review",
+          text: "Run Browser App Review",
           attachments: [],
         },
         modelSelection: {
@@ -484,24 +484,24 @@ describe("OrchestrationEngine", () => {
           model: "gpt-5-codex",
         },
         runtimeMode: "full-access",
-        workflowPromptId: "implementation.browser-dev-review.codex",
+        workflowPromptId: "implementation.browser-app-review.codex",
         createdAt,
       }),
     );
 
     const readModel = await system.readModel();
     const sourceThread = readModel.threads.find(
-      (thread) => thread.id === "thread-dev-review-plan-source",
+      (thread) => thread.id === "thread-app-review-plan-source",
     );
-    expect(sourceThread?.devReviews[0]?.sourceProposedPlan).toEqual({
-      threadId: "thread-dev-review-plan-source",
-      planId: "plan-dev-review-anchor",
+    expect(sourceThread?.appReviews[0]?.sourceProposedPlan).toEqual({
+      threadId: "thread-app-review-plan-source",
+      planId: "plan-app-review-anchor",
     });
 
     await system.dispose();
   });
 
-  it("updates Dev Review evidence through thread.dev-review.evidence.update", async () => {
+  it("updates App Review evidence through thread.app-review.evidence.update", async () => {
     const system = await createOrchestrationSystem();
     const { engine } = system;
     const createdAt = now();
@@ -509,10 +509,10 @@ describe("OrchestrationEngine", () => {
     await system.run(
       engine.dispatch({
         type: "project.create",
-        commandId: CommandId.make("cmd-project-dev-review-evidence-create"),
-        projectId: asProjectId("project-dev-review-evidence"),
-        title: "Dev Review Evidence Project",
-        workspaceRoot: "/tmp/project-dev-review-evidence",
+        commandId: CommandId.make("cmd-project-app-review-evidence-create"),
+        projectId: asProjectId("project-app-review-evidence"),
+        title: "App Review Evidence Project",
+        workspaceRoot: "/tmp/project-app-review-evidence",
         defaultModelSelection: {
           instanceId: ProviderInstanceId.make("codex"),
           model: "gpt-5-codex",
@@ -523,9 +523,9 @@ describe("OrchestrationEngine", () => {
     await system.run(
       engine.dispatch({
         type: "thread.create",
-        commandId: CommandId.make("cmd-thread-dev-review-evidence-source-create"),
-        threadId: ThreadId.make("thread-dev-review-evidence-source"),
-        projectId: asProjectId("project-dev-review-evidence"),
+        commandId: CommandId.make("cmd-thread-app-review-evidence-source-create"),
+        threadId: ThreadId.make("thread-app-review-evidence-source"),
+        projectId: asProjectId("project-app-review-evidence"),
         ownerUserId: DEFAULT_WORKSPACE_USER_ID,
         title: "Implementation",
         modelSelection: {
@@ -541,15 +541,15 @@ describe("OrchestrationEngine", () => {
     );
     await system.run(
       engine.dispatch({
-        type: "thread.dev-review.launch",
-        commandId: CommandId.make("cmd-dev-review-evidence-launch"),
-        sourceThreadId: ThreadId.make("thread-dev-review-evidence-source"),
-        reviewThreadId: ThreadId.make("thread-dev-review-evidence-review"),
-        reviewId: DevReviewId.make("dev-review-evidence-1"),
+        type: "thread.app-review.launch",
+        commandId: CommandId.make("cmd-app-review-evidence-launch"),
+        sourceThreadId: ThreadId.make("thread-app-review-evidence-source"),
+        reviewThreadId: ThreadId.make("thread-app-review-evidence-review"),
+        reviewId: AppReviewId.make("app-review-evidence-1"),
         message: {
-          messageId: asMessageId("msg-dev-review-evidence-launch"),
+          messageId: asMessageId("msg-app-review-evidence-launch"),
           role: "user",
-          text: "Run Browser Dev Review",
+          text: "Run Browser App Review",
           attachments: [],
         },
         modelSelection: {
@@ -557,7 +557,7 @@ describe("OrchestrationEngine", () => {
           model: "gpt-5-codex",
         },
         runtimeMode: "full-access",
-        workflowPromptId: "implementation.browser-dev-review.codex",
+        workflowPromptId: "implementation.browser-app-review.codex",
         createdAt,
       }),
     );
@@ -565,7 +565,7 @@ describe("OrchestrationEngine", () => {
     const evidence = {
       recording: {
         status: "saved" as const,
-        path: "dev-reviews/dev-review-evidence-1/recording.webm",
+        path: "app-reviews/app-review-evidence-1/recording.webm",
         mimeType: "video/webm",
         sizeBytes: 1024,
         startedAt: "2026-01-01T00:00:01.000Z",
@@ -575,7 +575,7 @@ describe("OrchestrationEngine", () => {
       screenshots: [
         {
           id: "screenshot-1",
-          path: "dev-reviews/dev-review-evidence-1/screenshot-1.png",
+          path: "app-reviews/app-review-evidence-1/screenshot-1.png",
           mimeType: "image/png" as const,
           caption: "Landing page",
           capturedAt: "2026-01-01T00:00:01.500Z",
@@ -585,10 +585,10 @@ describe("OrchestrationEngine", () => {
 
     await system.run(
       engine.dispatch({
-        type: "thread.dev-review.evidence.update",
-        commandId: CommandId.make("cmd-dev-review-evidence-update"),
-        threadId: ThreadId.make("thread-dev-review-evidence-source"),
-        reviewId: DevReviewId.make("dev-review-evidence-1"),
+        type: "thread.app-review.evidence.update",
+        commandId: CommandId.make("cmd-app-review-evidence-update"),
+        threadId: ThreadId.make("thread-app-review-evidence-source"),
+        reviewId: AppReviewId.make("app-review-evidence-1"),
         evidence,
         updatedAt: "2026-01-01T00:00:03.000Z",
         createdAt: "2026-01-01T00:00:03.000Z",
@@ -597,10 +597,10 @@ describe("OrchestrationEngine", () => {
 
     const readModel = await system.readModel();
     const sourceThread = readModel.threads.find(
-      (thread) => thread.id === "thread-dev-review-evidence-source",
+      (thread) => thread.id === "thread-app-review-evidence-source",
     );
-    expect(sourceThread?.devReviews[0]?.evidence).toEqual(evidence);
-    expect(sourceThread?.devReviews[0]?.updatedAt).toBe("2026-01-01T00:00:03.000Z");
+    expect(sourceThread?.appReviews[0]?.evidence).toEqual(evidence);
+    expect(sourceThread?.appReviews[0]?.updatedAt).toBe("2026-01-01T00:00:03.000Z");
 
     const events = await system.run(
       Stream.runCollect(engine.readEvents(0)).pipe(
@@ -608,13 +608,13 @@ describe("OrchestrationEngine", () => {
       ),
     );
     const evidenceUpdated = events.find(
-      (event) => event.type === "thread.dev-review-evidence-updated",
+      (event) => event.type === "thread.app-review-evidence-updated",
     );
     expect(evidenceUpdated?.payload).toMatchObject({
-      threadId: "thread-dev-review-evidence-source",
-      reviewId: "dev-review-evidence-1",
-      sourceThreadId: "thread-dev-review-evidence-source",
-      reviewThreadId: "thread-dev-review-evidence-review",
+      threadId: "thread-app-review-evidence-source",
+      reviewId: "app-review-evidence-1",
+      sourceThreadId: "thread-app-review-evidence-source",
+      reviewThreadId: "thread-app-review-evidence-review",
       evidence,
       updatedAt: "2026-01-01T00:00:03.000Z",
     });
@@ -622,10 +622,10 @@ describe("OrchestrationEngine", () => {
     await expect(
       system.run(
         engine.dispatch({
-          type: "thread.dev-review.evidence.update",
-          commandId: CommandId.make("cmd-dev-review-evidence-update-missing"),
-          threadId: ThreadId.make("thread-dev-review-evidence-source"),
-          reviewId: DevReviewId.make("dev-review-missing"),
+          type: "thread.app-review.evidence.update",
+          commandId: CommandId.make("cmd-app-review-evidence-update-missing"),
+          threadId: ThreadId.make("thread-app-review-evidence-source"),
+          reviewId: AppReviewId.make("app-review-missing"),
           evidence,
           updatedAt: "2026-01-01T00:00:04.000Z",
           createdAt: "2026-01-01T00:00:04.000Z",

@@ -4,8 +4,8 @@ import {
   CheckpointRef,
   CommandId,
   DEFAULT_WORKSPACE_USER_ID,
-  DevReviewId,
-  EMPTY_DEV_REVIEW_EVIDENCE,
+  AppReviewId,
+  EMPTY_APP_REVIEW_EVIDENCE,
   EventId,
   MessageId,
   ProjectId,
@@ -47,7 +47,7 @@ const baseThread: OrchestrationThread = {
   messages: [],
   proposedPlans: [],
   planningWorkflow: null,
-  devReviews: [],
+  appReviews: [],
   activities: [],
   checkpoints: [],
   session: null,
@@ -619,7 +619,7 @@ describe("applyThreadDetailEvent", () => {
     });
   });
 
-  describe("thread.dev-review-created", () => {
+  describe("thread.app-review-created", () => {
     it("adds the review record to both source and review thread details", () => {
       const sourceThread = {
         ...baseThread,
@@ -637,11 +637,11 @@ describe("applyThreadDetailEvent", () => {
         occurredAt: "2026-04-01T10:30:00.000Z",
         aggregateKind: "thread" as const,
         aggregateId: ThreadId.make("thread-source"),
-        type: "thread.dev-review-created" as const,
+        type: "thread.app-review-created" as const,
         payload: {
           threadId: ThreadId.make("thread-source"),
-          devReview: {
-            id: DevReviewId.make("dev-review-1"),
+          appReview: {
+            id: AppReviewId.make("app-review-1"),
             sourceThreadId: ThreadId.make("thread-source"),
             reviewThreadId: ThreadId.make("thread-review"),
             sourceTurnId: null,
@@ -654,7 +654,7 @@ describe("applyThreadDetailEvent", () => {
               questions: [],
               nextSteps: [],
             },
-            evidence: EMPTY_DEV_REVIEW_EVIDENCE,
+            evidence: EMPTY_APP_REVIEW_EVIDENCE,
             createdAt: "2026-04-01T10:30:00.000Z",
             updatedAt: "2026-04-01T10:30:00.000Z",
           },
@@ -667,20 +667,20 @@ describe("applyThreadDetailEvent", () => {
       expect(sourceResult.kind).toBe("updated");
       expect(reviewResult.kind).toBe("updated");
       if (sourceResult.kind === "updated" && reviewResult.kind === "updated") {
-        expect(sourceResult.thread.devReviews).toEqual(reviewResult.thread.devReviews);
-        expect(sourceResult.thread.devReviews[0]?.id).toBe("dev-review-1");
+        expect(sourceResult.thread.appReviews).toEqual(reviewResult.thread.appReviews);
+        expect(sourceResult.thread.appReviews[0]?.id).toBe("app-review-1");
       }
     });
   });
 
-  describe("thread.dev-review-evidence-updated", () => {
+  describe("thread.app-review-evidence-updated", () => {
     it("replaces the review's evidence", () => {
       const sourceThread = {
         ...baseThread,
         id: ThreadId.make("thread-source"),
-        devReviews: [
+        appReviews: [
           {
-            id: DevReviewId.make("dev-review-1"),
+            id: AppReviewId.make("app-review-1"),
             sourceThreadId: ThreadId.make("thread-source"),
             reviewThreadId: ThreadId.make("thread-review"),
             sourceTurnId: null,
@@ -693,7 +693,7 @@ describe("applyThreadDetailEvent", () => {
               questions: [],
               nextSteps: [],
             },
-            evidence: EMPTY_DEV_REVIEW_EVIDENCE,
+            evidence: EMPTY_APP_REVIEW_EVIDENCE,
             createdAt: "2026-04-01T10:30:00.000Z",
             updatedAt: "2026-04-01T10:30:00.000Z",
           },
@@ -726,10 +726,10 @@ describe("applyThreadDetailEvent", () => {
         occurredAt: "2026-04-01T10:32:00.000Z",
         aggregateKind: "thread",
         aggregateId: ThreadId.make("thread-source"),
-        type: "thread.dev-review-evidence-updated",
+        type: "thread.app-review-evidence-updated",
         payload: {
           threadId: ThreadId.make("thread-source"),
-          reviewId: DevReviewId.make("dev-review-1"),
+          reviewId: AppReviewId.make("app-review-1"),
           sourceThreadId: ThreadId.make("thread-source"),
           reviewThreadId: ThreadId.make("thread-review"),
           evidence,
@@ -739,8 +739,8 @@ describe("applyThreadDetailEvent", () => {
 
       expect(result.kind).toBe("updated");
       if (result.kind === "updated") {
-        expect(result.thread.devReviews[0]?.evidence).toEqual(evidence);
-        expect(result.thread.devReviews[0]?.updatedAt).toBe("2026-04-01T10:32:00.000Z");
+        expect(result.thread.appReviews[0]?.evidence).toEqual(evidence);
+        expect(result.thread.appReviews[0]?.updatedAt).toBe("2026-04-01T10:32:00.000Z");
       }
     });
   });

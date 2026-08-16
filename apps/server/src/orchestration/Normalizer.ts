@@ -29,7 +29,7 @@ export const canonicalizeClientCommandTimestamps = (
 
   if (
     (canonicalCommand.type !== "thread.turn.start" &&
-      canonicalCommand.type !== "thread.dev-review-workflow.launch") ||
+      canonicalCommand.type !== "thread.app-review-workflow.launch") ||
     !canonicalCommand.bootstrap?.createThread
   ) {
     return canonicalCommand;

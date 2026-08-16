@@ -68,12 +68,12 @@ function commandToAggregateRef(command: OrchestrationCommand): {
         aggregateKind: "project",
         aggregateId: command.projectId,
       };
-    case "thread.dev-review.launch":
+    case "thread.app-review.launch":
       return {
         aggregateKind: "thread",
         aggregateId: command.sourceThreadId,
       };
-    case "thread.dev-review-workflow.launch":
+    case "thread.app-review-workflow.launch":
       return {
         aggregateKind: "thread",
         aggregateId: command.targetThreadId,

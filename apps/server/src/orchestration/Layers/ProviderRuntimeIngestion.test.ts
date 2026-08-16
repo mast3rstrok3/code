@@ -15,7 +15,7 @@ import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_WORKSPACE_USER_ID,
-  DevReviewId,
+  AppReviewId,
   EventId,
   MessageId,
   type OrchestrationCommand,
@@ -3705,7 +3705,7 @@ describe("ProviderRuntimeIngestion", () => {
     });
   });
 
-  it("rejects ad hoc Browser Dev Review children while Fast Feature owns review sequencing", async () => {
+  it("rejects ad hoc Browser App Review children while Fast Feature owns review sequencing", async () => {
     const harness = await createHarness();
     const createdAt = "2026-01-01T00:00:00.000Z";
     const parentThreadId = asThreadId("thread-fast-feature-review-owner");
@@ -3746,10 +3746,10 @@ describe("ProviderRuntimeIngestion", () => {
         detail: `\`\`\`json
 {
   "type": "workflow-subagent-create",
-  "workflowPromptId": "${WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex}",
+  "workflowPromptId": "${WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex}",
   "title": "Ad hoc review",
   "promptMarkdown": "Review the app now.",
-  "devReviewMode": "full"
+  "appReviewMode": "full"
 }
 \`\`\``,
       },
@@ -3798,7 +3798,7 @@ describe("ProviderRuntimeIngestion", () => {
       }),
     );
     const children = Array.from({ length: 50 }, (_, index) => ({
-      workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
+      workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
       title: `Focused browser reviewer ${index}`,
       promptMarkdown: `Review concern ${index}.`,
     }));
@@ -3829,7 +3829,7 @@ describe("ProviderRuntimeIngestion", () => {
     expect(batch?.children).toHaveLength(50);
     expect(batch?.children.every((child) => child.status === "running")).toBe(true);
     expect(new Set(batch?.children.map((child) => child.childThreadId)).size).toBe(50);
-    expect(parent?.devReviews).toHaveLength(0);
+    expect(parent?.appReviews).toHaveLength(0);
   });
 
   it("ignores unrelated turn completions until the workflow child reports its result", async () => {
@@ -3872,7 +3872,7 @@ describe("ProviderRuntimeIngestion", () => {
         detail: `\`\`\`json
 {
   "type": "workflow-subagent-create",
-  "workflowPromptId": "${WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex}",
+  "workflowPromptId": "${WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex}",
   "title": "Review checkout",
   "promptMarkdown": "Review checkout in the browser."
 }
@@ -3958,7 +3958,7 @@ describe("ProviderRuntimeIngestion", () => {
     );
   });
 
-  it("creates durable browser dev reviews from sub-agent directives with the codex hardlock", async () => {
+  it("creates durable browser app reviews from sub-agent directives with the codex hardlock", async () => {
     const harness = await createHarness();
     const createdAt = "2026-01-01T00:00:00.000Z";
     const parentThreadId = asThreadId("thread-hardlock-parent");
@@ -3999,10 +3999,10 @@ describe("ProviderRuntimeIngestion", () => {
         detail: `\`\`\`json
 {
   "type": "workflow-subagent-create",
-  "workflowPromptId": "${WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex}",
+  "workflowPromptId": "${WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex}",
   "title": "Review checkout in the browser",
   "promptMarkdown": "Exercise the checkout flow in the browser.",
-  "devReviewMode": "full"
+  "appReviewMode": "full"
 }
 \`\`\``,
       },
@@ -4027,22 +4027,22 @@ describe("ProviderRuntimeIngestion", () => {
       model: "gpt-5.6-sol",
       options: [{ id: "reasoningEffort", value: "high" }],
     });
-    expect(parentThread?.devReviews).toHaveLength(1);
-    expect(parentThread?.devReviews[0]?.reviewThreadId).toBe(childThread?.id);
-    expect(parentThread?.devReviews[0]?.status).toBe("running");
-    expect(childThread?.messages[0]?.text).toContain("Run Browser Dev Review");
+    expect(parentThread?.appReviews).toHaveLength(1);
+    expect(parentThread?.appReviews[0]?.reviewThreadId).toBe(childThread?.id);
+    expect(parentThread?.appReviews[0]?.status).toBe("running");
+    expect(childThread?.messages[0]?.text).toContain("Run Browser App Review");
     expect(childThread?.messages[0]?.text).toContain("Exercise the checkout flow in the browser.");
     expect(childThread?.messages[0]?.text).not.toContain("Expected result directive");
   });
 
-  it("blocks a canonical Dev Review when its reviewer completes without a terminal update", async () => {
+  it("blocks a canonical App Review when its reviewer completes without a terminal update", async () => {
     const harness = await createHarness();
     const sourceThreadId = asThreadId("thread-1");
     const reviewerThreadId = asThreadId("thread-canonical-reviewer");
-    const reviewId = DevReviewId.make("review-canonical");
+    const reviewId = AppReviewId.make("review-canonical");
     await runtime!.runPromise(
       harness.engine.dispatch({
-        type: "thread.dev-review.launch",
+        type: "thread.app-review.launch",
         commandId: CommandId.make("cmd-canonical-review-launch"),
         sourceThreadId,
         reviewThreadId: reviewerThreadId,
@@ -4058,7 +4058,7 @@ describe("ProviderRuntimeIngestion", () => {
           model: "gpt-5.6-sol",
         },
         runtimeMode: "full-access",
-        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
+        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
         createdAt: "2026-01-01T00:00:00.000Z",
       }),
     );
@@ -4088,11 +4088,11 @@ describe("ProviderRuntimeIngestion", () => {
     const source = await waitForThread(
       harness.readModel,
       (thread) =>
-        thread.devReviews.some((review) => review.id === reviewId && review.status === "blocked"),
+        thread.appReviews.some((review) => review.id === reviewId && review.status === "blocked"),
       10_000,
       sourceThreadId,
     );
-    expect(source.devReviews.find((review) => review.id === reviewId)?.document.summary).toContain(
+    expect(source.appReviews.find((review) => review.id === reviewId)?.document.summary).toContain(
       "without terminally updating",
     );
   });
@@ -4102,8 +4102,8 @@ describe("ProviderRuntimeIngestion", () => {
     const sourceThreadId = asThreadId("thread-1");
     const reviewerThreadId = asThreadId("thread-legacy-canonical-reviewer");
     const nestedReviewerThreadId = asThreadId("thread-legacy-nested-reviewer");
-    const canonicalId = DevReviewId.make("review-legacy-canonical");
-    const nestedId = DevReviewId.make("review-legacy-nested");
+    const canonicalId = AppReviewId.make("review-legacy-canonical");
+    const nestedId = AppReviewId.make("review-legacy-nested");
     const modelSelection = {
       instanceId: ProviderInstanceId.make("codex"),
       model: "gpt-5.6-sol",
@@ -4124,7 +4124,7 @@ describe("ProviderRuntimeIngestion", () => {
     ]) {
       await runtime!.runPromise(
         harness.engine.dispatch({
-          type: "thread.dev-review.launch",
+          type: "thread.app-review.launch",
           commandId: CommandId.make(`cmd-legacy-${launch.tag}-launch`),
           sourceThreadId: launch.sourceThreadId,
           reviewThreadId: launch.reviewThreadId,
@@ -4137,7 +4137,7 @@ describe("ProviderRuntimeIngestion", () => {
           },
           modelSelection,
           runtimeMode: "full-access",
-          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
+          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
           createdAt: "2026-01-01T00:00:00.000Z",
         }),
       );
@@ -4157,7 +4157,7 @@ describe("ProviderRuntimeIngestion", () => {
     await runtime!.runPromise(
       Effect.all([
         harness.engine.dispatch({
-          type: "thread.dev-review.evidence.update",
+          type: "thread.app-review.evidence.update",
           commandId: CommandId.make("cmd-legacy-nested-evidence"),
           threadId: reviewerThreadId,
           reviewId: nestedId,
@@ -4166,7 +4166,7 @@ describe("ProviderRuntimeIngestion", () => {
           createdAt: "2026-01-01T00:00:01.000Z",
         }),
         harness.engine.dispatch({
-          type: "thread.dev-review.update",
+          type: "thread.app-review.update",
           commandId: CommandId.make("cmd-legacy-nested-blocked"),
           threadId: reviewerThreadId,
           reviewId: nestedId,
@@ -4210,18 +4210,18 @@ describe("ProviderRuntimeIngestion", () => {
     const source = await waitForThread(
       harness.readModel,
       (thread) =>
-        thread.devReviews.some(
+        thread.appReviews.some(
           (review) => review.id === canonicalId && review.status === "blocked",
         ),
       10_000,
       sourceThreadId,
     );
-    const canonical = source.devReviews.find((review) => review.id === canonicalId);
+    const canonical = source.appReviews.find((review) => review.id === canonicalId);
     expect(canonical?.document.summary).toContain("mailbox fixtures");
     expect(canonical?.evidence).toEqual(evidence);
   });
 
-  it("falls back to the parent selection for browser dev review when codex is disabled", async () => {
+  it("falls back to the parent selection for browser app review when codex is disabled", async () => {
     const harness = await createHarness({
       serverSettings: { providers: { codex: { enabled: false } } },
     });
@@ -4265,10 +4265,10 @@ describe("ProviderRuntimeIngestion", () => {
         detail: `\`\`\`json
 {
   "type": "workflow-subagent-create",
-  "workflowPromptId": "${WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex}",
+  "workflowPromptId": "${WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex}",
   "title": "Review checkout in the browser",
   "promptMarkdown": "Exercise the checkout flow in the browser.",
-  "devReviewMode": "full"
+  "appReviewMode": "full"
 }
 \`\`\``,
       },
@@ -4288,8 +4288,8 @@ describe("ProviderRuntimeIngestion", () => {
     );
     const parentThread = snapshot.threads.find((thread) => thread.id === parentThreadId);
     expect(childThread?.modelSelection).toEqual(parentModelSelection);
-    expect(parentThread?.devReviews).toHaveLength(1);
-    expect(parentThread?.devReviews[0]?.reviewThreadId).toBe(childThread?.id);
+    expect(parentThread?.appReviews).toHaveLength(1);
+    expect(parentThread?.appReviews[0]?.reviewThreadId).toBe(childThread?.id);
 
     const fallbackActivity = parentThread?.activities.find(
       (activity) => activity.kind === "workflow.subagent.model-fallback",

@@ -1,4 +1,8 @@
-import type { ProviderInteractionMode, WorkflowPreset } from "@t3tools/contracts";
+import type {
+  ProviderInteractionMode,
+  WorkflowPreset,
+  WorkflowSkillContract,
+} from "@t3tools/contracts";
 import {
   inferDisplayedWorkflowPreset,
   interactionModeForWorkflowPreset,
@@ -13,6 +17,7 @@ import {
   ChevronRightIcon,
   CircleHelpIcon,
   PencilRulerIcon,
+  SparklesIcon,
   WorkflowIcon,
 } from "lucide-react";
 import {
@@ -30,7 +35,20 @@ import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 
 export type ComposerPrimaryMode = "build" | "plan" | "workflow";
-export type ComposerModePickerView = "primary" | "workflow";
+export type ComposerModePickerView = "primary" | "workflow" | "skills";
+
+export type ComposerBuildSkill = Pick<
+  WorkflowSkillContract,
+  "id" | "title" | "description" | "workflowIds"
+>;
+
+export function sortComposerBuildSkills(
+  skills: ReadonlyArray<ComposerBuildSkill>,
+): ComposerBuildSkill[] {
+  return skills.toSorted(
+    (left, right) => left.title.localeCompare(right.title) || left.id.localeCompare(right.id),
+  );
+}
 
 export function resolveComposerPrimaryMode(input: {
   readonly interactionMode: ProviderInteractionMode;
@@ -198,11 +216,67 @@ export function ComposerModePickerContent(props: {
   readonly activeMode: ComposerPrimaryMode;
   readonly activePreset: WorkflowPreset | null;
   readonly workflowAvailable: boolean;
+  readonly buildSkills: ReadonlyArray<ComposerBuildSkill>;
+  readonly selectedBuildSkillId: string | null;
   readonly onBack: () => void;
+  readonly onOpenSkills: () => void;
   readonly onOpenWorkflow: () => void;
+  readonly onSelectSkill: (skillId: string) => void;
   readonly onSelectPrimary: (mode: "build" | "plan") => void;
   readonly onSelectPreset: (preset: WorkflowPreset) => void;
 }) {
+  if (props.view === "skills") {
+    return (
+      <div
+        className="grid w-[24rem] max-w-[calc(100vw-1rem)] gap-2 motion-safe:animate-in motion-safe:slide-in-from-right-3 motion-safe:duration-200"
+        data-composer-mode-view="skills-shell"
+      >
+        <div className="grid grid-cols-[2rem_1fr_2rem] items-center">
+          <Button
+            aria-label="Back to composer modes"
+            onClick={props.onBack}
+            size="icon-xs"
+            variant="ghost"
+          >
+            <ArrowLeftIcon aria-hidden="true" />
+          </Button>
+          <div className="text-center font-semibold text-sm">Build with a skill</div>
+        </div>
+        <div
+          className="grid max-h-[min(28rem,var(--available-height))] gap-1 overflow-y-auto"
+          data-composer-mode-view="skills"
+          role="menu"
+        >
+          {sortComposerBuildSkills(props.buildSkills).map((skill) => {
+            const selected = props.selectedBuildSkillId === skill.id;
+            return (
+              <button
+                aria-checked={selected}
+                className="grid min-h-12 grid-cols-[1rem_minmax(0,1fr)] gap-x-2 rounded-md px-2 py-2 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+                data-composer-mode-option
+                key={skill.id}
+                onClick={() => props.onSelectSkill(skill.id)}
+                onKeyDown={optionKeyDown}
+                role="menuitemradio"
+                type="button"
+              >
+                <span className="mt-0.5 size-4">
+                  {selected ? <CheckIcon aria-hidden="true" className="size-4" /> : null}
+                </span>
+                <span className="grid min-w-0 gap-0.5">
+                  <span className="font-medium text-sm">{skill.title}</span>
+                  <span className="text-muted-foreground text-xs leading-4">
+                    {skill.description}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
   if (props.view === "workflow") {
     return (
       <div
@@ -230,7 +304,7 @@ export function ComposerModePickerContent(props: {
   }
 
   const options: ReadonlyArray<{
-    readonly id: ComposerPrimaryMode;
+    readonly id: ComposerPrimaryMode | "skills";
     readonly label: string;
     readonly description: string;
     readonly icon: typeof BotIcon;
@@ -248,6 +322,12 @@ export function ComposerModePickerContent(props: {
       description: "Choose a guided multi-thread workflow.",
       icon: WorkflowIcon,
     },
+    {
+      id: "skills",
+      label: "Skills",
+      description: "Invoke an engineering skill in Build mode.",
+      icon: SparklesIcon,
+    },
   ];
 
   return (
@@ -264,10 +344,17 @@ export function ComposerModePickerContent(props: {
             aria-checked={selected}
             className="grid min-h-12 grid-cols-[1rem_minmax(0,1fr)_1rem] items-start gap-2 rounded-md px-2 py-2 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
             data-composer-mode-option
-            disabled={option.id === "workflow" && !props.workflowAvailable}
+            disabled={
+              (option.id === "workflow" && !props.workflowAvailable) ||
+              (option.id === "skills" && props.buildSkills.length === 0)
+            }
             key={option.id}
             onClick={() =>
-              option.id === "workflow" ? props.onOpenWorkflow() : props.onSelectPrimary(option.id)
+              option.id === "workflow"
+                ? props.onOpenWorkflow()
+                : option.id === "skills"
+                  ? props.onOpenSkills()
+                  : props.onSelectPrimary(option.id)
             }
             onKeyDown={optionKeyDown}
             role="menuitemradio"
@@ -282,7 +369,7 @@ export function ComposerModePickerContent(props: {
                   : option.description}
               </span>
             </span>
-            {option.id === "workflow" ? (
+            {option.id === "workflow" || option.id === "skills" ? (
               <ChevronRightIcon aria-hidden="true" className="mt-0.5 size-4" />
             ) : selected ? (
               <CheckIcon aria-hidden="true" className="mt-0.5 size-4" />
@@ -299,7 +386,10 @@ export const ComposerModePicker = memo(function ComposerModePicker(props: {
   readonly workflowPreset: WorkflowPreset | null;
   readonly lastWorkflowPreset: WorkflowPreset | null;
   readonly workflowAvailable: boolean;
+  readonly buildSkills: ReadonlyArray<ComposerBuildSkill>;
+  readonly selectedBuildSkillId: string | null;
   readonly onChange: (mode: ProviderInteractionMode, preset: WorkflowPreset | null) => void;
+  readonly onBuildSkillChange: (skillId: string | null) => void;
 }) {
   const [open, setOpen] = useState(false);
   const activeMode = resolveComposerPrimaryMode(props);
@@ -340,12 +430,16 @@ export const ComposerModePicker = memo(function ComposerModePicker(props: {
       ? `Workflow · ${WORKFLOW_PRESET_DEFINITION_BY_ID[displayedPreset].label}`
       : activeMode === "plan"
         ? "Plan"
-        : "Build";
+        : props.selectedBuildSkillId
+          ? `Build · ${props.buildSkills.find((skill) => skill.id === props.selectedBuildSkillId)?.title ?? "Skill"}`
+          : "Build";
   const triggerIcon: ReactNode =
     activeMode === "workflow" ? (
       <WorkflowIcon className="size-4" />
     ) : activeMode === "plan" ? (
       <PencilRulerIcon className="size-4" />
+    ) : props.selectedBuildSkillId ? (
+      <SparklesIcon className="size-4" />
     ) : (
       <BotIcon className="size-4" />
     );
@@ -364,7 +458,7 @@ export const ComposerModePicker = memo(function ComposerModePicker(props: {
         align="start"
         className={cn(
           "duration-200 motion-reduce:transition-none",
-          view === "workflow" ? "[--popup-width:25rem]" : "[--popup-width:17rem]",
+          view === "primary" ? "[--popup-width:17rem]" : "[--popup-width:25rem]",
         )}
         viewportClassName="p-2 [--viewport-inline-padding:--spacing(2)]"
       >
@@ -373,10 +467,22 @@ export const ComposerModePicker = memo(function ComposerModePicker(props: {
             <ComposerModePickerContent
               activeMode={activeMode}
               activePreset={activeMode === "workflow" ? displayedPreset : null}
+              buildSkills={props.buildSkills}
+              selectedBuildSkillId={props.selectedBuildSkillId}
               onBack={() => setView("primary")}
+              onOpenSkills={() => setView("skills")}
               onOpenWorkflow={() => setView("workflow")}
-              onSelectPreset={selectPreset}
+              onSelectPreset={(preset) => {
+                props.onBuildSkillChange(null);
+                selectPreset(preset);
+              }}
+              onSelectSkill={(skillId) => {
+                props.onChange("default", null);
+                props.onBuildSkillChange(skillId);
+                setOpen(false);
+              }}
               onSelectPrimary={(mode) => {
+                props.onBuildSkillChange(null);
                 props.onChange(mode === "build" ? "default" : "plan", null);
                 setOpen(false);
               }}

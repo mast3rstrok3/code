@@ -2,13 +2,13 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   DEFAULT_WORKSPACE_USER_ID,
-  DevReviewWorkflowRunId,
+  AppReviewWorkflowRunId,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
 } from "@t3tools/contracts";
 import type {
-  DevReviewWorkflowRun,
+  AppReviewWorkflowRun,
   OrchestrationShellSnapshot,
   OrchestrationShellStreamEvent,
 } from "@t3tools/contracts";
@@ -58,8 +58,8 @@ const stubThread = {
   session: null,
 } as const;
 
-const stubDevReviewWorkflowRun: DevReviewWorkflowRun = {
-  id: DevReviewWorkflowRunId.make("dev-review-workflow-controller-1"),
+const stubAppReviewWorkflowRun: AppReviewWorkflowRun = {
+  id: AppReviewWorkflowRunId.make("app-review-workflow-controller-1"),
   targetThreadId: ThreadId.make("thread-1"),
   controllerThreadId: ThreadId.make("controller-1"),
   caller: { type: "standalone", sourceThreadId: ThreadId.make("thread-1") },
@@ -67,7 +67,7 @@ const stubDevReviewWorkflowRun: DevReviewWorkflowRun = {
   supportingContextMarkdown: null,
   previewTargets: ["https://preview.example.test"],
   cycleBudget: 10,
-  attemptsUsed: 0,
+  cyclesUsed: 0,
   status: "running",
   cycles: [],
   activePhase: null,
@@ -218,19 +218,19 @@ describe("applyShellStreamEvent", () => {
     });
   });
 
-  describe("dev-review-workflow-run-upserted", () => {
+  describe("app-review-workflow-run-upserted", () => {
     it("adds and updates a workflow run without disturbing thread state", () => {
       const added = applyShellStreamEvent(baseSnapshot, {
-        kind: "dev-review-workflow-run-upserted",
+        kind: "app-review-workflow-run-upserted",
         sequence: 7,
-        run: stubDevReviewWorkflowRun,
+        run: stubAppReviewWorkflowRun,
       });
 
-      expect(added.devReviewWorkflowRuns).toEqual([stubDevReviewWorkflowRun]);
+      expect(added.appReviewWorkflowRuns).toEqual([stubAppReviewWorkflowRun]);
       expect(added.threads).toEqual([]);
 
       const completed = {
-        ...stubDevReviewWorkflowRun,
+        ...stubAppReviewWorkflowRun,
         status: "passed" as const,
         outcome: "passed" as const,
         finalHeadSha: "def456",
@@ -238,12 +238,12 @@ describe("applyShellStreamEvent", () => {
         updatedAt: "2026-04-01T00:05:00.000Z",
       };
       const updated = applyShellStreamEvent(added, {
-        kind: "dev-review-workflow-run-upserted",
+        kind: "app-review-workflow-run-upserted",
         sequence: 8,
         run: completed,
       });
 
-      expect(updated.devReviewWorkflowRuns).toEqual([completed]);
+      expect(updated.appReviewWorkflowRuns).toEqual([completed]);
       expect(updated.snapshotSequence).toBe(8);
     });
   });

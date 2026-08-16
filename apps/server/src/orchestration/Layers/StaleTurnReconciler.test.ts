@@ -3,7 +3,7 @@ import { expect, it } from "@effect/vitest";
 import {
   CommandId,
   DEFAULT_WORKSPACE_USER_ID,
-  DevReviewId,
+  AppReviewId,
   EventId,
   MessageId,
   ProjectId,
@@ -134,7 +134,7 @@ function makeTestLayer(
   const reactorLayer = ImplementationWorkflowReactorLive.pipe(
     Layer.provide(coreLayer),
     Layer.provide(serverSettingsLayerTest({})),
-    // The reactor probes the Dev Review frontend URL; answer it without real network I/O.
+    // The reactor probes the App Review frontend URL; answer it without real network I/O.
     Layer.provide(
       Layer.succeed(
         HttpClient.HttpClient,
@@ -631,17 +631,17 @@ function passMergeGate(system: ReconcilerSystem, run: OrchestrationImplementatio
   });
 }
 
-function passDevReview(system: ReconcilerSystem, run: OrchestrationImplementationRun) {
+function passAppReview(system: ReconcilerSystem, run: OrchestrationImplementationRun) {
   return Effect.gen(function* () {
     const snapshot = yield* system.query.getSnapshot();
     const reviewingRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
-    const reviewId = reviewingRun?.devReviewIds[0];
-    if (reviewId === undefined) throw new Error("Dev review missing.");
+    const reviewId = reviewingRun?.appReviewIds[0];
+    if (reviewId === undefined) throw new Error("App review missing.");
     yield* system.engine.dispatch({
-      type: "thread.dev-review.update",
-      commandId: commandId("dev-review-pass"),
+      type: "thread.app-review.update",
+      commandId: commandId("app-review-pass"),
       threadId: run.orchestratorThreadId,
-      reviewId: DevReviewId.make(reviewId),
+      reviewId: AppReviewId.make(reviewId),
       status: "passed",
       updatedAt: "2026-01-01T00:00:03.000Z",
       createdAt: "2026-01-01T00:00:03.000Z",
@@ -650,17 +650,17 @@ function passDevReview(system: ReconcilerSystem, run: OrchestrationImplementatio
   });
 }
 
-function failDevReview(system: ReconcilerSystem, run: OrchestrationImplementationRun) {
+function failAppReview(system: ReconcilerSystem, run: OrchestrationImplementationRun) {
   return Effect.gen(function* () {
     const snapshot = yield* system.query.getSnapshot();
     const reviewingRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
-    const reviewId = reviewingRun?.devReviewIds.at(-1);
-    if (reviewId === undefined) throw new Error("Dev review missing.");
+    const reviewId = reviewingRun?.appReviewIds.at(-1);
+    if (reviewId === undefined) throw new Error("App review missing.");
     yield* system.engine.dispatch({
-      type: "thread.dev-review.update",
-      commandId: commandId("dev-review-fail"),
+      type: "thread.app-review.update",
+      commandId: commandId("app-review-fail"),
       threadId: run.orchestratorThreadId,
-      reviewId: DevReviewId.make(reviewId),
+      reviewId: AppReviewId.make(reviewId),
       status: "failed",
       updatedAt: "2026-01-01T00:00:03.000Z",
       createdAt: "2026-01-01T00:00:03.000Z",
@@ -1141,7 +1141,7 @@ describe("StaleTurnReconciler", () => {
           const { run } = yield* launchRun(system);
           yield* appendWorkerSuccess(system, run);
           yield* passMergeGate(system, run);
-          yield* passDevReview(system, run);
+          yield* passAppReview(system, run);
           const reviewer = yield* findThreadByRole(system, "implementation-code-reviewer");
           if (!reviewer) throw new Error("Code reviewer missing.");
           const runBefore = yield* getRun(system, run.id);
@@ -1184,9 +1184,9 @@ describe("StaleTurnReconciler", () => {
           const { run } = yield* launchRun(system);
           yield* appendWorkerSuccess(system, run);
           yield* passMergeGate(system, run);
-          // A failing Dev Review is what spawns a fixer for spec-driven runs; Code Review no longer
+          // A failing App Review is what spawns a fixer for spec-driven runs; Code Review no longer
           // does, because it lands its own fixes in a single pass.
-          yield* failDevReview(system, run);
+          yield* failAppReview(system, run);
           const fixer = yield* findThreadByRole(system, "implementation-fixer");
           if (!fixer) throw new Error("Fixer missing.");
           const runBefore = yield* getRun(system, run.id);

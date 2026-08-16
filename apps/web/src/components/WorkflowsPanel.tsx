@@ -1,5 +1,5 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
-import type { DevReviewWorkflowRun, OrchestrationImplementationRun } from "@t3tools/contracts";
+import type { AppReviewWorkflowRun, OrchestrationImplementationRun } from "@t3tools/contracts";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 import { WORKFLOW_PRESET_DEFINITION_BY_ID } from "@t3tools/shared/workflowPresets";
 import { Archive, ChevronDown, ChevronRight, Copy, Eye, GitFork, RotateCcw } from "lucide-react";
@@ -257,13 +257,13 @@ function implementationRunForGroup(
     runs.find(
       (run) =>
         run.id === group.sourceId ||
-        run.devReviewWorkflowRunIds.some((runId) => runId === group.sourceId) ||
+        run.appReviewWorkflowRunIds.some((runId) => runId === group.sourceId) ||
         group.rows.some((row) => row.thread.id === run.orchestratorThreadId),
     ) ?? null
   );
 }
 
-function devReviewRunPresentation(run: DevReviewWorkflowRun | null): {
+function appReviewRunPresentation(run: AppReviewWorkflowRun | null): {
   readonly status: WorkflowThreadStatus;
   readonly label: string | null;
 } {
@@ -291,11 +291,11 @@ function WorkflowGroupCard(props: {
   readonly focusedGroupRef: RefObject<HTMLElement | null>;
   readonly activeThreadKey: string | null;
   readonly timestampFormat: TimestampFormat;
-  readonly devReviewWorkflowRuns: readonly DevReviewWorkflowRun[];
+  readonly appReviewWorkflowRuns: readonly AppReviewWorkflowRun[];
   readonly implementationRuns: readonly OrchestrationImplementationRun[];
   readonly workflowRoot: EnvironmentThreadShell;
   readonly onOpenThread: (thread: EnvironmentThreadShell) => void;
-  readonly onOpenDevReview: () => void;
+  readonly onOpenAppReview: () => void;
   readonly onCopyWorkflowLink: (workflowId: string) => void;
   readonly onRetryImplementationRun?: ((runId: string) => void) | undefined;
   readonly nested?: boolean;
@@ -304,16 +304,16 @@ function WorkflowGroupCard(props: {
   const { group } = props;
   const expanded = props.expandedById[group.id] ?? group.isActive;
   const focused = group.kind === "workflow" && group.sourceId === props.focusedWorkflowId;
-  const linkedDevReviewRun =
-    group.preset === "dev-review"
-      ? (props.devReviewWorkflowRuns.find((run) => run.id === group.sourceId) ?? null)
+  const linkedAppReviewRun =
+    group.preset === "app-review"
+      ? (props.appReviewWorkflowRuns.find((run) => run.id === group.sourceId) ?? null)
       : null;
-  const runPresentation = devReviewRunPresentation(linkedDevReviewRun);
+  const runPresentation = appReviewRunPresentation(linkedAppReviewRun);
   const linkedImplementationRun = implementationRunForGroup(group, props.implementationRuns);
   const status =
     linkedImplementationRun?.status === "needs-human-attention"
       ? "failed"
-      : linkedDevReviewRun === null
+      : linkedAppReviewRun === null
         ? groupStatus(group)
         : runPresentation.status;
   const visual = STATUS_VISUALS[status];
@@ -387,12 +387,12 @@ function WorkflowGroupCard(props: {
               />
             </span>
           </button>
-          {group.preset === "dev-review" ? (
+          {group.preset === "app-review" ? (
             <button
               type="button"
-              aria-label="View Dev Review results"
-              title="View Dev Review results"
-              onClick={props.onOpenDevReview}
+              aria-label="View App Review results"
+              title="View App Review results"
+              onClick={props.onOpenAppReview}
               className="cursor-pointer mt-2 flex items-center gap-1 rounded-md px-2 py-1.5 text-[11px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
             >
               <Eye className="size-3.5" aria-hidden />
@@ -513,10 +513,10 @@ export function WorkflowsPanel(props: {
   readonly activeThreadKey: string | null;
   readonly focusedWorkflowId: string | null;
   readonly timestampFormat: TimestampFormat;
-  readonly devReviewWorkflowRuns: readonly DevReviewWorkflowRun[];
+  readonly appReviewWorkflowRuns: readonly AppReviewWorkflowRun[];
   readonly implementationRuns: readonly OrchestrationImplementationRun[];
   readonly onOpenThread: (thread: EnvironmentThreadShell) => void;
-  readonly onOpenDevReview: () => void;
+  readonly onOpenAppReview: () => void;
   readonly onCopyWorkflowLink: (workflowId: string) => void;
   readonly onRetryImplementationRun?: ((runId: string) => void) | undefined;
 }) {
@@ -602,11 +602,11 @@ export function WorkflowsPanel(props: {
                 focusedGroupRef={focusedGroupRef}
                 activeThreadKey={props.activeThreadKey}
                 timestampFormat={props.timestampFormat}
-                devReviewWorkflowRuns={props.devReviewWorkflowRuns}
+                appReviewWorkflowRuns={props.appReviewWorkflowRuns}
                 implementationRuns={props.implementationRuns}
                 workflowRoot={workflow.root}
                 onOpenThread={props.onOpenThread}
-                onOpenDevReview={props.onOpenDevReview}
+                onOpenAppReview={props.onOpenAppReview}
                 onCopyWorkflowLink={props.onCopyWorkflowLink}
                 onRetryImplementationRun={props.onRetryImplementationRun}
               />

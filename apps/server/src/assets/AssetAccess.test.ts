@@ -1,11 +1,11 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
-  DEV_REVIEW_RECORDING_EVIDENCE_ID,
-  DevReviewId,
-  EMPTY_DEV_REVIEW_EVIDENCE,
+  APP_REVIEW_RECORDING_EVIDENCE_ID,
+  AppReviewId,
+  EMPTY_APP_REVIEW_EVIDENCE,
   AssetPreviewTypeValidationError,
   ThreadId,
-  type DevReviewEvidence,
+  type AppReviewEvidence,
 } from "@t3tools/contracts";
 import { PROJECT_FAVICON_FALLBACK_MARKER } from "@t3tools/shared/projectFavicon";
 import { describe, expect, it } from "@effect/vitest";
@@ -21,9 +21,9 @@ import * as TestClock from "effect/testing/TestClock";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import {
-  ProjectionThreadDevReviewRepository,
-  type ProjectionThreadDevReview,
-} from "../persistence/Services/ProjectionThreadDevReviews.ts";
+  ProjectionThreadAppReviewRepository,
+  type ProjectionThreadAppReview,
+} from "../persistence/Services/ProjectionThreadAppReviews.ts";
 import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
 import * as T3ProjectFileLoader from "../project/T3ProjectFileLoader.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
@@ -32,15 +32,15 @@ import { ASSET_ROUTE_PREFIX, issueAssetUrl, resolveAsset } from "./AssetAccess.t
 const configLayer = ServerConfig.ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-asset-access-test-",
 });
-const devReviewRows = new Map<string, ProjectionThreadDevReview>();
-const devReviewRepositoryLayer = Layer.succeed(
-  ProjectionThreadDevReviewRepository,
-  ProjectionThreadDevReviewRepository.of({
+const appReviewRows = new Map<string, ProjectionThreadAppReview>();
+const appReviewRepositoryLayer = Layer.succeed(
+  ProjectionThreadAppReviewRepository,
+  ProjectionThreadAppReviewRepository.of({
     upsert: (row) =>
       Effect.sync(() => {
-        devReviewRows.set(row.reviewId, row);
+        appReviewRows.set(row.reviewId, row);
       }),
-    getById: ({ reviewId }) => Effect.sync(() => Option.fromNullishOr(devReviewRows.get(reviewId))),
+    getById: ({ reviewId }) => Effect.sync(() => Option.fromNullishOr(appReviewRows.get(reviewId))),
     listByThreadId: () => Effect.succeed([]),
     listAll: () => Effect.succeed([]),
     deleteByThreadId: () => Effect.void,
@@ -54,11 +54,11 @@ const testLayer = Layer.mergeAll(
     Layer.provide(T3ProjectFileLoader.layer),
   ),
   ServerSecretStore.layer.pipe(Layer.provide(configLayer)),
-  devReviewRepositoryLayer,
+  appReviewRepositoryLayer,
 ).pipe(Layer.provideMerge(NodeServices.layer));
 
-const seedDevReview = (reviewId: DevReviewId, evidence: DevReviewEvidence) => {
-  devReviewRows.set(reviewId, {
+const seedAppReview = (reviewId: AppReviewId, evidence: AppReviewEvidence) => {
+  appReviewRows.set(reviewId, {
     reviewId,
     sourceThreadId: ThreadId.make("thread-source"),
     reviewThreadId: ThreadId.make("thread-review"),
@@ -518,7 +518,7 @@ describe("AssetAccess", () => {
     }).pipe(Effect.provide(testLayer)),
   );
 
-  it.effect("round-trips a saved dev-review recording through signed URLs", () =>
+  it.effect("round-trips a saved app-review recording through signed URLs", () =>
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;
       const fileSystem = yield* FileSystem.FileSystem;
@@ -529,8 +529,8 @@ describe("AssetAccess", () => {
       yield* fileSystem.writeFile(webmPath, new Uint8Array([0x1a, 0x45, 0xdf, 0xa3]));
       const canonicalWebmPath = yield* fileSystem.realPath(webmPath);
 
-      const reviewId = DevReviewId.make("dev-review-recording");
-      seedDevReview(reviewId, {
+      const reviewId = AppReviewId.make("app-review-recording");
+      seedAppReview(reviewId, {
         recording: {
           status: "saved",
           path: webmPath,
@@ -545,9 +545,9 @@ describe("AssetAccess", () => {
 
       const result = yield* issueAssetUrl({
         resource: {
-          _tag: "dev-review-evidence",
+          _tag: "app-review-evidence",
           reviewId,
-          evidenceId: DEV_REVIEW_RECORDING_EVIDENCE_ID,
+          evidenceId: APP_REVIEW_RECORDING_EVIDENCE_ID,
         },
       });
       expect(result.relativeUrl.endsWith("/browser-recording-test.webm")).toBe(true);
@@ -563,20 +563,20 @@ describe("AssetAccess", () => {
     }).pipe(Effect.provide(testLayer)),
   );
 
-  it.effect("round-trips dev-review screenshots by evidence id", () =>
+  it.effect("round-trips app-review screenshots by evidence id", () =>
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const reviewId = DevReviewId.make("dev-review-screenshot");
-      const screenshotDir = path.join(config.stateDir, "preview-artifacts", "dev-review", reviewId);
+      const reviewId = AppReviewId.make("app-review-screenshot");
+      const screenshotDir = path.join(config.stateDir, "preview-artifacts", "app-review", reviewId);
       const screenshotPath = path.join(screenshotDir, "shot-1.png");
       yield* fileSystem.makeDirectory(screenshotDir, { recursive: true });
       yield* fileSystem.writeFile(screenshotPath, new Uint8Array([137, 80, 78, 71]));
       const canonicalScreenshotPath = yield* fileSystem.realPath(screenshotPath);
 
-      seedDevReview(reviewId, {
-        recording: EMPTY_DEV_REVIEW_EVIDENCE.recording,
+      seedAppReview(reviewId, {
+        recording: EMPTY_APP_REVIEW_EVIDENCE.recording,
         screenshots: [
           {
             id: "shot-1",
@@ -589,7 +589,7 @@ describe("AssetAccess", () => {
       });
 
       const result = yield* issueAssetUrl({
-        resource: { _tag: "dev-review-evidence", reviewId, evidenceId: "shot-1" },
+        resource: { _tag: "app-review-evidence", reviewId, evidenceId: "shot-1" },
       });
       const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
       const token = suffix.slice(0, suffix.indexOf("/"));
@@ -600,31 +600,31 @@ describe("AssetAccess", () => {
       });
 
       const missing = yield* issueAssetUrl({
-        resource: { _tag: "dev-review-evidence", reviewId, evidenceId: "shot-2" },
+        resource: { _tag: "app-review-evidence", reviewId, evidenceId: "shot-2" },
       }).pipe(Effect.flip);
-      expect(missing._tag).toBe("AssetDevReviewEvidenceNotFoundError");
+      expect(missing._tag).toBe("AssetAppReviewEvidenceNotFoundError");
     }).pipe(Effect.provide(testLayer)),
   );
 
-  it.effect("rejects dev-review evidence that is not saved or escapes the artifacts root", () =>
+  it.effect("rejects app-review evidence that is not saved or escapes the artifacts root", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
 
       // Recording not yet saved: no URL may be minted.
-      const recordingReviewId = DevReviewId.make("dev-review-in-progress");
-      seedDevReview(recordingReviewId, {
-        recording: { ...EMPTY_DEV_REVIEW_EVIDENCE.recording, status: "recording" },
+      const recordingReviewId = AppReviewId.make("app-review-in-progress");
+      seedAppReview(recordingReviewId, {
+        recording: { ...EMPTY_APP_REVIEW_EVIDENCE.recording, status: "recording" },
         screenshots: [],
       });
       const notSaved = yield* issueAssetUrl({
         resource: {
-          _tag: "dev-review-evidence",
+          _tag: "app-review-evidence",
           reviewId: recordingReviewId,
-          evidenceId: DEV_REVIEW_RECORDING_EVIDENCE_ID,
+          evidenceId: APP_REVIEW_RECORDING_EVIDENCE_ID,
         },
       }).pipe(Effect.flip);
-      expect(notSaved._tag).toBe("AssetDevReviewEvidenceNotFoundError");
+      expect(notSaved._tag).toBe("AssetAppReviewEvidenceNotFoundError");
 
       // Evidence path outside stateDir/preview-artifacts: rejected even though
       // the file exists.
@@ -633,8 +633,8 @@ describe("AssetAccess", () => {
       });
       const outsidePath = path.join(outside, "escape.webm");
       yield* fileSystem.writeFile(outsidePath, new Uint8Array([1]));
-      const traversalReviewId = DevReviewId.make("dev-review-traversal");
-      seedDevReview(traversalReviewId, {
+      const traversalReviewId = AppReviewId.make("app-review-traversal");
+      seedAppReview(traversalReviewId, {
         recording: {
           status: "saved",
           path: outsidePath,
@@ -648,22 +648,22 @@ describe("AssetAccess", () => {
       });
       const traversal = yield* issueAssetUrl({
         resource: {
-          _tag: "dev-review-evidence",
+          _tag: "app-review-evidence",
           reviewId: traversalReviewId,
-          evidenceId: DEV_REVIEW_RECORDING_EVIDENCE_ID,
+          evidenceId: APP_REVIEW_RECORDING_EVIDENCE_ID,
         },
       }).pipe(Effect.flip);
-      expect(traversal._tag).toBe("AssetDevReviewEvidenceNotFoundError");
+      expect(traversal._tag).toBe("AssetAppReviewEvidenceNotFoundError");
 
       // Unknown review id.
       const unknown = yield* issueAssetUrl({
         resource: {
-          _tag: "dev-review-evidence",
-          reviewId: DevReviewId.make("dev-review-missing"),
-          evidenceId: DEV_REVIEW_RECORDING_EVIDENCE_ID,
+          _tag: "app-review-evidence",
+          reviewId: AppReviewId.make("app-review-missing"),
+          evidenceId: APP_REVIEW_RECORDING_EVIDENCE_ID,
         },
       }).pipe(Effect.flip);
-      expect(unknown._tag).toBe("AssetDevReviewEvidenceNotFoundError");
+      expect(unknown._tag).toBe("AssetAppReviewEvidenceNotFoundError");
     }).pipe(Effect.provide(testLayer)),
   );
 });

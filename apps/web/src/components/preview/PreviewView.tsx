@@ -325,7 +325,7 @@ export function PreviewView({
             type: "warning",
             title: "Recording unavailable",
             description: recordingAvailable
-              ? "The server can record this preview for Dev Reviews, but the manual record button is not wired up yet."
+              ? "The server can record this preview for App Reviews, but the manual record button is not wired up yet."
               : "Recording requires ffmpeg on the server. Install ffmpeg or run `pnpm --filter t3 run install:preview-browser`.",
           });
           return;

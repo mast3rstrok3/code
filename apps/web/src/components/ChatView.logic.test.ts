@@ -20,7 +20,7 @@ import {
   buildExpiredTerminalContextToastCopy,
   buildLoadingThreadFromShell,
   buildThreadTurnInterruptInput,
-  collectDevReviewLaunchPreviewTargets,
+  collectAppReviewLaunchPreviewTargets,
   createLocalDispatchSnapshot,
   deriveComposerSendState,
   dismissBranchMismatchForSession,
@@ -30,12 +30,12 @@ import {
   hasEnvironmentReconnectWarningGraceElapsed,
   hasServerAcknowledgedLocalDispatch,
   isBranchMismatchDismissedForSession,
-  normalizeDevReviewCycleBudget,
+  normalizeAppReviewCycleBudget,
   reconcileMountedTerminalThreadIds,
   reconcileRetainedMountedThreadIds,
   resolveProductWorkflowPlanningThreadId,
   resolveSendEnvMode,
-  selectBrowserDevReviewAutoContext,
+  selectBrowserAppReviewAutoContext,
   resolveThreadMetadataUpdateForNextTurn,
   scheduleEnvironmentReconnectWarning,
   startNewThreadForProject,
@@ -104,7 +104,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     messages: [],
     proposedPlans: [],
     planningWorkflow: null,
-    devReviews: [],
+    appReviews: [],
     activities: [],
     checkpoints: [],
     createdAt: now,
@@ -193,20 +193,20 @@ describe("buildLocalDraftThread", () => {
   });
 });
 
-describe("normalizeDevReviewCycleBudget", () => {
-  it("persists an integer attempt budget constrained to 1 through 50", () => {
-    expect(normalizeDevReviewCycleBudget(10)).toBe(10);
-    expect(normalizeDevReviewCycleBudget(2.6)).toBe(3);
-    expect(normalizeDevReviewCycleBudget(0)).toBe(1);
-    expect(normalizeDevReviewCycleBudget(51)).toBe(50);
-    expect(normalizeDevReviewCycleBudget(Number.NaN)).toBe(10);
+describe("normalizeAppReviewCycleBudget", () => {
+  it("persists an integer cycle budget constrained to 1 through 50", () => {
+    expect(normalizeAppReviewCycleBudget(10)).toBe(10);
+    expect(normalizeAppReviewCycleBudget(2.6)).toBe(3);
+    expect(normalizeAppReviewCycleBudget(0)).toBe(1);
+    expect(normalizeAppReviewCycleBudget(51)).toBe(50);
+    expect(normalizeAppReviewCycleBudget(Number.NaN)).toBe(10);
   });
 });
 
-describe("collectDevReviewLaunchPreviewTargets", () => {
+describe("collectAppReviewLaunchPreviewTargets", () => {
   it("uses URLs from this review brief before the current thread browser", () => {
     expect(
-      collectDevReviewLaunchPreviewTargets({
+      collectAppReviewLaunchPreviewTargets({
         brief: "Review https://feature.example.test/login.",
         activeBrowserUrl: "https://older.example.test/",
       }),
@@ -215,7 +215,7 @@ describe("collectDevReviewLaunchPreviewTargets", () => {
 
   it("has no project-scoped preview input", () => {
     expect(
-      collectDevReviewLaunchPreviewTargets({
+      collectAppReviewLaunchPreviewTargets({
         brief: "Review checkout.",
         activeBrowserUrl: null,
       }),
@@ -223,11 +223,11 @@ describe("collectDevReviewLaunchPreviewTargets", () => {
   });
 });
 
-describe("selectBrowserDevReviewAutoContext", () => {
+describe("selectBrowserAppReviewAutoContext", () => {
   it("selects the latest settled user turn and following assistant output", () => {
     const turn1 = TurnId.make("turn-1");
     const turn2 = TurnId.make("turn-2");
-    const context = selectBrowserDevReviewAutoContext({
+    const context = selectBrowserAppReviewAutoContext({
       latestTurn: { ...completedTurn, turnId: turn2 },
       messages: [
         makeMessage({ id: "user-1", role: "user", text: "First request", turnId: turn1 }),
@@ -257,7 +257,7 @@ describe("selectBrowserDevReviewAutoContext", () => {
   it("skips a running latest turn and falls back to the previous settled turn", () => {
     const settledTurn = TurnId.make("turn-settled");
     const runningTurn = TurnId.make("turn-running");
-    const context = selectBrowserDevReviewAutoContext({
+    const context = selectBrowserAppReviewAutoContext({
       latestTurn: {
         ...completedTurn,
         turnId: runningTurn,
@@ -302,7 +302,7 @@ describe("selectBrowserDevReviewAutoContext", () => {
 
   it("returns null when there is no settled user turn", () => {
     expect(
-      selectBrowserDevReviewAutoContext({
+      selectBrowserAppReviewAutoContext({
         latestTurn: null,
         messages: [makeMessage({ id: "assistant-only", role: "assistant", text: "No user turn" })],
       }),

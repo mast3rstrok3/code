@@ -5,16 +5,16 @@ import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 
 import { toPersistenceSqlError } from "../Errors.ts";
 import {
-  ProjectionDevReviewWorkflowRun,
-  ProjectionDevReviewWorkflowRunRepository,
-  type ProjectionDevReviewWorkflowRunRepositoryShape,
-} from "../Services/ProjectionDevReviewWorkflowRuns.ts";
+  ProjectionAppReviewWorkflowRun,
+  ProjectionAppReviewWorkflowRunRepository,
+  type ProjectionAppReviewWorkflowRunRepositoryShape,
+} from "../Services/ProjectionAppReviewWorkflowRuns.ts";
 
-const makeProjectionDevReviewWorkflowRunRepository = Effect.gen(function* () {
+const makeProjectionAppReviewWorkflowRunRepository = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
   const upsertRow = SqlSchema.void({
-    Request: ProjectionDevReviewWorkflowRun,
+    Request: ProjectionAppReviewWorkflowRun,
     execute: (row) => {
       const callerThreadId =
         row.run.caller.type === "standalone"
@@ -23,7 +23,7 @@ const makeProjectionDevReviewWorkflowRunRepository = Effect.gen(function* () {
       const implementationRunId =
         row.run.caller.type === "implementation" ? row.run.caller.implementationRunId : null;
       return sql`
-        INSERT INTO projection_dev_review_workflow_runs (
+        INSERT INTO projection_app_review_workflow_runs (
           run_id, target_thread_id, controller_thread_id, caller_type,
           caller_thread_id, implementation_run_id, status, run_json, created_at, updated_at
         ) VALUES (
@@ -48,13 +48,13 @@ const makeProjectionDevReviewWorkflowRunRepository = Effect.gen(function* () {
     upsert: (row) =>
       upsertRow(row).pipe(
         Effect.mapError(
-          toPersistenceSqlError("ProjectionDevReviewWorkflowRunRepository.upsert:query"),
+          toPersistenceSqlError("ProjectionAppReviewWorkflowRunRepository.upsert:query"),
         ),
       ),
-  } satisfies ProjectionDevReviewWorkflowRunRepositoryShape;
+  } satisfies ProjectionAppReviewWorkflowRunRepositoryShape;
 });
 
-export const ProjectionDevReviewWorkflowRunRepositoryLive = Layer.effect(
-  ProjectionDevReviewWorkflowRunRepository,
-  makeProjectionDevReviewWorkflowRunRepository,
+export const ProjectionAppReviewWorkflowRunRepositoryLive = Layer.effect(
+  ProjectionAppReviewWorkflowRunRepository,
+  makeProjectionAppReviewWorkflowRunRepository,
 );

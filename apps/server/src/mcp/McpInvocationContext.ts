@@ -7,7 +7,7 @@ import {
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 
-export type McpCapability = "preview" | "dev-review" | "workflow-artifacts";
+export type McpCapability = "preview" | "app-review" | "workflow-artifacts";
 
 export interface McpInvocationScope {
   readonly environmentId: EnvironmentId;

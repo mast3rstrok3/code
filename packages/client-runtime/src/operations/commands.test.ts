@@ -25,7 +25,7 @@ import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import {
   archiveThread,
   createProject,
-  launchThreadDevReviewWorkflow,
+  launchThreadAppReviewWorkflow,
   settleThread,
   stopThreadSession,
   unsettleThread,
@@ -174,13 +174,13 @@ describe("environment commands", () => {
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );
 
-  it.effect("dispatches Dev Review as a workflow launch instead of a provider turn", () =>
+  it.effect("dispatches App Review as a workflow launch instead of a provider turn", () =>
     Effect.gen(function* () {
       const dispatched: ClientOrchestrationCommand[] = [];
       const supervisor = yield* makeSupervisor(dispatched);
 
-      yield* launchThreadDevReviewWorkflow({
-        commandId: CommandId.make("dev-review-launch"),
+      yield* launchThreadAppReviewWorkflow({
+        commandId: CommandId.make("app-review-launch"),
         targetThreadId: ThreadId.make("thread-source"),
         controllerThreadId: ThreadId.make("thread-controller"),
         caller: { type: "standalone", sourceThreadId: ThreadId.make("thread-source") },
@@ -197,8 +197,8 @@ describe("environment commands", () => {
 
       expect(dispatched).toHaveLength(1);
       expect(dispatched[0]).toMatchObject({
-        type: "thread.dev-review-workflow.launch",
-        commandId: "dev-review-launch",
+        type: "thread.app-review-workflow.launch",
+        commandId: "app-review-launch",
         cycleBudget: 10,
         briefMarkdown: "Review checkout.",
       });

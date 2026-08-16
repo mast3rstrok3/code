@@ -53,6 +53,7 @@ describe("ServerProvider", () => {
           description: "Fix intent.",
           promptText: "Prompt.",
           docIds: ["context"],
+          buildModes: ["build"],
           workflowIds: ["fix"],
         },
       ],
@@ -61,12 +62,41 @@ describe("ServerProvider", () => {
           id: "context",
           title: "Context",
           path: "CONTEXT.md",
+          description: "Project context.",
           content: "# Context",
           skillIds: ["product.fix.codex"],
         },
       ],
     });
     expect(parsed.workflows[0]?.steps[0]?.skillId).toBe("product.fix.codex");
+    expect(parsed.skills[0]?.buildModes).toEqual(["build"]);
+    expect(parsed.docs[0]?.description).toBe("Project context.");
+  });
+
+  it("defaults new catalog relationship fields from older servers", () => {
+    const parsed = decodeWorkflowCatalog({
+      workflows: [],
+      skills: [
+        {
+          id: "legacy",
+          order: 1,
+          workflow: "shared",
+          role: "workflow-communications",
+          stage: "legacy",
+          title: "Legacy",
+          description: "Legacy skill.",
+          promptText: "Prompt.",
+          docIds: [],
+          workflowIds: [],
+        },
+      ],
+      docs: [
+        { id: "legacy", title: "Legacy", path: "legacy.md", content: "# Legacy", skillIds: [] },
+      ],
+    });
+
+    expect(parsed.skills[0]?.buildModes).toEqual([]);
+    expect(parsed.docs[0]?.description).toBe("Supporting reference for a workflow skill.");
   });
 
   it("rejects unknown workflow discriminators", () => {

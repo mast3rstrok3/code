@@ -4,10 +4,10 @@ import {
   AppDevStackError,
   CommandId,
   DEFAULT_WORKSPACE_USER_ID,
-  DevReviewId,
+  AppReviewId,
   EventId,
   GitCommandError,
-  IMPLEMENTATION_RUN_MAX_DEV_REVIEW_UNBLOCK_ATTEMPTS,
+  IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS,
   IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
   IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES,
   MessageId,
@@ -40,10 +40,10 @@ import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
 import {
   appDevStackBackendHealthUrl,
-  codeReviewNeedsFreshDevReview,
+  codeReviewNeedsFreshAppReview,
   fastFeatureBuildContractProblems,
   ImplementationWorkflowReactorLive,
-  passedDevReviewContinuation,
+  passedAppReviewContinuation,
   workflowIdForRun,
 } from "./ImplementationWorkflowReactor.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
@@ -200,7 +200,7 @@ function makeTestLayer(
     ImplementationWorkflowReactorLive.pipe(
       Layer.provide(coreLayer),
       Layer.provide(serverSettingsLayerTest(serverSettings)),
-      // The reactor probes the frontend URL before Dev Review; answer it without real network I/O.
+      // The reactor probes the frontend URL before App Review; answer it without real network I/O.
       Layer.provide(
         Layer.succeed(
           HttpClient.HttpClient,
@@ -475,7 +475,7 @@ function withSystem<A, E>(
     readonly startReactor?: boolean;
     /** Stack status the controller reports from `autoCreate`; only "running" is actually serving. */
     readonly autoCreateStackStatus?: "running" | "starting" | "error";
-    /** HTTP status the frontend URL answers with when the reactor probes it before Dev Review. */
+    /** HTTP status the frontend URL answers with when the reactor probes it before App Review. */
     readonly frontendProbeStatus?: number;
     /** HTTP status the same-origin backend health route answers with. */
     readonly backendProbeStatus?: number;
@@ -653,7 +653,7 @@ function launchRun(system: ImplementationSystem, options?: Parameters<typeof see
     const snapshot = yield* system.query.getSnapshot();
     const run = snapshot.implementationRuns[0];
     if (!run) throw new Error("Run missing.");
-    const legacyRun = { ...run, devReviewStrategy: "legacy-inline" as const };
+    const legacyRun = { ...run, appReviewStrategy: "legacy-inline" as const };
     yield* system.engine.dispatch({
       type: "thread.implementation-run.update",
       commandId: commandId("implementation-mark-legacy-inline"),
@@ -825,17 +825,17 @@ function failFinalGate(system: ImplementationSystem, run: OrchestrationImplement
   });
 }
 
-function passDevReview(system: ImplementationSystem, run: OrchestrationImplementationRun) {
+function passAppReview(system: ImplementationSystem, run: OrchestrationImplementationRun) {
   return Effect.gen(function* () {
     const snapshot = yield* system.query.getSnapshot();
     const reviewingRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
-    const reviewId = reviewingRun?.devReviewIds.at(-1);
-    if (reviewId === undefined) throw new Error("Dev review missing.");
+    const reviewId = reviewingRun?.appReviewIds.at(-1);
+    if (reviewId === undefined) throw new Error("App review missing.");
     yield* system.engine.dispatch({
-      type: "thread.dev-review.update",
-      commandId: commandId(`dev-review-pass-${reviewId}`),
+      type: "thread.app-review.update",
+      commandId: commandId(`app-review-pass-${reviewId}`),
       threadId: run.orchestratorThreadId,
-      reviewId: DevReviewId.make(reviewId),
+      reviewId: AppReviewId.make(reviewId),
       status: "passed",
       updatedAt: "2026-01-01T00:00:03.000Z",
       createdAt: "2026-01-01T00:00:03.000Z",
@@ -844,7 +844,7 @@ function passDevReview(system: ImplementationSystem, run: OrchestrationImplement
   });
 }
 
-function failDevReview(
+function failAppReview(
   system: ImplementationSystem,
   run: OrchestrationImplementationRun,
   status: "failed" | "blocked" = "failed",
@@ -852,13 +852,13 @@ function failDevReview(
   return Effect.gen(function* () {
     const snapshot = yield* system.query.getSnapshot();
     const reviewingRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
-    const reviewId = reviewingRun?.devReviewIds.at(-1);
-    if (reviewId === undefined) throw new Error("Dev review missing.");
+    const reviewId = reviewingRun?.appReviewIds.at(-1);
+    if (reviewId === undefined) throw new Error("App review missing.");
     yield* system.engine.dispatch({
-      type: "thread.dev-review.update",
-      commandId: commandId(`dev-review-${status}-${reviewId}`),
+      type: "thread.app-review.update",
+      commandId: commandId(`app-review-${status}-${reviewId}`),
       threadId: run.orchestratorThreadId,
-      reviewId: DevReviewId.make(reviewId),
+      reviewId: AppReviewId.make(reviewId),
       status,
       updatedAt: "2026-01-01T00:00:03.000Z",
       createdAt: "2026-01-01T00:00:03.000Z",
@@ -892,7 +892,7 @@ function appendBrowserFixResult(
           runId: input.run.id,
           status: "succeeded",
           validations: input.validations,
-          notesMarkdown: "Applied Browser Dev Review findings.",
+          notesMarkdown: "Applied Browser App Review findings.",
         },
         turnId: null,
         createdAt: "2026-01-01T00:00:04.000Z",
@@ -1060,7 +1060,7 @@ function launchFastFeatureRun(system: ImplementationSystem) {
     const snapshot = yield* system.query.getSnapshot();
     const run = snapshot.implementationRuns[0];
     if (!run) throw new Error("Fast feature run missing.");
-    const legacyRun = { ...run, devReviewStrategy: "legacy-inline" as const };
+    const legacyRun = { ...run, appReviewStrategy: "legacy-inline" as const };
     yield* system.engine.dispatch({
       type: "thread.implementation-run.update",
       commandId: commandId("fast-feature-mark-legacy-inline"),
@@ -1107,9 +1107,9 @@ function launchFastFeatureNestedReview(system: ImplementationSystem) {
     });
     yield* system.reactor.drain;
     snapshot = yield* system.query.getSnapshot();
-    const nestedRun = snapshot.devReviewWorkflowRuns?.[0];
+    const nestedRun = snapshot.appReviewWorkflowRuns?.[0];
     const currentRun = snapshot.implementationRuns[0];
-    if (!nestedRun || !currentRun) throw new Error("Nested Dev Review did not launch.");
+    if (!nestedRun || !currentRun) throw new Error("Nested App Review did not launch.");
     return { run: currentRun, nestedRun };
   });
 }
@@ -1135,16 +1135,16 @@ describe("ImplementationWorkflowReactor", () => {
         const { run } = yield* launchRun(system);
         const reviewedRun: OrchestrationImplementationRun = {
           ...run,
-          devReviewedHeadSha: "reviewed-head",
+          appReviewedHeadSha: "reviewed-head",
           codeReviewedHeadSha: "code-reviewed-head",
         };
 
-        expect(codeReviewNeedsFreshDevReview(reviewedRun, "new-head")).toBe(true);
-        expect(codeReviewNeedsFreshDevReview(reviewedRun, "reviewed-head")).toBe(false);
-        expect(passedDevReviewContinuation(reviewedRun, "code-reviewed-head")).toBe(
+        expect(codeReviewNeedsFreshAppReview(reviewedRun, "new-head")).toBe(true);
+        expect(codeReviewNeedsFreshAppReview(reviewedRun, "reviewed-head")).toBe(false);
+        expect(passedAppReviewContinuation(reviewedRun, "code-reviewed-head")).toBe(
           "final-validation",
         );
-        expect(passedDevReviewContinuation(reviewedRun, "other-head")).toBe("code-review");
+        expect(passedAppReviewContinuation(reviewedRun, "other-head")).toBe("code-review");
       }),
     ),
   );
@@ -1172,14 +1172,14 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("composes new Fast Feature runs through a distinct nested Dev Review workflow", () =>
+  it.effect("composes new Fast Feature runs through a distinct nested App Review workflow", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         const { run, nestedRun } = yield* launchFastFeatureNestedReview(system);
         const snapshot = yield* system.query.getSnapshot();
 
-        expect(run.devReviewStrategy).toBe("nested-workflow");
-        expect(run.devReviewWorkflowRunIds).toEqual([nestedRun.id]);
+        expect(run.appReviewStrategy).toBe("nested-workflow");
+        expect(run.appReviewWorkflowRunIds).toEqual([nestedRun.id]);
         expect(nestedRun.caller).toEqual({
           type: "implementation",
           implementationRunId: run.id,
@@ -1190,7 +1190,7 @@ describe("ImplementationWorkflowReactor", () => {
           (thread) => thread.workflowRole === "fast-feature-implementer",
         );
         const reviewController = snapshot.threads.find(
-          (thread) => thread.workflowRole === "dev-review-orchestrator",
+          (thread) => thread.workflowRole === "app-review-orchestrator",
         );
         expect(source?.workflowContext).toMatchObject({
           workflowId: `workflow-${sourceThreadId}`,
@@ -1217,13 +1217,13 @@ describe("ImplementationWorkflowReactor", () => {
           Effect.gen(function* () {
             const { run, nestedRun } = yield* launchFastFeatureNestedReview(system);
             yield* system.engine.dispatch({
-              type: "thread.dev-review-workflow.update",
+              type: "thread.app-review-workflow.update",
               commandId: commandId(`nested-${outcome}`),
               threadId: nestedRun.controllerThreadId,
               run: {
                 ...nestedRun,
                 status: outcome,
-                attemptsUsed: outcome === "passed" ? 1 : nestedRun.cycleBudget,
+                cyclesUsed: outcome === "passed" ? 1 : nestedRun.cycleBudget,
                 activePhase: null,
                 activeThreadId: null,
                 outcome,
@@ -1239,7 +1239,7 @@ describe("ImplementationWorkflowReactor", () => {
             const updated = snapshot.implementationRuns.find(
               (candidate) => candidate.id === run.id,
             );
-            expect(updated?.latestDevReviewWorkflowOutcome).toBe(outcome);
+            expect(updated?.latestAppReviewWorkflowOutcome).toBe(outcome);
             expect(updated?.status).toBe("code-reviewing");
             expect(
               snapshot.threads.some(
@@ -1247,7 +1247,7 @@ describe("ImplementationWorkflowReactor", () => {
               ),
             ).toBe(true);
             if (outcome === "exhausted") {
-              expect(updated?.qaExhaustionReason).toBe("dev-review");
+              expect(updated?.qaExhaustionReason).toBe("app-review");
             }
           }),
         ),
@@ -1256,19 +1256,19 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("tries to unblock Dev Review three times before requiring a human", () =>
+  it.effect("tries to unblock App Review three times before requiring a human", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         const { run, nestedRun: firstNestedRun } = yield* launchFastFeatureNestedReview(system);
         let nestedRun = firstNestedRun;
         for (
           let attempt = 1;
-          attempt <= IMPLEMENTATION_RUN_MAX_DEV_REVIEW_UNBLOCK_ATTEMPTS;
+          attempt <= IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS;
           attempt += 1
         ) {
           const occurredAt = `2026-01-01T00:00:0${attempt + 2}.000Z`;
           yield* system.engine.dispatch({
-            type: "thread.dev-review-workflow.update",
+            type: "thread.app-review-workflow.update",
             commandId: commandId(`nested-blocked-${attempt}`),
             threadId: nestedRun.controllerThreadId,
             run: {
@@ -1296,21 +1296,21 @@ describe("ImplementationWorkflowReactor", () => {
             (candidate) => candidate.id === run.id,
           );
           expect(recovering?.status).toBe("qa-reviewing");
-          expect(recovering?.devReviewUnblockAttemptCount).toBe(attempt);
+          expect(recovering?.appReviewUnblockAttemptCount).toBe(attempt);
           expect(recovering?.retryableFailure).toBeNull();
-          const nextNestedRunId = recovering?.devReviewWorkflowRunIds.at(-1);
-          const nextNestedRun = (snapshot.devReviewWorkflowRuns ?? []).find(
+          const nextNestedRunId = recovering?.appReviewWorkflowRunIds.at(-1);
+          const nextNestedRun = (snapshot.appReviewWorkflowRuns ?? []).find(
             (candidate) => candidate.id === nextNestedRunId,
           );
           if (!nextNestedRun || nextNestedRun.status !== "running") {
-            throw new Error(`Automatic unblock attempt ${attempt} did not launch Dev Review.`);
+            throw new Error(`Automatic unblock attempt ${attempt} did not launch App Review.`);
           }
           nestedRun = nextNestedRun;
         }
 
         const gateAt = "2026-01-01T00:00:06.000Z";
         yield* system.engine.dispatch({
-          type: "thread.dev-review-workflow.update",
+          type: "thread.app-review-workflow.update",
           commandId: commandId("nested-blocked-human-gate"),
           threadId: nestedRun.controllerThreadId,
           run: {
@@ -1337,12 +1337,12 @@ describe("ImplementationWorkflowReactor", () => {
           (candidate) => candidate.id === run.id,
         );
         expect(updated?.status).toBe("needs-human-attention");
-        expect(updated?.latestDevReviewWorkflowOutcome).toBe("blocked");
-        expect(updated?.devReviewUnblockAttemptCount).toBe(
-          IMPLEMENTATION_RUN_MAX_DEV_REVIEW_UNBLOCK_ATTEMPTS,
+        expect(updated?.latestAppReviewWorkflowOutcome).toBe("blocked");
+        expect(updated?.appReviewUnblockAttemptCount).toBe(
+          IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS,
         );
         expect(updated?.qaCycleCount).toBe(0);
-        expect(updated?.retryableFailure?.stage).toBe("dev-review");
+        expect(updated?.retryableFailure?.stage).toBe("app-review");
         expect(updated?.retryableFailure?.humanBlocked).toBe(true);
         expect(updated?.retryableFailure?.detail).toContain(
           "remained blocked after 3 automatic unblock attempts",
@@ -1362,10 +1362,10 @@ describe("ImplementationWorkflowReactor", () => {
           (candidate) => candidate.id === run.id,
         );
         expect(resumed?.status).toBe("qa-reviewing");
-        expect(resumed?.devReviewUnblockAttemptCount).toBe(0);
+        expect(resumed?.appReviewUnblockAttemptCount).toBe(0);
         expect(resumed?.retryableFailure).toBeNull();
-        expect(resumed?.devReviewWorkflowRunIds).toHaveLength(
-          IMPLEMENTATION_RUN_MAX_DEV_REVIEW_UNBLOCK_ATTEMPTS + 2,
+        expect(resumed?.appReviewWorkflowRunIds).toHaveLength(
+          IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS + 2,
         );
       }),
     ),
@@ -1378,7 +1378,7 @@ describe("ImplementationWorkflowReactor", () => {
           const { run, nestedRun } = yield* launchFastFeatureNestedReview(system);
           const blockedAt = "2026-01-01T00:00:03.000Z";
           yield* system.engine.dispatch({
-            type: "thread.dev-review-workflow.update",
+            type: "thread.app-review-workflow.update",
             commandId: commandId("nested-backend-blocked"),
             threadId: nestedRun.controllerThreadId,
             run: {
@@ -1409,7 +1409,7 @@ describe("ImplementationWorkflowReactor", () => {
           expect(repairing?.status).toBe("fixing");
           expect(repairing?.fixOrigin).toBe("app-dev-stack");
           expect(repairing?.qaCycleCount).toBe(1);
-          expect(repairing?.devReviewUnblockAttemptCount).toBe(0);
+          expect(repairing?.appReviewUnblockAttemptCount).toBe(0);
           expect(repairing?.lastQaFailure?.status).toBe("backend-unreachable");
           expect(repairing?.lastQaFailure?.detailMarkdown).toContain("HTTP 502");
           expect(
@@ -1424,7 +1424,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("sets up Fast feature Build and starts Dev Review only after a verified result", () =>
+  it.effect("sets up Fast feature Build and starts App Review only after a verified result", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         const run = yield* launchFastFeatureRun(system);
@@ -1483,7 +1483,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("uses a fresh TDD child for Fast feature Dev Review findings", () =>
+  it.effect("uses a fresh TDD child for Fast feature App Review findings", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         const run = yield* launchFastFeatureRun(system);
@@ -1515,7 +1515,7 @@ describe("ImplementationWorkflowReactor", () => {
           createdAt: "2026-01-01T00:00:02.000Z",
         });
         yield* system.reactor.drain;
-        yield* failDevReview(system, run);
+        yield* failAppReview(system, run);
 
         snapshot = yield* system.query.getSnapshot();
         const repairingRun = snapshot.implementationRuns[0];
@@ -1523,7 +1523,7 @@ describe("ImplementationWorkflowReactor", () => {
           (thread) => thread.workflowRole === "implementation-fixer",
         );
         expect(repairingRun?.status).toBe("fixing");
-        expect(repairingRun?.fixOrigin).toBe("dev-review");
+        expect(repairingRun?.fixOrigin).toBe("app-review");
         expect(repairingRun?.qaCycleCount).toBe(1);
         expect(repair?.parentThreadId).toBe(run.orchestratorThreadId);
         expect(repair?.messages.at(-1)?.text).toContain("Orchestrated QA Repair Result");
@@ -1704,7 +1704,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("blocks Dev Review instead of reviewing a stack that is not running", () =>
+  it.effect("blocks App Review instead of reviewing a stack that is not running", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
@@ -1808,7 +1808,7 @@ describe("ImplementationWorkflowReactor", () => {
           expect(
             snapshot.threads.filter((thread) => thread.workflowRole === "implementation-validator"),
           ).toHaveLength(0);
-          expect(reviewing?.devReviewIds).toHaveLength(1);
+          expect(reviewing?.appReviewIds).toHaveLength(1);
         }),
       { failAutoCreateAttempts: 1 },
     ),
@@ -1861,7 +1861,7 @@ describe("ImplementationWorkflowReactor", () => {
           const probeUrls = yield* Ref.get(system.frontendProbeUrls);
           expect(probeUrls).toContain("http://127.0.0.1:5173");
           expect(probeUrls).toContain("http://127.0.0.1:5173/api/health");
-          // No reviewer launched, no Dev Review attempt burned.
+          // No reviewer launched, no App Review attempt burned.
           expect(
             snapshot.threads.filter(
               (thread) => thread.workflowRole === "implementation-qa-reviewer",
@@ -1912,7 +1912,7 @@ describe("ImplementationWorkflowReactor", () => {
           const reviewer = snapshot.threads.find(
             (thread) => thread.workflowRole === "implementation-qa-reviewer",
           );
-          if (!reviewer) throw new Error("Dev Review thread missing.");
+          if (!reviewer) throw new Error("App Review thread missing.");
           expect(snapshot.implementationRuns[0]?.qaAttemptCount).toBe(1);
 
           // The reviewer completed without terminally updating its canonical record.
@@ -2037,18 +2037,18 @@ describe("ImplementationWorkflowReactor", () => {
 
         let snapshot = yield* system.query.getSnapshot();
         const reviewingRun = snapshot.implementationRuns[0];
-        const canonicalReviewId = reviewingRun?.devReviewIds[0];
+        const canonicalReviewId = reviewingRun?.appReviewIds[0];
         const canonicalReviewer = snapshot.threads.find(
           (thread) => thread.workflowRole === "implementation-qa-reviewer",
         );
         if (!reviewingRun || canonicalReviewId === undefined || !canonicalReviewer) {
-          throw new Error("Canonical Dev Review missing.");
+          throw new Error("Canonical App Review missing.");
         }
 
-        const nestedReviewId = DevReviewId.make("dev-review-legacy-nested");
-        const nestedReviewerId = ThreadId.make("thread-dev-review-legacy-nested");
+        const nestedReviewId = AppReviewId.make("app-review-legacy-nested");
+        const nestedReviewerId = ThreadId.make("thread-app-review-legacy-nested");
         yield* system.engine.dispatch({
-          type: "thread.dev-review.launch",
+          type: "thread.app-review.launch",
           commandId: commandId("legacy-nested-review-launch"),
           sourceThreadId: canonicalReviewer.id,
           reviewThreadId: nestedReviewerId,
@@ -2061,7 +2061,7 @@ describe("ImplementationWorkflowReactor", () => {
           },
           modelSelection: canonicalReviewer.modelSelection,
           runtimeMode: "full-access",
-          workflowPromptId: "implementation.browser-dev-review.codex",
+          workflowPromptId: "implementation.browser-app-review.codex",
           createdAt: "2026-01-01T00:00:03.000Z",
         });
         const nestedEvidence = {
@@ -2077,7 +2077,7 @@ describe("ImplementationWorkflowReactor", () => {
           screenshots: [],
         };
         yield* system.engine.dispatch({
-          type: "thread.dev-review.evidence.update",
+          type: "thread.app-review.evidence.update",
           commandId: commandId("legacy-nested-review-evidence"),
           threadId: canonicalReviewer.id,
           reviewId: nestedReviewId,
@@ -2086,7 +2086,7 @@ describe("ImplementationWorkflowReactor", () => {
           createdAt: "2026-01-01T00:00:04.000Z",
         });
         yield* system.engine.dispatch({
-          type: "thread.dev-review.update",
+          type: "thread.app-review.update",
           commandId: commandId("legacy-nested-review-blocked"),
           threadId: canonicalReviewer.id,
           reviewId: nestedReviewId,
@@ -2103,10 +2103,10 @@ describe("ImplementationWorkflowReactor", () => {
           createdAt: "2026-01-01T00:00:04.000Z",
         });
 
-        const laterReviewId = DevReviewId.make("dev-review-later-terminal");
-        const laterReviewerId = ThreadId.make("thread-dev-review-later-terminal");
+        const laterReviewId = AppReviewId.make("app-review-later-terminal");
+        const laterReviewerId = ThreadId.make("thread-app-review-later-terminal");
         yield* system.engine.dispatch({
-          type: "thread.dev-review.launch",
+          type: "thread.app-review.launch",
           commandId: commandId("later-terminal-review-launch"),
           sourceThreadId: run.orchestratorThreadId,
           reviewThreadId: laterReviewerId,
@@ -2119,11 +2119,11 @@ describe("ImplementationWorkflowReactor", () => {
           },
           modelSelection: canonicalReviewer.modelSelection,
           runtimeMode: "full-access",
-          workflowPromptId: "implementation.browser-dev-review.codex",
+          workflowPromptId: "implementation.browser-app-review.codex",
           createdAt: "2026-01-01T00:00:05.000Z",
         });
         yield* system.engine.dispatch({
-          type: "thread.dev-review.update",
+          type: "thread.app-review.update",
           commandId: commandId("later-terminal-review-failed"),
           threadId: run.orchestratorThreadId,
           reviewId: laterReviewId,
@@ -2137,7 +2137,7 @@ describe("ImplementationWorkflowReactor", () => {
           threadId: sourceThreadId,
           run: {
             ...reviewingRun,
-            devReviewIds: [...reviewingRun.devReviewIds, laterReviewId],
+            appReviewIds: [...reviewingRun.appReviewIds, laterReviewId],
             updatedAt: "2026-01-01T00:00:06.000Z",
           },
           createdAt: "2026-01-01T00:00:06.000Z",
@@ -2165,13 +2165,13 @@ describe("ImplementationWorkflowReactor", () => {
         const orchestrator = snapshot.threads.find(
           (thread) => thread.id === run.orchestratorThreadId,
         );
-        const canonicalReview = orchestrator?.devReviews.find(
+        const canonicalReview = orchestrator?.appReviews.find(
           (review) => review.id === canonicalReviewId,
         );
         expect(canonicalReview?.status).toBe("blocked");
         expect(canonicalReview?.document.summary).toContain("mailbox fixtures");
         expect(canonicalReview?.evidence).toEqual(nestedEvidence);
-        expect(orchestrator?.devReviews.find((review) => review.id === laterReviewId)?.status).toBe(
+        expect(orchestrator?.appReviews.find((review) => review.id === laterReviewId)?.status).toBe(
           "failed",
         );
       }),
@@ -2209,7 +2209,7 @@ describe("ImplementationWorkflowReactor", () => {
             threadId: sourceThreadId,
             run: {
               ...run,
-              devReviewStrategy: "legacy-inline",
+              appReviewStrategy: "legacy-inline",
               status: "needs-human-attention",
               retryableFailure: {
                 stage: "build",
@@ -2275,8 +2275,8 @@ describe("ImplementationWorkflowReactor", () => {
               status: "needs-human-attention",
               fastBuildResult: null,
               retryableFailure: {
-                stage: "dev-review",
-                detail: "Dev Review could not run.",
+                stage: "app-review",
+                detail: "App Review could not run.",
                 failedAt: "2026-01-01T00:00:02.000Z",
                 attemptCount: 3,
                 maxAttempts: 3,
@@ -2547,7 +2547,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("requires and probes the inherited stack after Build before Browser Dev Review", () =>
+  it.effect("requires and probes the inherited stack after Build before Browser App Review", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
@@ -2699,7 +2699,7 @@ describe("ImplementationWorkflowReactor", () => {
           expect(repairing?.status).toBe("fixing");
           expect(repairing?.fixOrigin).toBe("app-dev-stack");
           expect(repairing?.qaCycleCount).toBe(1);
-          expect(repairing?.devReviewIds).toHaveLength(0);
+          expect(repairing?.appReviewIds).toHaveLength(0);
           const repair = afterFailure.threads.find(
             (thread) => thread.workflowRole === "implementation-fixer",
           );
@@ -3213,7 +3213,7 @@ describe("ImplementationWorkflowReactor", () => {
             "Programmatic integration stopped",
           );
           expect(validators[0]?.messages.at(-1)?.text).toContain(
-            "integration gate before Dev Review and Code Review",
+            "integration gate before App Review and Code Review",
           );
           expect(snapshot.implementationRuns[0]?.activeValidationKind).toBe("integration");
 
@@ -3331,7 +3331,7 @@ describe("ImplementationWorkflowReactor", () => {
           "its workflow-owned AppDevStack was created during workspace bootstrap and is reused here",
         );
         expect(validator?.messages.at(-1)?.text).toContain(
-          "integration gate before Dev Review and Code Review",
+          "integration gate before App Review and Code Review",
         );
 
         yield* system.engine.dispatch({
@@ -3361,17 +3361,17 @@ describe("ImplementationWorkflowReactor", () => {
         const autoCreateInputs = yield* Ref.get(system.autoCreateInputs);
         expect(autoCreateInputs).toHaveLength(1);
         expect(reviewingRun?.status).toBe("qa-reviewing");
-        expect(reviewingRun?.devReviewIds).toHaveLength(1);
+        expect(reviewingRun?.appReviewIds).toHaveLength(1);
         const reviewThread = snapshot.threads.find(
           (thread) => thread.workflowRole === "implementation-qa-reviewer",
         );
         expect(reviewThread?.messages.at(-1)?.text).toContain("Feature URL: http://127.0.0.1:5173");
 
         yield* system.engine.dispatch({
-          type: "thread.dev-review.update",
-          commandId: commandId("dev-review-pass"),
+          type: "thread.app-review.update",
+          commandId: commandId("app-review-pass"),
           threadId: run.orchestratorThreadId,
-          reviewId: DevReviewId.make(reviewingRun!.devReviewIds[0]!),
+          reviewId: AppReviewId.make(reviewingRun!.appReviewIds[0]!),
           status: "passed",
           updatedAt: "2026-01-01T00:00:03.000Z",
           createdAt: "2026-01-01T00:00:03.000Z",
@@ -3508,7 +3508,7 @@ describe("ImplementationWorkflowReactor", () => {
           expect(reviewingRun?.status).toBe("fixing");
           expect(reviewingRun?.fixOrigin).toBe("app-dev-stack");
           expect(reviewingRun?.qaCycleCount).toBe(1);
-          expect(reviewingRun?.devReviewIds).toHaveLength(0);
+          expect(reviewingRun?.appReviewIds).toHaveLength(0);
           const orchestrator = snapshot.threads.find(
             (thread) => thread.id === run.orchestratorThreadId,
           );
@@ -3538,7 +3538,7 @@ describe("ImplementationWorkflowReactor", () => {
         const { run } = yield* launchRun(system);
         yield* appendWorkerResult(system, { run, status: "succeeded" });
         yield* passMergeGate(system, run);
-        yield* passDevReview(system, run);
+        yield* passAppReview(system, run);
         const reviewer = yield* nextThreadForRole(
           system,
           "implementation-code-reviewer",
@@ -3664,7 +3664,7 @@ describe("ImplementationWorkflowReactor", () => {
           },
           createdAt: "2026-01-01T00:00:02.500Z",
         });
-        yield* passDevReview(system, run);
+        yield* passAppReview(system, run);
 
         const reviewer = yield* nextThreadForRole(
           system,
@@ -3710,19 +3710,19 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("starts the next Dev Review directly after a fresh TDD browser repair", () =>
+  it.effect("starts the next App Review directly after a fresh TDD browser repair", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         const { run } = yield* launchRun(system);
         yield* appendWorkerResult(system, { run, status: "succeeded" });
         yield* passMergeGate(system, run);
-        yield* failDevReview(system, run);
+        yield* failAppReview(system, run);
         yield* appendBrowserFixResult(system, { run, validations: requiredValidations() });
 
         const snapshot = yield* system.query.getSnapshot();
         const updated = snapshot.implementationRuns.find((candidate) => candidate.id === run.id);
         expect(updated?.status).toBe("qa-reviewing");
-        expect(updated?.devReviewIds).toHaveLength(2);
+        expect(updated?.appReviewIds).toHaveLength(2);
         expect(updated?.mergeGateAttemptCount).toBe(1);
         expect(
           snapshot.threads.filter((thread) => thread.workflowRole === "implementation-validator"),
@@ -3738,18 +3738,18 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("routes a blocked Dev Review through a fresh TDD repair thread", () =>
+  it.effect("routes a blocked App Review through a fresh TDD repair thread", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         const { run } = yield* launchRun(system);
         yield* appendWorkerResult(system, { run, status: "succeeded" });
         yield* passMergeGate(system, run);
-        yield* failDevReview(system, run, "blocked");
+        yield* failAppReview(system, run, "blocked");
 
         const snapshot = yield* system.query.getSnapshot();
         const repairing = snapshot.implementationRuns.find((entry) => entry.id === run.id);
         expect(repairing?.status).toBe("fixing");
-        expect(repairing?.fixOrigin).toBe("dev-review");
+        expect(repairing?.fixOrigin).toBe("app-review");
         expect(repairing?.lastQaFailure?.status).toBe("blocked");
         expect(repairing?.qaCycleCount).toBe(1);
         expect(
@@ -3758,8 +3758,8 @@ describe("ImplementationWorkflowReactor", () => {
         const fixer = snapshot.threads.find(
           (thread) => thread.workflowRole === "implementation-fixer",
         );
-        expect(fixer?.messages.at(-1)?.text).toContain("Retrieve Dev Review");
-        expect(fixer?.messages.at(-1)?.text).toContain("workflow_dev_review_get");
+        expect(fixer?.messages.at(-1)?.text).toContain("Retrieve App Review");
+        expect(fixer?.messages.at(-1)?.text).toContain("workflow_app_review_get");
         expect(fixer?.messages.at(-1)?.text).toContain("focused red-green TDD loop");
       }),
     ),
@@ -3773,7 +3773,7 @@ describe("ImplementationWorkflowReactor", () => {
           const { run } = yield* launchRun(system);
           yield* appendWorkerResult(system, { run, status: "succeeded" });
           yield* passMergeGate(system, run);
-          yield* failDevReview(system, run);
+          yield* failAppReview(system, run);
           yield* appendBrowserFixResult(system, { run, validations: [] });
 
           const snapshot = yield* system.query.getSnapshot();
@@ -3781,7 +3781,7 @@ describe("ImplementationWorkflowReactor", () => {
           expect(updated?.status).toBe("fixing");
           expect(updated?.retryableFailure).toBeNull();
           expect(updated?.qaCycleCount).toBe(2);
-          expect(updated?.devReviewIds).toHaveLength(1);
+          expect(updated?.appReviewIds).toHaveLength(1);
           expect(
             snapshot.threads.filter((thread) => thread.workflowRole === "implementation-validator"),
           ).toHaveLength(1);
@@ -3798,7 +3798,7 @@ describe("ImplementationWorkflowReactor", () => {
         const { run } = yield* launchRun(system);
         yield* appendWorkerResult(system, { run, status: "succeeded" });
         yield* passMergeGate(system, run);
-        yield* failDevReview(system, run);
+        yield* failAppReview(system, run);
 
         let snapshot = yield* system.query.getSnapshot();
         const firstFixer = snapshot.threads.find(
@@ -3848,7 +3848,7 @@ describe("ImplementationWorkflowReactor", () => {
         const { run } = yield* launchRun(system);
         yield* appendWorkerResult(system, { run, status: "succeeded" });
         yield* passMergeGate(system, run);
-        yield* failDevReview(system, run);
+        yield* failAppReview(system, run);
 
         let snapshot = yield* system.query.getSnapshot();
         const fixingRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
@@ -3905,7 +3905,7 @@ describe("ImplementationWorkflowReactor", () => {
         const { run } = yield* launchRun(system);
         yield* appendWorkerResult(system, { run, status: "succeeded" });
         yield* passMergeGate(system, run);
-        yield* failDevReview(system, run, "blocked");
+        yield* failAppReview(system, run, "blocked");
 
         for (let index = 2; index <= 24; index += 1) {
           yield* system.engine.dispatch({
@@ -3916,7 +3916,7 @@ describe("ImplementationWorkflowReactor", () => {
             ownerUserId: DEFAULT_WORKSPACE_USER_ID,
             parentThreadId: run.orchestratorThreadId,
             workflowRole: "implementation-fixer",
-            title: `TDD repair ${Math.min(index, 10)}/10 · Dev Review`,
+            title: `TDD repair ${Math.min(index, 10)}/10 · App Review`,
             modelSelection: {
               instanceId: ProviderInstanceId.make("codex"),
               model: "gpt-5.6-sol",
@@ -3949,7 +3949,7 @@ describe("ImplementationWorkflowReactor", () => {
         const { run } = yield* launchRun(system);
         yield* appendWorkerResult(system, { run, status: "succeeded" });
         yield* passMergeGate(system, run);
-        yield* failDevReview(system, run);
+        yield* failAppReview(system, run);
 
         for (let repair = 1; repair <= IMPLEMENTATION_RUN_MAX_QA_REPAIRS; repair += 1) {
           const snapshot = yield* system.query.getSnapshot();
@@ -3994,7 +3994,7 @@ describe("ImplementationWorkflowReactor", () => {
         expect(fixers.map((thread) => thread.title)).toEqual(
           Array.from(
             { length: IMPLEMENTATION_RUN_MAX_QA_REPAIRS },
-            (_, index) => `TDD repair ${index + 1}/10 · Dev Review`,
+            (_, index) => `TDD repair ${index + 1}/10 · App Review`,
           ),
         );
       }),
@@ -4021,7 +4021,7 @@ describe("ImplementationWorkflowReactor", () => {
           },
           createdAt: "2026-01-01T00:00:03.000Z",
         });
-        yield* failDevReview(system, run, "blocked");
+        yield* failAppReview(system, run, "blocked");
 
         snapshot = yield* system.query.getSnapshot();
         const exhausted = snapshot.implementationRuns.find((entry) => entry.id === run.id);
@@ -4057,10 +4057,10 @@ describe("ImplementationWorkflowReactor", () => {
             orchestratorBranch: "implementation/unexpected",
             qaCycleCount: IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
             qaExhaustedAt: "2026-01-01T00:00:03.000Z",
-            devReviewExhaustedAt: "2026-01-01T00:00:03.000Z",
+            appReviewExhaustedAt: "2026-01-01T00:00:03.000Z",
             validatedHeadSha: null,
             retryableFailure: {
-              stage: "dev-review",
+              stage: "app-review",
               detail: "Legacy exhausted run needs validation.",
               failedAt: "2026-01-01T00:00:03.000Z",
               attemptCount: 1,
@@ -4083,7 +4083,7 @@ describe("ImplementationWorkflowReactor", () => {
         const recoveredSnapshot = yield* system.query.getSnapshot();
         const blocked = recoveredSnapshot.implementationRuns.find((entry) => entry.id === run.id);
         expect(blocked?.status).toBe("needs-human-attention");
-        expect(blocked?.retryableFailure?.stage).toBe("dev-review");
+        expect(blocked?.retryableFailure?.stage).toBe("app-review");
         expect(blocked?.retryableFailure?.humanBlocked).toBe(true);
         expect(blocked?.codeReviewAttemptCount).toBe(0);
         const orchestrator = recoveredSnapshot.threads.find(
@@ -4115,14 +4115,14 @@ describe("ImplementationWorkflowReactor", () => {
           run: { ...reviewingRun, qaCycleCount: IMPLEMENTATION_RUN_MAX_QA_REPAIRS },
           createdAt: "2026-01-01T00:00:03.000Z",
         });
-        yield* failDevReview(system, run);
+        yield* failAppReview(system, run);
 
         snapshot = yield* system.query.getSnapshot();
         const exhausted = snapshot.implementationRuns.find((entry) => entry.id === run.id);
-        // The unpassed dev review is recorded, but the run proceeds instead of blocking.
-        expect(exhausted?.devReviewExhaustedAt).not.toBeNull();
+        // The unpassed app review is recorded, but the run proceeds instead of blocking.
+        expect(exhausted?.appReviewExhaustedAt).not.toBeNull();
         expect(exhausted?.qaExhaustedAt).not.toBeNull();
-        expect(exhausted?.qaExhaustionReason).toBe("dev-review");
+        expect(exhausted?.qaExhaustionReason).toBe("app-review");
         expect(exhausted?.status).toBe("code-reviewing");
         expect(exhausted?.retryableFailure).toBeNull();
         expect(
@@ -4137,7 +4137,7 @@ describe("ImplementationWorkflowReactor", () => {
         );
         expect(exhaustedActivity?.tone).toBe("error");
 
-        // Publication still happens, and the change request records the unpassed dev review.
+        // Publication still happens, and the change request records the unpassed app review.
         const reviewer = yield* nextThreadForRole(
           system,
           "implementation-code-reviewer",
@@ -4147,7 +4147,7 @@ describe("ImplementationWorkflowReactor", () => {
           run,
           threadId: reviewer.id,
           status: "clean",
-          tag: "after-exhausted-dev-review",
+          tag: "after-exhausted-app-review",
         });
         yield* passFinalGate(system, run);
 
@@ -4222,8 +4222,8 @@ describe("ImplementationWorkflowReactor", () => {
           expect(exhausted?.qaCycleCount).toBe(IMPLEMENTATION_RUN_MAX_QA_REPAIRS);
           expect(exhausted?.qaExhaustedAt).not.toBeNull();
           expect(exhausted?.qaExhaustionReason).toBe("app-dev-stack");
-          expect(exhausted?.devReviewExhaustedAt).toBeNull();
-          expect(exhausted?.devReviewIds).toHaveLength(0);
+          expect(exhausted?.appReviewExhaustedAt).toBeNull();
+          expect(exhausted?.appReviewIds).toHaveLength(0);
           expect(
             snapshot.threads.filter((thread) => thread.workflowRole === "implementation-fixer"),
           ).toHaveLength(1);
@@ -4257,7 +4257,7 @@ describe("ImplementationWorkflowReactor", () => {
         const { run } = yield* launchRun(system);
         yield* appendWorkerResult(system, { run, status: "succeeded" });
         yield* passMergeGate(system, run);
-        yield* passDevReview(system, run);
+        yield* passAppReview(system, run);
 
         const seenReviewers = new Set<string>();
         const reviewer = yield* nextThreadForRole(
@@ -4300,7 +4300,7 @@ describe("ImplementationWorkflowReactor", () => {
         const { run } = yield* launchRun(system);
         yield* appendWorkerResult(system, { run, status: "succeeded" });
         yield* passMergeGate(system, run);
-        yield* passDevReview(system, run);
+        yield* passAppReview(system, run);
 
         const seenReviewers = new Set<string>();
         const reviewer = yield* nextThreadForRole(
@@ -4325,7 +4325,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("hardlocks the browser dev review thread to codex gpt-5.6-sol at high effort", () =>
+  it.effect("hardlocks the browser app review thread to codex gpt-5.6-sol at high effort", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         const { run } = yield* launchRun(system, { modelSelection: claudeParentSelection });

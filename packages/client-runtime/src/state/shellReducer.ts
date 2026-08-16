@@ -51,14 +51,14 @@ export function applyShellStreamEvent(
         snapshotSequence: event.sequence,
       };
     }
-    case "dev-review-workflow-run-upserted": {
-      const devReviewWorkflowRuns = snapshot.devReviewWorkflowRuns ?? [];
-      const nextRuns = devReviewWorkflowRuns.some((run) => run.id === event.run.id)
-        ? Arr.map(devReviewWorkflowRuns, (run) => (run.id === event.run.id ? event.run : run))
-        : Arr.append(devReviewWorkflowRuns, event.run);
+    case "app-review-workflow-run-upserted": {
+      const appReviewWorkflowRuns = snapshot.appReviewWorkflowRuns ?? [];
+      const nextRuns = appReviewWorkflowRuns.some((run) => run.id === event.run.id)
+        ? Arr.map(appReviewWorkflowRuns, (run) => (run.id === event.run.id ? event.run : run))
+        : Arr.append(appReviewWorkflowRuns, event.run);
       return {
         ...snapshot,
-        devReviewWorkflowRuns: nextRuns,
+        appReviewWorkflowRuns: nextRuns,
         snapshotSequence: event.sequence,
       };
     }

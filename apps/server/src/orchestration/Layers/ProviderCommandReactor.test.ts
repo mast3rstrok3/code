@@ -591,11 +591,11 @@ describe("ProviderCommandReactor", () => {
           message: {
             messageId: asMessageId("user-message-workflow-prompt"),
             role: "user",
-            text: "run browser dev review",
+            text: "run browser app review",
             attachments: [],
           },
           interactionMode: "implementation-workflow",
-          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
+          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
           runtimeMode: "full-access",
           createdAt: now,
         });
@@ -603,11 +603,11 @@ describe("ProviderCommandReactor", () => {
         yield* Effect.promise(() => waitFor(() => harness.startSession.mock.calls.length === 1));
         yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
         expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
-          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
+          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
         });
         expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserDevReviewCodex,
+          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
         });
       }),
   );

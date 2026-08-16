@@ -3,38 +3,18 @@ import {
   BookOpenIcon,
   ChevronRightIcon,
   FileTextIcon,
+  HammerIcon,
   Loader2Icon,
   SparklesIcon,
   WorkflowIcon,
 } from "lucide-react";
-import type { WorkflowCatalog } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
 
-import { usePrimaryEnvironment } from "../../state/environments";
-import { useEnvironmentQuery } from "../../state/query";
-import { serverEnvironment } from "../../state/server";
+import { type WorkflowCatalogState, useWorkflowCatalog } from "../../workflowCatalogState";
 import { Badge } from "../ui/badge";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { WorkflowCatalogContent } from "./WorkflowCatalogContent";
-
-type CatalogState =
-  | { readonly status: "loading" }
-  | { readonly status: "loaded"; readonly catalog: WorkflowCatalog }
-  | { readonly status: "error"; readonly message: string };
-
-function useWorkflowCatalog(): CatalogState {
-  const environmentId = usePrimaryEnvironment()?.environmentId ?? null;
-  const query = useEnvironmentQuery(
-    environmentId === null ? null : serverEnvironment.workflowCatalog({ environmentId, input: {} }),
-  );
-  if (environmentId === null) {
-    return { status: "error", message: "No primary server environment is connected." };
-  }
-  if (query.error !== null) return { status: "error", message: query.error };
-  if (query.data !== null) return { status: "loaded", catalog: query.data };
-  return { status: "loading" };
-}
 
 function PageIntro({ title, description }: { title: string; description: string }) {
   return (
@@ -58,7 +38,7 @@ function PageIntro({ title, description }: { title: string; description: string 
   );
 }
 
-function CatalogBoundary({ state, noun }: { state: CatalogState; noun: string }) {
+function CatalogBoundary({ state, noun }: { state: WorkflowCatalogState; noun: string }) {
   if (state.status === "loaded") return null;
   return (
     <SettingsSection title={noun}>
@@ -153,13 +133,6 @@ export function WorkflowSettings() {
   );
 }
 
-const GROUP_TITLES = {
-  shared: "Shared",
-  product: "Product Intent",
-  planning: "Planning",
-  implementation: "Implementation",
-} as const;
-
 export function resolveCatalogFocusId(
   requestedId: string | undefined,
   availableIds: readonly string[],
@@ -180,96 +153,86 @@ export function SkillSettings({ focusedSkillId }: { focusedSkillId: string | und
     <SettingsPageContainer>
       <PageIntro
         title="Skills"
-        description="Focused instructions loaded when a workflow runs a particular step."
+        description="Engineering skills available in Build mode and the guided workflows that use them."
       />
       <CatalogBoundary state={state} noun="Skills" />
-      {state.status === "loaded"
-        ? (Object.keys(GROUP_TITLES) as Array<keyof typeof GROUP_TITLES>).map((group) => {
-            const skills = state.catalog.skills
-              .filter((skill) => skill.workflow === group)
-              .toSorted((a, b) => a.order - b.order || a.id.localeCompare(b.id));
-            return skills.length === 0 ? null : (
-              <SettingsSection
-                key={group}
-                title={GROUP_TITLES[group]}
-                icon={<SparklesIcon className="size-3.5" />}
-              >
-                {skills.map((skill) => (
-                  <FocusedRow key={skill.id} focused={validFocusedId === skill.id}>
-                    <SettingsRow
-                      title={skill.title}
-                      description={skill.description}
-                      status={
-                        <span className="flex flex-wrap gap-x-3">
-                          <span>
-                            Role <code className="font-mono">{skill.role}</code>
-                          </span>
-                          <span>
-                            Stage <code className="font-mono">{skill.stage}</code>
-                          </span>
-                          <span>
-                            ID <code className="font-mono">{skill.id}</code>
-                          </span>
-                        </span>
-                      }
-                    >
-                      {skill.workflowIds.length > 0 ? (
-                        <div className="flex flex-wrap items-center gap-1.5 border-t border-border/60 py-2">
-                          <span className="mr-1 text-xs text-muted-foreground">Used in</span>
-                          {skill.workflowIds.map((workflowId) => {
-                            const workflow = state.catalog.workflows.find(
-                              (candidate) => candidate.id === workflowId,
-                            );
-                            return (
-                              <Badge key={workflowId} variant="secondary" size="sm">
-                                <WorkflowIcon />
-                                {workflow?.title ?? workflowId}
-                              </Badge>
-                            );
-                          })}
-                        </div>
-                      ) : null}
-                      {skill.docIds.length > 0 ? (
-                        <div className="flex flex-wrap gap-2 border-t border-border/60 py-2">
-                          {skill.docIds.map((docId) => {
-                            const doc = state.catalog.docs.find(
-                              (candidate) => candidate.id === docId,
-                            );
-                            return (
-                              <Link
-                                key={docId}
-                                to="/settings/docs"
-                                search={{ doc: docId }}
-                                className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-                              >
-                                <FileTextIcon className="size-3" />
-                                {doc?.title ?? docId}
-                              </Link>
-                            );
-                          })}
-                        </div>
-                      ) : null}
-                      <details
-                        open={validFocusedId === skill.id}
-                        className="group border-t border-border/60"
-                      >
-                        <summary className="flex cursor-pointer list-none items-center gap-2 py-2 font-medium text-muted-foreground text-xs">
-                          <ChevronRightIcon className="size-3.5 transition-transform group-open:rotate-90" />
-                          Prompt text
-                        </summary>
-                        <WorkflowCatalogContent
-                          text={skill.promptText}
-                          label={`${skill.title} prompt text`}
-                          maxHeightClassName="max-h-[26rem]"
-                        />
-                      </details>
-                    </SettingsRow>
-                  </FocusedRow>
-                ))}
-              </SettingsSection>
-            );
-          })
-        : null}
+      {state.status === "loaded" ? (
+        <SettingsSection title="Skill Catalog" icon={<SparklesIcon className="size-3.5" />}>
+          {state.catalog.skills
+            .toSorted(
+              (left, right) =>
+                left.title.localeCompare(right.title) || left.id.localeCompare(right.id),
+            )
+            .map((skill) => (
+              <FocusedRow key={skill.id} focused={validFocusedId === skill.id}>
+                <SettingsRow
+                  title={skill.title}
+                  description={skill.description}
+                  status={
+                    <span className="flex flex-wrap gap-x-3">
+                      <span>
+                        ID <code className="font-mono">{skill.id}</code>
+                      </span>
+                    </span>
+                  }
+                >
+                  {skill.buildModes.length > 0 || skill.workflowIds.length > 0 ? (
+                    <div className="flex flex-wrap items-center gap-1.5 border-t border-border/60 py-2">
+                      <span className="mr-1 text-xs text-muted-foreground">Used in</span>
+                      {skill.buildModes.map((mode) => (
+                        <Badge key={mode} variant="secondary" size="sm">
+                          <HammerIcon />
+                          Build
+                        </Badge>
+                      ))}
+                      {skill.workflowIds.map((workflowId) => {
+                        const workflow = state.catalog.workflows.find(
+                          (candidate) => candidate.id === workflowId,
+                        );
+                        return (
+                          <Badge key={workflowId} variant="secondary" size="sm">
+                            <WorkflowIcon />
+                            {workflow?.title ?? workflowId}
+                          </Badge>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                  {skill.docIds.length > 0 ? (
+                    <div className="flex flex-wrap items-center gap-1.5 border-t border-border/60 py-2">
+                      <span className="mr-1 text-xs text-muted-foreground">Docs</span>
+                      {skill.docIds.map((docId) => {
+                        const doc = state.catalog.docs.find((candidate) => candidate.id === docId);
+                        return (
+                          <Link key={docId} to="/settings/docs" search={{ doc: docId }}>
+                            <Badge variant="outline" size="sm">
+                              <FileTextIcon />
+                              {doc?.title ?? docId}
+                            </Badge>
+                          </Link>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                  <details
+                    open={validFocusedId === skill.id}
+                    className="group border-t border-border/60"
+                  >
+                    <summary className="flex cursor-pointer list-none items-center gap-2 py-2 font-medium text-muted-foreground text-xs">
+                      <ChevronRightIcon className="size-3.5 transition-transform group-open:rotate-90" />
+                      Prompt text
+                    </summary>
+                    <WorkflowCatalogContent
+                      text={skill.promptText}
+                      label={`${skill.title} prompt text`}
+                      maxHeightClassName="max-h-[26rem]"
+                    />
+                  </details>
+                </SettingsRow>
+              </FocusedRow>
+            ))}
+        </SettingsSection>
+      ) : null}
     </SettingsPageContainer>
   );
 }
@@ -287,64 +250,76 @@ export function DocSettings({ focusedDocId }: { focusedDocId: string | undefined
     <SettingsPageContainer>
       <PageIntro
         title="Docs"
-        description="Supporting references that workflow skills load only when they need the additional context."
+        description="Supporting references organized by the skill that uses them, with summaries and cross-skill links."
       />
       <CatalogBoundary state={state} noun="Docs" />
-      {state.status === "loaded" ? (
-        <SettingsSection title="Document Catalog" icon={<BookOpenIcon className="size-3.5" />}>
-          {state.catalog.docs.length === 0 ? (
-            <SettingsRow
-              title="No docs"
-              description="No supporting workflow documents are registered."
-            />
-          ) : (
-            state.catalog.docs.map((doc) => (
-              <FocusedRow key={doc.id} focused={validFocusedId === doc.id}>
+      {state.status === "loaded"
+        ? (() => {
+            const skillsById = new Map(state.catalog.skills.map((skill) => [skill.id, skill]));
+            const groups = state.catalog.skills
+              .map((skill) => ({
+                skill,
+                docs: state.catalog.docs.filter((doc) => doc.skillIds[0] === skill.id),
+              }))
+              .filter((group) => group.docs.length > 0)
+              .toSorted((left, right) => left.skill.title.localeCompare(right.skill.title));
+            return groups.length === 0 ? (
+              <SettingsSection
+                title="Document Catalog"
+                icon={<BookOpenIcon className="size-3.5" />}
+              >
                 <SettingsRow
-                  title={doc.title}
-                  description={doc.path}
-                  status={
-                    <span>
-                      ID <code className="font-mono">{doc.id}</code>
-                    </span>
-                  }
+                  title="No docs"
+                  description="No supporting workflow documents are registered."
+                />
+              </SettingsSection>
+            ) : (
+              groups.map(({ skill, docs }) => (
+                <SettingsSection
+                  key={skill.id}
+                  title={skill.title}
+                  icon={<BookOpenIcon className="size-3.5" />}
                 >
-                  <div className="flex flex-wrap items-center gap-1.5 border-t border-border/60 py-2">
-                    <span className="mr-1 text-xs text-muted-foreground">Used by</span>
-                    {doc.skillIds.map((skillId) => {
-                      const skill = state.catalog.skills.find(
-                        (candidate) => candidate.id === skillId,
-                      );
-                      return (
-                        <Link key={skillId} to="/settings/skills" search={{ skill: skillId }}>
-                          <Badge variant="secondary" size="sm">
-                            <SparklesIcon />
-                            {skill?.title ?? skillId}
-                          </Badge>
-                        </Link>
-                      );
-                    })}
-                  </div>
-                  <details
-                    open={validFocusedId === doc.id}
-                    className="group mt-3 border-t border-border/60"
-                  >
-                    <summary className="flex cursor-pointer list-none items-center gap-2 py-2 font-medium text-muted-foreground text-xs">
-                      <ChevronRightIcon className="size-3.5 transition-transform group-open:rotate-90" />
-                      Document content
-                    </summary>
-                    <WorkflowCatalogContent
-                      text={doc.content}
-                      label={`${doc.title} document content`}
-                      maxHeightClassName="max-h-[28rem]"
-                    />
-                  </details>
-                </SettingsRow>
-              </FocusedRow>
-            ))
-          )}
-        </SettingsSection>
-      ) : null}
+                  {docs.map((doc) => (
+                    <FocusedRow key={doc.id} focused={validFocusedId === doc.id}>
+                      <SettingsRow
+                        title={doc.title}
+                        description={doc.description}
+                        status={doc.path}
+                      >
+                        <div className="flex flex-wrap items-center gap-1.5 border-t border-border/60 py-2">
+                          <span className="mr-1 text-xs text-muted-foreground">Used by</span>
+                          {doc.skillIds.map((skillId) => (
+                            <Link key={skillId} to="/settings/skills" search={{ skill: skillId }}>
+                              <Badge variant="secondary" size="sm">
+                                <SparklesIcon />
+                                {skillsById.get(skillId)?.title ?? skillId}
+                              </Badge>
+                            </Link>
+                          ))}
+                        </div>
+                        <details
+                          open={validFocusedId === doc.id}
+                          className="group mt-3 border-t border-border/60"
+                        >
+                          <summary className="flex cursor-pointer list-none items-center gap-2 py-2 font-medium text-muted-foreground text-xs">
+                            <ChevronRightIcon className="size-3.5 transition-transform group-open:rotate-90" />
+                            Document content
+                          </summary>
+                          <WorkflowCatalogContent
+                            text={doc.content}
+                            label={`${doc.title} document content`}
+                            maxHeightClassName="max-h-[28rem]"
+                          />
+                        </details>
+                      </SettingsRow>
+                    </FocusedRow>
+                  ))}
+                </SettingsSection>
+              ))
+            );
+          })()
+        : null}
     </SettingsPageContainer>
   );
 }

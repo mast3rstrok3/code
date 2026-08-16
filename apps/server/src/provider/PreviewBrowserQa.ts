@@ -1,14 +1,14 @@
 export const PREVIEW_BROWSER_QA_ASSOCIATED_DOC_CONTENT = `# Preview Browser QA
 
-Browser Dev Review drives the T3-hosted collaborative browser through the \`preview_*\` MCP tools and attaches durable evidence through the \`dev_review_*\` MCP tools. There is no CLI and no external browser: every browser action is an MCP tool call.
+Browser App Review drives the T3-hosted collaborative browser through the \`preview_*\` MCP tools and attaches durable evidence through the \`app_review_*\` MCP tools. There is no CLI and no external browser: every browser action is an MCP tool call.
 
 ## Session flow
 
 1. \`preview_open\` to show and initialize the thread's browser tab, then \`preview_navigate\` to the feature URL when the launch message provides one.
-2. \`dev_review_recording_start\` to begin the screen recording. Everything you do in the tab until \`dev_review_recording_stop\` ends up in the review's video.
+2. \`app_review_recording_start\` to begin the screen recording. Everything you do in the tab until \`app_review_recording_stop\` ends up in the review's video.
 3. Interact, snapshotting between steps (see below).
-4. \`dev_review_capture_screenshot\` with a descriptive caption at each meaningful state.
-5. \`dev_review_recording_stop\`, then \`dev_review_update\` with the full document and verdict.
+4. \`app_review_capture_screenshot\` with a descriptive caption at each meaningful state.
+5. \`app_review_recording_stop\`, then \`app_review_update\` with the full document and verdict.
 
 ## Snapshot before you interact
 
@@ -33,10 +33,10 @@ Interaction tools:
 
 ## Evidence workflow
 
-The review's evidence is server-authoritative: recordings and screenshots are stored on the server and attached to the Dev Review record; file paths never pass through you.
+The review's evidence is server-authoritative: recordings and screenshots are stored on the server and attached to the App Review record; file paths never pass through you.
 
-- \`dev_review_recording_start\` / \`dev_review_recording_stop\` bracket the whole testing session. Stop returns the recording evidence; status \`failed\` means no video was saved.
-- \`dev_review_capture_screenshot\` saves a PNG of the current tab with your caption and returns \`{id, caption, capturedAt}\`. Reference these ids in findings' \`evidenceIds\`.
+- \`app_review_recording_start\` / \`app_review_recording_stop\` bracket the whole testing session. Stop returns the recording evidence; status \`failed\` means no video was saved.
+- \`app_review_capture_screenshot\` saves a PNG of the current tab with your caption and returns \`{id, caption, capturedAt}\`. Reference these ids in findings' \`evidenceIds\`.
 - A passed verdict requires a saved recording plus at least one screenshot. A failed verdict normally uses the same evidence. If recording finalization fails after product testing, retain a failed verdict when at least one check failed and every actionable finding references a captured screenshot; the recording error remains visible as an evidence warning. Do not erase evidenced defects by changing them to blocked solely because video saving failed. If no trustworthy product evidence was captured, set the review to \`blocked\` with an explanation instead of forcing a verdict.
 - If no URL is provided and no usable preview is already open, mark the review \`blocked\` with concrete details instead of inventing a target.
 `;

@@ -3,7 +3,7 @@ import {
   CommandId,
   type ClientOrchestrationCommand,
   DEFAULT_WORKSPACE_USER_ID,
-  DevReviewWorkflowCycleBudget,
+  AppReviewWorkflowCycleBudget,
   MessageId,
   ProjectId,
   ProviderInstanceId,
@@ -75,17 +75,17 @@ describe("canonicalizeClientCommandTimestamps", () => {
     expect(result.bootstrap?.createThread?.createdAt).toBe(serverReceivedAt);
   });
 
-  it("uses the same clock-safe bootstrap path for a draft Dev Review launch", () => {
-    const threadId = ThreadId.make("thread-dev-review-draft");
+  it("uses the same clock-safe bootstrap path for a draft App Review launch", () => {
+    const threadId = ThreadId.make("thread-app-review-draft");
     const command: ClientOrchestrationCommand = {
-      type: "thread.dev-review-workflow.launch",
-      commandId: CommandId.make("command-dev-review"),
+      type: "thread.app-review-workflow.launch",
+      commandId: CommandId.make("command-app-review"),
       targetThreadId: threadId,
       controllerThreadId: threadId,
       caller: { type: "standalone", sourceThreadId: threadId },
       briefMarkdown: "Review checkout.",
       previewTargets: ["https://preview.example.test"],
-      cycleBudget: DevReviewWorkflowCycleBudget.make(10),
+      cycleBudget: AppReviewWorkflowCycleBudget.make(10),
       modelSelection: {
         instanceId: ProviderInstanceId.make("codex"),
         model: "gpt-5.6-sol",
@@ -94,9 +94,9 @@ describe("canonicalizeClientCommandTimestamps", () => {
         createThread: {
           projectId: ProjectId.make("project-1"),
           ownerUserId: DEFAULT_WORKSPACE_USER_ID,
-          workflowRole: "dev-review-orchestrator",
+          workflowRole: "app-review-orchestrator",
           workflowContext: {
-            workflowId: WorkflowId.make(`dev-review-workflow-${threadId}`),
+            workflowId: WorkflowId.make(`app-review-workflow-${threadId}`),
             rootThreadId: threadId,
             ticketScope: [],
           },
@@ -107,7 +107,7 @@ describe("canonicalizeClientCommandTimestamps", () => {
           },
           runtimeMode: "full-access",
           interactionMode: "default",
-          workflowPreset: "dev-review",
+          workflowPreset: "app-review",
           branch: null,
           worktreePath: null,
           createdAt: clientCreatedAt,
@@ -118,9 +118,9 @@ describe("canonicalizeClientCommandTimestamps", () => {
 
     const result = canonicalizeClientCommandTimestamps(command, serverReceivedAt);
 
-    expect(result.type).toBe("thread.dev-review-workflow.launch");
-    if (result.type !== "thread.dev-review-workflow.launch") {
-      throw new Error("Expected a Dev Review workflow launch command");
+    expect(result.type).toBe("thread.app-review-workflow.launch");
+    if (result.type !== "thread.app-review-workflow.launch") {
+      throw new Error("Expected an App Review workflow launch command");
     }
     expect(result.createdAt).toBe(serverReceivedAt);
     expect(result.bootstrap?.createThread?.createdAt).toBe(serverReceivedAt);
