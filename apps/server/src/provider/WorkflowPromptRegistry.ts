@@ -1198,8 +1198,8 @@ This stage orchestrates the upstream implement loop across sub-threads instead o
 - Worker branches are merged programmatically back into the orchestrator worktree; the Merge Gate stage always runs once for the integrated HEAD, whether integration was clean or required conflict resolution.
 - A Browser Dev Review finding launches a fresh TDD repair thread on the already-integrated orchestrator worktree. After that repair commits and passes focused checks, start the next Browser Dev Review directly; do not rerun the Merge Gate between review cycles.
 - Automated QA has one global budget of ten fresh AppDevStack/Dev Review repair agents after integration. Initial stack probes and Browser Dev Review launches do not consume repair slots; replacing a malformed, failed, blocked, or interrupted repair does. After the cap, a clean integration-gated HEAD proceeds through best-effort Code Review with the unresolved gate flagged in the change request.
-- Code Review is a single review-and-fix pass that commits its own corrections and precedes change-request publication.
-- Ticket workers never run launch-level complete validation commands or full test suites, but may run documented sub-minute fast checks. After Code Review finishes, the final gate runs each launch validation command once on the reviewed HEAD before publication.
+- Code Review starts with one comprehensive review-and-fix pass. If complete final validation needs a repair, the next pass reviews only that repair delta. Review/final-validation cycles are capped at three; exhaustion publishes the clean branch with an explicit work-in-progress warning instead of looping indefinitely.
+- Ticket workers never run launch-level complete validation commands or full test suites, but may run documented sub-minute fast checks. After each bounded Code Review pass, the final gate runs each launch validation command once on the reviewed HEAD before publication.
 
 Plan the implementation run from the Spec and planning tickets. Identify worktree strategy, ticket order, validation commands, required app-dev/browser review surfaces, merge gates, and how progress will be reported. These rules override only upstream single-thread mechanics; TDD at pre-agreed seams, regular typechecking, review before publication, and committed work remain authoritative.
 </collaboration_mode>`;
@@ -1677,7 +1677,7 @@ When this prompt is run by an automatic implementation run, do not ask the user 
 
 Run the two axes as parallel feedback sub-agents by emitting one workflow-subagents-create directive with two children that return workflow-subagent-result, instead of upstream's \`Agent\` tool calls. If child creation is unavailable in this thread, run the two axis briefs sequentially yourself. Aggregation, fixes, validation, the commit, and the final result directive always stay in this thread.
 
-**This is a single review-and-fix pass.** You are the last automated reviewer: nothing re-reviews your work, and the change request is published from the commit you leave at HEAD. So run both axes, aggregate the report, then act on it yourself:
+**The launch message defines the complete review scope.** Review only its supplied diff and fixed point. A later bounded pass may intentionally cover only the repair delta, so do not reopen unchanged code before that fixed point. You are the last automated reviewer for the supplied scope: aggregate both axes, then act on their findings yourself:
 
 1. Run both axes and aggregate the two-axis report.
 2. If either axis produced findings that require code changes, fix them in the orchestrator worktree with the smallest reliable changes. Do not delegate the fixes and do not defer them to a follow-up.
