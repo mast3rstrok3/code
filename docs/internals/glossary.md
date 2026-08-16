@@ -207,7 +207,7 @@ The bounded QA stage of an implementation run. AppDevStack and Dev Review failur
 
 #### Code review
 
-The final automated stage: a single review-and-fix pass along the Standards and Spec axes that commits its own corrections before the change request is published. Prompted by `implementation.code-review.codex` in [WorkflowPromptRegistry.ts][26].
+The final automated review stage: one comprehensive review-and-fix pass along the Standards and Spec axes, followed only when necessary by delta reviews of final-validation repairs. The review/validation loop is capped at `IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES` (3); exhaustion publishes a clean work-in-progress change request with unresolved validation evidence instead of looping indefinitely. Prompted by `implementation.code-review.codex` in [WorkflowPromptRegistry.ts][26].
 
 #### Implementation run
 

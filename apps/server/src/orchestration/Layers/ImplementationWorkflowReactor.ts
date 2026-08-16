@@ -6,6 +6,7 @@ import {
   GitCommandError,
   IMPLEMENTATION_RUN_MAX_DEV_REVIEW_UNBLOCK_ATTEMPTS,
   IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
+  IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES,
   MessageId,
   ThreadId,
   type OrchestrationEvent,
@@ -49,10 +50,9 @@ import {
   resolveWorkflowSubagentSpawnDefinition,
 } from "../workflowSubagents.ts";
 
-// Code Review is a single review-and-fix pass: the reviewer lands its own fixes, then the final
-// validator gates that exact commit before publication. There is no ordinary re-review cycle or
-// cycle budget. The `code-review-fixing` status and `fixOrigin: "code-review"` remain so runs
-// persisted by the previous re-review loop still decode and recover.
+// Code Review owns its fixes, while final-validation repairs receive a bounded delta review before
+// the complete gate runs again. Exhaustion publishes the clean branch as work in progress instead
+// of allowing a fresh reviewer to reopen the entire implementation indefinitely.
 
 type ImplementationWorkflowEvent = Extract<
   OrchestrationEvent,
@@ -461,13 +461,18 @@ function buildAppDevStackFixPrompt(input: {
 function buildCodeReviewPrompt(input: {
   readonly run: OrchestrationImplementationRun;
   readonly artifactMarkdown?: string;
+  readonly reviewBaseSha?: string;
 }): string {
   const changeRequest = input.run.changeRequest;
-  const fixedPoint = input.run.pinnedCommit;
+  const reviewBaseSha = input.reviewBaseSha ?? input.run.pinnedCommit;
+  const isDeltaReview = input.reviewBaseSha !== undefined;
   return [
-    `Perform the implementation code review for implementation run ${input.run.id}. This is the only review pass: nothing re-reviews your work afterwards, and the change request is published from the commit you leave at HEAD.`,
+    `Perform implementation Code Review ${input.run.codeReviewAttemptCount} of ${IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES} for run ${input.run.id}.`,
     "",
-    "Do not ask the user questions. Review the change along the Standards and Spec axes as described in your workflow instructions, then apply the fixes yourself and commit them.",
+    isDeltaReview
+      ? "This is a delta review after a final-validation repair. Review only the changes since the previously reviewed commit. Do not reopen unchanged implementation scope or invent additional product work unless the delta itself introduces a regression."
+      : "This is the comprehensive review pass. Review the change along the Standards and Spec axes described in your workflow instructions.",
+    "Apply required fixes yourself and commit them. Do not ask the user questions.",
     "",
     input.run.qaExhaustedAt === null && input.run.devReviewExhaustedAt === null
       ? "Dev Review passed at this commit."
@@ -477,8 +482,8 @@ function buildCodeReviewPrompt(input: {
     "",
     "Review scope:",
     `- worktree: ${input.run.orchestratorWorktreePath}`,
-    `- fixed point: ${fixedPoint}`,
-    `- diff command: git diff ${fixedPoint}...HEAD`,
+    `- review base: ${reviewBaseSha}`,
+    `- diff command: git diff ${reviewBaseSha}...HEAD`,
     changeRequest === null
       ? "- change request: not available"
       : `- change request: ${changeRequest.url} (#${changeRequest.number})`,
@@ -493,6 +498,7 @@ function buildCodeReviewPrompt(input: {
     `When status is "findings", fix the findings in ${input.run.orchestratorWorktreePath} on branch ${input.run.orchestratorBranch}, commit them, and set commitSha to the resulting HEAD. Leave the worktree clean.`,
     "",
     "When findings change HEAD, run focused or sub-minute fast validation and report it in validations. Do not run launch-level complete validation commands; the sole complete gate starts after Code Review finishes. A clean review should not rerun validation.",
+    "If your changes affect capability evidence, review corpora, or their documentation, run the corresponding focused audit or contract test before handing off. The complete gate must not be used as a cheap preflight for deterministic evidence drift.",
     "",
     `Finish with exactly one fenced JSON directive of type implementation-code-review-result for runId ${input.run.id}.`,
   ].join("\n");
@@ -528,6 +534,8 @@ function buildMergeGateFixPrompt(input: {
     "",
     "Latest merge-gate report:",
     input.reportMarkdown,
+    "",
+    "Run the cheapest deterministic checks named by the failure first, including capability-evidence or review-documentation audits when applicable. Resolve the complete reported failure set in one repair instead of waiting for the next full gate to reveal the same items again.",
     "",
     "Run focused validation or a documented sub-minute fast check. Do not run launch-level complete validation commands or full test suites; the final gate after Code Review owns complete validation on the new HEAD.",
     "",
@@ -713,8 +721,28 @@ function buildFastFeaturePrompt(input: {
  * Automated-review provenance for the published change request. A run that exhausted Dev Review is
  * still published, so the unpassed review has to be visible on the change request itself.
  */
+function reviewGateExhaustionReason(run: OrchestrationImplementationRun): string {
+  const lastValidation = run.finalValidation?.outputMarkdown.trim();
+  return [
+    `Automated Code Review and final validation reached the ${IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES}-cycle limit.`,
+    lastValidation === undefined || lastValidation.length === 0
+      ? "The latest complete validation did not produce a usable summary."
+      : `Latest validation: ${lastValidation.slice(0, 1_000)}`,
+  ].join(" ");
+}
+
 function changeRequestReviewNote(run: OrchestrationImplementationRun): string {
-  const lines = ["## Automated review"];
+  const lines = [];
+  if (run.reviewGateExhaustedAt !== null) {
+    lines.push(
+      "## Work in progress",
+      `- ⚠️ Automated review stopped after ${run.codeReviewAttemptCount}/${IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES} Code Review/final-validation cycles.`,
+      `- ${run.reviewGateExhaustionReason ?? reviewGateExhaustionReason(run)}`,
+      "- Complete validation has not passed on this HEAD. Keep this change request as work in progress and resolve the recorded findings before merging.",
+      "",
+    );
+  }
+  lines.push("## Automated review");
   const exhaustedAt = run.qaExhaustedAt ?? run.devReviewExhaustedAt;
   if (exhaustedAt === null) {
     lines.push(
@@ -737,7 +765,7 @@ function changeRequestReviewNote(run: OrchestrationImplementationRun): string {
   lines.push(
     run.latestCodeReviewReportMarkdown === null
       ? "- Code Review: no report recorded."
-      : "- Code Review: completed in a single review-and-fix pass; findings were fixed in this branch.",
+      : `- Code Review: completed ${run.codeReviewAttemptCount} review-and-fix pass(es); the latest report is recorded on the implementation run.`,
   );
   return lines.join("\n");
 }
@@ -2090,6 +2118,7 @@ const make = Effect.gen(function* () {
       readonly run: OrchestrationImplementationRun;
       readonly createdAt: string;
       readonly skipDevReviewRequirement?: boolean;
+      readonly reviewBaseSha?: string;
     }) {
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
       const orchestratorThread = findThread(readModel, input.run.orchestratorThreadId);
@@ -2216,6 +2245,7 @@ const make = Effect.gen(function* () {
             buildCodeReviewPrompt({
               run: reviewingRun,
               ...(artifactMarkdown === undefined ? {} : { artifactMarkdown }),
+              ...(input.reviewBaseSha === undefined ? {} : { reviewBaseSha: input.reviewBaseSha }),
             }),
             WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
           ),
@@ -2313,19 +2343,27 @@ const make = Effect.gen(function* () {
         input.run.artifactSource === "proposed-plan"
           ? (proposedPlanTitle(sourcePlan?.planMarkdown ?? "") ?? "Fast feature")
           : `Implement ${input.run.specId}`;
-      const expectedHeadSha = input.run.codeReviewedHeadSha;
+      const workInProgress = input.run.reviewGateExhaustedAt !== null;
+      const currentHead = workInProgress
+        ? yield* gitWorkflow.resolveCommit({
+            cwd: input.run.orchestratorWorktreePath,
+            ref: "HEAD",
+          })
+        : null;
+      const expectedHeadSha = currentHead?.commitSha ?? input.run.codeReviewedHeadSha;
       if (expectedHeadSha === null) {
         yield* blockRun({
           sourceThreadId: input.sourceThreadId,
           run: input.run,
           retryableStage: "code-review",
-          reasonMarkdown:
-            "Cannot publish a change request before Code Review accepts an exact HEAD.",
+          reasonMarkdown: workInProgress
+            ? "Cannot publish the work-in-progress change request because HEAD could not be resolved."
+            : "Cannot publish a change request before Code Review accepts an exact HEAD.",
           updatedAt: input.createdAt,
         });
         return;
       }
-      if (input.run.validatedHeadSha !== expectedHeadSha) {
+      if (!workInProgress && input.run.validatedHeadSha !== expectedHeadSha) {
         yield* blockRun({
           sourceThreadId: input.sourceThreadId,
           run: input.run,
@@ -2335,25 +2373,27 @@ const make = Effect.gen(function* () {
         });
         return;
       }
-      const changedFiles = yield* gitWorkflow.listChangedFiles({
-        cwd: input.run.orchestratorWorktreePath,
-        baseRef: input.run.pinnedCommit,
-        headRef: expectedHeadSha,
-      });
-      if (
-        !completeValidationsPassedExactlyOnce({
-          requiredCommands: completeValidationCommandsForFiles(input.run, changedFiles),
-          validations: input.run.finalValidationResults,
-        })
-      ) {
-        yield* blockRun({
-          sourceThreadId: input.sourceThreadId,
-          run: input.run,
-          retryableStage: "merge-gate",
-          reasonMarkdown: `Cannot publish HEAD '${expectedHeadSha}' without exactly one passing result for every complete validation command.`,
-          updatedAt: input.createdAt,
+      if (!workInProgress) {
+        const changedFiles = yield* gitWorkflow.listChangedFiles({
+          cwd: input.run.orchestratorWorktreePath,
+          baseRef: input.run.pinnedCommit,
+          headRef: expectedHeadSha,
         });
-        return;
+        if (
+          !completeValidationsPassedExactlyOnce({
+            requiredCommands: completeValidationCommandsForFiles(input.run, changedFiles),
+            validations: input.run.finalValidationResults,
+          })
+        ) {
+          yield* blockRun({
+            sourceThreadId: input.sourceThreadId,
+            run: input.run,
+            retryableStage: "merge-gate",
+            reasonMarkdown: `Cannot publish HEAD '${expectedHeadSha}' without exactly one passing result for every complete validation command.`,
+            updatedAt: input.createdAt,
+          });
+          return;
+        }
       }
       const reviewOutcomeNote = changeRequestReviewNote(input.run);
       const publishingRun: OrchestrationImplementationRun = {
@@ -2421,12 +2461,13 @@ const make = Effect.gen(function* () {
 
       yield* appendActivity({
         threadId: publishingRun.orchestratorThreadId,
-        tone: "info",
+        tone: workInProgress ? "error" : "info",
         kind: "implementation-change-request-filed",
-        summary: `Change request filed (#${result.success.number})`,
+        summary: `${workInProgress ? "Work-in-progress change request" : "Change request"} filed (#${result.success.number})`,
         payload: {
           runId: publishingRun.id,
           status: "filed",
+          workInProgress,
           url: result.success.url,
           number: result.success.number,
         },
@@ -2448,10 +2489,12 @@ const make = Effect.gen(function* () {
       });
       yield* appendActivity({
         threadId: publishingRun.orchestratorThreadId,
-        tone: "info",
+        tone: workInProgress ? "error" : "info",
         kind: "implementation-run-completed",
-        summary: "Implementation run completed",
-        payload: { runId: publishingRun.id },
+        summary: workInProgress
+          ? "Implementation run completed with a work-in-progress change request"
+          : "Implementation run completed",
+        payload: { runId: publishingRun.id, workInProgress },
         createdAt: input.createdAt,
       });
     },
@@ -3145,21 +3188,51 @@ const make = Effect.gen(function* () {
       });
 
       if (!passed) {
+        const failedRun: OrchestrationImplementationRun = {
+          ...run,
+          ...(gateKind === "final"
+            ? {
+                finalValidation,
+                finalValidationResults: [...directive.validations],
+              }
+            : {}),
+          activeValidatorThreadId: null,
+          activeValidationHeadSha: null,
+          activeValidationKind: gateKind,
+          updatedAt,
+        };
+        if (
+          gateKind === "final" &&
+          run.codeReviewAttemptCount >= IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES
+        ) {
+          const exhaustionReason = reviewGateExhaustionReason(failedRun);
+          const exhaustedRun: OrchestrationImplementationRun = {
+            ...failedRun,
+            status: "publishing-change-request",
+            activeValidationKind: null,
+            reviewGateExhaustedAt: updatedAt,
+            reviewGateExhaustionReason: exhaustionReason,
+            retryableFailure: null,
+          };
+          yield* appendActivity({
+            threadId: run.orchestratorThreadId,
+            tone: "error",
+            kind: "implementation-review-gate-exhausted",
+            summary: `Review and validation stopped after ${run.codeReviewAttemptCount}/${IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES} cycles; publishing work in progress`,
+            payload: {
+              runId: run.id,
+              cycles: run.codeReviewAttemptCount,
+              maxCycles: IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES,
+              reasonMarkdown: exhaustionReason,
+            },
+            createdAt: updatedAt,
+          });
+          yield* fileChangeRequest({ sourceThreadId, run: exhaustedRun, createdAt: updatedAt });
+          return;
+        }
         yield* startFixer({
           sourceThreadId,
-          run: {
-            ...run,
-            ...(gateKind === "final"
-              ? {
-                  finalValidation,
-                  finalValidationResults: [...directive.validations],
-                }
-              : {}),
-            activeValidatorThreadId: null,
-            activeValidationHeadSha: null,
-            activeValidationKind: gateKind,
-            updatedAt,
-          },
+          run: failedRun,
           status: "fixing",
           origin: "merge-gate",
           title: gateKind === "final" ? "Fix final validation" : "Fix merge gate",
@@ -3293,6 +3366,39 @@ const make = Effect.gen(function* () {
     }
 
     if (run.activeValidationKind === "final") {
+      if (run.codeReviewAttemptCount >= IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES) {
+        const exhaustionReason = reviewGateExhaustionReason(run);
+        const exhaustedRun: OrchestrationImplementationRun = {
+          ...run,
+          status: "publishing-change-request",
+          integrationHeadSha: head.commitSha,
+          activeValidationHeadSha: null,
+          activeValidationKind: null,
+          activeValidatorThreadId: null,
+          activeFixerThreadId: null,
+          fixOrigin: null,
+          reviewGateExhaustedAt: updatedAt,
+          reviewGateExhaustionReason: exhaustionReason,
+          retryableFailure: null,
+          updatedAt,
+        };
+        yield* appendActivity({
+          threadId: run.orchestratorThreadId,
+          tone: "error",
+          kind: "implementation-review-gate-exhausted",
+          summary: `Review and validation stopped after ${run.codeReviewAttemptCount}/${IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES} cycles; publishing work in progress`,
+          payload: {
+            runId: run.id,
+            cycles: run.codeReviewAttemptCount,
+            maxCycles: IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES,
+            reasonMarkdown: exhaustionReason,
+          },
+          createdAt: updatedAt,
+        });
+        yield* fileChangeRequest({ sourceThreadId, run: exhaustedRun, createdAt: updatedAt });
+        return;
+      }
+      const reviewBaseSha = run.codeReviewedHeadSha;
       const repairedRun: OrchestrationImplementationRun = {
         ...run,
         status: "code-reviewing",
@@ -3314,6 +3420,7 @@ const make = Effect.gen(function* () {
         run: repairedRun,
         createdAt: updatedAt,
         skipDevReviewRequirement: true,
+        ...(reviewBaseSha === null ? {} : { reviewBaseSha }),
       });
       return;
     }
@@ -3388,13 +3495,15 @@ const make = Effect.gen(function* () {
     if (orchestratorThread === null) return;
     const fixerThreadId = yield* serverThreadId("implementation-fixer");
     const usesTdd = input.origin === "app-dev-stack" || input.origin === "dev-review";
+    const preservesReviewedBase =
+      input.origin === "merge-gate" && input.run.activeValidationKind === "final";
     const fixingRun: OrchestrationImplementationRun = {
       ...input.run,
       status: input.status,
       activeFixerThreadId: fixerThreadId,
       fixOrigin: input.origin,
       devReviewedHeadSha: null,
-      codeReviewedHeadSha: null,
+      codeReviewedHeadSha: preservesReviewedBase ? input.run.codeReviewedHeadSha : null,
       ...(usesTdd
         ? {
             appDevStack: {
@@ -3686,6 +3795,35 @@ const make = Effect.gen(function* () {
       });
 
       if (directive.status === "blocked") {
+        if (run.codeReviewAttemptCount >= IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES) {
+          const exhaustionReason = `Code Review remained blocked after ${run.codeReviewAttemptCount}/${IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES} bounded attempts. Latest report: ${directive.reportMarkdown.slice(0, 1_000)}`;
+          const exhaustedRun: OrchestrationImplementationRun = {
+            ...run,
+            status: "publishing-change-request",
+            activeCodeReviewHeadSha: null,
+            activeCodeReviewThreadId: null,
+            latestCodeReviewReportMarkdown: directive.reportMarkdown,
+            reviewGateExhaustedAt: updatedAt,
+            reviewGateExhaustionReason: exhaustionReason,
+            retryableFailure: null,
+            updatedAt,
+          };
+          yield* appendActivity({
+            threadId: run.orchestratorThreadId,
+            tone: "error",
+            kind: "implementation-review-gate-exhausted",
+            summary: `Code Review stopped after ${run.codeReviewAttemptCount}/${IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES} attempts; publishing work in progress`,
+            payload: {
+              runId: run.id,
+              cycles: run.codeReviewAttemptCount,
+              maxCycles: IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES,
+              reasonMarkdown: exhaustionReason,
+            },
+            createdAt: updatedAt,
+          });
+          yield* fileChangeRequest({ sourceThreadId, run: exhaustedRun, createdAt: updatedAt });
+          return;
+        }
         yield* blockRun({
           sourceThreadId,
           run,
