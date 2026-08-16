@@ -691,7 +691,18 @@ export const OrchestrationImplementationLaunchSummary = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   validationCommands: Schema.Array(TrimmedNonEmptyString),
-  finalAppReview: OrchestrationImplementationFinalAppReviewPlan,
+  finalAppReview: OrchestrationImplementationFinalAppReviewPlan.pipe(
+    Schema.withDecodingDefault(
+      Effect.succeed({
+        required: true,
+        completionBlocking: true,
+        appDevStackSource: "orchestrator-worktree" as const,
+        autoStartAppDevStack: true,
+        browserMcpProfile: "agent-browser" as const,
+        maxCycles: IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
+      }),
+    ),
+  ),
   createdAt: IsoDateTime,
 });
 export type OrchestrationImplementationLaunchSummary =
