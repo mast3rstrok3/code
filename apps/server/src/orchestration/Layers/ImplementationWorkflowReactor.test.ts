@@ -9,6 +9,7 @@ import {
   GitCommandError,
   IMPLEMENTATION_RUN_MAX_DEV_REVIEW_UNBLOCK_ATTEMPTS,
   IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
+  IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES,
   MessageId,
   ProviderInstanceId,
   ProjectId,
@@ -771,6 +772,47 @@ function passFinalGate(system: ImplementationSystem, run: OrchestrationImplement
           status: "passed",
           validations: completeValidations(),
           summaryMarkdown: "Reviewed HEAD passed complete validation.",
+        },
+        turnId: null,
+        createdAt: "2026-01-01T00:00:06.000Z",
+      },
+      createdAt: "2026-01-01T00:00:06.000Z",
+    });
+    yield* system.reactor.drain;
+  });
+}
+
+function failFinalGate(system: ImplementationSystem, run: OrchestrationImplementationRun) {
+  return Effect.gen(function* () {
+    const snapshot = yield* system.query.getSnapshot();
+    const activeValidatorThreadId = snapshot.implementationRuns.find(
+      (candidate) => candidate.id === run.id,
+    )?.activeValidatorThreadId;
+    const validator = snapshot.threads.find((thread) => thread.id === activeValidatorThreadId);
+    if (!validator) throw new Error("Final validator missing.");
+    yield* system.engine.dispatch({
+      type: "thread.activity.append",
+      commandId: commandId(`final-gate-fail-${validator.id}`),
+      threadId: validator.id,
+      activity: {
+        id: eventId(`final-gate-fail-${validator.id}`),
+        tone: "error",
+        kind: "implementation-merge-gate-result",
+        summary: "Final gate failed",
+        payload: {
+          type: "implementation-merge-gate-result",
+          runId: run.id,
+          status: "failed",
+          validations: completeValidations().map((validation, index) =>
+            index === 0
+              ? {
+                  ...validation,
+                  status: "failed" as const,
+                  outputMarkdown: "Capability evidence requires review.",
+                }
+              : validation,
+          ),
+          summaryMarkdown: "Capability evidence requires review.",
         },
         turnId: null,
         createdAt: "2026-01-01T00:00:06.000Z",
@@ -3559,6 +3601,10 @@ describe("ImplementationWorkflowReactor", () => {
           "implementation-code-reviewer",
           new Set([reviewer.id]),
         );
+        expect(secondReviewer.messages.at(-1)?.text).toContain(
+          "This is a delta review after a final-validation repair",
+        );
+        expect(secondReviewer.messages.at(-1)?.text).toContain("git diff def456...HEAD");
         yield* appendCodeReviewResult(system, {
           run,
           threadId: secondReviewer.id,
@@ -3572,6 +3618,72 @@ describe("ImplementationWorkflowReactor", () => {
         expect(completed?.status).toBe("completed");
         expect(completed?.mergeGateAttemptCount).toBe(3);
         expect(yield* Ref.get(system.createOrOpenChangeRequestCount)).toBe(1);
+      }),
+    ),
+  );
+
+  it.effect("publishes a work-in-progress change request when review validation exhausts", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+        yield* passMergeGate(system, run);
+
+        let snapshot = yield* system.query.getSnapshot();
+        const qaReviewing = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        if (qaReviewing === undefined) throw new Error("QA reviewing run missing.");
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("seed-review-gate-budget"),
+          threadId: sourceThreadId,
+          run: {
+            ...qaReviewing,
+            codeReviewAttemptCount: IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES - 1,
+          },
+          createdAt: "2026-01-01T00:00:02.500Z",
+        });
+        yield* passDevReview(system, run);
+
+        const reviewer = yield* nextThreadForRole(
+          system,
+          "implementation-code-reviewer",
+          new Set<string>(),
+        );
+        yield* appendCodeReviewResult(system, {
+          run,
+          threadId: reviewer.id,
+          status: "clean",
+          tag: "at-review-gate-budget",
+        });
+        yield* failFinalGate(system, run);
+
+        snapshot = yield* system.query.getSnapshot();
+        const completed = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(completed?.status).toBe("completed");
+        expect(completed?.codeReviewAttemptCount).toBe(IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES);
+        expect(completed?.reviewGateExhaustedAt).not.toBeNull();
+        expect(completed?.reviewGateExhaustionReason).toContain("cycle limit");
+        expect(completed?.finalValidation?.status).toBe("failed");
+        expect(completed?.validatedHeadSha).toBeNull();
+        expect(completed?.changeRequest?.url).toBe("https://example.test/pr/1");
+        expect(
+          snapshot.threads.filter((thread) => thread.workflowRole === "implementation-fixer"),
+        ).toHaveLength(0);
+        expect(yield* Ref.get(system.createOrOpenChangeRequestCount)).toBe(1);
+        const publishInput = (yield* Ref.get(system.createOrOpenChangeRequestInputs)).at(-1);
+        expect(publishInput?.expectedHeadSha).toBe("def456");
+        expect(publishInput?.pullRequestBodyNote).toContain("## Work in progress");
+        expect(publishInput?.pullRequestBodyNote).toContain(
+          "Complete validation has not passed on this HEAD",
+        );
+        const orchestrator = snapshot.threads.find(
+          (thread) => thread.id === run.orchestratorThreadId,
+        );
+        expect(
+          orchestrator?.activities.some(
+            (activity) => activity.kind === "implementation-review-gate-exhausted",
+          ),
+        ).toBe(true);
       }),
     ),
   );

@@ -489,7 +489,8 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /worker branches from its blocker's worker branch/);
     NodeAssert.match(rendered, /global budget of ten fresh .* repair agents/);
     NodeAssert.match(rendered, /do not consume repair slots/);
-    NodeAssert.match(rendered, /single review-and-fix pass/);
+    NodeAssert.match(rendered, /Code Review starts with one comprehensive review-and-fix pass/);
+    NodeAssert.match(rendered, /cycles are capped at three/);
     NodeAssert.match(rendered, /fresh TDD repair thread on the already-integrated orchestrator/);
     NodeAssert.match(rendered, /start the next Browser Dev Review directly/);
     NodeAssert.match(rendered, /do not rerun the Merge Gate between review cycles/);
@@ -597,7 +598,8 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /"type": "implementation-code-review-result"/);
     NodeAssert.match(rendered, /Use status "clean" when neither axis has findings/);
     // Code Review is the last automated pass: it must land its own fixes and name the commit.
-    NodeAssert.match(rendered, /single review-and-fix pass/);
+    NodeAssert.match(rendered, /launch message defines the complete review scope/);
+    NodeAssert.match(rendered, /do not reopen unchanged code/);
     NodeAssert.match(rendered, /"commitSha"/);
     NodeAssert.match(rendered, /"validations"/);
     NodeAssert.match(rendered, /do not use it to hand unfixed findings back/);

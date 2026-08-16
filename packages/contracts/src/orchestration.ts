@@ -504,6 +504,8 @@ export type OrchestrationPlanningSpecBundle = typeof OrchestrationPlanningSpecBu
 export const IMPLEMENTATION_RUN_MAX_QA_REPAIRS = 10;
 /** Maximum number of fresh nested Dev Review runs launched after consecutive blocked outcomes. */
 export const IMPLEMENTATION_RUN_MAX_DEV_REVIEW_UNBLOCK_ATTEMPTS = 3;
+/** Maximum number of complete Code Review and final-validation cycles before WIP publication. */
+export const IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES = 3;
 /** @deprecated Use IMPLEMENTATION_RUN_MAX_QA_REPAIRS. */
 export const IMPLEMENTATION_RUN_MAX_QA_CYCLES = IMPLEMENTATION_RUN_MAX_QA_REPAIRS;
 /** @deprecated Use IMPLEMENTATION_RUN_MAX_QA_REPAIRS. */
@@ -1011,6 +1013,12 @@ export const OrchestrationImplementationRun = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   codeReviewAttemptCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+  reviewGateExhaustedAt: Schema.NullOr(IsoDateTime).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  reviewGateExhaustionReason: Schema.NullOr(Schema.String).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   activeFixerThreadId: Schema.NullOr(ThreadId).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
