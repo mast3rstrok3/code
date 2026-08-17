@@ -1701,6 +1701,17 @@ const make = Effect.gen(function* () {
             );
             return;
           }
+          if (
+            child.workflowPromptId === WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex &&
+            (input.thread.workflowRole === "implementation-qa-reviewer" ||
+              input.thread.workflowRole === "app-review-reviewer") &&
+            appReviewMode !== "feedback"
+          ) {
+            yield* reject(
+              "A Browser App Review owner may launch only feedback-mode browser lanes. Durable evidence, verdicts, and repair cycles must remain with the parent review.",
+            );
+            return;
+          }
           if (definition === undefined) {
             yield* reject(`Workflow prompt '${child.workflowPromptId}' is not spawnable.`);
             return;

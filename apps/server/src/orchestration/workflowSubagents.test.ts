@@ -51,14 +51,17 @@ function settingsWith(input: {
 }
 
 describe("resolveWorkflowSubagentSpawnDefinition", () => {
-  it("rejects nested Browser App Review launches from implementation QA reviewers", () => {
+  it("allows Browser App Review owners to launch focused browser lanes", () => {
     expect(browserAppReviewDefinition).toBeDefined();
     expect(
       isWorkflowSubagentParentRoleAllowed(
         browserAppReviewDefinition!,
         "implementation-qa-reviewer",
       ),
-    ).toBe(false);
+    ).toBe(true);
+    expect(
+      isWorkflowSubagentParentRoleAllowed(browserAppReviewDefinition!, "app-review-reviewer"),
+    ).toBe(true);
     expect(isWorkflowSubagentParentRoleAllowed(browserAppReviewDefinition!, null)).toBe(true);
     expect(
       isWorkflowSubagentParentRoleAllowed(

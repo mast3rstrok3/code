@@ -16,7 +16,7 @@ The default \`feedback\` mode creates an ordinary Browser App Review child witho
 
 Do not use this one-shot launch as a substitute for an active Fix, Fast Feature, Full Feature, Implementation, or cycle-based App Review workflow. Those workflows own review sequencing, cycle budgets, worktree selection, and authoritative App Dev Stack preview targets. If one of those workflows is active, continue or recover that workflow instead of spawning an ad hoc Browser App Review child.
 
-Exception: a thread already acting as an \`implementation-qa-reviewer\` or \`app-review-reviewer\` is the Browser App Review. It must use its linked preview_* and app_review_* tools directly and must never launch a nested Browser App Review. The server rejects that nested launch.`;
+Exception: a thread already acting as an \`implementation-qa-reviewer\` or \`app-review-reviewer\` owns the durable Browser App Review. It may launch feedback-mode Browser App Review children only when an active workflow's App Review topology assigns independent browser lanes. Those children share the authoritative preview target, return observations only, and must not capture durable evidence or repair the worktree. The parent must use its linked preview_* and app_review_* tools for canonical evidence and the verdict. The server rejects nested full-mode App Reviews.`;
 
 export const WORKFLOW_SUBAGENT_INSTRUCTIONS_PROMPT = `## T3 Workflow Sub-Agent System
 

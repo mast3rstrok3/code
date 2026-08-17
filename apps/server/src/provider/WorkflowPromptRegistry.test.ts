@@ -159,6 +159,10 @@ describe("WorkflowPromptRegistry", () => {
     );
     NodeAssert.match(fastFeaturePlanning?.promptText ?? "", /## Build topology/);
     NodeAssert.match(fastFeaturePlanning?.promptText ?? "", /## App Review topology/);
+    NodeAssert.match(
+      fastFeaturePlanning?.promptText ?? "",
+      /parallel browser threads against the shared AppDevStack Feature URL/,
+    );
     NodeAssert.match(fastFeaturePlanning?.promptText ?? "", /parallel group/);
     const engineeringWorkflow = catalog.workflows.find((workflow) => workflow.id === "planning");
     NodeAssert.equal(engineeringWorkflow?.title, "Engineering Workflow");

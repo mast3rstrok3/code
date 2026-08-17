@@ -52,7 +52,9 @@ List the implementation workstreams that Build should run. For each workstream i
 
 ## App Review topology
 
-List the independent acceptance lanes App Review should prepare or analyze in parallel. For each lane include a stable id, covered user flow or acceptance criteria, required setup, and expected evidence. Keep all browser interaction, screenshots, recording, durable findings, and the final verdict assigned to the single authoritative Browser App Review thread. State explicitly when there is only one review lane.
+List the independent acceptance lanes that App Review should exercise in parallel browser threads against the shared AppDevStack Feature URL. For each lane include a stable id, covered user flow or acceptance criteria, required setup, test-state or account isolation, and expected observations. Mark dependencies or shared-state conflicts that require serialization. State explicitly when there is only one review lane.
+
+The workflow starts or reuses the AppDevStack for this exact worktree and branch after repository setup succeeds, then injects its status and Feature URL into later stages. Do not plan a competing dev server or a second stack. The durable Browser App Review parent launches the independent lanes as feedback-mode browser reviewers, aggregates their reports, and remains solely responsible for recording, screenshots, durable findings, the final verdict, and repair cycles.
 
 Everything after Planning is unattended. Do not ask for implementation approval in the final response; finish with the native CLI Plan-mode proposed plan handoff.
 </collaboration_mode>`;
@@ -1588,9 +1590,11 @@ Exercise the supplied preview target from the selected worktree. Verify the rele
 
 If the preview is unavailable, stuck on startup recovery, or has dependency/runtime failures, load \`app-dev-stack.md\` before diagnosing it.
 
-This thread is already the Browser App Review agent. Use the linked preview_* and app_review_* tools directly. Never delegate to or launch another Browser App Review.
+This thread is the durable Browser App Review owner. Use the linked preview_* and app_review_* tools directly for canonical evidence and the final verdict. Never launch another full or durable App Review from this thread.
 
-When the launch brief contains \`## App Review topology\`, treat it as the execution contract. Launch its independent acceptance lanes in parallel non-browser sub-agents for source-context, setup, or acceptance-criteria analysis, honoring their stated dependencies. Aggregate those lane reports before closing the review. Do not invent a different partition unless a planned lane is unsafe or impossible, and record any serialization or deviation in the review summary. Browser interaction, evidence capture, durable findings, and the terminal verdict remain this thread's responsibility in the single authoritative browser session.
+When the launch brief contains \`## App Review topology\`, treat it as the execution contract. On the first review turn, launch every independent browser lane in one \`workflow-subagents-create\` batch using \`implementation.browser-app-review.codex\` with \`appReviewMode: "feedback"\`. Give each child only its lane, the authoritative Feature URL from the launch context, required setup, state-isolation constraints, and expected observations. Honor dependencies and serialize lanes that can mutate the same account or application state. Do not launch full-mode children, and do not let lane reviewers edit the worktree or run repair cycles.
+
+Wait for every lane result and aggregate the reports before closing the durable review. Reproduce representative passing states and every actionable failure in this parent browser session so canonical recording, screenshots, checks, findings, and the terminal verdict remain owned by this thread. Do not invent a different partition unless a planned lane is unsafe or impossible, and record any serialization or deviation in the review summary. When there is only one lane, exercise it directly without creating a child batch.
 
 When this Browser App Review is linked to a durable App Review record:
 

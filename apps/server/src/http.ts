@@ -368,6 +368,12 @@ export const staticAndDevRouteLayer = HttpRouter.add(
 
     const fileInfo = yield* fileSystem.stat(filePath).pipe(Effect.orElseSucceed(() => null));
     if (!fileInfo || fileInfo.type !== "File") {
+      // Browser routes are extensionless. Missing asset requests must remain
+      // 404s; returning the SPA document for an old JavaScript chunk makes the
+      // browser reject HTML as an invalid module MIME type.
+      if (ext) {
+        return HttpServerResponse.text("Not Found", { status: 404 });
+      }
       const indexPath = path.resolve(staticRoot, "index.html");
       const indexData = yield* fileSystem
         .readFile(indexPath)

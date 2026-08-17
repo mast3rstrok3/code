@@ -3772,6 +3772,64 @@ describe("ProviderRuntimeIngestion", () => {
     ).toBe(false);
   });
 
+  it("rejects full-mode browser children from a durable App Review owner", async () => {
+    const harness = await createHarness();
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    const parentThreadId = asThreadId("thread-app-review-owner");
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-app-review-owner-create"),
+        threadId: parentThreadId,
+        projectId: asProjectId("project-1"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+        parentThreadId: null,
+        workflowRole: "app-review-reviewer",
+        title: "Durable App Review owner",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: "implementation-workflow",
+        runtimeMode: "full-access",
+        branch: "feature/review",
+        worktreePath: "/tmp/app-review-owner",
+        createdAt,
+      }),
+    );
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-nested-full-review"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt,
+      threadId: parentThreadId,
+      turnId: asTurnId("turn-nested-full-review"),
+      itemId: asItemId("item-nested-full-review"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail: `\`\`\`json
+{
+  "type": "workflow-subagent-create",
+  "workflowPromptId": "${WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex}",
+  "title": "Nested durable review",
+  "promptMarkdown": "Review one lane.",
+  "appReviewMode": "full"
+}
+\`\`\``,
+      },
+    });
+
+    const snapshot = await waitForReadModel(harness.readModel, (readModel) => {
+      const parent = readModel.threads.find((thread) => thread.id === parentThreadId);
+      return parent?.workflowSubagentBatches?.[0]?.children[0]?.status === "rejected";
+    });
+    const child = snapshot.threads.find((thread) => thread.id === parentThreadId)
+      ?.workflowSubagentBatches?.[0]?.children[0];
+    expect(child?.failureDetail).toContain("only feedback-mode browser lanes");
+  });
+
   it("launches all 50 focused browser reviewers in one durable batch", async () => {
     const harness = await createHarness();
     const createdAt = "2026-01-01T00:00:00.000Z";
