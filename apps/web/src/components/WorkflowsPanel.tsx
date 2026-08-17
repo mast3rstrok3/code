@@ -378,6 +378,109 @@ function PlanningArtifacts(props: {
   );
 }
 
+function TicketAppReviewCycles(props: {
+  readonly run: AppReviewWorkflowRun;
+  readonly threads: readonly EnvironmentThreadShell[];
+  readonly onOpenThread: (thread: EnvironmentThreadShell) => void;
+  readonly activeThreadKey: string | null;
+  readonly timestampFormat: TimestampFormat;
+}) {
+  const threadById = new Map(props.threads.map((thread) => [thread.id, thread] as const));
+  const threadRow = (threadId: EnvironmentThreadShell["id"] | null) => {
+    if (threadId === null) return null;
+    const thread = threadById.get(threadId);
+    if (!thread) return null;
+    return (
+      <ThreadRow
+        row={{ thread, depth: 0, parentThreadKey: null }}
+        timestampFormat={props.timestampFormat}
+        activeThreadKey={props.activeThreadKey}
+        onOpenThread={props.onOpenThread}
+      />
+    );
+  };
+
+  return (
+    <div className="space-y-2 pt-1">
+      {props.run.cycles
+        .toSorted((left, right) => left.cycleNumber - right.cycleNumber)
+        .map((cycle) => {
+          const steps = [
+            {
+              label: "App review",
+              detail:
+                cycle.reviewVerdict ?? (cycle.status === "reviewing" ? "in progress" : "pending"),
+              thread: threadRow(cycle.reviewerThreadId),
+            },
+            {
+              label: "Gap analysis & repair plan",
+              detail: cycle.planId
+                ? `plan ${cycle.planId}`
+                : cycle.status === "planning"
+                  ? "in progress"
+                  : "pending",
+              thread: threadRow(cycle.reviewerThreadId),
+            },
+            {
+              label: "Fix the problem",
+              detail:
+                cycle.fixResult?.status ?? (cycle.status === "fixing" ? "in progress" : "pending"),
+              thread: threadRow(cycle.fixerThreadId),
+            },
+          ];
+          return (
+            <article
+              key={cycle.cycleNumber}
+              className="rounded-md border border-border/70 bg-background/60 p-2"
+            >
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="text-[11px] font-medium">
+                  Cycle {cycle.cycleNumber} of {props.run.cycleBudget}
+                </span>
+                <span className="text-[10px] capitalize text-muted-foreground">
+                  · {cycle.status}
+                </span>
+              </div>
+              <TimelineTimeRange
+                startedAt={cycle.startedAt}
+                endedAt={cycle.completedAt}
+                timestampFormat={props.timestampFormat}
+                className="mt-1"
+              />
+              <ol className="mt-2 space-y-1.5 border-l border-border/70 pl-3">
+                {steps.map((step, index) => (
+                  <li key={step.label} className="relative">
+                    <span className="absolute -left-[1.05rem] top-0.5 flex size-3.5 items-center justify-center rounded-full border border-border bg-background text-[8px] text-muted-foreground">
+                      {index + 1}
+                    </span>
+                    <div className="text-[10px]">
+                      <span className="font-medium text-foreground">{step.label}</span>
+                      <span className="capitalize text-muted-foreground"> · {step.detail}</span>
+                    </div>
+                    {step.thread}
+                  </li>
+                ))}
+              </ol>
+              {cycle.actionableFindingsMarkdown ? (
+                <div className="mt-2 rounded border border-border/60 px-2 py-1.5">
+                  <div className="text-[9px] font-medium uppercase tracking-wider text-muted-foreground">
+                    Gaps to fix
+                  </div>
+                  <p className="mt-1 whitespace-pre-wrap text-[10px] leading-4 text-muted-foreground">
+                    {cycle.actionableFindingsMarkdown}
+                  </p>
+                </div>
+              ) : null}
+            </article>
+          );
+        })}
+      {props.run.cycles.length === 0 ? (
+        <div className="py-1 text-[10px] text-muted-foreground/65">Review cycle is starting</div>
+      ) : null}
+    </div>
+  );
+}
+
 function TicketPhases(props: {
   readonly tickets: readonly OrchestrationPlanningTicket[];
   readonly run: OrchestrationImplementationRun;
@@ -534,7 +637,15 @@ function TicketPhases(props: {
                               </button>
                             ) : null}
                           </div>
-                          {stage.threads.length > 0 ? (
+                          {stage.label === "App Review" && appReviewRun ? (
+                            <TicketAppReviewCycles
+                              run={appReviewRun}
+                              threads={props.threads}
+                              onOpenThread={props.onOpenThread}
+                              activeThreadKey={props.activeThreadKey}
+                              timestampFormat={props.timestampFormat}
+                            />
+                          ) : stage.threads.length > 0 ? (
                             <div className="space-y-0.5">
                               {stage.threads.map((thread) => (
                                 <ThreadRow
