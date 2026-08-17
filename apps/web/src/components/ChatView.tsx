@@ -1691,12 +1691,27 @@ function ChatViewContent(props: ChatViewProps) {
     }
     return titles;
   }, [workflowCatalogState]);
+  const workflowSkillTitlesById = useMemo(() => {
+    const titles = new Map<string, string>();
+    if (workflowCatalogState.status !== "loaded") return titles;
+    for (const skill of workflowCatalogState.catalog.skills) titles.set(skill.id, skill.title);
+    return titles;
+  }, [workflowCatalogState]);
   const openWorkflowInstructions = useCallback(
     (workflowPromptId: string) => {
       if (!activeThreadRef) return;
       useRightPanelStore.getState().openInstructions(activeThreadRef, workflowPromptId);
     },
     [activeThreadRef],
+  );
+  const openWorkflowSkill = useCallback(
+    (skillId: string) => {
+      if (workflowCatalogState.status !== "loaded") return;
+      const skill = workflowCatalogState.catalog.skills.find((entry) => entry.id === skillId);
+      const promptId = skill?.promptIds[0];
+      if (promptId) openWorkflowInstructions(promptId);
+    },
+    [openWorkflowInstructions, workflowCatalogState],
   );
   const handleThreadOwnerUserIdChange = useCallback(
     (ownerUserId: WorkspaceUserId) => {
@@ -6841,6 +6856,9 @@ function ChatViewContent(props: ChatViewProps) {
         timestampFormat={timestampFormat}
         appReviewWorkflowRuns={displayedWorkflowArtifacts?.appReviewWorkflowRuns ?? []}
         implementationRuns={activeImplementationRuns}
+        tickets={displayedWorkflowArtifacts?.tickets ?? displayedPlanningWorkflow?.tickets ?? []}
+        skillTitlesById={workflowSkillTitlesById}
+        onOpenSkill={openWorkflowSkill}
         onOpenThread={(thread) => openWorkflowThread(thread.id)}
         onOpenAppReview={() => {
           useRightPanelStore.getState().open(activeThreadRef, "review");

@@ -1,7 +1,9 @@
+import type { OrchestrationPlanningTicket } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   buildWorkflowViewModel,
+  buildTicketWaves,
   buildWorkflowTimeline,
   buildWorkflowSteps,
   resolveWorkflowGroupTimeRange,
@@ -14,6 +16,40 @@ import {
   workflowStepMatchesImplementationFailure,
   type WorkflowModelThread,
 } from "./workflowModel";
+
+const planningTicket = (
+  id: string,
+  ordinal: number,
+  dependencies: readonly string[] = [],
+): OrchestrationPlanningTicket => ({
+  id,
+  specId: "spec-1",
+  ordinal,
+  title: id,
+  bodyMarkdown: id,
+  plannedFileChanges: [],
+  dependencies: dependencies.map((ticketId) => ({ specId: "spec-1", ticketId })),
+  status: "open",
+  createdAt: "2026-01-01T00:00:00.000Z",
+  updatedAt: "2026-01-01T00:00:00.000Z",
+});
+
+describe("buildTicketWaves", () => {
+  it("groups independent tickets before their dependents", () => {
+    const waves = buildTicketWaves([
+      planningTicket("ticket-1", 0),
+      planningTicket("ticket-2", 1),
+      planningTicket("ticket-3", 2, ["ticket-1"]),
+      planningTicket("ticket-4", 3, ["ticket-2", "ticket-3"]),
+      planningTicket("ticket-5", 4),
+    ]);
+    expect(waves.map((wave) => wave.map(({ id }) => id))).toEqual([
+      ["ticket-1", "ticket-2", "ticket-5"],
+      ["ticket-3"],
+      ["ticket-4"],
+    ]);
+  });
+});
 
 type TestThread = WorkflowModelThread & { readonly title: string };
 

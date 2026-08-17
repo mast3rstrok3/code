@@ -1,5 +1,6 @@
 import type {
   OrchestrationImplementationRetryableFailure,
+  OrchestrationPlanningTicket,
   OrchestrationSessionStatus,
   OrchestrationThreadWorkflowRole,
   WorkflowPreset,
@@ -96,6 +97,7 @@ export interface WorkflowTimelineStep<TThread extends WorkflowModelThread> {
   readonly id: string;
   readonly createdAt: string;
   readonly label: string | null;
+  readonly skillId: string | null;
   readonly repeatsAsCycles: boolean;
   readonly entries: readonly WorkflowTimelineEntry<TThread>[];
 }
@@ -103,6 +105,27 @@ export interface WorkflowTimelineStep<TThread extends WorkflowModelThread> {
 export interface WorkflowTimeRange {
   readonly startedAt: string;
   readonly endedAt: string | null;
+}
+
+export function buildTicketWaves(
+  tickets: readonly OrchestrationPlanningTicket[],
+): readonly (readonly OrchestrationPlanningTicket[])[] {
+  const remaining = new Map(tickets.map((ticket) => [ticket.id, ticket] as const));
+  const waves: OrchestrationPlanningTicket[][] = [];
+  while (remaining.size > 0) {
+    const ready = [...remaining.values()]
+      .filter((ticket) =>
+        ticket.dependencies.every((dependency) => !remaining.has(dependency.ticketId)),
+      )
+      .toSorted((left, right) => left.ordinal - right.ordinal);
+    const wave =
+      ready.length > 0
+        ? ready
+        : [[...remaining.values()].toSorted((a, b) => a.ordinal - b.ordinal)[0]!];
+    waves.push(wave);
+    for (const ticket of wave) remaining.delete(ticket.id);
+  }
+  return waves;
 }
 
 export function workflowStepMatchesImplementationFailure<TThread extends WorkflowModelThread>(
@@ -324,6 +347,7 @@ export function buildWorkflowSteps<TThread extends WorkflowModelThread>(
         id: `defined:${group.id}:${String(index)}`,
         createdAt: entries[0]?.createdAt ?? group.createdAt,
         label: definition.label,
+        skillId: definition.skillId ?? null,
         repeatsAsCycles: definedStepRepeatsAsCycles(definition),
         entries,
       };
@@ -358,6 +382,7 @@ function buildFallbackWorkflowSteps<TThread extends WorkflowModelThread>(
       id: `${identity}:${entry.id}`,
       createdAt: entry.createdAt,
       label: null,
+      skillId: null,
       repeatsAsCycles: false,
       entries: [entry],
     });
