@@ -795,7 +795,7 @@ function buildFastFeaturePrompt(input: {
   return [
     `Implement Fast feature run ${input.run.id}.`,
     "",
-    "Do not ask the user questions. Implement the canonical plan in the exact branch and worktree below, validate it, and commit all completed changes.",
+    "Do not ask the user questions. Implement the canonical plan in the exact branch and worktree below, validate it, and commit all completed changes. Treat its `## Build topology` as the execution contract: launch each same-group, dependency-free workstream in parallel, preserve the stated ownership boundaries, and wait for dependencies before starting downstream work. The named integration owner must combine the results, resolve overlap, run the listed focused checks, and commit. If a planned boundary is unsafe in the actual worktree, serialize only that boundary and record why; do not silently repartition the plan.",
     ...(input.rejectionMarkdown === undefined
       ? []
       : [

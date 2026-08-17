@@ -1697,7 +1697,7 @@ const make = Effect.gen(function* () {
             productWorkflowOwnsBrowserReview
           ) {
             yield* reject(
-              `The selected ${input.thread.workflowPreset === "fast-feature" ? "Fast Feature" : "Full Feature"} workflow owns Product Grill, Planning, Build, App Review, Code Review, and change-request sequencing. Continue or recover that workflow instead of launching an ad hoc Browser App Review child.`,
+              `The selected ${input.thread.workflowPreset === "fast-feature" ? "Fast Feature" : "Full Feature"} workflow owns ${input.thread.workflowPreset === "fast-feature" ? "Planning" : "Product Grill and Planning"}, Build, App Review, Code Review, and change-request sequencing. Continue or recover that workflow instead of launching an ad hoc Browser App Review child.`,
             );
             return;
           }

@@ -35,9 +35,27 @@ export const WORKFLOW_PROMPT_IDS = {
   planningPrototypeCodex: "planning.prototype.codex",
   planningWayfinderCodex: "planning.wayfinder.codex",
   planningResearchCodex: "planning.research.codex",
+  planningFastFeatureCodex: "planning.fast-feature.codex",
 } as const;
 
 const WORKFLOW_AGENT_COMMUNICATIONS_PROMPT = WORKFLOW_SUBAGENT_INSTRUCTIONS_PROMPT;
+
+const FAST_FEATURE_PLANNING_PROMPT = `<collaboration_mode># Fast Feature Planning
+
+Use native CLI Plan mode to produce the implementation plan for this Fast Feature. Optimize for a short handoff and safe parallel execution. You may use parallel read-only sub-agents to investigate independent repository questions while planning.
+
+The final proposed plan must contain these exact sections:
+
+## Build topology
+
+List the implementation workstreams that Build should run. For each workstream include a stable id, owned scope or files, dependencies, and focused validation. Put independent workstreams in the same parallel group. State explicitly when the change is too coupled to parallelize. Include one integration owner responsible for combining work, resolving overlap, running final focused checks, and committing the result.
+
+## App Review topology
+
+List the independent acceptance lanes App Review should prepare or analyze in parallel. For each lane include a stable id, covered user flow or acceptance criteria, required setup, and expected evidence. Keep all browser interaction, screenshots, recording, durable findings, and the final verdict assigned to the single authoritative Browser App Review thread. State explicitly when there is only one review lane.
+
+Everything after Planning is unattended. Do not ask for implementation approval in the final response; finish with the native CLI Plan-mode proposed plan handoff.
+</collaboration_mode>`;
 
 const APP_DEV_STACK_ASSOCIATED_DOC_CONTENT = `# AppDevStack
 
@@ -1587,6 +1605,8 @@ If the preview is unavailable, stuck on startup recovery, or has dependency/runt
 
 This thread is already the Browser App Review agent. Use the linked preview_* and app_review_* tools directly. Never delegate to or launch another Browser App Review.
 
+When the launch brief contains \`## App Review topology\`, treat it as the execution contract. Launch its independent acceptance lanes in parallel non-browser sub-agents for source-context, setup, or acceptance-criteria analysis, honoring their stated dependencies. Aggregate those lane reports before closing the review. Do not invent a different partition unless a planned lane is unsafe or impossible, and record any serialization or deviation in the review summary. Browser interaction, evidence capture, durable findings, and the terminal verdict remain this thread's responsibility in the single authoritative browser session.
+
 When this Browser App Review is linked to a durable App Review record:
 
 1. Call app_review_get first to load the durable App Review record before testing.
@@ -1857,6 +1877,17 @@ ${mattPocockDomainModelingSkill.promptText}
   }));
 
 export const WORKFLOW_PROMPT_REGISTRY = [
+  {
+    id: WORKFLOW_PROMPT_IDS.planningFastFeatureCodex,
+    order: 1,
+    workflow: "planning",
+    role: "planning-thread",
+    stage: "planning",
+    title: "Planning",
+    description: "Plans Build workstreams and App Review lanes for safe parallel execution.",
+    promptText: FAST_FEATURE_PLANNING_PROMPT,
+    associatedDocs: [APP_DEV_STACK_ASSOCIATED_DOC],
+  },
   ...MATT_POCOCK_ENGINEERING_SKILL_PROMPTS,
   {
     id: WORKFLOW_PROMPT_IDS.workflowAgentCommunications,
@@ -2271,7 +2302,7 @@ const CATALOG_SKILL_ID_BY_PROMPT_ID: Readonly<Record<string, string>> = {
 };
 
 const VISIBLE_T3_SKILL_IDS = new Set<string>([
-  WORKFLOW_PROMPT_IDS.productFastFeatureCodex,
+  WORKFLOW_PROMPT_IDS.planningFastFeatureCodex,
   WORKFLOW_PROMPT_IDS.productFullFeatureCodex,
   WORKFLOW_PROMPT_IDS.productPlanningCodex,
   WORKFLOW_PROMPT_IDS.planningTicketReviewerCodex,

@@ -381,10 +381,10 @@ function upsertProposedPlan(
 }
 
 describe("ProductWorkflowReactor", () => {
-  it.effect("recovers a Fast Feature turn that stops before Product Grill lock-in", () =>
+  it.effect("recovers a Full Feature turn that stops before Product Grill lock-in", () =>
     withSystem((system) =>
       Effect.gen(function* () {
-        yield* seedProjectAndThread(system, { workflowPreset: "fast-feature" });
+        yield* seedProjectAndThread(system, { workflowPreset: "full-feature" });
         yield* completeTurnCheckpoint(system, { turnId: "turn-skipped-grill" });
         yield* system.reactor.drain;
 
@@ -397,7 +397,7 @@ describe("ProductWorkflowReactor", () => {
           (event) =>
             event.type === "thread.turn-start-requested" &&
             event.payload.threadId === productThreadId &&
-            event.payload.workflowPromptId === WORKFLOW_PROMPT_IDS.productFastFeatureCodex,
+            event.payload.workflowPromptId === WORKFLOW_PROMPT_IDS.productFullFeatureCodex,
         );
         const recoveryMessage = events.find(
           (event) =>
@@ -422,10 +422,28 @@ describe("ProductWorkflowReactor", () => {
     ),
   );
 
-  it.effect("does not recover Product Grill while structured user input is pending", () =>
+  it.effect("does not treat a completed Fast Feature planning turn as an incomplete grill", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         yield* seedProjectAndThread(system, { workflowPreset: "fast-feature" });
+        yield* completeTurnCheckpoint(system, { turnId: "turn-fast-feature-plan" });
+        yield* system.reactor.drain;
+
+        const snapshot = yield* system.query.getSnapshot();
+        const thread = snapshot.threads.find((entry) => entry.id === productThreadId);
+        expect(
+          thread?.activities.some(
+            (activity) => activity.kind === "product-grill-recovery-requested",
+          ),
+        ).toBe(false);
+      }),
+    ),
+  );
+
+  it.effect("does not recover Product Grill while structured user input is pending", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        yield* seedProjectAndThread(system, { workflowPreset: "full-feature" });
         yield* system.engine.dispatch({
           type: "thread.activity.append",
           commandId: commandId("product-question-pending"),
@@ -458,7 +476,7 @@ describe("ProductWorkflowReactor", () => {
   it.effect("carries settled Product Grill answers into a recovery without replaying them", () =>
     withSystem((system) =>
       Effect.gen(function* () {
-        yield* seedProjectAndThread(system, { workflowPreset: "fast-feature" });
+        yield* seedProjectAndThread(system, { workflowPreset: "full-feature" });
         const turnId = TurnId.make("turn-answered-grill");
         yield* system.engine.dispatch({
           type: "thread.activity.append",
@@ -526,7 +544,7 @@ describe("ProductWorkflowReactor", () => {
   it.effect("bounds repeated Product Grill recovery and surfaces a terminal activity", () =>
     withSystem((system) =>
       Effect.gen(function* () {
-        yield* seedProjectAndThread(system, { workflowPreset: "fast-feature" });
+        yield* seedProjectAndThread(system, { workflowPreset: "full-feature" });
         for (const [index, turnId] of [
           "turn-skipped-one",
           "turn-skipped-two",
@@ -558,7 +576,7 @@ describe("ProductWorkflowReactor", () => {
           events.filter(
             (event) =>
               event.type === "thread.turn-start-requested" &&
-              event.payload.workflowPromptId === WORKFLOW_PROMPT_IDS.productFastFeatureCodex,
+              event.payload.workflowPromptId === WORKFLOW_PROMPT_IDS.productFullFeatureCodex,
           ),
         ).toHaveLength(2);
       }),

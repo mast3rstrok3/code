@@ -17,20 +17,17 @@ describe("workflow presets", () => {
     ]);
   });
 
-  it("starts Fast Feature immediately and defers AppDevStack until after Build", () => {
+  it("defines Fast Feature as four topology-driven stages", () => {
     const definition = WORKFLOW_PRESET_DEFINITIONS.find(
       (candidate) => candidate.id === "fast-feature",
     );
-    expect(definition?.helpSteps[0]?.label).toBe("Create shared worktree");
-    expect(definition?.helpSteps.map((step) => step.label)).toContain(
-      "CLI Build in the shared worktree",
-    );
-    expect(definition?.helpSteps.map((step) => step.label)).toContain(
-      "Start and probe AppDevStack from the completed Build",
-    );
-    expect(definition?.helpSteps.map((step) => step.label)).toContain(
-      "Run nested App Review against AppDevStack",
-    );
+    expect(definition?.helpSteps.map((step) => step.label)).toEqual([
+      "Planning",
+      "Building",
+      "App Review",
+      "Code Review",
+    ]);
+    expect(definition?.workflowPromptId).toBe("planning.fast-feature.codex");
   });
 
   it("lists code review before change-request publication wherever both appear", () => {
@@ -51,7 +48,7 @@ describe("workflow presets", () => {
   });
 
   it("maps presets to provider modes and intent kinds", () => {
-    expect(interactionModeForWorkflowPreset("fast-feature")).toBe("product-workflow");
+    expect(interactionModeForWorkflowPreset("fast-feature")).toBe("plan");
     expect(interactionModeForWorkflowPreset("product-planning")).toBe("product-workflow");
     expect(interactionModeForWorkflowPreset("implementation")).toBe("implementation-workflow");
     expect(expectedIntentKindForWorkflowPreset("fix")).toBe("fix");

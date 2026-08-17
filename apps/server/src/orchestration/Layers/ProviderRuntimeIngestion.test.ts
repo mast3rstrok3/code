@@ -3762,7 +3762,7 @@ describe("ProviderRuntimeIngestion", () => {
     const parent = snapshot.threads.find((thread) => thread.id === parentThreadId);
     const child = parent?.workflowSubagentBatches?.[0]?.children[0];
     expect(child?.status).toBe("rejected");
-    expect(child?.failureDetail).toContain("Fast Feature workflow owns Product Grill");
+    expect(child?.failureDetail).toContain("Fast Feature workflow owns Planning");
     expect(
       snapshot.threads.some(
         (thread) =>

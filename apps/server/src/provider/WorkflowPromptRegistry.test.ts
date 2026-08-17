@@ -151,6 +151,17 @@ describe("WorkflowPromptRegistry", () => {
       ["fast-feature", "full-feature", "implementation"],
     );
     const fastFeature = catalog.workflows.find((workflow) => workflow.id === "fast-feature");
+    NodeAssert.deepEqual(
+      fastFeature?.steps.map((step) => step.label),
+      ["Planning", "TDD", "Browser App Review", "Code Review"],
+    );
+    NodeAssert.equal(fastFeature?.interactionMode, "plan");
+    const fastFeaturePlanning = catalog.skills.find(
+      (skill) => skill.id === WORKFLOW_PROMPT_IDS.planningFastFeatureCodex,
+    );
+    NodeAssert.match(fastFeaturePlanning?.promptText ?? "", /## Build topology/);
+    NodeAssert.match(fastFeaturePlanning?.promptText ?? "", /## App Review topology/);
+    NodeAssert.match(fastFeaturePlanning?.promptText ?? "", /parallel group/);
     NodeAssert.ok(
       fastFeature?.steps.some((step) => step.label === "TDD" && step.skillId === "matt-pocock.tdd"),
     );

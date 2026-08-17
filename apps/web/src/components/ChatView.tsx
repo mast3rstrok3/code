@@ -6101,8 +6101,7 @@ function ChatViewContent(props: ChatViewProps) {
               interactionMode,
               ...(selectedBuildSkillId !== null
                 ? { workflowPromptId: selectedBuildSkillId }
-                : interactionMode === "product-workflow" &&
-                    workflowPromptIdForPreset(workflowPreset)
+                : workflowPromptIdForPreset(workflowPreset)
                   ? { workflowPromptId: workflowPromptIdForPreset(workflowPreset) }
                   : {}),
               ...(bootstrap ? { bootstrap } : {}),

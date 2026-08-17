@@ -863,6 +863,9 @@ const make = Effect.gen(function* () {
     if (sourceTurnId === null) return;
     const thread = yield* resolveThread(event.payload.threadId);
     if (!thread || !isProductWorkflowThread(thread)) return;
+    // Fast Feature starts directly in Plan mode. Its completed turn is a plan handoff,
+    // not an interrupted Product Grill that needs recovery.
+    if (thread.workflowPreset === "fast-feature") return;
     if (hasProductIntentLockedActivity(thread) || hasOpenUserInputRequest(thread)) return;
     if (
       thread.activities.some(
