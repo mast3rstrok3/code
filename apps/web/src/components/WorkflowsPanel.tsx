@@ -481,6 +481,54 @@ function TicketAppReviewCycles(props: {
   );
 }
 
+function AppReviewRunsTimeline(props: {
+  readonly runs: readonly AppReviewWorkflowRun[];
+  readonly threads: readonly EnvironmentThreadShell[];
+  readonly onOpenThread: (thread: EnvironmentThreadShell) => void;
+  readonly activeThreadKey: string | null;
+  readonly timestampFormat: TimestampFormat;
+}) {
+  return (
+    <div className="space-y-2 px-2 pb-2">
+      {props.runs
+        .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt))
+        .map((run, index) => (
+          <section key={run.id}>
+            {props.runs.length > 1 ? (
+              <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                Recorded App Review {index + 1} · {run.status}
+              </div>
+            ) : null}
+            <TicketAppReviewCycles
+              run={run}
+              threads={props.threads}
+              onOpenThread={props.onOpenThread}
+              activeThreadKey={props.activeThreadKey}
+              timestampFormat={props.timestampFormat}
+            />
+          </section>
+        ))}
+    </div>
+  );
+}
+
+function workflowSkillLabel(skillId: string, titles: ReadonlyMap<string, string>): string {
+  const title = titles.get(skillId);
+  if (title) return title;
+  switch (skillId) {
+    case "implementation.browser-app-review.codex":
+      return "App Review";
+    case "implementation.code-review.codex":
+      return "Code Review";
+    case "implementation.merge-gate.codex":
+      return "Merge Gate";
+    case "implementation.tdd.codex":
+      return "Ticket implementation";
+    default:
+      return skillId;
+  }
+}
+
 function TicketPhases(props: {
   readonly tickets: readonly OrchestrationPlanningTicket[];
   readonly run: OrchestrationImplementationRun;
@@ -762,6 +810,10 @@ function WorkflowGroupCard(props: {
   const showsAppReviews =
     group.preset === "app-review" ||
     (group.parentGroupId === null && props.appReviewWorkflowRuns.length > 0);
+  const workflowThreads = [
+    props.workflowRoot,
+    ...props.groups.flatMap((candidate) => candidate.rows.map((row) => row.thread)),
+  ];
 
   return (
     <div className={cn("relative", props.nested && "ml-3 my-1.5")}>
@@ -914,6 +966,18 @@ function WorkflowGroupCard(props: {
                           const isTicketExecutionStep =
                             group.preset === "planning" &&
                             workflowStepLabel(step).toLowerCase().includes("execute ticket waves");
+                          const isCombinedAppReviewStep =
+                            workflowStepLabel(step).toLowerCase().includes("app review") &&
+                            !isTicketExecutionStep;
+                          const combinedAppReviewRuns =
+                            linkedImplementationRun === null
+                              ? []
+                              : props.appReviewWorkflowRuns.filter(
+                                  (run) =>
+                                    run.caller.type === "implementation" &&
+                                    run.caller.implementationRunId === linkedImplementationRun.id &&
+                                    run.caller.ticketId === undefined,
+                                );
                           return (
                             <section key={step.id} className="px-1 py-1">
                               <header className="px-1">
@@ -949,7 +1013,7 @@ function WorkflowGroupCard(props: {
                                       onClick={() => props.onOpenSkill(step.skillId!)}
                                       className="cursor-pointer mt-1 rounded-full border border-border px-2 py-0.5 font-mono text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground"
                                     >
-                                      {props.skillTitlesById.get(step.skillId) ?? step.skillId}
+                                      {workflowSkillLabel(step.skillId, props.skillTitlesById)}
                                     </button>
                                   ) : null}
                                   {canRetryStep ? (
@@ -963,6 +1027,10 @@ function WorkflowGroupCard(props: {
                                     >
                                       <RotateCcw className="size-3" aria-hidden /> Restart step
                                     </button>
+                                  ) : isCombinedAppReviewStep ? (
+                                    <span className="mt-1 shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
+                                      Up to 10 cycles
+                                    </span>
                                   ) : step.repeatsAsCycles && step.entries.length > 1 ? (
                                     <span className="mt-1 shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
                                       {step.entries.length} cycles
@@ -987,12 +1055,7 @@ function WorkflowGroupCard(props: {
                                   <TicketPhases
                                     tickets={props.tickets}
                                     run={linkedImplementationRun}
-                                    threads={[
-                                      props.workflowRoot,
-                                      ...props.groups.flatMap((candidate) =>
-                                        candidate.rows.map((row) => row.thread),
-                                      ),
-                                    ]}
+                                    threads={workflowThreads}
                                     appReviewWorkflowRuns={props.appReviewWorkflowRuns}
                                     onOpenThread={props.onOpenThread}
                                     onOpenAppReview={props.onOpenAppReview}
@@ -1000,6 +1063,16 @@ function WorkflowGroupCard(props: {
                                     timestampFormat={props.timestampFormat}
                                   />
                                 </div>
+                              ) : stepOpen &&
+                                isCombinedAppReviewStep &&
+                                combinedAppReviewRuns.length > 0 ? (
+                                <AppReviewRunsTimeline
+                                  runs={combinedAppReviewRuns}
+                                  threads={workflowThreads}
+                                  onOpenThread={props.onOpenThread}
+                                  activeThreadKey={props.activeThreadKey}
+                                  timestampFormat={props.timestampFormat}
+                                />
                               ) : stepOpen && step.entries.length === 0 ? (
                                 <div className="px-2 py-1 text-[11px] text-muted-foreground/55">
                                   Not started

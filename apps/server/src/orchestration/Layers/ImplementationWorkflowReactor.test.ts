@@ -3436,6 +3436,61 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
+  it.effect("starts the bounded combined App Review directly after the merge gate", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+
+        let snapshot = yield* system.query.getSnapshot();
+        const validator = snapshot.threads.find(
+          (thread) =>
+            thread.workflowRole === "implementation-validator" &&
+            thread.title === "Implementation merge gate",
+        );
+        if (!validator) throw new Error("Merge gate missing.");
+        yield* system.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: commandId("nested-merge-gate-pass"),
+          threadId: validator.id,
+          activity: {
+            id: eventId("nested-merge-gate-pass"),
+            tone: "info",
+            kind: "implementation-merge-gate-result",
+            summary: "Merge gate passed",
+            payload: {
+              type: "implementation-merge-gate-result",
+              runId: run.id,
+              status: "passed",
+              validations: requiredValidations(),
+              summaryMarkdown: "ok",
+            },
+            turnId: null,
+            createdAt: "2026-01-01T00:00:02.000Z",
+          },
+          createdAt: "2026-01-01T00:00:02.000Z",
+        });
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        const combinedReview = snapshot.appReviewWorkflowRuns?.find(
+          (candidate) =>
+            candidate.caller.type === "implementation" &&
+            candidate.caller.implementationRunId === run.id &&
+            candidate.caller.ticketId === undefined,
+        );
+        expect(combinedReview?.cycleBudget).toBe(10);
+        expect(
+          snapshot.threads.filter(
+            (thread) =>
+              thread.workflowRole === "implementation-code-reviewer" &&
+              thread.workflowContext?.ticketScope.length !== 1,
+          ),
+        ).toHaveLength(0);
+      }),
+    ),
+  );
+
   it.effect("runs merge gate, browser review, files a PR, and completes after worker success", () =>
     withSystem((system) =>
       Effect.gen(function* () {

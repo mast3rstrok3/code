@@ -2429,7 +2429,10 @@ const make = Effect.gen(function* () {
             ...(artifactMarkdown === undefined ? {} : { artifactMarkdown }),
           }),
           previewTargets: [frontendUrl],
-          cycleBudget: Math.min(50, Math.max(1, cycleRun.launchSummary.finalAppReview.maxCycles)),
+          cycleBudget: Math.min(
+            IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
+            Math.max(1, cycleRun.launchSummary.finalAppReview.maxCycles),
+          ),
           modelSelection: orchestratorThread.modelSelection,
           createdAt: input.createdAt,
         });
@@ -3773,19 +3776,6 @@ const make = Effect.gen(function* () {
         retryableFailure: null,
         updatedAt,
       };
-      if (
-        run.artifactSource === "planning-spec" &&
-        run.appReviewStrategy === "nested-workflow" &&
-        run.codeReviewAttemptCount === 0
-      ) {
-        yield* startCodeReview({
-          sourceThreadId,
-          run: validatedRun,
-          createdAt: updatedAt,
-          skipAppReviewRequirement: true,
-        });
-        return;
-      }
       if (run.qaExhaustedAt !== null || run.appReviewExhaustedAt !== null) {
         yield* startCodeReview({
           sourceThreadId,
@@ -4355,7 +4345,11 @@ const make = Effect.gen(function* () {
         if (
           run.appReviewedHeadSha === null &&
           run.qaExhaustedAt === null &&
-          run.appReviewExhaustedAt === null
+          run.appReviewExhaustedAt === null &&
+          !(
+            run.appReviewStrategy === "nested-workflow" &&
+            run.latestAppReviewWorkflowOutcome !== null
+          )
         ) {
           yield* startBrowserReview({ sourceThreadId, run: blockedRun, createdAt: updatedAt });
         } else {
@@ -4405,7 +4399,11 @@ const make = Effect.gen(function* () {
         if (
           run.appReviewedHeadSha === null &&
           run.qaExhaustedAt === null &&
-          run.appReviewExhaustedAt === null
+          run.appReviewExhaustedAt === null &&
+          !(
+            run.appReviewStrategy === "nested-workflow" &&
+            run.latestAppReviewWorkflowOutcome !== null
+          )
         ) {
           yield* startBrowserReview({
             sourceThreadId,
@@ -4492,7 +4490,10 @@ const make = Effect.gen(function* () {
       const needsFreshAppReview =
         run.appReviewedHeadSha === null &&
         run.qaExhaustedAt === null &&
-        run.appReviewExhaustedAt === null;
+        run.appReviewExhaustedAt === null &&
+        !(
+          run.appReviewStrategy === "nested-workflow" && run.latestAppReviewWorkflowOutcome !== null
+        );
       yield* startMergeGate({
         sourceThreadId,
         run: reviewedRun,

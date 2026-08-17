@@ -505,7 +505,68 @@ describe("buildWorkflowViewModel", () => {
       ticketExecution?.entries
         .filter((entry) => entry.kind === "thread")
         .map((entry) => entry.row.thread.id),
-    ).toEqual(["root", "ticket-review", "worker"]);
+    ).toEqual(["ticket-review", "worker"]);
+  });
+
+  it("renders one bounded post-ticket sequence without internal fallback steps", () => {
+    const root = thread("root", { workflowPreset: "planning" });
+    const scoped = (id: string, workflowRole: TestThread["workflowRole"]) =>
+      thread(id, {
+        parentThreadId: "root",
+        workflowRole,
+        workflowContext: {
+          workflowId: "implementation-run",
+          parentWorkflowId: "planning-run",
+          rootThreadId: "root",
+          ticketScope: ["ticket-1"],
+        },
+      });
+    const global = (id: string, workflowRole: TestThread["workflowRole"], title: string = id) =>
+      thread(id, {
+        title,
+        parentThreadId: "root",
+        workflowRole,
+        workflowContext: {
+          workflowId: "implementation-run",
+          parentWorkflowId: "planning-run",
+          rootThreadId: "root",
+          ticketScope: ["ticket-1", "ticket-2"],
+        },
+      });
+    const model = buildWorkflowViewModel([
+      root,
+      scoped("worker", "implementation-worker"),
+      scoped("ticket-app-review", "app-review-reviewer"),
+      scoped("ticket-code-review", "implementation-code-reviewer"),
+      global("merge", "implementation-validator", "Implementation merge gate"),
+      global("app-review", "app-review-reviewer"),
+      global("repair", "app-review-fixer"),
+      global("code-review", "implementation-code-reviewer"),
+      global("final-validation", "implementation-validator", "Implementation final validation"),
+    ]);
+    const groups = model.rootsByThreadKey.get("env:root")?.groups ?? [];
+    const planning = groups.find((group) => group.sourceId === "planning-run");
+    const steps = planning
+      ? buildWorkflowSteps(planning, groups, root, { flattenNestedWorkflows: true })
+      : [];
+
+    expect(steps.map((step) => step.label)).toEqual([
+      "Planning phase · Prepare shared worktree and App Dev Stack",
+      "Planning phase · Grill with Docs",
+      "Planning phase · Spec authoring",
+      "Planning phase · Ticket authoring",
+      "Planning phase · Ticket review and revision cycles",
+      "Implementation phase · Execute ticket waves",
+      "Implementation phase · Merge ticket branches",
+      "Implementation phase · App Review",
+      "Implementation phase · Final Code Review and pull request",
+    ]);
+    expect(steps[7]?.entries.map((entry) => entry.id)).toEqual(["env:app-review", "env:repair"]);
+    expect(steps[8]?.entries.map((entry) => entry.id)).toEqual([
+      "env:root",
+      "env:code-review",
+      "env:final-validation",
+    ]);
   });
 
   it("calculates thread, step, and parent workflow timing across nested work", () => {

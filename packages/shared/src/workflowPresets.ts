@@ -168,37 +168,24 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         skillId: "implementation.orchestrator-planning.codex",
       },
       {
-        label: "Run unblocked ticket workers in parallel worktrees",
+        label: "Execute ticket waves",
         skillId: "implementation.tdd.codex",
-      },
-      {
-        label: "Run eligible per-ticket App Reviews",
-        skillId: "implementation.browser-app-review.codex",
-        note: "up to ten cycles per ticket; failures do not stop the workflow",
-      },
-      {
-        label: "Run one Code Review per ticket",
-        skillId: "implementation.code-review.codex",
+        note: "workers, up to ten App Review cycles, and one Code Review per ticket",
       },
       {
         label: "Merge ticket branches into the starting worktree",
         skillId: "implementation.merge-gate.codex",
       },
       {
-        label: "Run combined Code Review",
-        skillId: "implementation.code-review.codex",
-      },
-      { label: "Start and probe the combined App Dev Stack" },
-      {
-        label: "Run combined App Review",
+        label: "Run App Review",
         skillId: "implementation.browser-app-review.codex",
-        note: "up to ten cycles; covers cross-ticket flows and earlier review problems",
+        note: "up to ten review, repair-plan, and fix cycles",
       },
       {
-        label: "Run final Code Review",
+        label: "Final Code Review and pull request",
         skillId: "implementation.code-review.codex",
+        note: "final validation and change-request publication are included",
       },
-      { label: "Publish the change request" },
     ],
   },
   {
@@ -241,14 +228,14 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         note: "automatic",
       },
       {
-        label: "Implementation phase · Combined Code Review and App Review",
-        skillId: "implementation.code-review.codex",
-        note: "automatic; App Review runs up to ten cycles",
+        label: "Implementation phase · App Review",
+        skillId: "implementation.browser-app-review.codex",
+        note: "automatic; up to ten review, repair-plan, and fix cycles",
       },
       {
         label: "Implementation phase · Final Code Review and pull request",
         skillId: "implementation.code-review.codex",
-        note: "automatic; unresolved warnings are included in the pull request",
+        note: "automatic; final validation and change-request publication are included",
       },
     ],
   },

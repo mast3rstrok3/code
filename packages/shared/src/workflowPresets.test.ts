@@ -24,6 +24,18 @@ describe("workflow presets", () => {
     );
   });
 
+  it("uses one bounded App Review between merge gate and final review", () => {
+    const engineeringWorkflow = WORKFLOW_PRESET_DEFINITIONS.find(
+      (definition) => definition.id === "planning",
+    );
+    expect(engineeringWorkflow?.helpSteps.slice(-3).map((step) => step.label)).toEqual([
+      "Implementation phase · Merge ticket branches",
+      "Implementation phase · App Review",
+      "Implementation phase · Final Code Review and pull request",
+    ]);
+    expect(engineeringWorkflow?.helpSteps.at(-2)?.note).toContain("up to ten");
+  });
+
   it("maps presets to provider modes and intent kinds", () => {
     expect(interactionModeForWorkflowPreset("fast-feature")).toBe("plan");
     expect(interactionModeForWorkflowPreset("product-planning")).toBe("product-workflow");

@@ -13,6 +13,7 @@ import {
 export interface WorkflowModelThread {
   readonly environmentId: string;
   readonly id: string;
+  readonly title?: string | undefined;
   readonly parentThreadId: string | null;
   readonly workflowRole: OrchestrationThreadWorkflowRole | null;
   readonly workflowContext?: {
@@ -275,6 +276,31 @@ function entryMatchesDefinedStep<TThread extends WorkflowModelThread>(
         role === "app-review-fixer")
     );
   }
+  if (label.includes("merge ticket branches")) {
+    return (
+      role === "implementation-validator" &&
+      !entry.row.thread.title?.toLowerCase().includes("final validation")
+    );
+  }
+  if (label.includes("app review") && !label.includes("ticket")) {
+    return (
+      (role === "app-review-orchestrator" ||
+        role === "app-review-reviewer" ||
+        role === "app-review-fixer" ||
+        role === "implementation-qa-reviewer" ||
+        role === "implementation-fixer") &&
+      entry.row.thread.workflowContext?.ticketScope?.length !== 1
+    );
+  }
+  if (label.includes("final code review")) {
+    return (
+      role === "implementation-orchestrator" ||
+      (role === "implementation-code-reviewer" &&
+        entry.row.thread.workflowContext?.ticketScope?.length !== 1) ||
+      (role === "implementation-validator" &&
+        entry.row.thread.title?.toLowerCase().includes("final validation") === true)
+    );
+  }
   if (step.skillId !== undefined && entrySkillIds(entry).has(step.skillId)) return true;
   if (label.includes("start and probe appdevstack")) {
     return role === "implementation-orchestrator" || role === "fast-feature-implementer";
@@ -302,7 +328,11 @@ function definedStepUsesRootThread(preset: WorkflowPreset, step: WorkflowPresetH
   const label = step.label.toLowerCase();
   if (label.includes("create shared worktree")) return true;
   if (preset === "planning") {
-    return step.skillId !== "planning.ticket-reviewer.codex";
+    const label = step.label.toLowerCase();
+    if (label.startsWith("planning phase")) {
+      return step.skillId !== "planning.ticket-reviewer.codex";
+    }
+    return label.includes("final code review");
   }
   if (preset === "wayfinder") return true;
   return false;
