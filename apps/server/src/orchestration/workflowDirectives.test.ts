@@ -5,6 +5,27 @@ import { describe, it } from "vite-plus/test";
 import { parseWorkflowDirectiveFromMarkdown } from "./workflowDirectives.ts";
 
 describe("workflowDirectives", () => {
+  it("parses hierarchical App Review repair tickets", () => {
+    const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
+{
+  "type": "app-review-repair-tickets",
+  "runId": "app-review-run-1",
+  "cycleNumber": 2,
+  "tickets": [{
+    "key": "TICKET-1.2",
+    "parentTicketKey": "TICKET-1",
+    "title": "Repair keyboard navigation",
+    "bodyMarkdown": "## What to build\\nRestore keyboard navigation.",
+    "dependencyKeys": []
+  }]
+}
+\`\`\``);
+
+    NodeAssert.equal(result.kind, "parsed");
+    if (result.kind !== "parsed" || result.directive.type !== "app-review-repair-tickets") return;
+    NodeAssert.equal(result.directive.tickets[0]?.key, "TICKET-1.2");
+  });
+
   it("parses App Review fixer results with focused validations", () => {
     const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
 {

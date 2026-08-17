@@ -8,12 +8,12 @@ import {
   type AppReviewWorkflowCycle,
   type AppReviewWorkflowFailureReason,
   type AppReviewWorkflowFixResult,
+  type AppReviewWorkflowRepairTicket,
   type AppReviewWorkflowRun,
   type AppReviewWorkflowWorkspaceRevision,
   MessageId,
   ThreadId,
   type OrchestrationEvent,
-  type OrchestrationProposedPlan,
   type OrchestrationThread,
   WORKFLOW_AUTOMATION_RUNTIME_MODE,
 } from "@t3tools/contracts";
@@ -64,6 +64,7 @@ type AppReviewWorkflowEvent = Extract<
 
 const terminalStatuses = new Set(["passed", "failed", "exhausted"]);
 const APP_REVIEW_IMPLEMENT_SKILL_ID = "matt-pocock.implement";
+const APP_REVIEW_TO_TICKETS_SKILL_ID = "matt-pocock.to-tickets";
 
 interface AppDevStackPreviewLookup {
   readonly stack: {
@@ -690,6 +691,8 @@ const make = Effect.gen(function* () {
               status: "planning",
               reviewVerdict: "failed",
               actionableFindingsMarkdown: input.actionableFindingsMarkdown,
+              repairTickets: [],
+              ticketingTurnId: null,
             }
           : entry,
       ),
@@ -697,41 +700,92 @@ const make = Effect.gen(function* () {
     };
     yield* updateRun(planningRun);
     yield* orchestrationEngine.dispatch({
-      type: "thread.interaction-mode.set",
-      commandId: yield* serverCommandId("app-review-workflow-plan-mode"),
-      threadId: reviewer.id,
-      interactionMode: "plan",
-      createdAt: input.occurredAt,
-    });
-    yield* orchestrationEngine.dispatch({
       type: "thread.runtime-mode.set",
-      commandId: yield* serverCommandId("app-review-workflow-plan-runtime"),
+      commandId: yield* serverCommandId("app-review-workflow-ticket-runtime"),
       threadId: reviewer.id,
       runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
       createdAt: input.occurredAt,
     });
+    const reviewedTicketId =
+      input.run.caller.type === "implementation" ? input.run.caller.ticketId : undefined;
+    const parentTicket =
+      reviewedTicketId !== undefined
+        ? (reviewer.planningWorkflow?.tickets ?? target.thread.planningWorkflow?.tickets)?.find(
+            (ticket) => ticket.id === reviewedTicketId,
+          )
+        : undefined;
+    if (reviewedTicketId !== undefined && parentTicket?.key === undefined) {
+      yield* failRun({
+        run: planningRun,
+        reason: "plan-missing",
+        detailMarkdown: `Cannot create child repair tickets because parent ticket '${reviewedTicketId}' is unavailable.`,
+        occurredAt: input.occurredAt,
+      });
+      return;
+    }
+    const parentTicketKey = parentTicket?.key ?? "INTEGRATION-1";
+    const existingRepairTicketCount = input.run.cycles.reduce(
+      (count, entry) =>
+        count +
+        (entry.repairTickets ?? []).filter((ticket) => ticket.parentTicketKey === parentTicketKey)
+          .length,
+      0,
+    );
+    const firstChildKey = `${parentTicketKey}.${existingRepairTicketCount + 1}`;
     yield* orchestrationEngine.dispatch({
       type: "thread.turn.start",
-      commandId: yield* serverCommandId("app-review-workflow-plan-turn"),
+      commandId: yield* serverCommandId("app-review-workflow-ticket-turn"),
       threadId: reviewer.id,
       message: {
-        messageId: yield* serverMessageId("app-review-workflow-plan"),
+        messageId: yield* serverMessageId("app-review-workflow-tickets"),
         role: "user",
-        text: [
-          `Analyze the product gap and create one non-interactive repair plan for App Review cycle ${cycle.cycleNumber}.`,
-          "",
-          "Stay in this App Review thread so the browser evidence, gap analysis, and plan share one history. Do not edit files. Do not ask questions. Compare the original acceptance brief with the observed UI behavior, cover every actionable finding together, and exit Plan mode with exactly one ordinary persisted proposed plan.",
-          "",
-          "Original acceptance brief:",
-          planningRun.briefMarkdown,
-          "",
-          "Complete actionable findings:",
-          input.actionableFindingsMarkdown,
-        ].join("\n"),
+        text: appendWorkflowSkillCommandSection(
+          [
+            `Run gap analysis and create repair tickets for App Review cycle ${cycle.cycleNumber}.`,
+            "",
+            "Stay in this App Review thread so the evidence, gap analysis, and tickets share one history. Do not edit files or ask questions. Apply the To Tickets vertical-slice discipline to every actionable finding.",
+            "This App Review adapter owns persistence. Do not emit planning-tickets-artifact, create external issues, or modify the parent planning-ticket set; emit only app-review-repair-tickets below.",
+            `Use '${parentTicketKey}' as the parent key. Number child tickets consecutively from '${firstChildKey}' (for example '${parentTicketKey}.1', '${parentTicketKey}.2').`,
+            input.run.caller.type === "implementation" && input.run.caller.ticketId !== undefined
+              ? "These are children of the ticket currently under review."
+              : "These are integration repair tickets for the combined post-merge review; do not attach them to an original planning ticket.",
+            "",
+            "Original acceptance brief:",
+            planningRun.briefMarkdown,
+            "",
+            "Complete actionable findings:",
+            input.actionableFindingsMarkdown,
+            "",
+            "Finish with exactly one fenced JSON block:",
+            "```json",
+            // @effect-diagnostics-next-line preferSchemaOverJson:off - embeds a fixed example in the agent prompt.
+            JSON.stringify(
+              {
+                type: "app-review-repair-tickets",
+                runId: planningRun.id,
+                cycleNumber: cycle.cycleNumber,
+                tickets: [
+                  {
+                    key: firstChildKey,
+                    parentTicketKey,
+                    title: "Repair the observed product gap",
+                    bodyMarkdown: "What to build and acceptance criteria.",
+                    dependencyKeys: [],
+                  },
+                ],
+              },
+              null,
+              2,
+            ),
+            "```",
+          ].join("\n"),
+          APP_REVIEW_TO_TICKETS_SKILL_ID,
+        ),
         attachments: [],
       },
       runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
-      interactionMode: "plan",
+      interactionMode: "default",
+      workflowPromptId: APP_REVIEW_TO_TICKETS_SKILL_ID,
       createdAt: input.occurredAt,
     });
   });
@@ -815,11 +869,10 @@ const make = Effect.gen(function* () {
   const buildFixPrompt = (input: {
     readonly run: AppReviewWorkflowRun;
     readonly cycle: AppReviewWorkflowCycle;
-    readonly plan: OrchestrationProposedPlan;
   }) =>
     appendWorkflowSkillCommandSection(
       [
-        `Implement the persisted App Review repair plan '${input.plan.id}' for run '${input.run.id}'.`,
+        `Implement the App Review repair tickets for run '${input.run.id}', cycle ${input.cycle.cycleNumber}.`,
         "",
         "Use TDD. Address every actionable finding together, preserve unrelated work, and run focused validation. Do not ask the user questions.",
         input.run.caller.type === "implementation"
@@ -832,8 +885,11 @@ const make = Effect.gen(function* () {
         "Actionable findings:",
         input.cycle.actionableFindingsMarkdown ?? "Missing findings",
         "",
-        "Persisted proposed plan:",
-        input.plan.planMarkdown,
+        "Durable repair tickets:",
+        ...(input.cycle.repairTickets ?? []).map(
+          (ticket) =>
+            `## ${ticket.key} · ${ticket.title}\n\n${ticket.bodyMarkdown}\n\nBlocked by: ${ticket.dependencyKeys.join(", ") || "None"}`,
+        ),
         "",
         "Finish with exactly one fenced JSON block:",
         "```json",
@@ -841,7 +897,7 @@ const make = Effect.gen(function* () {
           {
             type: "app-review-fix-result",
             runId: input.run.id,
-            planId: input.plan.id,
+            planId: input.cycle.planId,
             status: "succeeded",
             commitSha: input.run.caller.type === "implementation" ? "required-HEAD-sha" : undefined,
             validations: [
@@ -865,7 +921,6 @@ const make = Effect.gen(function* () {
   const ensureFixerLaunch = Effect.fn("AppReviewWorkflowReactor.ensureFixerLaunch")(function* (
     run: AppReviewWorkflowRun,
     cycle: AppReviewWorkflowCycle,
-    plan: OrchestrationProposedPlan,
   ) {
     if (cycle.fixerThreadId === null) return;
     const existing = yield* resolveThread(cycle.fixerThreadId);
@@ -898,20 +953,19 @@ const make = Effect.gen(function* () {
       message: {
         messageId: yield* serverMessageId("app-review-workflow-fixer"),
         role: "user",
-        text: buildFixPrompt({ run, cycle, plan }),
+        text: buildFixPrompt({ run, cycle }),
         attachments: [],
       },
       runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
       interactionMode: "default",
       workflowPromptId: APP_REVIEW_IMPLEMENT_SKILL_ID,
-      sourceProposedPlan: { threadId: reviewer.id, planId: plan.id },
       createdAt: run.updatedAt,
     });
   });
 
   const startFixer = Effect.fn("AppReviewWorkflowReactor.startFixer")(function* (input: {
     readonly run: AppReviewWorkflowRun;
-    readonly plan: OrchestrationProposedPlan;
+    readonly repairTickets: ReadonlyArray<AppReviewWorkflowRepairTicket>;
     readonly plannerTurnId: AppReviewWorkflowCycle["plannerTurnId"];
     readonly occurredAt: string;
   }) {
@@ -930,11 +984,14 @@ const make = Effect.gen(function* () {
       createdAt: input.occurredAt,
     });
     const fixerThreadId = yield* serverThreadId("app-review-fixer");
+    const repairTicketBatchId = `app-review-repair-tickets:${input.run.id}:${cycle.cycleNumber}`;
     const fixingCycle: AppReviewWorkflowCycle = {
       ...cycle,
       status: "fixing",
-      planId: input.plan.id,
+      planId: repairTicketBatchId,
       plannerTurnId: input.plannerTurnId,
+      ticketingTurnId: input.plannerTurnId,
+      repairTickets: input.repairTickets,
       fixerThreadId,
     };
     const fixingRun: AppReviewWorkflowRun = {
@@ -947,7 +1004,7 @@ const make = Effect.gen(function* () {
       updatedAt: input.occurredAt,
     };
     yield* updateRun(fixingRun);
-    yield* ensureFixerLaunch(fixingRun, fixingCycle, input.plan);
+    yield* ensureFixerLaunch(fixingRun, fixingCycle);
   });
 
   const reconcilePlanning = Effect.fn("AppReviewWorkflowReactor.reconcilePlanning")(function* (
@@ -982,29 +1039,79 @@ const make = Effect.gen(function* () {
       });
       return;
     }
-    const plans = reviewer.proposedPlans.filter((candidate) => candidate.turnId === turn.turnId);
-    if (plans.length === 0) {
+    const ticketActivity = reviewer.activities
+      .toReversed()
+      .find(
+        (activity) =>
+          activity.kind === "app-review-repair-tickets" &&
+          Predicate.isObject(activity.payload) &&
+          activity.payload["type"] === "app-review-repair-tickets" &&
+          activity.payload["runId"] === run.id &&
+          activity.payload["cycleNumber"] === cycle.cycleNumber,
+      );
+    const rawTickets =
+      ticketActivity !== undefined && Predicate.isObject(ticketActivity.payload)
+        ? ticketActivity.payload["tickets"]
+        : undefined;
+    if (!Array.isArray(rawTickets) || rawTickets.length === 0) {
       yield* failRun({
         run,
         reason: "plan-missing",
-        detailMarkdown:
-          "The App Review thread completed gap analysis without one persisted proposed plan.",
+        detailMarkdown: "The App Review thread completed gap analysis without repair tickets.",
         occurredAt,
       });
       return;
     }
-    const plan = plans[0]!;
-    if (plans.length !== 1 || plan.planMarkdown.trim().length === 0) {
+    const repairTickets = rawTickets.filter(
+      (ticket): ticket is AppReviewWorkflowRepairTicket =>
+        Predicate.isObject(ticket) &&
+        Predicate.isString(ticket["key"]) &&
+        (ticket["parentTicketKey"] === null || Predicate.isString(ticket["parentTicketKey"])) &&
+        Predicate.isString(ticket["title"]) &&
+        Predicate.isString(ticket["bodyMarkdown"]) &&
+        Array.isArray(ticket["dependencyKeys"]) &&
+        ticket["dependencyKeys"].every(Predicate.isString),
+    );
+    const keys = new Set(repairTickets.map((ticket) => ticket.key));
+    const parentKeys = new Set(repairTickets.map((ticket) => ticket.parentTicketKey));
+    const parentTicketKey = repairTickets[0]?.parentTicketKey;
+    const priorSiblingCount = run.cycles.reduce(
+      (count, entry) =>
+        count +
+        (entry.cycleNumber === cycle.cycleNumber
+          ? 0
+          : (entry.repairTickets ?? []).filter(
+              (ticket) => ticket.parentTicketKey === parentTicketKey,
+            ).length),
+      0,
+    );
+    const suffixes = repairTickets
+      .map((ticket) =>
+        parentTicketKey === null
+          ? Number.NaN
+          : Number(ticket.key.slice(`${parentTicketKey}.`.length)),
+      )
+      .toSorted((left, right) => left - right);
+    const keysAreSequential =
+      parentTicketKey !== null &&
+      repairTickets.every((ticket) => ticket.key.startsWith(`${parentTicketKey}.`)) &&
+      suffixes.every((suffix, index) => suffix === priorSiblingCount + index + 1);
+    if (
+      repairTickets.length !== rawTickets.length ||
+      keys.size !== repairTickets.length ||
+      parentKeys.size !== 1 ||
+      !keysAreSequential
+    ) {
       yield* failRun({
         run,
         reason: "plan-malformed",
         detailMarkdown:
-          "The App Review thread must persist exactly one non-empty proposed plan for the repair cycle.",
+          "The App Review thread must persist unique, consecutively numbered child repair tickets under one parent key.",
         occurredAt,
       });
       return;
     }
-    yield* startFixer({ run, plan, plannerTurnId: turn.turnId, occurredAt });
+    yield* startFixer({ run, repairTickets, plannerTurnId: turn.turnId, occurredAt });
   });
 
   const parseFixResult = (
@@ -1050,9 +1157,7 @@ const make = Effect.gen(function* () {
       return;
     const fixer = yield* resolveThread(cycle.fixerThreadId);
     if (fixer === undefined) {
-      const reviewer = yield* resolveThread(cycle.reviewerThreadId);
-      const plan = reviewer?.proposedPlans.find((candidate) => candidate.id === cycle.planId);
-      if (plan !== undefined) yield* ensureFixerLaunch(run, cycle, plan);
+      if ((cycle.repairTickets?.length ?? 0) > 0) yield* ensureFixerLaunch(run, cycle);
       return;
     }
     const result = parseFixResult(fixer, run, cycle);

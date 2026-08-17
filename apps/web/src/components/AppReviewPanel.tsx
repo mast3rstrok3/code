@@ -244,16 +244,20 @@ function RunDetails(props: {
                 />
                 <CycleStep
                   number={2}
-                  title="Gap analysis & fix plan"
-                  description="Analyze failures and persist the repair plan in the same review thread."
+                  title="Gap analysis & repair tickets"
+                  description="Analyze failures and create durable child tickets in the same review thread."
                   status={planningStatus}
-                  actionLabel={cycle.planId ? `Plan ${cycle.planId}` : "Review thread"}
+                  actionLabel={
+                    cycle.repairTickets?.length
+                      ? `${cycle.repairTickets.length} repair ticket${cycle.repairTickets.length === 1 ? "" : "s"}`
+                      : "Review thread"
+                  }
                   onOpen={() => props.onOpenThread(cycle.reviewerThreadId)}
                 />
                 <CycleStep
                   number={3}
-                  title="Implement the plan"
-                  description="Use the Implement skill in a new thread and validate the repair."
+                  title="Implement the repair tickets"
+                  description="Use the Implement skill in a fresh thread and validate every child ticket."
                   status={implementationStatus}
                   actionLabel="Implementation thread"
                   {...(cycle.fixerThreadId

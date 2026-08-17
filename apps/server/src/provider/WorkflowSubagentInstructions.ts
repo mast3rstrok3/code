@@ -92,6 +92,7 @@ Use existing final-result directives for durable handoffs:
 - \`implementation-worker-result\`
 - \`implementation-merge-gate-result\`
 - \`app-review-document\`
+- \`app-review-repair-tickets\`
 - \`implementation-fix-result\`
 - \`app-review-fix-result\`
 - \`implementation-code-review-result\`

@@ -413,9 +413,9 @@ function TicketAppReviewCycles(props: {
               thread: threadRow(cycle.reviewerThreadId),
             },
             {
-              label: "Gap analysis & repair plan",
-              detail: cycle.planId
-                ? `plan ${cycle.planId}`
+              label: "Gap analysis & repair tickets",
+              detail: cycle.repairTickets?.length
+                ? `${cycle.repairTickets.length} ticket${cycle.repairTickets.length === 1 ? "" : "s"}`
                 : cycle.status === "planning"
                   ? "in progress"
                   : "pending",
@@ -461,6 +461,20 @@ function TicketAppReviewCycles(props: {
                   </li>
                 ))}
               </ol>
+              {cycle.repairTickets && cycle.repairTickets.length > 0 ? (
+                <div className="mt-2 space-y-1 rounded border border-border/60 p-1.5">
+                  {cycle.repairTickets.map((ticket) => (
+                    <div key={ticket.key} className="rounded bg-muted/35 px-2 py-1.5">
+                      <div className="text-[10px] font-medium text-foreground">
+                        {ticket.key} · {ticket.title}
+                      </div>
+                      <div className="mt-0.5 line-clamp-2 whitespace-pre-wrap text-[9px] leading-4 text-muted-foreground">
+                        {ticket.bodyMarkdown}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
               {cycle.actionableFindingsMarkdown ? (
                 <div className="mt-2 rounded border border-border/60 px-2 py-1.5">
                   <div className="text-[9px] font-medium uppercase tracking-wider text-muted-foreground">

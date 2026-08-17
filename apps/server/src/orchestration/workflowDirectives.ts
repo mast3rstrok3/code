@@ -116,6 +116,18 @@ export type WorkflowDirective =
       readonly notesMarkdown: string;
     }
   | {
+      readonly type: "app-review-repair-tickets";
+      readonly runId: string;
+      readonly cycleNumber: number;
+      readonly tickets: ReadonlyArray<{
+        readonly key: string;
+        readonly parentTicketKey: string | null;
+        readonly title: string;
+        readonly bodyMarkdown: string;
+        readonly dependencyKeys: ReadonlyArray<string>;
+      }>;
+    }
+  | {
       readonly type: "app-review-fix-result";
       readonly runId: string;
       readonly planId: string;
@@ -782,6 +794,61 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
         ...(commitSha !== undefined ? { commitSha } : {}),
         validations,
         notesMarkdown,
+      };
+    }
+    case "app-review-repair-tickets": {
+      const runId = requiredString(record, "runId");
+      const cycleNumber = record["cycleNumber"];
+      const rawTickets = record["tickets"];
+      if (runId.startsWith("Directive field")) return runId;
+      if (!Number.isInteger(cycleNumber) || (cycleNumber as number) < 1) {
+        return "app-review-repair-tickets.cycleNumber must be a positive integer.";
+      }
+      if (!Array.isArray(rawTickets) || rawTickets.length === 0) {
+        return "app-review-repair-tickets.tickets must be a non-empty array.";
+      }
+      const tickets: Array<{
+        key: string;
+        parentTicketKey: string | null;
+        title: string;
+        bodyMarkdown: string;
+        dependencyKeys: string[];
+      }> = [];
+      for (const rawTicket of rawTickets) {
+        if (rawTicket === null || typeof rawTicket !== "object" || Array.isArray(rawTicket)) {
+          return "app-review-repair-tickets tickets must be objects.";
+        }
+        const ticket = rawTicket as Record<string, unknown>;
+        const key = requiredString(ticket, "key");
+        const title = requiredString(ticket, "title");
+        const bodyMarkdown = requiredString(ticket, "bodyMarkdown");
+        const parentTicketKey = ticket["parentTicketKey"];
+        const dependencyKeys = ticket["dependencyKeys"];
+        for (const value of [key, title, bodyMarkdown]) {
+          if (value.startsWith("Directive field")) return value;
+        }
+        if (parentTicketKey !== null && typeof parentTicketKey !== "string") {
+          return "app-review-repair-tickets.parentTicketKey must be a string or null.";
+        }
+        if (
+          !Array.isArray(dependencyKeys) ||
+          dependencyKeys.some((dependency) => typeof dependency !== "string")
+        ) {
+          return "app-review-repair-tickets.dependencyKeys must be an array of strings.";
+        }
+        tickets.push({
+          key,
+          parentTicketKey,
+          title,
+          bodyMarkdown,
+          dependencyKeys: dependencyKeys as string[],
+        });
+      }
+      return {
+        type: "app-review-repair-tickets",
+        runId,
+        cycleNumber: cycleNumber as number,
+        tickets,
       };
     }
     case "app-review-fix-result": {

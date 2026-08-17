@@ -2333,6 +2333,32 @@ const make = Effect.gen(function* () {
           return;
         }
 
+        case "app-review-repair-tickets": {
+          if (thread.workflowRole !== "app-review-reviewer") {
+            yield* Effect.logWarning(
+              "provider App Review repair tickets ignored for non-reviewer thread",
+              { threadId: thread.id, workflowRole: thread.workflowRole },
+            );
+            return;
+          }
+          yield* orchestrationEngine.dispatch({
+            type: "thread.activity.append",
+            commandId: yield* providerCommandId(input.event, "app-review-repair-tickets"),
+            threadId: thread.id,
+            activity: {
+              id: EventId.make(yield* crypto.randomUUIDv4),
+              tone: "info",
+              kind: "app-review-repair-tickets",
+              summary: `Created ${input.directive.tickets.length} App Review repair ticket(s)`,
+              payload: input.directive,
+              turnId: null,
+              createdAt: input.createdAt,
+            },
+            createdAt: input.createdAt,
+          });
+          return;
+        }
+
         case "app-review-fix-result": {
           if (thread.workflowRole !== "app-review-fixer") {
             yield* Effect.logWarning(

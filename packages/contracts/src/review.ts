@@ -83,6 +83,15 @@ export const AppReviewWorkflowFixResult = Schema.Struct({
 });
 export type AppReviewWorkflowFixResult = typeof AppReviewWorkflowFixResult.Type;
 
+export const AppReviewWorkflowRepairTicket = Schema.Struct({
+  key: TrimmedNonEmptyString,
+  parentTicketKey: Schema.NullOr(TrimmedNonEmptyString),
+  title: TrimmedNonEmptyString,
+  bodyMarkdown: TrimmedNonEmptyString,
+  dependencyKeys: Schema.Array(TrimmedNonEmptyString),
+});
+export type AppReviewWorkflowRepairTicket = typeof AppReviewWorkflowRepairTicket.Type;
+
 export const AppReviewWorkflowCycleStatus = Schema.Literals([
   "reviewing",
   "review-failed",
@@ -102,6 +111,8 @@ export const AppReviewWorkflowCycle = Schema.Struct({
   planId: Schema.NullOr(TrimmedNonEmptyString),
   plannerTurnId: Schema.NullOr(TurnId),
   fixerThreadId: Schema.NullOr(ThreadId),
+  repairTickets: Schema.optionalKey(Schema.Array(AppReviewWorkflowRepairTicket)),
+  ticketingTurnId: Schema.optionalKey(Schema.NullOr(TurnId)),
   fixResult: Schema.NullOr(AppReviewWorkflowFixResult),
   workspaceRevision: AppReviewWorkflowWorkspaceRevision,
   startedAt: IsoDateTime,
