@@ -96,4 +96,5 @@ Use existing final-result directives for durable handoffs:
 - \`implementation-fix-result\`
 - \`app-review-fix-result\`
 - \`implementation-code-review-result\`
+- \`implementation-change-request-babysit-result\`
 - \`workflow-subagent-result\` for focused feedback children.`;

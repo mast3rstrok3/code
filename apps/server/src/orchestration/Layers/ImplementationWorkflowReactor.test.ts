@@ -920,6 +920,35 @@ function passFinalGate(system: ImplementationSystem, run: OrchestrationImplement
       createdAt: "2026-01-01T00:00:06.000Z",
     });
     yield* system.reactor.drain;
+    snapshot = yield* system.query.getSnapshot();
+    currentRun = snapshot.implementationRuns.find((candidate) => candidate.id === run.id);
+    if (
+      currentRun?.status === "babysitting-change-request" &&
+      currentRun.activeChangeRequestBabysitterThreadId !== null
+    ) {
+      yield* system.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: commandId(`pr-babysit-pass-${currentRun.activeChangeRequestBabysitterThreadId}`),
+        threadId: currentRun.activeChangeRequestBabysitterThreadId,
+        activity: {
+          id: eventId(`pr-babysit-pass-${currentRun.activeChangeRequestBabysitterThreadId}`),
+          tone: "info",
+          kind: "implementation-change-request-babysit-result",
+          summary: "Pull request checks passed",
+          payload: {
+            type: "implementation-change-request-babysit-result",
+            runId: run.id,
+            status: "passed",
+            headSha: currentRun.validatedHeadSha ?? currentRun.codeReviewedHeadSha,
+            summaryMarkdown: "All checks passed on the latest commit.",
+          },
+          turnId: null,
+          createdAt: "2026-01-01T00:00:07.000Z",
+        },
+        createdAt: "2026-01-01T00:00:07.000Z",
+      });
+      yield* system.reactor.drain;
+    }
   });
 }
 

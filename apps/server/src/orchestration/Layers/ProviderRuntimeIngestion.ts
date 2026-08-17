@@ -2446,6 +2446,35 @@ const make = Effect.gen(function* () {
           });
           return;
         }
+
+        case "implementation-change-request-babysit-result": {
+          if (thread.workflowRole !== "implementation-change-request-babysitter") {
+            yield* Effect.logWarning(
+              "provider workflow change-request babysit result ignored for wrong thread",
+              { threadId: thread.id, workflowRole: thread.workflowRole },
+            );
+            return;
+          }
+          yield* orchestrationEngine.dispatch({
+            type: "thread.activity.append",
+            commandId: yield* providerCommandId(
+              input.event,
+              "workflow-change-request-babysit-result",
+            ),
+            threadId: thread.id,
+            activity: {
+              id: EventId.make(yield* crypto.randomUUIDv4),
+              tone: input.directive.status === "passed" ? "info" : "error",
+              kind: "implementation-change-request-babysit-result",
+              summary: `Change request checks ${input.directive.status}`,
+              payload: input.directive,
+              turnId: null,
+              createdAt: input.createdAt,
+            },
+            createdAt: input.createdAt,
+          });
+          return;
+        }
       }
     });
 

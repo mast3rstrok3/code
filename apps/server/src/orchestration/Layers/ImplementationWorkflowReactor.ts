@@ -129,6 +129,14 @@ type FastBuildDirective = {
   readonly notesMarkdown: string;
 };
 
+type ChangeRequestBabysitDirective = {
+  readonly type: "implementation-change-request-babysit-result";
+  readonly runId: string;
+  readonly status: "passed" | "blocked";
+  readonly headSha: string;
+  readonly summaryMarkdown: string;
+};
+
 type BranchIntegration = {
   readonly baseTicketId: string | null;
   readonly baseRefName: string;
@@ -170,6 +178,11 @@ const asCodeReviewDirective = (value: unknown): CodeReviewDirective | null =>
 const asFastBuildDirective = (value: unknown): FastBuildDirective | null =>
   isRecord(value) && value["type"] === "implementation-fast-build-result"
     ? (value as FastBuildDirective)
+    : null;
+
+const asChangeRequestBabysitDirective = (value: unknown): ChangeRequestBabysitDirective | null =>
+  isRecord(value) && value["type"] === "implementation-change-request-babysit-result"
+    ? (value as ChangeRequestBabysitDirective)
     : null;
 
 function findRunSourceThreadId(input: {
@@ -2758,6 +2771,92 @@ const make = Effect.gen(function* () {
     yield* startCodeReview(input);
   });
 
+  const startChangeRequestBabysitter = Effect.fn(
+    "ImplementationWorkflowReactor.startChangeRequestBabysitter",
+  )(function* (input: {
+    readonly sourceThreadId: ThreadId;
+    readonly run: OrchestrationImplementationRun;
+    readonly createdAt: string;
+  }) {
+    if (input.run.changeRequest === null) return;
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    const orchestratorThread = findThread(readModel, input.run.orchestratorThreadId);
+    if (orchestratorThread === null) return;
+    const babysitterThreadId = yield* serverThreadId("implementation-change-request-babysitter");
+    const babysittingRun: OrchestrationImplementationRun = {
+      ...input.run,
+      status: "babysitting-change-request",
+      activeChangeRequestBabysitterThreadId: babysitterThreadId,
+      updatedAt: input.createdAt,
+    };
+    yield* updateRun({
+      sourceThreadId: input.sourceThreadId,
+      run: babysittingRun,
+      createdAt: input.createdAt,
+    });
+    yield* orchestrationEngine.dispatch({
+      type: "thread.create",
+      commandId: yield* serverCommandId("implementation-change-request-babysitter-create"),
+      threadId: babysitterThreadId,
+      projectId: orchestratorThread.projectId,
+      ownerUserId: orchestratorThread.ownerUserId,
+      parentThreadId: input.run.orchestratorThreadId,
+      workflowRole: "implementation-change-request-babysitter",
+      title: `Babysit PR #${input.run.changeRequest.number}`,
+      modelSelection: orchestratorThread.modelSelection,
+      runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
+      interactionMode: "implementation-workflow",
+      branch: input.run.orchestratorBranch,
+      worktreePath: input.run.orchestratorWorktreePath,
+      createdAt: input.createdAt,
+    });
+    yield* orchestrationEngine.dispatch({
+      type: "thread.turn.start",
+      commandId: yield* serverCommandId("implementation-change-request-babysitter-turn"),
+      threadId: babysitterThreadId,
+      message: {
+        messageId: yield* serverMessageId("implementation-change-request-babysitter"),
+        role: "user",
+        text: [
+          `Babysit GitHub pull request #${input.run.changeRequest.number} (${input.run.changeRequest.url}) for implementation run ${input.run.id}.`,
+          "",
+          "Watch the checks and review feedback on the latest pushed commit. Use gh to inspect GitHub Actions failures and unresolved actionable review threads. Verify every finding against the source. Fix real failures in this worktree, run the smallest relevant local checks, commit, and push the branch. After every push, restart monitoring against the new latest commit.",
+          "",
+          "Stay active until all required GitHub checks on the latest commit pass and no actionable review feedback remains. Do not merge the pull request. Do not report success for an older commit. If access, infrastructure, or a required external decision makes progress impossible, report blocked with the concrete reason.",
+          "",
+          "Finish with exactly one fenced JSON block:",
+          "```json",
+          // @effect-diagnostics-next-line preferSchemaOverJson:off - fixed directive example for the agent prompt.
+          JSON.stringify(
+            {
+              type: "implementation-change-request-babysit-result",
+              runId: input.run.id,
+              status: "passed",
+              headSha: "latest-pushed-HEAD-sha",
+              summaryMarkdown:
+                "All required checks pass and no actionable review feedback remains.",
+            },
+            null,
+            2,
+          ),
+          "```",
+        ].join("\n"),
+        attachments: [],
+      },
+      runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
+      interactionMode: "implementation-workflow",
+      createdAt: input.createdAt,
+    });
+    yield* appendActivity({
+      threadId: input.run.orchestratorThreadId,
+      tone: "info",
+      kind: "implementation-change-request-babysit-started",
+      summary: `Watching checks and reviews for PR #${input.run.changeRequest.number}`,
+      payload: { runId: input.run.id, babysitterThreadId },
+      createdAt: input.createdAt,
+    });
+  });
+
   const fileChangeRequest = Effect.fn("ImplementationWorkflowReactor.fileChangeRequest")(
     function* (input: {
       readonly sourceThreadId: ThreadId;
@@ -2904,27 +3003,16 @@ const make = Effect.gen(function* () {
         createdAt: input.createdAt,
       });
 
-      const completedRun: OrchestrationImplementationRun = {
+      const filedRun: OrchestrationImplementationRun = {
         ...publishingRun,
-        status: "completed",
         changeRequest: result.success,
         changeRequestFailure: null,
         retryableFailure: null,
         updatedAt: input.createdAt,
       };
-      yield* updateRun({
+      yield* startChangeRequestBabysitter({
         sourceThreadId: input.sourceThreadId,
-        run: completedRun,
-        createdAt: input.createdAt,
-      });
-      yield* appendActivity({
-        threadId: publishingRun.orchestratorThreadId,
-        tone: workInProgress ? "error" : "info",
-        kind: "implementation-run-completed",
-        summary: workInProgress
-          ? "Implementation run completed with a work-in-progress change request"
-          : "Implementation run completed",
-        payload: { runId: publishingRun.id, workInProgress },
+        run: filedRun,
         createdAt: input.createdAt,
       });
     },
@@ -5177,6 +5265,72 @@ const make = Effect.gen(function* () {
     }
   });
 
+  const handleChangeRequestBabysitResult = Effect.fn(
+    "ImplementationWorkflowReactor.handleChangeRequestBabysitResult",
+  )(function* (
+    event: Extract<ImplementationWorkflowEvent, { type: "thread.activity-appended" }>,
+    directive: ChangeRequestBabysitDirective,
+  ) {
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    const run = findRunById(readModel, directive.runId);
+    if (
+      run === null ||
+      run.status !== "babysitting-change-request" ||
+      run.activeChangeRequestBabysitterThreadId !== event.payload.threadId
+    ) {
+      return;
+    }
+    const sourceThreadId = findRunSourceThreadId({ readModel, run });
+    if (sourceThreadId === null) return;
+    const updatedAt = event.payload.activity.createdAt;
+    const head = yield* gitWorkflow.resolveCommit({
+      cwd: run.orchestratorWorktreePath,
+      ref: "HEAD",
+    });
+    const passed = directive.status === "passed" && directive.headSha === head.commitSha;
+    if (!passed) {
+      const detail =
+        directive.status === "blocked"
+          ? directive.summaryMarkdown
+          : `PR babysitter reported green commit '${directive.headSha}', but current HEAD is '${head.commitSha}'.`;
+      yield* updateRun({
+        sourceThreadId,
+        run: {
+          ...run,
+          status: "needs-human-attention",
+          activeChangeRequestBabysitterThreadId: null,
+          retryableFailure: {
+            stage: "change-request",
+            detail,
+            failedAt: updatedAt,
+            attemptCount: 1,
+            maxAttempts: 3,
+            humanBlocked: directive.status === "blocked",
+          },
+          updatedAt,
+        },
+        createdAt: updatedAt,
+      });
+      return;
+    }
+    const completedRun: OrchestrationImplementationRun = {
+      ...run,
+      status: "completed",
+      activeChangeRequestBabysitterThreadId: null,
+      retryableFailure: null,
+      updatedAt,
+    };
+    yield* updateRun({ sourceThreadId, run: completedRun, createdAt: updatedAt });
+    yield* appendActivity({
+      threadId: run.orchestratorThreadId,
+      tone: "info",
+      kind: "implementation-run-completed",
+      summary: "Implementation run completed after PR checks passed",
+      payload: { runId: run.id, headSha: head.commitSha },
+      createdAt: updatedAt,
+    });
+  });
+
   const processActivity = Effect.fn("ImplementationWorkflowReactor.processActivity")(function* (
     event: Extract<ImplementationWorkflowEvent, { type: "thread.activity-appended" }>,
   ) {
@@ -5204,6 +5358,11 @@ const make = Effect.gen(function* () {
       case "implementation-fast-build-result": {
         const directive = asFastBuildDirective(event.payload.activity.payload);
         if (directive !== null) yield* handleFastBuildResult(event, directive);
+        return;
+      }
+      case "implementation-change-request-babysit-result": {
+        const directive = asChangeRequestBabysitDirective(event.payload.activity.payload);
+        if (directive !== null) yield* handleChangeRequestBabysitResult(event, directive);
         return;
       }
       default:
@@ -5468,6 +5627,7 @@ const make = Effect.gen(function* () {
           | "implementation-validator"
           | "implementation-qa-reviewer"
           | "implementation-code-reviewer"
+          | "implementation-change-request-babysitter"
           | "implementation-fixer";
       }) => {
         const matches = childThreads.filter(
@@ -5854,6 +6014,20 @@ const make = Effect.gen(function* () {
           run.id,
           "change-request",
           fileChangeRequest({ sourceThreadId, run, createdAt }),
+        );
+        continue;
+      }
+      if (
+        run.status === "babysitting-change-request" &&
+        !hasActiveChild({
+          threadId: run.activeChangeRequestBabysitterThreadId,
+          role: "implementation-change-request-babysitter",
+        })
+      ) {
+        yield* recoverRunStage(
+          run.id,
+          "change-request-babysitter",
+          startChangeRequestBabysitter({ sourceThreadId, run, createdAt }),
         );
       }
     }

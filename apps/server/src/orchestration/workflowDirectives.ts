@@ -154,6 +154,13 @@ export type WorkflowDirective =
       readonly reportMarkdown: string;
     }
   | {
+      readonly type: "implementation-change-request-babysit-result";
+      readonly runId: string;
+      readonly status: "passed" | "blocked";
+      readonly headSha: string;
+      readonly summaryMarkdown: string;
+    }
+  | {
       readonly type: "workflow-subagent-create";
       readonly workflowPromptId: string;
       readonly title: string;
@@ -318,6 +325,7 @@ const WORKFLOW_AGENT_MESSAGE_WORKFLOW_ROLES: ReadonlySet<OrchestrationThreadWork
     "implementation-qa-reviewer",
     "implementation-fixer",
     "implementation-code-reviewer",
+    "implementation-change-request-babysitter",
     "app-review-orchestrator",
     "app-review-reviewer",
     "app-review-fixer",
@@ -769,6 +777,25 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
         runId,
         status,
         validations,
+        summaryMarkdown,
+      };
+    }
+    case "implementation-change-request-babysit-result": {
+      const runId = requiredString(record, "runId");
+      const headSha = requiredString(record, "headSha");
+      const summaryMarkdown = requiredString(record, "summaryMarkdown");
+      const status = record["status"];
+      if (runId.startsWith("Directive field")) return runId;
+      if (headSha.startsWith("Directive field")) return headSha;
+      if (summaryMarkdown.startsWith("Directive field")) return summaryMarkdown;
+      if (status !== "passed" && status !== "blocked") {
+        return "implementation-change-request-babysit-result.status must be passed or blocked.";
+      }
+      return {
+        type: "implementation-change-request-babysit-result",
+        runId,
+        status,
+        headSha,
         summaryMarkdown,
       };
     }

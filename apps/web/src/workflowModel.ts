@@ -253,6 +253,7 @@ function entrySkillIds<TThread extends WorkflowModelThread>(
     case "app-review-orchestrator":
       return new Set(["implementation.browser-app-review.codex"]);
     case "implementation-code-reviewer":
+    case "implementation-change-request-babysitter":
       return new Set(["implementation.code-review.codex"]);
     case null:
       return new Set();
@@ -295,6 +296,7 @@ function entryMatchesDefinedStep<TThread extends WorkflowModelThread>(
   if (label.includes("final code review")) {
     return (
       role === "implementation-orchestrator" ||
+      role === "implementation-change-request-babysitter" ||
       (role === "implementation-code-reviewer" &&
         entry.row.thread.workflowContext?.ticketScope?.length !== 1) ||
       (role === "implementation-validator" &&

@@ -558,6 +558,7 @@ export const OrchestrationImplementationRunStatus = Schema.Literals([
   "code-reviewing",
   "code-review-fixing",
   "publishing-change-request",
+  "babysitting-change-request",
   "needs-human-attention",
   "completed",
   "canceled",
@@ -1038,6 +1039,9 @@ export const OrchestrationImplementationRun = Schema.Struct({
   activeCodeReviewThreadId: Schema.NullOr(ThreadId).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  activeChangeRequestBabysitterThreadId: Schema.NullOr(ThreadId).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   codeReviewAttemptCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
   reviewGateExhaustedAt: Schema.NullOr(IsoDateTime).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
@@ -1100,6 +1104,7 @@ export const OrchestrationThreadWorkflowRole = Schema.Literals([
   "implementation-qa-reviewer",
   "implementation-fixer",
   "implementation-code-reviewer",
+  "implementation-change-request-babysitter",
   "product-fix-implementer",
   "fast-feature-implementer",
   "app-review-orchestrator",

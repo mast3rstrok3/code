@@ -5,6 +5,26 @@ import { describe, it } from "vite-plus/test";
 import { parseWorkflowDirectiveFromMarkdown } from "./workflowDirectives.ts";
 
 describe("workflowDirectives", () => {
+  it("parses a green latest-commit PR babysit result", () => {
+    const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
+{
+  "type": "implementation-change-request-babysit-result",
+  "runId": "implementation-run-1",
+  "status": "passed",
+  "headSha": "abc123",
+  "summaryMarkdown": "All required checks pass."
+}
+\`\`\``);
+
+    NodeAssert.equal(result.kind, "parsed");
+    if (
+      result.kind !== "parsed" ||
+      result.directive.type !== "implementation-change-request-babysit-result"
+    )
+      return;
+    NodeAssert.equal(result.directive.headSha, "abc123");
+  });
+
   it("parses hierarchical App Review repair tickets", () => {
     const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
 {

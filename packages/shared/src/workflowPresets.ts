@@ -182,9 +182,9 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         note: "up to ten review, repair-plan, and fix cycles",
       },
       {
-        label: "Final Code Review and pull request",
+        label: "Final Code Review, pull request, and green checks",
         skillId: "implementation.code-review.codex",
-        note: "final validation and change-request publication are included",
+        note: "includes final validation, PR creation, and fixing CI or review failures until the latest commit is green",
       },
     ],
   },
@@ -233,9 +233,9 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         note: "automatic; up to ten review, repair-plan, and fix cycles",
       },
       {
-        label: "Implementation phase · Final Code Review and pull request",
+        label: "Implementation phase · Final Code Review, pull request, and green checks",
         skillId: "implementation.code-review.codex",
-        note: "automatic; final validation and change-request publication are included",
+        note: "automatic; includes final validation, PR creation, and fixing CI or review failures until the latest commit is green",
       },
     ],
   },

@@ -543,6 +543,7 @@ describe("buildWorkflowViewModel", () => {
       global("repair", "app-review-fixer"),
       global("code-review", "implementation-code-reviewer"),
       global("final-validation", "implementation-validator", "Implementation final validation"),
+      global("pr-babysitter", "implementation-change-request-babysitter"),
     ]);
     const groups = model.rootsByThreadKey.get("env:root")?.groups ?? [];
     const planning = groups.find((group) => group.sourceId === "planning-run");
@@ -559,13 +560,14 @@ describe("buildWorkflowViewModel", () => {
       "Implementation phase · Execute ticket waves",
       "Implementation phase · Merge ticket branches",
       "Implementation phase · App Review",
-      "Implementation phase · Final Code Review and pull request",
+      "Implementation phase · Final Code Review, pull request, and green checks",
     ]);
     expect(steps[7]?.entries.map((entry) => entry.id)).toEqual(["env:app-review", "env:repair"]);
     expect(steps[8]?.entries.map((entry) => entry.id)).toEqual([
       "env:root",
       "env:code-review",
       "env:final-validation",
+      "env:pr-babysitter",
     ]);
   });
 

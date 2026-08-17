@@ -20,7 +20,7 @@ describe("workflow presets", () => {
       (definition) => definition.id === "planning",
     );
     expect(engineeringWorkflow?.helpSteps.at(-1)?.label).toContain(
-      "Final Code Review and pull request",
+      "Final Code Review, pull request, and green checks",
     );
   });
 
@@ -31,7 +31,7 @@ describe("workflow presets", () => {
     expect(engineeringWorkflow?.helpSteps.slice(-3).map((step) => step.label)).toEqual([
       "Implementation phase · Merge ticket branches",
       "Implementation phase · App Review",
-      "Implementation phase · Final Code Review and pull request",
+      "Implementation phase · Final Code Review, pull request, and green checks",
     ]);
     expect(engineeringWorkflow?.helpSteps.at(-2)?.note).toContain("up to ten");
   });
