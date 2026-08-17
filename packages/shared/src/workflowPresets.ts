@@ -231,14 +231,9 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         note: "automatic; up to five cycles",
       },
       {
-        label: "Implementation phase · Run unblocked ticket workers",
+        label: "Implementation phase · Execute ticket waves",
         skillId: "implementation.tdd.codex",
-        note: "automatic; parallel worktrees",
-      },
-      {
-        label: "Implementation phase · Per-ticket App Review and Code Review",
-        skillId: "implementation.browser-app-review.codex",
-        note: "automatic; eligible tickets only; review failures do not stop the workflow",
+        note: "automatic; parallel workers, eligible App Reviews, and one Code Review per ticket",
       },
       {
         label: "Implementation phase · Merge ticket branches",

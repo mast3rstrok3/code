@@ -141,6 +141,7 @@ describe("buildWorkflowViewModel", () => {
         parentWorkflowId: "full-feature-run",
         rootThreadId: "root",
       },
+      createdAt: "2026-01-01T00:01:00.000Z",
     });
     const controller = thread("app-review-controller", {
       parentThreadId: "implementation",
@@ -151,6 +152,7 @@ describe("buildWorkflowViewModel", () => {
         parentWorkflowId: "implementation-run",
         rootThreadId: "root",
       },
+      createdAt: "2026-01-01T00:02:00.000Z",
     });
     const reviewer = thread("app-review-reviewer", {
       parentThreadId: "app-review-controller",
@@ -161,6 +163,7 @@ describe("buildWorkflowViewModel", () => {
         parentWorkflowId: "implementation-run",
         rootThreadId: "root",
       },
+      createdAt: "2026-01-01T00:03:00.000Z",
     });
 
     const groups = buildWorkflowViewModel([
@@ -177,6 +180,19 @@ describe("buildWorkflowViewModel", () => {
       ["workflow:app-review-run", "app-review", "workflow:implementation-run", 1],
     ]);
     expect(groups?.find((group) => group.id === "workflow:app-review-run")?.rows).toHaveLength(2);
+
+    const implementationGroup = groups?.find((group) => group.id === "workflow:implementation-run");
+    expect(
+      implementationGroup && groups
+        ? buildWorkflowTimeline(implementationGroup, groups, { flattenNestedWorkflows: true }).map(
+            (entry) => [entry.kind, entry.kind === "thread" ? entry.row.thread.id : entry.group.id],
+          )
+        : [],
+    ).toEqual([
+      ["thread", "implementation"],
+      ["thread", "app-review-controller"],
+      ["thread", "app-review-reviewer"],
+    ]);
   });
 
   it("uses explicit parent workflow identity when thread ancestry is incomplete", () => {
@@ -448,6 +464,48 @@ describe("buildWorkflowViewModel", () => {
     expect(
       steps.filter((step) => workflowStepMatchesImplementationFailure(step, "worktree-setup")),
     ).toHaveLength(1);
+  });
+
+  it("attaches every ticket-scoped implementation thread to the ticket execution step", () => {
+    const root = thread("root", { workflowPreset: "planning" });
+    const planningReview = thread("planning-review", {
+      parentThreadId: "root",
+      workflowRole: "planning-reviewer",
+      workflowContext: { workflowId: "planning-run", rootThreadId: "root" },
+    });
+    const worker = thread("worker", {
+      parentThreadId: "root",
+      workflowRole: "implementation-worker",
+      workflowContext: {
+        workflowId: "implementation-run",
+        parentWorkflowId: "planning-run",
+        rootThreadId: "root",
+        ticketScope: ["ticket-1"],
+      },
+    });
+    const ticketReview = thread("ticket-review", {
+      parentThreadId: "worker",
+      workflowRole: "implementation-code-reviewer",
+      workflowContext: {
+        workflowId: "implementation-run",
+        parentWorkflowId: "planning-run",
+        rootThreadId: "root",
+        ticketScope: ["ticket-1"],
+      },
+    });
+    const model = buildWorkflowViewModel([root, planningReview, worker, ticketReview]);
+    const groups = model.rootsByThreadKey.get("env:root")?.groups ?? [];
+    const planning = groups.find((group) => group.sourceId === "planning-run");
+    const steps = planning
+      ? buildWorkflowSteps(planning, groups, root, { flattenNestedWorkflows: true })
+      : [];
+    const ticketExecution = steps.find((step) => step.label?.includes("Execute ticket waves"));
+
+    expect(
+      ticketExecution?.entries
+        .filter((entry) => entry.kind === "thread")
+        .map((entry) => entry.row.thread.id),
+    ).toEqual(["root", "ticket-review", "worker"]);
   });
 
   it("calculates thread, step, and parent workflow timing across nested work", () => {

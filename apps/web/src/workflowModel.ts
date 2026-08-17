@@ -19,6 +19,7 @@ export interface WorkflowModelThread {
     readonly workflowId: string;
     readonly parentWorkflowId?: string | null | undefined;
     readonly rootThreadId: string;
+    readonly ticketScope?: readonly string[] | undefined;
   } | null;
   readonly workflowSubagentBatchProvenance?: {
     readonly batchId: string;
@@ -176,7 +177,19 @@ function timestampMs(value: string): number {
 export function buildWorkflowTimeline<TThread extends WorkflowModelThread>(
   group: WorkflowGroup<TThread>,
   groups: readonly WorkflowGroup<TThread>[],
+  options?: { readonly flattenNestedWorkflows?: boolean },
 ): readonly WorkflowTimelineEntry<TThread>[] {
+  const childGroups = groups.filter((candidate) => candidate.parentGroupId === group.id);
+  const nestedEntries = options?.flattenNestedWorkflows
+    ? childGroups.flatMap((child) => buildWorkflowTimeline(child, groups, options))
+    : childGroups.map(
+        (child): WorkflowTimelineEntry<TThread> => ({
+          kind: "workflow",
+          id: child.id,
+          createdAt: child.createdAt,
+          group: child,
+        }),
+      );
   return [
     ...group.rows.map(
       (row): WorkflowTimelineEntry<TThread> => ({
@@ -186,16 +199,7 @@ export function buildWorkflowTimeline<TThread extends WorkflowModelThread>(
         row,
       }),
     ),
-    ...groups
-      .filter((candidate) => candidate.parentGroupId === group.id)
-      .map(
-        (child): WorkflowTimelineEntry<TThread> => ({
-          kind: "workflow",
-          id: child.id,
-          createdAt: child.createdAt,
-          group: child,
-        }),
-      ),
+    ...nestedEntries,
   ].toSorted(
     (left, right) =>
       timestampMs(left.createdAt) - timestampMs(right.createdAt) || left.id.localeCompare(right.id),
@@ -258,10 +262,20 @@ function entryMatchesDefinedStep<TThread extends WorkflowModelThread>(
   entry: WorkflowTimelineEntry<TThread>,
   step: WorkflowPresetHelpStep,
 ): boolean {
-  if (step.skillId !== undefined && entrySkillIds(entry).has(step.skillId)) return true;
   if (entry.kind === "workflow") return false;
   const role = entry.row.thread.workflowRole;
   const label = step.label.toLowerCase();
+  if (label.includes("execute ticket waves")) {
+    return (
+      entry.row.thread.workflowContext?.ticketScope?.length === 1 &&
+      (role === "implementation-worker" ||
+        role === "implementation-code-reviewer" ||
+        role === "app-review-orchestrator" ||
+        role === "app-review-reviewer" ||
+        role === "app-review-fixer")
+    );
+  }
+  if (step.skillId !== undefined && entrySkillIds(entry).has(step.skillId)) return true;
   if (label.includes("start and probe appdevstack")) {
     return role === "implementation-orchestrator" || role === "fast-feature-implementer";
   }
@@ -320,8 +334,9 @@ export function buildWorkflowSteps<TThread extends WorkflowModelThread>(
   group: WorkflowGroup<TThread>,
   groups: readonly WorkflowGroup<TThread>[],
   rootThread?: TThread,
+  options?: { readonly flattenNestedWorkflows?: boolean },
 ): readonly WorkflowTimelineStep<TThread>[] {
-  const timeline = buildWorkflowTimeline(group, groups);
+  const timeline = buildWorkflowTimeline(group, groups, options);
   const definedSteps =
     group.preset === null ? [] : WORKFLOW_PRESET_DEFINITION_BY_ID[group.preset].helpSteps;
   if (definedSteps.length > 0) {

@@ -6856,6 +6856,7 @@ function ChatViewContent(props: ChatViewProps) {
         timestampFormat={timestampFormat}
         appReviewWorkflowRuns={displayedWorkflowArtifacts?.appReviewWorkflowRuns ?? []}
         implementationRuns={activeImplementationRuns}
+        spec={displayedWorkflowArtifacts?.spec ?? displayedPlanningWorkflow?.spec ?? null}
         tickets={displayedWorkflowArtifacts?.tickets ?? displayedPlanningWorkflow?.tickets ?? []}
         skillTitlesById={workflowSkillTitlesById}
         onOpenSkill={openWorkflowSkill}

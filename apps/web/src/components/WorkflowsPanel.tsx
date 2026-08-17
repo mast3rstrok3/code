@@ -2,11 +2,21 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/model
 import type {
   AppReviewWorkflowRun,
   OrchestrationImplementationRun,
+  OrchestrationPlanningSpec,
   OrchestrationPlanningTicket,
 } from "@t3tools/contracts";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 import { WORKFLOW_PRESET_DEFINITION_BY_ID } from "@t3tools/shared/workflowPresets";
-import { Archive, ChevronDown, ChevronRight, Copy, Eye, GitFork, RotateCcw } from "lucide-react";
+import {
+  Archive,
+  ArrowUpRight,
+  ChevronDown,
+  ChevronRight,
+  Copy,
+  Eye,
+  GitFork,
+  RotateCcw,
+} from "lucide-react";
 import {
   useEffect,
   useRef,
@@ -33,7 +43,16 @@ import {
   type WorkflowThreadStatus,
 } from "~/workflowModel";
 import { ScrollArea } from "~/components/ui/scroll-area";
+import {
+  Dialog,
+  DialogDescription,
+  DialogHeader,
+  DialogPanel,
+  DialogPopup,
+  DialogTitle,
+} from "~/components/ui/dialog";
 
+import ChatMarkdown from "./ChatMarkdown";
 import { workflowRoleShortLabel } from "./Sidebar.logic";
 
 const STATUS_VISUALS: Record<
@@ -257,7 +276,15 @@ function workflowStepTitle(step: WorkflowTimelineStep<EnvironmentThreadShell>): 
 function workflowStepPhase(step: WorkflowTimelineStep<EnvironmentThreadShell>): string {
   const label = workflowStepTitle(step);
   const separator = label.indexOf(" phase · ");
-  return separator === -1 ? "Workflow" : label.slice(0, separator);
+  if (separator !== -1) return label.slice(0, separator);
+  const roles = step.entries.flatMap((entry) =>
+    entry.kind === "thread" && entry.row.thread.workflowRole !== null
+      ? [entry.row.thread.workflowRole]
+      : [],
+  );
+  return roles.length > 0 && roles.every((role) => role.startsWith("planning-"))
+    ? "Planning"
+    : "Implementation";
 }
 
 function workflowStepLabel(step: WorkflowTimelineStep<EnvironmentThreadShell>): string {
@@ -279,9 +306,85 @@ function groupWorkflowStepsByPhase(
   return [...byPhase.entries()];
 }
 
+function planningStepTimeRange(
+  step: WorkflowTimelineStep<EnvironmentThreadShell>,
+  groups: readonly WorkflowGroup<EnvironmentThreadShell>[],
+  spec: OrchestrationPlanningSpec | null,
+  tickets: readonly OrchestrationPlanningTicket[],
+) {
+  const label = workflowStepLabel(step).toLowerCase();
+  if (label.includes("spec authoring") && spec !== null) {
+    return { startedAt: spec.createdAt, endedAt: spec.updatedAt };
+  }
+  if (label.includes("ticket authoring") && tickets.length > 0) {
+    const ordered = tickets.toSorted((left, right) =>
+      left.createdAt.localeCompare(right.createdAt),
+    );
+    return {
+      startedAt: spec?.updatedAt ?? ordered[0]!.createdAt,
+      endedAt: ordered.reduce(
+        (latest, ticket) => (ticket.createdAt > latest ? ticket.createdAt : latest),
+        ordered[0]!.createdAt,
+      ),
+    };
+  }
+  const threadRange = resolveWorkflowStepTimeRange(step, groups);
+  if (label.includes("grill") && spec !== null) {
+    return { startedAt: threadRange.startedAt, endedAt: spec.createdAt };
+  }
+  return threadRange;
+}
+
+function PlanningArtifacts(props: {
+  readonly spec: OrchestrationPlanningSpec | null;
+  readonly tickets: readonly OrchestrationPlanningTicket[];
+  readonly onOpenSpec: () => void;
+  readonly onOpenTicket: (ticket: OrchestrationPlanningTicket) => void;
+}) {
+  if (props.spec === null && props.tickets.length === 0) return null;
+  return (
+    <section className="border-t border-border/70 p-2">
+      <div className="mb-2 px-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+        Planning documents
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {props.spec ? (
+          <button
+            type="button"
+            onClick={props.onOpenSpec}
+            className="cursor-pointer inline-flex items-center gap-1 rounded-md border border-border/70 px-2 py-1.5 text-xs font-medium hover:bg-accent"
+          >
+            Spec · {props.spec.title}
+            <ArrowUpRight className="size-3" aria-hidden />
+          </button>
+        ) : null}
+        {props.tickets
+          .toSorted((left, right) => left.ordinal - right.ordinal)
+          .map((ticket) => (
+            <button
+              key={ticket.id}
+              type="button"
+              onClick={() => props.onOpenTicket(ticket)}
+              className="cursor-pointer inline-flex min-w-0 items-center gap-1 rounded-md border border-border/70 px-2 py-1.5 text-xs hover:bg-accent"
+            >
+              <span className="max-w-56 truncate">
+                {ticket.key ?? `Ticket ${ticket.ordinal + 1}`} · {ticket.title}
+              </span>
+              <ArrowUpRight className="size-3 shrink-0" aria-hidden />
+            </button>
+          ))}
+      </div>
+    </section>
+  );
+}
+
 function TicketPhases(props: {
   readonly tickets: readonly OrchestrationPlanningTicket[];
   readonly run: OrchestrationImplementationRun;
+  readonly threads: readonly EnvironmentThreadShell[];
+  readonly appReviewWorkflowRuns: readonly AppReviewWorkflowRun[];
+  readonly onOpenThread: (thread: EnvironmentThreadShell) => void;
+  readonly onOpenAppReview: () => void;
 }) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const states = new Map(props.run.ticketStates.map((state) => [state.ticketId, state] as const));
@@ -295,11 +398,39 @@ function TicketPhases(props: {
           className="rounded-md border border-border/70 bg-background/40 p-2"
         >
           <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-            Ticket phase {waveIndex + 1} · {wave.length} ticket{wave.length === 1 ? "" : "s"}
+            Wave {waveIndex + 1} · {wave.length} ticket{wave.length === 1 ? "" : "s"}
           </div>
           {wave.map((ticket) => {
             const open = expanded[ticket.id] ?? false;
             const state = states.get(ticket.id);
+            const appReviewRun = props.appReviewWorkflowRuns.find(
+              (run) => run.id === state?.appReviewWorkflowRunId,
+            );
+            const linkedThreadIds = new Set(
+              [
+                state?.workerThreadId,
+                state?.codeReviewThreadId,
+                appReviewRun?.controllerThreadId,
+                ...props.threads
+                  .filter(
+                    (thread) =>
+                      thread.workflowContext?.ticketScope.includes(ticket.id) === true &&
+                      (thread.workflowRole === "implementation-worker" ||
+                        thread.workflowRole === "implementation-code-reviewer" ||
+                        thread.workflowRole === "app-review-orchestrator" ||
+                        thread.workflowRole === "app-review-reviewer"),
+                  )
+                  .map((thread) => thread.id),
+              ].flatMap((threadId) => (threadId == null ? [] : [threadId])),
+            );
+            const linkedThreads = [...linkedThreadIds]
+              .map((threadId) => props.threads.find((thread) => thread.id === threadId))
+              .filter((thread): thread is EnvironmentThreadShell => thread !== undefined)
+              .toSorted(
+                (left, right) =>
+                  Date.parse(left.createdAt) - Date.parse(right.createdAt) ||
+                  left.id.localeCompare(right.id),
+              );
             return (
               <div key={ticket.id} className="border-t border-border/60 first:border-t-0">
                 <button
@@ -322,18 +453,40 @@ function TicketPhases(props: {
                 </button>
                 {open ? (
                   <div className="mb-2 ml-5 grid gap-1.5 text-[11px] text-muted-foreground">
-                    <div>
-                      <span className="font-medium text-foreground">Implementation</span> ·
-                      Test-driven implementation
-                    </div>
-                    <div>
-                      <span className="font-medium text-foreground">Code Review</span> · One cycle
+                    <div className="flex flex-wrap gap-1.5">
+                      {linkedThreads.map((thread) => (
+                        <button
+                          key={thread.id}
+                          type="button"
+                          onClick={() => props.onOpenThread(thread)}
+                          className="cursor-pointer inline-flex min-w-0 items-center gap-1 rounded-md border border-border/70 px-2 py-1 text-foreground hover:bg-accent"
+                        >
+                          <span className="max-w-48 truncate">
+                            {workflowRoleShortLabel(thread.workflowRole) ?? thread.title}
+                          </span>
+                          <ArrowUpRight className="size-3 shrink-0" aria-hidden />
+                        </button>
+                      ))}
+                      {appReviewRun ? (
+                        <button
+                          type="button"
+                          onClick={props.onOpenAppReview}
+                          className="cursor-pointer inline-flex items-center gap-1 rounded-md border border-border/70 px-2 py-1 text-foreground hover:bg-accent"
+                        >
+                          App Review results
+                          <Eye className="size-3 shrink-0" aria-hidden />
+                        </button>
+                      ) : null}
                     </div>
                     <div>
                       <span className="font-medium text-foreground">App Review</span> ·{" "}
-                      {ticket.appReviewEligible
-                        ? "Up to 10 cycles"
-                        : "Not planned for browser review"}
+                      {state?.appReviewOutcome === "skipped"
+                        ? "Skipped — not planned for browser review"
+                        : state?.appReviewOutcome
+                          ? state.appReviewOutcome
+                          : ticket.appReviewEligible
+                            ? "Eligible · up to 10 cycles"
+                            : "Not planned for browser review"}
                     </div>
                   </div>
                 ) : null}
@@ -396,6 +549,7 @@ function WorkflowGroupCard(props: {
   readonly onCopyWorkflowLink: (workflowId: string) => void;
   readonly onRetryImplementationRun?: ((runId: string) => void) | undefined;
   readonly tickets: readonly OrchestrationPlanningTicket[];
+  readonly spec: OrchestrationPlanningSpec | null;
   readonly skillTitlesById: ReadonlyMap<string, string>;
   readonly onOpenSkill: (skillId: string) => void;
   readonly nested?: boolean;
@@ -417,11 +571,20 @@ function WorkflowGroupCard(props: {
         ? groupStatus(group)
         : runPresentation.status;
   const visual = STATUS_VISUALS[status];
-  const steps = buildWorkflowSteps(group, props.groups, props.workflowRoot);
+  const steps = buildWorkflowSteps(group, props.groups, props.workflowRoot, {
+    flattenNestedWorkflows: group.parentGroupId === null,
+  });
   const [expandedPhases, setExpandedPhases] = useState<Record<string, boolean>>({});
   const [expandedSteps, setExpandedSteps] = useState<Record<string, boolean>>({});
+  const [openPlanningArtifact, setOpenPlanningArtifact] = useState<{
+    readonly title: string;
+    readonly markdown: string;
+  } | null>(null);
   const phases = groupWorkflowStepsByPhase(steps);
   const timeRange = resolveWorkflowGroupTimeRange(group, props.groups);
+  const showsAppReviews =
+    group.preset === "app-review" ||
+    (group.parentGroupId === null && props.appReviewWorkflowRuns.length > 0);
 
   return (
     <div className={cn("relative", props.nested && "ml-3 my-1.5")}>
@@ -490,7 +653,7 @@ function WorkflowGroupCard(props: {
               />
             </span>
           </button>
-          {group.preset === "app-review" ? (
+          {showsAppReviews ? (
             <button
               type="button"
               aria-label="View App Review results"
@@ -499,7 +662,7 @@ function WorkflowGroupCard(props: {
               className="cursor-pointer mt-2 flex items-center gap-1 rounded-md px-2 py-1.5 text-[11px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
             >
               <Eye className="size-3.5" aria-hidden />
-              Results
+              App Reviews
             </button>
           ) : null}
           {group.kind === "workflow" ? (
@@ -549,139 +712,206 @@ function WorkflowGroupCard(props: {
                     </span>
                   </button>
                   {phaseOpen ? (
-                    <div className="divide-y divide-border/70 border-t border-border/70">
-                      {availableSteps.map((step) => {
-                        const index = steps.indexOf(step);
-                        const stepTimeRange = resolveWorkflowStepTimeRange(step, props.groups);
-                        const threadCount = step.entries.filter(
-                          (entry) => entry.kind === "thread",
-                        ).length;
-                        const retryableFailure = linkedImplementationRun?.retryableFailure ?? null;
-                        const canRetryStep =
-                          linkedImplementationRun?.status === "needs-human-attention" &&
-                          retryableFailure !== null &&
-                          workflowStepMatchesImplementationFailure(step, retryableFailure.stage) &&
-                          props.onRetryImplementationRun !== undefined;
-                        const stepOpen = expandedSteps[step.id] ?? false;
-                        return (
-                          <section key={step.id} className="px-1 py-1">
-                            <header className="px-1">
-                              <div className="flex items-start gap-1">
-                                <button
-                                  type="button"
-                                  aria-expanded={stepOpen}
-                                  onClick={() =>
-                                    setExpandedSteps((current) => ({
-                                      ...current,
-                                      [step.id]: !stepOpen,
-                                    }))
-                                  }
-                                  className="cursor-pointer flex min-w-0 flex-1 items-start gap-2 rounded-md px-1 py-1.5 text-left hover:bg-accent/40"
-                                >
-                                  {stepOpen ? (
-                                    <ChevronDown className="mt-0.5 size-3.5 shrink-0" />
-                                  ) : (
-                                    <ChevronRight className="mt-0.5 size-3.5 shrink-0" />
-                                  )}
-                                  <div className="min-w-0 flex-1">
-                                    <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                                      Step {index + 1}
-                                    </div>
-                                    <h4 className="truncate text-sm font-semibold text-foreground">
-                                      {workflowStepLabel(step)}
-                                    </h4>
-                                  </div>
-                                </button>
-                                {step.skillId ? (
+                    <div className="border-t border-border/70">
+                      <div className="divide-y divide-border/70">
+                        {availableSteps.map((step) => {
+                          const index = steps.indexOf(step);
+                          const stepTimeRange =
+                            phase === "Planning"
+                              ? planningStepTimeRange(step, props.groups, props.spec, props.tickets)
+                              : resolveWorkflowStepTimeRange(step, props.groups);
+                          const threadCount = step.entries.filter(
+                            (entry) => entry.kind === "thread",
+                          ).length;
+                          const retryableFailure =
+                            linkedImplementationRun?.retryableFailure ?? null;
+                          const canRetryStep =
+                            linkedImplementationRun?.status === "needs-human-attention" &&
+                            retryableFailure !== null &&
+                            workflowStepMatchesImplementationFailure(
+                              step,
+                              retryableFailure.stage,
+                            ) &&
+                            props.onRetryImplementationRun !== undefined;
+                          const stepOpen = expandedSteps[step.id] ?? false;
+                          const isTicketExecutionStep =
+                            group.preset === "planning" &&
+                            workflowStepLabel(step).toLowerCase().includes("execute ticket waves");
+                          return (
+                            <section key={step.id} className="px-1 py-1">
+                              <header className="px-1">
+                                <div className="flex items-start gap-1">
                                   <button
                                     type="button"
-                                    onClick={() => props.onOpenSkill(step.skillId!)}
-                                    className="cursor-pointer mt-1 rounded-full border border-border px-2 py-0.5 font-mono text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground"
-                                  >
-                                    {props.skillTitlesById.get(step.skillId) ?? step.skillId}
-                                  </button>
-                                ) : null}
-                                {canRetryStep ? (
-                                  <button
-                                    type="button"
-                                    title={`Restart blocked ${workflowStepTitle(step)} step`}
+                                    aria-expanded={stepOpen}
                                     onClick={() =>
-                                      props.onRetryImplementationRun?.(linkedImplementationRun.id)
+                                      setExpandedSteps((current) => ({
+                                        ...current,
+                                        [step.id]: !stepOpen,
+                                      }))
                                     }
-                                    className="cursor-pointer mt-1 flex shrink-0 items-center gap-1 rounded-md border border-destructive/30 px-2 py-1 text-[10px] font-medium text-destructive hover:bg-destructive/10"
+                                    className="cursor-pointer flex min-w-0 flex-1 items-start gap-2 rounded-md px-1 py-1.5 text-left hover:bg-accent/40"
                                   >
-                                    <RotateCcw className="size-3" aria-hidden /> Restart step
-                                  </button>
-                                ) : step.repeatsAsCycles && step.entries.length > 1 ? (
-                                  <span className="mt-1 shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
-                                    {step.entries.length} cycles
-                                  </span>
-                                ) : threadCount > 1 ? (
-                                  <span className="mt-1 shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
-                                    {threadCount} threads
-                                  </span>
-                                ) : null}
-                              </div>
-                              <TimelineTimeRange
-                                {...stepTimeRange}
-                                timestampFormat={props.timestampFormat}
-                                className="mt-1"
-                              />
-                            </header>
-                            {stepOpen && step.entries.length === 0 ? (
-                              <div className="px-2 py-1 text-[11px] text-muted-foreground/55">
-                                Not started
-                              </div>
-                            ) : stepOpen ? (
-                              <div className="space-y-0.5">
-                                {step.entries.map((entry, entryIndex) => {
-                                  const cycleLabel = step.repeatsAsCycles
-                                    ? `Cycle ${entryIndex + 1}`
-                                    : undefined;
-                                  return entry.kind === "thread" ? (
-                                    <div key={entry.id}>
-                                      {cycleLabel ? (
-                                        <div className="px-2 pt-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
-                                          {cycleLabel}
-                                        </div>
-                                      ) : null}
-                                      <ThreadRow
-                                        row={entry.row}
-                                        timestampFormat={props.timestampFormat}
-                                        activeThreadKey={props.activeThreadKey}
-                                        onOpenThread={props.onOpenThread}
-                                      />
+                                    {stepOpen ? (
+                                      <ChevronDown className="mt-0.5 size-3.5 shrink-0" />
+                                    ) : (
+                                      <ChevronRight className="mt-0.5 size-3.5 shrink-0" />
+                                    )}
+                                    <div className="min-w-0 flex-1">
+                                      <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                                        Step {index + 1}
+                                      </div>
+                                      <h4 className="truncate text-sm font-semibold text-foreground">
+                                        {workflowStepLabel(step)}
+                                      </h4>
                                     </div>
-                                  ) : (
-                                    <WorkflowGroupCard
-                                      key={entry.id}
-                                      {...props}
-                                      group={entry.group}
-                                      nested
-                                      cycleLabel={cycleLabel}
-                                    />
-                                  );
-                                })}
-                              </div>
-                            ) : null}
-                          </section>
-                        );
-                      })}
+                                  </button>
+                                  {step.skillId ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => props.onOpenSkill(step.skillId!)}
+                                      className="cursor-pointer mt-1 rounded-full border border-border px-2 py-0.5 font-mono text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground"
+                                    >
+                                      {props.skillTitlesById.get(step.skillId) ?? step.skillId}
+                                    </button>
+                                  ) : null}
+                                  {canRetryStep ? (
+                                    <button
+                                      type="button"
+                                      title={`Restart blocked ${workflowStepTitle(step)} step`}
+                                      onClick={() =>
+                                        props.onRetryImplementationRun?.(linkedImplementationRun.id)
+                                      }
+                                      className="cursor-pointer mt-1 flex shrink-0 items-center gap-1 rounded-md border border-destructive/30 px-2 py-1 text-[10px] font-medium text-destructive hover:bg-destructive/10"
+                                    >
+                                      <RotateCcw className="size-3" aria-hidden /> Restart step
+                                    </button>
+                                  ) : step.repeatsAsCycles && step.entries.length > 1 ? (
+                                    <span className="mt-1 shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
+                                      {step.entries.length} cycles
+                                    </span>
+                                  ) : threadCount > 1 ? (
+                                    <span className="mt-1 shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
+                                      {threadCount} threads
+                                    </span>
+                                  ) : null}
+                                </div>
+                                <TimelineTimeRange
+                                  {...stepTimeRange}
+                                  timestampFormat={props.timestampFormat}
+                                  className="mt-1"
+                                />
+                              </header>
+                              {stepOpen &&
+                              isTicketExecutionStep &&
+                              linkedImplementationRun &&
+                              props.tickets.length > 0 ? (
+                                <div className="mt-1 border-t border-border/70 p-1">
+                                  <TicketPhases
+                                    tickets={props.tickets}
+                                    run={linkedImplementationRun}
+                                    threads={[
+                                      props.workflowRoot,
+                                      ...props.groups.flatMap((candidate) =>
+                                        candidate.rows.map((row) => row.thread),
+                                      ),
+                                    ]}
+                                    appReviewWorkflowRuns={props.appReviewWorkflowRuns}
+                                    onOpenThread={props.onOpenThread}
+                                    onOpenAppReview={props.onOpenAppReview}
+                                  />
+                                </div>
+                              ) : stepOpen && step.entries.length === 0 ? (
+                                <div className="px-2 py-1 text-[11px] text-muted-foreground/55">
+                                  Not started
+                                </div>
+                              ) : stepOpen ? (
+                                <div className="space-y-0.5">
+                                  {step.entries.map((entry, entryIndex) => {
+                                    const cycleLabel = step.repeatsAsCycles
+                                      ? `Cycle ${entryIndex + 1}`
+                                      : undefined;
+                                    return entry.kind === "thread" ? (
+                                      <div key={entry.id}>
+                                        {cycleLabel ? (
+                                          <div className="px-2 pt-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                                            {cycleLabel}
+                                          </div>
+                                        ) : null}
+                                        <ThreadRow
+                                          row={entry.row}
+                                          timestampFormat={props.timestampFormat}
+                                          activeThreadKey={props.activeThreadKey}
+                                          onOpenThread={props.onOpenThread}
+                                        />
+                                      </div>
+                                    ) : (
+                                      <button
+                                        key={entry.id}
+                                        type="button"
+                                        onClick={() => {
+                                          const thread = entry.group.rows[0]?.thread;
+                                          if (thread) props.onOpenThread(thread);
+                                        }}
+                                        className="cursor-pointer flex w-full items-center gap-2 rounded-md px-2 py-2 text-left hover:bg-accent/60"
+                                      >
+                                        <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                                          {cycleLabel ?? groupTitle(entry.group)}
+                                        </span>
+                                        <ArrowUpRight className="size-3.5 text-muted-foreground" />
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              ) : null}
+                            </section>
+                          );
+                        })}
+                      </div>
+                      {phase === "Planning" ? (
+                        <PlanningArtifacts
+                          spec={props.spec}
+                          tickets={props.tickets}
+                          onOpenSpec={() => {
+                            if (props.spec) {
+                              setOpenPlanningArtifact({
+                                title: props.spec.title,
+                                markdown: props.spec.summaryMarkdown,
+                              });
+                            }
+                          }}
+                          onOpenTicket={(ticket) =>
+                            setOpenPlanningArtifact({
+                              title: `${ticket.key ?? `Ticket ${ticket.ordinal + 1}`} · ${ticket.title}`,
+                              markdown: ticket.bodyMarkdown,
+                            })
+                          }
+                        />
+                      ) : null}
                     </div>
                   ) : null}
                 </section>
               );
             })}
-            {(group.preset === "implementation" || group.preset === "planning") &&
-            linkedImplementationRun &&
-            props.tickets.length > 0 ? (
-              <section className="p-2">
-                <TicketPhases tickets={props.tickets} run={linkedImplementationRun} />
-              </section>
-            ) : null}
           </div>
         ) : null}
       </section>
+      <Dialog
+        open={openPlanningArtifact !== null}
+        onOpenChange={(open) => {
+          if (!open) setOpenPlanningArtifact(null);
+        }}
+      >
+        <DialogPopup className="w-[min(52rem,calc(100vw-2rem))] max-w-none">
+          <DialogHeader>
+            <DialogTitle>{openPlanningArtifact?.title ?? "Planning document"}</DialogTitle>
+            <DialogDescription>Durable workflow artifact</DialogDescription>
+          </DialogHeader>
+          <DialogPanel className="max-h-[70vh]">
+            <ChatMarkdown text={openPlanningArtifact?.markdown ?? ""} cwd={undefined} />
+          </DialogPanel>
+        </DialogPopup>
+      </Dialog>
     </div>
   );
 }
@@ -694,6 +924,7 @@ export function WorkflowsPanel(props: {
   readonly appReviewWorkflowRuns: readonly AppReviewWorkflowRun[];
   readonly implementationRuns: readonly OrchestrationImplementationRun[];
   readonly tickets: readonly OrchestrationPlanningTicket[];
+  readonly spec: OrchestrationPlanningSpec | null;
   readonly skillTitlesById: ReadonlyMap<string, string>;
   readonly onOpenSkill: (skillId: string) => void;
   readonly onOpenThread: (thread: EnvironmentThreadShell) => void;
@@ -828,6 +1059,7 @@ export function WorkflowsPanel(props: {
                 timestampFormat={props.timestampFormat}
                 appReviewWorkflowRuns={props.appReviewWorkflowRuns}
                 implementationRuns={props.implementationRuns}
+                spec={props.spec}
                 tickets={props.tickets}
                 skillTitlesById={props.skillTitlesById}
                 onOpenSkill={props.onOpenSkill}
