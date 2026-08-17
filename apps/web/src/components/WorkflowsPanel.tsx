@@ -385,6 +385,8 @@ function TicketPhases(props: {
   readonly appReviewWorkflowRuns: readonly AppReviewWorkflowRun[];
   readonly onOpenThread: (thread: EnvironmentThreadShell) => void;
   readonly onOpenAppReview: () => void;
+  readonly activeThreadKey: string | null;
+  readonly timestampFormat: TimestampFormat;
 }) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const states = new Map(props.run.ticketStates.map((state) => [state.ticketId, state] as const));
@@ -418,7 +420,8 @@ function TicketPhases(props: {
                       (thread.workflowRole === "implementation-worker" ||
                         thread.workflowRole === "implementation-code-reviewer" ||
                         thread.workflowRole === "app-review-orchestrator" ||
-                        thread.workflowRole === "app-review-reviewer"),
+                        thread.workflowRole === "app-review-reviewer" ||
+                        thread.workflowRole === "app-review-fixer"),
                   )
                   .map((thread) => thread.id),
               ].flatMap((threadId) => (threadId == null ? [] : [threadId])),
@@ -431,6 +434,56 @@ function TicketPhases(props: {
                   Date.parse(left.createdAt) - Date.parse(right.createdAt) ||
                   left.id.localeCompare(right.id),
               );
+            const implementationThreads = linkedThreads.filter(
+              (thread) => thread.workflowRole === "implementation-worker",
+            );
+            const appReviewThreads = linkedThreads.filter(
+              (thread) => thread.workflowRole?.startsWith("app-review-") === true,
+            );
+            const codeReviewThreads = linkedThreads.filter(
+              (thread) => thread.workflowRole === "implementation-code-reviewer",
+            );
+            const ticketTimeRanges = linkedThreads.map(resolveWorkflowThreadTimeRange);
+            const ticketTimeRange =
+              ticketTimeRanges.length === 0
+                ? null
+                : {
+                    startedAt: ticketTimeRanges.reduce(
+                      (earliest, range) =>
+                        range.startedAt < earliest ? range.startedAt : earliest,
+                      ticketTimeRanges[0]!.startedAt,
+                    ),
+                    endedAt: ticketTimeRanges.some((range) => range.endedAt === null)
+                      ? null
+                      : ticketTimeRanges.reduce<string | null>(
+                          (latest, range) =>
+                            range.endedAt !== null && (latest === null || range.endedAt > latest)
+                              ? range.endedAt
+                              : latest,
+                          ticketTimeRanges[0]!.endedAt,
+                        ),
+                  };
+            const stages = [
+              {
+                label: "Implementation",
+                detail: state?.workerResult?.status ?? state?.status ?? "not started",
+                threads: implementationThreads,
+              },
+              {
+                label: "App Review",
+                detail:
+                  state?.appReviewOutcome === "skipped"
+                    ? "skipped — not planned for browser review"
+                    : (state?.appReviewOutcome ??
+                      (ticket.appReviewEligible ? "eligible" : "not planned")),
+                threads: appReviewThreads,
+              },
+              {
+                label: "Code Review",
+                detail: state?.codeReviewOutcome ?? "not started",
+                threads: codeReviewThreads,
+              },
+            ] as const;
             return (
               <div key={ticket.id} className="border-t border-border/60 first:border-t-0">
                 <button
@@ -452,41 +505,54 @@ function TicketPhases(props: {
                   </span>
                 </button>
                 {open ? (
-                  <div className="mb-2 ml-5 grid gap-1.5 text-[11px] text-muted-foreground">
-                    <div className="flex flex-wrap gap-1.5">
-                      {linkedThreads.map((thread) => (
-                        <button
-                          key={thread.id}
-                          type="button"
-                          onClick={() => props.onOpenThread(thread)}
-                          className="cursor-pointer inline-flex min-w-0 items-center gap-1 rounded-md border border-border/70 px-2 py-1 text-foreground hover:bg-accent"
-                        >
-                          <span className="max-w-48 truncate">
-                            {workflowRoleShortLabel(thread.workflowRole) ?? thread.title}
+                  <div className="mb-2 ml-5 border-l border-border/70 pl-3">
+                    {ticketTimeRange ? (
+                      <TimelineTimeRange
+                        {...ticketTimeRange}
+                        timestampFormat={props.timestampFormat}
+                        className="mb-2"
+                      />
+                    ) : null}
+                    <div className="space-y-2">
+                      {stages.map((stage, stageIndex) => (
+                        <section key={stage.label} className="relative">
+                          <span className="absolute -left-[1.05rem] top-1 flex size-4 items-center justify-center rounded-full border border-border bg-background text-[9px] font-medium text-muted-foreground">
+                            {stageIndex + 1}
                           </span>
-                          <ArrowUpRight className="size-3 shrink-0" aria-hidden />
-                        </button>
+                          <div className="mb-1 flex items-center gap-1.5 text-[11px]">
+                            <span className="font-medium text-foreground">{stage.label}</span>
+                            <span className="capitalize text-muted-foreground">
+                              · {stage.detail}
+                            </span>
+                            {stage.label === "App Review" && appReviewRun ? (
+                              <button
+                                type="button"
+                                onClick={props.onOpenAppReview}
+                                className="cursor-pointer ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] hover:bg-accent hover:text-foreground"
+                              >
+                                Results <Eye className="size-3" aria-hidden />
+                              </button>
+                            ) : null}
+                          </div>
+                          {stage.threads.length > 0 ? (
+                            <div className="space-y-0.5">
+                              {stage.threads.map((thread) => (
+                                <ThreadRow
+                                  key={thread.id}
+                                  row={{ thread, depth: 0, parentThreadKey: null }}
+                                  timestampFormat={props.timestampFormat}
+                                  activeThreadKey={props.activeThreadKey}
+                                  onOpenThread={props.onOpenThread}
+                                />
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="py-1 text-[10px] text-muted-foreground/65">
+                              No thread created
+                            </div>
+                          )}
+                        </section>
                       ))}
-                      {appReviewRun ? (
-                        <button
-                          type="button"
-                          onClick={props.onOpenAppReview}
-                          className="cursor-pointer inline-flex items-center gap-1 rounded-md border border-border/70 px-2 py-1 text-foreground hover:bg-accent"
-                        >
-                          App Review results
-                          <Eye className="size-3 shrink-0" aria-hidden />
-                        </button>
-                      ) : null}
-                    </div>
-                    <div>
-                      <span className="font-medium text-foreground">App Review</span> ·{" "}
-                      {state?.appReviewOutcome === "skipped"
-                        ? "Skipped — not planned for browser review"
-                        : state?.appReviewOutcome
-                          ? state.appReviewOutcome
-                          : ticket.appReviewEligible
-                            ? "Eligible · up to 10 cycles"
-                            : "Not planned for browser review"}
                     </div>
                   </div>
                 ) : null}
@@ -819,6 +885,8 @@ function WorkflowGroupCard(props: {
                                     appReviewWorkflowRuns={props.appReviewWorkflowRuns}
                                     onOpenThread={props.onOpenThread}
                                     onOpenAppReview={props.onOpenAppReview}
+                                    activeThreadKey={props.activeThreadKey}
+                                    timestampFormat={props.timestampFormat}
                                   />
                                 </div>
                               ) : stepOpen && step.entries.length === 0 ? (
