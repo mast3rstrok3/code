@@ -95,7 +95,7 @@ import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
 import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
 import { ComposerPlanFollowUpBanner } from "./ComposerPlanFollowUpBanner";
-import { ComposerControl, ComposerControlIcon, ComposerSelectControl } from "./ComposerControl";
+import { ComposerControlIcon, ComposerSelectControl } from "./ComposerControl";
 import { resolveComposerMenuActiveItemId } from "./composerMenuHighlight";
 import { searchSlashCommandItems } from "./composerSlashCommandSearch";
 import {
@@ -199,7 +199,6 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
 import {
   CircleAlertIcon,
-  ListTodoIcon,
   type LucideIcon,
   LockIcon,
   LockOpenIcon,
@@ -312,20 +311,12 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
   buildSkills: ReadonlyArray<ComposerBuildSkill>;
   selectedBuildSkillId: string | null;
   runtimeMode: RuntimeMode;
-  showPlanToggle: boolean;
-  planSidebarLabel: string;
-  planSidebarOpen: boolean;
   onInteractionModeChange: (mode: ProviderInteractionMode, preset: WorkflowPreset | null) => void;
   onBuildSkillChange: (skillId: string | null) => void;
-  onTogglePlanSidebar: () => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
 }) {
   const runtimeModeOption = runtimeModeConfig[props.runtimeMode];
   const RuntimeModeIcon = runtimeModeOption.icon;
-  const planSidebarTooltip = props.planSidebarOpen
-    ? `Hide ${props.planSidebarLabel.toLowerCase()} sidebar`
-    : `Show ${props.planSidebarLabel.toLowerCase()} sidebar`;
-
   return (
     <>
       <Separator orientation="vertical" className="mx-0.5 hidden h-4 sm:block" />
@@ -382,36 +373,6 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
         </Select>
         <TooltipPopup side="top">{runtimeModeOption.description}</TooltipPopup>
       </Tooltip>
-
-      {props.showPlanToggle ? (
-        <>
-          <Separator orientation="vertical" className="mx-0.5 hidden h-4 sm:block" />
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <ComposerControl
-                  className={cn(
-                    "shrink-0 whitespace-nowrap",
-                    props.planSidebarOpen
-                      ? "bg-blue-500/10 text-blue-400 hover:bg-blue-500/15 hover:text-blue-300"
-                      : "text-muted-foreground/70 hover:text-foreground/80",
-                  )}
-                  type="button"
-                  onClick={props.onTogglePlanSidebar}
-                  aria-label={planSidebarTooltip}
-                />
-              }
-            >
-              <ComposerControlIcon
-                icon={ListTodoIcon}
-                className={props.planSidebarOpen ? "text-current opacity-100" : undefined}
-              />
-              <span className="sr-only sm:not-sr-only">{props.planSidebarLabel}</span>
-            </TooltipTrigger>
-            <TooltipPopup side="top">{planSidebarTooltip}</TooltipPopup>
-          </Tooltip>
-        </>
-      ) : null}
     </>
   );
 });
@@ -569,9 +530,6 @@ export interface ChatComposerProps {
   // Plan
   showPlanFollowUpPrompt: boolean;
   activeProposedPlan: Thread["proposedPlans"][number] | null;
-  planSidebarLabel: string;
-  planSidebarOpen: boolean;
-  showPlanSidebarToggle: boolean;
 
   // Mode
   runtimeMode: RuntimeMode;
@@ -631,7 +589,6 @@ export interface ChatComposerProps {
     preset: WorkflowPreset | null,
   ) => void;
   onAppReviewCycleBudgetChange: (budget: number) => void;
-  togglePlanSidebar: () => void;
 
   focusComposer: () => void;
   scheduleComposerFocus: () => void;
@@ -674,9 +631,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     respondingRequestIds,
     showPlanFollowUpPrompt,
     activeProposedPlan,
-    planSidebarLabel,
-    planSidebarOpen,
-    showPlanSidebarToggle,
     runtimeMode,
     interactionMode,
     workflowPreset,
@@ -711,7 +665,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     handleRuntimeModeChange,
     handleInteractionModeChange,
     onAppReviewCycleBudgetChange,
-    togglePlanSidebar,
     focusComposer,
     scheduleComposerFocus,
     setThreadError,
@@ -3258,16 +3211,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     selectedBuildSkillId={selectedBuildSkillId}
                     workflowPreset={workflowPreset}
                     lastWorkflowPreset={lastWorkflowPreset}
-                    planSidebarLabel={planSidebarLabel}
-                    planSidebarOpen={planSidebarOpen}
-                    showPlanToggle={showPlanSidebarToggle}
                     planningWorkflowAvailable={planningWorkflowAvailable}
                     runtimeMode={runtimeMode}
                     showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
                     traitsMenuContent={providerTraitsMenuContent}
                     onBuildSkillChange={setSelectedBuildSkillId}
                     onInteractionModeChange={handleInteractionModeChange}
-                    onTogglePlanSidebar={togglePlanSidebar}
                     onRuntimeModeChange={handleRuntimeModeChange}
                   />
                 ) : (
@@ -3286,13 +3235,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       workflowPreset={workflowPreset}
                       lastWorkflowPreset={lastWorkflowPreset}
                       runtimeMode={runtimeMode}
-                      showPlanToggle={showPlanSidebarToggle}
-                      planSidebarLabel={planSidebarLabel}
-                      planSidebarOpen={planSidebarOpen}
                       planningWorkflowAvailable={planningWorkflowAvailable}
                       onInteractionModeChange={handleInteractionModeChange}
                       onBuildSkillChange={setSelectedBuildSkillId}
-                      onTogglePlanSidebar={togglePlanSidebar}
                       onRuntimeModeChange={handleRuntimeModeChange}
                     />
                   </>

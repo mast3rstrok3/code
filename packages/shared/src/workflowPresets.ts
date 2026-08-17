@@ -50,7 +50,9 @@ const LEGACY_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
   },
 ];
 
-export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition> = [
+// Keep every previously shipped definition available for rendering durable runs, while exposing
+// only the unified Engineering Workflow as a new composer/catalog entry.
+const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition> = [
   {
     id: "fast-feature",
     label: "Fast feature",
@@ -201,39 +203,72 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
   },
   {
     id: "planning",
-    label: "Planning",
+    label: "Engineering Workflow",
     description:
-      "Choose product-only or complete engineering grilling, then create reviewed tickets.",
+      "Plan with a Product or Engineering Grill, then implement, review, and publish the result.",
     route: "planning",
     interactionMode: "planning-workflow",
     helpSteps: [
-      { label: "Create shared worktree" },
+      { label: "Planning phase · Prepare shared worktree and App Dev Stack", note: "automatic" },
       {
-        label: "Choose Product or Engineering Grill",
+        label: "Planning phase · Grill with Docs",
         skillId: "planning.grill-stage.codex",
         note: "human-guided",
       },
-      { label: "Spec authoring", skillId: "planning.spec.codex", note: "automatic" },
       {
-        label: "Planning-ticket authoring",
+        label: "Planning phase · Spec authoring",
+        skillId: "planning.spec.codex",
+        note: "automatic",
+      },
+      {
+        label: "Planning phase · Ticket authoring",
         skillId: "planning.tickets.codex",
         note: "automatic",
       },
       {
-        label: "Ticket review and revision cycles",
+        label: "Planning phase · Ticket review and revision cycles",
         skillId: "planning.ticket-reviewer.codex",
         note: "automatic; up to five cycles",
       },
-      { label: "Start Implementation", note: "automatic" },
+      {
+        label: "Implementation phase · Run unblocked ticket workers",
+        skillId: "implementation.tdd.codex",
+        note: "automatic; parallel worktrees",
+      },
+      {
+        label: "Implementation phase · Per-ticket App Review and Code Review",
+        skillId: "implementation.browser-app-review.codex",
+        note: "automatic; eligible tickets only; review failures do not stop the workflow",
+      },
+      {
+        label: "Implementation phase · Merge ticket branches",
+        skillId: "implementation.merge-gate.codex",
+        note: "automatic",
+      },
+      {
+        label: "Implementation phase · Combined Code Review and App Review",
+        skillId: "implementation.code-review.codex",
+        note: "automatic; App Review runs up to ten cycles",
+      },
+      {
+        label: "Implementation phase · Final Code Review and pull request",
+        skillId: "implementation.code-review.codex",
+        note: "automatic; unresolved warnings are included in the pull request",
+      },
     ],
   },
 ];
 
+export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition> = [
+  "fast-feature",
+  "planning",
+  "wayfinder",
+].map((id) => GUIDED_WORKFLOW_PRESET_DEFINITIONS.find((definition) => definition.id === id)!);
+
 export const WORKFLOW_PRESET_DEFINITION_BY_ID = Object.fromEntries(
-  [...LEGACY_WORKFLOW_PRESET_DEFINITIONS, ...WORKFLOW_PRESET_DEFINITIONS].map((definition) => [
-    definition.id,
-    definition,
-  ]),
+  [...LEGACY_WORKFLOW_PRESET_DEFINITIONS, ...GUIDED_WORKFLOW_PRESET_DEFINITIONS].map(
+    (definition) => [definition.id, definition],
+  ),
 ) as Readonly<Record<WorkflowPreset, WorkflowPresetDefinition>>;
 
 export function interactionModeForWorkflowPreset(preset: WorkflowPreset): ProviderInteractionMode {

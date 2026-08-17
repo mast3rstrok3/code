@@ -1,11 +1,10 @@
 import { ProviderInteractionMode, RuntimeMode, WorkflowPreset } from "@t3tools/contracts";
 import { interactionModeForWorkflowPreset } from "@t3tools/shared/workflowPresets";
 import { memo, type ReactNode, useState } from "react";
-import { EllipsisIcon, ListTodoIcon } from "lucide-react";
+import { EllipsisIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import {
   Menu,
-  MenuItem,
   MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
@@ -26,16 +25,12 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
   selectedBuildSkillId: string | null;
   workflowPreset: WorkflowPreset | null;
   lastWorkflowPreset: WorkflowPreset | null;
-  planSidebarLabel: string;
-  planSidebarOpen: boolean;
-  showPlanToggle: boolean;
   planningWorkflowAvailable: boolean;
   runtimeMode: RuntimeMode;
   showInteractionModeToggle: boolean;
   traitsMenuContent?: ReactNode;
   onBuildSkillChange: (skillId: string | null) => void;
   onInteractionModeChange: (mode: ProviderInteractionMode, preset: WorkflowPreset | null) => void;
-  onTogglePlanSidebar: () => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
 }) {
   const activeMode = resolveComposerPrimaryMode(props);
@@ -100,15 +95,6 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
               view={modeView}
               workflowAvailable={props.planningWorkflowAvailable}
             />
-            <MenuDivider />
-          </>
-        ) : null}
-        {props.showPlanToggle ? (
-          <>
-            <MenuItem onClick={props.onTogglePlanSidebar}>
-              <ListTodoIcon aria-hidden className="size-4" />
-              {props.planSidebarOpen ? "Hide" : "Show"} {props.planSidebarLabel}
-            </MenuItem>
             <MenuDivider />
           </>
         ) : null}

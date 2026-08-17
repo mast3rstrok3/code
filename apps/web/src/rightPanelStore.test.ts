@@ -20,6 +20,15 @@ beforeEach(() => {
 });
 
 describe("rightPanelStore", () => {
+  it("opens prompt-specific workflow instructions", () => {
+    useRightPanelStore.getState().openInstructions(refA, "planning.spec.codex");
+    expect(selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      id: "instructions:planning.spec.codex",
+      kind: "instructions",
+      workflowPromptId: "planning.spec.codex",
+    });
+  });
+
   it("drops the legacy singleton terminal surface during migration", () => {
     expect(
       migratePersistedRightPanelState({
@@ -198,7 +207,7 @@ describe("rightPanelStore", () => {
     ).toEqual({ byThreadKey: { "env-1:thread-A": panelState } });
   });
 
-  it("retains persisted workflow plan surfaces", () => {
+  it("drops persisted legacy plan surfaces", () => {
     expect(
       migratePersistedRightPanelState({
         byThreadKey: {
@@ -219,18 +228,11 @@ describe("rightPanelStore", () => {
       }),
     ).toEqual({
       byThreadKey: {
-        "env-1:thread-A": {
-          isOpen: true,
-          activeSurfaceId: "plan",
-          surfaces: [{ id: "plan", kind: "plan" }],
-        },
+        "env-1:thread-A": { isOpen: false, activeSurfaceId: null, surfaces: [] },
         "env-1:thread-B": {
           isOpen: true,
-          activeSurfaceId: "plan",
-          surfaces: [
-            { id: "plan", kind: "plan" },
-            { id: "diff", kind: "diff" },
-          ],
+          activeSurfaceId: "diff",
+          surfaces: [{ id: "diff", kind: "diff" }],
         },
       },
     });
@@ -277,7 +279,6 @@ describe("rightPanelStore", () => {
   });
 
   it("keeps workflow surfaces as singleton tabs", () => {
-    useRightPanelStore.getState().open(refA, "plan");
     useRightPanelStore.getState().open(refA, "review");
     useRightPanelStore.getState().open(refA, "logs");
     useRightPanelStore.getState().open(refA, "workflows");
@@ -289,7 +290,6 @@ describe("rightPanelStore", () => {
       isOpen: true,
       activeSurfaceId: "review",
       surfaces: [
-        { id: "plan", kind: "plan" },
         { id: "review", kind: "review" },
         { id: "logs", kind: "logs" },
         { id: "workflows", kind: "workflows" },

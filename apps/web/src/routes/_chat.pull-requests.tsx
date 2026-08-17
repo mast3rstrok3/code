@@ -1142,7 +1142,6 @@ function PullRequestsRouteView() {
             onCopyFilePath={() => undefined}
             onAddBrowser={() => undefined}
             onAddTerminal={() => undefined}
-            onAddPlan={() => undefined}
             onAddReview={() => undefined}
             onAddLogs={() => undefined}
             onAddDiff={() => undefined}
@@ -1154,7 +1153,6 @@ function PullRequestsRouteView() {
             browserAvailable={false}
             browserUnavailableReason={undefined}
             terminalAvailable={false}
-            planAvailable={false}
             reviewAvailable={false}
             logsAvailable={false}
             diffAvailable={false}

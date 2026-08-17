@@ -53,12 +53,7 @@ import { CHAT_LIST_ANCHOR_OFFSET } from "@t3tools/shared/chatList";
 import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
 import { truncate } from "@t3tools/shared/String";
 import { nextTerminalId, resolveTerminalSessionLabel } from "@t3tools/shared/terminalLabels";
-import {
-  resolveImplementationBranchIdentity,
-  resolveWorkflowWorkspaceIdentity,
-  workflowPresetStartsInDedicatedWorkspace,
-} from "@t3tools/shared/orchestrationImplementation";
-import { resolveImplementationValidationCommands } from "@t3tools/shared/t3ProjectFile";
+import { workflowPresetStartsInDedicatedWorkspace } from "@t3tools/shared/orchestrationImplementation";
 import { isProductWorkflowRoot, workflowPromptIdForPreset } from "@t3tools/shared/workflowPresets";
 import { Debouncer } from "@tanstack/react-pacer";
 import { useAtomValue } from "@effect/atom-react";
@@ -88,7 +83,6 @@ import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { isElectron } from "../env";
 import { readLocalApi } from "../localApi";
-import { useT3ProjectFile } from "~/hooks/useT3ProjectFileScripts";
 import { useDiffPanelStore } from "../diffPanelStore";
 import {
   collapseExpandedComposerCursor,
@@ -161,7 +155,6 @@ import {
   usePreviewMiniPlayerStore,
 } from "../previewMiniPlayerStore";
 import { RightPanelTabs, type PullRequestTabStatus } from "./RightPanelTabs";
-import PlanSidebar from "./PlanSidebar";
 import { AppDevStackPanel } from "./AppDevStackPanel";
 import { AppDevStackLogsPanel } from "./AppDevStackLogsPanel";
 import { PullRequestDetailPanel } from "./pullRequest/PullRequestDetailPanel";
@@ -169,6 +162,8 @@ import { PullRequestDetailGhost } from "./pullRequest/PullRequestGhosts";
 import { PullRequestsUnavailableState } from "./pullRequest/PullRequestsUnavailableState";
 import { AgentsPanel } from "./AgentsPanel";
 import { WorkflowsPanel } from "./WorkflowsPanel";
+import { WorkflowInstructionsPanel } from "./WorkflowInstructionsPanel";
+import { useWorkflowCatalog } from "../workflowCatalogState";
 import {
   buildWorkflowViewModel,
   selectWorkflowRootForThread,
@@ -267,15 +262,10 @@ import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
   useImplementationRuns,
   useAppReviewWorkflowRuns,
-  useLaunchImplementationRunCommand,
-  useCreatePlanningSpecCommand,
-  useLoadPlanningSpecBundleCommand,
   usePlanningWorkflowThreadShells,
   useProject,
   useProjects,
-  useRequestPlanningTicketReviewCommand,
   useCancelImplementationRunCommand,
-  useRetryImplementationChangeRequestCommand,
   useRetryImplementationRunCommand,
   resolveThreadDetailRef,
   useThread,
@@ -309,7 +299,6 @@ import {
   shouldShowProviderStatusBanner,
 } from "./chat/ProviderStatusBanner";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
-import { isPlanningWorkflowAvailableForProvider } from "./chat/composerPlanningWorkflow";
 import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
 import { ThreadSyncStatusPill } from "./chat/ThreadSyncStatusPill";
 import {
@@ -480,11 +469,6 @@ const APP_REVIEW_CYCLE_BUDGET_STORAGE_KEY = "t3code.app-review-cycle-budget";
 const STOP_WORKFLOW_RUN_CONFIRM_MESSAGE = [
   "Stop this workflow run?",
   "The current turn is interrupted and the run is canceled, so it will not resume on its own.",
-  "The run's branch and worktree are kept.",
-].join("\n");
-const CANCEL_IMPLEMENTATION_RUN_CONFIRM_MESSAGE = [
-  "Cancel this run?",
-  "It stops where it is and will not resume on its own.",
   "The run's branch and worktree are kept.",
 ].join("\n");
 const TYPE_TO_FOCUS_EDITABLE_SELECTOR = [
@@ -1282,11 +1266,6 @@ function ChatViewContent(props: ChatViewProps) {
   const cancelAppReviewWorkflow = useAtomCommand(threadEnvironment.cancelAppReviewWorkflow, {
     reportFailure: false,
   });
-  const createPlanningSpec = useCreatePlanningSpecCommand();
-  const loadPlanningSpecBundle = useLoadPlanningSpecBundleCommand();
-  const requestPlanningTicketReview = useRequestPlanningTicketReviewCommand();
-  const launchImplementationRun = useLaunchImplementationRunCommand();
-  const retryImplementationChangeRequest = useRetryImplementationChangeRequestCommand();
   const retryImplementationRun = useRetryImplementationRunCommand();
   const cancelImplementationRun = useCancelImplementationRunCommand();
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, {
@@ -1365,7 +1344,6 @@ function ChatViewContent(props: ChatViewProps) {
     (store) => store.setStickyModelSelection,
   );
   const timestampFormat = settings.timestampFormat;
-  const autoOpenPlanSidebar = settings.autoOpenPlanSidebar;
   const defaultNewThreadOwnerUserId = useMemo(() => {
     return resolveDefaultThreadOwnerUserId({
       activeWorkspaceUserView: settings.activeWorkspaceUserView,
@@ -1450,7 +1428,6 @@ function ChatViewContent(props: ChatViewProps) {
   const [pendingUserInputQuestionIndexByRequestId, setPendingUserInputQuestionIndexByRequestId] =
     useState<Record<string, number>>({});
   const shouldUseRightPanelSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
-  const planSidebarDismissedForTurnRef = useRef<string | null>(null);
   const [terminalFocusRequestId, setTerminalFocusRequestId] = useState(0);
   const [pullRequestDialogState, setPullRequestDialogState] =
     useState<PullRequestDialogState | null>(null);
@@ -1705,6 +1682,22 @@ function ChatViewContent(props: ChatViewProps) {
         : null,
     [activeThreadEnvironmentId, activeThreadId],
   );
+  const workflowCatalogState = useWorkflowCatalog(activeThreadEnvironmentId);
+  const workflowSkillTitlesByPromptId = useMemo(() => {
+    const titles = new Map<string, string>();
+    if (workflowCatalogState.status !== "loaded") return titles;
+    for (const skill of workflowCatalogState.catalog.skills) {
+      for (const promptId of skill.promptIds) titles.set(promptId, skill.title);
+    }
+    return titles;
+  }, [workflowCatalogState]);
+  const openWorkflowInstructions = useCallback(
+    (workflowPromptId: string) => {
+      if (!activeThreadRef) return;
+      useRightPanelStore.getState().openInstructions(activeThreadRef, workflowPromptId);
+    },
+    [activeThreadRef],
+  );
   const handleThreadOwnerUserIdChange = useCallback(
     (ownerUserId: WorkspaceUserId) => {
       if (activeThreadId === null) {
@@ -1837,22 +1830,12 @@ function ChatViewContent(props: ChatViewProps) {
     previewPanelOpen,
   ]);
 
-  const planSidebarOpen = activeRightPanelKind === "plan";
-  const [focusedPlanningTicketTarget, setFocusedPlanningTicketTarget] = useState<{
-    readonly threadKey: string;
-    readonly ticketId: string | null;
-  } | null>(null);
-  const focusedPlanningTicketId =
-    focusedPlanningTicketTarget?.threadKey === activeThreadKey
-      ? focusedPlanningTicketTarget.ticketId
-      : null;
   const openPlanArtifact = useCallback(
-    (ticketId: string | null) => {
-      if (!activeThreadRef || activeThreadKey === null) return;
-      setFocusedPlanningTicketTarget({ threadKey: activeThreadKey, ticketId });
-      useRightPanelStore.getState().open(activeThreadRef, "plan");
+    (_ticketId: string | null) => {
+      if (!activeThreadRef) return;
+      useRightPanelStore.getState().open(activeThreadRef, "workflows");
     },
-    [activeThreadKey, activeThreadRef],
+    [activeThreadRef],
   );
 
   const existingOpenTerminalThreadKeys = useMemo(() => {
@@ -1957,9 +1940,7 @@ function ChatViewContent(props: ChatViewProps) {
     isServerThread &&
       activeThread !== undefined &&
       activeProject !== null &&
-      (activeRightPanelKind === "review" ||
-        activeRightPanelKind === "workflows" ||
-        (activeRightPanelKind === "plan" && activeThread?.workflowContext != null))
+      (activeRightPanelKind === "review" || activeRightPanelKind === "workflows")
       ? reviewEnvironment.workflowArtifacts({
           environmentId: activeThread.environmentId,
           input: { projectId: activeProject.id, threadId: activeThread.id },
@@ -1967,20 +1948,6 @@ function ChatViewContent(props: ChatViewProps) {
       : null,
   );
   const displayedWorkflowArtifacts = workflowArtifactsQuery.data;
-  const displayedPlanningWorkflowWithCanonicalArtifacts = useMemo(
-    () =>
-      displayedPlanningWorkflow === null || displayedPlanningWorkflow === undefined
-        ? displayedPlanningWorkflow
-        : displayedWorkflowArtifacts === null
-          ? displayedPlanningWorkflow
-          : {
-              ...displayedPlanningWorkflow,
-              spec: displayedWorkflowArtifacts.spec,
-              tickets: displayedWorkflowArtifacts.tickets,
-              reviewCycles: displayedWorkflowArtifacts.reviewCycles,
-            },
-    [displayedPlanningWorkflow, displayedWorkflowArtifacts],
-  );
   const displayedImplementationRuns = useMemo(() => {
     const specId =
       displayedWorkflowArtifacts?.spec?.id ?? displayedPlanningWorkflow?.spec?.id ?? null;
@@ -2582,27 +2549,6 @@ function ChatViewContent(props: ChatViewProps) {
     () => deriveActivePlanState(threadActivities, activeLatestTurn?.turnId ?? undefined),
     [activeLatestTurn?.turnId, threadActivities],
   );
-  const sidebarProposedPlan = activeThread?.workflowContext == null ? null : activeProposedPlan;
-  const planSidebarLabel = sidebarProposedPlan || interactionMode === "plan" ? "Plan" : "Tasks";
-  useEffect(() => {
-    if (!autoOpenPlanSidebar || activeThread?.workflowContext == null || !activePlan) return;
-    if (planSidebarOpen) return;
-    const latestTurnId = activeLatestTurn?.turnId ?? null;
-    if (latestTurnId && activePlan.turnId !== latestTurnId) return;
-    const turnKey = activePlan.turnId ?? sidebarProposedPlan?.turnId ?? "__dismissed__";
-    if (planSidebarDismissedForTurnRef.current === turnKey) return;
-    if (activeThreadRef) {
-      useRightPanelStore.getState().open(activeThreadRef, "plan");
-    }
-  }, [
-    activeLatestTurn?.turnId,
-    activePlan,
-    activeThread?.workflowContext,
-    activeThreadRef,
-    autoOpenPlanSidebar,
-    planSidebarOpen,
-    sidebarProposedPlan?.turnId,
-  ]);
   // Current step for the in-chat working row: only for the running turn's own
   // plan (deriveActivePlanState falls back to older turns' plans, which must
   // not label fresh work). Falls back to the first pending step so an
@@ -3009,30 +2955,6 @@ function ChatViewContent(props: ChatViewProps) {
   const activeProjectCwd = activeProject?.workspaceRoot ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const activeWorkspaceRoot = activeThreadWorktreePath ?? activeProjectCwd ?? undefined;
-  const t3ProjectFile = useT3ProjectFile(
-    activeThread?.environmentId ?? null,
-    activeWorkspaceRoot ?? null,
-  );
-  const implementationBranchIdentity = useMemo(() => {
-    if (!activeWorkspaceRoot || !activePlanningWorkflow?.spec) {
-      return null;
-    }
-    const workflowWorkspace = resolveWorkflowWorkspaceIdentity(activeThread?.activities ?? []);
-    if (workflowWorkspace !== null) {
-      return {
-        baseBranch: workflowWorkspace.baseBranch,
-        orchestratorBranch: activeThread?.branch ?? workflowWorkspace.branch,
-        orchestratorWorktreePath: workflowWorkspace.worktreePath,
-      };
-    }
-    return resolveImplementationBranchIdentity({
-      workspaceRoot: activeWorkspaceRoot,
-      specId: activePlanningWorkflow.spec.id,
-      specTitle: activePlanningWorkflow.spec.title,
-      baseBranch: activeThread?.branch ?? null,
-      implementationRuns: activeImplementationRuns,
-    });
-  }, [activeImplementationRuns, activePlanningWorkflow?.spec, activeThread, activeWorkspaceRoot]);
   const openWorkflowThread = useCallback(
     (targetThreadId: ThreadId) => {
       const targetRef = scopeThreadRef(environmentId, targetThreadId);
@@ -3077,81 +2999,6 @@ function ChatViewContent(props: ChatViewProps) {
       );
     },
     [activeWorkflowNavigation],
-  );
-  const handleLoadPlanningSpecBundle = useCallback(
-    (specId: string) => {
-      if (!activeThread) return;
-      void loadPlanningSpecBundle({
-        environmentId: activeThread.environmentId,
-        input: {
-          threadId: activeThread.id,
-          specId,
-          source: "projection",
-        },
-      });
-    },
-    [activeThread, loadPlanningSpecBundle],
-  );
-  const handleCreatePlanningSpec = useCallback(() => {
-    if (!activeThread) return;
-    void createPlanningSpec({
-      environmentId: activeThread.environmentId,
-      input: {
-        threadId: activeThread.id,
-      },
-    });
-  }, [activeThread, createPlanningSpec]);
-  const canCreatePlanningSpec =
-    activeThread != null &&
-    activeThread.interactionMode === "planning-workflow" &&
-    !isProductWorkflowRoot(activeThread) &&
-    (displayedPlanningWorkflowWithCanonicalArtifacts?.spec ?? null) === null &&
-    isPlanningWorkflowAvailableForProvider(selectedProvider);
-  const handleRequestPlanningTicketReview = useCallback(
-    (specId: string) => {
-      if (!activeThread) return;
-      void requestPlanningTicketReview({
-        environmentId: activeThread.environmentId,
-        input: {
-          threadId: activeThread.id,
-          specId,
-        },
-      });
-    },
-    [activeThread, requestPlanningTicketReview],
-  );
-  const handleLaunchImplementationRun = useCallback(
-    (specId: string) => {
-      if (!activeThread || implementationBranchIdentity === null) return;
-      void launchImplementationRun({
-        environmentId: activeThread.environmentId,
-        input: {
-          threadId: activeThread.id,
-          specId,
-          baseBranch: activeThread.branch ?? "main",
-          pinnedCommit: "HEAD",
-          orchestratorBranch: implementationBranchIdentity.orchestratorBranch,
-          orchestratorWorktreePath: implementationBranchIdentity.orchestratorWorktreePath,
-          validationCommands: [
-            ...resolveImplementationValidationCommands({ projectFile: t3ProjectFile }),
-          ],
-        },
-      });
-    },
-    [activeThread, implementationBranchIdentity, launchImplementationRun, t3ProjectFile],
-  );
-  const handleRetryImplementationChangeRequest = useCallback(
-    (runId: string) => {
-      if (!activeThread) return;
-      void retryImplementationChangeRequest({
-        environmentId: activeThread.environmentId,
-        input: {
-          threadId: activeThread.id,
-          runId,
-        },
-      });
-    },
-    [activeThread, retryImplementationChangeRequest],
   );
   const handleRetryImplementationRun = useCallback(
     (runId: string) => {
@@ -3307,20 +3154,6 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [activeThread, cancelImplementationRun, setThreadError],
   );
-  const handleCancelImplementationRunFromSidebar = useCallback(
-    (runId: string) => {
-      void (async () => {
-        const localApi = readLocalApi();
-        const confirmed = localApi
-          ? await localApi.dialogs.confirm(CANCEL_IMPLEMENTATION_RUN_CONFIRM_MESSAGE)
-          : window.confirm(CANCEL_IMPLEMENTATION_RUN_CONFIRM_MESSAGE);
-        if (!confirmed) return;
-        await handleCancelImplementationRun(runId, "Canceled from the plan sidebar.");
-      })();
-    },
-    [handleCancelImplementationRun],
-  );
-
   const focusComposer = useCallback(() => {
     composerRef.current?.focusAtEnd();
   }, [composerRef]);
@@ -3802,19 +3635,6 @@ function ChatViewContent(props: ChatViewProps) {
   const toggleInteractionMode = useCallback(() => {
     handleComposerModeChange(interactionMode === "plan" ? "default" : "plan", null);
   }, [handleComposerModeChange, interactionMode]);
-  const dismissPlanSidebarForCurrentTurn = useCallback(() => {
-    planSidebarDismissedForTurnRef.current =
-      activePlan?.turnId ?? sidebarProposedPlan?.turnId ?? "__dismissed__";
-  }, [activePlan?.turnId, sidebarProposedPlan?.turnId]);
-  const togglePlanSidebar = useCallback(() => {
-    if (!activeThreadRef) return;
-    if (planSidebarOpen) {
-      dismissPlanSidebarForCurrentTurn();
-    } else {
-      planSidebarDismissedForTurnRef.current = null;
-    }
-    useRightPanelStore.getState().toggle(activeThreadRef, "plan");
-  }, [activeThreadRef, dismissPlanSidebarForCurrentTurn, planSidebarOpen]);
   const createBrowserSurface = useCallback(() => {
     if (!activeThreadRef) return;
     void addBrowserSurface({ threadRef: activeThreadRef, openPreview });
@@ -3824,11 +3644,6 @@ function ChatViewContent(props: ChatViewProps) {
     useRightPanelStore.getState().open(activeThreadRef, "diff");
     onDiffPanelOpen?.();
   }, [activeThreadRef, isGitRepo, isServerThread, onDiffPanelOpen]);
-  const addPlanSurface = useCallback(() => {
-    if (!activeThreadRef || activeThread?.workflowContext == null) return;
-    planSidebarDismissedForTurnRef.current = null;
-    useRightPanelStore.getState().open(activeThreadRef, "plan");
-  }, [activeThread?.workflowContext, activeThreadRef]);
   const addReviewSurface = useCallback(() => {
     if (!activeThreadRef || !isServerThread || !isGitRepo) return;
     useRightPanelStore.getState().open(activeThreadRef, "review");
@@ -6957,32 +6772,6 @@ function ChatViewContent(props: ChatViewProps) {
           workflowArtifacts={displayedWorkflowArtifacts}
         />
       </Suspense>
-    ) : activeRightPanelSurface?.kind === "plan" ? (
-      <PlanSidebar
-        key={activeThreadKey}
-        activePlan={activePlan}
-        activeProposedPlan={sidebarProposedPlan}
-        planningWorkflow={displayedPlanningWorkflowWithCanonicalArtifacts}
-        workflowThreadShells={activeWorkflowThreadShells}
-        implementationRuns={activeImplementationRuns}
-        label={planSidebarLabel}
-        environmentId={environmentId}
-        threadRef={activeThreadRef}
-        markdownCwd={gitCwd ?? undefined}
-        workspaceRoot={activeWorkspaceRoot}
-        timestampFormat={timestampFormat}
-        mode="embedded"
-        onOpenThread={openWorkflowThread}
-        onCreateSpec={canCreatePlanningSpec ? handleCreatePlanningSpec : undefined}
-        onLoadSpecBundle={handleLoadPlanningSpecBundle}
-        automationOwned={activeThread ? isProductWorkflowRoot(activeThread) : false}
-        onRequestTicketReview={handleRequestPlanningTicketReview}
-        onLaunchImplementationRun={handleLaunchImplementationRun}
-        onRetryImplementationChangeRequest={handleRetryImplementationChangeRequest}
-        onRetryImplementationRun={handleRetryImplementationRun}
-        onCancelImplementationRun={handleCancelImplementationRunFromSidebar}
-        focusedTicketId={focusedPlanningTicketId}
-      />
     ) : activeRightPanelSurface?.kind === "app-dev-stack" &&
       activeProject &&
       activeWorkspaceRoot ? (
@@ -7058,6 +6847,11 @@ function ChatViewContent(props: ChatViewProps) {
         }}
         onCopyWorkflowLink={copyWorkflowLink}
         onRetryImplementationRun={handleRetryImplementationRun}
+      />
+    ) : activeRightPanelSurface?.kind === "instructions" ? (
+      <WorkflowInstructionsPanel
+        environmentId={activeThread.environmentId}
+        workflowPromptId={activeRightPanelSurface.workflowPromptId}
       />
     ) : (activeRightPanelSurface?.kind === "files" || activeRightPanelSurface?.kind === "file") &&
       activeProject &&
@@ -7156,7 +6950,7 @@ function ChatViewContent(props: ChatViewProps) {
           error={threadError}
           onDismiss={() => setThreadError(activeThread.id, null)}
         />
-        {/* Main content area with optional plan sidebar */}
+        {/* Main content area with optional right panel */}
         <div className="flex min-h-0 min-w-0 flex-1">
           {/* Chat column */}
           <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
@@ -7173,6 +6967,8 @@ function ChatViewContent(props: ChatViewProps) {
               <MessagesTimeline
                 agentPanelModel={agentPanelModel}
                 onOpenAgents={addAgentsSurface}
+                workflowSkillTitlesByPromptId={workflowSkillTitlesByPromptId}
+                onOpenWorkflowInstructions={openWorkflowInstructions}
                 key={activeThread.id}
                 isWorking={isWorking}
                 workingStepLabel={workingStepLabel}
@@ -7331,9 +7127,6 @@ function ChatViewContent(props: ChatViewProps) {
                             respondingRequestIds={respondingRequestIds}
                             showPlanFollowUpPrompt={showPlanFollowUpPrompt}
                             activeProposedPlan={activeProposedPlan}
-                            planSidebarLabel={planSidebarLabel}
-                            planSidebarOpen={planSidebarOpen}
-                            showPlanSidebarToggle={activeThread.workflowContext != null}
                             runtimeMode={runtimeMode}
                             interactionMode={interactionMode}
                             workflowPreset={workflowPreset}
@@ -7384,7 +7177,6 @@ function ChatViewContent(props: ChatViewProps) {
                                 ),
                               )
                             }
-                            togglePlanSidebar={togglePlanSidebar}
                             focusComposer={focusComposer}
                             scheduleComposerFocus={scheduleComposerFocus}
                             setThreadError={setThreadError}
@@ -7536,7 +7328,6 @@ function ChatViewContent(props: ChatViewProps) {
           onCopyFilePath={copyRightPanelFilePath}
           onAddBrowser={createBrowserSurface}
           onAddTerminal={addTerminalSurface}
-          onAddPlan={addPlanSurface}
           onAddReview={addReviewSurface}
           onAddLogs={addLogsSurface}
           onAddDiff={addDiffSurface}
@@ -7550,7 +7341,6 @@ function ChatViewContent(props: ChatViewProps) {
             previewRuntimeCapability.supported ? undefined : previewRuntimeCapability.message
           }
           terminalAvailable={activeProject !== null}
-          planAvailable={activeThread?.workflowContext != null}
           reviewAvailable={isServerThread && isGitRepo}
           logsAvailable={activeEnvironmentConnectionPhase === "connected"}
           diffAvailable={isServerThread && isGitRepo}
@@ -7584,7 +7374,6 @@ function ChatViewContent(props: ChatViewProps) {
             onCopyFilePath={copyRightPanelFilePath}
             onAddBrowser={createBrowserSurface}
             onAddTerminal={addTerminalSurface}
-            onAddPlan={addPlanSurface}
             onAddReview={addReviewSurface}
             onAddLogs={addLogsSurface}
             onAddDiff={addDiffSurface}
@@ -7598,7 +7387,6 @@ function ChatViewContent(props: ChatViewProps) {
               previewRuntimeCapability.supported ? undefined : previewRuntimeCapability.message
             }
             terminalAvailable={activeProject !== null}
-            planAvailable={activeThread?.workflowContext != null}
             reviewAvailable={isServerThread && isGitRepo}
             logsAvailable={activeEnvironmentConnectionPhase === "connected"}
             diffAvailable={isServerThread && isGitRepo}

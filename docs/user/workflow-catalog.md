@@ -2,7 +2,7 @@
 
 The Settings catalog separates workflow automation into three layers:
 
-- **Workflows** are the five selectable orchestration paths: Fast Feature, Full Feature, Wayfinder, Planning, and Implementation.
+- **Workflows** contains three selectable paths: **Fast Feature**, **Engineering Workflow**, and **Wayfinder**.
 - **Skills** are focused engineering instructions. The catalog includes all 18 skills from Matt Pocock's engineering collection plus T3-native orchestration skills.
 - **Docs** are supporting references used by those skills, such as ADR, context, testing, and browser-QA formats.
 
@@ -12,23 +12,25 @@ To invoke a skill directly, open the composer mode picker where you choose Build
 
 ## Choosing a workflow
 
-- **Fast Feature** — a feature small enough to skip the Spec-and-tickets pipeline but big enough to deserve a worktree and reviews.
-- **Full Feature** — the complete pipeline with one conversation: Product Grill, then automatic Engineering Grill, planning, and implementation.
-- **Planning** — choose Product Grill or Engineering Grill in one opening question, then continue through Spec, tickets, ticket review, and Implementation.
-- **Wayfinder** — the effort is too large or foggy to specify in one pass; chart the decisions first.
-- **Implementation** — you already have a Spec and reviewed tickets; execute them.
+- **Fast Feature** plans and implements a focused change without the full Spec-and-tickets pipeline.
+- **Engineering Workflow** begins directly with Grill with Docs, then proceeds through Planning and Implementation without another workflow handoff.
+- **Wayfinder** maps large or uncertain work into decisions before handing it to Spec authoring.
 
-Full Feature starts with a **Product Grill**. Before asking anything, the agent grounds itself in the codebase and existing product context, resolves discoverable facts, and answers what is already clear. It maps the remaining product decisions as a dependency tree, then asks the complete currently unblocked product-alignment frontier when that frontier contains one through seven questions — the problem, the outcome, the audience, how it should feel, success criteria, scope, and non-goals. Seven is the maximum for a round, not a target; smaller frontiers keep their natural size, while larger frontiers continue in stable order after the first seven answers. Your answers unlock the next round. Product Grill never asks implementation, architecture, or testing questions; Full Feature delegates those decisions to an automatic Engineering Grill.
+Control the grill in the initial prompt using ordinary language: for example, “ask product questions only,” “focus on engineering decisions,” or “ask at most five questions.” Without a constraint, Grill with Docs covers the complete product, engineering, and domain frontier.
+
+Before asking anything, Product Grill grounds itself in existing product context, resolves discoverable facts, and answers what is already clear. It maps the remaining product decisions as a dependency tree, then asks the complete currently unblocked product-alignment frontier when that frontier contains one through seven questions — the problem, the outcome, the audience, how it should feel, success criteria, scope, and non-goals. Seven is the maximum for a round, not a target; smaller frontiers keep their natural size, while larger frontiers continue in stable order after the first seven answers. Your answers unlock the next round. Product Grill never asks implementation, architecture, or testing questions.
 
 Interactive Product and Engineering Grills present questions as structured cards above the composer on web, desktop, and mobile. Choices stay in their natural order, and each option keeps a neutral impact or tradeoff description. A separate callout names the recommended option and explains why it is preferred without changing the option label or description. You can use the composer field on the card for a custom answer. The final “lock it in or keep grilling” confirmation uses one question in the same structured card.
 
-## What each workflow does
+## Phase details
+
+The Fast Feature, Full Feature, Wayfinder, and standalone Implementation descriptions below are retained for existing runs. New work starts through Engineering Workflow, which composes the Planning and Implementation behavior described here.
 
 **Fast Feature** — has exactly four stages: Planning, Building, App Review, and Code Review. It creates its shared worktree and starts directly in Plan mode. The plan owns downstream parallelization through two explicit sections: a Build topology of workstreams, dependencies, ownership boundaries, validation, and integration responsibility; and an App Review topology of independent acceptance lanes, setup, and expected evidence. Build executes that topology instead of repartitioning the work. App Review runs the planned analysis lanes in parallel while one browser reviewer retains ownership of UI interaction, recording, screenshots, durable findings, and the verdict. New temporary workspaces use a neutral `worktree-…` directory name; their Git branch is renamed to a short semantic name without a product prefix. T3 Code runs the repository-declared worktree setup and starts the App Dev Stack as soon as setup completes successfully; a setup failure prevents an unhealthy stack launch. Every agent turn launched in the worktree receives its exact path, current branch, live App Dev Stack state, and—once healthy—the authoritative frontend URL. Agents are explicitly prevented from substituting host containers, databases, or stacks from another worktree. Once the temporary worktree branch has its semantic name, the plan launches Build in that same worktree and reuses the already-owned stack. Browser App Review uses the frontend URL from that stack. Code Review makes its corrections, commits, and creates the pull request; PR creation is the handoff to a human. Failed or exhausted automated review is recorded on the pull request so the handoff remains explicit.
 
 **Full Feature** — creates its shared worktree and starts Product Grill immediately. Its repository-declared setup runs in parallel, and its App Dev Stack starts as soon as setup succeeds. Product Grill is the only stage that asks you questions. Once you confirm what the product should do, the same thread enters an automatic Engineering Grill. The model grounds itself in the codebase, resolves the engineering and domain decision tree on its own without reopening product questions, and then continues automatically through Spec authoring, tickets, ticket review, and the full Implementation workflow in that same worktree, branch, and stack.
 
-**Planning** — creates a prepared workspace and asks one opening structured question about the submitted prompt. Product Grill covers only product outcomes, scope, behavior, terminology, risks, and acceptance criteria; it never asks engineering or repository questions. Engineering Grill includes that complete product frontier first, then uses the repository to resolve architecture, constraints, seams, tests, implementation decisions, glossary terms, and warranted ADRs. Both choices continue through Spec authoring, durable tickets, up to five ticket-review cycles, and Implementation in the same worktree, branch, and App Dev Stack. T3 remembers the choice and does not ask it again during recovery.
+**Planning** — creates a prepared workspace and starts Grill with Docs against the submitted prompt. The grill honors user-supplied scope and question limits, uses the repository to resolve discoverable facts, and records assumptions when a limit leaves decisions unresolved. It then continues through Spec authoring, durable tickets, up to five ticket-review cycles, and Implementation in the same worktree, branch, and App Dev Stack.
 
 **Implementation** — uses reviewed Planning tickets when they exist. Otherwise it turns the user prompt into one or more durable T3 tickets before writing code. Each ticket records whether App Review can verify it through the UI and, when it can, carries an attached review plan describing the surface, actions, assertions, and evidence. T3 stores these artifacts in the application rather than GitHub or repository scratch files.
 
@@ -47,6 +49,8 @@ A Browser App Review's live browser tab is temporary. It closes when the review 
 ## Navigating workflow threads
 
 On web and desktop, a workflow keeps one sidebar entry: its top-level thread. Planning, build, review, repair, and other workflow-created child threads do not appear as separate sidebar rows.
+
+Workflow-generated user messages show a **Skill · _name_** pill. Select it to open the associated instructions in the right panel, where you can read the formatted skill, switch to its exact raw text, and expand any supporting documents. Historical workflow messages receive the same association when their recorded turn metadata is available.
 
 Open **Workflows** in the right panel to see the same ordered workflow steps defined in **Settings → Workflows**, together with every created child thread. Steps remain separate even when one conversation performs several of them. Repeating a review or repair appears as another numbered cycle inside the same step, not as a duplicate workflow step. If a run reaches a human gate, use **Restart step** on the blocked step directly in this panel; T3 Code preserves the workflow run, worktree, branch, App Dev Stack, completed steps, and code, and resumes only that stage. Selecting a child opens its conversation while keeping the complete workflow overview open. Select the workflow title to return to the top-level conversation. Provider-native subagents remain in the separate **Agents** surface.
 

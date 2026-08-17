@@ -3287,7 +3287,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("records final integration failure and continues from the usable HEAD", () =>
+  it.effect("sends final integration failures directly to a fixer with the Git error", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
@@ -3297,10 +3297,18 @@ describe("ImplementationWorkflowReactor", () => {
           const snapshot = yield* system.query.getSnapshot();
           expect(
             snapshot.implementationRuns.find((candidate) => candidate.id === run.id)?.status,
-          ).toBe("validating");
+          ).toBe("fixing");
           expect(
             snapshot.threads.filter((thread) => thread.workflowRole === "implementation-validator"),
+          ).toHaveLength(0);
+          const fixer = snapshot.threads.find(
+            (thread) => thread.workflowRole === "implementation-fixer",
+          );
+          expect(
+            snapshot.threads.filter((thread) => thread.workflowRole === "implementation-fixer"),
           ).toHaveLength(1);
+          expect(fixer?.messages[0]?.text).toContain("Ticket integration failed:");
+          expect(fixer?.messages[0]?.text).toContain("merge failed");
           expect(
             snapshot.threads
               .find((thread) => thread.id === run.orchestratorThreadId)

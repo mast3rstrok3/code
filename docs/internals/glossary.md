@@ -147,7 +147,7 @@ Workflows are the server-orchestrated automation paths that chain planning and i
 
 #### Workflow (preset)
 
-One of the five selectable orchestration paths — Fast Feature, Full Feature, Wayfinder, Planning, or Implementation — defined in [workflowPresets.ts][25]. Each preset maps to an interaction mode and an ordered list of skill-backed steps. Legacy Fix and App Review preset values remain decodable but are not selectable; App Review is launched as a nested or panel-owned run.
+One of the three selectable orchestration paths—Fast Feature, Engineering Workflow, or Wayfinder—defined in [workflowPresets.ts][25]. Engineering Workflow combines Planning and Implementation phases behind one entry point, beginning directly with user-scoped Grill with Docs. Earlier preset identities remain decodable for historical runs; App Review is launched as a nested or panel-owned run.
 
 #### Workflow ID
 

@@ -2040,20 +2040,16 @@ const make = Effect.gen(function* () {
           payload: { runId: integratingRun.id, detail },
           createdAt: input.createdAt,
         });
-        yield* startMergeGate({
+        yield* startFixer({
           sourceThreadId: input.sourceThreadId,
           run: continuedRun,
-          integration: {
-            baseTicketId: null,
-            baseRefName: continuedRun.orchestratorBranch,
-            mergedTicketIds: [],
-            conflictedTicketId: null,
-            conflictedRefName: null,
-            conflictedFiles: [],
-            remainingTicketIds: [],
-            remainingRefNames: [],
-          },
-          kind: "integration",
+          status: "fixing",
+          origin: "merge-gate",
+          title: "Fix terminal branch integration",
+          promptText: buildMergeGateFixPrompt({
+            run: continuedRun,
+            reportMarkdown: detail,
+          }),
           createdAt: input.createdAt,
         });
         return;

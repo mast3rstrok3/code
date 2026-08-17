@@ -144,6 +144,8 @@ interface TimelineRowSharedState {
   onToggleWorkGroup: (groupId: string, anchorKey: string) => void;
   agentPanelModel: AgentPanelModel;
   onOpenAgents: () => void;
+  workflowSkillTitlesByPromptId: ReadonlyMap<string, string>;
+  onOpenWorkflowInstructions: (workflowPromptId: string) => void;
 }
 
 interface TimelineRowActivityState {
@@ -188,6 +190,8 @@ function TimelineLoadEarlierHeader({
 }
 const TIMELINE_LIST_FOOTER = <div className="h-3 sm:h-4" />;
 const EMPTY_TIMELINE_SKILLS: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">> = [];
+const EMPTY_WORKFLOW_SKILL_TITLES = new Map<string, string>();
+const NOOP_OPEN_WORKFLOW_INSTRUCTIONS = () => {};
 const TIMELINE_MAINTAIN_SCROLL_AT_END = {
   animated: false,
   on: {
@@ -204,6 +208,8 @@ const TIMELINE_MAINTAIN_SCROLL_AT_END = {
 interface MessagesTimelineProps {
   agentPanelModel?: AgentPanelModel;
   onOpenAgents?: () => void;
+  workflowSkillTitlesByPromptId?: ReadonlyMap<string, string>;
+  onOpenWorkflowInstructions?: (workflowPromptId: string) => void;
   isWorking: boolean;
   workingStepLabel?: string | null;
   activeTurnInProgress: boolean;
@@ -255,6 +261,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   activeTurnStartedAt,
   agentPanelModel = EMPTY_AGENT_PANEL_MODEL,
   onOpenAgents = NOOP_OPEN_AGENTS,
+  workflowSkillTitlesByPromptId = EMPTY_WORKFLOW_SKILL_TITLES,
+  onOpenWorkflowInstructions = NOOP_OPEN_WORKFLOW_INSTRUCTIONS,
   listRef,
   timelineEntries,
   latestTurn,
@@ -519,6 +527,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onToggleWorkGroup,
       agentPanelModel,
       onOpenAgents,
+      workflowSkillTitlesByPromptId,
+      onOpenWorkflowInstructions,
     }),
     [
       timestampFormat,
@@ -535,6 +545,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onToggleWorkGroup,
       agentPanelModel,
       onOpenAgents,
+      workflowSkillTitlesByPromptId,
+      onOpenWorkflowInstructions,
     ],
   );
   const activityState = useMemo<TimelineRowActivityState>(
@@ -1044,6 +1056,16 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           markdownCwd={ctx.markdownCwd}
         />
       </div>
+      {row.message.workflowPromptId ? (
+        <button
+          type="button"
+          className="me-1 inline-flex items-center rounded-full border border-border/70 bg-background/70 px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          onClick={() => ctx.onOpenWorkflowInstructions(row.message.workflowPromptId!)}
+        >
+          Skill ·{" "}
+          {ctx.workflowSkillTitlesByPromptId.get(row.message.workflowPromptId) ?? "Instructions"}
+        </button>
+      ) : null}
       <div className="flex w-full max-w-[80%] items-center justify-end pe-1 text-xs tabular-nums opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover:opacity-100">
         <div className="flex shrink-0 items-center gap-2">
           <Tooltip>

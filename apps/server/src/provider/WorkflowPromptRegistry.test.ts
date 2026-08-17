@@ -44,8 +44,12 @@ describe("WorkflowPromptRegistry", () => {
   it("builds a validated, deduplicated workflow catalog", () => {
     const catalog = listWorkflowCatalog();
     NodeAssert.deepEqual(
+      catalog.skills.find((skill) => skill.id === "matt-pocock.to-spec")?.promptIds,
+      ["matt-pocock.to-spec", WORKFLOW_PROMPT_IDS.planningSpecCodex],
+    );
+    NodeAssert.deepEqual(
       catalog.workflows.map((workflow) => workflow.id),
-      ["fast-feature", "full-feature", "wayfinder", "planning", "implementation"],
+      ["fast-feature", "planning", "wayfinder"],
     );
     NodeAssert.equal(
       catalog.skills.filter((skill) => skill.id.startsWith("matt-pocock.")).length,
@@ -88,7 +92,7 @@ describe("WorkflowPromptRegistry", () => {
       (skill) => skill.id === "matt-pocock.grill-with-docs",
     );
     NodeAssert.equal(grillWithDocs?.title, "Grill with Docs");
-    NodeAssert.deepEqual(grillWithDocs?.workflowIds, ["full-feature", "wayfinder", "planning"]);
+    NodeAssert.deepEqual(grillWithDocs?.workflowIds, ["planning", "wayfinder"]);
     const directGrillWithDocs = resolveWorkflowPromptText("matt-pocock.grill-with-docs");
     NodeAssert.match(directGrillWithDocs, /T3 direct Build adapter/);
     NodeAssert.match(directGrillWithDocs, /Map this as a \*\*design tree\*\*/);
@@ -97,7 +101,7 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(directGrillWithDocs, /# CONTEXT\.md Format/);
     NodeAssert.deepEqual(
       catalog.skills.find((skill) => skill.id === "matt-pocock.domain-modeling")?.workflowIds,
-      ["full-feature", "product-planning", "wayfinder", "planning"],
+      ["planning", "wayfinder"],
     );
     NodeAssert.match(resolveWorkflowPromptText("matt-pocock.tdd"), /supporting-skill-docs/);
     NodeAssert.match(resolveWorkflowPromptText("matt-pocock.tdd"), /# When to Mock/);
@@ -148,33 +152,25 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.deepEqual(
       catalog.skills.find((skill) => skill.id === WORKFLOW_PROMPT_IDS.implementationFixCodex)
         ?.workflowIds,
-      ["fast-feature", "full-feature", "implementation"],
+      ["fast-feature"],
     );
-    const fastFeature = catalog.workflows.find((workflow) => workflow.id === "fast-feature");
-    NodeAssert.deepEqual(
-      fastFeature?.steps.map((step) => step.label),
-      ["Planning", "TDD", "Browser App Review", "Code Review"],
-    );
-    NodeAssert.equal(fastFeature?.interactionMode, "plan");
     const fastFeaturePlanning = catalog.skills.find(
       (skill) => skill.id === WORKFLOW_PROMPT_IDS.planningFastFeatureCodex,
     );
     NodeAssert.match(fastFeaturePlanning?.promptText ?? "", /## Build topology/);
     NodeAssert.match(fastFeaturePlanning?.promptText ?? "", /## App Review topology/);
     NodeAssert.match(fastFeaturePlanning?.promptText ?? "", /parallel group/);
+    const engineeringWorkflow = catalog.workflows.find((workflow) => workflow.id === "planning");
+    NodeAssert.equal(engineeringWorkflow?.title, "Engineering Workflow");
     NodeAssert.ok(
-      fastFeature?.steps.some((step) => step.label === "TDD" && step.skillId === "matt-pocock.tdd"),
-    );
-    const fullFeature = catalog.workflows.find((workflow) => workflow.id === "full-feature");
-    NodeAssert.ok(
-      fullFeature?.steps.some(
+      engineeringWorkflow?.steps.some(
         (step) =>
           step.label === "Ticket Review" &&
           step.skillId === WORKFLOW_PROMPT_IDS.planningTicketReviewerCodex,
       ),
     );
     NodeAssert.ok(
-      fullFeature?.steps.some(
+      engineeringWorkflow?.steps.some(
         (step) =>
           step.label === "Merge Gate" &&
           step.skillId === WORKFLOW_PROMPT_IDS.implementationMergeGateCodex,
@@ -204,7 +200,7 @@ describe("WorkflowPromptRegistry", () => {
     );
   });
 
-  it("renders one Planning Grill with a product or engineering opening choice", () => {
+  it("starts Grill with Docs without a separate grill-type choice", () => {
     const contracts = listWorkflowPromptContracts();
     const planningGrill = contracts.find(
       (contract) => contract.id === WORKFLOW_PROMPT_IDS.planningGrillStageCodex,
@@ -216,14 +212,11 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.equal(planningGrill.title, "1. Planning Grill");
 
     const rendered = resolveWorkflowPromptText(WORKFLOW_PROMPT_IDS.planningGrillStageCodex);
-    NodeAssert.match(rendered, /# Planning Grill/);
-    NodeAssert.match(rendered, /planning_grill_depth/);
-    NodeAssert.match(rendered, /How deeply should Planning grill this prompt\?/);
-    NodeAssert.match(rendered, /Product Grill.*Engineering Grill/s);
-    NodeAssert.match(rendered, /recommend `Engineering Grill`/);
-    NodeAssert.match(rendered, /Run the complete product decision tree above first/);
-    NodeAssert.match(rendered, /do not ask engineering or repository questions/);
-    NodeAssert.match(rendered, /never ask it again/);
+    NodeAssert.match(rendered, /# Grill with Docs/);
+    NodeAssert.match(rendered, /do not ask the user to choose a grill type first/);
+    NodeAssert.match(rendered, /product questions only/);
+    NodeAssert.match(rendered, /question or round limit/);
+    NodeAssert.doesNotMatch(rendered, /planning_grill_depth/);
     NodeAssert.ok(rendered.includes(GRILLING_BLUEPRINT));
     NodeAssert.match(rendered, /name: grilling/);
     NodeAssert.match(rendered, /Map this as a \*\*design tree\*\*/);

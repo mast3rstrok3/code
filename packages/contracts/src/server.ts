@@ -96,6 +96,9 @@ export const WorkflowSkillContract = Schema.Struct({
   title: TrimmedNonEmptyString,
   description: TrimmedNonEmptyString,
   promptText: TrimmedNonEmptyString,
+  promptIds: Schema.Array(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
   docIds: Schema.Array(TrimmedNonEmptyString),
   buildModes: Schema.Array(Schema.Literal("build")).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),

@@ -74,6 +74,7 @@ import Migration0069 from "./Migrations/069_ProjectionDevReviewWorkflowRuns.ts";
 import Migration0070 from "./Migrations/070_WorkflowParentIdentity.ts";
 import Migration0071 from "./Migrations/071_AppReviewRename.ts";
 import Migration0072 from "./Migrations/072_BinaryAppReviewResults.ts";
+import Migration0073 from "./Migrations/073_ProjectionThreadMessageWorkflowPromptId.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -159,6 +160,7 @@ export const migrationEntries = [
   [70, "WorkflowParentIdentity", Migration0070],
   [71, "AppReviewRename", Migration0071],
   [72, "BinaryAppReviewResults", Migration0072],
+  [73, "ProjectionThreadMessageWorkflowPromptId", Migration0073],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

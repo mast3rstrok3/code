@@ -64,9 +64,11 @@ Workflow stages hand results to the orchestration by ending a message with exact
 
 Workflow threads read canonical artifacts through the read-only `workflow-artifacts` MCP toolkit: `workflow_context_get`, `workflow_spec_get`, `workflow_wayfinder_map_get`, `workflow_tickets_list`, `workflow_ticket_get`, `workflow_app_reviews_list`, `workflow_app_review_get`, and `workflow_doc_get`.
 
-## The five selectable workflows
+## The three selectable workflows
 
-Workflows appear in catalog order: Fast Feature, Full Feature, Wayfinder, Implementation, Planning. The Spec is the node that binds tickets and app reviews into one package. `fix` and `app-review` remain accepted persistence values for historical compatibility but are not catalog entries or composer choices.
+The composer and catalog expose **Fast Feature**, **Engineering Workflow**, and **Wayfinder**. Engineering Workflow's Planning phase begins directly with Grill with Docs, produces a Spec and reviewed tickets, and hands them directly to its Implementation phase. The user's initial prompt can constrain the grill to product questions, engineering questions, or a question limit; there is no separate grill-type selection. Previously shipped Full Feature, standalone Planning, standalone Implementation, Fix, and App Review preset identities remain readable for historical runs but are not new composer choices. App Review remains independently launchable from its panel and programmatically reusable inside Engineering Workflow.
+
+The following preset descriptions document historical runs and the controllers reused by Engineering Workflow.
 
 ### Fast Feature
 
@@ -84,7 +86,7 @@ Wayfinder reuses the Planning Workflow projection. `wayfinder-map-artifact` writ
 
 ### Planning
 
-Planning first creates a dedicated branch and worktree from the selected branch. Setup runs concurrently; only successful completion allows early AppDevStack creation. Its first model action is one `workflow_request_user_input` question that routes the submitted prompt to Product Grill or Engineering Grill. Product Grill is product-only and never asks engineering or repository questions. Engineering Grill resolves the same product frontier first, then continues through repository-grounded engineering and domain decisions. Both routes stay in one thread and continue through `planning-spec-artifact`, `planning-tickets-artifact`, and up to `PLANNING_REVIEW_MAX_CYCLES` (5) reviewer sub-threads. A pass or exhausted review budget automatically launches Implementation with the same worktree, branch, and AppDevStack identity. Missing grill directives recover from the post-turn ready-session event, while startup reconciliation remains the crash-recovery path.
+Planning first creates a dedicated branch and worktree from the selected branch. Setup runs concurrently; only successful completion allows early AppDevStack creation. Grill with Docs starts immediately and follows any interview scope or question limit supplied in the user's prompt; otherwise it resolves the complete product, engineering, and domain frontier. The same thread continues through `planning-spec-artifact`, `planning-tickets-artifact`, and up to `PLANNING_REVIEW_MAX_CYCLES` (5) reviewer sub-threads. A pass or exhausted review budget automatically launches Implementation with the same worktree, branch, and AppDevStack identity. Missing grill directives recover from the post-turn ready-session event, while startup reconciliation remains the crash-recovery path.
 
 ### Implementation
 

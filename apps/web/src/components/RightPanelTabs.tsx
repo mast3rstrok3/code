@@ -3,7 +3,6 @@ import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
 import {
   Bot,
   Boxes,
-  ClipboardList,
   EyeIcon,
   FileDiff,
   Files,
@@ -12,6 +11,7 @@ import {
   Globe2,
   Plus,
   ScrollTextIcon,
+  BookOpenText,
   TerminalSquare,
   X,
 } from "lucide-react";
@@ -64,7 +64,6 @@ export interface RightPanelTabsProps {
   onCopyFilePath: (relativePath: string) => void;
   onAddBrowser: () => void;
   onAddTerminal: () => void;
-  onAddPlan: () => void;
   onAddReview: () => void;
   onAddLogs: () => void;
   onAddDiff: () => void;
@@ -76,7 +75,6 @@ export interface RightPanelTabsProps {
   browserAvailable: boolean;
   browserUnavailableReason: string | undefined;
   terminalAvailable: boolean;
-  planAvailable: boolean;
   reviewAvailable: boolean;
   logsAvailable: boolean;
   diffAvailable: boolean;
@@ -147,7 +145,6 @@ function SurfaceMenuItem(props: {
 function RightPanelEmptyState(props: {
   onAddBrowser: () => void;
   onAddTerminal: () => void;
-  onAddPlan: () => void;
   onAddReview: () => void;
   onAddLogs: () => void;
   onAddDiff: () => void;
@@ -159,7 +156,6 @@ function RightPanelEmptyState(props: {
   browserAvailable: boolean;
   browserUnavailableReason: string | undefined;
   terminalAvailable: boolean;
-  planAvailable: boolean;
   reviewAvailable: boolean;
   logsAvailable: boolean;
   diffAvailable: boolean;
@@ -172,15 +168,6 @@ function RightPanelEmptyState(props: {
   liveWorkflowCount: number;
 }) {
   const actions = [
-    {
-      label: "Plan",
-      description: "Review the current plan and proposed plan.",
-      icon: ClipboardList,
-      available: props.planAvailable,
-      disabledReason: "Workflow artifacts are only available for workflow threads.",
-      onClick: props.onAddPlan,
-      badgeCount: 0,
-    },
     {
       label: "App Review",
       description: "Inspect and annotate the current implementation diff.",
@@ -358,8 +345,6 @@ function surfaceTitle(
         terminalLabelsById.get(surface.activeTerminalId) ??
         getTerminalLabel(surface.activeTerminalId)
       );
-    case "plan":
-      return "Plan";
     case "review":
       return "App Review";
     case "logs":
@@ -370,6 +355,8 @@ function surfaceTitle(
       return "Agents";
     case "workflows":
       return "Workflows";
+    case "instructions":
+      return "Instructions";
     case "preview": {
       const snapshot = surface.resourceId ? sessions[surface.resourceId] : null;
       if (!snapshot || snapshot.navStatus._tag === "Idle") return "Browser";
@@ -433,8 +420,6 @@ function SurfaceIcon({
       );
     case "terminal":
       return <TerminalSquare className="size-3.5 shrink-0" />;
-    case "plan":
-      return <ClipboardList className="size-3.5 shrink-0" />;
     case "review":
       return <EyeIcon className="size-3.5 shrink-0" />;
     case "logs":
@@ -457,6 +442,8 @@ function SurfaceIcon({
       return <Bot className="size-3 shrink-0" />;
     case "workflows":
       return <GitFork className="size-3 shrink-0" />;
+    case "instructions":
+      return <BookOpenText className="size-3 shrink-0" />;
   }
 }
 
@@ -652,14 +639,6 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                     Terminal
                   </SurfaceMenuItem>
                   <SurfaceMenuItem
-                    available={props.planAvailable}
-                    disabledReason="Workflow artifacts are only available for workflow threads."
-                    onClick={props.onAddPlan}
-                  >
-                    <ClipboardList />
-                    Plan
-                  </SurfaceMenuItem>
-                  <SurfaceMenuItem
                     available={props.reviewAvailable}
                     disabledReason={SURFACE_DISABLED_REASONS.review}
                     onClick={props.onAddReview}
@@ -735,7 +714,6 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
           <RightPanelEmptyState
             onAddBrowser={props.onAddBrowser}
             onAddTerminal={props.onAddTerminal}
-            onAddPlan={props.onAddPlan}
             onAddReview={props.onAddReview}
             onAddLogs={props.onAddLogs}
             onAddDiff={props.onAddDiff}
@@ -747,7 +725,6 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             browserAvailable={props.browserAvailable}
             browserUnavailableReason={props.browserUnavailableReason}
             terminalAvailable={props.terminalAvailable}
-            planAvailable={props.planAvailable}
             reviewAvailable={props.reviewAvailable}
             logsAvailable={props.logsAvailable}
             diffAvailable={props.diffAvailable}

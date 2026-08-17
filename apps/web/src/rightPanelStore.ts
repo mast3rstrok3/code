@@ -15,7 +15,6 @@ import { createJSONStorage, persist } from "zustand/middleware";
 import { resolveStorage } from "./lib/storage";
 
 export const RIGHT_PANEL_KINDS = [
-  "plan",
   "review",
   "logs",
   "diff",
@@ -27,6 +26,7 @@ export const RIGHT_PANEL_KINDS = [
   "pull-request",
   "agents",
   "workflows",
+  "instructions",
 ] as const;
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
 
@@ -51,7 +51,6 @@ export type RightPanelSurface =
       revealLine: number | null;
       revealRequestId: number;
     }
-  | { id: "plan"; kind: "plan" }
   | { id: "review"; kind: "review" }
   | { id: "logs"; kind: "logs" }
   | {
@@ -66,15 +65,17 @@ export type RightPanelSurface =
       number: number;
     }
   | { id: "agents"; kind: "agents" }
-  | { id: "workflows"; kind: "workflows" };
+  | { id: "workflows"; kind: "workflows" }
+  | { id: `instructions:${string}`; kind: "instructions"; workflowPromptId: string };
 
 const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
-// v9 moved ordinary provider plans into the transcript. Fork workflow plans
-// remain a distinct surface and are only exposed for workflow threads.
+// v9 moved provider plans into the transcript and removes the legacy Plan surface.
 // v10 keys pull-request surfaces by reference instead of a singleton tab.
 // v11 stops persisting the pull-request list's shared panel, so a restart opens the page fresh.
 // v12 adds the persisted singleton Workflows surface.
-const RIGHT_PANEL_STORAGE_VERSION = 12;
+// v13 adds prompt-specific workflow instruction surfaces.
+// v14 removes the legacy Plan surface now that plans render in the transcript.
+const RIGHT_PANEL_STORAGE_VERSION = 14;
 
 /**
  * The pull-request list's shared panel (see PULL_REQUESTS_PANEL_ID in the route) is session
@@ -92,7 +93,7 @@ interface RightPanelStoreState {
   byThreadKey: Record<string, ThreadRightPanelState>;
   open: (
     ref: ScopedThreadRef,
-    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request">,
+    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request" | "instructions">,
   ) => void;
   openBrowser: (ref: ScopedThreadRef, tabId: string | null) => void;
   openFile: (ref: ScopedThreadRef, relativePath: string, line?: number) => void;
@@ -100,6 +101,7 @@ interface RightPanelStoreState {
     ref: ScopedThreadRef,
     target: { projectId: string; repository: string; number: number },
   ) => void;
+  openInstructions: (ref: ScopedThreadRef, workflowPromptId: string) => void;
   openTerminal: (ref: ScopedThreadRef, terminalId: string) => void;
   splitTerminal: (
     ref: ScopedThreadRef,
@@ -121,7 +123,7 @@ interface RightPanelStoreState {
   toggleVisibility: (ref: ScopedThreadRef) => void;
   toggle: (
     ref: ScopedThreadRef,
-    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request">,
+    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request" | "instructions">,
   ) => void;
   removeThread: (ref: ScopedThreadRef) => void;
 }
@@ -133,7 +135,7 @@ const EMPTY_THREAD_STATE: ThreadRightPanelState = {
 };
 
 const singletonSurface = (
-  kind: Exclude<RightPanelKind, "file" | "preview" | "terminal" | "pull-request">,
+  kind: Exclude<RightPanelKind, "file" | "preview" | "terminal" | "pull-request" | "instructions">,
 ): RightPanelSurface => {
   switch (kind) {
     case "diff":
@@ -142,8 +144,6 @@ const singletonSurface = (
       return { id: "files", kind };
     case "app-dev-stack":
       return { id: "app-dev-stack", kind };
-    case "plan":
-      return { id: "plan", kind };
     case "review":
       return { id: "review", kind };
     case "logs":
@@ -255,6 +255,7 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                 threadState && typeof threadState === "object" ? threadState : null;
               const surfaces = Array.isArray(validThreadState?.surfaces)
                 ? validThreadState.surfaces.flatMap<RightPanelSurface>((surface) => {
+                    if ((surface as { kind?: unknown }).kind === "plan") return [];
                     if (surface.kind === "file") {
                       const revealLine =
                         typeof surface.revealLine === "number" &&
@@ -280,6 +281,16 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                         return [];
                       }
                       return [pullRequestSurface(surface)];
+                    }
+                    if (surface.kind === "instructions") {
+                      if (
+                        typeof surface.workflowPromptId !== "string" ||
+                        surface.workflowPromptId.length === 0 ||
+                        surface.id !== `instructions:${surface.workflowPromptId}`
+                      ) {
+                        return [];
+                      }
+                      return [surface];
                     }
                     if (surface.kind !== "terminal") return [surface];
                     if (
@@ -370,6 +381,16 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
           byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => {
             return upsertSurface(current, pullRequestSurface(target));
           }),
+        })),
+      openInstructions: (ref, workflowPromptId) =>
+        set((state) => ({
+          byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) =>
+            upsertSurface(current, {
+              id: `instructions:${workflowPromptId}`,
+              kind: "instructions",
+              workflowPromptId,
+            }),
+          ),
         })),
       openFile: (ref, relativePath, line) =>
         set((state) => ({

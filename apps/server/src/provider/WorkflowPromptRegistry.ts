@@ -620,31 +620,16 @@ When multiple contexts exist, infer which one the current topic relates to. If u
 
 const buildEngineeringGrillPrompt = (input: {
   readonly automatic: boolean;
-}) => `<collaboration_mode># ${input.automatic ? "Engineering Grill (Automatic)" : "Planning Grill"}
+}) => `<collaboration_mode># ${input.automatic ? "Engineering Grill (Automatic)" : "Grill with Docs"}
 
 ${
   input.automatic
     ? ""
-    : `## Required opening choice
+    : `The user's submitted prompt is the subject of this Grill with Docs session. Start directly with repository grounding and the unresolved design frontier; do not ask the user to choose a grill type first.
 
-The user's submitted prompt is the subject of this workflow. Before exploring the repository, asking any grill question, or making any file change, call \`workflow_request_user_input\` exactly once with one question using this exact shape:
+Treat scope instructions in the user's prompt as authoritative. For example, if the user asks for product questions only, do not ask engineering questions. If the user supplies a question or round limit, respect that limit, resolve remaining discoverable decisions from the repository, and clearly record any assumptions before continuing. Without an explicit constraint, apply the complete product, engineering, and domain design tree below.
 
-- id: \`planning_grill_depth\`
-- header: \`Grill depth\`
-- question: \`How deeply should Planning grill this prompt?\`
-- option \`Product Grill\`: \`Settle product outcomes, scope, behavior, terminology, risks, and acceptance criteria without engineering or repository questions.\`
-- option \`Engineering Grill\`: \`Settle the complete product frontier first, then use the repository to settle architecture, constraints, seams, tests, and implementation decisions.\`
-- recommend \`Engineering Grill\` because it produces the complete decision set needed for implementation.
-
-Do not repeat this choice in Markdown. Treat the returned answer as durable and never ask it again unless the user explicitly changes it.
-
-### Product Grill route
-
-Run only the product decision tree: problem, audience, desired outcome, user-visible behavior and experience, terminology, success criteria, scope, non-goals, risks, edge cases, failure modes, and acceptance criteria. You may inspect existing product context to resolve facts, but do not ask engineering or repository questions, discuss architecture or implementation, update repository files, or apply the Domain Modeling and Engineering sections below. After the user confirms shared understanding through the structured final confirmation, finish with exactly one fenced JSON block containing { "type": "planning-grill-complete" }.
-
-### Engineering Grill route
-
-Run the complete product decision tree above first. Only after its frontier is settled, continue into the Engineering Grill and Domain Modeling instructions below. Repository exploration and engineering questions belong only to this route. Use one final structured shared-understanding confirmation after both frontiers are empty, then emit the required completion directive.`
+Use the structured question tool only for substantive grill questions and the final shared-understanding confirmation. Do not spend a question on selecting Product Grill versus Engineering Grill.`
 }
 
 ${GRILLING_BLUEPRINT}
@@ -2343,10 +2328,10 @@ function buildWorkflowCatalog(): WorkflowCatalog {
   const promptContractById = new Map(promptContracts.map((contract) => [contract.id, contract]));
   const workflowOrder = [
     "fast-feature",
+    "planning",
+    "wayfinder",
     "full-feature",
     "product-planning",
-    "wayfinder",
-    "planning",
     "implementation",
   ];
   const workflows = WORKFLOW_PRESET_DEFINITIONS.toSorted(
@@ -2401,6 +2386,14 @@ function buildWorkflowCatalog(): WorkflowCatalog {
     workflowIdsBySkill.set(skillId, ids);
   }
 
+  const promptIdsBySkill = new Map<string, string[]>();
+  for (const contract of promptContracts) {
+    const skillId = catalogSkillIdForPromptId(contract.id);
+    const promptIds = promptIdsBySkill.get(skillId) ?? [];
+    promptIds.push(contract.id);
+    promptIdsBySkill.set(skillId, promptIds);
+  }
+
   type MutableCatalogSkill = Omit<WorkflowSkillContract, "docIds"> & { docIds: string[] };
   const skills: MutableCatalogSkill[] = promptContracts
     .filter(
@@ -2415,6 +2408,7 @@ function buildWorkflowCatalog(): WorkflowCatalog {
       title: contract.title.replace(/^\d+\.\s+/, ""),
       description: contract.description,
       promptText: contract.promptText,
+      promptIds: promptIdsBySkill.get(contract.id) ?? [contract.id],
       docIds: [],
       buildModes: MATT_POCOCK_SKILL_IDS.has(contract.id) ? (["build"] as const) : [],
       workflowIds: workflowIdsBySkill.get(contract.id) ?? [],

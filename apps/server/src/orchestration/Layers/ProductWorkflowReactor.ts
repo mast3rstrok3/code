@@ -164,11 +164,11 @@ const buildPlanningGrillRecoveryPrompt = () =>
   [
     ENGINEERING_GRILL_RECOVERY_PROMPT_PREFIX,
     "",
-    "Preserve the Product Grill or Engineering Grill route already selected in the opening popup and every decision already settled in the conversation. Do not ask for the grill-depth choice again unless it was never answered.",
+    "Preserve every decision already settled in the Grill with Docs conversation and every scope or question-limit instruction from the user's original prompt. Do not ask the user to choose a grill type.",
     "",
-    "For Product Grill, continue only the product frontier and do not ask engineering or repository questions. For Engineering Grill, finish the product frontier first, then continue the repository-grounded engineering and domain frontier.",
+    "Continue only the unresolved frontier allowed by the user's scope. Resolve discoverable facts from the repository and record assumptions when the user's question limit prevents another interview round.",
     "",
-    'When the selected frontier is complete and confirmed, finish with exactly one fenced JSON block containing { "type": "planning-grill-complete" }. Do not write the Spec in this stage.',
+    'When that frontier is complete and confirmed, finish with exactly one fenced JSON block containing { "type": "planning-grill-complete" }. Do not write the Spec in this stage.',
   ].join("\n");
 
 const buildProductLightweightPlanPrompt = (input: {

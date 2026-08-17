@@ -582,7 +582,7 @@ describe("buildCodexDeveloperInstructions", () => {
     NodeAssert.ok(instructions.startsWith(CODEX_INTERACTIVE_GRILL_DEVELOPER_INSTRUCTIONS));
     NodeAssert.match(instructions, /only as a compatibility fallback/);
     NodeAssert.match(instructions, /request_user_input/);
-    NodeAssert.match(instructions, /Product Grill or Engineering Grill workflow prompt/);
+    NodeAssert.match(instructions, /Grill with Docs workflow prompt/);
     NodeAssert.match(instructions, /CONTEXT\.md/);
     NodeAssert.match(instructions, /CONTEXT-MAP\.md/);
     NodeAssert.match(instructions, /qualifying ADRs/);

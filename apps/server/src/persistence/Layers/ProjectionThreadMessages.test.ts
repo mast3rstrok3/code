@@ -12,6 +12,29 @@ const layer = it.layer(
 );
 
 layer("ProjectionThreadMessageRepository", (it) => {
+  it.effect("preserves an associated workflow prompt across message updates", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProjectionThreadMessageRepository;
+      const messageId = MessageId.make("message-workflow-prompt");
+      const threadId = ThreadId.make("thread-workflow-prompt");
+      const base = {
+        messageId,
+        threadId,
+        turnId: null,
+        role: "user" as const,
+        text: "Plan this",
+        isStreaming: false,
+        createdAt: "2026-08-17T00:00:00.000Z",
+        updatedAt: "2026-08-17T00:00:00.000Z",
+      };
+      yield* repository.upsert({ ...base, workflowPromptId: "planning.spec.codex" });
+      yield* repository.upsert({ ...base, text: "Plan this feature", workflowPromptId: null });
+
+      const row = yield* repository.getByMessageId({ messageId });
+      assert.equal(row._tag === "Some" ? row.value.workflowPromptId : null, "planning.spec.codex");
+    }),
+  );
+
   it.effect("preserves existing attachments when upsert omits attachments", () =>
     Effect.gen(function* () {
       const repository = yield* ProjectionThreadMessageRepository;
@@ -34,6 +57,7 @@ layer("ProjectionThreadMessageRepository", (it) => {
         threadId,
         turnId: null,
         role: "user",
+        workflowPromptId: null,
         text: "initial",
         attachments: persistedAttachments,
         isStreaming: false,
@@ -46,6 +70,7 @@ layer("ProjectionThreadMessageRepository", (it) => {
         threadId,
         turnId: null,
         role: "user",
+        workflowPromptId: null,
         text: "updated",
         isStreaming: false,
         createdAt,
@@ -78,6 +103,7 @@ layer("ProjectionThreadMessageRepository", (it) => {
         threadId,
         turnId: null,
         role: "assistant",
+        workflowPromptId: null,
         text: "with attachment",
         attachments: [
           {
@@ -98,6 +124,7 @@ layer("ProjectionThreadMessageRepository", (it) => {
         threadId,
         turnId: null,
         role: "assistant",
+        workflowPromptId: null,
         text: "cleared",
         attachments: [],
         isStreaming: false,
