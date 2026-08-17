@@ -602,7 +602,32 @@ When multiple contexts exist, infer which one the current topic relates to. If u
 
 const buildEngineeringGrillPrompt = (input: {
   readonly automatic: boolean;
-}) => `<collaboration_mode># Engineering Grill${input.automatic ? " (Automatic)" : ""}
+}) => `<collaboration_mode># ${input.automatic ? "Engineering Grill (Automatic)" : "Planning Grill"}
+
+${
+  input.automatic
+    ? ""
+    : `## Required opening choice
+
+The user's submitted prompt is the subject of this workflow. Before exploring the repository, asking any grill question, or making any file change, call \`workflow_request_user_input\` exactly once with one question using this exact shape:
+
+- id: \`planning_grill_depth\`
+- header: \`Grill depth\`
+- question: \`How deeply should Planning grill this prompt?\`
+- option \`Product Grill\`: \`Settle product outcomes, scope, behavior, terminology, risks, and acceptance criteria without engineering or repository questions.\`
+- option \`Engineering Grill\`: \`Settle the complete product frontier first, then use the repository to settle architecture, constraints, seams, tests, and implementation decisions.\`
+- recommend \`Engineering Grill\` because it produces the complete decision set needed for implementation.
+
+Do not repeat this choice in Markdown. Treat the returned answer as durable and never ask it again unless the user explicitly changes it.
+
+### Product Grill route
+
+Run only the product decision tree: problem, audience, desired outcome, user-visible behavior and experience, terminology, success criteria, scope, non-goals, risks, edge cases, failure modes, and acceptance criteria. You may inspect existing product context to resolve facts, but do not ask engineering or repository questions, discuss architecture or implementation, update repository files, or apply the Domain Modeling and Engineering sections below. After the user confirms shared understanding through the structured final confirmation, finish with exactly one fenced JSON block containing { "type": "planning-grill-complete" }.
+
+### Engineering Grill route
+
+Run the complete product decision tree above first. Only after its frontier is settled, continue into the Engineering Grill and Domain Modeling instructions below. Repository exploration and engineering questions belong only to this route. Use one final structured shared-understanding confirmation after both frontiers are empty, then emit the required completion directive.`
+}
 
 ${GRILLING_BLUEPRINT}
 
@@ -1860,9 +1885,9 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     workflow: "planning",
     role: "planning-thread",
     stage: "grill",
-    title: "1. Engineering Grill",
+    title: "1. Planning Grill",
     description:
-      "Grills engineering decisions while maintaining the domain glossary and qualifying ADRs.",
+      "Asks for product-only or complete engineering grilling, then resolves that decision tree.",
     promptText: ENGINEERING_GRILL_PROMPT,
     associatedDocs: [
       APP_DEV_STACK_ASSOCIATED_DOC,

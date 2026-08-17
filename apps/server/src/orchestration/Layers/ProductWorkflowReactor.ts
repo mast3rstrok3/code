@@ -54,7 +54,8 @@ type ProductWorkflowEvent = Extract<
       | "thread.planning-tickets-created"
       | "thread.planning-tickets-revised"
       | "thread.proposed-plan-upserted"
-      | "thread.meta-updated";
+      | "thread.meta-updated"
+      | "thread.session-set";
   }
 >;
 
@@ -66,6 +67,9 @@ const PRODUCT_CONTEXT_RECOVERY_PROMPT_PREFIX =
   "The previous automatic Product Context turn completed without its required workflow directive.";
 
 const isProductWorkflowThread = isProductWorkflowRoot;
+const isRecoverablePlanningGrillThread = (thread: OrchestrationThread) =>
+  isProductWorkflowThread(thread) ||
+  (thread.workflowRole === null && thread.workflowPreset === "planning");
 
 const isProductPlanningOrchestratorThread = (thread: {
   readonly interactionMode: string;
@@ -154,6 +158,17 @@ const buildEngineeringGrillRecoveryPrompt = (productContextOnly = false) =>
     "If the engineering frontier is already complete, preserve the plan and conclusions you just produced. Otherwise resolve only the remaining engineering and domain decisions autonomously.",
     "",
     'Finish this turn with exactly one fenced JSON block containing { "type": "planning-grill-complete" }. Do not write the Spec in this stage.',
+  ].join("\n");
+
+const buildPlanningGrillRecoveryPrompt = () =>
+  [
+    ENGINEERING_GRILL_RECOVERY_PROMPT_PREFIX,
+    "",
+    "Preserve the Product Grill or Engineering Grill route already selected in the opening popup and every decision already settled in the conversation. Do not ask for the grill-depth choice again unless it was never answered.",
+    "",
+    "For Product Grill, continue only the product frontier and do not ask engineering or repository questions. For Engineering Grill, finish the product frontier first, then continue the repository-grounded engineering and domain frontier.",
+    "",
+    'When the selected frontier is complete and confirmed, finish with exactly one fenced JSON block containing { "type": "planning-grill-complete" }. Do not write the Spec in this stage.',
   ].join("\n");
 
 const buildProductLightweightPlanPrompt = (input: {
@@ -926,8 +941,10 @@ const make = Effect.gen(function* () {
   }) {
     const { thread } = input;
     if (
-      !isProductWorkflowThread(thread) ||
-      (thread.workflowPreset !== "full-feature" && thread.workflowPreset !== "product-planning")
+      !isRecoverablePlanningGrillThread(thread) ||
+      (thread.workflowPreset !== "full-feature" &&
+        thread.workflowPreset !== "product-planning" &&
+        thread.workflowPreset !== "planning")
     )
       return;
     if (thread.planningWorkflow?.stage !== "grill") return;
@@ -994,7 +1011,10 @@ const make = Effect.gen(function* () {
       message: {
         messageId: yield* serverMessageId("engineering-grill-recovery"),
         role: "user",
-        text: buildEngineeringGrillRecoveryPrompt(productContextOnly),
+        text:
+          thread.workflowPreset === "planning"
+            ? buildPlanningGrillRecoveryPrompt()
+            : buildEngineeringGrillRecoveryPrompt(productContextOnly),
         attachments: [],
       },
       runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
@@ -1033,15 +1053,29 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const recoverIncompleteEngineeringGrillFromReadySession = Effect.fn(
+    "ProductWorkflowReactor.recoverIncompleteEngineeringGrillFromReadySession",
+  )(function* (event: Extract<ProductWorkflowEvent, { type: "thread.session-set" }>) {
+    if (event.payload.session.status !== "ready") return;
+    const thread = yield* resolveThread(event.payload.threadId);
+    if (!thread || thread.latestTurn === null) return;
+    yield* recoverIncompleteEngineeringGrill({
+      thread,
+      sourceTurnId: thread.latestTurn.turnId,
+      createdAt: event.payload.session.updatedAt,
+    });
+  });
+
   const reconcileIncompleteEngineeringGrills = Effect.fn(
     "ProductWorkflowReactor.reconcileIncompleteEngineeringGrills",
   )(function* () {
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
     for (const candidate of readModel.threads) {
       if (
-        !isProductWorkflowThread(candidate) ||
+        !isRecoverablePlanningGrillThread(candidate) ||
         (candidate.workflowPreset !== "full-feature" &&
-          candidate.workflowPreset !== "product-planning") ||
+          candidate.workflowPreset !== "product-planning" &&
+          candidate.workflowPreset !== "planning") ||
         candidate.planningWorkflow?.stage !== "grill" ||
         candidate.latestTurn?.state !== "completed"
       ) {
@@ -1080,6 +1114,9 @@ const make = Effect.gen(function* () {
       case "thread.meta-updated":
         yield* handleWorkspaceRenamed(event);
         return;
+      case "thread.session-set":
+        yield* recoverIncompleteEngineeringGrillFromReadySession(event);
+        return;
     }
   });
 
@@ -1106,7 +1143,8 @@ const make = Effect.gen(function* () {
           event.type !== "thread.planning-tickets-created" &&
           event.type !== "thread.planning-tickets-revised" &&
           event.type !== "thread.proposed-plan-upserted" &&
-          event.type !== "thread.meta-updated"
+          event.type !== "thread.meta-updated" &&
+          event.type !== "thread.session-set"
         ) {
           return Effect.void;
         }

@@ -713,10 +713,40 @@ describe("ProductWorkflowReactor", () => {
         yield* seedProjectAndThread(system, { workflowPreset: "full-feature" });
         yield* lockProductIntent(system);
         const completedAt = "2026-01-01T00:01:00.000Z";
-        yield* settleTurn(system, { turnId: "turn-engineering-grill", completedAt });
+        const turnId = TurnId.make("turn-engineering-grill");
+        yield* system.engine.dispatch({
+          type: "thread.session.set",
+          commandId: commandId("session-running-turn-engineering-grill"),
+          threadId: productThreadId,
+          session: {
+            threadId: productThreadId,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: turnId,
+            lastError: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        });
         yield* completeTurnCheckpoint(system, {
           turnId: "turn-engineering-grill",
           checkpointTurnCount: 2,
+          createdAt: "2026-01-01T00:00:30.000Z",
+        });
+        yield* system.engine.dispatch({
+          type: "thread.session.set",
+          commandId: commandId("session-ready-turn-engineering-grill"),
+          threadId: productThreadId,
+          session: {
+            threadId: productThreadId,
+            status: "ready",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: completedAt,
+          },
           createdAt: completedAt,
         });
         yield* system.reactor.drain;

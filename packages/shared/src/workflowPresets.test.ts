@@ -9,7 +9,6 @@ import {
 describe("workflow presets", () => {
   it("defines every preset once in canonical display order", () => {
     expect(WORKFLOW_PRESET_DEFINITIONS.map((definition) => definition.id)).toEqual([
-      "product-planning",
       "fast-feature",
       "full-feature",
       "wayfinder",
@@ -59,20 +58,11 @@ describe("workflow presets", () => {
     expect(expectedIntentKindForWorkflowPreset("full-feature")).toBe("feature");
   });
 
-  it("offers product and engineering planning as explicit entries", () => {
-    const productPlanning = WORKFLOW_PRESET_DEFINITIONS.find(
-      (definition) => definition.id === "product-planning",
-    );
-    const engineeringPlanning = WORKFLOW_PRESET_DEFINITIONS.find(
-      (definition) => definition.id === "planning",
-    );
-    expect(productPlanning?.label).toBe("Product planning");
-    expect(productPlanning?.helpSteps.map((step) => step.skillId)).toContain(
-      "planning.product-context.codex",
-    );
-    expect(productPlanning?.helpSteps.at(-1)?.label).toBe("Start Implementation");
-    expect(engineeringPlanning?.label).toBe("Engineering planning");
-    expect(engineeringPlanning?.helpSteps.at(-1)?.label).toBe("Start Implementation");
+  it("offers one Planning entry with an initial grill choice", () => {
+    const planning = WORKFLOW_PRESET_DEFINITIONS.find((definition) => definition.id === "planning");
+    expect(planning?.label).toBe("Planning");
+    expect(planning?.helpSteps[1]?.label).toBe("Choose Product or Engineering Grill");
+    expect(planning?.helpSteps.at(-1)?.label).toBe("Start Implementation");
   });
 
   it("runs Product Grill before Engineering Grill for Full Feature", () => {
@@ -92,7 +82,7 @@ describe("workflow presets", () => {
     );
   });
 
-  it("keeps the standalone Planning Engineering Grill interactive", () => {
+  it("keeps the standalone Planning grill choice interactive", () => {
     const planning = WORKFLOW_PRESET_DEFINITIONS.find((definition) => definition.id === "planning");
     expect(planning?.helpSteps[1]?.skillId).toBe("planning.grill-stage.codex");
     expect(planning?.helpSteps[1]?.note).toBe("human-guided");

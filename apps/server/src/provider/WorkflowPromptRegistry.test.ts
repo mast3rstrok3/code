@@ -45,14 +45,7 @@ describe("WorkflowPromptRegistry", () => {
     const catalog = listWorkflowCatalog();
     NodeAssert.deepEqual(
       catalog.workflows.map((workflow) => workflow.id),
-      [
-        "fast-feature",
-        "full-feature",
-        "product-planning",
-        "wayfinder",
-        "planning",
-        "implementation",
-      ],
+      ["fast-feature", "full-feature", "wayfinder", "planning", "implementation"],
     );
     NodeAssert.equal(
       catalog.skills.filter((skill) => skill.id.startsWith("matt-pocock.")).length,
@@ -104,7 +97,7 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(directGrillWithDocs, /# CONTEXT\.md Format/);
     NodeAssert.deepEqual(
       catalog.skills.find((skill) => skill.id === "matt-pocock.domain-modeling")?.workflowIds,
-      ["product-planning", "full-feature", "wayfinder", "planning"],
+      ["full-feature", "product-planning", "wayfinder", "planning"],
     );
     NodeAssert.match(resolveWorkflowPromptText("matt-pocock.tdd"), /supporting-skill-docs/);
     NodeAssert.match(resolveWorkflowPromptText("matt-pocock.tdd"), /# When to Mock/);
@@ -200,7 +193,7 @@ describe("WorkflowPromptRegistry", () => {
     );
   });
 
-  it("renders the Engineering Grill from Grilling plus domain modeling", () => {
+  it("renders one Planning Grill with a product or engineering opening choice", () => {
     const contracts = listWorkflowPromptContracts();
     const planningGrill = contracts.find(
       (contract) => contract.id === WORKFLOW_PROMPT_IDS.planningGrillStageCodex,
@@ -209,10 +202,17 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.ok(planningGrill);
     NodeAssert.equal(planningGrill.workflow, "planning");
     NodeAssert.equal(planningGrill.stage, "grill");
-    NodeAssert.equal(planningGrill.title, "1. Engineering Grill");
+    NodeAssert.equal(planningGrill.title, "1. Planning Grill");
 
     const rendered = resolveWorkflowPromptText(WORKFLOW_PROMPT_IDS.planningGrillStageCodex);
-    NodeAssert.match(rendered, /# Engineering Grill/);
+    NodeAssert.match(rendered, /# Planning Grill/);
+    NodeAssert.match(rendered, /planning_grill_depth/);
+    NodeAssert.match(rendered, /How deeply should Planning grill this prompt\?/);
+    NodeAssert.match(rendered, /Product Grill.*Engineering Grill/s);
+    NodeAssert.match(rendered, /recommend `Engineering Grill`/);
+    NodeAssert.match(rendered, /Run the complete product decision tree above first/);
+    NodeAssert.match(rendered, /do not ask engineering or repository questions/);
+    NodeAssert.match(rendered, /never ask it again/);
     NodeAssert.ok(rendered.includes(GRILLING_BLUEPRINT));
     NodeAssert.match(rendered, /name: grilling/);
     NodeAssert.match(rendered, /Map this as a \*\*design tree\*\*/);

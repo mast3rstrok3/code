@@ -23,6 +23,15 @@ export interface WorkflowPresetDefinition {
 // threads, but they are not selectable workflows or catalog entries.
 const LEGACY_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition> = [
   {
+    id: "product-planning",
+    label: "Product planning",
+    description: "Legacy product-only planning workflow.",
+    route: "product",
+    interactionMode: "product-workflow",
+    workflowPromptId: "product.planning.codex",
+    helpSteps: [],
+  },
+  {
     id: "fix",
     label: "Fix",
     description: "Legacy fix workflow.",
@@ -42,35 +51,6 @@ const LEGACY_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
 ];
 
 export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition> = [
-  {
-    id: "product-planning",
-    label: "Product planning",
-    description: "Grill product decisions, then create reviewed tickets and start Implementation.",
-    route: "product",
-    interactionMode: "product-workflow",
-    workflowPromptId: "product.planning.codex",
-    helpSteps: [
-      { label: "Create shared worktree", note: "automatic" },
-      {
-        label: "Product Grill",
-        skillId: "product.planning.codex",
-        note: "human-guided",
-      },
-      {
-        label: "Build product context, glossary, and ADRs",
-        skillId: "planning.product-context.codex",
-        note: "automatic",
-      },
-      { label: "Spec authoring", skillId: "planning.spec.codex", note: "automatic" },
-      { label: "Planning tickets", skillId: "planning.tickets.codex", note: "automatic" },
-      {
-        label: "Ticket review and revision cycles",
-        skillId: "planning.ticket-reviewer.codex",
-        note: "automatic; up to five cycles",
-      },
-      { label: "Start Implementation", note: "automatic" },
-    ],
-  },
   {
     id: "fast-feature",
     label: "Fast feature",
@@ -223,15 +203,15 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
   },
   {
     id: "planning",
-    label: "Engineering planning",
+    label: "Planning",
     description:
-      "Grill engineering decisions, then create reviewed tickets and start Implementation.",
+      "Choose product-only or complete engineering grilling, then create reviewed tickets.",
     route: "planning",
     interactionMode: "planning-workflow",
     helpSteps: [
       { label: "Create shared worktree" },
       {
-        label: "Engineering Grill",
+        label: "Choose Product or Engineering Grill",
         skillId: "planning.grill-stage.codex",
         note: "human-guided",
       },

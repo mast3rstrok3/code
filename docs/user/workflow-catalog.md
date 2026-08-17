@@ -14,8 +14,7 @@ To invoke a skill directly, open the composer mode picker where you choose Build
 
 - **Fast Feature** — a feature small enough to skip the Spec-and-tickets pipeline but big enough to deserve a worktree and reviews.
 - **Full Feature** — the complete pipeline with one conversation: Product Grill, then automatic Engineering Grill, planning, and implementation.
-- **Product planning** — Product Grill followed by automatic product-context modeling, Spec, tickets, ticket review, and Implementation.
-- **Engineering planning** — Engineering Grill followed by automatic Spec, tickets, ticket review, and Implementation.
+- **Planning** — choose Product Grill or Engineering Grill in one opening question, then continue through Spec, tickets, ticket review, and Implementation.
 - **Wayfinder** — the effort is too large or foggy to specify in one pass; chart the decisions first.
 - **Implementation** — you already have a Spec and reviewed tickets; execute them.
 
@@ -29,9 +28,7 @@ Interactive Product and Engineering Grills present questions as structured cards
 
 **Full Feature** — creates its shared worktree and starts Product Grill immediately. Its repository-declared setup runs in parallel, and its App Dev Stack starts as soon as setup succeeds. Product Grill is the only stage that asks you questions. Once you confirm what the product should do, the same thread enters an automatic Engineering Grill. The model grounds itself in the codebase, resolves the engineering and domain decision tree on its own without reopening product questions, and then continues automatically through Spec authoring, tickets, ticket review, and the full Implementation workflow in that same worktree, branch, and stack.
 
-**Product planning** — creates its shared worktree and starts Product Grill immediately. Setup runs in parallel and its App Dev Stack starts after setup succeeds. Once you confirm the product direction, T3 derives `CONTEXT.md`, `CONTEXT-MAP.md` when the repository has multiple bounded contexts, and warranted product/domain ADRs without opening engineering questions. Spec, tickets, and up to five ticket-review cycles follow automatically, then Implementation starts in the same workflow workspace.
-
-**Engineering planning** — creates the same prepared workspace but starts Engineering Grill immediately. It works through the engineering-decision frontier in structured batches while maintaining glossary and ADR context. Once you confirm shared understanding, Spec authoring, durable tickets, up to five ticket-review cycles, and Implementation continue automatically in the same worktree, branch, and App Dev Stack.
+**Planning** — creates a prepared workspace and asks one opening structured question about the submitted prompt. Product Grill covers only product outcomes, scope, behavior, terminology, risks, and acceptance criteria; it never asks engineering or repository questions. Engineering Grill includes that complete product frontier first, then uses the repository to resolve architecture, constraints, seams, tests, implementation decisions, glossary terms, and warranted ADRs. Both choices continue through Spec authoring, durable tickets, up to five ticket-review cycles, and Implementation in the same worktree, branch, and App Dev Stack. T3 remembers the choice and does not ask it again during recovery.
 
 **Implementation** — uses reviewed Planning tickets when they exist. Otherwise it turns the user prompt into one or more durable T3 tickets before writing code. Each ticket records whether App Review can verify it through the UI and, when it can, carries an attached review plan describing the surface, actions, assertions, and evidence. T3 stores these artifacts in the application rather than GitHub or repository scratch files.
 
