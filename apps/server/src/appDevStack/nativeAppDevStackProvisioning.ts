@@ -1195,15 +1195,34 @@ const readinessProbeForHealthcheck = (
   };
 };
 
-const buildNamespace = (namespace: string, stackId: string): KubernetesDocument => ({
+/**
+ * Identity a Code server reads back when it discovers a stack it did not create
+ * in this process: without it the panel can only show the raw namespace, and
+ * start/restart have no worktree to provision from. Annotations rather than
+ * labels, since display names and paths are not valid label values.
+ */
+const buildNamespaceAnnotations = (config: NativeProvisionConfig): Record<string, string> => {
+  const annotations: Record<string, string> = {
+    "cortex.ai/display-name": config.displayName,
+    "cortex.ai/worktree-path": config.worktreePath,
+    "cortex.ai/compose-path": config.composePath,
+  };
+  if (config.displaySlug !== undefined) annotations["cortex.ai/display-slug"] = config.displaySlug;
+  if (config.repoName !== undefined) annotations["cortex.ai/repo-name"] = config.repoName;
+  if (config.branchName !== undefined) annotations["cortex.ai/branch-name"] = config.branchName;
+  return annotations;
+};
+
+const buildNamespace = (config: NativeProvisionConfig): KubernetesDocument => ({
   apiVersion: "v1",
   kind: "Namespace",
   metadata: {
-    name: namespace,
+    name: config.namespace,
     labels: {
-      ...makeLabels(stackId),
+      ...makeLabels(config.id),
       "pod-security.kubernetes.io/enforce": "privileged",
     },
+    annotations: buildNamespaceAnnotations(config),
   },
 });
 
@@ -1404,7 +1423,7 @@ export const generateNativeAppDevStackManifests = async (
   const composeDir = NodePath.dirname(composePath);
   const services = await prepareServices(config, parsedServices, composeDir, runCommand);
   const documents: Array<KubernetesDocument> = [
-    buildNamespace(namespace, stackId),
+    buildNamespace(config),
     buildForwardedProtoMiddleware(namespace, stackId),
   ];
   // Ahead of the Deployments: the backend reads the Secret this produces via

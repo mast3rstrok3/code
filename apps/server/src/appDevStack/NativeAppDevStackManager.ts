@@ -69,8 +69,12 @@ interface KubectlNamespace {
   readonly metadata?: {
     readonly name?: string;
     readonly creationTimestamp?: string;
+    readonly deletionTimestamp?: string;
     readonly labels?: Record<string, string>;
     readonly annotations?: Record<string, string>;
+  };
+  readonly status?: {
+    readonly phase?: string;
   };
 }
 
@@ -662,14 +666,19 @@ const serviceOrder = (name: string) => {
   return index === -1 ? order.length : index;
 };
 
+const isTerminatingNamespace = (namespace: KubectlNamespace): boolean =>
+  namespace.metadata?.deletionTimestamp !== undefined ||
+  namespace.status?.phase?.trim().toLowerCase() === "terminating";
+
 const readNamespace = async (
   config: ResolvedNativeAppDevStackConfig,
   runKubectl: KubectlRunner,
 ): Promise<KubectlNamespace | null> => {
   try {
-    return parseJson<KubectlNamespace>(
+    const namespace = parseJson<KubectlNamespace>(
       await runKubectl(["get", "namespace", config.namespace, "-o", "json"]),
     );
+    return isTerminatingNamespace(namespace) ? null : namespace;
   } catch (cause) {
     if (isNotFound(cause)) return null;
     throw cause;
@@ -689,9 +698,11 @@ const readAppDevStackNamespaces = async (
       "json",
     ]),
   );
-  return [...(list.items ?? [])].sort((left, right) =>
-    (left.metadata?.name ?? "").localeCompare(right.metadata?.name ?? ""),
-  );
+  // A namespace that is already terminating is on its way out; listing it would
+  // resurrect a card the user just deleted.
+  return [...(list.items ?? [])]
+    .filter((namespace) => !isTerminatingNamespace(namespace))
+    .sort((left, right) => (left.metadata?.name ?? "").localeCompare(right.metadata?.name ?? ""));
 };
 
 const readDeployments = async (
@@ -1061,14 +1072,47 @@ export const makeNativeAppDevStackService = (
       left.namespace.localeCompare(right.namespace),
     );
 
+  const forgetStack = (resolved: ResolvedNativeAppDevStackConfig) => {
+    for (const [key, value] of knownByStackId) {
+      if (value.namespace === resolved.namespace) knownByStackId.delete(key);
+    }
+    for (const [key, value] of knownByWorktreePath) {
+      if (value.namespace === resolved.namespace) knownByWorktreePath.delete(key);
+    }
+    knownNamespaceMetadata.delete(resolved.namespace);
+  };
+
+  /**
+   * The registry is a cache of the cluster, not a record of its own: a stack
+   * whose namespace is gone — deleted here, or by another Code server sharing
+   * the cluster — has to leave the list instead of lingering as "stopped".
+   * The env-configured stack stays, since it is legitimately known before its
+   * namespace is ever provisioned.
+   */
+  const forgetVanishedStacks = async (liveNamespaces: ReadonlySet<string>) => {
+    const candidates = knownStacks().filter(
+      (resolved) =>
+        !liveNamespaces.has(resolved.namespace) &&
+        resolved.namespace !== configuredStack?.namespace,
+    );
+    await Promise.all(
+      candidates.map(async (resolved) => {
+        if ((await readNamespace(resolved, runKubectl)) === null) forgetStack(resolved);
+      }),
+    );
+  };
+
   const discoverAppDevStacks = async () => {
     const namespaces = await readAppDevStackNamespaces(runKubectl);
+    const liveNamespaces = new Set<string>();
     for (const namespace of namespaces) {
       const resolved = resolveNativeConfigForNamespace(config, namespace);
       if (resolved !== null) {
+        liveNamespaces.add(resolved.namespace);
         rememberStack(resolved, namespace);
       }
     }
+    await forgetVanishedStacks(liveNamespaces);
     return knownStacks();
   };
 
@@ -1256,6 +1300,7 @@ export const makeNativeAppDevStackService = (
         Effect.flatMap((resolved) =>
           nativeOperation("delete", async () => {
             await runKubectl(["delete", "namespace", resolved.namespace, "--ignore-not-found"]);
+            forgetStack(resolved);
             return { deleted: true };
           }),
         ),

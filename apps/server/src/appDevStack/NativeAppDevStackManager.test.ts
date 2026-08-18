@@ -111,6 +111,207 @@ const makeTempHeroComposeWorktree = (
   return tempDir;
 };
 
+it.effect("stamps stack identity on the namespace so discovery can name it", () => {
+  const tempDir = makeTempHeroComposeWorktree(["    image: hero-web:latest"]);
+
+  return Effect.gen(function* () {
+    const documents = yield* Effect.promise(() =>
+      generateNativeAppDevStackManifests({
+        id: "hero-dev",
+        namespace: "hero-dev",
+        worktreePath: tempDir,
+        composePath: "infra/compose/compose.app-dev.yml",
+        displayName: "hero fix-auth",
+        displaySlug: "hero-fix-auth",
+        repoName: "hero",
+        branchName: "fix-auth",
+        dockerPath: "docker",
+        buildctlPath: "buildctl",
+        imageBuilder: "docker",
+        imageRegistry: undefined,
+        imagePushRegistry: undefined,
+        imageProject: undefined,
+        buildkitAddr: undefined,
+        buildkitDockerConfig: undefined,
+        buildkitDockerConfigsDir: undefined,
+        buildkitHarborCaCert: undefined,
+        frontendUrl: undefined,
+        backendUrl: undefined,
+        keycloakUrl: undefined,
+        minioUrl: undefined,
+        preferStackScopedUrls: true,
+      }),
+    );
+    const namespace = documents.find((document) => document.kind === "Namespace");
+    const metadata = namespace?.metadata as
+      | { readonly annotations?: Record<string, string> }
+      | undefined;
+
+    assert.deepEqual(metadata?.annotations, {
+      "cortex.ai/display-name": "hero fix-auth",
+      "cortex.ai/worktree-path": tempDir,
+      "cortex.ai/compose-path": "infra/compose/compose.app-dev.yml",
+      "cortex.ai/display-slug": "hero-fix-auth",
+      "cortex.ai/repo-name": "hero",
+      "cortex.ai/branch-name": "fix-auth",
+    });
+  }).pipe(
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { force: true, recursive: true }))),
+  );
+});
+
+it.effect("names a discovered stack from its namespace annotations", () => {
+  const namespacesJson = JSON.stringify({
+    items: [
+      {
+        metadata: {
+          name: "hero-dev",
+          creationTimestamp: "2026-06-25T15:00:00.000Z",
+          labels: {
+            "cortex.ai/component": "app-dev-stack",
+            "cortex.ai/stack-id": "hero-stack",
+          },
+          annotations: {
+            "cortex.ai/display-name": "hero fix-auth",
+            "cortex.ai/worktree-path": "/worktrees/hero-fix-auth",
+            "cortex.ai/branch-name": "fix-auth",
+            "cortex.ai/repo-name": "hero",
+          },
+        },
+      },
+    ],
+  });
+  const runKubectl: KubectlRunner = async (args) => {
+    if (args.join(" ") === "get namespaces -l cortex.ai/component=app-dev-stack -o json") {
+      return namespacesJson;
+    }
+    if (args.join(" ") === "get namespace hero-dev -o json") return namespaceJson;
+    if (args.join(" ") === "-n hero-dev get deployments -o json") return deploymentsJson;
+    throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
+  };
+  const service = makeNativeAppDevStackService(
+    {
+      ...nativeConfig,
+      id: undefined,
+      namespace: undefined,
+      worktreePath: undefined,
+      displayName: undefined,
+      repoName: undefined,
+      branchName: undefined,
+    },
+    runKubectl,
+  );
+
+  return Effect.gen(function* () {
+    const result = yield* service.list({});
+
+    assert.deepEqual(
+      result.stacks.map((stack) => [stack.displayName, stack.branchName, stack.worktreePath]),
+      [["hero fix-auth", "fix-auth", "/worktrees/hero-fix-auth"]],
+    );
+  });
+});
+
+it.effect("drops a discovered stack once its namespace leaves the cluster", () => {
+  let namespaceExists = true;
+  const namespaceItem = {
+    metadata: {
+      name: "hero-dev",
+      creationTimestamp: "2026-06-25T15:00:00.000Z",
+      labels: {
+        "cortex.ai/component": "app-dev-stack",
+        "cortex.ai/stack-id": "hero-stack",
+      },
+    },
+  };
+  const runKubectl: KubectlRunner = async (args) => {
+    if (args.join(" ") === "get namespaces -l cortex.ai/component=app-dev-stack -o json") {
+      return JSON.stringify({ items: namespaceExists ? [namespaceItem] : [] });
+    }
+    if (args.join(" ") === "get namespace hero-dev -o json") {
+      if (!namespaceExists) throw new Error('namespaces "hero-dev" not found');
+      return namespaceJson;
+    }
+    if (args.join(" ") === "-n hero-dev get deployments -o json") return deploymentsJson;
+    throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
+  };
+  const service = makeNativeAppDevStackService(
+    {
+      ...nativeConfig,
+      id: undefined,
+      namespace: undefined,
+      worktreePath: undefined,
+      displayName: undefined,
+      repoName: undefined,
+      branchName: undefined,
+    },
+    runKubectl,
+  );
+
+  return Effect.gen(function* () {
+    const before = yield* service.list({});
+    assert.deepEqual(
+      before.stacks.map((stack) => stack.namespace),
+      ["hero-dev"],
+    );
+
+    namespaceExists = false;
+    const after = yield* service.list({});
+    assert.deepEqual(after.stacks, []);
+  });
+});
+
+it.effect("keeps a terminating namespace out of the list after delete", () => {
+  let deleted = false;
+  const namespaceItem = (terminating: boolean) => ({
+    metadata: {
+      name: "hero-dev",
+      creationTimestamp: "2026-06-25T15:00:00.000Z",
+      ...(terminating ? { deletionTimestamp: "2026-06-25T16:00:00.000Z" } : {}),
+      labels: {
+        "cortex.ai/component": "app-dev-stack",
+        "cortex.ai/stack-id": "hero-stack",
+      },
+    },
+    ...(terminating ? { status: { phase: "Terminating" } } : {}),
+  });
+  const runKubectl: KubectlRunner = async (args) => {
+    if (args.join(" ") === "get namespaces -l cortex.ai/component=app-dev-stack -o json") {
+      return JSON.stringify({ items: [namespaceItem(deleted)] });
+    }
+    if (args.join(" ") === "delete namespace hero-dev --ignore-not-found") {
+      deleted = true;
+      return "";
+    }
+    if (args.join(" ") === "get namespace hero-dev -o json") {
+      return JSON.stringify(namespaceItem(deleted));
+    }
+    if (args.join(" ") === "-n hero-dev get deployments -o json") return deploymentsJson;
+    throw new Error(`unexpected kubectl call: ${args.join(" ")}`);
+  };
+  const service = makeNativeAppDevStackService(
+    {
+      ...nativeConfig,
+      id: undefined,
+      namespace: undefined,
+      worktreePath: undefined,
+      displayName: undefined,
+      repoName: undefined,
+      branchName: undefined,
+    },
+    runKubectl,
+  );
+
+  return Effect.gen(function* () {
+    yield* service.list({});
+    const result = yield* service.delete({ stackId: "hero-stack" });
+    assert.equal(result.deleted, true);
+
+    const after = yield* service.list({});
+    assert.deepEqual(after.stacks, []);
+  });
+});
+
 it.effect("translates interpolated bind mounts and string commands for Kubernetes", () => {
   const tempDir = makeTempHeroComposeWorktree([
     "    image: quay.io/minio/minio:latest",

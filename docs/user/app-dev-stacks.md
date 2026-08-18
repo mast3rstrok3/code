@@ -20,6 +20,10 @@ For setup work in another repository, copy the full prompt in
 - The public API service should be named `api` or `backend`.
 - Private services should set `stacks.appDevStack.expose: "false"` (legacy `cortex.appDevStack.*` and `rudi.appDevStack.*` still accepted).
 - T3 Code derives preview URLs from the namespace and service name.
+- The stack's namespace carries its identity as annotations, so any T3 Code server
+  connected to the same cluster can name the stack and restart it from the right
+  worktree: `cortex.ai/display-name`, `cortex.ai/display-slug`, `cortex.ai/repo-name`,
+  `cortex.ai/branch-name`, `cortex.ai/worktree-path`, and `cortex.ai/compose-path`.
 
 Conventional URLs:
 
@@ -40,7 +44,9 @@ Stacks created for a workflow are labeled **Workflow-owned**. If historical impl
 map more than one visible stack to the same workflow, the panel reports the conflict but never
 deletes either stack automatically.
 
-Restart and delete remain available on every collapsed card. To clean up several stacks, select
+A stopped stack keeps its namespace, so **Restart** brings it back up. Deleting a stack
+removes its namespace, and the card leaves the list as soon as that namespace is gone —
+including when another T3 Code server or the controller removed it. To clean up several stacks, select
 their checkboxes (or use **Select all**) and choose **Delete** in the selection toolbar. T3 Code asks
 for confirmation once, deletes the selected Kubernetes namespaces in parallel, and leaves any stack
 that failed selected so you can retry it.
