@@ -28,6 +28,8 @@ function WorkflowModelsBody(props: {
   readonly preset: WorkflowPreset | null;
   readonly pinFor: (key: WorkflowModelPinKey) => ModelSelection | null;
   readonly rootModelSelection: ModelSelection;
+  readonly rootLabel?: string | undefined;
+  readonly description?: string | undefined;
   readonly onSetStepModel: SetWorkflowStepModel;
 }) {
   const choices = useWorkflowModelChoices(props.environmentId);
@@ -45,9 +47,8 @@ function WorkflowModelsBody(props: {
     <ScrollArea className="max-h-[26rem]">
       <div className="space-y-3 px-3 py-2">
         <p className="text-[11px] leading-relaxed text-muted-foreground">
-          Every step runs on the workflow&apos;s model unless you pin it, and each agent a step
-          starts follows that step unless you pin it too. Pins apply to the next agent a step starts
-          — stop and start a step to reach work already running.
+          {props.description ??
+            "Every step runs on the workflow's model unless you pin it, and each agent a step starts follows that step unless you pin it too. Pins apply to the next agent a step starts — stop and start a step to reach work already running."}
         </p>
         {steps.map((step) => (
           <div key={step.label} className="border-t border-border/70 pt-2 first:border-t-0">
@@ -57,6 +58,7 @@ function WorkflowModelsBody(props: {
               subSteps={step.subSteps ?? []}
               pinFor={props.pinFor}
               rootModelSelection={props.rootModelSelection}
+              rootLabel={props.rootLabel}
               choices={choices}
               onSetStepModel={props.onSetStepModel}
             />
@@ -79,6 +81,10 @@ export function WorkflowModelsMenu(props: {
   readonly preset: WorkflowPreset | null;
   readonly pinFor: (key: WorkflowModelPinKey) => ModelSelection | null;
   readonly rootModelSelection: ModelSelection;
+  /** Names what an unpinned step follows. Defaults to the run's own model. */
+  readonly rootLabel?: string | undefined;
+  readonly description?: string | undefined;
+  readonly heading?: string | undefined;
   readonly onSetStepModel: SetWorkflowStepModel | undefined;
 }) {
   const [open, setOpen] = useState(false);
@@ -96,7 +102,7 @@ export function WorkflowModelsMenu(props: {
       <PopoverPopup side="bottom" align="end" className="w-80 p-0">
         <div className="border-b border-border/70 px-3 py-2">
           <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-            Step models
+            {props.heading ?? "Step models"}
           </div>
           <div className="truncate text-xs font-semibold text-foreground">
             {props.preset === null
@@ -110,6 +116,8 @@ export function WorkflowModelsMenu(props: {
             preset={props.preset}
             pinFor={props.pinFor}
             rootModelSelection={props.rootModelSelection}
+            rootLabel={props.rootLabel}
+            description={props.description}
             onSetStepModel={onSetStepModel}
           />
         ) : null}

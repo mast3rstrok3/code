@@ -36,11 +36,15 @@ const hardlockOptions = [{ id: "reasoningEffort", value: "high" }];
 function settingsWith(input: {
   readonly legacyCodexEnabled?: boolean;
   readonly providerInstances?: ProviderInstanceConfigMap;
+  readonly workflowStepModels?: ServerSettings["workflowStepModels"];
 }): ServerSettings {
   return {
     ...DEFAULT_SERVER_SETTINGS,
     ...(input.providerInstances !== undefined
       ? { providerInstances: input.providerInstances }
+      : {}),
+    ...(input.workflowStepModels !== undefined
+      ? { workflowStepModels: input.workflowStepModels }
       : {}),
     providers: {
       ...DEFAULT_SERVER_SETTINGS.providers,
@@ -386,6 +390,136 @@ describe("resolveWorkflowStepModelSelection", () => {
       settings: enabledClaudeSettings,
     });
     expect(finalReview.modelSelection).toEqual(finalReviewSelection);
+  });
+
+  it("routes an App Review agent to its sub-step pin, then to the step pin", () => {
+    const gapAnalysisSelection: ModelSelection = {
+      instanceId: ProviderInstanceId.make("claudeAgent"),
+      model: "claude-sonnet-5",
+    };
+    const stepModels = [
+      {
+        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+        modelSelection: pinnedSelection,
+      },
+      {
+        workflowPromptId: "matt-pocock.to-tickets",
+        stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+        modelSelection: gapAnalysisSelection,
+      },
+    ];
+    // The reactor scopes all three agents of a cycle to the App Review step.
+    const modelFor = (workflowPromptId: string) =>
+      resolveWorkflowStepModelSelection({
+        workflowPromptId,
+        stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+        definition: resolveWorkflowSubagentSpawnDefinition(workflowPromptId),
+        stepModels,
+        parentModelSelection: claudeParentSelection,
+        settings: enabledClaudeSettings,
+      }).modelSelection;
+
+    expect(modelFor("matt-pocock.to-tickets")).toEqual(gapAnalysisSelection);
+    expect(modelFor(WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex)).toEqual(
+      pinnedSelection,
+    );
+    expect(modelFor("matt-pocock.implement")).toEqual(pinnedSelection);
+  });
+
+  it("uses the Settings default when the run pins nothing", () => {
+    const resolved = resolveWorkflowStepModelSelection({
+      workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+      definition: browserAppReviewDefinition,
+      stepModels: [],
+      parentModelSelection: claudeParentSelection,
+      settings: settingsWith({
+        providerInstances: {
+          [ProviderInstanceId.make("claudeAgent")]: {
+            driver: ProviderDriverKind.make("claudeAgent"),
+            enabled: true,
+          },
+        },
+        workflowStepModels: [
+          {
+            workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+            modelSelection: pinnedSelection,
+          },
+        ],
+      }),
+    });
+    expect(resolved.modelSelection).toEqual(pinnedSelection);
+    expect(resolved.overrideApplied).toBe(true);
+  });
+
+  it("lets a run's own pin outrank the Settings default", () => {
+    const runSelection: ModelSelection = {
+      instanceId: ProviderInstanceId.make("claudeAgent"),
+      model: "claude-sonnet-5",
+    };
+    const resolved = resolveWorkflowStepModelSelection({
+      workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+      definition: browserAppReviewDefinition,
+      stepModels: [
+        {
+          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+          modelSelection: runSelection,
+        },
+      ],
+      parentModelSelection: claudeParentSelection,
+      settings: settingsWith({
+        providerInstances: {
+          [ProviderInstanceId.make("claudeAgent")]: {
+            driver: ProviderDriverKind.make("claudeAgent"),
+            enabled: true,
+          },
+        },
+        workflowStepModels: [
+          {
+            workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+            modelSelection: pinnedSelection,
+          },
+        ],
+      }),
+    });
+    expect(resolved.modelSelection).toEqual(runSelection);
+  });
+
+  it("scopes a Settings default for one sub-step to that step", () => {
+    const settings = settingsWith({
+      providerInstances: {
+        [ProviderInstanceId.make("claudeAgent")]: {
+          driver: ProviderDriverKind.make("claudeAgent"),
+          enabled: true,
+        },
+      },
+      workflowStepModels: [
+        {
+          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+          stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+          modelSelection: pinnedSelection,
+        },
+      ],
+    });
+    const definition = resolveWorkflowSubagentSpawnDefinition(
+      WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+    );
+    const ticketReview = resolveWorkflowStepModelSelection({
+      workflowPromptId: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+      stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+      definition,
+      stepModels: [],
+      parentModelSelection: claudeParentSelection,
+      settings,
+    });
+    const finalReview = resolveWorkflowStepModelSelection({
+      workflowPromptId: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+      definition,
+      stepModels: [],
+      parentModelSelection: claudeParentSelection,
+      settings,
+    });
+    expect(ticketReview.modelSelection).toEqual(pinnedSelection);
+    expect(finalReview.modelSelection).toEqual(claudeParentSelection);
   });
 
   it("falls back and explains when the pinned instance is disabled", () => {

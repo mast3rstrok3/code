@@ -279,14 +279,47 @@ export function findWorkflowStepModels(
 }
 
 /**
+ * Find the pin that governs one spawn, most specific first:
+ *   1. this sub-step's own pin, scoped to the step that starts it
+ *   2. the step's pin, which covers every agent the step starts
+ *   3. an unscoped pin on this prompt — only when the spawn *is* the step,
+ *      otherwise it would pick up a sibling step's pin (a ticket Code Review
+ *      would inherit the final Code Review's model)
+ */
+function findWorkflowStepPin(
+  pins: ReadonlyArray<WorkflowStepModelOverride>,
+  workflowPromptId: string,
+  stepWorkflowPromptId: string | undefined,
+): WorkflowStepModelOverride | undefined {
+  if (stepWorkflowPromptId === undefined) {
+    return pins.find(
+      (entry) =>
+        entry.workflowPromptId === workflowPromptId && entry.stepWorkflowPromptId === undefined,
+    );
+  }
+  return (
+    pins.find(
+      (entry) =>
+        entry.workflowPromptId === workflowPromptId &&
+        entry.stepWorkflowPromptId === stepWorkflowPromptId,
+    ) ??
+    pins.find(
+      (entry) =>
+        entry.workflowPromptId === stepWorkflowPromptId && entry.stepWorkflowPromptId === undefined,
+    )
+  );
+}
+
+/**
  * Resolve the model a workflow step should run with, honoring the user's
  * per-step pin ahead of any definition hardlock.
  *
- * Precedence is deliberate: a pin set from the Workflows panel is an explicit
- * instruction and outranks the definition's hardlock, which in turn outranks
- * the parent's inherited selection. A pin whose provider instance is no longer
- * enabled is ignored, and `fallbackDetail` explains the demotion so callers can
- * surface an activity instead of silently running the wrong model.
+ * Precedence is deliberate: a pin set from the Workflows panel governs the one
+ * run it was set on and outranks the standing default from Settings, which in
+ * turn outranks the definition's hardlock and the parent's inherited
+ * selection. A pin whose provider instance is no longer enabled is ignored, and
+ * `fallbackDetail` explains the demotion so callers can surface an activity
+ * instead of silently running the wrong model.
  */
 export function resolveWorkflowStepModelSelection(input: {
   readonly workflowPromptId: string;
@@ -305,29 +338,10 @@ export function resolveWorkflowStepModelSelection(input: {
   readonly overrideApplied: boolean;
   readonly fallbackDetail: string | null;
 } {
-  // Precedence, most specific first:
-  //   1. this sub-step's own pin, scoped to the step that starts it
-  //   2. the step's pin, which covers every agent the step starts
-  //   3. an unscoped pin on this prompt — only when the spawn *is* the step,
-  //      otherwise it would pick up a sibling step's pin (a ticket Code Review
-  //      would inherit the final Code Review's model)
-  const pins = input.stepModels ?? [];
   const step = input.stepWorkflowPromptId;
   const pin =
-    step === undefined
-      ? pins.find(
-          (entry) =>
-            entry.workflowPromptId === input.workflowPromptId &&
-            entry.stepWorkflowPromptId === undefined,
-        )
-      : (pins.find(
-          (entry) =>
-            entry.workflowPromptId === input.workflowPromptId &&
-            entry.stepWorkflowPromptId === step,
-        ) ??
-        pins.find(
-          (entry) => entry.workflowPromptId === step && entry.stepWorkflowPromptId === undefined,
-        ));
+    findWorkflowStepPin(input.stepModels ?? [], input.workflowPromptId, step) ??
+    findWorkflowStepPin(input.settings?.workflowStepModels ?? [], input.workflowPromptId, step);
   if (pin === undefined) {
     return resolveWorkflowSubagentModelSelection({
       definition: input.definition,

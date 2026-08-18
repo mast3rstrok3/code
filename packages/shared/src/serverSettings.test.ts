@@ -166,6 +166,32 @@ describe("serverSettings helpers", () => {
     });
   });
 
+  it("replaces workflow step model defaults so a pin can be removed", () => {
+    const current = {
+      ...DEFAULT_SERVER_SETTINGS,
+      workflowStepModels: [
+        {
+          workflowPromptId: "implementation.browser-app-review.codex",
+          modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.6-sol"),
+        },
+        {
+          workflowPromptId: "matt-pocock.to-tickets",
+          stepWorkflowPromptId: "implementation.browser-app-review.codex",
+          modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.6-sol"),
+        },
+      ],
+    };
+
+    expect(
+      applyServerSettingsPatch(current, {
+        workflowStepModels: [current.workflowStepModels[1]!],
+      }).workflowStepModels,
+    ).toEqual([current.workflowStepModels[1]]);
+    expect(applyServerSettingsPatch(current, {}).workflowStepModels).toEqual(
+      current.workflowStepModels,
+    );
+  });
+
   it("replaces source control writer selection without retaining stale options", () => {
     const current = {
       ...DEFAULT_SERVER_SETTINGS,

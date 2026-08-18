@@ -463,40 +463,40 @@ describe("buildWorkflowViewModel", () => {
     const model = buildWorkflowViewModel([root, build, reviewA, reviewB]);
     const groups = model.rootsByThreadKey.get("env:root")?.groups;
     const fastFeature = groups?.find((group) => group.sourceId === "fast-feature-run");
-    const steps = fastFeature && groups ? buildWorkflowSteps(fastFeature, groups, root) : [];
+    // The panel flattens nested runs into their parent's steps, so the two
+    // App Review runs read as two cycles of the one App Review step.
+    const steps =
+      fastFeature && groups
+        ? buildWorkflowSteps(fastFeature, groups, root, { flattenNestedWorkflows: true })
+        : [];
 
-    expect(steps.slice(0, 8).map((step) => step.label)).toEqual([
-      "Create shared worktree",
-      "Product Grill",
-      "CLI Plan mode",
-      "CLI Build in the shared worktree",
-      "Start and probe AppDevStack from the completed Build",
-      "Run nested App Review against AppDevStack",
+    expect(steps.map((step) => step.label)).toEqual([
+      "Planning",
+      "Building",
+      "App Review",
       "Code Review",
-      "Change request publication",
     ]);
-    expect(steps[5]).toMatchObject({
+    expect(steps[2]).toMatchObject({
       repeatsAsCycles: true,
       entries: [
-        { kind: "workflow", group: { sourceId: "app-review-a" } },
-        { kind: "workflow", group: { sourceId: "app-review-b" } },
+        { kind: "thread", row: { thread: { id: "review-a" } } },
+        { kind: "thread", row: { thread: { id: "review-b" } } },
       ],
     });
-    expect(steps.slice(0, 3).map((step) => step.entries[0]?.id)).toEqual([
-      "env:root",
-      "env:root",
-      "env:root",
-    ]);
-    expect(steps[3]?.entries[0]).toMatchObject({
+    // Planning is a conversation in the main thread; Building gets its own.
+    expect(steps[0]?.entries[0]?.id).toBe("env:root");
+    expect(steps[1]?.entries[0]).toMatchObject({
       kind: "thread",
       row: { thread: { id: "build" } },
     });
     expect(
       steps.findIndex((step) => workflowStepMatchesImplementationFailure(step, "app-review")),
-    ).toBe(5);
+    ).toBe(2);
+    // Fast feature creates the worktree and starts the stack inside Planning,
+    // so both stages restart there rather than losing their step.
     expect(
       steps.findIndex((step) => workflowStepMatchesImplementationFailure(step, "app-dev-stack")),
-    ).toBe(4);
+    ).toBe(0);
     expect(
       steps.filter((step) => workflowStepMatchesImplementationFailure(step, "app-dev-stack")),
     ).toHaveLength(1);
@@ -570,7 +570,12 @@ describe("buildWorkflowViewModel", () => {
   });
 
   it("renders one bounded post-ticket sequence without internal fallback steps", () => {
-    const root = thread("root", { workflowPreset: "planning" });
+    // The root declares the planning run; its implementation children name it
+    // as their parent workflow and flatten into the same steps.
+    const root = thread("root", {
+      workflowPreset: "planning",
+      workflowContext: { workflowId: "planning-run", rootThreadId: "root" },
+    });
     const scoped = (id: string, workflowRole: TestThread["workflowRole"]) =>
       thread(id, {
         parentThreadId: "root",

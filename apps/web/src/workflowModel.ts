@@ -158,7 +158,10 @@ export function workflowStepMatchesImplementationFailure<TThread extends Workflo
         label.includes("create shared worktree") ||
         label.includes("prepare shared worktree") ||
         label.includes("load the selected spec") ||
-        label.includes("load planning tickets")
+        label.includes("load planning tickets") ||
+        // Fast feature has no setup step: its Planning step creates the shared
+        // worktree and starts the stack, so it owns both stages' restart.
+        label === "planning"
       );
     case "worker-setup":
     case "worker-execution":
@@ -167,7 +170,7 @@ export function workflowStepMatchesImplementationFailure<TThread extends Workflo
     case "merge-gate":
       return label.includes("integrat") || label.includes("merge");
     case "app-dev-stack":
-      return label.includes("appdevstack");
+      return label.includes("appdevstack") || label === "planning";
     case "app-review":
       return label.includes("app review");
     case "code-review":

@@ -1375,6 +1375,7 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
 
         const created = yield* driver.createWorktree({
           cwd,
+          path: null,
           refName: initialBranch,
           newRefName: temporaryBranch,
         });

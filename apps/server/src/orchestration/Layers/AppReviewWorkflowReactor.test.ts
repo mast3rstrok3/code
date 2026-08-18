@@ -9,6 +9,7 @@ import {
 } from "@t3tools/contracts";
 
 import {
+  findAppReviewParentTicket,
   nextAppReviewWorkflowAction,
   selectReviewRunToStart,
   selectStandalonePreviewTargets,
@@ -447,4 +448,47 @@ it("accepts screenshot-backed failed findings when recording finalization fails"
 
   expect(action).toBe("planning");
   expect(terminalReviewEvidenceFailure(action, terminal)).toBeNull();
+});
+
+/** A thread as `findAppReviewParentTicket` reads it. */
+function ticketThread(
+  id: string,
+  ticketIds: readonly string[],
+): Parameters<typeof findAppReviewParentTicket>[0][number] {
+  return {
+    id,
+    planningWorkflow:
+      ticketIds.length === 0
+        ? null
+        : {
+            tickets: ticketIds.map((ticketId, index) => ({
+              id: ticketId,
+              key: `TICKET-${String(index + 1)}`,
+            })),
+          },
+  };
+}
+
+it("finds the reviewed ticket on the planning thread that owns it", () => {
+  const threads = [
+    ticketThread("thread-planning-root", ["planning-ticket-a", "planning-ticket-b"]),
+    ticketThread("thread-implementation-worker", []),
+    ticketThread("thread-app-review-reviewer", []),
+  ];
+
+  expect(findAppReviewParentTicket(threads, "planning-ticket-b", "thread-planning-root")?.key).toBe(
+    "TICKET-2",
+  );
+});
+
+it("still finds the reviewed ticket when the workflow root does not own it", () => {
+  const threads = [
+    ticketThread("thread-workflow-root", []),
+    ticketThread("thread-planning", ["planning-ticket-a"]),
+  ];
+
+  expect(findAppReviewParentTicket(threads, "planning-ticket-a", "thread-workflow-root")?.key).toBe(
+    "TICKET-1",
+  );
+  expect(findAppReviewParentTicket(threads, "planning-ticket-missing", undefined)).toBeUndefined();
 });

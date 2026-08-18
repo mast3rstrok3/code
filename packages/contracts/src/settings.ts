@@ -9,7 +9,7 @@ import {
   DEFAULT_TEXT_GENERATION_REASONING_EFFORT,
   ProviderOptionSelections,
 } from "./model.ts";
-import { ModelSelection } from "./orchestration.ts";
+import { ModelSelection, WorkflowStepModelOverride } from "./orchestration.ts";
 import { ProviderInstanceConfig, ProviderInstanceId } from "./providerInstance.ts";
 import {
   DEFAULT_WORKSPACE_USER,
@@ -601,6 +601,14 @@ export const ServerSettings = Schema.Struct({
   sourceControlWriterModelSelection: Schema.NullOr(ModelSelection).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  /**
+   * Default model per workflow step and sub-step, used by every workflow that
+   * does not pin the step itself. A pin set from the Workflows panel governs
+   * that one run; this is the standing choice new runs start from.
+   */
+  workflowStepModels: Schema.Array(WorkflowStepModelOverride).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
 
   // Legacy single-instance-per-driver settings. Continues to be the source
   // of truth until `providerInstances` (below) lands per-driver migration
@@ -761,6 +769,9 @@ export const ServerSettingsPatch = Schema.Struct({
     }),
   ),
   sourceControlWriterModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
+  // Whole-array replacement, like `providerInstances`: the list is small and
+  // the client always sends the complete set of default step pins.
+  workflowStepModels: Schema.optionalKey(Schema.Array(WorkflowStepModelOverride)),
   observability: Schema.optionalKey(
     Schema.Struct({
       otlpTracesUrl: Schema.optionalKey(TrimmedString),

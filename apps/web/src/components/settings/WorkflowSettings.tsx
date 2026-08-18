@@ -5,16 +5,34 @@ import {
   FileTextIcon,
   HammerIcon,
   Loader2Icon,
+  SlidersHorizontalIcon,
   SparklesIcon,
   WorkflowIcon,
 } from "lucide-react";
+import type { EnvironmentId, ModelSelection, ServerSettings } from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
+import { useAtomValue } from "@effect/atom-react";
 import { useEffect, useRef } from "react";
 
 import { type WorkflowCatalogState, useWorkflowCatalog } from "../../workflowCatalogState";
+import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
+import { resolveAppModelSelectionState } from "../../modelSelection";
+import { primaryServerProvidersAtom } from "../../state/server";
+import { usePrimaryEnvironmentId } from "../../state/environments";
+import {
+  useWorkflowModelChoices,
+  WorkflowStepModelPins,
+  type SetWorkflowStepModel,
+  type WorkflowModelPinKey,
+} from "../WorkflowModelPins";
 import { Badge } from "../ui/badge";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { WorkflowCatalogContent } from "./WorkflowCatalogContent";
+import {
+  setWorkflowStepModelDefault,
+  workflowStepModelDefaultTargets,
+  workflowStepModelPinKeysEqual,
+} from "./workflowStepModelDefaults";
 
 function PageIntro({ title, description }: { title: string; description: string }) {
   return (
@@ -78,6 +96,85 @@ function FocusedRow({ focused, children }: { focused: boolean; children: React.R
   );
 }
 
+/**
+ * The standing model choice for every workflow step and sub-step.
+ *
+ * Pins set from a running workflow's Models menu govern that run only; these
+ * are what every new run starts from. Defaults are keyed by the step's agent,
+ * so one entry covers each workflow that runs that step.
+ */
+function WorkflowStepModelDefaults() {
+  const environmentId = usePrimaryEnvironmentId();
+  const settings = usePrimarySettings();
+  const updateSettings = useUpdatePrimarySettings();
+  const providers = useAtomValue(primaryServerProvidersAtom);
+  if (environmentId === null) return null;
+  return (
+    <WorkflowStepModelDefaultsBody
+      environmentId={environmentId}
+      defaults={settings.workflowStepModels}
+      seedSelection={resolveAppModelSelectionState(settings, providers)}
+      onSetStepModel={(key, selection) => {
+        updateSettings({
+          workflowStepModels: [
+            ...setWorkflowStepModelDefault(settings.workflowStepModels, key, selection),
+          ],
+        });
+      }}
+    />
+  );
+}
+
+function WorkflowStepModelDefaultsBody(props: {
+  readonly environmentId: EnvironmentId;
+  readonly defaults: ServerSettings["workflowStepModels"];
+  readonly seedSelection: ModelSelection;
+  readonly onSetStepModel: SetWorkflowStepModel;
+}) {
+  const choices = useWorkflowModelChoices(props.environmentId);
+  const pinFor = (key: WorkflowModelPinKey): ModelSelection | null =>
+    props.defaults.find((entry) => workflowStepModelPinKeysEqual(entry, key))?.modelSelection ??
+    null;
+  return (
+    <SettingsSection
+      title="Default step models"
+      icon={<SlidersHorizontalIcon className="size-3.5" />}
+      headerAction={
+        props.defaults.length === 0 ? null : (
+          <Badge variant="secondary" size="sm">
+            {props.defaults.length} set
+          </Badge>
+        )
+      }
+    >
+      <SettingsRow
+        title="Model per step and sub-step"
+        description="Every step runs on the workflow's own model unless you set one here. A workflow's Models menu overrides these for that run, and changes apply to agents started from now on."
+      >
+        <div className="mt-1 space-y-3 pb-3">
+          {workflowStepModelDefaultTargets().map((target) => (
+            <div
+              key={target.workflowPromptId}
+              className="max-w-md border-t border-border/60 pt-3 first:border-t-0 first:pt-1"
+            >
+              <WorkflowStepModelPins
+                stepLabel={target.label}
+                workflowPromptId={target.workflowPromptId}
+                subSteps={target.subSteps}
+                pinFor={pinFor}
+                rootModelSelection={props.seedSelection}
+                rootLabel="The model the workflow runs on"
+                choices={choices}
+                onSetStepModel={props.onSetStepModel}
+              />
+            </div>
+          ))}
+        </div>
+      </SettingsRow>
+    </SettingsSection>
+  );
+}
+
 export function WorkflowSettings() {
   const state = useWorkflowCatalog();
   return (
@@ -86,6 +183,7 @@ export function WorkflowSettings() {
         title="Workflows"
         description="Built-in orchestration paths and the skills each step uses."
       />
+      <WorkflowStepModelDefaults />
       <CatalogBoundary state={state} noun="Workflows" />
       {state.status === "loaded" ? (
         <SettingsSection title="Workflow Catalog" icon={<WorkflowIcon className="size-3.5" />}>

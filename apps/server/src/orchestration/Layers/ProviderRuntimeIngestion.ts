@@ -1706,7 +1706,7 @@ const make = Effect.gen(function* () {
             child.workflowPromptId === WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex &&
             (input.thread.workflowRole === "implementation-qa-reviewer" ||
               input.thread.workflowRole === "app-review-reviewer") &&
-            appReviewMode !== "feedback"
+            (child.appReviewMode ?? "feedback") !== "feedback"
           ) {
             yield* reject(
               "A Browser App Review owner may launch only feedback-mode browser lanes. Durable evidence, verdicts, and repair cycles must remain with the parent review.",

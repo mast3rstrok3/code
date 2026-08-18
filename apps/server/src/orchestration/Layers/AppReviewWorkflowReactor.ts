@@ -174,6 +174,41 @@ export function selectReviewRunToStart(
   return run;
 }
 
+/**
+ * Find the planning ticket an embedded App Review is repairing.
+ *
+ * Tickets live on the thread that authored them — the planning root of the
+ * run — while an embedded review only holds the reviewer, the worker worktree
+ * it reviewed, and the workflow root id. Searching those threads alone finds
+ * nothing, so the whole run fails with "parent ticket unavailable" for every
+ * ticket. Prefer the run's workflow root, then fall back to any thread that
+ * owns the ticket: ticket ids are unique, so a wider search cannot mismatch.
+ */
+export function findAppReviewParentTicket(
+  threads: ReadonlyArray<{
+    readonly id: string;
+    readonly planningWorkflow?:
+      | { readonly tickets: ReadonlyArray<{ readonly id: string; readonly key?: string }> }
+      | null
+      | undefined;
+  }>,
+  ticketId: string,
+  rootThreadId: string | undefined,
+): { readonly id: string; readonly key?: string } | undefined {
+  const ordered =
+    rootThreadId === undefined
+      ? threads
+      : [
+          ...threads.filter((thread) => thread.id === rootThreadId),
+          ...threads.filter((thread) => thread.id !== rootThreadId),
+        ];
+  for (const thread of ordered) {
+    const ticket = thread.planningWorkflow?.tickets.find((candidate) => candidate.id === ticketId);
+    if (ticket !== undefined) return ticket;
+  }
+  return undefined;
+}
+
 export function terminalReviewAction(review: AppReviewRecord): "passed" | "planning" {
   if (review.status === "passed" && review.document.verdict === "passed") return "passed";
   return "planning";
@@ -423,6 +458,14 @@ const make = Effect.gen(function* () {
     return updatedRun;
   });
 
+  /**
+   * The model for one agent of a cycle.
+   *
+   * All three agents run under the parent workflow's App Review step, so they
+   * resolve as its sub-steps: the browser review, the gap analysis, and the
+   * repair each take their own pin, and anything left unset follows the App
+   * Review step pin and then the workflow's own model.
+   */
   const modelForPrompt = Effect.fn("AppReviewWorkflowReactor.modelForPrompt")(function* (
     workflowPromptId: string,
     parent: OrchestrationThread,
@@ -435,6 +478,7 @@ const make = Effect.gen(function* () {
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
     return resolveWorkflowStepModelSelection({
       workflowPromptId,
+      stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
       definition: resolveWorkflowSubagentSpawnDefinition(workflowPromptId),
       stepModels: findWorkflowStepModels(parent, readModel.threads),
       parentModelSelection: parent.modelSelection,
@@ -713,11 +757,13 @@ const make = Effect.gen(function* () {
     const reviewedTicketId =
       input.run.caller.type === "implementation" ? input.run.caller.ticketId : undefined;
     const parentTicket =
-      reviewedTicketId !== undefined
-        ? (reviewer.planningWorkflow?.tickets ?? target.thread.planningWorkflow?.tickets)?.find(
-            (ticket) => ticket.id === reviewedTicketId,
-          )
-        : undefined;
+      reviewedTicketId === undefined
+        ? undefined
+        : findAppReviewParentTicket(
+            (yield* projectionSnapshotQuery.getCommandReadModel()).threads,
+            reviewedTicketId,
+            reviewer.workflowContext?.rootThreadId ?? target.thread.workflowContext?.rootThreadId,
+          );
     if (reviewedTicketId !== undefined && parentTicket?.key === undefined) {
       yield* failRun({
         run: planningRun,
