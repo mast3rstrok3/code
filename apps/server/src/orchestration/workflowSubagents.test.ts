@@ -10,7 +10,9 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { WORKFLOW_PROMPT_IDS } from "../provider/WorkflowPromptRegistry.ts";
 import {
+  findWorkflowStepModels,
   isWorkflowSubagentParentRoleAllowed,
+  resolveWorkflowStepModelSelection,
   resolveWorkflowSubagentModelSelection,
   resolveWorkflowSubagentSpawnDefinition,
 } from "./workflowSubagents.ts";
@@ -230,5 +232,129 @@ describe("resolveWorkflowSubagentModelSelection", () => {
     expect(resolved.modelSelection).toEqual(claudeParentSelection);
     expect(resolved.overrideApplied).toBe(false);
     expect(resolved.fallbackDetail).not.toBeNull();
+  });
+});
+
+const pinnedSelection: ModelSelection = {
+  instanceId: ProviderInstanceId.make("claudeAgent"),
+  model: "claude-opus-5",
+};
+
+const enabledClaudeSettings = settingsWith({
+  providerInstances: {
+    [ProviderInstanceId.make("claudeAgent")]: {
+      driver: ProviderDriverKind.make("claudeAgent"),
+      enabled: true,
+    },
+  },
+});
+
+describe("resolveWorkflowStepModelSelection", () => {
+  it("keeps the definition hardlock when the step carries no pin", () => {
+    const resolved = resolveWorkflowStepModelSelection({
+      workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+      definition: browserAppReviewDefinition,
+      stepModels: [],
+      parentModelSelection: claudeParentSelection,
+      settings: settingsWith({ legacyCodexEnabled: true }),
+    });
+    expect(resolved.modelSelection).toEqual({
+      instanceId: "codex",
+      model: "gpt-5.6-sol",
+      options: hardlockOptions,
+    });
+    expect(resolved.overrideApplied).toBe(true);
+  });
+
+  it("prefers the user's pin over the definition hardlock", () => {
+    const resolved = resolveWorkflowStepModelSelection({
+      workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+      definition: browserAppReviewDefinition,
+      stepModels: [
+        {
+          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+          modelSelection: pinnedSelection,
+        },
+      ],
+      parentModelSelection: claudeParentSelection,
+      settings: enabledClaudeSettings,
+    });
+    expect(resolved.modelSelection).toEqual(pinnedSelection);
+    expect(resolved.overrideApplied).toBe(true);
+    expect(resolved.fallbackDetail).toBeNull();
+  });
+
+  it("ignores a pin for a different step", () => {
+    const resolved = resolveWorkflowStepModelSelection({
+      workflowPromptId: WORKFLOW_PROMPT_IDS.planningTicketReviewerCodex,
+      definition: planningReviewerDefinition,
+      stepModels: [
+        {
+          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+          modelSelection: pinnedSelection,
+        },
+      ],
+      parentModelSelection: claudeParentSelection,
+      settings: enabledClaudeSettings,
+    });
+    expect(resolved.modelSelection).toEqual(claudeParentSelection);
+    expect(resolved.overrideApplied).toBe(false);
+  });
+
+  it("falls back and explains when the pinned instance is disabled", () => {
+    const resolved = resolveWorkflowStepModelSelection({
+      workflowPromptId: WORKFLOW_PROMPT_IDS.planningTicketReviewerCodex,
+      definition: planningReviewerDefinition,
+      stepModels: [
+        {
+          workflowPromptId: WORKFLOW_PROMPT_IDS.planningTicketReviewerCodex,
+          modelSelection: pinnedSelection,
+        },
+      ],
+      parentModelSelection: claudeParentSelection,
+      settings: settingsWith({
+        providerInstances: {
+          [ProviderInstanceId.make("claudeAgent")]: {
+            driver: ProviderDriverKind.make("claudeAgent"),
+            enabled: false,
+          },
+        },
+      }),
+    });
+    expect(resolved.modelSelection).toEqual(claudeParentSelection);
+    expect(resolved.overrideApplied).toBe(false);
+    expect(resolved.fallbackDetail).toContain("no longer enabled");
+  });
+});
+
+describe("findWorkflowStepModels", () => {
+  const pins = [
+    {
+      workflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+      modelSelection: pinnedSelection,
+    },
+  ];
+
+  it("reads pins from the workflow root for a nested thread", () => {
+    const root = { id: "root", workflowStepModels: pins };
+    const child = {
+      id: "child",
+      workflowContext: { rootThreadId: "root" },
+    };
+    expect(findWorkflowStepModels(child, [root, child])).toEqual(pins);
+  });
+
+  it("reads its own pins when the thread is the root", () => {
+    const root = {
+      id: "root",
+      workflowContext: { rootThreadId: "root" },
+      workflowStepModels: pins,
+    };
+    expect(findWorkflowStepModels(root, [root])).toEqual(pins);
+  });
+
+  it("returns undefined when the run has no pins", () => {
+    const child = { id: "child", workflowContext: { rootThreadId: "root" } };
+    expect(findWorkflowStepModels(child, [{ id: "root" }, child])).toBeUndefined();
   });
 });

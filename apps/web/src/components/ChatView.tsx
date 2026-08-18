@@ -167,6 +167,7 @@ import { useWorkflowCatalog } from "../workflowCatalogState";
 import {
   buildWorkflowViewModel,
   selectWorkflowRootForThread,
+  workflowNavigationIsAvailable,
   workflowThreadKey,
 } from "../workflowModel";
 import {
@@ -1267,6 +1268,18 @@ function ChatViewContent(props: ChatViewProps) {
     reportFailure: false,
   });
   const retryImplementationRun = useRetryImplementationRunCommand();
+  const restartPlanningStage = useAtomCommand(threadEnvironment.startPlanningStage, {
+    label: "planning stage restart",
+  });
+  const pauseWorkflow = useAtomCommand(threadEnvironment.pauseWorkflow, {
+    label: "workflow pause",
+  });
+  const setWorkflowStepModel = useAtomCommand(threadEnvironment.setWorkflowStepModel, {
+    label: "workflow step model",
+  });
+  const resumeWorkflow = useAtomCommand(threadEnvironment.unsettle, {
+    label: "workflow resume",
+  });
   const cancelImplementationRun = useCancelImplementationRunCommand();
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, {
     reportFailure: false,
@@ -1748,7 +1761,7 @@ function ChatViewContent(props: ChatViewProps) {
     () => selectWorkflowRootForThread(workflowNavigationModel, activeThread),
     [activeThread, workflowNavigationModel],
   );
-  const workflowsAvailable = (activeWorkflowNavigation?.groups.length ?? 0) > 0;
+  const workflowsAvailable = workflowNavigationIsAvailable(activeWorkflowNavigation);
   const focusedWorkflowExists =
     focusedWorkflowId !== null &&
     activeWorkflowNavigation?.groups.some(
@@ -3027,6 +3040,60 @@ function ChatViewContent(props: ChatViewProps) {
       });
     },
     [activeThread, retryImplementationRun],
+  );
+  const handleRestartPlanningStage = useCallback(
+    (stage: "grill" | "spec" | "tickets") => {
+      const root = activeWorkflowNavigation?.root;
+      if (!root) return;
+      void (async () => {
+        if (root.settledOverride === "settled") {
+          const resumed = await resumeWorkflow({
+            environmentId: root.environmentId,
+            input: { threadId: root.id, reason: "user" },
+          });
+          if (resumed._tag === "Failure") return;
+        }
+        await restartPlanningStage({
+          environmentId: root.environmentId,
+          input: { threadId: root.id, stage },
+        });
+      })();
+    },
+    [activeWorkflowNavigation, restartPlanningStage, resumeWorkflow],
+  );
+  const handlePauseWorkflow = useCallback(() => {
+    const root = activeWorkflowNavigation?.root;
+    if (!root) return;
+    void pauseWorkflow({
+      environmentId: root.environmentId,
+      input: { threadId: root.id },
+    });
+  }, [activeWorkflowNavigation, pauseWorkflow]);
+  const handleSetWorkflowStepModel = useCallback(
+    (workflowPromptId: string, selection: ModelSelection | null) => {
+      const root = activeWorkflowNavigation?.root;
+      if (!root) return;
+      void setWorkflowStepModel({
+        environmentId: root.environmentId,
+        input: { threadId: root.id, workflowPromptId, modelSelection: selection },
+      });
+    },
+    [activeWorkflowNavigation, setWorkflowStepModel],
+  );
+  // Stopping a step stops each of its threads and the sessions beneath them;
+  // the workflow root is never in this list, so the run itself stays active.
+  const handleStopWorkflowThreads = useCallback(
+    (threadIds: readonly ThreadId[]) => {
+      const root = activeWorkflowNavigation?.root;
+      if (!root) return;
+      for (const threadId of threadIds) {
+        void pauseWorkflow({
+          environmentId: root.environmentId,
+          input: { threadId },
+        });
+      }
+    },
+    [activeWorkflowNavigation, pauseWorkflow],
   );
   const activeTerminalLaunchContext =
     terminalUiLaunchContext?.threadId === activeThreadId ? terminalUiLaunchContext : null;
@@ -6866,6 +6933,10 @@ function ChatViewContent(props: ChatViewProps) {
         }}
         onCopyWorkflowLink={copyWorkflowLink}
         onRetryImplementationRun={handleRetryImplementationRun}
+        onRestartPlanningStage={handleRestartPlanningStage}
+        onPauseWorkflow={handlePauseWorkflow}
+        onSetStepModel={handleSetWorkflowStepModel}
+        onStopThreads={handleStopWorkflowThreads}
       />
     ) : activeRightPanelSurface?.kind === "instructions" ? (
       <WorkflowInstructionsPanel

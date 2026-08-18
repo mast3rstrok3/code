@@ -449,7 +449,7 @@ function parsePlanningTickets(value: unknown):
     const plannedFileChanges = parsePlanningFileChanges(record["plannedFileChanges"]);
     const dependencyKeys = stringArray(record["dependencyKeys"] ?? []);
     const appReviewEligible = record["appReviewEligible"] ?? false;
-    const appReviewPlanMarkdown = record["appReviewPlanMarkdown"] ?? null;
+    const rawAppReviewPlanMarkdown = record["appReviewPlanMarkdown"] ?? null;
     if (key.startsWith("Directive field")) return key;
     if (title.startsWith("Directive field")) return title;
     if (bodyMarkdown.startsWith("Directive field")) return bodyMarkdown;
@@ -458,10 +458,16 @@ function parsePlanningTickets(value: unknown):
     if (typeof appReviewEligible !== "boolean") {
       return "planning-tickets-artifact appReviewEligible must be boolean.";
     }
-    if (
-      appReviewPlanMarkdown !== null &&
-      (typeof appReviewPlanMarkdown !== "string" || appReviewPlanMarkdown.trim().length === 0)
-    ) {
+    if (rawAppReviewPlanMarkdown !== null && typeof rawAppReviewPlanMarkdown !== "string") {
+      return "planning-tickets-artifact appReviewPlanMarkdown must be a non-empty string or null.";
+    }
+    const appReviewPlanMarkdown =
+      typeof rawAppReviewPlanMarkdown === "string" &&
+      rawAppReviewPlanMarkdown.trim().length === 0 &&
+      !appReviewEligible
+        ? null
+        : rawAppReviewPlanMarkdown;
+    if (typeof appReviewPlanMarkdown === "string" && appReviewPlanMarkdown.trim().length === 0) {
       return "planning-tickets-artifact appReviewPlanMarkdown must be a non-empty string or null.";
     }
     if (appReviewEligible && appReviewPlanMarkdown === null) {

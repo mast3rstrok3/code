@@ -1,9 +1,12 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import type {
   AppReviewWorkflowRun,
+  ModelSelection,
+  ThreadId,
   OrchestrationImplementationRun,
   OrchestrationPlanningSpec,
   OrchestrationPlanningTicket,
+  OrchestrationPlanningWorkflowStage,
 } from "@t3tools/contracts";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 import { WORKFLOW_PRESET_DEFINITION_BY_ID } from "@t3tools/shared/workflowPresets";
@@ -15,7 +18,7 @@ import {
   Copy,
   Eye,
   GitFork,
-  RotateCcw,
+  Pause,
 } from "lucide-react";
 import {
   useEffect,
@@ -35,6 +38,7 @@ import {
   resolveWorkflowStepTimeRange,
   resolveWorkflowThreadTimeRange,
   resolveWorkflowThreadStatus,
+  workflowStatusIsActive,
   workflowStepMatchesImplementationFailure,
   workflowThreadKey,
   type WorkflowGroup,
@@ -53,6 +57,7 @@ import {
 } from "~/components/ui/dialog";
 
 import ChatMarkdown from "./ChatMarkdown";
+import { WorkflowStepSettingsMenu } from "./WorkflowStepSettingsMenu";
 import { workflowRoleShortLabel } from "./Sidebar.logic";
 
 const STATUS_VISUALS: Record<
@@ -333,6 +338,115 @@ function planningStepTimeRange(
     return { startedAt: threadRange.startedAt, endedAt: spec.createdAt };
   }
   return threadRange;
+}
+
+type RestartablePlanningStage = "grill" | "spec" | "tickets";
+
+function restartablePlanningStage(
+  step: WorkflowTimelineStep<EnvironmentThreadShell>,
+  currentStage: OrchestrationPlanningWorkflowStage,
+): RestartablePlanningStage | null {
+  const label = workflowStepLabel(step).toLowerCase();
+  if (label.includes("grill")) return "grill";
+  if (label.includes("spec authoring")) return currentStage === "grill" ? null : "spec";
+  if (label.includes("ticket authoring")) {
+    return currentStage === "grill" || currentStage === "spec-authoring" ? null : "tickets";
+  }
+  return null;
+}
+
+/**
+ * The restart the workflow can honor for a step, if any.
+ *
+ * Only stages the runtime can re-enter are offered: planning stages restart in
+ * place, and a blocked implementation run retries from its failed stage. Every
+ * other step reports why it cannot be restarted on its own rather than
+ * offering an action that would do nothing.
+ */
+function resolveStepRestart(input: {
+  readonly planningRestartStage: RestartablePlanningStage | null;
+  readonly rootSessionBusy: boolean;
+  readonly canRetryStep: boolean;
+  readonly onRestartPlanningStage: ((stage: RestartablePlanningStage) => void) | undefined;
+  readonly onRetryImplementationRun: ((runId: string) => void) | undefined;
+  readonly implementationRunId: string | null;
+}): { readonly run: (() => void) | undefined; readonly disabledReason: string | null } {
+  if (input.planningRestartStage !== null && input.onRestartPlanningStage !== undefined) {
+    if (input.rootSessionBusy) {
+      return {
+        run: undefined,
+        disabledReason: "The main thread is busy. Wait for it to settle before restarting.",
+      };
+    }
+    const stage = input.planningRestartStage;
+    const restart = input.onRestartPlanningStage;
+    return { run: () => restart(stage), disabledReason: null };
+  }
+  if (
+    input.canRetryStep &&
+    input.onRetryImplementationRun !== undefined &&
+    input.implementationRunId !== null
+  ) {
+    const runId = input.implementationRunId;
+    const retry = input.onRetryImplementationRun;
+    return { run: () => retry(runId), disabledReason: null };
+  }
+  return {
+    run: undefined,
+    disabledReason: "This workflow cannot re-enter this step on its own.",
+  };
+}
+
+/** Threads of a step that are still live, excluding the workflow root. */
+function collectRunningStepThreadIds(
+  step: WorkflowTimelineStep<EnvironmentThreadShell>,
+  rootThreadId: string,
+): readonly ThreadId[] {
+  const ids = new Set<ThreadId>();
+  const consider = (thread: EnvironmentThreadShell) => {
+    if (thread.id === rootThreadId) return;
+    if (!workflowStatusIsActive(resolveWorkflowThreadStatus(thread))) return;
+    ids.add(thread.id);
+  };
+  for (const entry of step.entries) {
+    if (entry.kind === "thread") consider(entry.row.thread);
+    else for (const row of entry.group.rows) consider(row.thread);
+  }
+  return [...ids];
+}
+
+function planningStepProgress(
+  step: WorkflowTimelineStep<EnvironmentThreadShell>,
+  currentStage: OrchestrationPlanningWorkflowStage,
+): "Completed" | "Current" | "Upcoming" | null {
+  const label = workflowStepLabel(step).toLowerCase();
+  const stepIndex = label.includes("prepare shared worktree")
+    ? 0
+    : label.includes("grill")
+      ? 1
+      : label.includes("spec authoring")
+        ? 2
+        : label.includes("ticket authoring")
+          ? 3
+          : label.includes("ticket review")
+            ? 4
+            : null;
+  if (stepIndex === null) return null;
+  const currentIndex =
+    currentStage === "grill"
+      ? 1
+      : currentStage === "spec-authoring"
+        ? 2
+        : currentStage === "tickets-authoring"
+          ? 3
+          : currentStage === "ticket-review" || currentStage === "ticket-revision"
+            ? 4
+            : 5;
+  return stepIndex < currentIndex
+    ? "Completed"
+    : stepIndex === currentIndex
+      ? "Current"
+      : "Upcoming";
 }
 
 function PlanningArtifacts(props: {
@@ -787,6 +901,11 @@ function WorkflowGroupCard(props: {
   readonly onOpenAppReview: () => void;
   readonly onCopyWorkflowLink: (workflowId: string) => void;
   readonly onRetryImplementationRun?: ((runId: string) => void) | undefined;
+  readonly onRestartPlanningStage?: ((stage: RestartablePlanningStage) => void) | undefined;
+  readonly onSetStepModel?:
+    | ((workflowPromptId: string, selection: ModelSelection | null) => void)
+    | undefined;
+  readonly onStopThreads?: ((threadIds: readonly ThreadId[]) => void) | undefined;
   readonly tickets: readonly OrchestrationPlanningTicket[];
   readonly spec: OrchestrationPlanningSpec | null;
   readonly skillTitlesById: ReadonlyMap<string, string>;
@@ -810,6 +929,11 @@ function WorkflowGroupCard(props: {
         ? groupStatus(group)
         : runPresentation.status;
   const visual = STATUS_VISUALS[status];
+  const stepModelByPromptId = new Map(
+    (props.workflowRoot.workflowStepModels ?? []).map(
+      (entry) => [entry.workflowPromptId, entry.modelSelection] as const,
+    ),
+  );
   const steps = buildWorkflowSteps(group, props.groups, props.workflowRoot, {
     flattenNestedWorkflows: group.parentGroupId === null,
   });
@@ -976,6 +1100,39 @@ function WorkflowGroupCard(props: {
                               retryableFailure.stage,
                             ) &&
                             props.onRetryImplementationRun !== undefined;
+                          const planningRestartStage =
+                            phase === "Planning" && props.workflowRoot.planningWorkflowSummary
+                              ? restartablePlanningStage(
+                                  step,
+                                  props.workflowRoot.planningWorkflowSummary.stage,
+                                )
+                              : null;
+                          const planningProgress =
+                            phase === "Planning" && props.workflowRoot.planningWorkflowSummary
+                              ? planningStepProgress(
+                                  step,
+                                  props.workflowRoot.planningWorkflowSummary.stage,
+                                )
+                              : null;
+                          const rootSessionBusy =
+                            props.workflowRoot.session?.status === "running" ||
+                            props.workflowRoot.session?.status === "starting" ||
+                            props.workflowRoot.hasPendingApprovals ||
+                            props.workflowRoot.hasPendingUserInput;
+                          const stepRestart = resolveStepRestart({
+                            planningRestartStage,
+                            rootSessionBusy,
+                            canRetryStep,
+                            onRestartPlanningStage: props.onRestartPlanningStage,
+                            onRetryImplementationRun: props.onRetryImplementationRun,
+                            implementationRunId: linkedImplementationRun?.id ?? null,
+                          });
+                          // The workflow root is excluded: stopping it pauses the
+                          // whole run, which is what the header's Pause is for.
+                          const stepRunningThreadIds = collectRunningStepThreadIds(
+                            step,
+                            props.workflowRoot.id,
+                          );
                           const stepOpen = expandedSteps[step.id] ?? false;
                           const isTicketExecutionStep =
                             group.preset === "planning" &&
@@ -1019,6 +1176,11 @@ function WorkflowGroupCard(props: {
                                       <h4 className="truncate text-sm font-semibold text-foreground">
                                         {workflowStepLabel(step)}
                                       </h4>
+                                      {planningProgress ? (
+                                        <div className="mt-0.5 text-[10px] text-muted-foreground">
+                                          {planningProgress}
+                                        </div>
+                                      ) : null}
                                     </div>
                                   </button>
                                   {step.skillId ? (
@@ -1030,18 +1192,7 @@ function WorkflowGroupCard(props: {
                                       {workflowSkillLabel(step.skillId, props.skillTitlesById)}
                                     </button>
                                   ) : null}
-                                  {canRetryStep ? (
-                                    <button
-                                      type="button"
-                                      title={`Restart blocked ${workflowStepTitle(step)} step`}
-                                      onClick={() =>
-                                        props.onRetryImplementationRun?.(linkedImplementationRun.id)
-                                      }
-                                      className="cursor-pointer mt-1 flex shrink-0 items-center gap-1 rounded-md border border-destructive/30 px-2 py-1 text-[10px] font-medium text-destructive hover:bg-destructive/10"
-                                    >
-                                      <RotateCcw className="size-3" aria-hidden /> Restart step
-                                    </button>
-                                  ) : isCombinedAppReviewStep ? (
+                                  {isCombinedAppReviewStep ? (
                                     <span className="mt-1 shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
                                       Up to 10 cycles
                                     </span>
@@ -1054,6 +1205,24 @@ function WorkflowGroupCard(props: {
                                       {threadCount} threads
                                     </span>
                                   ) : null}
+                                  <WorkflowStepSettingsMenu
+                                    environmentId={props.workflowRoot.environmentId}
+                                    stepLabel={workflowStepTitle(step)}
+                                    workflowPromptId={step.skillId}
+                                    pinnedSelection={
+                                      step.skillId === null
+                                        ? null
+                                        : (stepModelByPromptId.get(step.skillId) ?? null)
+                                    }
+                                    usesRootThread={step.usesRootThread}
+                                    rootModelSelection={props.workflowRoot.modelSelection}
+                                    restartLabel={`Start ${workflowStepTitle(step)} again`}
+                                    restartDisabledReason={stepRestart.disabledReason}
+                                    runningThreadIds={stepRunningThreadIds}
+                                    onSetStepModel={props.onSetStepModel}
+                                    onRestart={stepRestart.run}
+                                    onStop={props.onStopThreads}
+                                  />
                                 </div>
                                 <TimelineTimeRange
                                   {...stepTimeRange}
@@ -1197,6 +1366,12 @@ export function WorkflowsPanel(props: {
   readonly onOpenAppReview: () => void;
   readonly onCopyWorkflowLink: (workflowId: string) => void;
   readonly onRetryImplementationRun?: ((runId: string) => void) | undefined;
+  readonly onRestartPlanningStage?: ((stage: RestartablePlanningStage) => void) | undefined;
+  readonly onPauseWorkflow?: (() => void) | undefined;
+  readonly onSetStepModel?:
+    | ((workflowPromptId: string, selection: ModelSelection | null) => void)
+    | undefined;
+  readonly onStopThreads?: ((threadIds: readonly ThreadId[]) => void) | undefined;
 }) {
   const groups = props.workflow?.groups ?? [];
   const focusedGroupRef = useRef<HTMLElement>(null);
@@ -1223,14 +1398,14 @@ export function WorkflowsPanel(props: {
     return () => window.cancelAnimationFrame(frame);
   }, [groups, props.focusedWorkflowId]);
 
-  if (!props.workflow || groups.length === 0) {
+  if (!props.workflow) {
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center p-8 text-center">
         <div className="max-w-xs">
           <GitFork className="mx-auto size-5 text-muted-foreground" />
           <h3 className="mt-3 text-sm font-medium">No workflow runs</h3>
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            This workflow may have been removed, or it has no created child threads.
+            This workflow may have been removed.
           </p>
         </div>
       </div>
@@ -1243,71 +1418,99 @@ export function WorkflowsPanel(props: {
   return (
     <ScrollArea className="min-h-0 flex-1">
       <div className="p-3">
-        <div className="mb-3 rounded-lg border border-border/80 bg-card p-2">
-          <div className="mb-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-            Interaction modes
-          </div>
-          <div className="flex gap-2 overflow-x-auto pb-1">
-            {groups
-              .filter((group) => group.parentGroupId === null)
-              .map((group) => {
-                const status = groupStatus(group);
-                const visual = STATUS_VISUALS[status];
-                const activeStep = buildWorkflowSteps(group, groups, workflow.root).find((step) =>
-                  step.entries.some((entry) =>
-                    entry.kind === "thread"
-                      ? resolveWorkflowThreadStatus(entry.row.thread) === "working"
-                      : entry.group.isActive,
-                  ),
-                );
-                return (
-                  <button
-                    key={group.id}
-                    type="button"
-                    onClick={() => {
-                      setExpandedById((current) => ({ ...current, [group.id]: true }));
-                      document
-                        .querySelector(`[data-workflow-group="${CSS.escape(group.id)}"]`)
-                        ?.scrollIntoView({ block: "nearest" });
-                    }}
-                    className="cursor-pointer flex min-w-36 shrink-0 items-start gap-2 rounded-md border border-border/70 px-2.5 py-2 text-left hover:bg-accent"
-                  >
-                    <span className={cn("mt-1 size-2 shrink-0 rounded-full", visual.dotClass)} />
-                    <span className="min-w-0">
-                      <span className="block truncate text-xs font-medium">
-                        {groupTitle(group)}
+        {groups.length > 0 ? (
+          <div className="mb-3 rounded-lg border border-border/80 bg-card p-2">
+            <div className="mb-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+              Interaction modes
+            </div>
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {groups
+                .filter((group) => group.parentGroupId === null)
+                .map((group) => {
+                  const status = groupStatus(group);
+                  const visual = STATUS_VISUALS[status];
+                  const activeStep = buildWorkflowSteps(group, groups, workflow.root).find((step) =>
+                    step.entries.some((entry) =>
+                      entry.kind === "thread"
+                        ? resolveWorkflowThreadStatus(entry.row.thread) === "working"
+                        : entry.group.isActive,
+                    ),
+                  );
+                  return (
+                    <button
+                      key={group.id}
+                      type="button"
+                      onClick={() => {
+                        setExpandedById((current) => ({ ...current, [group.id]: true }));
+                        document
+                          .querySelector(`[data-workflow-group="${CSS.escape(group.id)}"]`)
+                          ?.scrollIntoView({ block: "nearest" });
+                      }}
+                      className="cursor-pointer flex min-w-36 shrink-0 items-start gap-2 rounded-md border border-border/70 px-2.5 py-2 text-left hover:bg-accent"
+                    >
+                      <span className={cn("mt-1 size-2 shrink-0 rounded-full", visual.dotClass)} />
+                      <span className="min-w-0">
+                        <span className="block truncate text-xs font-medium">
+                          {groupTitle(group)}
+                        </span>
+                        <span className="block truncate text-[10px] text-muted-foreground">
+                          {activeStep
+                            ? `${workflowStepPhase(activeStep)} · ${workflowStepLabel(activeStep)}`
+                            : visual.label}
+                        </span>
                       </span>
-                      <span className="block truncate text-[10px] text-muted-foreground">
-                        {activeStep
-                          ? `${workflowStepPhase(activeStep)} · ${workflowStepLabel(activeStep)}`
-                          : visual.label}
-                      </span>
-                    </span>
-                  </button>
-                );
-              })}
+                    </button>
+                  );
+                })}
+            </div>
           </div>
-        </div>
-        <button
-          type="button"
-          onClick={() => props.onOpenThread(workflow.root)}
-          className="cursor-pointer mb-3 flex w-full min-w-0 items-start gap-2 rounded-md px-2 py-2 text-left hover:bg-accent/60"
-        >
-          <GitFork className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 flex-1">
-            <span className="flex min-w-0 items-center gap-2">
-              <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                {workflow.root.title}
+        ) : null}
+        <div className="mb-3 flex items-start gap-2">
+          <button
+            type="button"
+            onClick={() => props.onOpenThread(workflow.root)}
+            className="cursor-pointer flex min-w-0 flex-1 items-start gap-2 rounded-md px-2 py-2 text-left hover:bg-accent/60"
+          >
+            <GitFork className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 flex-1">
+              <span className="flex min-w-0 items-center gap-2">
+                <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                  {workflow.root.title}
+                </span>
+                <span className="shrink-0 text-[11px] text-muted-foreground">Main thread</span>
               </span>
-              <span className="shrink-0 text-[11px] text-muted-foreground">Main thread</span>
+              <TimelineTimeRange
+                {...rootTimeRange}
+                timestampFormat={props.timestampFormat}
+                className="mt-1"
+              />
             </span>
-            <TimelineTimeRange
-              {...rootTimeRange}
-              timestampFormat={props.timestampFormat}
-              className="mt-1"
-            />
-          </span>
-        </button>
+          </button>
+          {workflow.root.settledOverride !== "settled" && props.onPauseWorkflow ? (
+            <button
+              type="button"
+              onClick={props.onPauseWorkflow}
+              title="Pause the workflow and stop all active agent sessions"
+              className="cursor-pointer mt-1 inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-border/80 px-2 text-xs font-medium hover:bg-accent"
+            >
+              <Pause className="size-3" aria-hidden /> Pause
+            </button>
+          ) : workflow.root.settledOverride === "settled" ? (
+            <span className="mt-1 rounded-md bg-muted px-2 py-1 text-xs font-medium text-muted-foreground">
+              Paused
+            </span>
+          ) : null}
+        </div>
+
+        {groups.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-border/80 px-3 py-4 text-center">
+            <p className="text-xs font-medium">Workflow started</p>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              This workflow is running in the main thread. Its stages will appear here as they are
+              created.
+            </p>
+          </div>
+        ) : null}
 
         <div className="space-y-2">
           {groups
@@ -1334,6 +1537,9 @@ export function WorkflowsPanel(props: {
                 onOpenAppReview={props.onOpenAppReview}
                 onCopyWorkflowLink={props.onCopyWorkflowLink}
                 onRetryImplementationRun={props.onRetryImplementationRun}
+                onRestartPlanningStage={props.onRestartPlanningStage}
+                onSetStepModel={props.onSetStepModel}
+                onStopThreads={props.onStopThreads}
               />
             ))}
         </div>

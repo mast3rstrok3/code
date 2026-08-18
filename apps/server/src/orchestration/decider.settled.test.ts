@@ -663,4 +663,46 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
       ]);
     }),
   );
+
+  it.effect("pauses a workflow by stopping its session and settling it", () =>
+    Effect.gen(function* () {
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.workflow.pause",
+          commandId: CommandId.make("cmd-pause-workflow"),
+          threadId: ThreadId.make("thread-1"),
+          createdAt: NOW,
+        },
+        readModel: makeReadModel(null, null, makeSession("running")),
+      });
+      const events = Array.isArray(result) ? result : [result];
+      expect(events.map((event) => event.type)).toEqual([
+        "thread.session-stop-requested",
+        "thread.settled",
+      ]);
+    }),
+  );
+
+  it.effect("blocks server recovery turns while a workflow is paused", () =>
+    Effect.gen(function* () {
+      const error = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.turn.start",
+          commandId: CommandId.make("server:workflow-recovery"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: MessageId.make("message-paused-recovery"),
+            role: "user",
+            text: "Recover",
+            attachments: [],
+          },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          createdAt: NOW,
+        },
+        readModel: makeReadModel("settled"),
+      }).pipe(Effect.flip);
+      expect(error._tag).toBe("OrchestrationCommandInvariantError");
+    }),
+  );
 });

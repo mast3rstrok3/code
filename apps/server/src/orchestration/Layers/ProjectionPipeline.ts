@@ -681,6 +681,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             hasActionableProposedPlan: 0,
             planningWorkflowStage: null,
             planningActiveReview: null,
+            workflowStepModels: null,
             deletedAt: null,
           });
           return;
@@ -857,6 +858,33 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               ? { ownerUserId: event.payload.ownerUserId }
               : {}),
             updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
+        case "thread.workflow-step-model-set": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          const otherStepModels = (existingRow.value.workflowStepModels ?? []).filter(
+            (entry) => entry.workflowPromptId !== event.payload.workflowPromptId,
+          );
+          const modelSelection = event.payload.modelSelection;
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            workflowStepModels:
+              modelSelection === null
+                ? otherStepModels
+                : [
+                    ...otherStepModels,
+                    {
+                      workflowPromptId: event.payload.workflowPromptId,
+                      modelSelection,
+                    },
+                  ],
           });
           return;
         }

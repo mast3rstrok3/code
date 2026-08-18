@@ -22,6 +22,8 @@ Before asking anything, Product Grill grounds itself in existing product context
 
 Interactive Product and Engineering Grills present questions as structured cards above the composer on web, desktop, and mobile. Choices stay in their natural order, and each option keeps a neutral impact or tradeoff description. A separate callout names the recommended option and explains why it is preferred without changing the option label or description. You can use the composer field on the card for a custom answer. The final “lock it in or keep grilling” confirmation uses one question in the same structured card.
 
+After a workflow starts, its Planning steps appear in the Workflows side panel even before child threads are created. Completed Planning artifacts remain available there. You can restart the Grill, Spec authoring, or Ticket authoring from that step's settings without resetting the shared worktree: existing commits and uncommitted files stay in place, while newly produced Planning artifacts supersede the earlier version as the workflow advances again.
+
 ## Phase details
 
 The Fast Feature, Full Feature, Wayfinder, and standalone Implementation descriptions below are retained for existing runs. New work starts through Engineering Workflow, which composes the Planning and Implementation behavior described here.
@@ -52,7 +54,18 @@ On web and desktop, a workflow keeps one sidebar entry: its top-level thread. Pl
 
 Workflow-generated user messages show a **Skill · _name_** pill. Select it to open the associated instructions in the right panel, where you can read the formatted skill, switch to its exact raw text, and expand any supporting documents. Historical workflow messages receive the same association when their recorded turn metadata is available.
 
-Open **Workflows** in the right panel to see the same ordered workflow steps defined in **Settings → Workflows**, together with every created child thread. Steps remain separate even when one conversation performs several of them. Repeating a review or repair appears as another numbered cycle inside the same step, not as a duplicate workflow step. If a run reaches a human gate, use **Restart step** on the blocked step directly in this panel; T3 Code preserves the workflow run, worktree, branch, App Dev Stack, completed steps, and code, and resumes only that stage. Selecting a child opens its conversation while keeping the complete workflow overview open. Select the workflow title to return to the top-level conversation. Provider-native subagents remain in the separate **Agents** surface.
+Open **Workflows** in the right panel to see the same ordered workflow steps defined in **Settings → Workflows**, together with every created child thread. Steps remain separate even when one conversation performs several of them. Repeating a review or repair appears as another numbered cycle inside the same step, not as a duplicate workflow step. Every step carries a settings button. If a run reaches a human gate, open the blocked step's settings and choose **Start step again**; T3 Code preserves the workflow run, worktree, branch, App Dev Stack, completed steps, and code, and resumes only that stage. **Stop step** in the same menu ends that step's active agent sessions; the run, its worktree, commits, and history stay in place, and the workflow waits there until you start a step again. Steps the workflow cannot re-enter on its own say so instead of offering an action that would do nothing. Selecting a child opens its conversation while keeping the complete workflow overview open. Select the workflow title to return to the top-level conversation. Provider-native subagents remain in the separate **Agents** surface.
+
+Use **Pause** in the workflow panel to stop every active agent session in that workflow and prevent new turns from starting. The worktree, commits, uncommitted files, and workflow history remain in place. Restart a planning stage to resume from that point.
+
+### Choosing a model per step
+
+By default every step runs on the model the workflow was started with. Open a step's settings to change that:
+
+- **Auto** keeps the step on the workflow's model. Changing the main thread's model in its composer moves every auto step with it.
+- **Custom** pins the step to one CLI harness and model — Codex on GPT-5.6 Sol for App Review, Claude on Opus 5 for Code Review, and so on — using the same picker as the composer.
+
+A pin belongs to that workflow run, applies to the next agent the step starts, and takes precedence over the model a step would otherwise be locked to. Agents already running keep the model they launched with, so stop and start the step again to move work that is in flight. Steps that run in the workflow's main thread say so: a pin there covers the agents that step starts, while the main thread itself follows its own composer. If the pinned provider is later disabled, the step falls back to the workflow's model and records why in the workflow thread.
 
 Every workflow run has a durable workflow ID. Children that belong to the run inherit that ID; a nested App Review receives its own ID and records the parent workflow ID. Use **Copy workflow link** in the Workflows panel to copy a URL that opens the top-level conversation, opens the workflow panel, and focuses that exact run.
 

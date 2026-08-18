@@ -332,6 +332,20 @@ export const ThreadWorkflowContext = Schema.Struct({
 });
 export type ThreadWorkflowContext = typeof ThreadWorkflowContext.Type;
 
+/**
+ * One workflow step pinned to an explicit provider instance and model.
+ *
+ * Keyed by the step's workflow prompt id — the same id the step's skill is
+ * registered under — so the pin survives step reordering and applies to every
+ * later spawn of that step in the run. No entry means the step stays in auto
+ * mode and inherits the workflow root's selection.
+ */
+export const WorkflowStepModelOverride = Schema.Struct({
+  workflowPromptId: TrimmedNonEmptyString,
+  modelSelection: ModelSelection,
+});
+export type WorkflowStepModelOverride = typeof WorkflowStepModelOverride.Type;
+
 export const OrchestrationPlanningSpec = Schema.Struct({
   id: OrchestrationPlanningSpecId,
   title: TrimmedNonEmptyString,
@@ -1274,6 +1288,11 @@ export const OrchestrationThread = Schema.Struct({
   workflowSubagentBatchProvenance: Schema.optionalKey(
     Schema.NullOr(WorkflowSubagentBatchProvenance),
   ),
+  /**
+   * Per-step model pins for the workflow rooted at this thread. Only workflow
+   * root threads carry entries; every other thread omits the key.
+   */
+  workflowStepModels: Schema.optionalKey(Schema.Array(WorkflowStepModelOverride)),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -1365,6 +1384,11 @@ export const OrchestrationThreadShell = Schema.Struct({
   workflowSubagentBatchProvenance: Schema.optionalKey(
     Schema.NullOr(WorkflowSubagentBatchProvenance),
   ),
+  /**
+   * Per-step model pins for the workflow rooted at this thread. Only workflow
+   * root threads carry entries; every other thread omits the key.
+   */
+  workflowStepModels: Schema.optionalKey(Schema.Array(WorkflowStepModelOverride)),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -1667,6 +1691,26 @@ const ThreadSettleCommand = Schema.Struct({
   threadId: ThreadId,
 });
 
+const ThreadWorkflowPauseCommand = Schema.Struct({
+  type: Schema.Literal("thread.workflow.pause"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  createdAt: IsoDateTime,
+});
+
+/**
+ * Pin one workflow step to an explicit provider instance and model, or clear
+ * the pin (`modelSelection: null`) so the step returns to auto mode.
+ */
+const ThreadWorkflowStepModelSetCommand = Schema.Struct({
+  type: Schema.Literal("thread.workflow.step-model.set"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  workflowPromptId: TrimmedNonEmptyString,
+  modelSelection: Schema.NullOr(ModelSelection),
+  createdAt: IsoDateTime,
+});
+
 const ThreadUnsettleCommand = Schema.Struct({
   type: Schema.Literal("thread.unsettle"),
   commandId: CommandId,
@@ -1783,7 +1827,7 @@ const ThreadPlanningStageStartCommand = Schema.Struct({
   type: Schema.Literal("thread.planning-stage.start"),
   commandId: CommandId,
   threadId: ThreadId,
-  stage: Schema.Literals(["spec"]),
+  stage: Schema.Literals(["grill", "spec", "tickets"]),
   createdAt: IsoDateTime,
 });
 
@@ -2251,6 +2295,8 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadArchiveCommand,
   ThreadUnarchiveCommand,
   ThreadSettleCommand,
+  ThreadWorkflowPauseCommand,
+  ThreadWorkflowStepModelSetCommand,
   ThreadUnsettleCommand,
   ThreadSnoozeCommand,
   ThreadUnsnoozeCommand,
@@ -2294,6 +2340,8 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadArchiveCommand,
   ThreadUnarchiveCommand,
   ThreadSettleCommand,
+  ThreadWorkflowPauseCommand,
+  ThreadWorkflowStepModelSetCommand,
   ThreadUnsettleCommand,
   ThreadSnoozeCommand,
   ThreadUnsnoozeCommand,
@@ -2487,6 +2535,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.planning-ticket-review-requested",
   "thread.planning-spec-bundle-loaded",
   "thread.planning-workflow-stage-set",
+  "thread.workflow-step-model-set",
   "thread.implementation-run-launched",
   "thread.implementation-run-updated",
   "thread.implementation-run-retry-requested",
@@ -2661,6 +2710,14 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
 export const ThreadRuntimeModeSetPayload = Schema.Struct({
   threadId: ThreadId,
   runtimeMode: RuntimeMode,
+  updatedAt: IsoDateTime,
+});
+
+export const ThreadWorkflowStepModelSetPayload = Schema.Struct({
+  threadId: ThreadId,
+  workflowPromptId: TrimmedNonEmptyString,
+  /** Null clears the pin and returns the step to auto mode. */
+  modelSelection: Schema.NullOr(ModelSelection),
   updatedAt: IsoDateTime,
 });
 
@@ -3063,6 +3120,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.planning-workflow-stage-set"),
     payload: ThreadPlanningWorkflowStageSetPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.workflow-step-model-set"),
+    payload: ThreadWorkflowStepModelSetPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

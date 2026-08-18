@@ -45,7 +45,8 @@ import {
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import {
-  resolveWorkflowSubagentModelSelection,
+  findWorkflowStepModels,
+  resolveWorkflowStepModelSelection,
   resolveWorkflowSubagentSpawnDefinition,
 } from "../workflowSubagents.ts";
 
@@ -1069,6 +1070,44 @@ const make = Effect.gen(function* () {
     },
   );
 
+  /**
+   * Model for one workflow step: the user's per-step pin when the workflow
+   * root carries one, otherwise the step definition's hardlock, otherwise the
+   * orchestrator's own selection. A pin that can no longer be honored is
+   * reported on the orchestrator thread rather than failing the spawn.
+   */
+  const modelForStep = Effect.fn("ImplementationWorkflowReactor.modelForStep")(function* (input: {
+    readonly workflowPromptId: string;
+    readonly orchestratorThread: OrchestrationThread;
+    readonly createdAt: string;
+  }) {
+    const settings = yield* serverSettingsService.getSettings.pipe(
+      Effect.orElseSucceed(() => undefined),
+    );
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    const resolved = resolveWorkflowStepModelSelection({
+      workflowPromptId: input.workflowPromptId,
+      definition: resolveWorkflowSubagentSpawnDefinition(input.workflowPromptId),
+      stepModels: findWorkflowStepModels(input.orchestratorThread, readModel.threads),
+      parentModelSelection: input.orchestratorThread.modelSelection,
+      settings,
+    });
+    if (resolved.fallbackDetail !== null) {
+      yield* appendActivity({
+        threadId: input.orchestratorThread.id,
+        tone: "info",
+        kind: "implementation-workflow.step-model-fallback",
+        summary: "Pinned step model not honored",
+        payload: {
+          workflowPromptId: input.workflowPromptId,
+          detail: resolved.fallbackDetail,
+        },
+        createdAt: input.createdAt,
+      });
+    }
+    return resolved.modelSelection;
+  });
+
   const requestRunRetry = Effect.fn("ImplementationWorkflowReactor.requestRunRetry")(
     function* (input: {
       readonly sourceThreadId: ThreadId;
@@ -1422,7 +1461,11 @@ const make = Effect.gen(function* () {
             },
           }),
       title: `Implement ${ticket?.title ?? input.ticketId}`,
-      modelSelection: input.orchestratorThread.modelSelection,
+      modelSelection: yield* modelForStep({
+        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+        orchestratorThread: input.orchestratorThread,
+        createdAt: input.createdAt,
+      }),
       runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
       interactionMode: "implementation-workflow",
       branch: plannedWorker.branch,
@@ -1742,7 +1785,11 @@ const make = Effect.gen(function* () {
         parentThreadId: state.workerThreadId ?? input.run.orchestratorThreadId,
         workflowRole: "implementation-code-reviewer",
         title: `Code review ${ticket?.title ?? input.ticketId}`,
-        modelSelection: orchestratorThread.modelSelection,
+        modelSelection: yield* modelForStep({
+          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+          orchestratorThread,
+          createdAt: input.createdAt,
+        }),
         runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
         interactionMode: "implementation-workflow",
         branch: state.branch,
@@ -1852,7 +1899,11 @@ const make = Effect.gen(function* () {
         supportingContextMarkdown: `Review only ticket ${input.ticketId}: ${ticket.title}. Treat its attached plan and acceptance criteria as authoritative.`,
         previewTargets: [frontendUrl],
         cycleBudget: 10,
-        modelSelection: orchestratorThread.modelSelection,
+        modelSelection: yield* modelForStep({
+          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+          orchestratorThread,
+          createdAt: input.createdAt,
+        }),
         createdAt: input.createdAt,
       });
     },
@@ -1925,7 +1976,11 @@ const make = Effect.gen(function* () {
         workflowRole: "implementation-validator",
         title:
           input.kind === "final" ? "Implementation final validation" : "Implementation merge gate",
-        modelSelection: orchestratorThread.modelSelection,
+        modelSelection: yield* modelForStep({
+          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationMergeGateCodex,
+          orchestratorThread,
+          createdAt: input.createdAt,
+        }),
         runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
         interactionMode: "implementation-workflow",
         branch: input.run.orchestratorBranch,
@@ -2446,7 +2501,11 @@ const make = Effect.gen(function* () {
             IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
             Math.max(1, cycleRun.launchSummary.finalAppReview.maxCycles),
           ),
-          modelSelection: orchestratorThread.modelSelection,
+          modelSelection: yield* modelForStep({
+            workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+            orchestratorThread,
+            createdAt: input.createdAt,
+          }),
           createdAt: input.createdAt,
         });
         return;
@@ -2485,32 +2544,11 @@ const make = Effect.gen(function* () {
         createdAt: input.createdAt,
       });
 
-      const settings = yield* serverSettingsService.getSettings.pipe(
-        Effect.orElseSucceed(() => undefined),
-      );
-      const spawnDefinition = resolveWorkflowSubagentSpawnDefinition(
-        WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
-      );
-      const resolved = resolveWorkflowSubagentModelSelection({
-        definition: spawnDefinition,
-        parentModelSelection: orchestratorThread.modelSelection,
-        settings,
+      const reviewModelSelection = yield* modelForStep({
+        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+        orchestratorThread,
+        createdAt: input.createdAt,
       });
-      if (resolved.fallbackDetail !== null) {
-        yield* appendActivity({
-          threadId: cycleRun.orchestratorThreadId,
-          tone: "info",
-          kind: "implementation-workflow.model-hardlock-fallback",
-          summary: "Browser app review model hardlock not honored",
-          payload: {
-            runId: cycleRun.id,
-            detail: resolved.fallbackDetail,
-            requestedDriver: spawnDefinition?.modelOverride?.driver ?? null,
-            requestedModel: spawnDefinition?.modelOverride?.model ?? null,
-          },
-          createdAt: input.createdAt,
-        });
-      }
 
       yield* orchestrationEngine.dispatch({
         type: "thread.app-review.launch",
@@ -2532,7 +2570,7 @@ const make = Effect.gen(function* () {
           ),
           attachments: [],
         },
-        modelSelection: resolved.modelSelection,
+        modelSelection: reviewModelSelection,
         runtimeMode: orchestratorThread.runtimeMode,
         workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
         createdAt: input.createdAt,
@@ -2669,7 +2707,11 @@ const make = Effect.gen(function* () {
         parentThreadId: input.run.orchestratorThreadId,
         workflowRole: "implementation-code-reviewer",
         title: "Implementation code review",
-        modelSelection: orchestratorThread.modelSelection,
+        modelSelection: yield* modelForStep({
+          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+          orchestratorThread,
+          createdAt: input.createdAt,
+        }),
         runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
         interactionMode: "implementation-workflow",
         branch: input.run.orchestratorBranch,
@@ -2803,7 +2845,11 @@ const make = Effect.gen(function* () {
       parentThreadId: input.run.orchestratorThreadId,
       workflowRole: "implementation-change-request-babysitter",
       title: `Babysit PR #${input.run.changeRequest.number}`,
-      modelSelection: orchestratorThread.modelSelection,
+      modelSelection: yield* modelForStep({
+        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+        orchestratorThread,
+        createdAt: input.createdAt,
+      }),
       runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
       interactionMode: "implementation-workflow",
       branch: input.run.orchestratorBranch,

@@ -17,6 +17,7 @@ import {
   ThreadId,
   OrchestrationPlanningWorkflowStage,
   OrchestrationPlanningActiveReviewRequest,
+  WorkflowStepModelOverride,
   OrchestrationThreadWorkflowRole,
   ThreadWorkflowContext,
   WorkflowSubagentBatchId,
@@ -65,6 +66,7 @@ export const ProjectionThread = Schema.Struct({
   hasActionableProposedPlan: NonNegativeInt,
   planningWorkflowStage: Schema.NullOr(OrchestrationPlanningWorkflowStage),
   planningActiveReview: Schema.optionalKey(Schema.NullOr(OrchestrationPlanningActiveReviewRequest)),
+  workflowStepModels: Schema.optionalKey(Schema.NullOr(Schema.Array(WorkflowStepModelOverride))),
   deletedAt: Schema.NullOr(IsoDateTime),
 });
 export type ProjectionThread = typeof ProjectionThread.Type;

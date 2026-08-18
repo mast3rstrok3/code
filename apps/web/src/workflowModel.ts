@@ -101,6 +101,12 @@ export interface WorkflowTimelineStep<TThread extends WorkflowModelThread> {
   readonly label: string | null;
   readonly skillId: string | null;
   readonly repeatsAsCycles: boolean;
+  /**
+   * True when the step's work happens in the workflow's main thread rather
+   * than a thread of its own, which bounds what a per-step model pin can
+   * change.
+   */
+  readonly usesRootThread: boolean;
   readonly entries: readonly WorkflowTimelineEntry<TThread>[];
 }
 
@@ -376,10 +382,10 @@ export function buildWorkflowSteps<TThread extends WorkflowModelThread>(
     const steps = definedSteps.map((definition, index): WorkflowTimelineStep<TThread> => {
       const matchedEntries = timeline.filter((entry) => entryMatchesDefinedStep(entry, definition));
       for (const entry of matchedEntries) matchedEntryIds.add(entry.id);
+      const usesRootThread =
+        group.preset !== null && definedStepUsesRootThread(group.preset, definition);
       const entries =
-        rootThread !== undefined &&
-        group.preset !== null &&
-        definedStepUsesRootThread(group.preset, definition)
+        rootThread !== undefined && usesRootThread
           ? [
               {
                 kind: "thread" as const,
@@ -396,6 +402,7 @@ export function buildWorkflowSteps<TThread extends WorkflowModelThread>(
         label: definition.label,
         skillId: definition.skillId ?? null,
         repeatsAsCycles: definedStepRepeatsAsCycles(definition),
+        usesRootThread,
         entries,
       };
     });
@@ -431,6 +438,7 @@ function buildFallbackWorkflowSteps<TThread extends WorkflowModelThread>(
       label: null,
       skillId: null,
       repeatsAsCycles: false,
+      usesRootThread: false,
       entries: [entry],
     });
   }
@@ -711,6 +719,13 @@ export function buildWorkflowViewModel<TThread extends WorkflowModelThread>(
       string,
       { kind: WorkflowGroup<TThread>["kind"]; sourceId: string; threads: TThread[] }
     >();
+    if (owner.workflowContext != null && owner.workflowPreset !== null) {
+      grouped.set(`workflow:${owner.workflowContext.workflowId}`, {
+        kind: "workflow",
+        sourceId: owner.workflowContext.workflowId,
+        threads: [],
+      });
+    }
     for (const thread of descendants) {
       const contextId = thread.workflowContext?.workflowId;
       const batchId = thread.workflowSubagentBatchProvenance?.batchId;
@@ -797,7 +812,10 @@ export function buildWorkflowViewModel<TThread extends WorkflowModelThread>(
 
     const unorderedGroups = [...grouped.entries()].map(([id, group]): WorkflowGroup<TThread> => {
       const rows = buildGroupRows(group.threads);
-      const statuses = rows.map((row) => resolveWorkflowThreadStatus(row.thread));
+      const statuses =
+        rows.length > 0
+          ? rows.map((row) => resolveWorkflowThreadStatus(row.thread))
+          : [resolveWorkflowThreadStatus(owner)];
       const activeCount = statuses.filter(workflowStatusIsActive).length;
       return {
         id,
@@ -867,4 +885,15 @@ export function selectWorkflowRootForThread<TThread extends WorkflowModelThread>
   const threadKey = workflowThreadKey(thread);
   const ownerKey = model.ownerThreadKeyByThreadKey.get(threadKey) ?? threadKey;
   return model.rootsByThreadKey.get(ownerKey) ?? null;
+}
+
+export function workflowNavigationIsAvailable<TThread extends WorkflowModelThread>(
+  workflow: WorkflowRoot<TThread> | null,
+): boolean {
+  if (workflow === null) return false;
+  return (
+    workflow.groups.length > 0 ||
+    workflow.root.workflowPreset !== null ||
+    workflow.root.workflowContext !== null
+  );
 }

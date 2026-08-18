@@ -45,6 +45,7 @@ import {
   WorkflowSubagentBatchId,
   ThreadWorkflowContext,
   OrchestrationPlanningActiveReviewRequest,
+  WorkflowStepModelOverride,
   AppReviewId,
   type WorkspaceUserView,
 } from "@t3tools/contracts";
@@ -163,6 +164,9 @@ const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
     workflowContext: Schema.NullOr(Schema.fromJsonString(ThreadWorkflowContext)),
     planningActiveReview: Schema.NullOr(
       Schema.fromJsonString(OrchestrationPlanningActiveReviewRequest),
+    ),
+    workflowStepModels: Schema.NullOr(
+      Schema.fromJsonString(Schema.Array(WorkflowStepModelOverride)),
     ),
   }),
 );
@@ -633,6 +637,9 @@ function mapThreadShellRow(input: {
             batchId: input.thread.workflowSubagentBatchId,
             childIndex: input.thread.workflowSubagentChildIndex,
           },
+    ...(input.thread.workflowStepModels != null && input.thread.workflowStepModels.length > 0
+      ? { workflowStepModels: input.thread.workflowStepModels }
+      : {}),
     title: input.thread.title,
     modelSelection: input.thread.modelSelection,
     runtimeMode: input.thread.runtimeMode,
@@ -787,6 +794,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
           planning_workflow_stage AS "planningWorkflowStage",
           planning_active_review_json AS "planningActiveReview",
+          workflow_step_models_json AS "workflowStepModels",
           deleted_at AS "deletedAt"
         FROM projection_threads
         ORDER BY created_at ASC, thread_id ASC
@@ -835,6 +843,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
           planning_workflow_stage AS "planningWorkflowStage",
           planning_active_review_json AS "planningActiveReview",
+          workflow_step_models_json AS "workflowStepModels",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE deleted_at IS NULL
@@ -885,6 +894,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
           planning_workflow_stage AS "planningWorkflowStage",
           planning_active_review_json AS "planningActiveReview",
+          workflow_step_models_json AS "workflowStepModels",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE deleted_at IS NULL
@@ -1492,6 +1502,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
           planning_workflow_stage AS "planningWorkflowStage",
           planning_active_review_json AS "planningActiveReview",
+          workflow_step_models_json AS "workflowStepModels",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE thread_id = ${threadId}
@@ -2391,6 +2402,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                         batchId: row.workflowSubagentBatchId,
                         childIndex: row.workflowSubagentChildIndex,
                       },
+                ...(row.workflowStepModels != null && row.workflowStepModels.length > 0
+                  ? { workflowStepModels: row.workflowStepModels }
+                  : {}),
                 title: row.title,
                 modelSelection: row.modelSelection,
                 runtimeMode: row.runtimeMode,
@@ -2817,6 +2831,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                           batchId: row.workflowSubagentBatchId,
                           childIndex: row.workflowSubagentChildIndex,
                         },
+                  ...(row.workflowStepModels != null && row.workflowStepModels.length > 0
+                    ? { workflowStepModels: row.workflowStepModels }
+                    : {}),
                   title: row.title,
                   modelSelection: row.modelSelection,
                   runtimeMode: row.runtimeMode,
@@ -3706,6 +3723,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 batchId: threadRow.value.workflowSubagentBatchId,
                 childIndex: threadRow.value.workflowSubagentChildIndex,
               },
+        ...(threadRow.value.workflowStepModels != null &&
+        threadRow.value.workflowStepModels.length > 0
+          ? { workflowStepModels: threadRow.value.workflowStepModels }
+          : {}),
         title: threadRow.value.title,
         modelSelection: threadRow.value.modelSelection,
         runtimeMode: threadRow.value.runtimeMode,

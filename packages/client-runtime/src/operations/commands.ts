@@ -37,6 +37,8 @@ export type ArchiveThreadInput = CommandInput<"thread.archive">;
 export type UnarchiveThreadInput = CommandInput<"thread.unarchive">;
 export type SettleThreadInput = CommandInput<"thread.settle">;
 export type UnsettleThreadInput = CommandInput<"thread.unsettle">;
+export type PauseThreadWorkflowInput = CommandInput<"thread.workflow.pause">;
+export type SetThreadWorkflowStepModelInput = CommandInput<"thread.workflow.step-model.set">;
 export type SnoozeThreadInput = CommandInput<"thread.snooze">;
 export type UnsnoozeThreadInput = CommandInput<"thread.unsnooze">;
 export type PinThreadInput = CommandInput<"thread.pin">;
@@ -185,6 +187,29 @@ export const settleThread: (input: SettleThreadInput) => CommandEffect = Effect.
     commandId: yield* commandId(input),
   });
 });
+
+export const pauseThreadWorkflow: (input: PauseThreadWorkflowInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.pauseThreadWorkflow",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "thread.workflow.pause",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const setThreadWorkflowStepModel: (input: SetThreadWorkflowStepModelInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.setThreadWorkflowStepModel")(function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "thread.workflow.step-model.set",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  });
 
 export const unsettleThread: (input: UnsettleThreadInput) => CommandEffect = Effect.fn(
   "EnvironmentCommands.unsettleThread",

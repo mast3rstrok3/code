@@ -408,6 +408,81 @@ describe("orchestration projector", () => {
     expect(afterUpdate.threads[0]?.updatedAt).toBe(updatedAt);
   });
 
+  it("merges and clears workflow step model pins", async () => {
+    const createdAt = "2026-02-24T08:00:00.000Z";
+    const pinnedAt = "2026-02-24T08:00:05.000Z";
+    const model = createEmptyReadModel(createdAt);
+    const claudeSelection = { instanceId: "claudeAgent", model: "claude-opus-5" };
+    const codexSelection = { instanceId: "codex", model: "gpt-5.6-sol" };
+
+    const afterCreate = await Effect.runPromise(
+      projectEvent(
+        model,
+        makeEvent({
+          sequence: 1,
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: createdAt,
+          commandId: "cmd-create",
+          payload: {
+            threadId: "thread-1",
+            projectId: "project-1",
+            title: "demo",
+            modelSelection: {
+              provider: ProviderDriverKind.make("codex"),
+              model: "gpt-5.3-codex",
+            },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        }),
+      ),
+    );
+
+    const pinStep = (sequence: number, workflowPromptId: string, modelSelection: unknown) =>
+      makeEvent({
+        sequence,
+        type: "thread.workflow-step-model-set",
+        aggregateKind: "thread",
+        aggregateId: "thread-1",
+        occurredAt: pinnedAt,
+        commandId: `cmd-pin-${String(sequence)}`,
+        payload: { threadId: "thread-1", workflowPromptId, modelSelection, updatedAt: pinnedAt },
+      });
+
+    const afterFirstPin = await Effect.runPromise(
+      projectEvent(afterCreate, pinStep(2, "implementation.tdd.codex", claudeSelection)),
+    );
+    const afterSecondPin = await Effect.runPromise(
+      projectEvent(afterFirstPin, pinStep(3, "implementation.code-review.codex", codexSelection)),
+    );
+    expect(afterSecondPin.threads[0]?.workflowStepModels).toEqual([
+      { workflowPromptId: "implementation.tdd.codex", modelSelection: claudeSelection },
+      { workflowPromptId: "implementation.code-review.codex", modelSelection: codexSelection },
+    ]);
+
+    const afterRepin = await Effect.runPromise(
+      projectEvent(afterSecondPin, pinStep(4, "implementation.tdd.codex", codexSelection)),
+    );
+    expect(afterRepin.threads[0]?.workflowStepModels).toEqual([
+      { workflowPromptId: "implementation.code-review.codex", modelSelection: codexSelection },
+      { workflowPromptId: "implementation.tdd.codex", modelSelection: codexSelection },
+    ]);
+
+    const afterClear = await Effect.runPromise(
+      projectEvent(afterRepin, pinStep(5, "implementation.tdd.codex", null)),
+    );
+    expect(afterClear.threads[0]?.workflowStepModels).toEqual([
+      { workflowPromptId: "implementation.code-review.codex", modelSelection: codexSelection },
+    ]);
+    // A pin is configuration, not activity: it must not move the thread's clock.
+    expect(afterClear.threads[0]?.updatedAt).toBe(createdAt);
+  });
+
   it("marks assistant messages completed with non-streaming updates", async () => {
     const createdAt = "2026-02-23T09:00:00.000Z";
     const deltaAt = "2026-02-23T09:00:01.000Z";

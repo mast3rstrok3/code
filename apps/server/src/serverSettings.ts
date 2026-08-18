@@ -287,6 +287,22 @@ export function findEnabledProviderInstanceIdForDriver(
   );
 }
 
+/**
+ * True when `instanceId` names a provider instance that is currently enabled,
+ * using the same effective instance set and enablement rule as
+ * `findEnabledProviderInstanceIdForDriver`. An id absent from
+ * `providerInstances` is treated as the legacy default instance for the driver
+ * of the same name.
+ */
+export function isProviderInstanceEnabled(
+  settings: ServerSettings,
+  instanceId: ProviderInstanceId,
+): boolean {
+  const driver =
+    settings.providerInstances[instanceId]?.driver ?? ProviderDriverKind.make(instanceId);
+  return findEnabledProviderInstanceIdForDriver(settings, driver, instanceId) === instanceId;
+}
+
 // Values under these keys are compared as a whole — never stripped field-by-field.
 const ATOMIC_SETTINGS_KEYS: ReadonlySet<string> = new Set([
   "backgroundActivity",

@@ -13,6 +13,7 @@ import {
   resolveWorkflowThreadTimeRange,
   resolveWorkflowThreadStatus,
   selectWorkflowRootForThread,
+  workflowNavigationIsAvailable,
   workflowStepMatchesImplementationFailure,
   type WorkflowModelThread,
 } from "./workflowModel";
@@ -77,6 +78,41 @@ function thread(id: string, overrides: Partial<TestThread> = {}): TestThread {
 }
 
 describe("buildWorkflowViewModel", () => {
+  it("makes a started root workflow navigable before it creates child threads", () => {
+    const workflowRoot = thread("root", {
+      workflowPreset: "planning",
+      workflowContext: { workflowId: "workflow-root", rootThreadId: "root" },
+    });
+    const ordinaryThread = thread("ordinary");
+
+    const workflow = selectWorkflowRootForThread(
+      buildWorkflowViewModel([workflowRoot]),
+      workflowRoot,
+    );
+    const ordinary = selectWorkflowRootForThread(
+      buildWorkflowViewModel([ordinaryThread]),
+      ordinaryThread,
+    );
+
+    expect(workflow?.groups).toHaveLength(1);
+    expect(workflow?.groups[0]?.preset).toBe("planning");
+    expect(
+      workflow
+        ? buildWorkflowSteps(workflow.groups[0]!, workflow.groups, workflow.root)
+            .map((step) => step.label)
+            .filter((label) => label?.startsWith("Planning phase"))
+        : [],
+    ).toEqual([
+      "Planning phase · Prepare shared worktree and App Dev Stack",
+      "Planning phase · Grill with Docs",
+      "Planning phase · Spec authoring",
+      "Planning phase · Ticket authoring",
+      "Planning phase · Ticket review and revision cycles",
+    ]);
+    expect(workflowNavigationIsAvailable(workflow)).toBe(true);
+    expect(workflowNavigationIsAvailable(ordinary)).toBe(false);
+  });
+
   it("resolves the same owner from a root and a deeply nested child", () => {
     const root = thread("root");
     const planning = thread("planning", {
@@ -506,6 +542,28 @@ describe("buildWorkflowViewModel", () => {
         .filter((entry) => entry.kind === "thread")
         .map((entry) => entry.row.thread.id),
     ).toEqual(["ticket-review", "worker"]);
+  });
+
+  it("marks which Engineering Workflow steps run in the main thread", () => {
+    const root = thread("root", { workflowPreset: "planning" });
+    const planningReview = thread("planning-review", {
+      parentThreadId: "root",
+      workflowRole: "planning-reviewer",
+      workflowContext: { workflowId: "planning-run", rootThreadId: "root" },
+    });
+    const model = buildWorkflowViewModel([root, planningReview]);
+    const groups = model.rootsByThreadKey.get("env:root")?.groups ?? [];
+    const planning = groups.find((group) => group.sourceId === "planning-run");
+    const steps = planning
+      ? buildWorkflowSteps(planning, groups, root, { flattenNestedWorkflows: true })
+      : [];
+    const byLabel = (needle: string) => steps.find((step) => step.label?.includes(needle));
+
+    // The Grill is a conversation in the main thread, while ticket review and
+    // the ticket waves get threads of their own.
+    expect(byLabel("Grill with Docs")?.usesRootThread).toBe(true);
+    expect(byLabel("Ticket review")?.usesRootThread).toBe(false);
+    expect(byLabel("Execute ticket waves")?.usesRootThread).toBe(false);
   });
 
   it("renders one bounded post-ticket sequence without internal fallback steps", () => {

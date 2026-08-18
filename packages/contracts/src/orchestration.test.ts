@@ -216,6 +216,24 @@ it.effect("decodes canonical Spec and Ticket commands and rejects legacy wire sh
   }),
 );
 
+it.effect("decodes restartable Planning stages", () =>
+  Effect.gen(function* () {
+    for (const stage of ["grill", "spec", "tickets"] as const) {
+      const command = yield* decodeOrchestrationCommand({
+        type: "thread.planning-stage.start",
+        commandId: `cmd-restart-${stage}`,
+        threadId: "thread-planning",
+        stage,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      });
+      assert.strictEqual(command.type, "thread.planning-stage.start");
+      if (command.type === "thread.planning-stage.start") {
+        assert.strictEqual(command.stage, stage);
+      }
+    }
+  }),
+);
+
 it.effect("decodes canonical Spec and Ticket events and rejects legacy event discriminants", () =>
   Effect.gen(function* () {
     const baseEvent = {
@@ -1413,5 +1431,46 @@ it.effect("project favicon overrides accept only supported image files", () =>
       }),
     );
     assert.strictEqual(invalid._tag, "Failure");
+  }),
+);
+
+it.effect("decodes workflow step model pins and their removal", () =>
+  Effect.gen(function* () {
+    const pinned = yield* decodeOrchestrationCommand({
+      type: "thread.workflow.step-model.set",
+      commandId: "cmd-pin-step",
+      threadId: "thread-workflow-root",
+      workflowPromptId: "implementation.code-review.codex",
+      modelSelection: { instanceId: "claudeAgent", model: "claude-opus-5" },
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(pinned.type, "thread.workflow.step-model.set");
+    if (pinned.type === "thread.workflow.step-model.set") {
+      assert.strictEqual(pinned.modelSelection?.model, "claude-opus-5");
+    }
+
+    const cleared = yield* decodeOrchestrationCommand({
+      type: "thread.workflow.step-model.set",
+      commandId: "cmd-clear-step",
+      threadId: "thread-workflow-root",
+      workflowPromptId: "implementation.code-review.codex",
+      modelSelection: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    if (cleared.type === "thread.workflow.step-model.set") {
+      assert.strictEqual(cleared.modelSelection, null);
+    }
+
+    const missingStep = yield* Effect.exit(
+      decodeOrchestrationCommand({
+        type: "thread.workflow.step-model.set",
+        commandId: "cmd-pin-no-step",
+        threadId: "thread-workflow-root",
+        workflowPromptId: "  ",
+        modelSelection: null,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    assert.strictEqual(missingStep._tag, "Failure");
   }),
 );

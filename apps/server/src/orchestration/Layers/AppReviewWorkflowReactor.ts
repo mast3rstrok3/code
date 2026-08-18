@@ -43,7 +43,8 @@ import {
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import {
-  resolveWorkflowSubagentModelSelection,
+  findWorkflowStepModels,
+  resolveWorkflowStepModelSelection,
   resolveWorkflowSubagentSpawnDefinition,
 } from "../workflowSubagents.ts";
 
@@ -429,8 +430,13 @@ const make = Effect.gen(function* () {
     const settings = yield* serverSettingsService.getSettings.pipe(
       Effect.orElseSucceed(() => undefined),
     );
-    return resolveWorkflowSubagentModelSelection({
+    // The controller carries the run's root thread id, so a pin the user set on
+    // the parent workflow reaches review threads spawned several levels down.
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    return resolveWorkflowStepModelSelection({
+      workflowPromptId,
       definition: resolveWorkflowSubagentSpawnDefinition(workflowPromptId),
+      stepModels: findWorkflowStepModels(parent, readModel.threads),
       parentModelSelection: parent.modelSelection,
       settings,
     }).modelSelection;

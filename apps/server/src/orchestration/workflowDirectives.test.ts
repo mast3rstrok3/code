@@ -236,6 +236,30 @@ ${JSON.stringify({
     );
   });
 
+  it("normalizes an empty App Review plan for ineligible tickets", () => {
+    const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
+${JSON.stringify({
+  type: "planning-tickets-artifact",
+  specId: "spec-1",
+  tickets: [
+    {
+      key: "ticket-1",
+      title: "Document checkout",
+      bodyMarkdown: "Update the checkout guide.",
+      plannedFileChanges: [{ path: "docs/checkout.md", action: "create" }],
+      dependencyKeys: [],
+      appReviewEligible: false,
+      appReviewPlanMarkdown: "",
+    },
+  ],
+})}
+\`\`\``);
+
+    NodeAssert.equal(result.kind, "parsed");
+    if (result.kind !== "parsed" || result.directive.type !== "planning-tickets-artifact") return;
+    NodeAssert.equal(result.directive.tickets[0]?.appReviewPlanMarkdown, null);
+  });
+
   it("parses ticket-scoped Code Review results", () => {
     const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
 {

@@ -61,7 +61,8 @@ import {
 } from "../workflowDirectives.ts";
 import {
   isWorkflowSubagentParentRoleAllowed,
-  resolveWorkflowSubagentModelSelection,
+  findWorkflowStepModels,
+  resolveWorkflowStepModelSelection,
   resolveWorkflowSubagentSpawnDefinition,
 } from "../workflowSubagents.ts";
 
@@ -1723,8 +1724,10 @@ const make = Effect.gen(function* () {
             return;
           }
 
-          const resolvedModel = resolveWorkflowSubagentModelSelection({
+          const resolvedModel = resolveWorkflowStepModelSelection({
+            workflowPromptId: definition.workflowPromptId,
             definition,
+            stepModels: findWorkflowStepModels(input.thread, readModel.threads),
             parentModelSelection: input.thread.modelSelection,
             settings,
           });

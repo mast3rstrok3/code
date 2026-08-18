@@ -5,11 +5,15 @@ import {
   type ProviderOptionSelection,
   ProviderDriverKind,
   type ServerSettings,
+  type WorkflowStepModelOverride,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 
 import { WORKFLOW_PROMPT_IDS } from "../provider/WorkflowPromptRegistry.ts";
-import { findEnabledProviderInstanceIdForDriver } from "../serverSettings.ts";
+import {
+  findEnabledProviderInstanceIdForDriver,
+  isProviderInstanceEnabled,
+} from "../serverSettings.ts";
 
 export type WorkflowSubagentParentWorkflowRole = OrchestrationThreadWorkflowRole | null;
 
@@ -240,6 +244,91 @@ export function resolveWorkflowSubagentModelSelection(input: {
 
   return {
     modelSelection: createModelSelection(instanceId, override.model, override.options),
+    overrideApplied: true,
+    fallbackDetail: null,
+  };
+}
+
+/**
+ * A thread as far as step pins are concerned: pins live on the workflow root,
+ * so any thread of a run can find them through its workflow context.
+ */
+export interface WorkflowStepModelThread {
+  readonly id: string;
+  readonly workflowContext?: { readonly rootThreadId: string } | null | undefined;
+  readonly workflowStepModels?: ReadonlyArray<WorkflowStepModelOverride> | undefined;
+}
+
+/**
+ * Find the step pins that govern `thread`'s run.
+ *
+ * Nested runs (an implementation orchestrator under a planning root) carry the
+ * root's id in their workflow context, so a spawn deep in the run still reads
+ * the pins the user set on the workflow they see in the panel.
+ */
+export function findWorkflowStepModels(
+  thread: WorkflowStepModelThread,
+  threads: ReadonlyArray<WorkflowStepModelThread>,
+): ReadonlyArray<WorkflowStepModelOverride> | undefined {
+  const rootThreadId = thread.workflowContext?.rootThreadId ?? thread.id;
+  if (rootThreadId === thread.id) return thread.workflowStepModels;
+  return (
+    threads.find((candidate) => candidate.id === rootThreadId)?.workflowStepModels ??
+    thread.workflowStepModels
+  );
+}
+
+/**
+ * Resolve the model a workflow step should run with, honoring the user's
+ * per-step pin ahead of any definition hardlock.
+ *
+ * Precedence is deliberate: a pin set from the Workflows panel is an explicit
+ * instruction and outranks the definition's hardlock, which in turn outranks
+ * the parent's inherited selection. A pin whose provider instance is no longer
+ * enabled is ignored, and `fallbackDetail` explains the demotion so callers can
+ * surface an activity instead of silently running the wrong model.
+ */
+export function resolveWorkflowStepModelSelection(input: {
+  readonly workflowPromptId: string;
+  readonly definition: WorkflowSubagentSpawnDefinition | undefined;
+  readonly stepModels: ReadonlyArray<WorkflowStepModelOverride> | undefined;
+  readonly parentModelSelection: ModelSelection;
+  readonly settings: ServerSettings | undefined;
+}): {
+  readonly modelSelection: ModelSelection;
+  readonly overrideApplied: boolean;
+  readonly fallbackDetail: string | null;
+} {
+  const pin = input.stepModels?.find((entry) => entry.workflowPromptId === input.workflowPromptId);
+  if (pin === undefined) {
+    return resolveWorkflowSubagentModelSelection({
+      definition: input.definition,
+      parentModelSelection: input.parentModelSelection,
+      settings: input.settings,
+    });
+  }
+
+  const inherited = resolveWorkflowSubagentModelSelection({
+    definition: input.definition,
+    parentModelSelection: input.parentModelSelection,
+    settings: input.settings,
+  });
+  if (input.settings === undefined) {
+    return {
+      modelSelection: inherited.modelSelection,
+      overrideApplied: false,
+      fallbackDetail: `Server settings could not be read; ignoring the pinned model '${pin.modelSelection.model}' for step '${input.workflowPromptId}'.`,
+    };
+  }
+  if (!isProviderInstanceEnabled(input.settings, pin.modelSelection.instanceId)) {
+    return {
+      modelSelection: inherited.modelSelection,
+      overrideApplied: false,
+      fallbackDetail: `The provider instance pinned for step '${input.workflowPromptId}' is no longer enabled; ignoring the pinned model '${pin.modelSelection.model}'.`,
+    };
+  }
+  return {
+    modelSelection: pin.modelSelection,
     overrideApplied: true,
     fallbackDetail: null,
   };

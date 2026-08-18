@@ -377,6 +377,14 @@ function buildPlanningSpecStagePrompt(): string {
   ].join("\n");
 }
 
+function buildPlanningGrillRestartPrompt(): string {
+  return [
+    "Restart the Planning Workflow's Engineering Grill from the existing conversation.",
+    "",
+    "Treat prior answers and repository findings as context, but reopen the design frontier so the user can revise decisions. Do not discard or revert any worktree changes. When the shared understanding is locked again, finish with the planning-grill-complete directive.",
+  ].join("\n");
+}
+
 function buildProductAutomaticEngineeringGrillStagePrompt(
   command: Extract<OrchestrationCommand, { type: "thread.planning-workflow.launch" }>,
 ): string {
@@ -1243,6 +1251,77 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       return events;
     }
 
+    case "thread.workflow.pause": {
+      yield* requireThreadNotArchived({ readModel, command, threadId: command.threadId });
+      const targets = collectHierarchyPostOrder(readModel.threads, command.threadId, {
+        getId: (thread) => thread.id,
+        getParentId: (thread) => thread.parentThreadId,
+      }).filter(
+        (thread) =>
+          thread.id === command.threadId ||
+          (thread.deletedAt === null && thread.archivedAt === null),
+      );
+      const events: PlannedOrchestrationEvent[] = [];
+      for (const thread of targets) {
+        if (thread.session !== null) {
+          events.push({
+            ...(yield* withEventBase({
+              aggregateKind: "thread",
+              aggregateId: thread.id,
+              occurredAt: command.createdAt,
+              commandId: command.commandId,
+            })),
+            type: "thread.session-stop-requested",
+            payload: { threadId: thread.id, createdAt: command.createdAt },
+          });
+        }
+        events.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: thread.id,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.settled",
+          payload: {
+            threadId: thread.id,
+            settledAt: thread.settledAt ?? command.createdAt,
+            updatedAt: thread.settledOverride === "settled" ? thread.updatedAt : command.createdAt,
+          },
+        });
+      }
+      return events;
+    }
+
+    case "thread.workflow.step-model.set": {
+      const thread = yield* requireThreadNotArchived({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      // Pins live on the workflow root so every step of the run reads one
+      // record, no matter which thread of the run the client had open.
+      const rootThreadId = thread.workflowContext?.rootThreadId ?? thread.id;
+      const rootThread =
+        readModel.threads.find((candidate) => candidate.id === rootThreadId) ?? thread;
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: rootThread.id,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.workflow-step-model-set",
+        payload: {
+          threadId: rootThread.id,
+          workflowPromptId: command.workflowPromptId,
+          modelSelection: command.modelSelection,
+          updatedAt: occurredAt,
+        },
+      };
+    }
+
     case "thread.unsettle": {
       const thread = yield* requireThreadNotArchived({
         readModel,
@@ -1795,16 +1874,35 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Thread '${command.threadId}' is not in Planning Workflow mode.`,
         });
       }
-      if (thread.planningWorkflow?.spec !== null && thread.planningWorkflow?.spec !== undefined) {
+      const spec = thread.planningWorkflow?.spec ?? null;
+      if (command.stage === "tickets" && spec === null) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Thread '${command.threadId}' already has a Spec for this Planning Workflow.`,
+          detail: `Thread '${command.threadId}' does not have a Spec for Planning Tickets.`,
         });
       }
 
       const crypto = yield* Crypto.Crypto;
       const messageUuid = yield* crypto.randomUUIDv4;
-      const messageId = MessageId.make(`message-planning-spec-stage-${messageUuid}`);
+      const messageId = MessageId.make(`message-planning-${command.stage}-stage-${messageUuid}`);
+      const stage =
+        command.stage === "grill"
+          ? "grill"
+          : command.stage === "spec"
+            ? "spec-authoring"
+            : "tickets-authoring";
+      const workflowPromptId =
+        command.stage === "grill"
+          ? WORKFLOW_PROMPT_IDS.planningGrillStageCodex
+          : command.stage === "spec"
+            ? WORKFLOW_PROMPT_IDS.planningSpecCodex
+            : WORKFLOW_PROMPT_IDS.planningTicketsCodex;
+      const promptText =
+        command.stage === "grill"
+          ? buildPlanningGrillRestartPrompt()
+          : command.stage === "spec"
+            ? buildPlanningSpecStagePrompt()
+            : buildPlanningTicketsStagePrompt(spec!);
       // The grill is the workflow's human gate; from Spec authoring on, the
       // thread runs unattended.
       const runtimeModeSetEvent: PlannedOrchestrationEvent = {
@@ -1832,7 +1930,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "thread.planning-stage-started",
         payload: {
           threadId: thread.id,
-          stage: "spec-authoring",
+          stage,
           startedAt: command.createdAt,
         },
       };
@@ -1849,7 +1947,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: thread.id,
           messageId,
           role: "user",
-          text: buildPlanningSpecStagePrompt(),
+          text: promptText,
           turnId: null,
           streaming: false,
           createdAt: command.createdAt,
@@ -1871,7 +1969,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           modelSelection: thread.modelSelection,
           runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
           interactionMode: thread.interactionMode,
-          workflowPromptId: WORKFLOW_PROMPT_IDS.planningSpecCodex,
+          workflowPromptId,
           createdAt: command.createdAt,
         },
       };
@@ -1926,7 +2024,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         artifactKind === "wayfinder-map"
           ? (thread.planningWorkflow?.wayfinderMap ?? null)
           : (thread.planningWorkflow?.spec ?? null);
-      if (artifactKind === "spec" && existingArtifact !== null) {
+      if (
+        artifactKind === "spec" &&
+        existingArtifact !== null &&
+        thread.planningWorkflow?.stage !== "spec-authoring"
+      ) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: `Thread '${command.threadId}' already has a Spec for this Planning Workflow.`,
@@ -3755,6 +3857,21 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (command.commandId.startsWith("server:")) {
+        let workflowAncestor: typeof targetThread | undefined = targetThread;
+        while (workflowAncestor !== undefined) {
+          if (workflowAncestor.settledOverride === "settled") {
+            return yield* new OrchestrationCommandInvariantError({
+              commandType: command.type,
+              detail: `workflow ancestor ${workflowAncestor.id} is paused`,
+            });
+          }
+          workflowAncestor =
+            workflowAncestor.parentThreadId === null
+              ? undefined
+              : readModel.threads.find((thread) => thread.id === workflowAncestor?.parentThreadId);
+        }
+      }
       const targetProject = readModel.projects.find(
         (project) => project.id === targetThread.projectId,
       );

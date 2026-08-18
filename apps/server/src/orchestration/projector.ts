@@ -48,6 +48,7 @@ import {
   ThreadPlanningWorkflowStageSetPayload,
   ThreadProposedPlanUpsertedPayload,
   ThreadRuntimeModeSetPayload,
+  ThreadWorkflowStepModelSetPayload,
   ThreadSettledPayload,
   ThreadPinnedPayload,
   ThreadPinReorderedPayload,
@@ -549,6 +550,40 @@ export function projectEvent(
             updatedAt: payload.updatedAt,
           }),
         })),
+      );
+
+    case "thread.workflow-step-model-set":
+      return decodeForEvent(
+        ThreadWorkflowStepModelSetPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((candidate) => candidate.id === payload.threadId);
+          if (thread === undefined) return nextBase;
+          const others = (thread.workflowStepModels ?? []).filter(
+            (entry) => entry.workflowPromptId !== payload.workflowPromptId,
+          );
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              workflowStepModels:
+                payload.modelSelection === null
+                  ? others
+                  : [
+                      ...others,
+                      {
+                        workflowPromptId: payload.workflowPromptId,
+                        modelSelection: payload.modelSelection,
+                      },
+                    ],
+              // A pin is configuration, not activity: leave updatedAt alone so
+              // the run does not jump around the inbox when a step is retuned.
+              updatedAt: thread.updatedAt,
+            }),
+          };
+        }),
       );
 
     case "thread.runtime-mode-set":
