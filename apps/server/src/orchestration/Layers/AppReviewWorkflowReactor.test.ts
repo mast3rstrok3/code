@@ -8,7 +8,9 @@ import {
   type AppReviewWorkflowRun,
 } from "@t3tools/contracts";
 
+import { WORKFLOW_NUDGE_EXHAUSTED_MESSAGE, type WorkflowNudgeThread } from "../workflowNudge.ts";
 import {
+  appReviewPhaseThreadState,
   findAppReviewParentTicket,
   nextAppReviewWorkflowAction,
   selectReviewRunToStart,
@@ -491,4 +493,59 @@ it("still finds the reviewed ticket when the workflow root does not own it", () 
     "TICKET-1",
   );
   expect(findAppReviewParentTicket(threads, "planning-ticket-missing", undefined)).toBeUndefined();
+});
+
+const blockedAt = "2026-01-01T00:00:00.000Z";
+const nudgeNowMs = Date.parse(blockedAt) + 60_000;
+
+function phaseThread(overrides: Partial<WorkflowNudgeThread> = {}): WorkflowNudgeThread {
+  return {
+    id: "thread-reviewer",
+    parentThreadId: "thread-controller",
+    settledOverride: null,
+    workflowRole: "app-review-reviewer",
+    deletedAt: null,
+    session: {
+      status: "stopped",
+      activeTurnId: null,
+      lastError: "Claude AI usage limit reached",
+      updatedAt: blockedAt,
+    },
+    latestTurn: { state: "error" },
+    ...overrides,
+  };
+}
+
+const phaseState = (thread: WorkflowNudgeThread) =>
+  appReviewPhaseThreadState({ threads: [thread], thread, nowMs: nudgeNowMs });
+
+it("waits out a provider failure on the phase thread instead of failing the run", () => {
+  // One API error or usage limit used to cost the whole run, and with it a
+  // repair cycle the user paid for.
+  expect(phaseState(phaseThread())).toBe("nudging");
+});
+
+it("fails the run once nudging gives up or nobody is nudging", () => {
+  const exhausted = phaseThread({
+    session: {
+      status: "error",
+      activeTurnId: null,
+      lastError: WORKFLOW_NUDGE_EXHAUSTED_MESSAGE,
+      updatedAt: blockedAt,
+    },
+  });
+  // A human pressing Stop is not a provider failure, and is never nudged.
+  const interrupted = phaseThread({ latestTurn: { state: "interrupted" } });
+
+  expect(phaseState(exhausted)).toBe("failed");
+  expect(phaseState(interrupted)).toBe("failed");
+});
+
+it("leaves a working phase thread alone", () => {
+  const working = phaseThread({
+    session: { status: "running", activeTurnId: "turn-1", lastError: null, updatedAt: blockedAt },
+    latestTurn: { state: "running" },
+  });
+
+  expect(phaseState(working)).toBe("working");
 });

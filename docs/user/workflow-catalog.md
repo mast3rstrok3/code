@@ -62,6 +62,12 @@ Use **Pause** in the workflow panel to stop every active agent session in that w
 
 **Resume** in the same place picks the run back up at the step it stopped at, on the same worktrees, branches, and App Dev Stack, with fresh agents on whatever models the steps are pinned to now. The step the run stopped at also offers **Start step again** in its own settings; every other step says where the run is paused instead.
 
+### When a provider fails or your plan hits its limit
+
+Provider errors and plan usage limits — Claude's rolling five-hour window is the usual one — stop a turn mid-step. A workflow treats that as blocked, not finished. It keeps the same thread, with everything it had already worked out, and asks it to continue: once about a minute later, then every ten minutes for as long as the block lasts, and again whenever the T3 Code server restarts. A run stopped by a five-hour limit therefore picks itself up within ten minutes of the limit lifting, with no action from you.
+
+Nothing is nudged while it is working, and nothing is nudged inside a paused run. The step shows each retry in its thread, so a long block reads as "still waiting" rather than silence. If a thread stays blocked all day the workflow stops retrying and surfaces the step for you, exactly as it does for any other failure.
+
 ### Choosing a model per step
 
 By default every step runs on the model the workflow was started with. There are three ways to change that. **Settings → Workflows → Default step models** sets the standing choice every new run starts from. Inside a run, **Models** at the top of the Workflows panel lays out the whole run at once, and each step's own settings button tunes one step; those two edit the same per-run pins, and a per-run pin wins over the default.

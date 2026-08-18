@@ -51,6 +51,10 @@ import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQu
 import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
 import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
 import {
+  WORKFLOW_NUDGE_ACTIVITY_KIND,
+  WORKFLOW_NUDGE_EXHAUSTED_MESSAGE,
+} from "../workflowNudge.ts";
+import {
   makeStaleTurnReconcilerLive,
   STALE_TURN_RESUME_ACTIVITY_KIND,
   type StaleTurnReconcilerLiveOptions,
@@ -292,6 +296,67 @@ function resumeMessages(system: ReconcilerSystem, threadId: ThreadId) {
       (thread?.messages ?? []).filter((message) => message.text.includes(RESUME_MESSAGE_MARKER)),
     ),
   );
+}
+
+const NUDGE_MESSAGE_MARKER = "stopped on a provider failure";
+
+function nudgeActivities(system: ReconcilerSystem, threadId: ThreadId) {
+  return getThread(system, threadId).pipe(
+    Effect.map((thread) =>
+      (thread?.activities ?? []).filter(
+        (activity) => activity.kind === WORKFLOW_NUDGE_ACTIVITY_KIND,
+      ),
+    ),
+  );
+}
+
+function nudgeMessages(system: ReconcilerSystem, threadId: ThreadId) {
+  return getThread(system, threadId).pipe(
+    Effect.map((thread) =>
+      (thread?.messages ?? []).filter((message) => message.text.includes(NUDGE_MESSAGE_MARKER)),
+    ),
+  );
+}
+
+/**
+ * Put a thread where a provider failure leaves it: the turn ran, failed, and
+ * the session went down with it.
+ */
+function blockThreadOnFailedTurn(
+  system: ReconcilerSystem,
+  input: {
+    readonly threadId: ThreadId;
+    readonly turnId: TurnId;
+    readonly tag: string;
+    readonly blockedAt?: string;
+  },
+) {
+  return Effect.gen(function* () {
+    const blockedAt = input.blockedAt ?? now;
+    yield* setThreadSession(system, {
+      threadId: input.threadId,
+      status: "running",
+      activeTurnId: input.turnId,
+      updatedAt: blockedAt,
+      tag: `${input.tag}-running`,
+    });
+    yield* setThreadSession(system, {
+      threadId: input.threadId,
+      status: "error",
+      activeTurnId: null,
+      updatedAt: blockedAt,
+      tag: `${input.tag}-failed`,
+    });
+    // Claude tears the session down after an API failure; the failed turn is
+    // what stays behind.
+    yield* setThreadSession(system, {
+      threadId: input.threadId,
+      status: "stopped",
+      activeTurnId: null,
+      updatedAt: blockedAt,
+      tag: `${input.tag}-stopped`,
+    });
+  });
 }
 
 function setThreadSession(
@@ -1440,6 +1505,144 @@ describe("StaleTurnReconciler", () => {
           expect(settledRun?.ticketStates[0]?.status).toBe("running");
         }),
       { reconciler: bootOnlyOptions },
+    ),
+  );
+
+  it.live("nudges a worker blocked by a failed turn instead of replacing it", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          const workerThreadId = requireWorkerThreadId(run);
+          yield* blockThreadOnFailedTurn(system, {
+            threadId: workerThreadId,
+            turnId: TurnId.make("turn-nudge-worker"),
+            tag: "nudge-worker",
+          });
+
+          yield* system.reconciler.start();
+          yield* waitUntil(
+            nudgeActivities(system, workerThreadId).pipe(
+              Effect.map((activities) => activities.length === 1),
+            ),
+            "worker nudge activity",
+          );
+          yield* system.reactor.drain;
+
+          const nudges = yield* nudgeActivities(system, workerThreadId);
+          const payload = nudges[0]?.payload as Record<string, unknown>;
+          expect(payload["attempt"]).toBe(1);
+          expect(payload["workflowPromptId"]).toBe(WORKFLOW_PROMPT_IDS.implementationTddCodex);
+          expect(yield* nudgeMessages(system, workerThreadId)).toHaveLength(1);
+          // A nudge is not a settle: the provider's own failure state stands.
+          expect(yield* resumeActivities(system, workerThreadId)).toHaveLength(0);
+
+          const nudgedRun = yield* getRun(system, run.id);
+          expect(nudgedRun?.status).toBe("running");
+          expect(nudgedRun?.ticketStates[0]?.status).toBe("running");
+          expect(nudgedRun?.ticketStates[0]?.workerThreadId).toBe(workerThreadId);
+        }),
+      { reconciler: bootOnlyOptions },
+    ),
+  );
+
+  it.live("never nudges a thread that is still running", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          const workerThreadId = requireWorkerThreadId(run);
+          yield* setThreadSession(system, {
+            threadId: workerThreadId,
+            status: "running",
+            activeTurnId: TurnId.make("turn-nudge-live-worker"),
+            tag: "nudge-live-worker",
+          });
+          yield* Ref.set(system.liveSessions, [
+            {
+              threadId: workerThreadId,
+              provider: ProviderDriverKind.make("codex"),
+              providerInstanceId: ProviderInstanceId.make("codex"),
+              status: "running",
+              driver: ProviderDriverKind.make("codex"),
+            } as unknown as ProviderSession,
+          ]);
+
+          // The sentinel shares the sweep with the worker, so its settle proves
+          // the pass ran and left the working thread untouched.
+          const sentinelThreadId = ThreadId.make("thread-nudge-sentinel");
+          yield* createPlainThread(system, sentinelThreadId, "nudge-sentinel");
+          yield* setThreadSession(system, {
+            threadId: sentinelThreadId,
+            status: "running",
+            activeTurnId: TurnId.make("turn-nudge-sentinel"),
+            tag: "nudge-sentinel",
+          });
+
+          yield* system.reconciler.start();
+          yield* waitUntil(
+            sessionStatus(system, sentinelThreadId).pipe(
+              Effect.map((status) => status === "error"),
+            ),
+            "sentinel session to settle",
+          );
+          yield* system.reactor.drain;
+
+          expect(yield* nudgeActivities(system, workerThreadId)).toHaveLength(0);
+          expect(yield* nudgeMessages(system, workerThreadId)).toHaveLength(0);
+          expect(yield* sessionStatus(system, workerThreadId)).toBe("running");
+        }),
+      { reconciler: bootOnlyOptions },
+    ),
+  );
+
+  it.live("gives up after the nudge budget and hands the thread back to its stage", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          const workerThreadId = requireWorkerThreadId(run);
+          // Blocked long enough ago to be due for its next nudge, recently
+          // enough that the stage is still deferring to it.
+          const blockedAt = DateTime.formatIso(
+            DateTime.subtract(yield* DateTime.now, { minutes: 5 }),
+          );
+          yield* blockThreadOnFailedTurn(system, {
+            threadId: workerThreadId,
+            turnId: TurnId.make("turn-nudge-exhaust"),
+            tag: "nudge-exhaust",
+            blockedAt,
+          });
+
+          yield* system.reconciler.start();
+          yield* waitUntil(
+            getThread(system, workerThreadId).pipe(
+              Effect.map(
+                (thread) => thread?.session?.lastError === WORKFLOW_NUDGE_EXHAUSTED_MESSAGE,
+              ),
+            ),
+            "nudge budget to be exhausted",
+          );
+          yield* system.reactor.drain;
+
+          expect(yield* nudgeActivities(system, workerThreadId)).toHaveLength(1);
+          const thread = yield* getThread(system, workerThreadId);
+          const reported = (thread?.activities ?? []).filter(
+            (activity) => activity.kind === "implementation-worker-result",
+          );
+          expect(reported).toHaveLength(1);
+          const failure = reported[0]?.payload as Record<string, unknown> | undefined;
+          expect(failure?.["status"]).toBe("failed");
+        }),
+      {
+        reconciler: {
+          sweepIntervalMs: 25,
+          graceMs: 0,
+          confirmDelayMs: 0,
+          maxNudgeAttempts: 1,
+          nudgeIntervalMs: 0,
+        },
+      },
     ),
   );
 });

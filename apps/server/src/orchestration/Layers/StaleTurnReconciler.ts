@@ -32,11 +32,24 @@ import {
   StaleTurnReconciler,
   type StaleTurnReconcilerShape,
 } from "../Services/StaleTurnReconciler.ts";
+import {
+  isAwaitingWorkflowNudge,
+  isWorkflowNudgeCandidate,
+  workflowNudgeDelayMs,
+  WORKFLOW_NUDGE_ACTIVITY_KIND,
+  WORKFLOW_NUDGE_EXHAUSTED_MESSAGE,
+  WORKFLOW_NUDGE_INTERVAL_MS,
+  WORKFLOW_NUDGE_MAX_ATTEMPTS,
+} from "../workflowNudge.ts";
 
 const DEFAULT_SWEEP_INTERVAL_MS = 60 * 1000;
 const DEFAULT_GRACE_MS = 60 * 1000;
 const DEFAULT_CONFIRM_DELAY_MS = 15 * 1000;
 const DEFAULT_MAX_RESUME_ATTEMPTS = 2;
+
+/** The two App Review phase skills, mirrored from the App Review reactor. */
+const APP_REVIEW_TO_TICKETS_SKILL_ID = "matt-pocock.to-tickets";
+const APP_REVIEW_IMPLEMENT_SKILL_ID = "matt-pocock.implement";
 
 const STALE_TURN_ERROR_MESSAGE =
   "Provider session lost while a turn was running; settled by the stale-turn reconciler.";
@@ -45,6 +58,14 @@ export const STALE_TURN_RESUME_ACTIVITY_KIND = "stale-turn-resumed";
 
 const STALE_TURN_RESUME_MESSAGE =
   "Your previous turn was interrupted by a server restart. The provider session has been resumed with your prior context. Continue where you left off and finish by emitting your required directive.";
+
+/**
+ * The reconciler's second job: a turn that *failed* leaves the thread idle
+ * rather than orphaned, and for the common causes — an API error, a plan usage
+ * limit — the fix is to wait and ask again. See `../workflowNudge.ts`.
+ */
+const WORKFLOW_NUDGE_MESSAGE =
+  "Your previous turn stopped on a provider failure — an API error, or a plan usage limit that has since had time to lift. Nothing else about the work changed. Pick up exactly where you left off and finish by emitting your required directive.";
 
 /**
  * Workflow roles whose orphaned turns are resumed autonomously instead of
@@ -68,15 +89,28 @@ export interface StaleTurnReconcilerLiveOptions {
   readonly graceMs?: number;
   readonly confirmDelayMs?: number;
   readonly maxResumeAttempts?: number;
+  readonly nudgeIntervalMs?: number;
+  readonly maxNudgeAttempts?: number;
 }
 
 interface SweepOptions {
   readonly graceMs: number;
   readonly confirmDelayMs: number;
+  /** Spacing between nudges for a thread that stays blocked. */
+  readonly nudgeIntervalMs: number;
+  /**
+   * Whether to nudge threads that have been blocked for longer than the
+   * deferral window. Only the boot pass does: in steady state a thread nobody
+   * has nudged for that long is one nobody is waiting on, and re-reading every
+   * long-dead thread's detail each minute costs more than it can ever recover.
+   * A server that was down for hours, though, is exactly where a run stopped by
+   * a usage limit is waiting.
+   */
+  readonly nudgeLongBlocked: boolean;
 }
 
 interface StaleTurnCandidate {
-  readonly kind: "running" | "resumable-error";
+  readonly kind: "running" | "resumable-error" | "nudge";
   readonly threadId: ThreadId;
   readonly pinnedTurnId: TurnId | null;
 }
@@ -133,10 +167,10 @@ function pinTurnId(thread: OrchestrationThread): TurnId | null {
 }
 
 /**
- * Where a resumed turn should restart, per role. Doubles as the guard shared
- * by resume, budget-fail, and the safety net: a null target means the workflow
- * has moved past this thread (or the role is not autonomous) and the thread
- * settles without any resume artifacts.
+ * Where a resumed turn should restart, per role. Doubles as the guard shared by
+ * resume, nudge, budget-fail, and the safety net: a null target means the
+ * workflow has moved past this thread (or the role is not autonomous), so the
+ * thread settles without any resume artifacts and is never nudged.
  */
 function resolveResumeTarget(
   readModel: OrchestrationReadModel,
@@ -201,11 +235,47 @@ function resolveResumeTarget(
           candidate.status === "qa-reviewing" &&
           candidate.appReviewIds.length > 0,
       );
-      if (run === undefined) return null;
+      // A ticket-level review runs while its implementation run is still
+      // `running`, so the nested App Review run is the other place this thread
+      // can be the live reviewer.
+      const nestedRun = (readModel.appReviewWorkflowRuns ?? []).find(
+        (candidate) => candidate.status === "running" && candidate.activeThreadId === thread.id,
+      );
+      if (run === undefined && nestedRun === undefined) return null;
       return {
         workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
         interactionMode: "implementation-workflow",
       };
+    }
+    case "implementation-change-request-babysitter": {
+      const run = readModel.implementationRuns.find(
+        (candidate) =>
+          candidate.orchestratorThreadId === thread.parentThreadId &&
+          candidate.status === "babysitting-change-request" &&
+          candidate.activeChangeRequestBabysitterThreadId === thread.id,
+      );
+      if (run === undefined) return null;
+      return {
+        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+        interactionMode: "implementation-workflow",
+      };
+    }
+    // The nested App Review workflow drives one thread per phase and records it
+    // on the run, so the run's own `activeThreadId` is the whole test.
+    case "app-review-reviewer":
+    case "app-review-planner":
+    case "app-review-fixer": {
+      const run = (readModel.appReviewWorkflowRuns ?? []).find(
+        (candidate) => candidate.status === "running" && candidate.activeThreadId === thread.id,
+      );
+      if (run === undefined) return null;
+      const workflowPromptId =
+        thread.workflowRole === "app-review-reviewer"
+          ? WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex
+          : thread.workflowRole === "app-review-planner"
+            ? APP_REVIEW_TO_TICKETS_SKILL_ID
+            : APP_REVIEW_IMPLEMENT_SKILL_ID;
+      return { workflowPromptId, interactionMode: "default" };
     }
     case "planning-orchestrator": {
       const stage = thread.planningWorkflow?.stage;
@@ -305,6 +375,18 @@ function countResumeActivities(detail: OrchestrationThread): number {
     .length;
 }
 
+function nudgeActivities(detail: OrchestrationThread) {
+  return detail.activities.filter((activity) => activity.kind === WORKFLOW_NUDGE_ACTIVITY_KIND);
+}
+
+/** When the last nudge went out, or null when none has. */
+function lastNudgeAtMs(detail: OrchestrationThread): number | null {
+  const last = nudgeActivities(detail).at(-1);
+  if (last === undefined) return null;
+  const parsed = Date.parse(last.createdAt);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
 const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
   Effect.gen(function* () {
     const orchestrationEngine = yield* OrchestrationEngineService;
@@ -320,6 +402,8 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
       1,
       options?.maxResumeAttempts ?? DEFAULT_MAX_RESUME_ATTEMPTS,
     );
+    const nudgeIntervalMs = Math.max(0, options?.nudgeIntervalMs ?? WORKFLOW_NUDGE_INTERVAL_MS);
+    const maxNudgeAttempts = Math.max(1, options?.maxNudgeAttempts ?? WORKFLOW_NUDGE_MAX_ATTEMPTS);
 
     const staleTurnCommandId = (tag: string, threadId: ThreadId, pinnedTurnId: TurnId | null) =>
       pinnedTurnId !== null
@@ -565,17 +649,43 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
       },
     );
 
+    /**
+     * A binding still marked running outlives the provider session it names, so
+     * the next turn start would try to reuse a session that is gone. Both the
+     * resume and the nudge paths clear it before starting a turn.
+     */
+    const stopBinding = (threadId: ThreadId) =>
+      directory.getBinding(threadId).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.void,
+            onSome: (binding) =>
+              binding.status === "stopped"
+                ? Effect.void
+                : directory.upsert({ ...binding, status: "stopped" }),
+          }),
+        ),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("stale-turn.reconciler.binding-hygiene-failed", {
+            threadId,
+            cause,
+          }),
+        ),
+      );
+
     const settleSessionAndBinding = Effect.fn("StaleTurnReconciler.settleSessionAndBinding")(
       function* (input: {
         readonly thread: OrchestrationThread;
         readonly pinnedTurnId: TurnId | null;
         readonly updatedAt: string;
+        readonly lastError?: string;
+        readonly tag?: string;
       }) {
         const { thread, pinnedTurnId, updatedAt } = input;
 
         yield* orchestrationEngine.dispatch({
           type: "thread.session.set",
-          commandId: yield* staleTurnCommandId("settle", thread.id, pinnedTurnId),
+          commandId: yield* staleTurnCommandId(input.tag ?? "settle", thread.id, pinnedTurnId),
           threadId: thread.id,
           session: {
             threadId: thread.id,
@@ -586,29 +696,13 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
               : {}),
             runtimeMode: thread.session?.runtimeMode ?? thread.runtimeMode,
             activeTurnId: null,
-            lastError: STALE_TURN_ERROR_MESSAGE,
+            lastError: input.lastError ?? STALE_TURN_ERROR_MESSAGE,
             updatedAt,
           },
           createdAt: updatedAt,
         });
 
-        yield* directory.getBinding(thread.id).pipe(
-          Effect.flatMap(
-            Option.match({
-              onNone: () => Effect.void,
-              onSome: (binding) =>
-                binding.status === "stopped"
-                  ? Effect.void
-                  : directory.upsert({ ...binding, status: "stopped" }),
-            }),
-          ),
-          Effect.catchCause((cause) =>
-            Effect.logWarning("stale-turn.reconciler.binding-hygiene-failed", {
-              threadId: thread.id,
-              cause,
-            }),
-          ),
-        );
+        yield* stopBinding(thread.id);
       },
     );
 
@@ -687,6 +781,143 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
         maxAttempts: maxResumeAttempts,
       });
     });
+
+    /**
+     * Re-prompt a blocked thread in place. Unlike a resume there is nothing to
+     * settle — the failed turn already left the session idle — so the nudge is
+     * one activity (the budget's durable record) and one turn.
+     */
+    const nudgeThread = Effect.fn("StaleTurnReconciler.nudgeThread")(function* (input: {
+      readonly thread: OrchestrationThread;
+      readonly blockedTurnId: TurnId;
+      readonly target: ResumeTarget;
+      readonly attempt: number;
+      readonly updatedAt: string;
+    }) {
+      const { thread, blockedTurnId, target, attempt, updatedAt } = input;
+      const nudgeMessageId = MessageId.make(`message-workflow-nudge-${thread.id}-${attempt}`);
+      const nudgeCommandId = (tag: string) =>
+        CommandId.make(`server:workflow-nudge:${tag}:${thread.id}:${attempt}`);
+
+      yield* orchestrationEngine.dispatch({
+        type: "thread.activity.append",
+        commandId: nudgeCommandId("nudged"),
+        threadId: thread.id,
+        activity: {
+          id: EventId.make(yield* crypto.randomUUIDv4),
+          tone: "info",
+          kind: WORKFLOW_NUDGE_ACTIVITY_KIND,
+          summary: `Nudged after a failed turn (attempt ${attempt}/${maxNudgeAttempts})`,
+          payload: {
+            type: WORKFLOW_NUDGE_ACTIVITY_KIND,
+            attempt,
+            maxAttempts: maxNudgeAttempts,
+            blockedTurnId,
+            nudgeMessageId,
+            workflowPromptId: target.workflowPromptId,
+            reason: "turn-failed",
+            blockedError: thread.session?.lastError ?? null,
+            nudgedAt: updatedAt,
+          },
+          turnId: null,
+          createdAt: updatedAt,
+        },
+        createdAt: updatedAt,
+      });
+
+      yield* stopBinding(thread.id);
+
+      yield* orchestrationEngine.dispatch({
+        type: "thread.turn.start",
+        commandId: nudgeCommandId("turn"),
+        threadId: thread.id,
+        message: {
+          messageId: nudgeMessageId,
+          role: "user",
+          text: appendWorkflowSkillCommandSection(WORKFLOW_NUDGE_MESSAGE, target.workflowPromptId),
+          attachments: [],
+        },
+        ...(target.workflowPromptId !== null ? { workflowPromptId: target.workflowPromptId } : {}),
+        runtimeMode: thread.session?.runtimeMode ?? thread.runtimeMode,
+        interactionMode: target.interactionMode,
+        ...(target.sourceProposedPlan !== undefined
+          ? { sourceProposedPlan: target.sourceProposedPlan }
+          : {}),
+        createdAt: updatedAt,
+      });
+
+      yield* Effect.logInfo("stale-turn.reconciler.nudged", {
+        threadId: thread.id,
+        turnId: blockedTurnId,
+        workflowRole: thread.workflowRole,
+        attempt,
+        maxAttempts: maxNudgeAttempts,
+      });
+    });
+
+    /**
+     * One blocked thread, one decision per sweep: not due yet, nudge, or give
+     * up. Giving up hands the thread back to its stage owner through the same
+     * failure directives an exhausted resume budget uses, and marks the session
+     * so the owner stops deferring immediately.
+     */
+    const reconcileNudgeCandidate = Effect.fn("StaleTurnReconciler.reconcileNudgeCandidate")(
+      function* (input: {
+        readonly readModel: OrchestrationReadModel;
+        readonly thread: OrchestrationThread;
+        readonly blockedTurnId: TurnId;
+        readonly detail: OrchestrationThread;
+        readonly nudgeIntervalMs: number;
+        readonly nowMs: number;
+        readonly updatedAt: string;
+      }) {
+        const { readModel, thread, blockedTurnId, detail, updatedAt } = input;
+        const target = resolveResumeTarget(readModel, thread);
+        // The workflow has moved past this thread; its stage owner is the one
+        // that decides what happens next.
+        if (target === null) return false;
+
+        const priorAttempts = nudgeActivities(detail).length;
+        if (priorAttempts >= maxNudgeAttempts) {
+          yield* propagateWorkflowFailure({
+            readModel,
+            thread,
+            pinnedTurnId: blockedTurnId,
+            createdAt: updatedAt,
+          });
+          yield* settleSessionAndBinding({
+            thread,
+            pinnedTurnId: blockedTurnId,
+            updatedAt,
+            lastError: WORKFLOW_NUDGE_EXHAUSTED_MESSAGE,
+            tag: "nudge-exhausted",
+          });
+          yield* Effect.logInfo("stale-turn.reconciler.nudges-exhausted", {
+            threadId: thread.id,
+            turnId: blockedTurnId,
+            workflowRole: thread.workflowRole,
+            attempts: priorAttempts,
+          });
+          return true;
+        }
+
+        const lastNudge = lastNudgeAtMs(detail);
+        const dueAfterMs =
+          lastNudge === null
+            ? Date.parse(thread.session?.updatedAt ?? "") + workflowNudgeDelayMs(0)
+            : lastNudge + input.nudgeIntervalMs;
+        if (!Number.isNaN(dueAfterMs) && input.nowMs < dueAfterMs) return false;
+
+        yield* nudgeThread({
+          thread,
+          blockedTurnId,
+          target,
+          attempt: priorAttempts + 1,
+          updatedAt,
+        });
+        return true;
+      },
+    );
 
     const reconcileCandidate = Effect.fn("StaleTurnReconciler.reconcileCandidate")(
       function* (input: {
@@ -769,29 +1000,54 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
         const candidates: StaleTurnCandidate[] = [];
         for (const thread of readModel.threads) {
           if (thread.deletedAt !== null) continue;
-          if (liveThreadIds.has(thread.id)) continue;
 
-          const running = hasRunningTurnSignature(thread);
-          if (!running && !hasResumableErrorSignature(readModel, thread)) continue;
+          const sessionLost = !liveThreadIds.has(thread.id);
+          const running = sessionLost && hasRunningTurnSignature(thread);
+          const resumableError =
+            sessionLost && !running && hasResumableErrorSignature(readModel, thread);
 
-          if (sweepOptions.graceMs > 0) {
-            const referenceIso = thread.session?.updatedAt ?? thread.updatedAt;
-            const referenceMs = Date.parse(referenceIso);
-            if (Number.isNaN(referenceMs)) {
-              yield* Effect.logWarning("stale-turn.reconciler.invalid-session-updated-at", {
-                threadId: thread.id,
-                updatedAt: referenceIso,
-              });
-              continue;
+          if (running || resumableError) {
+            if (sweepOptions.graceMs > 0) {
+              const referenceIso = thread.session?.updatedAt ?? thread.updatedAt;
+              const referenceMs = Date.parse(referenceIso);
+              if (Number.isNaN(referenceMs)) {
+                yield* Effect.logWarning("stale-turn.reconciler.invalid-session-updated-at", {
+                  threadId: thread.id,
+                  updatedAt: referenceIso,
+                });
+                continue;
+              }
+              if (now - referenceMs < sweepOptions.graceMs) continue;
             }
-            if (now - referenceMs < sweepOptions.graceMs) continue;
+
+            candidates.push(
+              running
+                ? { kind: "running", threadId: thread.id, pinnedTurnId: pinTurnId(thread) }
+                : { kind: "resumable-error", threadId: thread.id, pinnedTurnId: null },
+            );
+            continue;
           }
 
-          candidates.push(
-            running
-              ? { kind: "running", threadId: thread.id, pinnedTurnId: pinTurnId(thread) }
-              : { kind: "resumable-error", threadId: thread.id, pinnedTurnId: null },
-          );
+          // A terminated failed turn is a blocked thread whatever the provider
+          // did with its session afterwards — Claude tears the session down
+          // after an API error, others leave it idle — so this is decided
+          // independently of the live session list.
+          const nudgeable = sweepOptions.nudgeLongBlocked
+            ? isWorkflowNudgeCandidate({ threads: readModel.threads, thread })
+            : isAwaitingWorkflowNudge({ threads: readModel.threads, thread, nowMs: now });
+          if (!nudgeable) continue;
+          const blockedTurnId = thread.latestTurn?.turnId ?? null;
+          if (blockedTurnId === null) continue;
+          // Cheap spacing pre-filter, so the common case costs no detail read:
+          // every nudge restarts the session clock, so a thread that just
+          // failed cannot be due for its next one.
+          const blockedSinceMs = Date.parse(thread.session?.updatedAt ?? "");
+          const tooSoon =
+            !sweepOptions.nudgeLongBlocked &&
+            !Number.isNaN(blockedSinceMs) &&
+            now - blockedSinceMs < workflowNudgeDelayMs(0);
+          if (tooSoon) continue;
+          candidates.push({ kind: "nudge", threadId: thread.id, pinnedTurnId: blockedTurnId });
         }
 
         if (candidates.length === 0) {
@@ -811,6 +1067,46 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
         );
         const updatedAt = DateTime.formatIso(yield* DateTime.now);
 
+        /**
+         * Nudge a blocked thread, reusing an already-loaded detail when the
+         * caller has one. Returns whether it acted.
+         */
+        const nudgeBlockedThread = (
+          thread: OrchestrationThread,
+          loadedDetail?: OrchestrationThread,
+        ) =>
+          Effect.gen(function* () {
+            if (!isWorkflowNudgeCandidate({ threads: confirmedModel.threads, thread })) {
+              return false;
+            }
+            const blockedTurnId = thread.latestTurn?.turnId ?? null;
+            if (blockedTurnId === null) return false;
+            const detail =
+              loadedDetail ??
+              Option.getOrUndefined(
+                yield* projectionSnapshotQuery
+                  .getThreadDetailById(thread.id)
+                  .pipe(Effect.orElseSucceed(() => Option.none<OrchestrationThread>())),
+              );
+            if (detail === undefined) return false;
+            return yield* reconcileNudgeCandidate({
+              readModel: confirmedModel,
+              thread,
+              blockedTurnId,
+              detail,
+              nudgeIntervalMs: sweepOptions.nudgeIntervalMs,
+              nowMs: yield* Clock.currentTimeMillis,
+              updatedAt,
+            });
+          }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("stale-turn.reconciler.nudge-failed", {
+                threadId: thread.id,
+                cause,
+              }).pipe(Effect.as(false)),
+            ),
+          );
+
         let settledCount = 0;
         for (const candidate of candidates) {
           const thread = confirmedModel.threads.find((entry) => entry.id === candidate.threadId);
@@ -819,6 +1115,14 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
 
           let pinnedTurnId: TurnId | null = candidate.pinnedTurnId;
           let detail: OrchestrationThread | undefined;
+
+          if (candidate.kind === "nudge") {
+            // A new turn since detection means the thread is no longer blocked
+            // on the failure this candidate was raised for.
+            if (thread.latestTurn?.turnId !== candidate.pinnedTurnId) continue;
+            if (yield* nudgeBlockedThread(thread)) settledCount += 1;
+            continue;
+          }
 
           if (candidate.kind === "running") {
             if (!hasRunningTurnSignature(thread)) continue;
@@ -831,9 +1135,14 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
                 .getThreadDetailById(thread.id)
                 .pipe(Effect.orElseSucceed(() => Option.none<OrchestrationThread>())),
             );
-            // Containment: only re-inspect threads the reconciler already
-            // resumed at least once.
-            if (detail === undefined || countResumeActivities(detail) === 0) continue;
+            if (detail === undefined) continue;
+            // Containment: the fast lane only re-inspects threads it already
+            // resumed. Any other blocked thread belongs to the nudge path,
+            // which is patient where this one converges.
+            if (countResumeActivities(detail) === 0) {
+              if (yield* nudgeBlockedThread(thread, detail)) settledCount += 1;
+              continue;
+            }
             // The settle nulls the snapshot's latestTurn join, so a crashed
             // resume falls back to the pin recorded on the resume activity.
             pinnedTurnId =
@@ -892,10 +1201,21 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
           Effect.gen(function* () {
             // Boot pass: nothing is rehydrated at startup, so every running
             // session in the read model is an orphan — no grace, no confirm.
-            yield* safeSweep({ graceMs: 0, confirmDelayMs: 0 });
-            yield* safeSweep({ graceMs, confirmDelayMs }).pipe(
-              Effect.repeat(Schedule.spaced(Duration.millis(sweepIntervalMs))),
-            );
+            // The same pass retries threads a usage limit stopped before the
+            // restart: a fresh server is the best moment to find out whether
+            // the limit has lifted, so nudge spacing does not apply here.
+            yield* safeSweep({
+              graceMs: 0,
+              confirmDelayMs: 0,
+              nudgeIntervalMs: 0,
+              nudgeLongBlocked: true,
+            });
+            yield* safeSweep({
+              graceMs,
+              confirmDelayMs,
+              nudgeIntervalMs,
+              nudgeLongBlocked: false,
+            }).pipe(Effect.repeat(Schedule.spaced(Duration.millis(sweepIntervalMs))));
           }),
         );
 
@@ -904,6 +1224,8 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
           graceMs,
           confirmDelayMs,
           maxResumeAttempts,
+          nudgeIntervalMs,
+          maxNudgeAttempts,
         });
       });
 

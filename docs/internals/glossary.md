@@ -213,6 +213,10 @@ The final automated review stage: one comprehensive review-and-fix pass along th
 
 One orchestrated execution of a Spec's tickets: a dedicated worktree, dependency-chained TDD workers, programmatic merges, app review, and code review, driven by [ImplementationWorkflowReactor.ts][29].
 
+#### Workflow nudge
+
+The retry a blocked workflow thread gets in place. A turn that ends in a provider failure — an API error, a plan usage limit — leaves the thread idle with a failed turn, which is not the same as an agent that gave up. [StaleTurnReconciler.ts][32] re-prompts that same thread a minute later, then every ten minutes, and once more on every server start, up to `WORKFLOW_NUDGE_MAX_ATTEMPTS`. While a nudge is pending, the stage that owns the thread waits instead of relaunching or failing it; when the budget runs out the nudge path marks the session with `WORKFLOW_NUDGE_EXHAUSTED_MESSAGE` and the stage applies its normal failure handling. The shared vocabulary lives in [workflowNudge.ts][33].
+
 #### App dev stack
 
 A Kubernetes development deployment for a worktree. Workflow orchestration may own one stack at a
@@ -269,3 +273,5 @@ The per-worktree development stack (dev servers, preview) that implementation ru
 [29]: ../../apps/server/src/orchestration/Layers/ImplementationWorkflowReactor.ts
 [30]: ../user/app-dev-stacks.md
 [31]: ../user/workflow-catalog.md
+[32]: ../../apps/server/src/orchestration/Layers/StaleTurnReconciler.ts
+[33]: ../../apps/server/src/orchestration/workflowNudge.ts

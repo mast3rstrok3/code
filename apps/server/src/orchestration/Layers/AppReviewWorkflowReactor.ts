@@ -42,6 +42,7 @@ import {
 } from "../Services/AppReviewWorkflowReactor.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
+import { isAwaitingWorkflowNudge, type WorkflowNudgeThread } from "../workflowNudge.ts";
 import {
   findWorkflowStepModels,
   resolveWorkflowStepModelSelection,
@@ -207,6 +208,36 @@ export function findAppReviewParentTicket(
     if (ticket !== undefined) return ticket;
   }
   return undefined;
+}
+
+export function threadTurnFailed(thread: {
+  readonly latestTurn: { readonly state: string } | null;
+  readonly session: { readonly status: string } | null;
+}): boolean {
+  return (
+    thread.latestTurn?.state === "error" ||
+    thread.latestTurn?.state === "interrupted" ||
+    thread.session?.status === "error" ||
+    thread.session?.status === "stopped"
+  );
+}
+
+/**
+ * What a phase thread's state means for the run: still working, blocked on a
+ * provider failure the nudge path is retrying in place, or failed for good.
+ *
+ * Waiting matters because a single API error or plan usage limit used to end
+ * the whole App Review run — and with it a repair cycle the user paid for. It
+ * is deliberately not "wait forever": a thread the nudge path has given up on,
+ * or one nobody is nudging, fails here exactly as it always did.
+ */
+export function appReviewPhaseThreadState(input: {
+  readonly threads: ReadonlyArray<WorkflowNudgeThread>;
+  readonly thread: WorkflowNudgeThread;
+  readonly nowMs: number;
+}): "working" | "nudging" | "failed" {
+  if (!threadTurnFailed(input.thread)) return "working";
+  return isAwaitingWorkflowNudge(input) ? "nudging" : "failed";
 }
 
 export function terminalReviewAction(review: AppReviewRecord): "passed" | "planning" {
@@ -648,11 +679,21 @@ const make = Effect.gen(function* () {
     );
   };
 
-  const threadTurnFailed = (thread: OrchestrationThread): boolean =>
-    thread.latestTurn?.state === "error" ||
-    thread.latestTurn?.state === "interrupted" ||
-    thread.session?.status === "error" ||
-    thread.session?.status === "stopped";
+  /**
+   * What the run should make of the thread driving its current phase. Reads the
+   * read model only when the answer can be "nudging".
+   */
+  const phaseThreadState = Effect.fn("AppReviewWorkflowReactor.phaseThreadState")(function* (
+    thread: OrchestrationThread,
+  ) {
+    if (!threadTurnFailed(thread)) return "working" as const;
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    return appReviewPhaseThreadState({
+      threads: readModel.threads,
+      thread,
+      nowMs: Date.parse(yield* nowIso),
+    });
+  });
 
   const findingsMarkdown = (review: AppReviewRecord) =>
     review.document.findings
@@ -877,6 +918,7 @@ const make = Effect.gen(function* () {
       (review === null || !["passed", "failed"].includes(review.status)) &&
       threadTurnFailed(reviewer)
     ) {
+      if ((yield* phaseThreadState(reviewer)) === "nudging") return;
       yield* failRun({
         run,
         reason: "review-blocked",
@@ -1087,6 +1129,7 @@ const make = Effect.gen(function* () {
     const planner = yield* resolveThread(cycle.plannerThreadId ?? cycle.reviewerThreadId);
     if (planner === undefined) return;
     if (threadTurnFailed(planner) && !hasSettledCheckpoint(planner)) {
+      if ((yield* phaseThreadState(planner)) === "nudging") return;
       yield* failRun({
         run,
         reason: "plan-missing",
@@ -1232,6 +1275,7 @@ const make = Effect.gen(function* () {
     }
     const result = parseFixResult(fixer, run, cycle);
     if (result === null && threadTurnFailed(fixer)) {
+      if ((yield* phaseThreadState(fixer)) === "nudging") return;
       yield* failRun({
         run,
         reason: "fixer-failed",
@@ -1421,6 +1465,8 @@ const make = Effect.gen(function* () {
     if (event.type === "thread.session-set" && event.payload.session.status === "error") {
       const run = yield* runForEvent(event);
       if (run !== null && run.activeThreadId === event.payload.threadId) {
+        const active = yield* resolveThread(event.payload.threadId);
+        if (active !== undefined && (yield* phaseThreadState(active)) === "nudging") return;
         yield* failRun({
           run,
           reason:

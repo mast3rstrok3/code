@@ -50,6 +50,7 @@ import {
   resolveWorkflowSubagentSpawnDefinition,
 } from "../workflowSubagents.ts";
 import { isWorkflowThreadPaused } from "../workflowPause.ts";
+import { isAwaitingWorkflowNudge } from "../workflowNudge.ts";
 
 // Code Review owns its fixes, while final-validation repairs receive a bounded delta review before
 // the complete gate runs again. Exhaustion publishes the clean branch as work in progress instead
@@ -5620,6 +5621,7 @@ const make = Effect.gen(function* () {
   )(function* () {
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
     const createdAt = DateTime.formatIso(yield* DateTime.now);
+    const nowMs = Date.parse(createdAt);
     for (const run of readModel.implementationRuns) {
       if (run.status === "canceled") continue;
       const recoverStackFailure =
@@ -5641,7 +5643,11 @@ const make = Effect.gen(function* () {
         run.status === "qa-reviewing" &&
         run.appReviewIds.length > 0 &&
         (latestReviewThread?.session?.status === "error" ||
-          latestReviewThread?.session?.status === "stopped");
+          latestReviewThread?.session?.status === "stopped") &&
+        !(
+          latestReviewThread !== undefined &&
+          isAwaitingWorkflowNudge({ threads: readModel.threads, thread: latestReviewThread, nowMs })
+        );
       if (!recoverStackFailure && !recoverInterruptedReview) continue;
       const sourceThreadId = findRunSourceThreadId({ readModel, run });
       if (sourceThreadId === null) continue;
@@ -5702,6 +5708,7 @@ const make = Effect.gen(function* () {
   )(function* () {
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
     const createdAt = DateTime.formatIso(yield* DateTime.now);
+    const nowMs = Date.parse(createdAt);
     for (const run of readModel.implementationRuns) {
       if (run.status === "canceled") continue;
       // A paused run is waiting for the user, not for recovery. Re-entering its
@@ -5714,6 +5721,9 @@ const make = Effect.gen(function* () {
       const childThreads = readModel.threads.filter(
         (thread) => thread.parentThreadId === run.orchestratorThreadId && thread.deletedAt === null,
       );
+      const awaitingNudge = (thread: OrchestrationThread | undefined) =>
+        thread !== undefined &&
+        isAwaitingWorkflowNudge({ threads: readModel.threads, thread, nowMs });
       const hasActiveChild = (input: {
         readonly threadId: ThreadId | null;
         readonly role:
@@ -5728,8 +5738,15 @@ const make = Effect.gen(function* () {
             thread.workflowRole === input.role &&
             (input.threadId === null || thread.id === input.threadId),
         );
+        // A thread blocked on a failed turn is still this stage's thread: the
+        // nudge path is re-prompting it in place, and relaunching the stage
+        // underneath that would throw away its context and, while a usage limit
+        // holds, spawn one dead thread per sweep.
         return matches.some(
-          (thread) => thread.session?.status === "starting" || thread.session?.status === "running",
+          (thread) =>
+            thread.session?.status === "starting" ||
+            thread.session?.status === "running" ||
+            awaitingNudge(thread),
         );
       };
 
@@ -5744,7 +5761,8 @@ const make = Effect.gen(function* () {
           implementer !== null &&
           implementer.deletedAt === null &&
           implementer.session?.status !== "starting" &&
-          implementer.session?.status !== "running"
+          implementer.session?.status !== "running" &&
+          !awaitingNudge(implementer)
         ) {
           yield* recoverRunStage(
             run.id,
@@ -5911,7 +5929,11 @@ const make = Effect.gen(function* () {
             state.codeReviewThreadId == null
               ? undefined
               : readModel.threads.find((candidate) => candidate.id === state.codeReviewThreadId);
-          return thread?.session?.status !== "starting" && thread?.session?.status !== "running";
+          return (
+            thread?.session?.status !== "starting" &&
+            thread?.session?.status !== "running" &&
+            !awaitingNudge(thread)
+          );
         });
         if (interruptedTicketCodeReview !== undefined) {
           yield* recoverRunStage(
@@ -5942,7 +5964,8 @@ const make = Effect.gen(function* () {
               return (
                 !resultAlreadyReported &&
                 thread?.session?.status !== "starting" &&
-                thread?.session?.status !== "running"
+                thread?.session?.status !== "running" &&
+                !awaitingNudge(thread)
               );
             })
             .map((state) => state.ticketId),
@@ -6026,8 +6049,9 @@ const make = Effect.gen(function* () {
           : childThreads.find((thread) => thread.id === run.activeAppReviewThreadId);
       const reviewerNeedsRelaunch =
         activeReviewer === undefined ||
-        activeReviewer.session?.status === "error" ||
-        activeReviewer.session?.status === "stopped";
+        ((activeReviewer.session?.status === "error" ||
+          activeReviewer.session?.status === "stopped") &&
+          !awaitingNudge(activeReviewer));
       if (run.status === "qa-reviewing" && reviewerNeedsRelaunch) {
         yield* startBrowserReview({
           sourceThreadId,

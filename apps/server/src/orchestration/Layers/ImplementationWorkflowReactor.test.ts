@@ -14,12 +14,14 @@ import {
   ProviderInstanceId,
   ProjectId,
   ThreadId,
+  TurnId,
   type ModelSelection,
   type OrchestrationImplementationRun,
   type ServerSettings,
   type VcsCreateWorktreeInput,
 } from "@t3tools/contracts";
 import { type DeepPartial } from "@t3tools/shared/Struct";
+import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -49,6 +51,7 @@ import {
   passedAppReviewContinuation,
   workflowIdForRun,
 } from "./ImplementationWorkflowReactor.ts";
+import { WORKFLOW_NUDGE_EXHAUSTED_MESSAGE } from "../workflowNudge.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
@@ -3461,6 +3464,99 @@ describe("ImplementationWorkflowReactor", () => {
         expect(
           snapshot.threads.filter((thread) => thread.workflowRole === "implementation-validator"),
         ).toHaveLength(1);
+      }),
+    ),
+  );
+
+  it.effect("waits for a nudge instead of relaunching a stage whose turn failed", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
+        yield* appendWorkerResult(system, {
+          run,
+          status: "succeeded",
+          completeTicketReview: false,
+        });
+
+        const codeReviewers = (snapshot: {
+          readonly threads: ReadonlyArray<{
+            readonly id: ThreadId;
+            readonly workflowRole: string | null;
+          }>;
+        }) =>
+          snapshot.threads.filter(
+            (thread) => thread.workflowRole === "implementation-code-reviewer",
+          );
+
+        let snapshot = yield* system.query.getSnapshot();
+        const reviewer = codeReviewers(snapshot)[0];
+        if (!reviewer) throw new Error("Code reviewer missing.");
+
+        // A provider failure — an API error, a usage limit — fails the turn and
+        // then takes the session down with it.
+        const blockedAt = DateTime.formatIso(yield* DateTime.now);
+        const setReviewerSession = (input: {
+          readonly tag: string;
+          readonly status: "running" | "error" | "stopped";
+          readonly activeTurnId: TurnId | null;
+          readonly lastError: string | null;
+        }) =>
+          system.engine.dispatch({
+            type: "thread.session.set",
+            commandId: commandId(input.tag),
+            threadId: reviewer.id,
+            session: {
+              threadId: reviewer.id,
+              status: input.status,
+              providerName: "codex",
+              runtimeMode: "full-access",
+              activeTurnId: input.activeTurnId,
+              lastError: input.lastError,
+              updatedAt: blockedAt,
+            },
+            createdAt: blockedAt,
+          });
+
+        yield* setReviewerSession({
+          tag: "nudge-reviewer-running",
+          status: "running",
+          activeTurnId: TurnId.make("turn-nudge-reviewer"),
+          lastError: null,
+        });
+        yield* setReviewerSession({
+          tag: "nudge-reviewer-failed",
+          status: "error",
+          activeTurnId: null,
+          lastError: "Claude AI usage limit reached",
+        });
+        yield* setReviewerSession({
+          tag: "nudge-reviewer-stopped",
+          status: "stopped",
+          activeTurnId: null,
+          lastError: "Claude AI usage limit reached",
+        });
+        yield* system.reactor.drain;
+
+        // Relaunching here would throw away the reviewer's context and, for as
+        // long as the limit holds, leave one dead thread per sweep behind.
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+        snapshot = yield* system.query.getSnapshot();
+        expect(codeReviewers(snapshot)).toHaveLength(1);
+
+        // Nudging gives up and hands the thread back by marking its session.
+        yield* setReviewerSession({
+          tag: "nudge-reviewer-exhausted",
+          status: "error",
+          activeTurnId: null,
+          lastError: WORKFLOW_NUDGE_EXHAUSTED_MESSAGE,
+        });
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        expect(codeReviewers(snapshot)).toHaveLength(2);
       }),
     ),
   );
