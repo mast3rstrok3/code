@@ -41,6 +41,7 @@ import {
 } from "./commandInvariants.ts";
 import { WORKFLOW_PROMPT_IDS } from "../provider/WorkflowPromptRegistry.ts";
 import { validatePlanningTicketFileChanges } from "./planningTicketFiles.ts";
+import { isWorkflowThreadPaused } from "./workflowPause.ts";
 import { buildPlanImplementationThreadTitle } from "@t3tools/shared/orchestrationPlanning";
 import { resolveImplementationValidationCommands } from "@t3tools/shared/t3ProjectFile";
 import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
@@ -1293,6 +1294,44 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       return events;
     }
 
+    case "thread.workflow.resume": {
+      yield* requireThreadNotArchived({ readModel, command, threadId: command.threadId });
+      // Pause settles the whole subtree, so resume has to clear the whole
+      // subtree: a still-settled descendant keeps failing the paused-ancestor
+      // invariant the moment a reactor tries to re-enter its stage.
+      const targets = collectHierarchyPostOrder(readModel.threads, command.threadId, {
+        getId: (thread) => thread.id,
+        getParentId: (thread) => thread.parentThreadId,
+      }).filter(
+        (thread) =>
+          thread.settledOverride === "settled" &&
+          (thread.id === command.threadId ||
+            (thread.deletedAt === null && thread.archivedAt === null)),
+      );
+      const events: PlannedOrchestrationEvent[] = [];
+      for (const thread of targets) {
+        events.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: thread.id,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.unsettled",
+          payload: {
+            threadId: thread.id,
+            // The thread the user resumed is the one they want back in the
+            // inbox, so it is pinned active. Descendants take the neutral
+            // server-side reset instead and settle again on their own once the
+            // work they are about to be given finishes.
+            reason: thread.id === command.threadId ? "user" : "activity",
+            updatedAt: command.createdAt,
+          },
+        });
+      }
+      return events;
+    }
+
     case "thread.workflow.step-model.set": {
       const thread = yield* requireThreadNotArchived({
         readModel,
@@ -1316,6 +1355,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: rootThread.id,
           workflowPromptId: command.workflowPromptId,
+          ...(command.stepWorkflowPromptId === undefined
+            ? {}
+            : { stepWorkflowPromptId: command.stepWorkflowPromptId }),
           modelSelection: command.modelSelection,
           updatedAt: occurredAt,
         },
@@ -3857,20 +3899,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
-      if (command.commandId.startsWith("server:")) {
-        let workflowAncestor: typeof targetThread | undefined = targetThread;
-        while (workflowAncestor !== undefined) {
-          if (workflowAncestor.settledOverride === "settled") {
-            return yield* new OrchestrationCommandInvariantError({
-              commandType: command.type,
-              detail: `workflow ancestor ${workflowAncestor.id} is paused`,
-            });
-          }
-          workflowAncestor =
-            workflowAncestor.parentThreadId === null
-              ? undefined
-              : readModel.threads.find((thread) => thread.id === workflowAncestor?.parentThreadId);
-        }
+      if (
+        command.commandId.startsWith("server:") &&
+        isWorkflowThreadPaused(readModel.threads, targetThread.id)
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `workflow ancestor of ${targetThread.id} is paused`,
+        });
       }
       const targetProject = readModel.projects.find(
         (project) => project.id === targetThread.projectId,

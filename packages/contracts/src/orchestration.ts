@@ -342,6 +342,15 @@ export type ThreadWorkflowContext = typeof ThreadWorkflowContext.Type;
  */
 export const WorkflowStepModelOverride = Schema.Struct({
   workflowPromptId: TrimmedNonEmptyString,
+  /**
+   * The step this pin is scoped to, when the pin targets one sub-step rather
+   * than a whole step. A step starts several kinds of agent and the same agent
+   * prompt appears under more than one step — a per-ticket Code Review runs
+   * inside "Execute ticket waves" and again as the final Code Review — so only
+   * the pair identifies a sub-step. Absent means the pin covers the step named
+   * by `workflowPromptId` and every agent it starts.
+   */
+  stepWorkflowPromptId: Schema.optionalKey(TrimmedNonEmptyString),
   modelSelection: ModelSelection,
 });
 export type WorkflowStepModelOverride = typeof WorkflowStepModelOverride.Type;
@@ -1123,6 +1132,7 @@ export const OrchestrationThreadWorkflowRole = Schema.Literals([
   "fast-feature-implementer",
   "app-review-orchestrator",
   "app-review-reviewer",
+  "app-review-planner",
   "app-review-fixer",
 ]);
 export type OrchestrationThreadWorkflowRole = typeof OrchestrationThreadWorkflowRole.Type;
@@ -1699,6 +1709,18 @@ const ThreadWorkflowPauseCommand = Schema.Struct({
 });
 
 /**
+ * The reverse of a pause: un-settle the paused subtree so the run's reactors can
+ * re-enter whichever stage it stopped at. Worktrees, branches, and App Dev
+ * Stacks are untouched — resuming starts fresh agents on the work as it stands.
+ */
+const ThreadWorkflowResumeCommand = Schema.Struct({
+  type: Schema.Literal("thread.workflow.resume"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  createdAt: IsoDateTime,
+});
+
+/**
  * Pin one workflow step to an explicit provider instance and model, or clear
  * the pin (`modelSelection: null`) so the step returns to auto mode.
  */
@@ -1707,6 +1729,8 @@ const ThreadWorkflowStepModelSetCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   workflowPromptId: TrimmedNonEmptyString,
+  /** Set when the pin targets one sub-step of a step rather than the step. */
+  stepWorkflowPromptId: Schema.optionalKey(TrimmedNonEmptyString),
   modelSelection: Schema.NullOr(ModelSelection),
   createdAt: IsoDateTime,
 });
@@ -2296,6 +2320,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadUnarchiveCommand,
   ThreadSettleCommand,
   ThreadWorkflowPauseCommand,
+  ThreadWorkflowResumeCommand,
   ThreadWorkflowStepModelSetCommand,
   ThreadUnsettleCommand,
   ThreadSnoozeCommand,
@@ -2341,6 +2366,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadUnarchiveCommand,
   ThreadSettleCommand,
   ThreadWorkflowPauseCommand,
+  ThreadWorkflowResumeCommand,
   ThreadWorkflowStepModelSetCommand,
   ThreadUnsettleCommand,
   ThreadSnoozeCommand,
@@ -2716,6 +2742,8 @@ export const ThreadRuntimeModeSetPayload = Schema.Struct({
 export const ThreadWorkflowStepModelSetPayload = Schema.Struct({
   threadId: ThreadId,
   workflowPromptId: TrimmedNonEmptyString,
+  /** Set when the pin targets one sub-step of a step rather than the step. */
+  stepWorkflowPromptId: Schema.optionalKey(TrimmedNonEmptyString),
   /** Null clears the pin and returns the step to auto mode. */
   modelSelection: Schema.NullOr(ModelSelection),
   updatedAt: IsoDateTime,

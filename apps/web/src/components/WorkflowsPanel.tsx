@@ -7,9 +7,13 @@ import type {
   OrchestrationPlanningSpec,
   OrchestrationPlanningTicket,
   OrchestrationPlanningWorkflowStage,
+  WorkflowPreset,
 } from "@t3tools/contracts";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
-import { WORKFLOW_PRESET_DEFINITION_BY_ID } from "@t3tools/shared/workflowPresets";
+import {
+  WORKFLOW_PRESET_DEFINITION_BY_ID,
+  type WorkflowPresetSubStep,
+} from "@t3tools/shared/workflowPresets";
 import {
   Archive,
   ArrowUpRight,
@@ -19,6 +23,7 @@ import {
   Eye,
   GitFork,
   Pause,
+  Play,
 } from "lucide-react";
 import {
   useEffect,
@@ -34,6 +39,8 @@ import { formatChatTimestampTooltip, formatShortTimestamp } from "~/timestampFor
 import {
   buildWorkflowSteps,
   buildTicketWaves,
+  implementationRunCurrentStage,
+  implementationTicketStageDetails,
   resolveWorkflowGroupTimeRange,
   resolveWorkflowStepTimeRange,
   resolveWorkflowThreadTimeRange,
@@ -58,6 +65,12 @@ import {
 
 import ChatMarkdown from "./ChatMarkdown";
 import { WorkflowStepSettingsMenu } from "./WorkflowStepSettingsMenu";
+import { WorkflowModelsMenu } from "./WorkflowModelsMenu";
+import {
+  workflowModelPinKey,
+  type SetWorkflowStepModel,
+  type WorkflowModelPinKey,
+} from "./WorkflowModelPins";
 import { workflowRoleShortLabel } from "./Sidebar.logic";
 
 const STATUS_VISUALS: Record<
@@ -359,16 +372,22 @@ function restartablePlanningStage(
  * The restart the workflow can honor for a step, if any.
  *
  * Only stages the runtime can re-enter are offered: planning stages restart in
- * place, and a blocked implementation run retries from its failed stage. Every
- * other step reports why it cannot be restarted on its own rather than
- * offering an action that would do nothing.
+ * place, a paused run resumes at the step it stopped at, and a blocked
+ * implementation run retries from its failed stage. Every other step reports
+ * why it cannot be restarted on its own rather than offering an action that
+ * would do nothing.
  */
 function resolveStepRestart(input: {
   readonly planningRestartStage: RestartablePlanningStage | null;
   readonly rootSessionBusy: boolean;
   readonly canRetryStep: boolean;
+  readonly workflowPaused: boolean;
+  /** True only for the one step a resume would actually re-enter. */
+  readonly isResumeStep: boolean;
+  readonly resumeStepLabel: string | null;
   readonly onRestartPlanningStage: ((stage: RestartablePlanningStage) => void) | undefined;
   readonly onRetryImplementationRun: ((runId: string) => void) | undefined;
+  readonly onResumeWorkflow: (() => void) | undefined;
   readonly implementationRunId: string | null;
 }): { readonly run: (() => void) | undefined; readonly disabledReason: string | null } {
   if (input.planningRestartStage !== null && input.onRestartPlanningStage !== undefined) {
@@ -381,6 +400,22 @@ function resolveStepRestart(input: {
     const stage = input.planningRestartStage;
     const restart = input.onRestartPlanningStage;
     return { run: () => restart(stage), disabledReason: null };
+  }
+  // A paused run keeps its worktrees, branches, and App Dev Stack. Resuming
+  // starts fresh agents on that same work, which is also how a step's model pin
+  // reaches a stage that was already in flight when the pause landed.
+  if (input.workflowPaused) {
+    if (input.isResumeStep && input.onResumeWorkflow !== undefined) {
+      const resume = input.onResumeWorkflow;
+      return { run: () => resume(), disabledReason: null };
+    }
+    return {
+      run: undefined,
+      disabledReason:
+        input.resumeStepLabel === null
+          ? "The workflow is paused. Resume it from the workflow header."
+          : `The workflow is paused at ${input.resumeStepLabel}. Start that step again to continue.`,
+    };
   }
   if (
     input.canRetryStep &&
@@ -640,6 +675,21 @@ function AppReviewRunsTimeline(props: {
   );
 }
 
+/**
+ * The agents a rendered step starts, read back from its preset definition.
+ *
+ * Matched on the definition's own label so a step rendered from a legacy run
+ * still finds its sub-steps.
+ */
+function workflowStepSubSteps(
+  preset: WorkflowPreset | null,
+  step: WorkflowTimelineStep<EnvironmentThreadShell>,
+): ReadonlyArray<WorkflowPresetSubStep> {
+  if (preset === null || step.label === null) return [];
+  const definition = WORKFLOW_PRESET_DEFINITION_BY_ID[preset];
+  return definition?.helpSteps.find((candidate) => candidate.label === step.label)?.subSteps ?? [];
+}
+
 function workflowSkillLabel(skillId: string, titles: ReadonlyMap<string, string>): string {
   const title = titles.get(skillId);
   if (title) return title;
@@ -655,6 +705,64 @@ function workflowSkillLabel(skillId: string, titles: ReadonlyMap<string, string>
     default:
       return skillId;
   }
+}
+
+/**
+ * How many of a stage's threads render before the rest are folded away.
+ *
+ * A stage that retried hard can own hundreds of threads. Rendering them all
+ * buries the one the user is looking for and costs a long list on every open,
+ * so the newest — the live attempt among them — stay visible and the history
+ * waits behind one click.
+ */
+const VISIBLE_STAGE_THREADS = 8;
+
+/** The tail of a step's entries, keeping each entry's original cycle number. */
+function visibleStepEntries(
+  step: WorkflowTimelineStep<EnvironmentThreadShell>,
+  showAll: boolean,
+): ReadonlyArray<{
+  readonly entry: WorkflowTimelineStep<EnvironmentThreadShell>["entries"][number];
+  readonly entryIndex: number;
+}> {
+  const indexed = step.entries.map((entry, entryIndex) => ({ entry, entryIndex }));
+  return showAll || indexed.length <= VISIBLE_STAGE_THREADS
+    ? indexed
+    : indexed.slice(-VISIBLE_STAGE_THREADS);
+}
+
+function ThreadRowList(props: {
+  readonly threads: readonly EnvironmentThreadShell[];
+  readonly timestampFormat: TimestampFormat;
+  readonly activeThreadKey: string | null;
+  readonly onOpenThread: (thread: EnvironmentThreadShell) => void;
+}) {
+  const [showAll, setShowAll] = useState(false);
+  const hiddenCount = props.threads.length - VISIBLE_STAGE_THREADS;
+  const visible =
+    showAll || hiddenCount <= 0 ? props.threads : props.threads.slice(-VISIBLE_STAGE_THREADS);
+  return (
+    <div className="space-y-0.5">
+      {hiddenCount > 0 && !showAll ? (
+        <button
+          type="button"
+          onClick={() => setShowAll(true)}
+          className="cursor-pointer w-full rounded px-2 py-1 text-left text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground"
+        >
+          Show {hiddenCount} earlier attempt{hiddenCount === 1 ? "" : "s"}
+        </button>
+      ) : null}
+      {visible.map((thread) => (
+        <ThreadRow
+          key={thread.id}
+          row={{ thread, depth: 0, parentThreadKey: null }}
+          timestampFormat={props.timestampFormat}
+          activeThreadKey={props.activeThreadKey}
+          onOpenThread={props.onOpenThread}
+        />
+      ))}
+    </div>
+  );
 }
 
 function TicketPhases(props: {
@@ -742,24 +850,21 @@ function TicketPhases(props: {
                           ticketTimeRanges[0]!.endedAt,
                         ),
                   };
+            const stageDetails = implementationTicketStageDetails(state, ticket);
             const stages = [
               {
                 label: "Implementation",
-                detail: state?.workerResult?.status ?? state?.status ?? "not started",
+                detail: stageDetails.implementation,
                 threads: implementationThreads,
               },
               {
                 label: "App Review",
-                detail:
-                  state?.appReviewOutcome === "skipped"
-                    ? "skipped — not planned for browser review"
-                    : (state?.appReviewOutcome ??
-                      (ticket.appReviewEligible ? "eligible" : "not planned")),
+                detail: stageDetails.appReview,
                 threads: appReviewThreads,
               },
               {
                 label: "Code Review",
-                detail: state?.codeReviewOutcome ?? "not started",
+                detail: stageDetails.codeReview,
                 threads: codeReviewThreads,
               },
             ] as const;
@@ -822,17 +927,12 @@ function TicketPhases(props: {
                               timestampFormat={props.timestampFormat}
                             />
                           ) : stage.threads.length > 0 ? (
-                            <div className="space-y-0.5">
-                              {stage.threads.map((thread) => (
-                                <ThreadRow
-                                  key={thread.id}
-                                  row={{ thread, depth: 0, parentThreadKey: null }}
-                                  timestampFormat={props.timestampFormat}
-                                  activeThreadKey={props.activeThreadKey}
-                                  onOpenThread={props.onOpenThread}
-                                />
-                              ))}
-                            </div>
+                            <ThreadRowList
+                              threads={stage.threads}
+                              timestampFormat={props.timestampFormat}
+                              activeThreadKey={props.activeThreadKey}
+                              onOpenThread={props.onOpenThread}
+                            />
                           ) : (
                             <div className="py-1 text-[10px] text-muted-foreground/65">
                               No thread created
@@ -902,9 +1002,8 @@ function WorkflowGroupCard(props: {
   readonly onCopyWorkflowLink: (workflowId: string) => void;
   readonly onRetryImplementationRun?: ((runId: string) => void) | undefined;
   readonly onRestartPlanningStage?: ((stage: RestartablePlanningStage) => void) | undefined;
-  readonly onSetStepModel?:
-    | ((workflowPromptId: string, selection: ModelSelection | null) => void)
-    | undefined;
+  readonly onResumeWorkflow?: (() => void) | undefined;
+  readonly onSetStepModel?: SetWorkflowStepModel | undefined;
   readonly onStopThreads?: ((threadIds: readonly ThreadId[]) => void) | undefined;
   readonly tickets: readonly OrchestrationPlanningTicket[];
   readonly spec: OrchestrationPlanningSpec | null;
@@ -929,21 +1028,38 @@ function WorkflowGroupCard(props: {
         ? groupStatus(group)
         : runPresentation.status;
   const visual = STATUS_VISUALS[status];
-  const stepModelByPromptId = new Map(
+  // Pins are keyed by step *and* sub-step: the same agent prompt appears under
+  // more than one step, so a bare prompt id would collide.
+  const stepModelByPinKey = new Map(
     (props.workflowRoot.workflowStepModels ?? []).map(
-      (entry) => [entry.workflowPromptId, entry.modelSelection] as const,
+      (entry) => [workflowModelPinKey(entry), entry.modelSelection] as const,
     ),
   );
+  const pinFor = (key: WorkflowModelPinKey): ModelSelection | null =>
+    stepModelByPinKey.get(workflowModelPinKey(key)) ?? null;
   const steps = buildWorkflowSteps(group, props.groups, props.workflowRoot, {
     flattenNestedWorkflows: group.parentGroupId === null,
   });
   const [expandedPhases, setExpandedPhases] = useState<Record<string, boolean>>({});
   const [expandedSteps, setExpandedSteps] = useState<Record<string, boolean>>({});
+  const [expandedStepEntries, setExpandedStepEntries] = useState<Record<string, boolean>>({});
   const [openPlanningArtifact, setOpenPlanningArtifact] = useState<{
     readonly title: string;
     readonly markdown: string;
   } | null>(null);
   const phases = groupWorkflowStepsByPhase(steps);
+  // Pausing settles the whole workflow, so a resume is workflow-wide. Only the
+  // step the run actually stopped at offers it, so "Start step again" never
+  // claims to restart a step the runtime would skip.
+  const workflowPaused = props.workflowRoot.settledOverride === "settled";
+  const resumeStage =
+    workflowPaused && linkedImplementationRun !== null
+      ? implementationRunCurrentStage(linkedImplementationRun)
+      : null;
+  const resumeStep =
+    resumeStage === null
+      ? null
+      : (steps.find((step) => workflowStepMatchesImplementationFailure(step, resumeStage)) ?? null);
   const timeRange = resolveWorkflowGroupTimeRange(group, props.groups);
   const showsAppReviews =
     group.preset === "app-review" ||
@@ -1123,8 +1239,13 @@ function WorkflowGroupCard(props: {
                             planningRestartStage,
                             rootSessionBusy,
                             canRetryStep,
+                            workflowPaused,
+                            isResumeStep: resumeStep?.id === step.id,
+                            resumeStepLabel:
+                              resumeStep === null ? null : workflowStepTitle(resumeStep),
                             onRestartPlanningStage: props.onRestartPlanningStage,
                             onRetryImplementationRun: props.onRetryImplementationRun,
+                            onResumeWorkflow: props.onResumeWorkflow,
                             implementationRunId: linkedImplementationRun?.id ?? null,
                           });
                           // The workflow root is excluded: stopping it pauses the
@@ -1209,11 +1330,8 @@ function WorkflowGroupCard(props: {
                                     environmentId={props.workflowRoot.environmentId}
                                     stepLabel={workflowStepTitle(step)}
                                     workflowPromptId={step.skillId}
-                                    pinnedSelection={
-                                      step.skillId === null
-                                        ? null
-                                        : (stepModelByPromptId.get(step.skillId) ?? null)
-                                    }
+                                    subSteps={workflowStepSubSteps(group.preset, step)}
+                                    pinFor={pinFor}
                                     usesRootThread={step.usesRootThread}
                                     rootModelSelection={props.workflowRoot.modelSelection}
                                     restartLabel={`Start ${workflowStepTitle(step)} again`}
@@ -1262,7 +1380,29 @@ function WorkflowGroupCard(props: {
                                 </div>
                               ) : stepOpen ? (
                                 <div className="space-y-0.5">
-                                  {step.entries.map((entry, entryIndex) => {
+                                  {step.entries.length > VISIBLE_STAGE_THREADS &&
+                                  !(expandedStepEntries[step.id] ?? false) ? (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setExpandedStepEntries((current) => ({
+                                          ...current,
+                                          [step.id]: true,
+                                        }))
+                                      }
+                                      className="cursor-pointer w-full rounded px-2 py-1 text-left text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground"
+                                    >
+                                      Show {step.entries.length - VISIBLE_STAGE_THREADS} earlier
+                                      entr
+                                      {step.entries.length - VISIBLE_STAGE_THREADS === 1
+                                        ? "y"
+                                        : "ies"}
+                                    </button>
+                                  ) : null}
+                                  {visibleStepEntries(
+                                    step,
+                                    expandedStepEntries[step.id] ?? false,
+                                  ).map(({ entry, entryIndex }) => {
                                     const cycleLabel = step.repeatsAsCycles
                                       ? `Cycle ${entryIndex + 1}`
                                       : undefined;
@@ -1367,10 +1507,9 @@ export function WorkflowsPanel(props: {
   readonly onCopyWorkflowLink: (workflowId: string) => void;
   readonly onRetryImplementationRun?: ((runId: string) => void) | undefined;
   readonly onRestartPlanningStage?: ((stage: RestartablePlanningStage) => void) | undefined;
+  readonly onResumeWorkflow?: (() => void) | undefined;
   readonly onPauseWorkflow?: (() => void) | undefined;
-  readonly onSetStepModel?:
-    | ((workflowPromptId: string, selection: ModelSelection | null) => void)
-    | undefined;
+  readonly onSetStepModel?: SetWorkflowStepModel | undefined;
   readonly onStopThreads?: ((threadIds: readonly ThreadId[]) => void) | undefined;
 }) {
   const groups = props.workflow?.groups ?? [];
@@ -1486,6 +1625,17 @@ export function WorkflowsPanel(props: {
               />
             </span>
           </button>
+          <WorkflowModelsMenu
+            environmentId={workflow.root.environmentId}
+            preset={workflow.root.workflowPreset ?? null}
+            pinFor={(key) =>
+              (workflow.root.workflowStepModels ?? []).find(
+                (entry) => workflowModelPinKey(entry) === workflowModelPinKey(key),
+              )?.modelSelection ?? null
+            }
+            rootModelSelection={workflow.root.modelSelection}
+            onSetStepModel={props.onSetStepModel}
+          />
           {workflow.root.settledOverride !== "settled" && props.onPauseWorkflow ? (
             <button
               type="button"
@@ -1494,6 +1644,15 @@ export function WorkflowsPanel(props: {
               className="cursor-pointer mt-1 inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-border/80 px-2 text-xs font-medium hover:bg-accent"
             >
               <Pause className="size-3" aria-hidden /> Pause
+            </button>
+          ) : workflow.root.settledOverride === "settled" && props.onResumeWorkflow ? (
+            <button
+              type="button"
+              onClick={props.onResumeWorkflow}
+              title="Resume the workflow from the step it stopped at, keeping its worktrees"
+              className="cursor-pointer mt-1 inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-border/80 px-2 text-xs font-medium hover:bg-accent"
+            >
+              <Play className="size-3" aria-hidden /> Resume
             </button>
           ) : workflow.root.settledOverride === "settled" ? (
             <span className="mt-1 rounded-md bg-muted px-2 py-1 text-xs font-medium text-muted-foreground">
@@ -1538,6 +1697,7 @@ export function WorkflowsPanel(props: {
                 onCopyWorkflowLink={props.onCopyWorkflowLink}
                 onRetryImplementationRun={props.onRetryImplementationRun}
                 onRestartPlanningStage={props.onRestartPlanningStage}
+                onResumeWorkflow={props.onResumeWorkflow}
                 onSetStepModel={props.onSetStepModel}
                 onStopThreads={props.onStopThreads}
               />

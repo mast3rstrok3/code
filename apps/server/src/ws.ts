@@ -883,6 +883,7 @@ const makeWsRpcLayer = (
               !run.cycles.some(
                 (cycle) =>
                   visibleThreadIds.has(cycle.reviewerThreadId) ||
+                  (cycle.plannerThreadId != null && visibleThreadIds.has(cycle.plannerThreadId)) ||
                   (cycle.fixerThreadId !== null && visibleThreadIds.has(cycle.fixerThreadId)),
               )
             ) {

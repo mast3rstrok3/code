@@ -3465,6 +3465,60 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
+  it.effect("leaves a paused run's stage alone and re-enters it on resume", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
+        yield* appendWorkerResult(system, {
+          run,
+          status: "succeeded",
+          completeTicketReview: false,
+        });
+
+        const codeReviewers = (snapshot: {
+          readonly threads: ReadonlyArray<{ readonly workflowRole: string | null }>;
+        }) =>
+          snapshot.threads.filter(
+            (thread) => thread.workflowRole === "implementation-code-reviewer",
+          );
+
+        let snapshot = yield* system.query.getSnapshot();
+        expect(codeReviewers(snapshot)).toHaveLength(1);
+
+        yield* system.engine.dispatch({
+          type: "thread.workflow.pause",
+          commandId: commandId("pause-run"),
+          threadId: sourceThreadId,
+          createdAt: "2026-01-01T00:00:02.000Z",
+        });
+        yield* system.reactor.drain;
+
+        // The reviewer has no live session, so the sweep would normally re-enter
+        // the stage. While the run is paused it must not: the turn would fail on
+        // the paused-ancestor invariant and leave the created thread orphaned.
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+        snapshot = yield* system.query.getSnapshot();
+        expect(codeReviewers(snapshot)).toHaveLength(1);
+
+        yield* system.engine.dispatch({
+          type: "thread.workflow.resume",
+          commandId: commandId("resume-run"),
+          threadId: sourceThreadId,
+          createdAt: "2026-01-01T00:00:03.000Z",
+        });
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        expect(codeReviewers(snapshot)).toHaveLength(2);
+        expect(
+          snapshot.implementationRuns.find((entry) => entry.id === run.id)?.ticketStates[0]?.status,
+        ).toBe("code-reviewing");
+      }),
+    ),
+  );
+
   it.effect("starts the bounded combined App Review directly after the merge gate", () =>
     withSystem((system) =>
       Effect.gen(function* () {

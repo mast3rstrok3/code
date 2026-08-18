@@ -10,6 +10,12 @@ export interface ImplementationWorkflowReactorShape {
    * Exposed so its guards can be exercised without waiting on the schedule.
    */
   readonly recoverRetryableRuns: () => Effect.Effect<void>;
+  /**
+   * One pass of the stage recovery sweep that `start` otherwise runs every 30s.
+   * Exposed so its guards — above all the one that leaves paused runs alone —
+   * can be exercised without waiting on the schedule.
+   */
+  readonly recoverIncompleteStages: () => Effect.Effect<void>;
 }
 
 export class ImplementationWorkflowReactor extends Context.Service<

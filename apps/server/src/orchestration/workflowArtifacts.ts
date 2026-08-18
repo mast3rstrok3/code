@@ -39,7 +39,10 @@ export const getWorkflowArtifactsForThread = Effect.fn("getWorkflowArtifactsForT
         run.targetThreadId === thread.id ||
         run.controllerThreadId === thread.id ||
         run.cycles.some(
-          (cycle) => cycle.reviewerThreadId === thread.id || cycle.fixerThreadId === thread.id,
+          (cycle) =>
+            cycle.reviewerThreadId === thread.id ||
+            cycle.plannerThreadId === thread.id ||
+            cycle.fixerThreadId === thread.id,
         ),
     );
     const targetThread =

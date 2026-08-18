@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
+  buildComposerModeTriggerDisplay,
   resolveComposerPrimaryMode,
   resolveWorkflowPresetForPicker,
   sortComposerBuildSkills,
@@ -58,5 +59,44 @@ describe("ComposerModePicker state", () => {
         { id: "a", title: "Code Review", description: "Review", workflowIds: [] },
       ]).map((skill) => skill.id),
     ).toEqual(["a", "b", "z"]);
+  });
+});
+
+describe("buildComposerModeTriggerDisplay", () => {
+  const base = {
+    interactionMode: "default" as const,
+    workflowPreset: null,
+    lastWorkflowPreset: null,
+    buildSkills: [{ id: "tdd", title: "TDD", description: "TDD", workflowIds: [] }],
+    selectedBuildSkillId: null,
+  };
+
+  it("leaves plain Build unlabelled so it costs no room beside the traits", () => {
+    const display = buildComposerModeTriggerDisplay(base);
+    expect(display.shortLabel).toBeNull();
+    expect(display.label).toBe("Build");
+  });
+
+  it("names the workflow, the skill and plan mode", () => {
+    expect(
+      buildComposerModeTriggerDisplay({
+        ...base,
+        interactionMode: "product-workflow",
+        workflowPreset: "wayfinder",
+      }),
+    ).toMatchObject({ label: "Workflow · Wayfinder", shortLabel: "Wayfinder" });
+    expect(buildComposerModeTriggerDisplay({ ...base, selectedBuildSkillId: "tdd" })).toMatchObject(
+      { label: "Build · TDD", shortLabel: "TDD" },
+    );
+    expect(buildComposerModeTriggerDisplay({ ...base, interactionMode: "plan" })).toMatchObject({
+      label: "Plan",
+      shortLabel: "Plan",
+    });
+  });
+
+  it("falls back to a generic skill name when the catalog no longer lists it", () => {
+    expect(
+      buildComposerModeTriggerDisplay({ ...base, selectedBuildSkillId: "removed" }).shortLabel,
+    ).toBe("Skill");
   });
 });

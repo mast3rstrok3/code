@@ -38,6 +38,7 @@ export type UnarchiveThreadInput = CommandInput<"thread.unarchive">;
 export type SettleThreadInput = CommandInput<"thread.settle">;
 export type UnsettleThreadInput = CommandInput<"thread.unsettle">;
 export type PauseThreadWorkflowInput = CommandInput<"thread.workflow.pause">;
+export type ResumeThreadWorkflowInput = CommandInput<"thread.workflow.resume">;
 export type SetThreadWorkflowStepModelInput = CommandInput<"thread.workflow.step-model.set">;
 export type SnoozeThreadInput = CommandInput<"thread.snooze">;
 export type UnsnoozeThreadInput = CommandInput<"thread.unsnooze">;
@@ -195,6 +196,18 @@ export const pauseThreadWorkflow: (input: PauseThreadWorkflowInput) => CommandEf
   return yield* dispatch({
     ...input,
     type: "thread.workflow.pause",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const resumeThreadWorkflow: (input: ResumeThreadWorkflowInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.resumeThreadWorkflow",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "thread.workflow.resume",
     commandId: metadata.commandId,
     createdAt: metadata.createdAt,
   });

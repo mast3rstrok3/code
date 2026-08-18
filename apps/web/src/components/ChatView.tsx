@@ -161,6 +161,7 @@ import { PullRequestDetailPanel } from "./pullRequest/PullRequestDetailPanel";
 import { PullRequestDetailGhost } from "./pullRequest/PullRequestGhosts";
 import { PullRequestsUnavailableState } from "./pullRequest/PullRequestsUnavailableState";
 import { AgentsPanel } from "./AgentsPanel";
+import type { SetWorkflowStepModel } from "./WorkflowModelPins";
 import { WorkflowsPanel } from "./WorkflowsPanel";
 import { WorkflowInstructionsPanel } from "./WorkflowInstructionsPanel";
 import { useWorkflowCatalog } from "../workflowCatalogState";
@@ -1277,8 +1278,8 @@ function ChatViewContent(props: ChatViewProps) {
   const setWorkflowStepModel = useAtomCommand(threadEnvironment.setWorkflowStepModel, {
     label: "workflow step model",
   });
-  const resumeWorkflow = useAtomCommand(threadEnvironment.unsettle, {
-    label: "workflow resume",
+  const resumeWorkflowTree = useAtomCommand(threadEnvironment.resumeWorkflow, {
+    label: "workflow tree resume",
   });
   const cancelImplementationRun = useCancelImplementationRunCommand();
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, {
@@ -3047,9 +3048,11 @@ function ChatViewContent(props: ChatViewProps) {
       if (!root) return;
       void (async () => {
         if (root.settledOverride === "settled") {
-          const resumed = await resumeWorkflow({
+          // Un-settle the whole paused subtree, not just the root: a settled
+          // descendant still fails the paused-ancestor invariant.
+          const resumed = await resumeWorkflowTree({
             environmentId: root.environmentId,
-            input: { threadId: root.id, reason: "user" },
+            input: { threadId: root.id },
           });
           if (resumed._tag === "Failure") return;
         }
@@ -3059,8 +3062,19 @@ function ChatViewContent(props: ChatViewProps) {
         });
       })();
     },
-    [activeWorkflowNavigation, restartPlanningStage, resumeWorkflow],
+    [activeWorkflowNavigation, restartPlanningStage, resumeWorkflowTree],
   );
+  // Resuming un-settles the paused subtree; the run's reactor then re-enters
+  // whichever stage it stopped at, reusing the worktrees and branches it
+  // already has and starting fresh agents on the step's current model pin.
+  const handleResumeWorkflow = useCallback(() => {
+    const root = activeWorkflowNavigation?.root;
+    if (!root) return;
+    void resumeWorkflowTree({
+      environmentId: root.environmentId,
+      input: { threadId: root.id },
+    });
+  }, [activeWorkflowNavigation, resumeWorkflowTree]);
   const handlePauseWorkflow = useCallback(() => {
     const root = activeWorkflowNavigation?.root;
     if (!root) return;
@@ -3069,13 +3083,20 @@ function ChatViewContent(props: ChatViewProps) {
       input: { threadId: root.id },
     });
   }, [activeWorkflowNavigation, pauseWorkflow]);
-  const handleSetWorkflowStepModel = useCallback(
-    (workflowPromptId: string, selection: ModelSelection | null) => {
+  const handleSetWorkflowStepModel = useCallback<SetWorkflowStepModel>(
+    (key, selection) => {
       const root = activeWorkflowNavigation?.root;
       if (!root) return;
       void setWorkflowStepModel({
         environmentId: root.environmentId,
-        input: { threadId: root.id, workflowPromptId, modelSelection: selection },
+        input: {
+          threadId: root.id,
+          workflowPromptId: key.workflowPromptId,
+          ...(key.stepWorkflowPromptId === undefined
+            ? {}
+            : { stepWorkflowPromptId: key.stepWorkflowPromptId }),
+          modelSelection: selection,
+        },
       });
     },
     [activeWorkflowNavigation, setWorkflowStepModel],
@@ -6935,6 +6956,7 @@ function ChatViewContent(props: ChatViewProps) {
         onRetryImplementationRun={handleRetryImplementationRun}
         onRestartPlanningStage={handleRestartPlanningStage}
         onPauseWorkflow={handlePauseWorkflow}
+        onResumeWorkflow={handleResumeWorkflow}
         onSetStepModel={handleSetWorkflowStepModel}
         onStopThreads={handleStopWorkflowThreads}
       />

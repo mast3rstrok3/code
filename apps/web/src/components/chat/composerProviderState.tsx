@@ -15,7 +15,12 @@ import type { ReactNode } from "react";
 
 import type { DraftId } from "../../composerDraftStore";
 import { getProviderModelCapabilities } from "../../providerModels";
-import { shouldRenderTraitsControls, TraitsMenuContent, TraitsPicker } from "./TraitsPicker";
+import {
+  shouldRenderTraitsControls,
+  TraitsMenuContent,
+  TraitsPicker,
+  type ComposerModeControls,
+} from "./TraitsPicker";
 
 export type ComposerProviderStateInput = {
   provider: ProviderDriverKind;
@@ -46,6 +51,11 @@ type TraitsRenderInput = {
   modelOptions: ReadonlyArray<ProviderOptionSelection> | undefined;
   prompt: string;
   onPromptChange: (prompt: string) => void;
+  /**
+   * Composer-only. When present the control also renders the mode section, so
+   * it must survive providers whose model advertises no traits at all.
+   */
+  modeControls?: ComposerModeControls;
 };
 
 export function getComposerPromptInjectionState(prompt: string): ComposerPromptInjectionState {
@@ -80,47 +90,44 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
   };
 }
 
-function renderTraitsControl(
-  Component: typeof TraitsMenuContent | typeof TraitsPicker,
-  input: TraitsRenderInput,
-): ReactNode {
-  const {
-    provider,
-    instanceId,
-    threadRef,
-    draftId,
-    model,
-    models,
-    modelOptions,
-    prompt,
-    onPromptChange,
-  } = input;
+function traitsControlProps(input: TraitsRenderInput) {
+  const { provider, instanceId, threadRef, draftId, model, models, modelOptions, prompt } = input;
   const hasTarget = threadRef !== undefined || draftId !== undefined;
-  if (
-    !hasTarget ||
-    !shouldRenderTraitsControls({ provider, models, model, modelOptions, prompt })
-  ) {
+  if (!hasTarget) {
     return null;
   }
-  return (
-    <Component
-      provider={provider}
-      {...(instanceId ? { instanceId } : {})}
-      models={models}
-      {...(threadRef ? { threadRef } : {})}
-      {...(draftId ? { draftId } : {})}
-      model={model}
-      modelOptions={modelOptions}
-      prompt={prompt}
-      onPromptChange={onPromptChange}
-    />
-  );
+  return {
+    provider,
+    ...(instanceId ? { instanceId } : {}),
+    models,
+    ...(threadRef ? { threadRef } : {}),
+    ...(draftId ? { draftId } : {}),
+    model,
+    modelOptions,
+    prompt,
+    onPromptChange: input.onPromptChange,
+    hasTraits: shouldRenderTraitsControls({ provider, models, model, modelOptions, prompt }),
+  };
 }
 
 export function renderProviderTraitsMenuContent(input: TraitsRenderInput): ReactNode {
-  return renderTraitsControl(TraitsMenuContent, input);
+  const props = traitsControlProps(input);
+  if (!props?.hasTraits) {
+    return null;
+  }
+  const { hasTraits: _hasTraits, ...rest } = props;
+  return <TraitsMenuContent {...rest} />;
 }
 
 export function renderProviderTraitsPicker(input: TraitsRenderInput): ReactNode {
-  return renderTraitsControl(TraitsPicker, input);
+  const props = traitsControlProps(input);
+  // The mode section is reason enough to render: a model with no reasoning or
+  // context-window options still needs somewhere to pick a workflow.
+  if (!props || (!props.hasTraits && !input.modeControls)) {
+    return null;
+  }
+  const { hasTraits: _hasTraits, ...rest } = props;
+  return (
+    <TraitsPicker {...rest} {...(input.modeControls ? { modeControls: input.modeControls } : {})} />
+  );
 }

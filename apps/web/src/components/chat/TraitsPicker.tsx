@@ -1,10 +1,12 @@
 import {
   type ProviderDriverKind,
   type ProviderInstanceId,
+  type ProviderInteractionMode,
   type ProviderOptionDescriptor,
   type ProviderOptionSelection,
   type ScopedThreadRef,
   type ServerProviderModel,
+  type WorkflowPreset,
 } from "@t3tools/contracts";
 import {
   applyClaudePromptEffortPrefix,
@@ -14,6 +16,7 @@ import {
   getProviderOptionDescriptors,
   isClaudeUltrathinkPrompt,
 } from "@t3tools/shared/model";
+import { interactionModeForWorkflowPreset } from "@t3tools/shared/workflowPresets";
 import { memo, useCallback, useState } from "react";
 import type { VariantProps } from "class-variance-authority";
 import { ZapIcon } from "lucide-react";
@@ -27,6 +30,14 @@ import {
   MenuSeparator as MenuDivider,
   MenuTrigger,
 } from "../ui/menu";
+import {
+  buildComposerModeTriggerDisplay,
+  ComposerModePickerContent,
+  resolveComposerPrimaryMode,
+  resolveWorkflowPresetForPicker,
+  type ComposerBuildSkill,
+  type ComposerModePickerView,
+} from "./ComposerModePicker";
 import { useComposerDraftStore, DraftId } from "../../composerDraftStore";
 import { getProviderModelCapabilities } from "../../providerModels";
 import { cn } from "~/lib/utils";
@@ -34,6 +45,26 @@ import { Badge } from "../ui/badge";
 import { ComposerControl, ComposerControlChevron, ComposerControlIcon } from "./ComposerControl";
 
 type ProviderOptions = ReadonlyArray<ProviderOptionSelection>;
+
+/**
+ * Composer-only extras for the traits menu: what the agent should do, next to
+ * how the model should think. Settings surfaces configure a default model and
+ * pass nothing here, so the menu stays traits-only there.
+ */
+export type ComposerModeControls = {
+  readonly interactionMode: ProviderInteractionMode;
+  readonly workflowPreset: WorkflowPreset | null;
+  readonly lastWorkflowPreset: WorkflowPreset | null;
+  readonly workflowAvailable: boolean;
+  readonly showPrimaryModes: boolean;
+  readonly buildSkills: ReadonlyArray<ComposerBuildSkill>;
+  readonly selectedBuildSkillId: string | null;
+  readonly onInteractionModeChange: (
+    mode: ProviderInteractionMode,
+    preset: WorkflowPreset | null,
+  ) => void;
+  readonly onBuildSkillChange: (skillId: string | null) => void;
+};
 
 type TraitsPersistence =
   | {
@@ -435,6 +466,13 @@ export function buildTraitsTriggerDisplay(input: {
   return { label: labels.join(" · "), showFastModeIcon: fastModeEnabled };
 }
 
+/**
+ * The composer's model settings control: how the model thinks (reasoning,
+ * context window, fast mode) and, when `modeControls` is passed, what it is
+ * asked to do (Build/Plan, a guided workflow, or a Build skill). The mode
+ * sub-pages replace the menu body rather than stacking under it, so picking a
+ * workflow never scrolls the traits off the bottom.
+ */
 export const TraitsPicker = memo(function TraitsPicker({
   provider,
   instanceId,
@@ -446,10 +484,12 @@ export const TraitsPicker = memo(function TraitsPicker({
   allowPromptInjectedEffort = true,
   triggerVariant,
   triggerClassName,
+  modeControls,
   ...persistence
-}: TraitsMenuContentProps & TraitsPersistence) {
+}: TraitsMenuContentProps & TraitsPersistence & { modeControls?: ComposerModeControls }) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const { descriptors, primarySelectDescriptor, ultrathinkPromptControlled } =
+  const [modeView, setModeView] = useState<ComposerModePickerView>("primary");
+  const { descriptors, primarySelectDescriptor, ultrathinkPromptControlled, hasAnyControls } =
     getTraitsSectionVisibility({
       provider,
       models,
@@ -458,25 +498,23 @@ export const TraitsPicker = memo(function TraitsPicker({
       modelOptions,
       allowPromptInjectedEffort,
     });
-  if (
-    !shouldRenderTraitsControls({
-      provider,
-      models,
-      model,
-      prompt,
-      modelOptions,
-      allowPromptInjectedEffort,
-    })
-  ) {
+  if (!hasAnyControls && !modeControls) {
     return null;
   }
 
-  const { label: triggerLabel, showFastModeIcon } = buildTraitsTriggerDisplay({
+  const { label: traitsLabel, showFastModeIcon } = buildTraitsTriggerDisplay({
     provider,
     descriptors,
     primarySelectDescriptorId: primarySelectDescriptor?.id ?? null,
     ultrathinkPromptControlled,
   });
+  const modeDisplay = modeControls ? buildComposerModeTriggerDisplay(modeControls) : null;
+  // Plain Build contributes an icon and no text; every other mode names itself
+  // ahead of the traits, so the trigger reads "Wayfinder · High · 1M".
+  const triggerLabel =
+    modeDisplay === null
+      ? traitsLabel
+      : [modeDisplay.shortLabel, traitsLabel].filter(Boolean).join(" · ") || modeDisplay.label;
   const fastModeIcon = showFastModeIcon ? (
     <>
       <ComposerControlIcon
@@ -489,6 +527,7 @@ export const TraitsPicker = memo(function TraitsPicker({
       <span className="sr-only">Fast mode on</span>
     </>
   ) : null;
+  const modeIcon = modeDisplay ? <ComposerControlIcon icon={modeDisplay.icon} /> : null;
 
   const isCodexStyle = provider === "codex";
 
@@ -497,6 +536,9 @@ export const TraitsPicker = memo(function TraitsPicker({
       open={isMenuOpen}
       onOpenChange={(open) => {
         setIsMenuOpen(open);
+        if (open) {
+          setModeView("primary");
+        }
       }}
     >
       <MenuTrigger
@@ -514,12 +556,14 @@ export const TraitsPicker = memo(function TraitsPicker({
       >
         {isCodexStyle ? (
           <span className="flex min-w-0 w-full items-center gap-1.5 overflow-hidden">
+            {modeIcon}
             {fastModeIcon}
             <span className="min-w-0 truncate">{triggerLabel}</span>
             <ComposerControlChevron />
           </span>
         ) : (
           <>
+            {modeIcon}
             {fastModeIcon}
             <span>{triggerLabel}</span>
             <ComposerControlChevron />
@@ -527,17 +571,61 @@ export const TraitsPicker = memo(function TraitsPicker({
         )}
       </MenuTrigger>
       <MenuPopup align="start">
-        <TraitsMenuContent
-          provider={provider}
-          {...(instanceId ? { instanceId } : {})}
-          models={models}
-          model={model}
-          prompt={prompt}
-          onPromptChange={onPromptChange}
-          modelOptions={modelOptions}
-          allowPromptInjectedEffort={allowPromptInjectedEffort}
-          {...persistence}
-        />
+        {modeControls ? (
+          <>
+            {modeView === "primary" ? (
+              <div className="px-2 pt-1.5 pb-1 font-medium text-muted-foreground text-xs">Mode</div>
+            ) : null}
+            <ComposerModePickerContent
+              activeMode={resolveComposerPrimaryMode(modeControls)}
+              activePreset={
+                resolveComposerPrimaryMode(modeControls) === "workflow"
+                  ? resolveWorkflowPresetForPicker(modeControls)
+                  : null
+              }
+              buildSkills={modeControls.buildSkills}
+              selectedBuildSkillId={modeControls.selectedBuildSkillId}
+              showPrimaryModes={modeControls.showPrimaryModes}
+              view={modeView}
+              workflowAvailable={modeControls.workflowAvailable}
+              onBack={() => setModeView("primary")}
+              onOpenSkills={() => setModeView("skills")}
+              onOpenWorkflow={() => setModeView("workflow")}
+              onSelectPrimary={(mode) => {
+                modeControls.onBuildSkillChange(null);
+                modeControls.onInteractionModeChange(mode === "build" ? "default" : "plan", null);
+                setIsMenuOpen(false);
+              }}
+              onSelectPreset={(preset) => {
+                modeControls.onBuildSkillChange(null);
+                modeControls.onInteractionModeChange(
+                  interactionModeForWorkflowPreset(preset),
+                  preset,
+                );
+                setIsMenuOpen(false);
+              }}
+              onSelectSkill={(skillId) => {
+                modeControls.onInteractionModeChange("default", null);
+                modeControls.onBuildSkillChange(skillId);
+                setIsMenuOpen(false);
+              }}
+            />
+            {modeView === "primary" && hasAnyControls ? <MenuDivider /> : null}
+          </>
+        ) : null}
+        {modeView === "primary" ? (
+          <TraitsMenuContent
+            provider={provider}
+            {...(instanceId ? { instanceId } : {})}
+            models={models}
+            model={model}
+            prompt={prompt}
+            onPromptChange={onPromptChange}
+            modelOptions={modelOptions}
+            allowPromptInjectedEffort={allowPromptInjectedEffort}
+            {...persistence}
+          />
+        ) : null}
       </MenuPopup>
     </Menu>
   );

@@ -562,8 +562,13 @@ export function projectEvent(
         Effect.map((payload) => {
           const thread = nextBase.threads.find((candidate) => candidate.id === payload.threadId);
           if (thread === undefined) return nextBase;
+          // A pin is identified by step *and* sub-step: the same agent prompt
+          // appears under more than one step, so replacing by prompt id alone
+          // would clear a sibling step's pin.
           const others = (thread.workflowStepModels ?? []).filter(
-            (entry) => entry.workflowPromptId !== payload.workflowPromptId,
+            (entry) =>
+              entry.workflowPromptId !== payload.workflowPromptId ||
+              entry.stepWorkflowPromptId !== payload.stepWorkflowPromptId,
           );
           return {
             ...nextBase,
@@ -575,6 +580,9 @@ export function projectEvent(
                       ...others,
                       {
                         workflowPromptId: payload.workflowPromptId,
+                        ...(payload.stepWorkflowPromptId === undefined
+                          ? {}
+                          : { stepWorkflowPromptId: payload.stepWorkflowPromptId }),
                         modelSelection: payload.modelSelection,
                       },
                     ],

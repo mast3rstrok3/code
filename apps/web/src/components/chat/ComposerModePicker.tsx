@@ -5,7 +5,6 @@ import type {
 } from "@t3tools/contracts";
 import {
   inferDisplayedWorkflowPreset,
-  interactionModeForWorkflowPreset,
   WORKFLOW_PRESET_DEFINITION_BY_ID,
   WORKFLOW_PRESET_DEFINITIONS,
   type WorkflowPresetDefinition,
@@ -20,17 +19,8 @@ import {
   SparklesIcon,
   WorkflowIcon,
 } from "lucide-react";
-import {
-  type KeyboardEvent,
-  memo,
-  type ReactNode,
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-} from "react";
+import { type KeyboardEvent, useState } from "react";
 import { cn } from "~/lib/utils";
-import { AnimatedHeight } from "../AnimatedHeight";
 import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 
@@ -58,6 +48,37 @@ export function resolveComposerPrimaryMode(input: {
     return "workflow";
   }
   return input.interactionMode === "plan" ? "plan" : "build";
+}
+
+/**
+ * Label and icon for the control that opens the mode section. `shortLabel` is
+ * null for plain Build — the default mode is not worth the horizontal space
+ * next to the model traits, and the bot icon already carries it — so callers
+ * that sit beside other labels should render the icon plus `shortLabel` and
+ * fall back to `label` when they stand alone.
+ */
+export function buildComposerModeTriggerDisplay(input: {
+  readonly interactionMode: ProviderInteractionMode;
+  readonly workflowPreset: WorkflowPreset | null;
+  readonly lastWorkflowPreset: WorkflowPreset | null;
+  readonly buildSkills: ReadonlyArray<ComposerBuildSkill>;
+  readonly selectedBuildSkillId: string | null;
+}): { label: string; shortLabel: string | null; icon: typeof BotIcon } {
+  const activeMode = resolveComposerPrimaryMode(input);
+  if (activeMode === "workflow") {
+    const presetLabel =
+      WORKFLOW_PRESET_DEFINITION_BY_ID[resolveWorkflowPresetForPicker(input)].label;
+    return { label: `Workflow · ${presetLabel}`, shortLabel: presetLabel, icon: WorkflowIcon };
+  }
+  if (activeMode === "plan") {
+    return { label: "Plan", shortLabel: "Plan", icon: PencilRulerIcon };
+  }
+  if (input.selectedBuildSkillId !== null) {
+    const skillTitle =
+      input.buildSkills.find((skill) => skill.id === input.selectedBuildSkillId)?.title ?? "Skill";
+    return { label: `Build · ${skillTitle}`, shortLabel: skillTitle, icon: SparklesIcon };
+  }
+  return { label: "Build", shortLabel: null, icon: BotIcon };
 }
 
 export function resolveWorkflowPresetForPicker(input: {
@@ -216,6 +237,12 @@ export function ComposerModePickerContent(props: {
   readonly activeMode: ComposerPrimaryMode;
   readonly activePreset: WorkflowPreset | null;
   readonly workflowAvailable: boolean;
+  /**
+   * Build and Plan are the provider's own modes, and Plan is a legacy beta.
+   * With it off there is no choice left to offer, so the rows drop out and the
+   * section is just Workflow and Skills — neither of which is plan mode.
+   */
+  readonly showPrimaryModes: boolean;
   readonly buildSkills: ReadonlyArray<ComposerBuildSkill>;
   readonly selectedBuildSkillId: string | null;
   readonly onBack: () => void;
@@ -309,13 +336,22 @@ export function ComposerModePickerContent(props: {
     readonly description: string;
     readonly icon: typeof BotIcon;
   }> = [
-    { id: "build", label: "Build", description: "Make implementation changes.", icon: BotIcon },
-    {
-      id: "plan",
-      label: "Plan",
-      description: "Plan without changing files.",
-      icon: PencilRulerIcon,
-    },
+    ...(props.showPrimaryModes
+      ? ([
+          {
+            id: "build",
+            label: "Build",
+            description: "Make implementation changes.",
+            icon: BotIcon,
+          },
+          {
+            id: "plan",
+            label: "Plan",
+            description: "Plan without changing files.",
+            icon: PencilRulerIcon,
+          },
+        ] as const)
+      : []),
     {
       id: "workflow",
       label: "Workflow",
@@ -380,118 +416,3 @@ export function ComposerModePickerContent(props: {
     </div>
   );
 }
-
-export const ComposerModePicker = memo(function ComposerModePicker(props: {
-  readonly interactionMode: ProviderInteractionMode;
-  readonly workflowPreset: WorkflowPreset | null;
-  readonly lastWorkflowPreset: WorkflowPreset | null;
-  readonly workflowAvailable: boolean;
-  readonly buildSkills: ReadonlyArray<ComposerBuildSkill>;
-  readonly selectedBuildSkillId: string | null;
-  readonly onChange: (mode: ProviderInteractionMode, preset: WorkflowPreset | null) => void;
-  readonly onBuildSkillChange: (skillId: string | null) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const activeMode = resolveComposerPrimaryMode(props);
-  const displayedPreset = resolveWorkflowPresetForPicker(props);
-  const [view, setView] = useState<ComposerModePickerView>(
-    activeMode === "workflow" ? "workflow" : "primary",
-  );
-  const contentRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    setView(activeMode === "workflow" ? "workflow" : "primary");
-  }, [activeMode, open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const frame = requestAnimationFrame(() => {
-      const options = contentRef.current?.querySelectorAll<HTMLButtonElement>(
-        "button[data-composer-mode-option]:not(:disabled)",
-      );
-      const selected = Array.from(options ?? []).find(
-        (option) => option.getAttribute("aria-checked") === "true",
-      );
-      (selected ?? options?.[0])?.focus();
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [open, view]);
-
-  const selectPreset = useCallback(
-    (preset: WorkflowPreset) => {
-      props.onChange(interactionModeForWorkflowPreset(preset), preset);
-      setOpen(false);
-    },
-    [props],
-  );
-  const triggerLabel =
-    activeMode === "workflow"
-      ? `Workflow · ${WORKFLOW_PRESET_DEFINITION_BY_ID[displayedPreset].label}`
-      : activeMode === "plan"
-        ? "Plan"
-        : props.selectedBuildSkillId
-          ? `Build · ${props.buildSkills.find((skill) => skill.id === props.selectedBuildSkillId)?.title ?? "Skill"}`
-          : "Build";
-  const triggerIcon: ReactNode =
-    activeMode === "workflow" ? (
-      <WorkflowIcon className="size-4" />
-    ) : activeMode === "plan" ? (
-      <PencilRulerIcon className="size-4" />
-    ) : props.selectedBuildSkillId ? (
-      <SparklesIcon className="size-4" />
-    ) : (
-      <BotIcon className="size-4" />
-    );
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger
-        render={
-          <Button aria-label="Composer mode" className="font-medium" size="sm" variant="ghost" />
-        }
-      >
-        {triggerIcon}
-        <span>{triggerLabel}</span>
-      </PopoverTrigger>
-      <PopoverPopup
-        align="start"
-        className={cn(
-          "duration-200 motion-reduce:transition-none",
-          view === "primary" ? "[--popup-width:17rem]" : "[--popup-width:25rem]",
-        )}
-        viewportClassName="p-2 [--viewport-inline-padding:--spacing(2)]"
-      >
-        <div ref={contentRef}>
-          <AnimatedHeight>
-            <ComposerModePickerContent
-              activeMode={activeMode}
-              activePreset={activeMode === "workflow" ? displayedPreset : null}
-              buildSkills={props.buildSkills}
-              selectedBuildSkillId={props.selectedBuildSkillId}
-              onBack={() => setView("primary")}
-              onOpenSkills={() => setView("skills")}
-              onOpenWorkflow={() => setView("workflow")}
-              onSelectPreset={(preset) => {
-                props.onBuildSkillChange(null);
-                selectPreset(preset);
-              }}
-              onSelectSkill={(skillId) => {
-                props.onChange("default", null);
-                props.onBuildSkillChange(skillId);
-                setOpen(false);
-              }}
-              onSelectPrimary={(mode) => {
-                props.onBuildSkillChange(null);
-                props.onChange(mode === "build" ? "default" : "plan", null);
-                setOpen(false);
-              }}
-              view={view}
-              workflowAvailable={props.workflowAvailable}
-            />
-          </AnimatedHeight>
-        </div>
-      </PopoverPopup>
-    </Popover>
-  );
-});

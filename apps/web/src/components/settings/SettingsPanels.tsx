@@ -1633,7 +1633,7 @@ function LegacyFeaturesSection() {
           <div className="relative space-y-1 overflow-visible pt-3 text-foreground">
             <SettingsRow
               {...searchableSetting("legacy-plan-mode")}
-              description="Brings back the Build/Plan toggle in the composer along with the /plan and /default commands and the Shift+Tab shortcut. While off, every thread runs in build mode."
+              description="Brings back the Build and Plan modes in the composer's model settings along with the /plan and /default commands and the Shift+Tab shortcut. While off, every thread runs in build mode; workflows and skills stay available either way."
               control={
                 <Switch
                   checked={settings.planModeEnabled}

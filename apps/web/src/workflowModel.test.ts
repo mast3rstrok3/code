@@ -14,8 +14,11 @@ import {
   resolveWorkflowThreadStatus,
   selectWorkflowRootForThread,
   workflowNavigationIsAvailable,
+  implementationRunCurrentStage,
+  implementationTicketStageDetails,
   workflowStepMatchesImplementationFailure,
   type WorkflowModelThread,
+  type WorkflowTimelineStep,
 } from "./workflowModel";
 
 const planningTicket = (
@@ -627,6 +630,120 @@ describe("buildWorkflowViewModel", () => {
       "env:final-validation",
       "env:pr-babysitter",
     ]);
+  });
+
+  it("maps every implementation stage onto a guided preset step", () => {
+    // Guided presets prefix labels with their phase and name the work
+    // differently from the legacy presets; a stage that matches no step
+    // silently loses its restart, which is how "Execute ticket waves" ended up
+    // with no way back in.
+    const step = (label: string) =>
+      ({
+        id: label,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        label,
+        skillId: null,
+        repeatsAsCycles: false,
+        usesRootThread: false,
+        entries: [],
+      }) satisfies WorkflowTimelineStep<ReturnType<typeof thread>>;
+
+    const guidedSteps = [
+      "Planning phase · Prepare shared worktree and App Dev Stack",
+      "Implementation phase · Execute ticket waves",
+      "Implementation phase · Merge ticket branches",
+      "Implementation phase · App Review",
+      "Implementation phase · Final Code Review, pull request, and green checks",
+    ].map(step);
+
+    const matched = (stage: Parameters<typeof workflowStepMatchesImplementationFailure>[1]) =>
+      guidedSteps.find((candidate) => workflowStepMatchesImplementationFailure(candidate, stage))
+        ?.label;
+
+    expect(matched("worktree-setup")).toBe(
+      "Planning phase · Prepare shared worktree and App Dev Stack",
+    );
+    expect(matched("worker-execution")).toBe("Implementation phase · Execute ticket waves");
+    expect(matched("merge-gate")).toBe("Implementation phase · Merge ticket branches");
+    expect(matched("integration")).toBe("Implementation phase · Merge ticket branches");
+    expect(matched("app-review")).toBe("Implementation phase · App Review");
+    expect(matched("code-review")).toBe(
+      "Implementation phase · Final Code Review, pull request, and green checks",
+    );
+    expect(matched("change-request")).toBe(
+      "Implementation phase · Final Code Review, pull request, and green checks",
+    );
+  });
+
+  it("reports a ticket stage that is running rather than calling it not started", () => {
+    // The reviewer thread is live but the outcome only lands when it finishes;
+    // reading the outcome alone described running work as work that never began.
+    const reviewing = implementationTicketStageDetails(
+      {
+        status: "code-reviewing",
+        workerResult: { status: "succeeded" },
+        appReviewOutcome: "failed",
+        codeReviewOutcome: null,
+      },
+      { appReviewEligible: true },
+    );
+    expect(reviewing.implementation).toBe("succeeded");
+    expect(reviewing.appReview).toBe("failed");
+    expect(reviewing.codeReview).toBe("in review");
+
+    const appReviewing = implementationTicketStageDetails(
+      { status: "app-reviewing", workerResult: { status: "succeeded" } },
+      { appReviewEligible: true },
+    );
+    expect(appReviewing.appReview).toBe("in review");
+
+    const building = implementationTicketStageDetails(
+      { status: "running" },
+      { appReviewEligible: false },
+    );
+    expect(building.implementation).toBe("running");
+    expect(building.appReview).toBe("not planned");
+    expect(building.codeReview).toBe("not started");
+
+    // A finished outcome still wins over the ticket's status.
+    const done = implementationTicketStageDetails(
+      { status: "succeeded", codeReviewOutcome: "clean", appReviewOutcome: "skipped" },
+      { appReviewEligible: true },
+    );
+    expect(done.codeReview).toBe("clean");
+    expect(done.appReview).toBe("skipped — not planned for browser review");
+
+    expect(implementationTicketStageDetails(undefined, {})).toEqual({
+      implementation: "not started",
+      appReview: "not planned",
+      codeReview: "not started",
+    });
+  });
+
+  it("reports the stage a paused run would resume at", () => {
+    expect(implementationRunCurrentStage({ status: "running" })).toBe("worker-execution");
+    expect(implementationRunCurrentStage({ status: "code-reviewing" })).toBe("code-review");
+    expect(implementationRunCurrentStage({ status: "code-review-fixing" })).toBe("code-review");
+    expect(implementationRunCurrentStage({ status: "validating" })).toBe("merge-gate");
+    expect(implementationRunCurrentStage({ status: "babysitting-change-request" })).toBe(
+      "change-request",
+    );
+    // A blocked run still reports the stage it failed at, not its status.
+    expect(
+      implementationRunCurrentStage({
+        status: "needs-human-attention",
+        retryableFailure: {
+          stage: "app-review",
+          detail: "App Review did not pass",
+          failedAt: "2026-01-01T00:00:00.000Z",
+          attemptCount: 1,
+          maxAttempts: 3,
+          humanBlocked: false,
+        },
+      }),
+    ).toBe("app-review");
+    expect(implementationRunCurrentStage({ status: "completed" })).toBeNull();
+    expect(implementationRunCurrentStage({ status: "canceled" })).toBeNull();
   });
 
   it("calculates thread, step, and parent workflow timing across nested work", () => {

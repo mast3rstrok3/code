@@ -869,8 +869,11 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           if (Option.isNone(existingRow)) {
             return;
           }
+          // Keyed by step and sub-step together — see the projector.
           const otherStepModels = (existingRow.value.workflowStepModels ?? []).filter(
-            (entry) => entry.workflowPromptId !== event.payload.workflowPromptId,
+            (entry) =>
+              entry.workflowPromptId !== event.payload.workflowPromptId ||
+              entry.stepWorkflowPromptId !== event.payload.stepWorkflowPromptId,
           );
           const modelSelection = event.payload.modelSelection;
           yield* projectionThreadRepository.upsert({
@@ -882,6 +885,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
                     ...otherStepModels,
                     {
                       workflowPromptId: event.payload.workflowPromptId,
+                      ...(event.payload.stepWorkflowPromptId === undefined
+                        ? {}
+                        : { stepWorkflowPromptId: event.payload.stepWorkflowPromptId }),
                       modelSelection,
                     },
                   ],

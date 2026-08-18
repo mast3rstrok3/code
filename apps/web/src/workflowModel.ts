@@ -1,5 +1,6 @@
 import type {
   OrchestrationImplementationRetryableFailure,
+  OrchestrationImplementationRunStatus,
   OrchestrationPlanningTicket,
   OrchestrationSessionStatus,
   OrchestrationThreadWorkflowRole,
@@ -136,6 +137,15 @@ export function buildTicketWaves(
   return waves;
 }
 
+/**
+ * Whether a step owns the work an implementation run reports at `stage`.
+ *
+ * Matching is by label because a step is a presentation row, not a runtime
+ * record. Guided presets prefix their labels with the phase ("Implementation
+ * phase · Execute ticket waves") and name the same work differently from the
+ * legacy presets ("TDD implementation workers"), so every arm has to accept
+ * both vocabularies — a stage that matches no step silently loses its restart.
+ */
 export function workflowStepMatchesImplementationFailure<TThread extends WorkflowModelThread>(
   step: WorkflowTimelineStep<TThread>,
   stage: OrchestrationImplementationRetryableFailure["stage"],
@@ -144,25 +154,115 @@ export function workflowStepMatchesImplementationFailure<TThread extends Workflo
   switch (stage) {
     case "source-dirty":
     case "worktree-setup":
-      return label === "create shared worktree" || label.startsWith("load the selected spec");
+      return (
+        label.includes("create shared worktree") ||
+        label.includes("prepare shared worktree") ||
+        label.includes("load the selected spec") ||
+        label.includes("load planning tickets")
+      );
     case "worker-setup":
     case "worker-execution":
-      return label.includes("tdd") || label.includes("build");
+      return label.includes("tdd") || label.includes("build") || label.includes("ticket wave");
     case "integration":
     case "merge-gate":
-      return label.includes("integrat") || label.includes("merge gate");
+      return label.includes("integrat") || label.includes("merge");
     case "app-dev-stack":
-      return label.startsWith("start and probe appdevstack");
+      return label.includes("appdevstack");
     case "app-review":
       return label.includes("app review");
     case "code-review":
       return label.includes("code review");
     case "fixer":
-      return label.includes("repair") || label.includes("tdd");
+      return label.includes("repair") || label.includes("tdd") || label.includes("ticket wave");
     case "build":
-      return label.includes("build") || label.includes("tdd");
+      return label.includes("build") || label.includes("tdd") || label.includes("ticket wave");
     case "change-request":
-      return label.includes("change request") || label.includes("publish");
+      return (
+        label.includes("change request") ||
+        label.includes("publish") ||
+        label.includes("pull request")
+      );
+  }
+}
+
+/**
+ * What each stage of one ticket should report in the Workflows panel.
+ *
+ * A stage records an outcome only once it has one, so reading the outcome
+ * alone describes a stage that is running right now as one that never began.
+ * The ticket's own status is what distinguishes the two.
+ */
+export function implementationTicketStageDetails(
+  state:
+    | {
+        readonly status: string;
+        readonly workerResult?: { readonly status: string } | null | undefined;
+        readonly appReviewOutcome?: string | null | undefined;
+        readonly codeReviewOutcome?: string | null | undefined;
+      }
+    | undefined,
+  ticket: { readonly appReviewEligible?: boolean | undefined },
+): {
+  readonly implementation: string;
+  readonly appReview: string;
+  readonly codeReview: string;
+} {
+  return {
+    implementation:
+      state?.workerResult?.status ??
+      (state?.status === "running" ? "running" : (state?.status ?? "not started")),
+    appReview:
+      state?.appReviewOutcome === "skipped"
+        ? "skipped — not planned for browser review"
+        : (state?.appReviewOutcome ??
+          (state?.status === "app-reviewing"
+            ? "in review"
+            : ticket.appReviewEligible === true
+              ? "eligible"
+              : "not planned")),
+    codeReview:
+      state?.codeReviewOutcome ??
+      (state?.status === "code-reviewing" ? "in review" : "not started"),
+  };
+}
+
+/**
+ * The stage an implementation run is sitting at right now.
+ *
+ * A paused or stalled run reports no `retryableFailure`, so this is what tells
+ * the panel which step a resume would actually re-enter — the difference
+ * between one honest "Start step again" and the same button on every row.
+ * Ticket-level App Review and Code Review report as worker execution because
+ * the ticket-wave step owns them.
+ */
+export function implementationRunCurrentStage(run: {
+  readonly status: OrchestrationImplementationRunStatus;
+  readonly retryableFailure?: OrchestrationImplementationRetryableFailure | null | undefined;
+}): OrchestrationImplementationRetryableFailure["stage"] | null {
+  switch (run.status) {
+    case "needs-human-attention":
+      return run.retryableFailure?.stage ?? null;
+    case "launch-pending":
+      return "worktree-setup";
+    case "running":
+      return "worker-execution";
+    case "integrating":
+      return "integration";
+    case "validating":
+      return "merge-gate";
+    case "qa-reviewing":
+      return "app-review";
+    case "fixing":
+      return "fixer";
+    case "code-reviewing":
+    case "code-review-fixing":
+      return "code-review";
+    case "publishing-change-request":
+    case "babysitting-change-request":
+      return "change-request";
+    case "completed":
+    case "canceled":
+      return null;
   }
 }
 
@@ -252,6 +352,8 @@ function entrySkillIds<TThread extends WorkflowModelThread>(
       return new Set(["implementation.tdd.codex"]);
     case "app-review-fixer":
       return new Set(["matt-pocock.implement"]);
+    case "app-review-planner":
+      return new Set(["matt-pocock.to-tickets"]);
     case "implementation-validator":
       return new Set(["implementation.merge-gate.codex"]);
     case "implementation-qa-reviewer":

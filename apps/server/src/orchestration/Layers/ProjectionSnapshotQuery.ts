@@ -3008,6 +3008,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                     row.run.cycles.some(
                       (cycle) =>
                         visibleThreadIds.has(cycle.reviewerThreadId) ||
+                        (cycle.plannerThreadId != null &&
+                          visibleThreadIds.has(cycle.plannerThreadId)) ||
                         (cycle.fixerThreadId !== null && visibleThreadIds.has(cycle.fixerThreadId)),
                     ),
                 )
@@ -3204,6 +3206,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                     row.run.cycles.some(
                       (cycle) =>
                         visibleThreadIds.has(cycle.reviewerThreadId) ||
+                        (cycle.plannerThreadId != null &&
+                          visibleThreadIds.has(cycle.plannerThreadId)) ||
                         (cycle.fixerThreadId !== null && visibleThreadIds.has(cycle.fixerThreadId)),
                     ),
                 )

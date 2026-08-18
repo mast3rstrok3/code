@@ -2,11 +2,31 @@ import type { ProviderInteractionMode, WorkflowPreset } from "@t3tools/contracts
 
 export type WorkflowPresetRoute = "product" | "implementation" | "planning" | "review";
 
+/**
+ * One agent a step starts, as the model settings surface it.
+ *
+ * A step is a phase of the run, not a single agent: "Execute ticket waves"
+ * starts TDD workers, ticket App Reviews, and ticket Code Reviews. Each entry
+ * here is separately pinnable; the step's own pin covers any that are not.
+ * Only work that runs in a thread of its own can appear — an agent's later
+ * turns in the same thread keep the model that thread launched with.
+ */
+export interface WorkflowPresetSubStep {
+  readonly label: string;
+  readonly workflowPromptId: string;
+  readonly note?: string;
+}
+
 export interface WorkflowPresetHelpStep {
   readonly label: string;
   readonly skillId?: string;
   readonly threadBoundary?: "same thread" | "new thread" | "new child thread" | "new review thread";
   readonly note?: string;
+  /**
+   * The agents this step starts, when it starts more than the one its own
+   * `skillId` names. Absent means the step is its own single agent.
+   */
+  readonly subSteps?: ReadonlyArray<WorkflowPresetSubStep>;
 }
 
 export interface WorkflowPresetDefinition {
@@ -18,6 +38,25 @@ export interface WorkflowPresetDefinition {
   readonly workflowPromptId?: string;
   readonly helpSteps: ReadonlyArray<WorkflowPresetHelpStep>;
 }
+
+/**
+ * The three agents an App Review cycle runs, each in its own thread: the
+ * browser review, the gap analysis that writes repair tickets, and the fix.
+ */
+const APP_REVIEW_SUB_STEPS: ReadonlyArray<WorkflowPresetSubStep> = [
+  {
+    label: "Browser review",
+    workflowPromptId: "implementation.browser-app-review.codex",
+  },
+  {
+    label: "Gap analysis & repair tickets",
+    workflowPromptId: "matt-pocock.to-tickets",
+  },
+  {
+    label: "Repair implementation",
+    workflowPromptId: "matt-pocock.implement",
+  },
+];
 
 // These definitions remain available for decoding and rendering historical
 // threads, but they are not selectable workflows or catalog entries.
@@ -128,6 +167,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         label: "Nested App Review against the shared AppDevStack",
         skillId: "implementation.browser-app-review.codex",
         note: "automatic; App Review has its own cycle budget",
+        subSteps: APP_REVIEW_SUB_STEPS,
       },
       {
         label: "Code Review",
@@ -171,6 +211,15 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         label: "Execute ticket waves",
         skillId: "implementation.tdd.codex",
         note: "workers, up to ten App Review cycles, and one Code Review per ticket",
+        subSteps: [
+          { label: "TDD implementation worker", workflowPromptId: "implementation.tdd.codex" },
+          {
+            label: "Ticket App Review",
+            workflowPromptId: "implementation.browser-app-review.codex",
+            note: "the review's own agents follow the App Review step",
+          },
+          { label: "Ticket Code Review", workflowPromptId: "implementation.code-review.codex" },
+        ],
       },
       {
         label: "Merge ticket branches into the starting worktree",
@@ -180,6 +229,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         label: "Run App Review",
         skillId: "implementation.browser-app-review.codex",
         note: "up to ten review, repair-plan, and fix cycles",
+        subSteps: APP_REVIEW_SUB_STEPS,
       },
       {
         label: "Final Code Review, pull request, and green checks",
@@ -221,6 +271,15 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         label: "Implementation phase · Execute ticket waves",
         skillId: "implementation.tdd.codex",
         note: "automatic; parallel workers, eligible App Reviews, and one Code Review per ticket",
+        subSteps: [
+          { label: "TDD implementation worker", workflowPromptId: "implementation.tdd.codex" },
+          {
+            label: "Ticket App Review",
+            workflowPromptId: "implementation.browser-app-review.codex",
+            note: "the review's own agents follow the App Review step",
+          },
+          { label: "Ticket Code Review", workflowPromptId: "implementation.code-review.codex" },
+        ],
       },
       {
         label: "Implementation phase · Merge ticket branches",
@@ -231,6 +290,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         label: "Implementation phase · App Review",
         skillId: "implementation.browser-app-review.codex",
         note: "automatic; up to ten review, repair-plan, and fix cycles",
+        subSteps: APP_REVIEW_SUB_STEPS,
       },
       {
         label: "Implementation phase · Final Code Review, pull request, and green checks",

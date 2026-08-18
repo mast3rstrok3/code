@@ -11,6 +11,8 @@ import {
   renderProviderTraitsMenuContent,
   renderProviderTraitsPicker,
 } from "./composerProviderState";
+import type { ComposerModeControls } from "./TraitsPicker";
+import { DraftId } from "../../composerDraftStore";
 
 // Everything in composerProviderState is now data-driven by the model's
 // optionDescriptors, so these tests use a single synthetic provider/model and
@@ -18,6 +20,18 @@ import {
 
 const PROVIDER: ProviderDriverKind = ProviderDriverKind.make("codex");
 const MODEL = "test-model";
+
+const MODE_CONTROLS: ComposerModeControls = {
+  interactionMode: "default",
+  workflowPreset: null,
+  lastWorkflowPreset: null,
+  workflowAvailable: true,
+  showPrimaryModes: false,
+  buildSkills: [],
+  selectedBuildSkillId: null,
+  onInteractionModeChange: () => {},
+  onBuildSkillChange: () => {},
+};
 
 function selectDescriptor(
   id: string,
@@ -243,6 +257,24 @@ describe("provider traits render guards", () => {
     };
 
     expect(renderProviderTraitsPicker(args)).toBeNull();
+    expect(renderProviderTraitsMenuContent(args)).toBeNull();
+  });
+
+  it("still renders the picker for a traitless model when mode controls are passed", () => {
+    const args = {
+      provider: PROVIDER,
+      draftId: DraftId.make("draft-1"),
+      model: MODEL,
+      models: modelWith([]),
+      modelOptions: undefined,
+      prompt: "",
+      onPromptChange: () => {},
+    };
+
+    // Without the mode section there is nothing to show; with it, the workflow
+    // and skill lists still need a home.
+    expect(renderProviderTraitsPicker(args)).toBeNull();
+    expect(renderProviderTraitsPicker({ ...args, modeControls: MODE_CONTROLS })).not.toBeNull();
     expect(renderProviderTraitsMenuContent(args)).toBeNull();
   });
 });

@@ -169,6 +169,46 @@ it.effect("allows App Review to resolve preview targets after launch", () =>
   }),
 );
 
+const legacyCycle = {
+  cycleNumber: 1,
+  status: "planning",
+  reviewId: "app-review-1",
+  reviewerThreadId: "thread-reviewer",
+  reviewVerdict: "failed",
+  actionableFindingsMarkdown: "1. [major] Checkout fails",
+  planId: null,
+  plannerTurnId: null,
+  fixerThreadId: null,
+  fixResult: null,
+  workspaceRevision: {
+    headSha: "abc123",
+    workingTreeDiffHash: "worktree-hash",
+    branchDiffHash: "branch-hash",
+    fingerprint: "fingerprint",
+  },
+  startedAt: "2026-01-01T00:00:00.000Z",
+  completedAt: null,
+} as const;
+
+it.effect("decodes cycles recorded before gap analysis had its own thread", () =>
+  Effect.gen(function* () {
+    // Those cycles ran gap analysis on the reviewer; the reactor falls back to
+    // reviewerThreadId when plannerThreadId is absent, so it must stay optional.
+    const run = yield* decodeAppReviewWorkflowRun({ ...workflowRun, cycles: [legacyCycle] });
+    assert.strictEqual(run.cycles[0]?.plannerThreadId, undefined);
+  }),
+);
+
+it.effect("carries the gap analysis thread on new cycles", () =>
+  Effect.gen(function* () {
+    const run = yield* decodeAppReviewWorkflowRun({
+      ...workflowRun,
+      cycles: [{ ...legacyCycle, plannerThreadId: "thread-planner" }],
+    });
+    assert.strictEqual(run.cycles[0]?.plannerThreadId, "thread-planner");
+  }),
+);
+
 it.effect("rejects App Review cycle budgets outside 1 through 50", () =>
   Effect.gen(function* () {
     for (const cycleBudget of [0, 51]) {

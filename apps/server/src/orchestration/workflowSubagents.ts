@@ -290,6 +290,12 @@ export function findWorkflowStepModels(
  */
 export function resolveWorkflowStepModelSelection(input: {
   readonly workflowPromptId: string;
+  /**
+   * The workflow step this spawn belongs to, when the spawn is a sub-step
+   * rather than the step itself — a per-ticket Code Review runs under "Execute
+   * ticket waves". Leave unset when the spawn *is* the step.
+   */
+  readonly stepWorkflowPromptId?: string | undefined;
   readonly definition: WorkflowSubagentSpawnDefinition | undefined;
   readonly stepModels: ReadonlyArray<WorkflowStepModelOverride> | undefined;
   readonly parentModelSelection: ModelSelection;
@@ -299,7 +305,29 @@ export function resolveWorkflowStepModelSelection(input: {
   readonly overrideApplied: boolean;
   readonly fallbackDetail: string | null;
 } {
-  const pin = input.stepModels?.find((entry) => entry.workflowPromptId === input.workflowPromptId);
+  // Precedence, most specific first:
+  //   1. this sub-step's own pin, scoped to the step that starts it
+  //   2. the step's pin, which covers every agent the step starts
+  //   3. an unscoped pin on this prompt — only when the spawn *is* the step,
+  //      otherwise it would pick up a sibling step's pin (a ticket Code Review
+  //      would inherit the final Code Review's model)
+  const pins = input.stepModels ?? [];
+  const step = input.stepWorkflowPromptId;
+  const pin =
+    step === undefined
+      ? pins.find(
+          (entry) =>
+            entry.workflowPromptId === input.workflowPromptId &&
+            entry.stepWorkflowPromptId === undefined,
+        )
+      : (pins.find(
+          (entry) =>
+            entry.workflowPromptId === input.workflowPromptId &&
+            entry.stepWorkflowPromptId === step,
+        ) ??
+        pins.find(
+          (entry) => entry.workflowPromptId === step && entry.stepWorkflowPromptId === undefined,
+        ));
   if (pin === undefined) {
     return resolveWorkflowSubagentModelSelection({
       definition: input.definition,

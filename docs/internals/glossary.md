@@ -155,15 +155,15 @@ The durable identity of one workflow run. A top-level controller creates the ID 
 
 #### App Review Workflow
 
-A durable workflow made of budgeted three-step cycles: human-style Browser App Review, same-thread gap analysis and repair planning, then plan implementation in a fresh child thread using the Implement skill. It can run standalone against an in-place worktree or as a nested workflow below Implementation.
+A durable workflow made of budgeted three-step cycles: human-style Browser App Review, gap analysis and repair planning in a child thread, then plan implementation in a further child thread using the Implement skill. It can run standalone against an in-place worktree or as a nested workflow below Implementation.
 
 #### App Review controller
 
-The persistent thread that owns one App Review run and keeps the original brief across cycles. Each cycle gets a fresh reviewer thread; that reviewer switches to CLI Plan mode after a failed review so its evidence, gap analysis, and plan remain together. Implementation happens in a new child thread.
+The persistent thread that owns one App Review run and keeps the original brief across cycles. Each cycle gets a fresh reviewer thread. A failed review starts a gap analysis thread below it, which receives the brief and the complete actionable findings and persists the repair plan. Implementation happens in a further child thread.
 
 #### App Review cycle
 
-One complete App Review budget unit: UI review, same-thread gap analysis and plan after a failure, and implementation in a new thread. The initial review is cycle 1. A pass completes its cycle without the unnecessary planning and implementation steps; the final failed cycle still implements its plan before the run becomes exhausted.
+One complete App Review budget unit: UI review, gap analysis and plan after a failure, and implementation, each in its own thread. The initial review is cycle 1. A pass completes its cycle without the unnecessary planning and implementation steps; the final failed cycle still implements its plan before the run becomes exhausted.
 
 #### App Review outcome
 

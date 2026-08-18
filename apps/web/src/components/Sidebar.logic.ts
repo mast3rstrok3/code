@@ -1089,6 +1089,8 @@ export function workflowRoleShortLabel(
       return "App Review";
     case "app-review-reviewer":
       return "Browser review";
+    case "app-review-planner":
+      return "Gap analysis";
     case "app-review-fixer":
       return "Implement";
     case "implementation-fixer":

@@ -109,6 +109,12 @@ export const AppReviewWorkflowCycle = Schema.Struct({
   reviewVerdict: Schema.NullOr(Schema.Literals(["pending", "passed", "failed"])),
   actionableFindingsMarkdown: Schema.NullOr(Schema.String),
   planId: Schema.NullOr(TrimmedNonEmptyString),
+  /**
+   * The thread that runs gap analysis and writes the cycle's repair tickets.
+   * Absent on cycles recorded before gap analysis moved out of the reviewer
+   * thread; those still reconcile against `reviewerThreadId`.
+   */
+  plannerThreadId: Schema.optionalKey(Schema.NullOr(ThreadId)),
   plannerTurnId: Schema.NullOr(TurnId),
   fixerThreadId: Schema.NullOr(ThreadId),
   repairTickets: Schema.optionalKey(Schema.Array(AppReviewWorkflowRepairTicket)),

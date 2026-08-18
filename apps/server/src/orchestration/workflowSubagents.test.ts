@@ -301,6 +301,93 @@ describe("resolveWorkflowStepModelSelection", () => {
     expect(resolved.overrideApplied).toBe(false);
   });
 
+  it("lets a step's pin cover the agents that step starts", () => {
+    // A per-ticket Code Review runs inside "Execute ticket waves", so pinning
+    // that step moves the reviewer too — the step label promises exactly that.
+    const resolved = resolveWorkflowStepModelSelection({
+      workflowPromptId: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+      stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+      definition: resolveWorkflowSubagentSpawnDefinition(
+        WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+      ),
+      stepModels: [
+        {
+          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+          modelSelection: pinnedSelection,
+        },
+      ],
+      parentModelSelection: claudeParentSelection,
+      settings: enabledClaudeSettings,
+    });
+    expect(resolved.modelSelection).toEqual(pinnedSelection);
+    expect(resolved.overrideApplied).toBe(true);
+  });
+
+  it("prefers a sub-step's own pin over the pin of the step that starts it", () => {
+    const ownSelection: ModelSelection = {
+      instanceId: ProviderInstanceId.make("claudeAgent"),
+      model: "claude-sonnet-5",
+    };
+    const resolved = resolveWorkflowStepModelSelection({
+      workflowPromptId: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+      stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+      definition: resolveWorkflowSubagentSpawnDefinition(
+        WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+      ),
+      stepModels: [
+        {
+          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+          modelSelection: pinnedSelection,
+        },
+        {
+          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+          stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+          modelSelection: ownSelection,
+        },
+      ],
+      parentModelSelection: claudeParentSelection,
+      settings: enabledClaudeSettings,
+    });
+    expect(resolved.modelSelection).toEqual(ownSelection);
+  });
+
+  it("keeps a sub-step out of the identically named step's pin", () => {
+    // The final Code Review step and the per-ticket Code Review share a prompt
+    // id. Pinning the final step must not silently move every ticket review.
+    const finalReviewSelection: ModelSelection = {
+      instanceId: ProviderInstanceId.make("claudeAgent"),
+      model: "claude-sonnet-5",
+    };
+    const stepModels = [
+      {
+        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+        modelSelection: finalReviewSelection,
+      },
+    ];
+    const definition = resolveWorkflowSubagentSpawnDefinition(
+      WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+    );
+
+    const ticketReview = resolveWorkflowStepModelSelection({
+      workflowPromptId: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+      stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+      definition,
+      stepModels,
+      parentModelSelection: claudeParentSelection,
+      settings: enabledClaudeSettings,
+    });
+    expect(ticketReview.modelSelection).toEqual(claudeParentSelection);
+
+    const finalReview = resolveWorkflowStepModelSelection({
+      workflowPromptId: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+      definition,
+      stepModels,
+      parentModelSelection: claudeParentSelection,
+      settings: enabledClaudeSettings,
+    });
+    expect(finalReview.modelSelection).toEqual(finalReviewSelection);
+  });
+
   it("falls back and explains when the pinned instance is disabled", () => {
     const resolved = resolveWorkflowStepModelSelection({
       workflowPromptId: WORKFLOW_PROMPT_IDS.planningTicketReviewerCodex,

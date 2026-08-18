@@ -137,6 +137,8 @@ export function workflowProgressLabel(input: {
       return "App Review · Controller";
     case "app-review-reviewer":
       return "App Review · Browser review";
+    case "app-review-planner":
+      return "App Review · Gap analysis";
     case "app-review-fixer":
       return "App Review · Implement plan";
     case "implementation-fixer":

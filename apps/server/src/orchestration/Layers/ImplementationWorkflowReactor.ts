@@ -49,6 +49,7 @@ import {
   resolveWorkflowStepModelSelection,
   resolveWorkflowSubagentSpawnDefinition,
 } from "../workflowSubagents.ts";
+import { isWorkflowThreadPaused } from "../workflowPause.ts";
 
 // Code Review owns its fixes, while final-validation repairs receive a bounded delta review before
 // the complete gate runs again. Exhaustion publishes the clean branch as work in progress instead
@@ -66,7 +67,8 @@ type ImplementationWorkflowEvent = Extract<
       | "thread.implementation-run-retry-requested"
       | "thread.implementation-run-cancel-requested"
       | "thread.app-review-workflow-launched"
-      | "thread.app-review-workflow-updated";
+      | "thread.app-review-workflow-updated"
+      | "thread.unsettled";
   }
 >;
 
@@ -1078,6 +1080,8 @@ const make = Effect.gen(function* () {
    */
   const modelForStep = Effect.fn("ImplementationWorkflowReactor.modelForStep")(function* (input: {
     readonly workflowPromptId: string;
+    /** Set when the spawn runs under a step with a different prompt id. */
+    readonly stepWorkflowPromptId?: string;
     readonly orchestratorThread: OrchestrationThread;
     readonly createdAt: string;
   }) {
@@ -1087,6 +1091,9 @@ const make = Effect.gen(function* () {
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
     const resolved = resolveWorkflowStepModelSelection({
       workflowPromptId: input.workflowPromptId,
+      ...(input.stepWorkflowPromptId === undefined
+        ? {}
+        : { stepWorkflowPromptId: input.stepWorkflowPromptId }),
       definition: resolveWorkflowSubagentSpawnDefinition(input.workflowPromptId),
       stepModels: findWorkflowStepModels(input.orchestratorThread, readModel.threads),
       parentModelSelection: input.orchestratorThread.modelSelection,
@@ -1787,6 +1794,9 @@ const make = Effect.gen(function* () {
         title: `Code review ${ticket?.title ?? input.ticketId}`,
         modelSelection: yield* modelForStep({
           workflowPromptId: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+          // Per-ticket reviews belong to "Execute ticket waves", so that
+          // step's pin covers them unless they carry a pin of their own.
+          stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
           orchestratorThread,
           createdAt: input.createdAt,
         }),
@@ -1901,6 +1911,9 @@ const make = Effect.gen(function* () {
         cycleBudget: 10,
         modelSelection: yield* modelForStep({
           workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+          // Per-ticket reviews belong to "Execute ticket waves", so that
+          // step's pin covers them unless they carry a pin of their own.
+          stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
           orchestratorThread,
           createdAt: input.createdAt,
         }),
@@ -5416,6 +5429,32 @@ const make = Effect.gen(function* () {
     }
   });
 
+  /**
+   * Resuming a paused workflow un-settles its threads, and stage recovery is
+   * what turns that back into running work — sweeping here rather than waiting
+   * for the periodic pass is what makes "Start step again" start something the
+   * user can see.
+   *
+   * A resume un-settles the whole subtree, so this reacts to the thread that
+   * owns the run and no other. Sweeping once per un-settled descendant would
+   * start one duplicate stage thread per thread in the run, none of which has a
+   * session yet for the next sweep to recognize. Resuming a single paused
+   * branch instead of the workflow root is picked up by the periodic sweep.
+   */
+  const handleThreadUnsettled = Effect.fn("ImplementationWorkflowReactor.handleThreadUnsettled")(
+    function* (event: Extract<ImplementationWorkflowEvent, { type: "thread.unsettled" }>) {
+      const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+      const ownsThread = readModel.implementationRuns.some(
+        (run) =>
+          run.status !== "canceled" &&
+          run.status !== "completed" &&
+          findRunSourceThreadId({ readModel, run }) === event.payload.threadId,
+      );
+      if (!ownsThread) return;
+      yield* recoverIncompleteStages();
+    },
+  );
+
   const processEvent = Effect.fn("ImplementationWorkflowReactor.processEvent")(function* (
     event: ImplementationWorkflowEvent,
   ) {
@@ -5444,6 +5483,9 @@ const make = Effect.gen(function* () {
       case "thread.app-review-workflow-launched":
       case "thread.app-review-workflow-updated":
         yield* handleNestedAppReviewWorkflow(event);
+        return;
+      case "thread.unsettled":
+        yield* handleThreadUnsettled(event);
         return;
     }
   });
@@ -5662,6 +5704,11 @@ const make = Effect.gen(function* () {
     const createdAt = DateTime.formatIso(yield* DateTime.now);
     for (const run of readModel.implementationRuns) {
       if (run.status === "canceled") continue;
+      // A paused run is waiting for the user, not for recovery. Re-entering its
+      // stage would create the stage's thread and then fail to start the turn
+      // on the paused-ancestor invariant, leaving an orphan thread behind every
+      // sweep for as long as the pause lasts.
+      if (isWorkflowThreadPaused(readModel.threads, run.orchestratorThreadId)) continue;
       const sourceThreadId = findRunSourceThreadId({ readModel, run });
       if (sourceThreadId === null) continue;
       const childThreads = readModel.threads.filter(
@@ -5834,8 +5881,16 @@ const make = Effect.gen(function* () {
       }
 
       if (run.artifactSource === "planning-spec" && run.status === "running") {
+        // Stop step pauses one ticket's worker subtree without pausing the run,
+        // so a ticket stage is only recoverable while its worker is not paused.
+        const ticketStagePaused = (state: { readonly workerThreadId: ThreadId | null }) =>
+          state.workerThreadId !== null &&
+          isWorkflowThreadPaused(readModel.threads, state.workerThreadId);
         const pendingTicketReview = run.ticketStates.find(
-          (state) => state.status === "app-reviewing" && state.appReviewWorkflowRunId == null,
+          (state) =>
+            state.status === "app-reviewing" &&
+            state.appReviewWorkflowRunId == null &&
+            !ticketStagePaused(state),
         );
         if (pendingTicketReview !== undefined) {
           yield* recoverRunStage(
@@ -5851,7 +5906,7 @@ const make = Effect.gen(function* () {
           continue;
         }
         const interruptedTicketCodeReview = run.ticketStates.find((state) => {
-          if (state.status !== "code-reviewing") return false;
+          if (state.status !== "code-reviewing" || ticketStagePaused(state)) return false;
           const thread =
             state.codeReviewThreadId == null
               ? undefined
@@ -6125,7 +6180,8 @@ const make = Effect.gen(function* () {
           event.type !== "thread.implementation-run-retry-requested" &&
           event.type !== "thread.implementation-run-cancel-requested" &&
           event.type !== "thread.app-review-workflow-launched" &&
-          event.type !== "thread.app-review-workflow-updated"
+          event.type !== "thread.app-review-workflow-updated" &&
+          event.type !== "thread.unsettled"
         ) {
           return Effect.void;
         }
@@ -6184,6 +6240,7 @@ const make = Effect.gen(function* () {
     start,
     drain: worker.drain,
     recoverRetryableRuns: () => recoverRetryableRuns().pipe(Effect.orDie),
+    recoverIncompleteStages: () => recoverIncompleteStages().pipe(Effect.orDie),
   } satisfies ImplementationWorkflowReactorShape;
 });
 

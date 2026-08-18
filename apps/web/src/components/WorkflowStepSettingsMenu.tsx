@@ -1,133 +1,44 @@
-import { useAtomValue } from "@effect/atom-react";
-import type {
-  EnvironmentId,
-  ModelSelection,
-  ProviderInstanceId,
-  ThreadId,
-} from "@t3tools/contracts";
-import { createModelSelection } from "@t3tools/shared/model";
+import type { EnvironmentId, ModelSelection, ThreadId } from "@t3tools/contracts";
+import type { WorkflowPresetSubStep } from "@t3tools/shared/workflowPresets";
 import { Pause, RotateCcw, Settings2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
-import { cn } from "~/lib/utils";
-import {
-  applyProviderInstanceSettings,
-  deriveProviderInstanceEntries,
-  sortProviderInstanceEntries,
-} from "../providerInstances";
-import { getCustomModelOptionsByInstance } from "../modelSelection";
-import { primaryServerProvidersAtom, serverEnvironment } from "../state/server";
-import { useEnvironmentSettings } from "../hooks/useSettings";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
-import { ProviderModelPicker } from "./chat/ProviderModelPicker";
-import { getTriggerDisplayModelName } from "./chat/providerIconUtils";
+import {
+  useWorkflowModelChoices,
+  WorkflowStepModelPins,
+  type SetWorkflowStepModel,
+  type WorkflowModelPinKey,
+} from "./WorkflowModelPins";
 
 /**
- * Auto/Custom model choice for one step.
- *
- * Split from the menu so the provider and settings subscriptions it needs
- * exist only while a menu is open — a workflow renders a row for every stage,
- * and none of them should carry a picker's state until it is asked for.
+ * The step's model choices, split out so the provider and settings
+ * subscriptions they need exist only while a menu is open — a workflow renders
+ * a row for every stage, and none of them should carry a picker's state until
+ * it is asked for.
  */
 function WorkflowStepModelSection(props: {
   readonly environmentId: EnvironmentId;
   readonly stepLabel: string;
   readonly workflowPromptId: string;
-  readonly pinnedSelection: ModelSelection | null;
+  readonly subSteps: ReadonlyArray<WorkflowPresetSubStep>;
+  readonly pinFor: (key: WorkflowModelPinKey) => ModelSelection | null;
   readonly usesRootThread: boolean;
   readonly rootModelSelection: ModelSelection;
-  readonly onSetStepModel: (workflowPromptId: string, selection: ModelSelection | null) => void;
+  readonly onSetStepModel: SetWorkflowStepModel;
 }) {
-  // The workflow may live in a non-primary environment, so its own providers
-  // and settings decide what can be pinned.
-  const environmentConfig = useAtomValue(serverEnvironment.configValueAtom(props.environmentId));
-  const primaryProviders = useAtomValue(primaryServerProvidersAtom);
-  const providers = environmentConfig?.providers ?? primaryProviders;
-  const settings = useEnvironmentSettings(props.environmentId);
-
-  const instanceEntries = useMemo(
-    () =>
-      sortProviderInstanceEntries(
-        applyProviderInstanceSettings(deriveProviderInstanceEntries(providers), settings),
-      ),
-    [providers, settings],
-  );
-  const modelOptionsByInstance = useMemo(
-    () => getCustomModelOptionsByInstance(settings, providers),
-    [providers, settings],
-  );
-
-  const activeSelection = props.pinnedSelection ?? props.rootModelSelection;
-  const describeSelection = (selection: ModelSelection): string => {
-    const option = modelOptionsByInstance
-      .get(selection.instanceId)
-      ?.find((candidate) => candidate.slug === selection.model);
-    const modelName = option ? getTriggerDisplayModelName(option) : selection.model;
-    const instanceName = instanceEntries.find(
-      (entry) => entry.instanceId === selection.instanceId,
-    )?.displayName;
-    return instanceName === undefined ? modelName : `${instanceName} · ${modelName}`;
-  };
-
+  const choices = useWorkflowModelChoices(props.environmentId);
   return (
     <>
-      <div className="flex gap-1 rounded-md bg-muted p-0.5">
-        {(
-          [
-            ["auto", "Auto"],
-            ["custom", "Custom"],
-          ] as const
-        ).map(([mode, label]) => {
-          const selected =
-            mode === "auto" ? props.pinnedSelection === null : props.pinnedSelection !== null;
-          return (
-            <button
-              key={mode}
-              type="button"
-              aria-pressed={selected}
-              onClick={() =>
-                props.onSetStepModel(
-                  props.workflowPromptId,
-                  mode === "auto"
-                    ? null
-                    : createModelSelection(
-                        props.rootModelSelection.instanceId,
-                        props.rootModelSelection.model,
-                      ),
-                )
-              }
-              className={cn(
-                "cursor-pointer flex-1 rounded-[5px] px-2 py-1 text-xs font-medium",
-                selected
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {label}
-            </button>
-          );
-        })}
-      </div>
-      {props.pinnedSelection === null ? (
-        <p className="text-[11px] leading-relaxed text-muted-foreground">
-          Runs on the model this workflow was started with (
-          {describeSelection(props.rootModelSelection)}).
-        </p>
-      ) : (
-        <ProviderModelPicker
-          activeInstanceId={activeSelection.instanceId}
-          model={activeSelection.model}
-          lockedProvider={null}
-          instanceEntries={instanceEntries}
-          modelOptionsByInstance={modelOptionsByInstance}
-          triggerVariant="outline"
-          triggerClassName="w-full justify-between text-foreground/90 hover:text-foreground"
-          triggerAriaLabel={`Model for ${props.stepLabel}`}
-          onInstanceModelChange={(instanceId: ProviderInstanceId, model: string) => {
-            props.onSetStepModel(props.workflowPromptId, createModelSelection(instanceId, model));
-          }}
-        />
-      )}
+      <WorkflowStepModelPins
+        stepLabel={props.stepLabel}
+        workflowPromptId={props.workflowPromptId}
+        subSteps={props.subSteps}
+        pinFor={props.pinFor}
+        rootModelSelection={props.rootModelSelection}
+        choices={choices}
+        onSetStepModel={props.onSetStepModel}
+      />
       {props.usesRootThread ? (
         <p className="text-[11px] leading-relaxed text-muted-foreground">
           This step also runs in the workflow&apos;s main thread. A pin covers the agents this step
@@ -152,16 +63,16 @@ export function WorkflowStepSettingsMenu(props: {
   readonly stepLabel: string;
   /** Null for steps with no agent of their own, e.g. worktree preparation. */
   readonly workflowPromptId: string | null;
-  readonly pinnedSelection: ModelSelection | null;
+  /** The agents this step starts, when it starts more than one kind. */
+  readonly subSteps: ReadonlyArray<WorkflowPresetSubStep>;
+  readonly pinFor: (key: WorkflowModelPinKey) => ModelSelection | null;
   /** True when the step's work happens in the workflow's main thread. */
   readonly usesRootThread: boolean;
   readonly rootModelSelection: ModelSelection;
   readonly restartLabel: string;
   readonly restartDisabledReason: string | null;
   readonly runningThreadIds: readonly ThreadId[];
-  readonly onSetStepModel:
-    | ((workflowPromptId: string, selection: ModelSelection | null) => void)
-    | undefined;
+  readonly onSetStepModel: SetWorkflowStepModel | undefined;
   readonly onRestart: (() => void) | undefined;
   readonly onStop: ((threadIds: readonly ThreadId[]) => void) | undefined;
 }) {
@@ -194,7 +105,8 @@ export function WorkflowStepSettingsMenu(props: {
               environmentId={props.environmentId}
               stepLabel={props.stepLabel}
               workflowPromptId={workflowPromptId}
-              pinnedSelection={props.pinnedSelection}
+              subSteps={props.subSteps}
+              pinFor={props.pinFor}
               usesRootThread={props.usesRootThread}
               rootModelSelection={props.rootModelSelection}
               onSetStepModel={onSetStepModel}

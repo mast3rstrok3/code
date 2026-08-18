@@ -90,7 +90,7 @@ import { ProviderModelPicker } from "./ProviderModelPicker";
 import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommandMenu";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
-import { type ComposerBuildSkill, ComposerModePicker } from "./ComposerModePicker";
+import type { ComposerBuildSkill } from "./ComposerModePicker";
 import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
 import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
@@ -104,6 +104,7 @@ import {
   renderProviderTraitsMenuContent,
   renderProviderTraitsPicker,
 } from "./composerProviderState";
+import type { ComposerModeControls } from "./TraitsPicker";
 import { ContextWindowMeter } from "./ContextWindowMeter";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { basenameOfPath } from "../../pierre-icons";
@@ -302,17 +303,13 @@ function isInsideComposerFloatingLayer(element: Element): boolean {
   return element.closest(COMPOSER_FLOATING_LAYER_SELECTOR) !== null;
 }
 
-const ComposerFooterModeControls = memo(function ComposerFooterModeControls(props: {
-  showInteractionModeToggle: boolean;
-  interactionMode: ProviderInteractionMode;
-  workflowPreset: WorkflowPreset | null;
-  lastWorkflowPreset: WorkflowPreset | null;
-  planningWorkflowAvailable: boolean;
-  buildSkills: ReadonlyArray<ComposerBuildSkill>;
-  selectedBuildSkillId: string | null;
+/**
+ * The runtime-access select. Mode, workflow and skill selection live in the
+ * model settings control next to it, so the footer carries one settings popup
+ * rather than two.
+ */
+const ComposerFooterAccessControl = memo(function ComposerFooterAccessControl(props: {
   runtimeMode: RuntimeMode;
-  onInteractionModeChange: (mode: ProviderInteractionMode, preset: WorkflowPreset | null) => void;
-  onBuildSkillChange: (skillId: string | null) => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
 }) {
   const runtimeModeOption = runtimeModeConfig[props.runtimeMode];
@@ -320,23 +317,6 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
   return (
     <>
       <Separator orientation="vertical" className="mx-0.5 hidden h-4 sm:block" />
-
-      {props.showInteractionModeToggle ? (
-        <>
-          <ComposerModePicker
-            buildSkills={props.buildSkills}
-            interactionMode={props.interactionMode}
-            selectedBuildSkillId={props.selectedBuildSkillId}
-            workflowPreset={props.workflowPreset}
-            lastWorkflowPreset={props.lastWorkflowPreset}
-            workflowAvailable={props.planningWorkflowAvailable}
-            onBuildSkillChange={props.onBuildSkillChange}
-            onChange={props.onInteractionModeChange}
-          />
-
-          <Separator orientation="vertical" className="mx-0.5 hidden h-4 sm:block" />
-        </>
-      ) : null}
 
       <Tooltip>
         <Select
@@ -920,6 +900,38 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     () => isPlanningWorkflowAvailableForProvider(selectedProvider),
     [selectedProvider],
   );
+  // Workflows and Build skills are not plan mode, so they survive the legacy
+  // plan-mode beta being off; only the Build/Plan rows follow that toggle. The
+  // whole section drops out when nothing in it is offerable.
+  const composerModeControls = useMemo<ComposerModeControls | null>(() => {
+    if (
+      !composerProviderControls.showInteractionModeToggle &&
+      !planningWorkflowAvailable &&
+      buildSkills.length === 0
+    ) {
+      return null;
+    }
+    return {
+      interactionMode,
+      workflowPreset,
+      lastWorkflowPreset,
+      workflowAvailable: planningWorkflowAvailable,
+      showPrimaryModes: composerProviderControls.showInteractionModeToggle,
+      buildSkills,
+      selectedBuildSkillId,
+      onInteractionModeChange: handleInteractionModeChange,
+      onBuildSkillChange: setSelectedBuildSkillId,
+    };
+  }, [
+    buildSkills,
+    composerProviderControls.showInteractionModeToggle,
+    handleInteractionModeChange,
+    interactionMode,
+    lastWorkflowPreset,
+    planningWorkflowAvailable,
+    selectedBuildSkillId,
+    workflowPreset,
+  ]);
 
   useEffect(() => {
     if (workflowPreset !== null && !planningWorkflowAvailable) {
@@ -1272,6 +1284,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     modelOptions: composerModelOptions?.[selectedInstanceId],
     prompt,
     onPromptChange: setPromptFromTraits,
+    ...(composerModeControls ? { modeControls: composerModeControls } : {}),
   });
   const pendingPrimaryAction = useMemo(
     () =>
@@ -3206,17 +3219,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
                 {isComposerFooterCompact ? (
                   <CompactComposerControlsMenu
-                    buildSkills={buildSkills}
-                    interactionMode={interactionMode}
-                    selectedBuildSkillId={selectedBuildSkillId}
-                    workflowPreset={workflowPreset}
-                    lastWorkflowPreset={lastWorkflowPreset}
-                    planningWorkflowAvailable={planningWorkflowAvailable}
+                    modeControls={composerModeControls}
                     runtimeMode={runtimeMode}
-                    showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
                     traitsMenuContent={providerTraitsMenuContent}
-                    onBuildSkillChange={setSelectedBuildSkillId}
-                    onInteractionModeChange={handleInteractionModeChange}
                     onRuntimeModeChange={handleRuntimeModeChange}
                   />
                 ) : (
@@ -3227,17 +3232,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                         {providerTraitsPicker}
                       </>
                     ) : null}
-                    <ComposerFooterModeControls
-                      buildSkills={buildSkills}
-                      showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
-                      interactionMode={interactionMode}
-                      selectedBuildSkillId={selectedBuildSkillId}
-                      workflowPreset={workflowPreset}
-                      lastWorkflowPreset={lastWorkflowPreset}
+                    <ComposerFooterAccessControl
                       runtimeMode={runtimeMode}
-                      planningWorkflowAvailable={planningWorkflowAvailable}
-                      onInteractionModeChange={handleInteractionModeChange}
-                      onBuildSkillChange={setSelectedBuildSkillId}
                       onRuntimeModeChange={handleRuntimeModeChange}
                     />
                   </>

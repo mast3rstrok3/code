@@ -686,10 +686,14 @@ const make = Effect.gen(function* () {
     const cwd = target.cwd;
     const stableRun = yield* assertStableRevision(input.run, cwd, input.occurredAt);
     if (stableRun === null) return;
+    // Gap analysis runs in a thread of its own so it can be given its own
+    // model. The reviewer's evidence does not travel with it, so the prompt
+    // below carries the brief and the complete actionable findings.
+    const plannerThreadId = yield* serverThreadId("app-review-planner");
     const planningRun: AppReviewWorkflowRun = {
       ...stableRun,
       activePhase: "planning",
-      activeThreadId: reviewer.id,
+      activeThreadId: plannerThreadId,
       cycles: stableRun.cycles.map((entry) =>
         entry.cycleNumber === cycle.cycleNumber
           ? {
@@ -697,6 +701,7 @@ const make = Effect.gen(function* () {
               status: "planning",
               reviewVerdict: "failed",
               actionableFindingsMarkdown: input.actionableFindingsMarkdown,
+              plannerThreadId,
               repairTickets: [],
               ticketingTurnId: null,
             }
@@ -705,13 +710,6 @@ const make = Effect.gen(function* () {
       updatedAt: input.occurredAt,
     };
     yield* updateRun(planningRun);
-    yield* orchestrationEngine.dispatch({
-      type: "thread.runtime-mode.set",
-      commandId: yield* serverCommandId("app-review-workflow-ticket-runtime"),
-      threadId: reviewer.id,
-      runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
-      createdAt: input.occurredAt,
-    });
     const reviewedTicketId =
       input.run.caller.type === "implementation" ? input.run.caller.ticketId : undefined;
     const parentTicket =
@@ -739,9 +737,27 @@ const make = Effect.gen(function* () {
     );
     const firstChildKey = `${parentTicketKey}.${existingRepairTicketCount + 1}`;
     yield* orchestrationEngine.dispatch({
+      type: "thread.create",
+      commandId: yield* serverCommandId("app-review-workflow-planner-create"),
+      threadId: plannerThreadId,
+      projectId: reviewer.projectId,
+      ownerUserId: reviewer.ownerUserId,
+      parentThreadId: reviewer.id,
+      workflowRole: "app-review-planner",
+      workflowContext: reviewer.workflowContext ?? null,
+      title: `App Review gap analysis ${cycle.cycleNumber}`,
+      modelSelection: yield* modelForPrompt(APP_REVIEW_TO_TICKETS_SKILL_ID, reviewer),
+      runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
+      interactionMode: "default",
+      workflowPreset: "app-review",
+      branch: reviewer.branch,
+      worktreePath: reviewer.worktreePath,
+      createdAt: input.occurredAt,
+    });
+    yield* orchestrationEngine.dispatch({
       type: "thread.turn.start",
       commandId: yield* serverCommandId("app-review-workflow-ticket-turn"),
-      threadId: reviewer.id,
+      threadId: plannerThreadId,
       message: {
         messageId: yield* serverMessageId("app-review-workflow-tickets"),
         role: "user",
@@ -749,7 +765,7 @@ const make = Effect.gen(function* () {
           [
             `Run gap analysis and create repair tickets for App Review cycle ${cycle.cycleNumber}.`,
             "",
-            "Stay in this App Review thread so the evidence, gap analysis, and tickets share one history. Do not edit files or ask questions. Apply the To Tickets vertical-slice discipline to every actionable finding.",
+            "The review that produced these findings ran in a separate thread; the brief and the complete actionable findings below are the whole input. Do not edit files, browse the app, or ask questions. Apply the To Tickets vertical-slice discipline to every actionable finding.",
             "This App Review adapter owns persistence. Do not emit planning-tickets-artifact, create external issues, or modify the parent planning-ticket set; emit only app-review-repair-tickets below.",
             `Use '${parentTicketKey}' as the parent key. Number child tickets consecutively from '${firstChildKey}' (for example '${parentTicketKey}.1', '${parentTicketKey}.2').`,
             input.run.caller.type === "implementation" && input.run.caller.ticketId !== undefined
@@ -1020,21 +1036,23 @@ const make = Effect.gen(function* () {
     if (run.activePhase !== "planning") return;
     const cycle = run.cycles.at(-1);
     if (cycle === undefined) return;
-    const reviewer = yield* resolveThread(cycle.reviewerThreadId);
-    if (reviewer === undefined) return;
-    if (threadTurnFailed(reviewer) && !hasSettledCheckpoint(reviewer)) {
+    // Cycles recorded before gap analysis moved into its own thread ran it on
+    // the reviewer, and their plans still have to reconcile.
+    const planner = yield* resolveThread(cycle.plannerThreadId ?? cycle.reviewerThreadId);
+    if (planner === undefined) return;
+    if (threadTurnFailed(planner) && !hasSettledCheckpoint(planner)) {
       yield* failRun({
         run,
         reason: "plan-missing",
         detailMarkdown:
-          reviewer.session?.lastError ??
+          planner.session?.lastError ??
           "The non-interactive planning turn stopped without a settled plan checkpoint.",
         occurredAt,
       });
       return;
     }
-    if (!hasSettledCheckpoint(reviewer)) return;
-    const turn = reviewer.latestTurn;
+    if (!hasSettledCheckpoint(planner)) return;
+    const turn = planner.latestTurn;
     if (turn === null) return;
     if (turn.state === "error" || turn.state === "interrupted") {
       yield* failRun({
@@ -1045,7 +1063,7 @@ const make = Effect.gen(function* () {
       });
       return;
     }
-    const ticketActivity = reviewer.activities
+    const ticketActivity = planner.activities
       .toReversed()
       .find(
         (activity) =>

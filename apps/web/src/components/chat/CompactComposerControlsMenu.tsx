@@ -1,4 +1,4 @@
-import { ProviderInteractionMode, RuntimeMode, WorkflowPreset } from "@t3tools/contracts";
+import { RuntimeMode } from "@t3tools/contracts";
 import { interactionModeForWorkflowPreset } from "@t3tools/shared/workflowPresets";
 import { memo, type ReactNode, useState } from "react";
 import { EllipsisIcon } from "lucide-react";
@@ -16,35 +16,60 @@ import {
   resolveComposerPrimaryMode,
   resolveWorkflowPresetForPicker,
   type ComposerModePickerView,
-  type ComposerBuildSkill,
 } from "./ComposerModePicker";
+import type { ComposerModeControls } from "./TraitsPicker";
 
+/**
+ * The narrow footer's single overflow menu: traits, mode and access in one
+ * popup. The Workflow and Skills sub-pages replace the menu body so the list
+ * they open into is not buried under everything else.
+ */
 export const CompactComposerControlsMenu = memo(function CompactComposerControlsMenu(props: {
-  buildSkills: ReadonlyArray<ComposerBuildSkill>;
-  interactionMode: ProviderInteractionMode;
-  selectedBuildSkillId: string | null;
-  workflowPreset: WorkflowPreset | null;
-  lastWorkflowPreset: WorkflowPreset | null;
-  planningWorkflowAvailable: boolean;
+  /** Null when no mode, workflow or skill is offerable for this provider. */
+  modeControls: ComposerModeControls | null;
   runtimeMode: RuntimeMode;
-  showInteractionModeToggle: boolean;
   traitsMenuContent?: ReactNode;
-  onBuildSkillChange: (skillId: string | null) => void;
-  onInteractionModeChange: (mode: ProviderInteractionMode, preset: WorkflowPreset | null) => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
 }) {
-  const activeMode = resolveComposerPrimaryMode(props);
-  const displayedPreset = resolveWorkflowPresetForPicker(props);
+  const { modeControls } = props;
   const [open, setOpen] = useState(false);
-  const [modeView, setModeView] = useState<ComposerModePickerView>(
-    activeMode === "workflow" ? "workflow" : "primary",
-  );
+  const [modeView, setModeView] = useState<ComposerModePickerView>("primary");
+  const activeMode = modeControls ? resolveComposerPrimaryMode(modeControls) : null;
+  const modeSection = modeControls ? (
+    <ComposerModePickerContent
+      activeMode={activeMode ?? "build"}
+      activePreset={activeMode === "workflow" ? resolveWorkflowPresetForPicker(modeControls) : null}
+      buildSkills={modeControls.buildSkills}
+      selectedBuildSkillId={modeControls.selectedBuildSkillId}
+      showPrimaryModes={modeControls.showPrimaryModes}
+      view={modeView}
+      workflowAvailable={modeControls.workflowAvailable}
+      onBack={() => setModeView("primary")}
+      onOpenSkills={() => setModeView("skills")}
+      onOpenWorkflow={() => setModeView("workflow")}
+      onSelectPrimary={(mode) => {
+        modeControls.onBuildSkillChange(null);
+        modeControls.onInteractionModeChange(mode === "build" ? "default" : "plan", null);
+        setOpen(false);
+      }}
+      onSelectPreset={(preset) => {
+        modeControls.onBuildSkillChange(null);
+        modeControls.onInteractionModeChange(interactionModeForWorkflowPreset(preset), preset);
+        setOpen(false);
+      }}
+      onSelectSkill={(skillId) => {
+        modeControls.onInteractionModeChange("default", null);
+        modeControls.onBuildSkillChange(skillId);
+        setOpen(false);
+      }}
+    />
+  ) : null;
   return (
     <Menu
       open={open}
       onOpenChange={(nextOpen) => {
         setOpen(nextOpen);
-        if (nextOpen) setModeView(activeMode === "workflow" ? "workflow" : "primary");
+        if (nextOpen) setModeView("primary");
       }}
     >
       <MenuTrigger
@@ -60,57 +85,38 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
         <EllipsisIcon aria-hidden="true" className="size-4" />
       </MenuTrigger>
       <MenuPopup align="start">
-        {props.traitsMenuContent ? (
+        {modeView === "primary" ? (
           <>
-            {props.traitsMenuContent}
-            <MenuDivider />
+            {props.traitsMenuContent ? (
+              <>
+                {props.traitsMenuContent}
+                <MenuDivider />
+              </>
+            ) : null}
+            {modeSection ? (
+              <>
+                <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Mode</div>
+                {modeSection}
+                <MenuDivider />
+              </>
+            ) : null}
+            <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Access</div>
+            <MenuRadioGroup
+              value={props.runtimeMode}
+              onValueChange={(value) => {
+                if (!value || value === props.runtimeMode) return;
+                props.onRuntimeModeChange(value as RuntimeMode);
+              }}
+            >
+              <MenuRadioItem value="approval-required">Supervised</MenuRadioItem>
+              <MenuRadioItem value="auto-accept-edits">Auto-accept edits</MenuRadioItem>
+              <MenuRadioItem value="auto">Auto</MenuRadioItem>
+              <MenuRadioItem value="full-access">Full access</MenuRadioItem>
+            </MenuRadioGroup>
           </>
-        ) : null}
-        {props.showInteractionModeToggle ? (
-          <>
-            <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Mode</div>
-            <ComposerModePickerContent
-              activeMode={activeMode}
-              activePreset={activeMode === "workflow" ? displayedPreset : null}
-              buildSkills={props.buildSkills}
-              selectedBuildSkillId={props.selectedBuildSkillId}
-              onBack={() => setModeView("primary")}
-              onOpenSkills={() => setModeView("skills")}
-              onOpenWorkflow={() => setModeView("workflow")}
-              onSelectPrimary={(mode) => {
-                props.onBuildSkillChange(null);
-                props.onInteractionModeChange(mode === "build" ? "default" : "plan", null);
-                setOpen(false);
-              }}
-              onSelectPreset={(preset) => {
-                props.onBuildSkillChange(null);
-                props.onInteractionModeChange(interactionModeForWorkflowPreset(preset), preset);
-                setOpen(false);
-              }}
-              onSelectSkill={(skillId) => {
-                props.onInteractionModeChange("default", null);
-                props.onBuildSkillChange(skillId);
-                setOpen(false);
-              }}
-              view={modeView}
-              workflowAvailable={props.planningWorkflowAvailable}
-            />
-            <MenuDivider />
-          </>
-        ) : null}
-        <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Access</div>
-        <MenuRadioGroup
-          value={props.runtimeMode}
-          onValueChange={(value) => {
-            if (!value || value === props.runtimeMode) return;
-            props.onRuntimeModeChange(value as RuntimeMode);
-          }}
-        >
-          <MenuRadioItem value="approval-required">Supervised</MenuRadioItem>
-          <MenuRadioItem value="auto-accept-edits">Auto-accept edits</MenuRadioItem>
-          <MenuRadioItem value="auto">Auto</MenuRadioItem>
-          <MenuRadioItem value="full-access">Full access</MenuRadioItem>
-        </MenuRadioGroup>
+        ) : (
+          modeSection
+        )}
       </MenuPopup>
     </Menu>
   );
