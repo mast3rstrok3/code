@@ -19,7 +19,7 @@ import {
   SparklesIcon,
   WorkflowIcon,
 } from "lucide-react";
-import { type KeyboardEvent, useState } from "react";
+import type { KeyboardEvent } from "react";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
@@ -116,42 +116,25 @@ function optionKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
   if (container) focusRelativeOption(container, event.key === "ArrowDown" ? 1 : -1);
 }
 
+/**
+ * Hover card for one workflow row. Open state belongs to the popover: driving
+ * it from the trigger's own focus and blur fought the popup's focus handling —
+ * opening moved focus off the trigger, the blur closed it, the focus handed
+ * back reopened it, and the card strobed until the pointer left the row.
+ */
 function WorkflowHelp({ definition }: { readonly definition: WorkflowPresetDefinition }) {
-  const [open, setOpen] = useState(false);
-  const [pinned, setPinned] = useState(false);
-
   return (
-    <Popover
-      open={open}
-      onOpenChange={(nextOpen) => {
-        setOpen(nextOpen);
-        if (!nextOpen) setPinned(false);
-      }}
-    >
+    <Popover>
       <PopoverTrigger
+        closeDelay={120}
+        delay={120}
+        openOnHover
         render={
           <Button
             aria-label={`How ${definition.label} workflow works`}
             className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 size-8 rounded-md text-muted-foreground"
             size="icon-xs"
             variant="ghost"
-            onBlur={() => {
-              if (!pinned) setOpen(false);
-            }}
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              setPinned((current) => {
-                const next = !current;
-                setOpen(next);
-                return next;
-              });
-            }}
-            onFocus={() => setOpen(true)}
-            onMouseEnter={() => setOpen(true)}
-            onMouseLeave={() => {
-              if (!pinned) setOpen(false);
-            }}
           />
         }
       >
@@ -160,6 +143,8 @@ function WorkflowHelp({ definition }: { readonly definition: WorkflowPresetDefin
       <PopoverPopup
         align="end"
         className="max-h-[min(28rem,var(--available-height))] w-[min(22rem,var(--available-width))]"
+        // Hovering a row must not pull focus out of the mode list behind it.
+        initialFocus={false}
         side="right"
         sideOffset={8}
         viewportClassName="overflow-y-auto p-3 [--viewport-inline-padding:--spacing(3)]"
