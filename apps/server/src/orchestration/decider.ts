@@ -9,6 +9,7 @@ import {
   type OrchestrationImplementationRun,
   type OrchestrationCommand,
   type OrchestrationEvent,
+  type OrchestrationPlanningReviewCycle,
   type OrchestrationPlanningTicket,
   type OrchestrationPlanningSpec,
   type OrchestrationPlanningSpecBundle,
@@ -41,6 +42,10 @@ import {
 } from "./commandInvariants.ts";
 import { WORKFLOW_PROMPT_IDS } from "../provider/WorkflowPromptRegistry.ts";
 import { validatePlanningTicketFileChanges } from "./planningTicketFiles.ts";
+import {
+  PLANNING_REVIEWER_TICKET_EDIT_RULES,
+  planningReviewerVerdictExampleJson,
+} from "./workflowDirectives.ts";
 import { isWorkflowThreadPaused } from "./workflowPause.ts";
 import { buildPlanImplementationThreadTitle } from "@t3tools/shared/orchestrationPlanning";
 import { resolveImplementationValidationCommands } from "@t3tools/shared/t3ProjectFile";
@@ -219,15 +224,24 @@ function nextPlanningReviewRequest(
   const allTicketIds = workflow.tickets.map((ticket) => ticket.id);
   const previous = workflow.reviewCycles.at(-1);
   if (previous === undefined || workflow.stage !== "ticket-review") {
-    return { cycleNumber, mode: "full" as const, targetPlanningTicketIds: allTicketIds };
+    return {
+      cycleNumber,
+      mode: "full" as const,
+      targetPlanningTicketIds: allTicketIds,
+      previousCycle: previous,
+    };
   }
-  const targetPlanningTicketIds = Array.from(
-    new Set([...previous.failingPlanningTicketIds, ...previous.editedPlanningTicketIds]),
-  ).filter((ticketId) => allTicketIds.includes(ticketId));
+  // Only tickets the last cycle could not resolve. A ticket the reviewer corrected and passed is
+  // finished: re-reviewing the reviewer's own edit is what turned one run into five cycles of the
+  // same tickets being rewritten.
+  const targetPlanningTicketIds = Array.from(new Set(previous.failingPlanningTicketIds)).filter(
+    (ticketId) => allTicketIds.includes(ticketId),
+  );
   return {
     cycleNumber,
     mode: "targeted" as const,
     targetPlanningTicketIds,
+    previousCycle: previous,
   };
 }
 
@@ -455,12 +469,38 @@ function buildPlanningTicketsStagePrompt(spec: OrchestrationPlanningSpec): strin
   ].join("\n");
 }
 
+/**
+ * A later cycle exists only because the cycle before it could not fix something itself. Handing
+ * that cycle its predecessor's findings is what keeps the two from being the same review twice:
+ * without them each reviewer re-derives the same objections from scratch and re-edits the same
+ * ticket, which is how one run spent five cycles rediscovering a single ordering trap.
+ */
+function buildPlanningReviewCarryForward(input: {
+  readonly previousCycle: OrchestrationPlanningReviewCycle | undefined;
+  readonly targetPlanningTicketIds: ReadonlyArray<string>;
+}): ReadonlyArray<string> {
+  const previous = input.previousCycle;
+  if (previous === undefined) return [];
+  const targets = new Set(input.targetPlanningTicketIds);
+  const carriedFeedback = previous.perTicketFeedback.filter(
+    (entry) => !entry.passed && targets.has(entry.ticketId),
+  );
+  if (carriedFeedback.length === 0 && previous.dependencyFeedback.length === 0) return [];
+  return [
+    "",
+    `Cycle ${previous.cycleNumber} could not resolve these findings itself. Verify each one against the current ticket and repository, then fix it with a ticketEdit or fail it again with a concrete reason. Do not re-derive an independent review of tickets that are not in scope.`,
+    ...carriedFeedback.map((entry) => `- ${entry.ticketId}: ${entry.feedbackMarkdown}`),
+    ...previous.dependencyFeedback.map((entry) => `- Dependency graph: ${entry}`),
+  ];
+}
+
 function buildPlanningReviewerPrompt(input: {
   readonly spec: OrchestrationPlanningSpec;
   readonly tickets: ReadonlyArray<OrchestrationPlanningTicket>;
   readonly cycleNumber: number;
   readonly mode: "full" | "targeted";
   readonly targetPlanningTicketIds: ReadonlyArray<string>;
+  readonly previousCycle: OrchestrationPlanningReviewCycle | undefined;
 }): string {
   const reviewScopeInstructions =
     input.mode === "full"
@@ -485,29 +525,20 @@ function buildPlanningReviewerPrompt(input: {
     "Review for missing Spec coverage, incorrect horizontal slicing, oversized or undersized slices, incorrect dependency ordering, hidden prefactoring/migration/contract work, vague acceptance criteria, and missing expected tests.",
     "Also verify every ticket has a complete, plausible plannedFileChanges list with exact repository-relative paths and correct create/update/delete actions. Missing lists on legacy tickets are findings and should be repaired with a ticket update. Reviewer-created tickets require a non-empty list; update edits may replace the list with plannedFileChanges.",
     "",
+    "Fix what you can through ticketEdits. A ticket you correct and pass is finished — it is not reviewed again — so leave every edited ticket in the state you would approve. Fail a ticket only when the correction genuinely needs another cycle.",
+    ...buildPlanningReviewCarryForward({
+      previousCycle: input.previousCycle,
+      targetPlanningTicketIds: input.targetPlanningTicketIds,
+    }),
+    "",
     "When ready, finish with exactly one fenced JSON block using this shape. Use the planning ticket ids shown below.",
+    ...PLANNING_REVIEWER_TICKET_EDIT_RULES.map((rule) => `- ${rule}`),
     "```json",
-    JSON.stringify(
-      {
-        type: "planning-reviewer-verdict",
-        cycleNumber: input.cycleNumber,
-        mode: input.mode,
-        targetPlanningTicketIds: input.targetPlanningTicketIds,
-        passed: false,
-        failingPlanningTicketIds: ["planning-ticket-id"],
-        dependencyFeedback: ["Dependency graph correction or empty array."],
-        perTicketFeedback: [
-          {
-            ticketId: "planning-ticket-id",
-            passed: false,
-            feedbackMarkdown: "Concrete correction or approval note.",
-          },
-        ],
-        ticketEdits: [],
-      },
-      null,
-      2,
-    ),
+    planningReviewerVerdictExampleJson({
+      cycleNumber: input.cycleNumber,
+      mode: input.mode,
+      targetPlanningTicketIds: input.targetPlanningTicketIds,
+    }),
     "```",
   ].join("\n");
 }
@@ -2356,7 +2387,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const reviewerMessageUuid = yield* crypto.randomUUIDv4;
       const reviewerThreadId = ThreadId.make(`thread-planning-reviewer-${reviewerThreadUuid}`);
       const reviewerMessageId = MessageId.make(`message-planning-reviewer-${reviewerMessageUuid}`);
-      const { cycleNumber, mode, targetPlanningTicketIds } = reviewRequest;
+      const { cycleNumber, mode, targetPlanningTicketIds, previousCycle } = reviewRequest;
       if (targetPlanningTicketIds.length === 0) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -2436,6 +2467,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             cycleNumber,
             mode,
             targetPlanningTicketIds,
+            previousCycle,
           }),
           turnId: null,
           streaming: false,
@@ -2597,7 +2629,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         }
         return [edit.ticketId];
       });
-      const passed = inferredPassed && edits.length === 0;
+      // The reviewer's own corrections are the review, not work awaiting one: a cycle that passes
+      // every target ticket ends ticket review whether or not it edited them on the way.
+      const passed = inferredPassed;
       const cycleNumber = activeReview.cycleNumber;
       const status = command.runtimeFailure
         ? ("runtime-failed" as const)
@@ -2606,14 +2640,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           : passed
             ? ("passed" as const)
             : ("failed" as const);
-      const remainingTargetPlanningTicketIds = Array.from(
-        new Set([...failingPlanningTicketIds, ...editedPlanningTicketIds]),
-      ).filter((ticketId) => editedTickets.some((ticket) => ticket.id === ticketId));
+      const remainingTargetPlanningTicketIds = failingPlanningTicketIds.filter((ticketId) =>
+        editedTickets.some((ticket) => ticket.id === ticketId),
+      );
       const reviewCompleted =
-        passed ||
-        (command.runtimeFailure !== true &&
-          status === "revised" &&
-          remainingTargetPlanningTicketIds.length === 0);
+        command.runtimeFailure !== true &&
+        (passed || remainingTargetPlanningTicketIds.length === 0);
       return {
         ...(yield* withEventBase({
           aggregateKind: "thread",

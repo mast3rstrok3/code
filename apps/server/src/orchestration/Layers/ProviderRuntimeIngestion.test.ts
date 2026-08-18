@@ -3626,6 +3626,222 @@ describe("ProviderRuntimeIngestion", () => {
     expect(planningThread.planningWorkflow?.spec?.summaryMarkdown).toBe("Build checkout.");
   });
 
+  it("retries a rejected reviewer verdict, then fails the cycle when the retries run out", async () => {
+    const harness = await createHarness();
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    const planningThreadId = asThreadId("thread-planning-review-retry");
+
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-planning-review-retry-create"),
+        threadId: planningThreadId,
+        projectId: asProjectId("project-1"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+        parentThreadId: null,
+        workflowRole: "planning-orchestrator",
+        title: "Plan Checkout",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: "planning-workflow",
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-review-retry-spec"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt,
+      threadId: planningThreadId,
+      turnId: asTurnId("turn-review-retry-spec"),
+      itemId: asItemId("item-review-retry-spec"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail:
+          '```json\n{ "type": "planning-spec-artifact", "title": "Checkout", "summaryMarkdown": "Build checkout." }\n```',
+      },
+    });
+
+    const withSpec = await waitForThread(
+      harness.readModel,
+      (thread) => thread.planningWorkflow?.spec?.id !== undefined,
+      2_000,
+      planningThreadId,
+    );
+    const specId = withSpec.planningWorkflow?.spec?.id;
+    if (specId === undefined) throw new Error("Spec was not created.");
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-review-retry-tickets"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt,
+      threadId: planningThreadId,
+      turnId: asTurnId("turn-review-retry-tickets"),
+      itemId: asItemId("item-review-retry-tickets"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail: `\`\`\`json
+{
+  "type": "planning-tickets-artifact",
+  "specId": "${specId}",
+  "tickets": [
+    {
+      "key": "TICKET-1",
+      "title": "Checkout slice",
+      "bodyMarkdown": "Build the checkout slice.",
+      "plannedFileChanges": [{ "path": "src/checkout.ts", "action": "update" }],
+      "dependencyKeys": [],
+      "appReviewEligible": false,
+      "appReviewPlanMarkdown": null
+    }
+  ]
+}
+\`\`\``,
+      },
+    });
+
+    await waitForThread(
+      harness.readModel,
+      (thread) => (thread.planningWorkflow?.tickets.length ?? 0) === 1,
+      2_000,
+      planningThreadId,
+    );
+
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.planning-ticket-review.request",
+        commandId: CommandId.make("cmd-planning-review-retry-request"),
+        threadId: planningThreadId,
+        specId,
+        createdAt,
+      }),
+    );
+
+    const requested = await waitForThread(
+      harness.readModel,
+      (thread) => thread.planningWorkflow?.activeReview != null,
+      2_000,
+      planningThreadId,
+    );
+    const reviewerThreadId = requested.planningWorkflow?.activeReview?.reviewerThreadId;
+    if (reviewerThreadId === undefined) throw new Error("Reviewer thread was not created.");
+
+    // The shape every cycle of one real run got wrong: `action` is the plannedFileChanges field,
+    // not the edit discriminator, and the parser rejects the whole verdict over it.
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-review-retry-verdict"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt,
+      threadId: reviewerThreadId,
+      turnId: asTurnId("turn-review-retry-verdict"),
+      itemId: asItemId("item-review-retry-verdict"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail: `\`\`\`json
+{
+  "type": "planning-reviewer-verdict",
+  "cycleNumber": 1,
+  "mode": "full",
+  "passed": true,
+  "failingPlanningTicketIds": [],
+  "dependencyFeedback": [],
+  "perTicketFeedback": [],
+  "ticketEdits": [{ "action": "update", "ticketId": "planning-ticket-1", "title": "Fixed" }]
+}
+\`\`\``,
+      },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-review-retry-verdict-turn"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt,
+      threadId: reviewerThreadId,
+      turnId: asTurnId("turn-review-retry-verdict"),
+      payload: { state: "completed" },
+    });
+
+    const reviewerThread = await waitForThread(
+      harness.readModel,
+      (thread) =>
+        thread.messages.some(
+          (message) =>
+            message.role === "user" && message.text.includes("ticket edit type is invalid"),
+        ),
+      2_000,
+      reviewerThreadId,
+    );
+    const retryPrompt = reviewerThread.messages.find(
+      (message) => message.role === "user" && message.text.includes("ticket edit type is invalid"),
+    );
+    expect(retryPrompt?.text).toContain('"type": "update-dependencies"');
+    expect(retryPrompt?.text).toContain("Nothing from that verdict was applied");
+
+    const planning = await harness
+      .readModel()
+      .then((snapshot) => snapshot.threads.find((thread) => thread.id === planningThreadId));
+    // The cycle is still open: a rejected shape must not burn one of the five.
+    expect(planning?.planningWorkflow?.reviewCycles ?? []).toHaveLength(0);
+    expect(planning?.planningWorkflow?.activeReview?.cycleNumber).toBe(1);
+
+    // A reviewer that cannot produce a well-formed verdict must not hold the stage open forever.
+    for (const attempt of [2, 3]) {
+      harness.emit({
+        type: "item.completed",
+        eventId: asEventId(`evt-review-retry-verdict-${attempt}`),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt,
+        threadId: reviewerThreadId,
+        turnId: asTurnId(`turn-review-retry-verdict-${attempt}`),
+        itemId: asItemId(`item-review-retry-verdict-${attempt}`),
+        payload: {
+          itemType: "assistant_message",
+          status: "completed",
+          detail: `\`\`\`json
+{
+  "type": "planning-reviewer-verdict",
+  "cycleNumber": 1,
+  "mode": "full",
+  "passed": true,
+  "failingPlanningTicketIds": [],
+  "dependencyFeedback": [],
+  "perTicketFeedback": [],
+  "ticketEdits": [{ "action": "update", "ticketId": "planning-ticket-1", "title": "Fixed" }]
+}
+\`\`\``,
+        },
+      });
+      harness.emit({
+        type: "turn.completed",
+        eventId: asEventId(`evt-review-retry-verdict-turn-${attempt}`),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt,
+        threadId: reviewerThreadId,
+        turnId: asTurnId(`turn-review-retry-verdict-${attempt}`),
+        payload: { state: "completed" },
+      });
+    }
+
+    const failed = await waitForThread(
+      harness.readModel,
+      (thread) => (thread.planningWorkflow?.reviewCycles.length ?? 0) > 0,
+      2_000,
+      planningThreadId,
+    );
+    expect(failed.planningWorkflow?.reviewCycles[0]?.status).toBe("runtime-failed");
+  });
+
   it("creates workflow sub-agent threads from provider directives", async () => {
     const harness = await createHarness();
     const createdAt = "2026-01-01T00:00:00.000Z";

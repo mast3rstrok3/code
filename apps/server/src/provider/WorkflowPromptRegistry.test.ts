@@ -570,7 +570,9 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /Reject any remaining long serial chain/);
     NodeAssert.match(rendered, /call `workflow_tickets_list`/);
     NodeAssert.match(rendered, /retrieve every ticket with `workflow_ticket_get`/);
-    NodeAssert.match(rendered, /review only the failed, reworked, or replacement tickets/);
+    NodeAssert.match(rendered, /review only the failed tickets named in the target scope/);
+    NodeAssert.match(rendered, /A ticket you correct and pass is finished/);
+    NodeAssert.match(rendered, /Every entry is discriminated by `type`/);
     NodeAssert.match(rendered, /A clean targeted pass completes ticket review/);
     NodeAssert.match(
       rendered,

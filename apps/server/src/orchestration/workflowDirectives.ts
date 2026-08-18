@@ -1069,3 +1069,76 @@ export function parseWorkflowDirectiveFromMarkdown(markdown: string): WorkflowDi
     ? { kind: "error", message: directive }
     : { kind: "parsed", directive };
 }
+
+/**
+ * The verdict shape a planning reviewer must emit, rendered for the prompts that ask for it.
+ *
+ * It lives beside the parser because the two have to agree exactly: every reviewer cycle of one
+ * real run was thrown away for spelling the edit discriminator `action`/`operation` — the shapes
+ * the surrounding JSON teaches — while the parser accepts only `type`. Both the review launch
+ * prompt and the retry that follows a rejection render this, so the reviewer is never left to
+ * guess the field names.
+ */
+export const PLANNING_REVIEWER_TICKET_EDIT_RULES: ReadonlyArray<string> = [
+  'Each ticketEdits entry is discriminated by "type": "update", "create", "delete", or "update-dependencies". "action" and "operation" are not accepted; the "action" field inside plannedFileChanges is unrelated.',
+  'Dependency edits carry "dependencyKeys" holding ticket keys such as "TICKET-2". There is no "dependencies" field on an edit.',
+  "An update carries only the fields it changes; omitted fields keep their current value.",
+  "Leave ticketEdits empty when nothing needs correcting. The entries below show one of each accepted shape, not a required set.",
+];
+
+export function planningReviewerVerdictExampleJson(input: {
+  readonly cycleNumber: number;
+  readonly mode: "full" | "targeted";
+  readonly targetPlanningTicketIds: ReadonlyArray<string>;
+}): string {
+  const exampleTicketId = input.targetPlanningTicketIds[0] ?? "planning-ticket-id";
+  return JSON.stringify(
+    {
+      type: "planning-reviewer-verdict",
+      cycleNumber: input.cycleNumber,
+      mode: input.mode,
+      targetPlanningTicketIds: input.targetPlanningTicketIds,
+      passed: false,
+      failingPlanningTicketIds: [exampleTicketId],
+      dependencyFeedback: ["Dependency graph correction or empty array."],
+      perTicketFeedback: [
+        {
+          ticketId: exampleTicketId,
+          passed: false,
+          feedbackMarkdown: "Concrete correction or approval note.",
+        },
+      ],
+      ticketEdits: [
+        {
+          type: "update",
+          ticketId: exampleTicketId,
+          title: "Corrected ticket title",
+          bodyMarkdown: "Corrected outcome, acceptance criteria, and expected tests.",
+          plannedFileChanges: [{ path: "apps/example/src/feature.ts", action: "update" }],
+          dependencyKeys: ["TICKET-2"],
+          appReviewEligible: true,
+          appReviewPlanMarkdown: "How a human-style UI review verifies this ticket in isolation.",
+        },
+        {
+          type: "update-dependencies",
+          ticketId: exampleTicketId,
+          dependencyKeys: ["TICKET-2"],
+        },
+        {
+          type: "create",
+          key: "TICKET-7",
+          title: "Missing slice this review adds",
+          bodyMarkdown: "Outcome, acceptance criteria, and expected tests.",
+          plannedFileChanges: [{ path: "apps/example/src/feature.ts", action: "create" }],
+          dependencyKeys: [],
+          replacesPlanningTicketIds: [exampleTicketId],
+          appReviewEligible: false,
+          appReviewPlanMarkdown: null,
+        },
+        { type: "delete", ticketId: exampleTicketId },
+      ],
+    },
+    null,
+    2,
+  );
+}

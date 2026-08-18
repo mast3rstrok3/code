@@ -1141,7 +1141,7 @@ describe("ProductWorkflowReactor", () => {
       ),
   );
 
-  it.effect("moves from full review to targeted review and completes after the targeted pass", () =>
+  it.effect("completes ticket review when the reviewer corrects the tickets and passes them", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         yield* seedProjectAndThread(system);
@@ -1152,7 +1152,7 @@ describe("ProductWorkflowReactor", () => {
         let workflow = snapshot.threads.find(
           (thread) => thread.id === planningThread.id,
         )?.planningWorkflow;
-        let activeReview = workflow?.activeReview;
+        const activeReview = workflow?.activeReview;
         const ticketId = workflow?.tickets[0]?.id;
         if (activeReview == null || ticketId === undefined) throw new Error("Cycle 1 missing.");
         expect(activeReview.mode).toBe("full");
@@ -1174,7 +1174,74 @@ describe("ProductWorkflowReactor", () => {
             },
           ],
           passed: true,
-          verdictMarkdown: "Edited; requires another review.",
+          verdictMarkdown: "Corrected the checkout slice; the set is complete.",
+          createdAt: "2026-01-01T00:00:01.000Z",
+        });
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        workflow = snapshot.threads.find(
+          (thread) => thread.id === planningThread.id,
+        )?.planningWorkflow;
+        // The reviewer's own correction is the review: re-reviewing it is what used to spend every
+        // remaining cycle rewriting tickets that had already passed.
+        expect(workflow?.reviewCycles[0]?.status).toBe("revised");
+        expect(workflow?.tickets[0]?.bodyMarkdown).toBe(
+          "Add a vertical checkout slice with explicit acceptance criteria.",
+        );
+        expect(workflow?.tickets[0]?.plannedFileChanges).toEqual([
+          { path: "src/checkout.ts", action: "update" },
+        ]);
+        expect(workflow?.stage).toBe("completed");
+        expect(workflow?.activeReview).toBeNull();
+        expect(workflow?.reviewCycles).toHaveLength(1);
+        expect(snapshot.implementationRuns).toHaveLength(1);
+      }),
+    ),
+  );
+
+  it.effect("re-reviews only the tickets a cycle failed, with that cycle's findings", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        yield* seedProjectAndThread(system);
+        const planningThread = yield* lockProductIntent(system);
+        yield* seedProductSpecAndTickets(system, planningThread.id, 2);
+
+        let snapshot = yield* system.query.getSnapshot();
+        let workflow = snapshot.threads.find(
+          (thread) => thread.id === planningThread.id,
+        )?.planningWorkflow;
+        let activeReview = workflow?.activeReview;
+        const ticketIds = workflow?.tickets.map((ticket) => ticket.id) ?? [];
+        if (activeReview == null || ticketIds.length !== 2) throw new Error("Cycle 1 missing.");
+
+        yield* system.engine.dispatch({
+          type: "thread.planning-reviewer-verdict.apply",
+          commandId: commandId("review-edit-and-fail-cycle-1"),
+          threadId: planningThread.id,
+          reviewerThreadId: activeReview.reviewerThreadId,
+          reviewerMessageId: messageId("review-edit-and-fail-cycle-1"),
+          cycleNumber: 1,
+          mode: "full",
+          targetPlanningTicketIds: [...activeReview.targetPlanningTicketIds],
+          ticketEdits: [
+            {
+              type: "update",
+              ticketId: ticketIds[0]!,
+              bodyMarkdown: "Corrected by the reviewer and approved.",
+            },
+          ],
+          passed: false,
+          failingPlanningTicketIds: [ticketIds[1]!],
+          perTicketFeedback: [
+            { ticketId: ticketIds[0]!, passed: true, feedbackMarkdown: "Corrected in place." },
+            {
+              ticketId: ticketIds[1]!,
+              passed: false,
+              feedbackMarkdown: "Splitting this slice needs another cycle.",
+            },
+          ],
+          verdictMarkdown: "One ticket corrected, one failed.",
           createdAt: "2026-01-01T00:00:01.000Z",
         });
         yield* system.reactor.drain;
@@ -1184,40 +1251,18 @@ describe("ProductWorkflowReactor", () => {
           (thread) => thread.id === planningThread.id,
         )?.planningWorkflow;
         activeReview = workflow?.activeReview;
-        expect(workflow?.reviewCycles[0]?.status).toBe("revised");
-        expect(workflow?.tickets[0]?.plannedFileChanges).toEqual([
-          { path: "src/checkout.ts", action: "update" },
-        ]);
         expect(activeReview?.cycleNumber).toBe(2);
         expect(activeReview?.mode).toBe("targeted");
-        expect(activeReview?.targetPlanningTicketIds).toEqual([ticketId]);
-        if (activeReview == null) throw new Error("Cycle 2 missing.");
+        // The edited-and-approved ticket is done; only the failed one comes back.
+        expect(activeReview?.targetPlanningTicketIds).toEqual([ticketIds[1]]);
 
-        yield* system.engine.dispatch({
-          type: "thread.planning-reviewer-verdict.apply",
-          commandId: commandId("review-targeted-pass-cycle-2"),
-          threadId: planningThread.id,
-          reviewerThreadId: activeReview.reviewerThreadId,
-          reviewerMessageId: messageId("review-targeted-pass-cycle-2"),
-          cycleNumber: 2,
-          mode: "targeted",
-          targetPlanningTicketIds: [ticketId],
-          ticketEdits: [],
-          passed: true,
-          verdictMarkdown: "Targeted ticket passes.",
-          createdAt: "2026-01-01T00:00:02.000Z",
-        });
-        yield* system.reactor.drain;
-
-        snapshot = yield* system.query.getSnapshot();
-        workflow = snapshot.threads.find(
-          (thread) => thread.id === planningThread.id,
-        )?.planningWorkflow;
-        activeReview = workflow?.activeReview;
-        expect(workflow?.stage).toBe("completed");
-        expect(activeReview).toBeNull();
-        expect(workflow?.reviewCycles.map((cycle) => cycle.mode)).toEqual(["full", "targeted"]);
-        expect(snapshot.implementationRuns).toHaveLength(1);
+        const reviewerThread = snapshot.threads.find(
+          (thread) => thread.id === activeReview?.reviewerThreadId,
+        );
+        const reviewerPrompt = reviewerThread?.messages[0]?.text ?? "";
+        expect(reviewerPrompt).toContain("Splitting this slice needs another cycle.");
+        expect(reviewerPrompt).toContain('"type": "update-dependencies"');
+        expect(reviewerPrompt).not.toContain("Corrected in place.");
       }),
     ),
   );

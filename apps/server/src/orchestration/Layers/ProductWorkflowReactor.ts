@@ -480,7 +480,10 @@ const make = Effect.gen(function* () {
     const startsImplementation =
       context !== null || (thread.workflowRole === null && thread.workflowPreset === "planning");
 
-    if (cycle.status === "passed" && startsImplementation) {
+    // The decider owns "is ticket review over" — a cycle that fixed its own findings completes the
+    // stage with status `revised`, so reading the stage is what keeps that cycle from being the
+    // last one before an idle workflow.
+    if (event.payload.stage === "completed" && startsImplementation) {
       yield* launchImplementation(event);
       return;
     }

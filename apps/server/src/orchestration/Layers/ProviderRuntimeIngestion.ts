@@ -56,6 +56,8 @@ import {
 } from "../../provider/WorkflowPromptRegistry.ts";
 import {
   parseWorkflowDirectiveFromMarkdown,
+  PLANNING_REVIEWER_TICKET_EDIT_RULES,
+  planningReviewerVerdictExampleJson,
   type WorkflowDirective,
   type WorkflowAgentMessageTarget,
 } from "../workflowDirectives.ts";
@@ -122,6 +124,12 @@ const TASK_DESCRIPTION_BY_TASK_CACHE_CAPACITY = 10_000;
 const TASK_DESCRIPTION_BY_TASK_TTL = Duration.minutes(120);
 const MAX_BUFFERED_ASSISTANT_CHARS = 24_000;
 export const MAX_PRODUCT_INTENT_LOCK_REJECTION_BOUNCES = 3;
+/**
+ * How many times a planning reviewer may be handed the parser's complaint and asked to re-emit
+ * before the cycle is failed. Two covers the shape mistakes that repeat across providers without
+ * letting a reviewer that cannot produce a verdict at all stall the stage.
+ */
+export const MAX_PLANNING_REVIEWER_VERDICT_RETRIES = 2;
 
 /**
  * Server-synthesized user messages carry the `message-` prefix (see `serverMessageId` and the
@@ -2489,6 +2497,13 @@ const make = Effect.gen(function* () {
     readonly messageId: MessageId;
     readonly detail: string;
     readonly createdAt: string;
+    /** Aligns the retry with the turn that produced the bad verdict, so one turn buys one retry. */
+    readonly dedupeScope?: string;
+    /**
+     * `false` for failures raised while the reviewer's turn is still running: the retry starts a
+     * turn, and a thread that is already running one cannot take another.
+     */
+    readonly retryable?: boolean;
   }) {
     const thread = yield* resolveThreadDetail(input.threadId);
     if (thread?.workflowRole !== "planning-reviewer" || thread.parentThreadId === null) return;
@@ -2496,6 +2511,59 @@ const make = Effect.gen(function* () {
     const activeReview = parent?.planningWorkflow?.activeReview;
     if (activeReview === null || activeReview === undefined) return;
     if (activeReview.reviewerThreadId !== thread.id) return;
+
+    // A verdict rejected over its shape carries a real review inside it. Failing the cycle throws
+    // that review away, marks every target ticket failed and buys the next cycle nothing — one run
+    // burned all five cycles this way, none of them applying a single edit. So hand the reviewer
+    // the parser's complaint and the exact shape, and let the same thread re-emit.
+    const priorRetries = thread.activities.filter(
+      (activity) =>
+        activity.kind === "workflow.directive.rejected" &&
+        (activity.payload as { directiveType?: string } | null)?.directiveType ===
+          "planning-reviewer-verdict",
+    ).length;
+    if (input.retryable !== false && priorRetries < MAX_PLANNING_REVIEWER_VERDICT_RETRIES) {
+      const retryKey = `${input.threadId}:${activeReview.cycleNumber}:${input.dedupeScope ?? input.messageId}:planning-review-retry`;
+      const retried = yield* Cache.getOption(processedWorkflowDirectiveKeys, retryKey);
+      if (Option.getOrElse(retried, () => false)) return;
+      yield* Cache.set(processedWorkflowDirectiveKeys, retryKey, true);
+      yield* appendWorkflowDirectiveRejectedActivity({
+        event: input.event,
+        threadId: thread.id,
+        directiveType: "planning-reviewer-verdict",
+        summary: "Planning reviewer verdict rejected",
+        detail: input.detail,
+        createdAt: input.createdAt,
+      });
+      yield* orchestrationEngine.dispatch({
+        type: "thread.turn.start",
+        commandId: yield* providerCommandId(input.event, "workflow-planning-review-retry"),
+        threadId: thread.id,
+        message: {
+          messageId: yield* serverMessageId("planning-review-retry"),
+          role: "user",
+          text: [
+            `${input.detail}`,
+            "",
+            "Nothing from that verdict was applied. Keep every finding and correction you already made and re-emit the complete verdict for this cycle as exactly one fenced JSON block in the shape below. Do not review the tickets again.",
+            ...PLANNING_REVIEWER_TICKET_EDIT_RULES.map((rule) => `- ${rule}`),
+            "```json",
+            planningReviewerVerdictExampleJson({
+              cycleNumber: activeReview.cycleNumber,
+              mode: activeReview.mode,
+              targetPlanningTicketIds: [...activeReview.targetPlanningTicketIds],
+            }),
+            "```",
+          ].join("\n"),
+          attachments: [],
+        },
+        runtimeMode: thread.runtimeMode,
+        interactionMode: thread.interactionMode,
+        createdAt: input.createdAt,
+      });
+      return;
+    }
+
     const failureKey = `${input.threadId}:${activeReview.cycleNumber}:planning-review-runtime-failure`;
     const existing = yield* Cache.getOption(processedWorkflowDirectiveKeys, failureKey);
     if (Option.getOrElse(existing, () => false)) return;
@@ -2843,6 +2911,7 @@ const make = Effect.gen(function* () {
         yield* consumePlanningReviewerFailure({
           ...input,
           detail: `Reviewer directive was rejected: ${detail}`,
+          retryable: false,
         });
         yield* consumeImplementationFixerFailure({
           ...input,
@@ -2945,6 +3014,7 @@ const make = Effect.gen(function* () {
         event: input.event,
         threadId: input.threadId,
         messageId,
+        dedupeScope: input.turnId,
         createdAt: input.createdAt,
         detail:
           parseResult.kind === "error"

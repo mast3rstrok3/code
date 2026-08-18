@@ -58,7 +58,7 @@ Workflow stages hand results to the orchestration by ending a message with exact
 - `planning-grill-complete` — Engineering Grill finished.
 - `planning-spec-artifact` / `wayfinder-map-artifact` — write the durable Spec or Wayfinder Map.
 - `planning-tickets-artifact` — store the drafted ticket set against a Spec or map.
-- `planning-reviewer-verdict` — the ticket reviewer's per-cycle verdict, including a `ticketEdits` array (update / create / delete / update-dependencies) through which the reviewer edits tickets directly.
+- `planning-reviewer-verdict` — the ticket reviewer's per-cycle verdict, including a `ticketEdits` array (entries discriminated by `type`: update / create / delete / update-dependencies) through which the reviewer edits tickets directly. A verdict the parser rejects applies nothing, so ingestion hands the complaint and the exact shape back to the same reviewer thread (`MAX_PLANNING_REVIEWER_VERDICT_RETRIES`) before failing the cycle.
 - `implementation-worker-result`, `implementation-merge-gate-result`, `implementation-fix-result`, `implementation-code-review-result` — implementation stage results.
 - `workflow-subagent-create`, `workflow-subagents-create`, `workflow-subagent-result`, `workflow-agent-message` — sub-thread lifecycle and messaging.
 
@@ -86,7 +86,7 @@ Wayfinder reuses the Planning Workflow projection. `wayfinder-map-artifact` writ
 
 ### Planning
 
-Planning first creates a dedicated branch and worktree from the selected branch. Setup runs concurrently; only successful completion allows early AppDevStack creation. Grill with Docs starts immediately and follows any interview scope or question limit supplied in the user's prompt; otherwise it resolves the complete product, engineering, and domain frontier. The same thread continues through `planning-spec-artifact`, `planning-tickets-artifact`, and up to `PLANNING_REVIEW_MAX_CYCLES` (5) reviewer sub-threads. A pass or exhausted review budget automatically launches Implementation with the same worktree, branch, and AppDevStack identity. Missing grill directives recover from the post-turn ready-session event, while startup reconciliation remains the crash-recovery path.
+Planning first creates a dedicated branch and worktree from the selected branch. Setup runs concurrently; only successful completion allows early AppDevStack creation. Grill with Docs starts immediately and follows any interview scope or question limit supplied in the user's prompt; otherwise it resolves the complete product, engineering, and domain frontier. The same thread continues through `planning-spec-artifact`, `planning-tickets-artifact`, and up to `PLANNING_REVIEW_MAX_CYCLES` (5) reviewer sub-threads. A cycle that passes every ticket in its scope ends ticket review, including tickets it corrected itself; only the tickets a cycle explicitly failed carry into the next cycle, which receives that cycle's findings for them. A pass or exhausted review budget automatically launches Implementation with the same worktree, branch, and AppDevStack identity. Missing grill directives recover from the post-turn ready-session event, while startup reconciliation remains the crash-recovery path.
 
 ### Implementation
 
