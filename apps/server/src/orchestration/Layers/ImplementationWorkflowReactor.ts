@@ -1035,6 +1035,16 @@ function changeRequestFailure(input: {
 }
 
 /** App Review is already slow; a hung edge must not hold the reactor's queue. */
+/**
+ * How long a stage thread may sit with no session and no turn before recovery
+ * treats its launch as lost.
+ *
+ * Long enough that a provider backed up behind dozens of agents still reports
+ * first, short enough that a start dropped by a restart, which nothing else
+ * re-drives, does not strand the ticket for the rest of the run.
+ */
+const UNREPORTED_STAGE_THREAD_GRACE_MS = 10 * 60 * 1_000;
+
 const FRONTEND_PROBE_TIMEOUT = Duration.seconds(10);
 const APP_DEV_STACK_DIAGNOSTIC_LIMIT = 24 * 1_024;
 
@@ -6265,6 +6275,38 @@ const make = Effect.gen(function* () {
       const awaitingNudge = (thread: OrchestrationThread | undefined) =>
         thread !== undefined &&
         isAwaitingWorkflowNudge({ threads: readModel.threads, thread, nowMs });
+      /**
+       * Whether a stage's thread is done with the work the stage gave it, as
+       * opposed to not having reported yet.
+       *
+       * "No live session" used to be the whole test, and that is also what a
+       * thread looks like between being created and its provider session coming
+       * up. On a loaded machine that gap outlasts the sweep, so every pass
+       * started another thread for the same stage and orphaned the last: one
+       * ticket collected more than 1,900 code reviewers that way.
+       *
+       * A thread that has never reported anything, no session and no turn, is
+       * a launch still queued behind a busy provider. It is left alone, but not
+       * forever: a restart drops a queued start with nothing to re-drive it, so
+       * after UNREPORTED_STAGE_THREAD_GRACE_MS silence counts as gone. That
+       * backstop is a floor on how often the sweep can be wrong, not the test
+       * itself, which is why it is generous.
+       */
+      const stageThreadIsFinished = (thread: OrchestrationThread | undefined) => {
+        if (thread === undefined) return true;
+        if (
+          thread.session?.status === "starting" ||
+          thread.session?.status === "running" ||
+          thread.latestTurn?.state === "running" ||
+          awaitingNudge(thread)
+        ) {
+          return false;
+        }
+        if (thread.session === null && thread.latestTurn === null) {
+          return nowMs - Date.parse(thread.createdAt) >= UNREPORTED_STAGE_THREAD_GRACE_MS;
+        }
+        return true;
+      };
       const hasActiveChild = (input: {
         readonly threadId: ThreadId | null;
         readonly role:
@@ -6283,12 +6325,7 @@ const make = Effect.gen(function* () {
         // nudge path is re-prompting it in place, and relaunching the stage
         // underneath that would throw away its context and, while a usage limit
         // holds, spawn one dead thread per sweep.
-        return matches.some(
-          (thread) =>
-            thread.session?.status === "starting" ||
-            thread.session?.status === "running" ||
-            awaitingNudge(thread),
-        );
+        return matches.some((thread) => !stageThreadIsFinished(thread));
       };
 
       // A Fast feature Build thread is created by the decider but seeded by `ensureFastFeatureRun`,
@@ -6298,6 +6335,10 @@ const make = Effect.gen(function* () {
       // gone out, so a run still sitting there never reached Build.
       if (run.artifactSource === "proposed-plan" && run.status === "launch-pending") {
         const implementer = findThread(readModel, run.orchestratorThreadId);
+        // Not stageThreadIsFinished: this branch is about a thread the decider
+        // created and nobody ever handed work to, which is the one shape that
+        // rule deliberately waits on. Here silence means the handover was lost,
+        // and this sweep is the only thing that closes it.
         if (
           implementer !== null &&
           implementer.deletedAt === null &&
@@ -6470,11 +6511,7 @@ const make = Effect.gen(function* () {
             state.codeReviewThreadId == null
               ? undefined
               : readModel.threads.find((candidate) => candidate.id === state.codeReviewThreadId);
-          return (
-            thread?.session?.status !== "starting" &&
-            thread?.session?.status !== "running" &&
-            !awaitingNudge(thread)
-          );
+          return stageThreadIsFinished(thread);
         });
         if (interruptedTicketCodeReview !== undefined) {
           yield* recoverRunStage(
@@ -6502,12 +6539,7 @@ const make = Effect.gen(function* () {
               const resultAlreadyReported = thread?.activities.some(
                 (activity) => activity.kind === "implementation-worker-result",
               );
-              return (
-                !resultAlreadyReported &&
-                thread?.session?.status !== "starting" &&
-                thread?.session?.status !== "running" &&
-                !awaitingNudge(thread)
-              );
+              return !resultAlreadyReported && stageThreadIsFinished(thread);
             })
             .map((state) => state.ticketId),
         );

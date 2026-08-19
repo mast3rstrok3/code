@@ -3500,6 +3500,76 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
+  it.effect("waits for a stage thread whose session has not reported yet", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        // The leak this closes: recovery read "no live session" as "this stage
+        // was interrupted", which is also what a thread looks like in the gap
+        // between being created and its provider session coming up. On a loaded
+        // machine that gap outlasts the sweep, and every pass started another
+        // thread for the same ticket and orphaned the last.
+        const { run } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
+        yield* appendWorkerResult(system, {
+          run,
+          status: "succeeded",
+          completeTicketReview: false,
+        });
+
+        const codeReviewers = (snapshot: {
+          readonly threads: ReadonlyArray<{
+            readonly id: ThreadId;
+            readonly workflowRole: string | null;
+            readonly session: { readonly status: string } | null;
+            readonly latestTurn: { readonly state: string } | null;
+          }>;
+        }) =>
+          snapshot.threads.filter(
+            (thread) => thread.workflowRole === "implementation-code-reviewer",
+          );
+
+        let snapshot = yield* system.query.getSnapshot();
+        const reviewer = codeReviewers(snapshot)[0];
+        if (!reviewer) throw new Error("Code reviewer missing.");
+        // Created, its turn requested, and nothing has come back from the
+        // provider yet. On a loaded machine this state lasts minutes.
+        expect(reviewer.session).toBe(null);
+        expect(reviewer.latestTurn).toBe(null);
+
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        expect(codeReviewers(snapshot)).toHaveLength(1);
+
+        // Once the turn is over and the session is idle, the stage is genuinely
+        // interrupted and recovery starts exactly one replacement.
+        const endedAt = DateTime.formatIso(yield* DateTime.now);
+        yield* system.engine.dispatch({
+          type: "thread.session.set",
+          commandId: commandId("reviewer-session-stopped"),
+          threadId: reviewer.id,
+          session: {
+            threadId: reviewer.id,
+            status: "stopped",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: endedAt,
+          },
+          createdAt: endedAt,
+        });
+        yield* system.reactor.drain;
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        expect(codeReviewers(snapshot)).toHaveLength(2);
+      }),
+    ),
+  );
+
   it.effect("waits for a nudge instead of relaunching a stage whose turn failed", () =>
     withSystem((system) =>
       Effect.gen(function* () {
@@ -3604,7 +3674,10 @@ describe("ImplementationWorkflowReactor", () => {
         });
 
         const codeReviewers = (snapshot: {
-          readonly threads: ReadonlyArray<{ readonly workflowRole: string | null }>;
+          readonly threads: ReadonlyArray<{
+            readonly id: ThreadId;
+            readonly workflowRole: string | null;
+          }>;
         }) =>
           snapshot.threads.filter(
             (thread) => thread.workflowRole === "implementation-code-reviewer",
@@ -3629,6 +3702,29 @@ describe("ImplementationWorkflowReactor", () => {
         yield* system.reactor.drain;
         snapshot = yield* system.query.getSnapshot();
         expect(codeReviewers(snapshot)).toHaveLength(1);
+
+        // Stopping the reviewer is what the pause asked the provider for, and
+        // it is what tells recovery the stage is free to start again. Without
+        // it the reviewer still counts as work in flight, which is the whole
+        // point of the sweep leaving unreported threads alone.
+        const reviewer = codeReviewers(snapshot)[0];
+        if (!reviewer) throw new Error("Code reviewer missing.");
+        yield* system.engine.dispatch({
+          type: "thread.session.set",
+          commandId: commandId("paused-reviewer-stopped"),
+          threadId: reviewer.id,
+          session: {
+            threadId: reviewer.id,
+            status: "stopped",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: "2026-01-01T00:00:02.500Z",
+          },
+          createdAt: "2026-01-01T00:00:02.500Z",
+        });
+        yield* system.reactor.drain;
 
         yield* system.engine.dispatch({
           type: "thread.workflow.resume",
