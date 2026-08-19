@@ -343,6 +343,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               text: "hello from projection",
               turnId: asTurnId("turn-1"),
               streaming: false,
+              workflowPromptId: null,
               createdAt: "2026-02-24T00:00:04.000Z",
               updatedAt: "2026-02-24T00:00:05.000Z",
             },

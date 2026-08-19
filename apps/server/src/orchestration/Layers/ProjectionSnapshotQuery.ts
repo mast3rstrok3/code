@@ -3758,6 +3758,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         archivedAt: threadRow.value.archivedAt,
         settledOverride: threadRow.value.settledOverride,
         settledAt: threadRow.value.settledAt,
+        workflowPausedAt: threadRow.value.workflowPausedAt ?? null,
         snoozedUntil: threadRow.value.snoozedUntil,
         snoozedAt: threadRow.value.snoozedAt,
         pinnedAt: threadRow.value.pinnedAt,
