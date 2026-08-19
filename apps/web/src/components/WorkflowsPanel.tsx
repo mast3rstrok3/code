@@ -1,4 +1,4 @@
-import { isTicketSkipped, isTicketStageSkipped } from "@t3tools/contracts";
+import { isRunStageSkipped, isTicketSkipped, isTicketStageSkipped } from "@t3tools/contracts";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import type {
   AppReviewWorkflowCycle,
@@ -1072,6 +1072,9 @@ function TicketPhases(props: {
             <div className="mb-1 flex items-center gap-1">
               <div className="min-w-0 flex-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
                 Wave {waveIndex + 1} · {wave.length} ticket{wave.length === 1 ? "" : "s"}
+                {wave.every((ticket) => isTicketSkipped(props.skips, ticket.id))
+                  ? " · skipped"
+                  : ""}
               </div>
               <WorkflowStepSettingsMenu
                 environmentId={props.environmentId}
@@ -1195,7 +1198,9 @@ function TicketPhases(props: {
                         {ticketLabel} · {ticket.title}
                       </span>
                       <span className="text-[10px] capitalize text-muted-foreground">
-                        {state?.status ?? ticket.status}
+                        {isTicketSkipped(props.skips, ticket.id)
+                          ? "skipped"
+                          : (state?.status ?? ticket.status)}
                       </span>
                     </button>
                     <WorkflowStepSettingsMenu
@@ -1266,7 +1271,14 @@ function TicketPhases(props: {
                             <div className="mb-1 flex items-center gap-1.5 text-[11px]">
                               <span className="font-medium text-foreground">{stage.label}</span>
                               <span className="capitalize text-muted-foreground">
-                                · {stage.detail}
+                                ·{" "}
+                                {isTicketStageSkipped(
+                                  props.skips,
+                                  ticket.id,
+                                  TICKET_STAGE_RERUN[stage.label].stage,
+                                )
+                                  ? "skipped"
+                                  : stage.detail}
                               </span>
                               {stage.label === "App Review" && appReviewRun ? (
                                 <button
@@ -1821,6 +1833,27 @@ function WorkflowGroupCard(props: {
                                     onStop={props.onStopThreads}
                                     onClear={onClearStep}
                                     confirmClearMessage={`Clears this step's recorded work for the whole run. Branches and commits stay.`}
+                                    skipped={
+                                      stepClearStage !== null &&
+                                      linkedImplementationRun !== undefined &&
+                                      linkedImplementationRun !== null &&
+                                      isRunStageSkipped(
+                                        linkedImplementationRun.skips,
+                                        stepClearStage,
+                                      )
+                                    }
+                                    onSetSkipped={
+                                      stepClearStage === null ||
+                                      stepClearRunId === null ||
+                                      props.onSetImplementationSkip === undefined
+                                        ? undefined
+                                        : (skipped) =>
+                                            props.onSetImplementationSkip?.({
+                                              runId: stepClearRunId,
+                                              target: { kind: "run", stage: stepClearStage },
+                                              skipped,
+                                            })
+                                    }
                                   />
                                 </div>
                                 <TimelineTimeRange

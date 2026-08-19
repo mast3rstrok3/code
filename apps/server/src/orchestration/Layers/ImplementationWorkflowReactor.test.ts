@@ -4784,12 +4784,13 @@ describe("ImplementationWorkflowReactor", () => {
         expect(baseState?.workerResult ?? null).toBeNull();
         expect(baseState?.branch).not.toBeNull();
         expect(baseState?.warningMarkdown).toContain("Skipped");
-        // The skip unblocks the dependent; the sweep that starts ready tickets
-        // is what puts a worker on it, the same as for any other ticket.
+        // The dependent starts inside the same call the skip settled in, rather
+        // than waiting for a sweep.
         const dependentState = current?.ticketStates.find(
           (state) => state.ticketId === dependent.id,
         );
-        expect(dependentState?.status).toBe("ready");
+        expect(dependentState?.status).toBe("running");
+        expect(dependentState?.branch).not.toBeNull();
       }),
     ),
   );

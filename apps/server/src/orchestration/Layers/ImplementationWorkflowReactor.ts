@@ -1752,48 +1752,65 @@ const make = Effect.gen(function* () {
       const orchestratorThread = findThread(readModel, input.run.orchestratorThreadId);
       if (orchestratorThread === null) return input.run;
 
-      const readyTicketIds = input.run.ticketStates
-        .filter((ticketState) => ticketState.status === "ready")
-        .map((ticketState) => ticketState.ticketId);
-      const startResults = yield* Effect.forEach(
-        readyTicketIds,
-        (ticketId) =>
-          Effect.result(
-            createWorker({
-              sourceThreadId: input.sourceThreadId,
-              orchestratorThread,
-              run: input.run,
-              ticketId,
-              ownerUserId: orchestratorThread.ownerUserId,
-              createdAt: input.createdAt,
-            }),
-          ).pipe(Effect.map((result) => ({ ticketId, result }))),
-        { concurrency: 4 },
-      );
-      const startedRuns = startResults.flatMap(({ result }) =>
-        result._tag === "Success" ? [result.success] : [],
-      );
-      // Whatever createWorker made of a ready ticket, not only a running one: a
-      // skipped ticket comes back terminal, having taken its branch and none of
-      // the work.
-      const startedStates = new Map(
-        startedRuns.flatMap((run) =>
-          run.ticketStates
-            .filter((state) => state.status !== "ready" && readyTicketIds.includes(state.ticketId))
-            .map((state) => [state.ticketId, state] as const),
-        ),
-      );
-      const nextRun =
-        startedStates.size === 0
-          ? input.run
-          : ({
-              ...input.run,
-              ticketStates: input.run.ticketStates.map(
-                (state) => startedStates.get(state.ticketId) ?? state,
-              ),
-              retryableFailure: null,
-              updatedAt: input.createdAt,
-            } satisfies OrchestrationImplementationRun);
+      // Passes rather than one sweep, because a skipped ticket is terminal the
+      // moment it takes its branch: what waited on it becomes ready inside this
+      // call and deserves to start now. Each pass strictly shrinks the set of
+      // tickets that are neither started nor terminal, so this ends.
+      let workingRun = input.run;
+      const startResults: {
+        readonly ticketId: string;
+        readonly result: { readonly _tag: "Success" | "Failure"; readonly failure?: unknown };
+      }[] = [];
+      for (let pass = 0; pass <= input.run.ticketStates.length; pass += 1) {
+        const readyTicketIds = workingRun.ticketStates
+          .filter((ticketState) => ticketState.status === "ready")
+          .map((ticketState) => ticketState.ticketId);
+        if (readyTicketIds.length === 0) break;
+        const passResults = yield* Effect.forEach(
+          readyTicketIds,
+          (ticketId) =>
+            Effect.result(
+              createWorker({
+                sourceThreadId: input.sourceThreadId,
+                orchestratorThread,
+                run: workingRun,
+                ticketId,
+                ownerUserId: orchestratorThread.ownerUserId,
+                createdAt: input.createdAt,
+              }),
+            ).pipe(Effect.map((result) => ({ ticketId, result }))),
+          { concurrency: 4 },
+        );
+        startResults.push(...passResults);
+        const startedRuns = passResults.flatMap(({ result }) =>
+          result._tag === "Success" ? [result.success] : [],
+        );
+        // Whatever createWorker made of a ready ticket, not only a running one:
+        // a skipped ticket comes back terminal, having taken its branch and
+        // none of the work.
+        const startedStates = new Map(
+          startedRuns.flatMap((run) =>
+            run.ticketStates
+              .filter(
+                (state) => state.status !== "ready" && readyTicketIds.includes(state.ticketId),
+              )
+              .map((state) => [state.ticketId, state] as const),
+          ),
+        );
+        if (startedStates.size === 0) break;
+        workingRun = markDependentsReady(
+          {
+            ...workingRun,
+            ticketStates: workingRun.ticketStates.map(
+              (state) => startedStates.get(state.ticketId) ?? state,
+            ),
+            retryableFailure: null,
+            updatedAt: input.createdAt,
+          },
+          input.createdAt,
+        );
+      }
+      const nextRun = workingRun;
       if (nextRun !== input.run) {
         yield* updateRun({
           sourceThreadId: input.sourceThreadId,
@@ -1845,29 +1862,17 @@ const make = Effect.gen(function* () {
         }
         return continuedRun;
       }
-      // A skipped ticket is terminal the moment it takes its branch, so what
-      // waits on it is unblocked here. Starting those is left to the sweep that
-      // already starts ready tickets, rather than re-entering this function and
-      // making its own type recursive.
-      const promotedRun = markDependentsReady(nextRun, input.createdAt);
-      if (promotedRun !== nextRun) {
-        yield* updateRun({
+      // Every ticket skipped leaves nothing left to run, so the run goes on to
+      // integration rather than waiting for work that will never start.
+      if (
+        nextRun !== input.run &&
+        nextRun.ticketStates.every((state) => implementationTicketStateIsTerminal(state.status))
+      ) {
+        yield* integrateCompletedRun({
           sourceThreadId: input.sourceThreadId,
-          run: promotedRun,
+          run: nextRun,
           createdAt: input.createdAt,
         });
-        if (
-          promotedRun.ticketStates.every((state) =>
-            implementationTicketStateIsTerminal(state.status),
-          )
-        ) {
-          yield* integrateCompletedRun({
-            sourceThreadId: input.sourceThreadId,
-            run: promotedRun,
-            createdAt: input.createdAt,
-          });
-        }
-        return promotedRun;
       }
       return nextRun;
     },
@@ -2877,6 +2882,27 @@ const make = Effect.gen(function* () {
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
       const orchestratorThread = findThread(readModel, input.run.orchestratorThreadId);
       if (orchestratorThread === null) return;
+      // Code Review is the last thing between the integrated change and the
+      // final gate, so skipping it goes straight to that gate.
+      if (isRunStageSkipped(input.run.skips, "code-review")) {
+        yield* startMergeGate({
+          sourceThreadId: input.sourceThreadId,
+          run: input.run,
+          integration: {
+            baseTicketId: null,
+            baseRefName: input.run.orchestratorBranch,
+            mergedTicketIds: [],
+            conflictedTicketId: null,
+            conflictedRefName: null,
+            conflictedFiles: [],
+            remainingTicketIds: [],
+            remainingRefNames: [],
+          },
+          kind: "final",
+          createdAt: input.createdAt,
+        });
+        return;
+      }
       const activeReviewer =
         input.run.activeCodeReviewThreadId === null
           ? undefined
