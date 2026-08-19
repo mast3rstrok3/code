@@ -1,6 +1,6 @@
 import type { EnvironmentId, ModelSelection, ThreadId } from "@t3tools/contracts";
 import type { WorkflowPresetSubStep } from "@t3tools/shared/workflowPresets";
-import { Pause, RotateCcw, Settings2 } from "lucide-react";
+import { Pause, RotateCcw, Settings2, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
@@ -50,13 +50,18 @@ function WorkflowStepModelSection(props: {
 }
 
 /**
- * Per-step controls for a running workflow: which agent runs the step, and
- * stopping or starting it again.
+ * Controls for one scope of a running workflow: which agent runs it, and
+ * stopping, starting or clearing it. The same menu serves a step, a wave, a
+ * ticket and a ticket's stages, so `scopeNoun` names what the buttons act on.
  *
- * A pin applies to the next agent the step starts — a later cycle, a restart,
+ * A pin applies to the next agent the scope starts — a later cycle, a restart,
  * a wave that has not begun. Agents already running keep the model they
- * launched with, so stopping and starting the step again is how a pin reaches
- * work in flight.
+ * launched with, so stopping and starting again is how a pin reaches work in
+ * flight.
+ *
+ * Clearing keeps every commit; it drops what the scope recorded so the run can
+ * reach it again. A clear that covers more than one thing asks first, because
+ * it is one click away from discarding a whole wave's results.
  */
 export function WorkflowStepSettingsMenu(props: {
   readonly environmentId: EnvironmentId;
@@ -75,15 +80,32 @@ export function WorkflowStepSettingsMenu(props: {
   readonly onSetStepModel: SetWorkflowStepModel | undefined;
   readonly onRestart: (() => void) | undefined;
   readonly onStop: ((threadIds: readonly ThreadId[]) => void) | undefined;
+  /** What the buttons act on. "step" unless the menu sits on a smaller scope. */
+  readonly scopeNoun?: string;
+  readonly onDelete?: (() => void) | undefined;
+  readonly deleteDisabledReason?: string | null;
+  /** Set when clearing covers more than one thing, so the menu asks first. */
+  readonly confirmDeleteMessage?: string | null;
 }) {
   const [open, setOpen] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const { workflowPromptId, onSetStepModel } = props;
+  const noun = props.scopeNoun ?? "step";
+  const deleteDisabledReason = props.deleteDisabledReason ?? null;
+  const confirmDeleteMessage = props.confirmDeleteMessage ?? null;
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setConfirmingDelete(false);
+      }}
+    >
       <PopoverTrigger
         aria-label={`Settings for ${props.stepLabel}`}
         title={`Settings for ${props.stepLabel}`}
+        data-testid="workflow-scope-menu"
         className="cursor-pointer mt-1 flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
       >
         <Settings2 className="size-3.5" aria-hidden />
@@ -134,7 +156,7 @@ export function WorkflowStepSettingsMenu(props: {
             className="cursor-pointer flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
           >
             <Pause className="size-3.5" aria-hidden />
-            Stop step
+            Stop {noun}
           </button>
           <button
             type="button"
@@ -147,13 +169,54 @@ export function WorkflowStepSettingsMenu(props: {
             className="cursor-pointer flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
           >
             <RotateCcw className="size-3.5" aria-hidden />
-            Start step again
+            Start {noun} again
           </button>
           {props.restartDisabledReason !== null ? (
             <p className="px-2 text-[11px] leading-relaxed text-muted-foreground">
               {props.restartDisabledReason}
             </p>
           ) : null}
+          {props.onDelete === undefined ? null : (
+            <>
+              <button
+                type="button"
+                disabled={deleteDisabledReason !== null}
+                title={deleteDisabledReason ?? `Clear this ${noun} without starting it`}
+                onClick={() => {
+                  if (confirmDeleteMessage !== null && !confirmingDelete) {
+                    setConfirmingDelete(true);
+                    return;
+                  }
+                  props.onDelete?.();
+                  setConfirmingDelete(false);
+                  setOpen(false);
+                }}
+                className="cursor-pointer flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium text-destructive hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+              >
+                <Trash2 className="size-3.5" aria-hidden />
+                {confirmingDelete ? `Yes, delete ${noun}` : `Delete ${noun}`}
+              </button>
+              {confirmingDelete && confirmDeleteMessage !== null ? (
+                <>
+                  <p className="px-2 text-[11px] leading-relaxed text-muted-foreground">
+                    {confirmDeleteMessage}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmingDelete(false)}
+                    className="cursor-pointer flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium hover:bg-accent"
+                  >
+                    Cancel
+                  </button>
+                </>
+              ) : null}
+              {deleteDisabledReason !== null ? (
+                <p className="px-2 text-[11px] leading-relaxed text-muted-foreground">
+                  {deleteDisabledReason}
+                </p>
+              ) : null}
+            </>
+          )}
         </div>
       </PopoverPopup>
     </Popover>

@@ -66,6 +66,7 @@ export type RetryThreadImplementationChangeRequestInput =
   CommandInput<"thread.implementation-change-request.retry">;
 export type RetryThreadImplementationRunInput = CommandInput<"thread.implementation-run.retry">;
 export type RerunThreadImplementationStageInput = CommandInput<"thread.implementation-run.rerun">;
+export type ResetThreadImplementationStageInput = CommandInput<"thread.implementation-run.reset">;
 export type CancelThreadImplementationRunInput = CommandInput<"thread.implementation-run.cancel">;
 export type InterruptThreadTurnInput = CommandInput<"thread.turn.interrupt">;
 export type RespondToThreadApprovalInput = CommandInput<"thread.approval.respond">;
@@ -506,6 +507,20 @@ export const rerunThreadImplementationStage: (
     return yield* dispatch({
       ...input,
       type: "thread.implementation-run.rerun",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  },
+);
+
+export const resetThreadImplementationStage: (
+  input: ResetThreadImplementationStageInput,
+) => CommandEffect = Effect.fn("EnvironmentCommands.resetThreadImplementationStage")(
+  function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "thread.implementation-run.reset",
       commandId: metadata.commandId,
       createdAt: metadata.createdAt,
     });

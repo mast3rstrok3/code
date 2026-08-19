@@ -22,6 +22,7 @@ import {
   type RetryThreadImplementationChangeRequestInput,
   type RerunThreadAppReviewPhaseInput,
   type RerunThreadImplementationStageInput,
+  type ResetThreadImplementationStageInput,
   type RetryThreadImplementationRunInput,
   type SetThreadInteractionModeInput,
   type SetThreadComposerModeInput,
@@ -60,6 +61,7 @@ import {
   retryThreadImplementationChangeRequest,
   rerunThreadAppReviewPhase,
   rerunThreadImplementationStage,
+  resetThreadImplementationStage,
   retryThreadImplementationRun,
   setThreadInteractionMode,
   setThreadComposerMode,
@@ -101,6 +103,7 @@ export type {
   RevertThreadCheckpointInput,
   RerunThreadAppReviewPhaseInput,
   RerunThreadImplementationStageInput,
+  ResetThreadImplementationStageInput,
   RetryThreadImplementationChangeRequestInput,
   RetryThreadImplementationRunInput,
   SetThreadInteractionModeInput,
@@ -400,6 +403,30 @@ export function createThreadEnvironmentAtoms<R, E>(
         }: {
           environmentId: string;
           input: RerunThreadImplementationStageInput;
+        }) =>
+          JSON.stringify([
+            environmentId,
+            input.threadId,
+            input.runId,
+            input.target.kind === "ticket"
+              ? [input.target.ticketId, input.target.stage]
+              : input.target.stage,
+          ]),
+      },
+    }),
+    resetImplementationStage: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:implementation-run:reset",
+      execute: (input: ResetThreadImplementationStageInput) =>
+        resetThreadImplementationStage(input),
+      scheduler,
+      concurrency: {
+        mode: "serial" as const,
+        key: ({
+          environmentId,
+          input,
+        }: {
+          environmentId: string;
+          input: ResetThreadImplementationStageInput;
         }) =>
           JSON.stringify([
             environmentId,
