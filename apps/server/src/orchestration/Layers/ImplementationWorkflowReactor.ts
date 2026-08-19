@@ -1536,7 +1536,8 @@ const make = Effect.gen(function* () {
     const existingWorktreeHead = yield* gitWorkflow
       .resolveCommit({ cwd: plannedWorker.worktreePath, ref: "HEAD" })
       .pipe(Effect.option);
-    if (Option.isSome(existingWorktreeHead)) {
+    const worktreeExisted = Option.isSome(existingWorktreeHead);
+    if (worktreeExisted) {
       const status = yield* gitWorkflow.localStatus({ cwd: plannedWorker.worktreePath });
       if (!status.isRepo || status.refName !== plannedWorker.branch) {
         return yield* new GitCommandError({
@@ -1560,7 +1561,13 @@ const make = Effect.gen(function* () {
       cwd: plannedWorker.worktreePath,
       baseTicketId: baseDependency?.ticketId ?? null,
       baseRefName,
-      refs: dependencies.slice(1).map((dependency) => ({
+      // A new worktree starts at the first dependency's commit, so only the rest
+      // are merged. A worktree that already exists was branched from that
+      // dependency as it stood then, and a ticket only comes back here because
+      // someone started it again: if that dependency has since been repaired,
+      // its new commits have to be merged like any other, or the ticket goes on
+      // building on a base that moved without it.
+      refs: (worktreeExisted ? dependencies : dependencies.slice(1)).map((dependency) => ({
         ticketId: dependency.ticketId,
         refName: dependency.commitSha,
       })),

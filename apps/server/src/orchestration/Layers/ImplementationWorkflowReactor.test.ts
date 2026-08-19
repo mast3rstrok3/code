@@ -4728,6 +4728,62 @@ describe("ImplementationWorkflowReactor", () => {
       { serverSettings: { providers: { codex: { enabled: false } } } },
     ),
   );
+  it.effect("re-running a ticket merges a dependency that moved under it", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { tickets, run } = yield* launchRun(system, {
+          tickets: [
+            {
+              key: "TICKET-1",
+              title: "Base",
+              bodyMarkdown: "Base work.",
+              plannedFileChanges: [{ path: "src/base.ts", action: "create" }],
+              dependencyKeys: [],
+            },
+            {
+              key: "TICKET-2",
+              title: "Dependent",
+              bodyMarkdown: "Dependent work.",
+              plannedFileChanges: [{ path: "src/dependent.ts", action: "create" }],
+              dependencyKeys: ["TICKET-1"],
+            },
+          ],
+        });
+        const base = tickets.find((ticket) => ticket.key === "TICKET-1")!;
+        const dependent = tickets.find((ticket) => ticket.key === "TICKET-2")!;
+        yield* appendWorkerResult(system, { run, status: "succeeded", ticketId: base.id });
+        yield* appendWorkerResult(system, { run, status: "succeeded", ticketId: dependent.id });
+
+        const snapshot = yield* system.query.getSnapshot();
+        const dependentState = snapshot.implementationRuns
+          .find((entry) => entry.id === run.id)
+          ?.ticketStates.find((state) => state.ticketId === dependent.id);
+        const baseState = snapshot.implementationRuns
+          .find((entry) => entry.id === run.id)
+          ?.ticketStates.find((state) => state.ticketId === base.id);
+        const mergesBefore = yield* Ref.get(system.mergeRefInputs);
+
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.rerun",
+          commandId: commandId("rerun-dependent-implementation"),
+          threadId: sourceThreadId,
+          runId: run.id,
+          target: { kind: "ticket", ticketId: dependent.id, stage: "implementation" },
+          createdAt: "2026-01-01T00:05:00.000Z",
+        });
+        yield* system.reactor.drain;
+
+        // The worktree is still there, so nothing re-branches it off the base.
+        // Merging that base is the only way its repairs reach the ticket.
+        const merges = (yield* Ref.get(system.mergeRefInputs)).slice(mergesBefore.length);
+        expect(merges).toContainEqual({
+          cwd: dependentState?.worktreePath,
+          refName: baseState?.workerResult?.commitSha,
+        });
+      }),
+    ),
+  );
+
   it.effect("re-running a failed ticket reopens the tickets its failure took down", () =>
     withSystem((system) =>
       Effect.gen(function* () {
