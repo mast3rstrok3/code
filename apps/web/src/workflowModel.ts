@@ -467,6 +467,70 @@ function fallbackStepRepeatsAsCycles<TThread extends WorkflowModelThread>(
   );
 }
 
+/** The parts of an implementation run needed to link it to a workflow group. */
+export interface WorkflowModelImplementationRun {
+  readonly id: string;
+  readonly specId: string | null;
+  readonly sourceProposedPlan?: { readonly threadId: string } | null | undefined;
+  readonly orchestratorThreadId: string;
+  readonly appReviewWorkflowRunIds: readonly string[];
+  readonly updatedAt: string;
+}
+
+/**
+ * The implementation run whose progress a group's card reports.
+ *
+ * A top-level card flattens its nested workflow groups into its own steps, so
+ * the run that owns a descendant group owns that card's implementation steps
+ * too. Matching only the card's own rows misses it, because implementation
+ * threads carry the run id as their workflow id and land in a nested group.
+ *
+ * When nothing links — a run whose threads do not exist yet — a planning card
+ * falls back to the newest run built from the same spec or proposed plan. It
+ * never borrows a run from another workflow, whose tickets and retries belong
+ * to a different card.
+ */
+export function resolveGroupImplementationRun<
+  TThread extends WorkflowModelThread,
+  TRun extends WorkflowModelImplementationRun,
+>(
+  group: WorkflowGroup<TThread>,
+  groups: readonly WorkflowGroup<TThread>[],
+  runs: readonly TRun[],
+  scope: { readonly specId: string | null; readonly rootThreadId: string },
+): TRun | null {
+  const linkedGroups =
+    group.parentGroupId === null ? [group, ...descendantGroups(group, groups)] : [group];
+  const directlyLinked =
+    runs.find((run) =>
+      linkedGroups.some(
+        (candidate) =>
+          run.id === candidate.sourceId ||
+          run.appReviewWorkflowRunIds.some((runId) => runId === candidate.sourceId) ||
+          candidate.rows.some((row) => row.thread.id === run.orchestratorThreadId),
+      ),
+    ) ?? null;
+  if (directlyLinked !== null) return directlyLinked;
+  if (group.preset !== "planning") return null;
+  return (
+    runs
+      .filter(
+        (run) =>
+          (scope.specId !== null && run.specId === scope.specId) ||
+          run.sourceProposedPlan?.threadId === scope.rootThreadId,
+      )
+      .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0] ?? null
+  );
+}
+
+function descendantGroups<TThread extends WorkflowModelThread>(
+  group: WorkflowGroup<TThread>,
+  groups: readonly WorkflowGroup<TThread>[],
+): readonly WorkflowGroup<TThread>[] {
+  const children = groups.filter((candidate) => candidate.parentGroupId === group.id);
+  return [...children, ...children.flatMap((child) => descendantGroups(child, groups))];
+}
+
 /**
  * Render the canonical steps users see in Settings → Workflows. Runtime threads
  * attach to those definitions; a fresh thread for a repeated review or repair

@@ -6,6 +6,7 @@ import {
   buildTicketWaves,
   buildWorkflowTimeline,
   buildWorkflowSteps,
+  resolveGroupImplementationRun,
   resolveWorkflowGroupTimeRange,
   resolveWorkflowLifecycle,
   resolveWorkflowRollupStatus,
@@ -16,6 +17,7 @@ import {
   workflowNavigationIsAvailable,
   implementationRunCurrentStage,
   implementationTicketStageDetails,
+  type WorkflowModelImplementationRun,
   workflowStepMatchesImplementationFailure,
   type WorkflowModelThread,
   type WorkflowTimelineStep,
@@ -79,6 +81,81 @@ function thread(id: string, overrides: Partial<TestThread> = {}): TestThread {
     ...overrides,
   };
 }
+
+describe("resolveGroupImplementationRun", () => {
+  const run = (
+    id: string,
+    overrides: Partial<WorkflowModelImplementationRun> = {},
+  ): WorkflowModelImplementationRun => ({
+    id,
+    specId: "spec-1",
+    sourceProposedPlan: null,
+    orchestratorThreadId: `orchestrator-${id}`,
+    appReviewWorkflowRunIds: [],
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    ...overrides,
+  });
+
+  // Implementation threads carry the run id as their workflow id, so they land
+  // in a group of their own nested under the planning card that flattened them.
+  const planningWorkflow = () => {
+    const root = thread("root", {
+      workflowPreset: "planning",
+      workflowContext: { workflowId: "workflow-root", rootThreadId: "root" },
+    });
+    const orchestrator = thread("orchestrator-run-a", {
+      parentThreadId: "root",
+      workflowRole: "implementation-orchestrator",
+      createdAt: "2026-01-02T00:00:00.000Z",
+      workflowContext: {
+        workflowId: "run-a",
+        parentWorkflowId: "workflow-root",
+        rootThreadId: "root",
+      },
+    });
+    const groups =
+      buildWorkflowViewModel([root, orchestrator]).rootsByThreadKey.get("env:root")?.groups ?? [];
+    return { groups, card: groups.find((group) => group.parentGroupId === null)! };
+  };
+
+  it("links the run that owns a flattened nested group", () => {
+    const { groups, card } = planningWorkflow();
+    const otherWorkflowRun = run("run-b", {
+      specId: "spec-2",
+      updatedAt: "2026-01-09T00:00:00.000Z",
+    });
+
+    expect(
+      resolveGroupImplementationRun(card, groups, [otherWorkflowRun, run("run-a")], {
+        specId: "spec-1",
+        rootThreadId: "root",
+      })?.id,
+    ).toBe("run-a");
+  });
+
+  it("never borrows another workflow's run when this one has not linked yet", () => {
+    const { groups, card } = planningWorkflow();
+    const otherWorkflowRun = run("run-b", {
+      specId: "spec-2",
+      updatedAt: "2026-01-09T00:00:00.000Z",
+    });
+
+    expect(
+      resolveGroupImplementationRun(card, groups, [otherWorkflowRun], {
+        specId: "spec-1",
+        rootThreadId: "root",
+      }),
+    ).toBeNull();
+    expect(
+      resolveGroupImplementationRun(
+        card,
+        groups,
+        [otherWorkflowRun, run("run-pending", { orchestratorThreadId: "not-created-yet" })],
+        { specId: "spec-1", rootThreadId: "root" },
+      )?.id,
+    ).toBe("run-pending");
+  });
+});
 
 describe("buildWorkflowViewModel", () => {
   it("makes a started root workflow navigable before it creates child threads", () => {

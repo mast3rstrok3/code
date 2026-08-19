@@ -41,6 +41,7 @@ import {
   buildTicketWaves,
   implementationRunCurrentStage,
   implementationTicketStageDetails,
+  resolveGroupImplementationRun,
   resolveWorkflowGroupTimeRange,
   resolveWorkflowStepTimeRange,
   resolveWorkflowThreadTimeRange,
@@ -779,9 +780,7 @@ function TicketPhases(props: {
   const states = new Map(props.run.ticketStates.map((state) => [state.ticketId, state] as const));
   return (
     <div className="space-y-2">
-      {buildTicketWaves(
-        props.tickets.filter((ticket) => props.run.planningTicketIds.includes(ticket.id)),
-      ).map((wave, waveIndex) => (
+      {buildTicketWaves(props.tickets).map((wave, waveIndex) => (
         <section
           key={wave.map((ticket) => ticket.id).join(":")}
           className="rounded-md border border-border/70 bg-background/40 p-2"
@@ -952,22 +951,6 @@ function TicketPhases(props: {
   );
 }
 
-function implementationRunForGroup(
-  group: WorkflowGroup<EnvironmentThreadShell>,
-  runs: readonly OrchestrationImplementationRun[],
-): OrchestrationImplementationRun | null {
-  const directlyLinked =
-    runs.find(
-      (run) =>
-        run.id === group.sourceId ||
-        run.appReviewWorkflowRunIds.some((runId) => runId === group.sourceId) ||
-        group.rows.some((row) => row.thread.id === run.orchestratorThreadId),
-    ) ?? null;
-  if (directlyLinked !== null) return directlyLinked;
-  if (group.preset !== "planning") return null;
-  return runs.toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0] ?? null;
-}
-
 function appReviewRunPresentation(run: AppReviewWorkflowRun | null): {
   readonly status: WorkflowThreadStatus;
   readonly label: string | null;
@@ -1020,7 +1003,21 @@ function WorkflowGroupCard(props: {
       ? (props.appReviewWorkflowRuns.find((run) => run.id === group.sourceId) ?? null)
       : null;
   const runPresentation = appReviewRunPresentation(linkedAppReviewRun);
-  const linkedImplementationRun = implementationRunForGroup(group, props.implementationRuns);
+  const linkedImplementationRun = resolveGroupImplementationRun(
+    group,
+    props.groups,
+    props.implementationRuns,
+    { specId: props.spec?.id ?? null, rootThreadId: props.workflowRoot.id },
+  );
+  // Tickets belong to the run that is executing them. An unlinked run leaves
+  // this empty, and the step falls back to listing its threads rather than
+  // rendering an empty box under an expanded step.
+  const ticketWaveTickets =
+    linkedImplementationRun === null
+      ? []
+      : props.tickets.filter((ticket) =>
+          linkedImplementationRun.planningTicketIds.includes(ticket.id),
+        );
   const status =
     linkedImplementationRun?.status === "needs-human-attention"
       ? "failed"
@@ -1351,10 +1348,10 @@ function WorkflowGroupCard(props: {
                               {stepOpen &&
                               isTicketExecutionStep &&
                               linkedImplementationRun &&
-                              props.tickets.length > 0 ? (
+                              ticketWaveTickets.length > 0 ? (
                                 <div className="mt-1 border-t border-border/70 p-1">
                                   <TicketPhases
-                                    tickets={props.tickets}
+                                    tickets={ticketWaveTickets}
                                     run={linkedImplementationRun}
                                     threads={workflowThreads}
                                     appReviewWorkflowRuns={props.appReviewWorkflowRuns}
