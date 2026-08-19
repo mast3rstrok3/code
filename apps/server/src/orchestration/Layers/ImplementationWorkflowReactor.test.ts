@@ -4728,6 +4728,72 @@ describe("ImplementationWorkflowReactor", () => {
       { serverSettings: { providers: { codex: { enabled: false } } } },
     ),
   );
+  it.effect("a skipped ticket keeps its branch so dependents still build on it", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { tickets, run } = yield* launchRun(system, {
+          tickets: [
+            {
+              key: "TICKET-1",
+              title: "Base",
+              bodyMarkdown: "Base work.",
+              plannedFileChanges: [{ path: "src/base.ts", action: "create" }],
+              dependencyKeys: [],
+            },
+            {
+              key: "TICKET-2",
+              title: "Dependent",
+              bodyMarkdown: "Dependent work.",
+              plannedFileChanges: [{ path: "src/dependent.ts", action: "create" }],
+              dependencyKeys: ["TICKET-1"],
+            },
+          ],
+        });
+        const base = tickets.find((ticket) => ticket.key === "TICKET-1")!;
+        const dependent = tickets.find((ticket) => ticket.key === "TICKET-2")!;
+
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.skip",
+          commandId: commandId("skip-base-ticket"),
+          threadId: sourceThreadId,
+          runId: run.id,
+          target: { kind: "ticket", ticketId: base.id },
+          skipped: true,
+          createdAt: "2026-01-01T00:00:00.500Z",
+        });
+        yield* system.reactor.drain;
+        // Re-running the base is what walks it through createWorker again now
+        // that the skip is recorded.
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.rerun",
+          commandId: commandId("rerun-skipped-base"),
+          threadId: sourceThreadId,
+          runId: run.id,
+          target: { kind: "ticket", ticketId: base.id, stage: "implementation" },
+          createdAt: "2026-01-01T00:00:01.000Z",
+        });
+        yield* system.reactor.drain;
+
+        const snapshot = yield* system.query.getSnapshot();
+        const current = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        const baseState = current?.ticketStates.find((state) => state.ticketId === base.id);
+        // No agent ran, but the branch is there and the ticket is terminal, so
+        // the dependent is free to start on top of it.
+        expect(baseState?.status).toBe("succeeded");
+        expect(baseState?.workerThreadId ?? null).toBeNull();
+        expect(baseState?.workerResult ?? null).toBeNull();
+        expect(baseState?.branch).not.toBeNull();
+        expect(baseState?.warningMarkdown).toContain("Skipped");
+        // The skip unblocks the dependent; the sweep that starts ready tickets
+        // is what puts a worker on it, the same as for any other ticket.
+        const dependentState = current?.ticketStates.find(
+          (state) => state.ticketId === dependent.id,
+        );
+        expect(dependentState?.status).toBe("ready");
+      }),
+    ),
+  );
+
   it.effect("skipping a ticket's App Review sends it straight to Code Review", () =>
     withSystem((system) =>
       Effect.gen(function* () {

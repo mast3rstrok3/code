@@ -3,6 +3,8 @@ import {
   applyImplementationSkip,
   CommandId,
   AppReviewId,
+  isRunStageSkipped,
+  isTicketSkipped,
   isTicketStageSkipped,
   EventId,
   GitCommandError,
@@ -1353,6 +1355,28 @@ const make = Effect.gen(function* () {
       const state = input.run.ticketStates.find(
         (candidate) => candidate.ticketId === input.ticketId,
       );
+      // A skipped ticket carries no work and so reports no commit. Its branch
+      // still exists and still holds its own dependencies, so it can be built
+      // on; the branch itself is what says where it ended up.
+      if (isTicketSkipped(input.run.skips, input.ticketId)) {
+        if (state?.status !== "succeeded" || state.branch === null) {
+          return yield* new GitCommandError({
+            operation: "ImplementationWorkflowReactor.verifiedDependency",
+            command: "git rev-parse",
+            cwd: input.run.orchestratorWorktreePath,
+            detail: `Skipped dependency ticket '${input.ticketId}' has no branch yet.`,
+          });
+        }
+        const skippedHead = yield* gitWorkflow.resolveCommit({
+          cwd: input.run.orchestratorWorktreePath,
+          ref: state.branch,
+        });
+        return {
+          ticketId: input.ticketId,
+          branch: state.branch,
+          commitSha: skippedHead.commitSha,
+        };
+      }
       if (
         state?.status !== "succeeded" ||
         state.branch === null ||
@@ -1589,6 +1613,41 @@ const make = Effect.gen(function* () {
       createdAt: input.createdAt,
     });
 
+    if (isTicketSkipped(input.run.skips, input.ticketId)) {
+      yield* appendActivity({
+        threadId: input.run.orchestratorThreadId,
+        tone: "info",
+        kind: "implementation-worker-finished",
+        summary: `Ticket ${input.ticketId} skipped`,
+        payload: {
+          runId: input.run.id,
+          ticketId: input.ticketId,
+          status: "skipped",
+          branch: plannedWorker.branch,
+        },
+        createdAt: input.createdAt,
+      });
+      return {
+        ...input.run,
+        ticketStates: input.run.ticketStates.map((state) =>
+          state.ticketId === input.ticketId
+            ? {
+                ...state,
+                status: "succeeded" as const,
+                workerThreadId: null,
+                workerResult: null,
+                branch: plannedWorker.branch,
+                worktreePath: plannedWorker.worktreePath,
+                warningMarkdown:
+                  "Skipped. The branch carries its dependencies and no work of its own.",
+                updatedAt: input.createdAt,
+              }
+            : state,
+        ),
+        updatedAt: input.createdAt,
+      } satisfies OrchestrationImplementationRun;
+    }
+
     const workerThreadId = yield* serverThreadId("implementation-worker");
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
     const sourceThread = findThread(readModel, input.sourceThreadId);
@@ -1714,12 +1773,13 @@ const make = Effect.gen(function* () {
       const startedRuns = startResults.flatMap(({ result }) =>
         result._tag === "Success" ? [result.success] : [],
       );
+      // Whatever createWorker made of a ready ticket, not only a running one: a
+      // skipped ticket comes back terminal, having taken its branch and none of
+      // the work.
       const startedStates = new Map(
         startedRuns.flatMap((run) =>
           run.ticketStates
-            .filter(
-              (state) => state.status === "running" && readyTicketIds.includes(state.ticketId),
-            )
+            .filter((state) => state.status !== "ready" && readyTicketIds.includes(state.ticketId))
             .map((state) => [state.ticketId, state] as const),
         ),
       );
@@ -1741,6 +1801,7 @@ const make = Effect.gen(function* () {
           createdAt: input.createdAt,
         });
       }
+
       const failedStarts = startResults.filter(({ result }) => result._tag === "Failure");
       if (failedStarts.length > 0) {
         const continuedRun = failImplementationTickets(
@@ -1783,6 +1844,30 @@ const make = Effect.gen(function* () {
           });
         }
         return continuedRun;
+      }
+      // A skipped ticket is terminal the moment it takes its branch, so what
+      // waits on it is unblocked here. Starting those is left to the sweep that
+      // already starts ready tickets, rather than re-entering this function and
+      // making its own type recursive.
+      const promotedRun = markDependentsReady(nextRun, input.createdAt);
+      if (promotedRun !== nextRun) {
+        yield* updateRun({
+          sourceThreadId: input.sourceThreadId,
+          run: promotedRun,
+          createdAt: input.createdAt,
+        });
+        if (
+          promotedRun.ticketStates.every((state) =>
+            implementationTicketStateIsTerminal(state.status),
+          )
+        ) {
+          yield* integrateCompletedRun({
+            sourceThreadId: input.sourceThreadId,
+            run: promotedRun,
+            createdAt: input.createdAt,
+          });
+        }
+        return promotedRun;
       }
       return nextRun;
     },
@@ -1898,6 +1983,21 @@ const make = Effect.gen(function* () {
       );
       if (orchestratorThread === null || state?.worktreePath == null || state.branch == null)
         return;
+      // A skipped Code Review is the last stage a ticket has, so skipping it
+      // ends the ticket on whatever its branch already holds.
+      if (isTicketStageSkipped(input.run.skips, input.ticketId, "code-review")) {
+        const head = yield* gitWorkflow.resolveCommit({ cwd: state.worktreePath, ref: "HEAD" });
+        yield* finishTicketReviewChain({
+          sourceThreadId: input.sourceThreadId,
+          run: input.run,
+          ticketId: input.ticketId,
+          commitSha: head.commitSha,
+          codeReviewOutcome: "clean",
+          warningMarkdown: input.warningMarkdown ?? "Code Review skipped.",
+          createdAt: input.createdAt,
+        });
+        return;
+      }
       const ticket = ticketsById(
         findThread(readModel, input.sourceThreadId) ?? orchestratorThread,
       ).get(input.ticketId);
@@ -2334,6 +2434,17 @@ const make = Effect.gen(function* () {
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
       const orchestratorThread = findThread(readModel, cycleRun.orchestratorThreadId);
       if (orchestratorThread === null) return;
+      // The combined App Review is a stage of the run, so skipping it hands the
+      // integrated change to the Code Review that would have followed it.
+      if (isRunStageSkipped(cycleRun.skips, "app-review")) {
+        yield* startCodeReview({
+          sourceThreadId: input.sourceThreadId,
+          run: cycleRun,
+          createdAt: input.createdAt,
+          skipAppReviewRequirement: true,
+        });
+        return;
+      }
       const artifactSourceThread = findThread(readModel, input.sourceThreadId);
       const artifactMarkdown =
         cycleRun.artifactSource === "proposed-plan" && artifactSourceThread !== null
