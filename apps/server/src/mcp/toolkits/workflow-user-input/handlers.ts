@@ -3,9 +3,12 @@ import {
   EventId,
   OrchestrationDispatchCommandError,
   OrchestrationGetSnapshotError,
+  WORKFLOW_USER_INPUT_ABANDON_GRACE_MS,
+  WORKFLOW_USER_INPUT_WAIT_WINDOW_MS,
   WorkflowUserInputError,
   type ProviderUserInputAnswers,
   type ThreadId,
+  type UserInputQuestion,
   type WorkflowUserInputAnswer,
   type WorkflowUserInputQuestion,
 } from "@t3tools/contracts";
@@ -44,7 +47,7 @@ const dispatchError = (message: string, cause: unknown) =>
  * labels, or free text typed into the composer.
  */
 const toWorkflowUserInputAnswers = (
-  questions: ReadonlyArray<WorkflowUserInputQuestion>,
+  questions: ReadonlyArray<Pick<WorkflowUserInputQuestion, "id">>,
   answers: ProviderUserInputAnswers,
 ): ReadonlyArray<WorkflowUserInputAnswer> =>
   questions.map((question) => {
@@ -98,8 +101,25 @@ export const handlers = {
       // is blocked in, where a provider-native question would have landed.
       const turnId = thread.value.latestTurn?.turnId ?? null;
 
-      const requestId = `workflow-user-input-${nextId(scope.providerSessionId)}`;
-      const questions = input.questions.map((question) => ({ ...question, multiSelect: false }));
+      // A resume parks on the question already on screen, so the card, its id
+      // and the answers the user has half-filled all survive the round change.
+      const resumeRequestId = input.resumeRequestId;
+      const resumed =
+        resumeRequestId === undefined
+          ? Option.none<ReadonlyArray<UserInputQuestion>>()
+          : yield* broker.pendingQuestions({ threadId, requestId: resumeRequestId });
+      if (resumeRequestId !== undefined && Option.isNone(resumed)) {
+        return yield* inputError(
+          threadId,
+          `No question is waiting under resumeRequestId '${resumeRequestId}'. It was answered or retired already. Ask again with a fresh call that omits resumeRequestId.`,
+        );
+      }
+      const requestId = resumeRequestId ?? `workflow-user-input-${nextId(scope.providerSessionId)}`;
+      // The registered questions win over a resend, so a reworded resume can
+      // never remap answers the user gave to the card they actually saw.
+      const questions = Option.getOrElse(resumed, () =>
+        input.questions.map((question) => ({ ...question, multiSelect: false })),
+      );
 
       const appendActivity = (activity: {
         readonly kind: "user-input.requested" | "user-input.resolved";
@@ -135,17 +155,58 @@ export const handlers = {
       const resolveCard = (summary: string, answers: ProviderUserInputAnswers) =>
         appendActivity({ kind: "user-input.resolved", summary, payload: { answers } });
 
-      yield* appendActivity({
-        kind: "user-input.requested",
-        summary: "User input requested",
-        payload: { questions },
-      });
+      if (Option.isNone(resumed)) {
+        yield* appendActivity({
+          kind: "user-input.requested",
+          summary: "User input requested",
+          payload: { questions },
+        });
+      }
 
-      const outcome = yield* broker.awaitAnswers({ threadId, requestId }).pipe(
-        // An interrupted tool call (turn stopped, client gone) must still clear
-        // the card, or the thread keeps showing a question nobody is waiting on.
-        Effect.onInterrupt(() => resolveCard("User input cancelled", {}).pipe(Effect.ignore)),
-      );
+      const outcome = yield* broker
+        .awaitAnswers({
+          threadId,
+          requestId,
+          questions,
+          waitFor: WORKFLOW_USER_INPUT_WAIT_WINDOW_MS,
+        })
+        .pipe(
+          // An interrupted tool call (turn stopped, client gone) must still clear
+          // the card, or the thread keeps showing a question nobody is waiting on.
+          Effect.onInterrupt(() => resolveCard("User input cancelled", {}).pipe(Effect.ignore)),
+        );
+
+      if (outcome._tag === "waiting") {
+        // Nothing closes the card from here, so an agent that never parks again
+        // would strand it. This retires the round on its behalf if it does.
+        yield* Effect.forkDetach(
+          Effect.sleep(WORKFLOW_USER_INPUT_ABANDON_GRACE_MS).pipe(
+            Effect.andThen(
+              broker.reapIfUnwatched({
+                threadId,
+                requestId,
+                reason: "the agent stopped waiting for it",
+              }),
+            ),
+            Effect.flatMap(
+              Option.match({
+                onNone: () => Effect.void,
+                onSome: (abandoned) =>
+                  abandoned._tag === "answered"
+                    ? resolveCard("User input submitted", abandoned.answers)
+                    : resolveCard("User input cancelled", {}),
+              }),
+            ),
+            Effect.ignore,
+          ),
+        );
+        return {
+          status: "waiting" as const,
+          resumeRequestId: requestId,
+          instructions:
+            "The user has not answered yet. The question is still on their screen. Call workflow_request_user_input again immediately with the same questions and this resumeRequestId to keep waiting. Do not rephrase the questions, do not ask a different question, and never answer on the user's behalf.",
+        };
+      }
 
       if (outcome._tag === "cancelled") {
         yield* resolveCard("User input cancelled", {});
@@ -157,7 +218,10 @@ export const handlers = {
 
       yield* resolveCard("User input submitted", outcome.answers);
 
-      return { answers: toWorkflowUserInputAnswers(questions, outcome.answers) };
+      return {
+        status: "answered" as const,
+        answers: toWorkflowUserInputAnswers(questions, outcome.answers),
+      };
     }),
 } satisfies Parameters<typeof WorkflowUserInputToolkit.toLayer>[0];
 

@@ -94,10 +94,46 @@ export const WorkflowUserInputAnswer = Schema.Struct({
 });
 export type WorkflowUserInputAnswer = typeof WorkflowUserInputAnswer.Type;
 
-export const WorkflowUserInputResult = Schema.Struct({
+export const WorkflowUserInputAnsweredResult = Schema.Struct({
+  status: Schema.Literal("answered"),
   answers: Schema.Array(WorkflowUserInputAnswer),
 });
+export type WorkflowUserInputAnsweredResult = typeof WorkflowUserInputAnsweredResult.Type;
+
+export const WorkflowUserInputWaitingResult = Schema.Struct({
+  status: Schema.Literal("waiting"),
+  resumeRequestId: TrimmedNonEmptyString,
+  instructions: TrimmedNonEmptyString,
+});
+export type WorkflowUserInputWaitingResult = typeof WorkflowUserInputWaitingResult.Type;
+
+/**
+ * A question outlives the tool call that asked it. Providers cut a silent MCP
+ * call off after a few minutes, so a round nobody answered in time comes back
+ * as `waiting` carrying the id to park on again; the card on screen and the
+ * answers the user has already picked survive across those rounds.
+ */
+export const WorkflowUserInputResult = Schema.Union([
+  WorkflowUserInputAnsweredResult,
+  WorkflowUserInputWaitingResult,
+]);
 export type WorkflowUserInputResult = typeof WorkflowUserInputResult.Type;
+
+/**
+ * How long one parked round waits before it hands the agent a `waiting`
+ * result. It has to clear the shortest provider ceiling we have measured with
+ * room to spare: Claude Code aborts a silent HTTP MCP call about five minutes
+ * after it arrives, and appending the card eats into that from the front.
+ */
+export const WORKFLOW_USER_INPUT_WAIT_WINDOW_MS = 3.5 * 60 * 1000;
+
+/**
+ * How long a question survives with no round parked on it. A model that never
+ * comes back would otherwise leave a card on screen nobody can resolve. The
+ * window is generous on purpose: an agent that takes a detour before parking
+ * again must not have its question reaped out from under it.
+ */
+export const WORKFLOW_USER_INPUT_ABANDON_GRACE_MS = 3 * 60 * 1000;
 
 export class WorkflowUserInputError extends Schema.TaggedErrorClass<WorkflowUserInputError>()(
   "WorkflowUserInputError",

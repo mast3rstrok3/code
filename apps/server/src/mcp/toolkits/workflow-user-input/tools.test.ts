@@ -23,3 +23,15 @@ it("publishes the same question shape the clients render", () => {
   // required rather than optional.
   expect(schema.properties.questions.items.required).toContain("recommendation");
 });
+
+it("takes a resume id so a round can park on the question already on screen", () => {
+  const schema = Tool.getJsonSchema(WorkflowRequestUserInputTool) as {
+    readonly properties: Record<string, unknown>;
+    readonly required: ReadonlyArray<string>;
+  };
+
+  expect(Object.keys(schema.properties)).toContain("resumeRequestId");
+  // A fresh round must not have to invent one.
+  expect(schema.required).not.toContain("resumeRequestId");
+  expect(schema.required).toContain("questions");
+});

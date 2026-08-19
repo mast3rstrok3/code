@@ -1230,9 +1230,11 @@ const SUPPORTED_CLAUDE_IMAGE_MIME_TYPES = new Set([
   "image/webp",
 ]);
 /**
- * How long a structured grill question may wait for its human. The SDK treats
- * this as a hard wall clock per MCP tool call, so it has to cover a user who
- * walks away mid-round rather than a typical answer.
+ * How long one parked grill round may hold its MCP tool call open. This lifts
+ * the per-request budget off its 60s default, but it does not buy the whole
+ * wait: Claude Code aborts a silent HTTP MCP call at roughly five minutes
+ * whatever this says, which is why the tool hands back a `waiting` result and
+ * a resume id well inside that ceiling instead of parking for hours.
  */
 const WORKFLOW_USER_INPUT_TOOL_TIMEOUT_MS = 6 * 60 * 60 * 1000;
 const CLAUDE_SETTING_SOURCES = [

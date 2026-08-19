@@ -918,7 +918,12 @@ routing.layer("ProviderServiceLive routing", (it) => {
       // answer settles there and never reaches the adapter's pending map.
       const broker = yield* WorkflowUserInputBroker.WorkflowUserInputBroker;
       const parked = yield* broker
-        .awaitAnswers({ threadId: session.threadId, requestId: "workflow-user-input-1" })
+        .awaitAnswers({
+          threadId: session.threadId,
+          requestId: "workflow-user-input-1",
+          questions: [],
+          waitFor: 60_000,
+        })
         .pipe(Effect.forkChild);
       yield* Effect.yieldNow;
       yield* provider.respondToUserInput({

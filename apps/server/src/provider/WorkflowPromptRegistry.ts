@@ -109,6 +109,8 @@ ${WORKFLOW_REQUEST_USER_INPUT_CODE_MODE_FORWARDING}
 
 Recompute the currently unblocked frontier before every round. When it contains one through ten questions, submit the entire frontier at its natural size. Ten is a maximum, never a target: do not aim for three, ten, or any other fixed batch size, and do not pad a round. If more than ten questions are independently ready, send the first ten in stable design-tree order and continue with the remainder after those answers resolve. Never put questions in the same call when one answer depends on another question in that call.
 
+A result of \`status: "waiting"\` is not an answer and not a refusal: the user is still reading. Call \`workflow_request_user_input\` again immediately with the same questions and the \`resumeRequestId\` it returned, and keep doing that for as long as the user takes. Never rephrase the round, open a second card, or move on because a round came back waiting.
+
 Treat every answer returned by \`workflow_request_user_input\` as settled. Never repeat its question or the previously answered frontier unless the user explicitly reopens or contradicts that decision. When a custom answer needs clarification, ask only the narrower unresolved clarification instead of replaying the original question batch.
 
 Each question must have:
