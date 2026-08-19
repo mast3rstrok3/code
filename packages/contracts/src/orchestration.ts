@@ -2095,6 +2095,24 @@ const ThreadImplementationRunRerunCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+/**
+ * Clear a stage without starting it.
+ *
+ * The same clearing a re-run does, stopping there: the stage's threads,
+ * results and outcomes go, the ticket is clean from that point on, and the
+ * branch, worktree and every commit stay. Starting it again is a separate
+ * decision, which is what makes this useful when the work has to be looked at
+ * before it is redone.
+ */
+const ThreadImplementationRunResetCommand = Schema.Struct({
+  type: Schema.Literal("thread.implementation-run.reset"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  runId: OrchestrationImplementationRunId,
+  target: OrchestrationImplementationRerunTarget,
+  createdAt: IsoDateTime,
+});
+
 const ThreadImplementationRunCancelCommand = Schema.Struct({
   type: Schema.Literal("thread.implementation-run.cancel"),
   commandId: CommandId,
@@ -2412,6 +2430,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadFastFeatureRunLaunchCommand,
   ThreadImplementationRunRetryCommand,
   ThreadImplementationRunRerunCommand,
+  ThreadImplementationRunResetCommand,
   ThreadImplementationRunCancelCommand,
   ThreadImplementationChangeRequestRetryCommand,
   ThreadAppReviewWorkflowLaunchCommand,
@@ -2460,6 +2479,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadFastFeatureRunLaunchCommand,
   ThreadImplementationRunRetryCommand,
   ThreadImplementationRunRerunCommand,
+  ThreadImplementationRunResetCommand,
   ThreadImplementationRunCancelCommand,
   ThreadImplementationChangeRequestRetryCommand,
   ThreadAppReviewWorkflowLaunchCommand,
@@ -2641,6 +2661,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.implementation-run-updated",
   "thread.implementation-run-retry-requested",
   "thread.implementation-run-rerun-requested",
+  "thread.implementation-run-reset-requested",
   "thread.implementation-run-cancel-requested",
   "thread.implementation-change-request-retry-requested",
   "thread.app-review-workflow-launched",
@@ -2923,6 +2944,11 @@ export const ThreadImplementationRunRetryRequestedPayload = Schema.Struct({
 });
 
 export const ThreadImplementationRunRerunRequestedPayload = Schema.Struct({
+  run: OrchestrationImplementationRun,
+  target: OrchestrationImplementationRerunTarget,
+});
+
+export const ThreadImplementationRunResetRequestedPayload = Schema.Struct({
   run: OrchestrationImplementationRun,
   target: OrchestrationImplementationRerunTarget,
 });
@@ -3262,6 +3288,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.implementation-run-rerun-requested"),
     payload: ThreadImplementationRunRerunRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.implementation-run-reset-requested"),
+    payload: ThreadImplementationRunResetRequestedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

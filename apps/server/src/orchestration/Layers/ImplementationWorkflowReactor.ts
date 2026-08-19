@@ -69,6 +69,7 @@ type ImplementationWorkflowEvent = Extract<
       | "thread.implementation-change-request-retry-requested"
       | "thread.implementation-run-retry-requested"
       | "thread.implementation-run-rerun-requested"
+      | "thread.implementation-run-reset-requested"
       | "thread.implementation-run-cancel-requested"
       | "thread.app-review-workflow-launched"
       | "thread.app-review-workflow-updated"
@@ -5315,6 +5316,72 @@ const make = Effect.gen(function* () {
     }
   });
 
+  /**
+   * Clear a stage and leave it for the run to reach again on its own.
+   *
+   * The same rewind a re-run does, without starting anything: what the stage
+   * produced goes, the branch and its commits stay. A cleared ticket rests at
+   * `blocked`, which is where a ticket waits its turn, so the run starts it once
+   * its dependencies have succeeded rather than the instant it is cleared. That
+   * is what makes clearing a whole wave useful: the wave rebuilds in dependency
+   * order on top of whatever the wave before it ended up producing.
+   */
+  const handleRunReset = Effect.fn("ImplementationWorkflowReactor.handleRunReset")(function* (
+    event: Extract<
+      ImplementationWorkflowEvent,
+      { type: "thread.implementation-run-reset-requested" }
+    >,
+  ) {
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    const run = findRunById(readModel, event.payload.run.id) ?? event.payload.run;
+    const sourceThreadId = findRunSourceThreadId({ readModel, run });
+    if (sourceThreadId === null) return;
+    const target = event.payload.target;
+    const createdAt = event.occurredAt;
+
+    yield* appendActivity({
+      threadId: run.orchestratorThreadId,
+      tone: "info",
+      kind: "implementation-rerun-requested",
+      summary:
+        target.kind === "ticket"
+          ? `Cleared ${target.stage} for ticket ${target.ticketId}`
+          : `Cleared ${target.stage}`,
+      payload: { runId: run.id, target, cleared: true },
+      createdAt,
+    });
+
+    if (target.kind === "run") {
+      yield* updateRun({
+        sourceThreadId,
+        run: clearRunStageForRerun({ run, stage: target.stage, updatedAt: createdAt }),
+        createdAt,
+      });
+      return;
+    }
+
+    const rewound = reopenTicketForRerun({
+      run,
+      ticketId: target.ticketId,
+      stage: target.stage,
+      updatedAt: createdAt,
+    });
+    // A re-run wants the worker now; clearing wants it in turn. Every other
+    // stage already rests on the status it resumes at.
+    const clearedRun =
+      target.stage === "implementation"
+        ? {
+            ...rewound,
+            ticketStates: rewound.ticketStates.map((state) =>
+              state.ticketId === target.ticketId && state.status === "ready"
+                ? { ...state, status: "blocked" as const }
+                : state,
+            ),
+          }
+        : rewound;
+    yield* updateRun({ sourceThreadId, run: clearedRun, createdAt });
+  });
+
   const handleRunCancel = Effect.fn("ImplementationWorkflowReactor.handleRunCancel")(function* (
     event: Extract<
       ImplementationWorkflowEvent,
@@ -5772,6 +5839,9 @@ const make = Effect.gen(function* () {
         return;
       case "thread.implementation-run-rerun-requested":
         yield* handleRunRerun(event);
+        return;
+      case "thread.implementation-run-reset-requested":
+        yield* handleRunReset(event);
         return;
       case "thread.implementation-run-cancel-requested":
         yield* handleRunCancel(event);
@@ -6498,6 +6568,7 @@ const make = Effect.gen(function* () {
           event.type !== "thread.implementation-change-request-retry-requested" &&
           event.type !== "thread.implementation-run-retry-requested" &&
           event.type !== "thread.implementation-run-rerun-requested" &&
+          event.type !== "thread.implementation-run-reset-requested" &&
           event.type !== "thread.implementation-run-cancel-requested" &&
           event.type !== "thread.app-review-workflow-launched" &&
           event.type !== "thread.app-review-workflow-updated" &&

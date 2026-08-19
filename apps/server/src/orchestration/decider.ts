@@ -3396,6 +3396,52 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       ];
     }
 
+    case "thread.implementation-run.reset": {
+      yield* requireThread({ readModel, command, threadId: command.threadId });
+      const existingRun = readModel.implementationRuns.find((run) => run.id === command.runId);
+      if (existingRun === undefined) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Implementation Run '${command.runId}' does not exist.`,
+        });
+      }
+      if (existingRun.status === "canceled") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Implementation Run '${command.runId}' was canceled.`,
+        });
+      }
+      const target = command.target;
+      if (
+        target.kind === "ticket" &&
+        !existingRun.ticketStates.some((state) => state.ticketId === target.ticketId)
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Ticket '${target.ticketId}' is not part of Implementation Run '${command.runId}'.`,
+        });
+      }
+      // Clearing a stage out from under its own agent would leave that agent
+      // writing results the run no longer expects, exactly as a re-run would.
+      const liveThreadId = liveRerunTargetThreadId({ readModel, run: existingRun, target });
+      if (liveThreadId !== null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${liveThreadId}' is still running this stage. Stop it before clearing the stage.`,
+        });
+      }
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.implementation-run-reset-requested" as const,
+        payload: { run: existingRun, target },
+      };
+    }
+
     case "thread.implementation-run.cancel": {
       yield* requireThread({ readModel, command, threadId: command.threadId });
       const existingRun = readModel.implementationRuns.find((run) => run.id === command.runId);

@@ -4728,6 +4728,92 @@ describe("ImplementationWorkflowReactor", () => {
       { serverSettings: { providers: { codex: { enabled: false } } } },
     ),
   );
+  it.effect("clearing a ticket puts it back in the queue instead of starting it", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { tickets, run } = yield* launchRun(system, {
+          tickets: [
+            {
+              key: "TICKET-1",
+              title: "Base",
+              bodyMarkdown: "Base work.",
+              plannedFileChanges: [{ path: "src/base.ts", action: "create" }],
+              dependencyKeys: [],
+            },
+            {
+              key: "TICKET-2",
+              title: "Dependent",
+              bodyMarkdown: "Dependent work.",
+              plannedFileChanges: [{ path: "src/dependent.ts", action: "create" }],
+              dependencyKeys: ["TICKET-1"],
+            },
+          ],
+        });
+        const base = tickets.find((ticket) => ticket.key === "TICKET-1")!;
+        const dependent = tickets.find((ticket) => ticket.key === "TICKET-2")!;
+        yield* appendWorkerResult(system, { run, status: "succeeded", ticketId: base.id });
+        yield* appendWorkerResult(system, { run, status: "succeeded", ticketId: dependent.id });
+        const workersBefore = (yield* system.query.getSnapshot()).threads.filter(
+          (thread) => thread.workflowRole === "implementation-worker",
+        ).length;
+
+        // Clearing the base takes its dependent down with it, and neither
+        // starts until the run reaches them again in dependency order.
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.reset",
+          commandId: commandId("clear-base-implementation"),
+          threadId: sourceThreadId,
+          runId: run.id,
+          target: { kind: "ticket", ticketId: base.id, stage: "implementation" },
+          createdAt: "2026-01-01T00:05:00.000Z",
+        });
+        yield* system.reactor.drain;
+
+        const snapshot = yield* system.query.getSnapshot();
+        const current = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        const baseState = current?.ticketStates.find((state) => state.ticketId === base.id);
+        expect(baseState?.status).toBe("blocked");
+        expect(baseState?.workerResult).toBeNull();
+        expect(baseState?.branch).not.toBeNull();
+        expect(
+          snapshot.threads.filter((thread) => thread.workflowRole === "implementation-worker")
+            .length,
+        ).toBe(workersBefore);
+      }),
+    ),
+  );
+
+  it.effect("clearing a ticket stage leaves its branch and its earlier stages alone", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, ticket } = yield* launchRun(system);
+        yield* appendWorkerResult(system, { run, status: "succeeded", ticketId: ticket.id });
+
+        const before = (yield* system.query.getSnapshot()).implementationRuns
+          .find((entry) => entry.id === run.id)
+          ?.ticketStates.find((state) => state.ticketId === ticket.id);
+
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.reset",
+          commandId: commandId("clear-ticket-code-review"),
+          threadId: sourceThreadId,
+          runId: run.id,
+          target: { kind: "ticket", ticketId: ticket.id, stage: "code-review" },
+          createdAt: "2026-01-01T00:05:00.000Z",
+        });
+        yield* system.reactor.drain;
+
+        const after = (yield* system.query.getSnapshot()).implementationRuns
+          .find((entry) => entry.id === run.id)
+          ?.ticketStates.find((state) => state.ticketId === ticket.id);
+        expect(after?.codeReviewOutcome).toBeNull();
+        expect(after?.branch).toBe(before?.branch);
+        expect(after?.worktreePath).toBe(before?.worktreePath);
+        expect(after?.workerResult?.commitSha).toBe(before?.workerResult?.commitSha);
+      }),
+    ),
+  );
+
   it.effect("re-running a ticket merges a dependency that moved under it", () =>
     withSystem((system) =>
       Effect.gen(function* () {
