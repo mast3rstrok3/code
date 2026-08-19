@@ -58,6 +58,13 @@ describe("ComposerPendingUserInputPanel", () => {
     expect(markup).not.toContain("Why that?");
   });
 
+  it("offers a minimize control so a long question can be folded away from the thread", () => {
+    const markup = renderPanel([makeQuestion(1)], 0);
+
+    expect(markup).toContain('aria-label="Minimize the question"');
+    expect(markup).toContain('aria-expanded="true"');
+  });
+
   it("keeps historic questions unchanged when recommendation metadata is absent", () => {
     const { recommendation: _recommendation, ...historicQuestion } = makeQuestion(1);
     const markup = renderPanel([historicQuestion], 0);

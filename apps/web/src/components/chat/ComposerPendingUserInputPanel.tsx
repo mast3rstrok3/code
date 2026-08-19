@@ -5,7 +5,7 @@ import {
   derivePendingUserInputProgress,
   type PendingUserInputDraftAnswer,
 } from "../../pendingUserInput";
-import { CheckIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, ChevronUpIcon } from "lucide-react";
 import { cn } from "~/lib/utils";
 
 interface PendingUserInputPanelProps {
@@ -65,6 +65,15 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
     questionId: string;
     optionLabel: string;
   } | null>(null);
+  // A long question with long options can fill the viewport and bury the
+  // thread behind the composer, so the card folds down to its header.
+  const [isMinimized, setIsMinimized] = useState(false);
+
+  // Each new question shows itself, so a fold left over from the previous one
+  // can never hide the fact that the agent is asking something else.
+  useEffect(() => {
+    setIsMinimized(false);
+  }, [activeQuestion?.id]);
 
   useEffect(() => {
     onAdvanceRef.current = onAdvance;
@@ -120,7 +129,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   // outside editable fields. Multi-select prompts toggle options in place; single-
   // select prompts keep the existing auto-advance behavior.
   useEffect(() => {
-    if (!activeQuestion || isResponding) return;
+    if (!activeQuestion || isResponding || isMinimized) return;
     const handler = (event: globalThis.KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       const target = event.target;
@@ -144,7 +153,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [activeQuestion, isResponding]);
+  }, [activeQuestion, isResponding, isMinimized]);
 
   if (!activeQuestion) {
     return null;
@@ -154,84 +163,110 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
 
   return (
     <div className="px-4 py-3 sm:px-5">
-      <div className="mb-2 flex items-center gap-3">
-        <span className="text-secondary-label text-[11px] font-semibold tracking-widest uppercase">
+      <div className={cn("flex items-center gap-3", isMinimized ? null : "mb-2")}>
+        <span className="text-secondary-label shrink-0 text-[11px] font-semibold tracking-widest uppercase">
           {activeQuestion.header}
         </span>
         {prompt.questions.length > 1 ? (
-          <span className="flex h-5 items-center rounded-md bg-muted/60 px-1.5 text-secondary-label text-[10px] font-medium tabular-nums">
+          <span className="flex h-5 shrink-0 items-center rounded-md bg-muted/60 px-1.5 text-secondary-label text-[10px] font-medium tabular-nums">
             {questionIndex + 1}/{prompt.questions.length}
           </span>
         ) : null}
+        {isMinimized ? (
+          <p className="text-secondary-label min-w-0 flex-1 truncate text-xs">
+            {activeQuestion.question}
+          </p>
+        ) : (
+          <div className="flex-1" />
+        )}
+        <button
+          type="button"
+          aria-expanded={!isMinimized}
+          aria-label={isMinimized ? "Show the question" : "Minimize the question"}
+          title={isMinimized ? "Show the question" : "Minimize the question"}
+          onPointerDown={(event) => event.preventDefault()}
+          onClick={() => setIsMinimized((minimized) => !minimized)}
+          className="text-secondary-label flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md outline-none hover:bg-muted/60 hover:text-foreground focus-visible:ring-1 focus-visible:ring-primary/25"
+        >
+          {isMinimized ? (
+            <ChevronUpIcon className="size-3.5" />
+          ) : (
+            <ChevronDownIcon className="size-3.5" />
+          )}
+        </button>
       </div>
-      <p className="text-sm text-foreground/90">{activeQuestion.question}</p>
-      {activeQuestion.multiSelect ? (
-        <p className="mt-1 text-secondary-label text-xs">Select one or more options.</p>
-      ) : null}
-      <div className="mt-3 space-y-1.5">
-        {activeQuestion.options.map((option, index) => {
-          const isOptimisticallySelected =
-            optimisticSingleSelect?.questionId === activeQuestion.id &&
-            optimisticSingleSelect.optionLabel === option.label;
-          const isSelected =
-            isOptimisticallySelected ||
-            (!customAnswerActive && progress.selectedOptionLabels.includes(option.label));
-          const shortcutKey = index < 9 ? index + 1 : null;
-          const className = cn(
-            "group flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left outline-none transition-all duration-150 focus-visible:border-primary/40 focus-visible:ring-1 focus-visible:ring-primary/25",
-            isSelected
-              ? "border-primary/30 bg-primary/8 text-foreground"
-              : "border-transparent bg-muted/22 text-foreground/85 hover:border-border/45 hover:bg-muted/34",
-            isResponding && "opacity-50 cursor-not-allowed",
-            !isResponding && "cursor-pointer",
-          );
-          const content = (
-            <>
-              <div className="min-w-0 flex-1 flex flex-col gap-0.5">
-                <span className="text-sm font-medium">{option.label}</span>
-                {option.description && option.description !== option.label ? (
-                  <span className="text-secondary-label text-xs">{option.description}</span>
-                ) : null}
-              </div>
-              {isSelected ? (
-                <CheckIcon className="size-3.5 shrink-0 text-primary" />
-              ) : shortcutKey !== null ? (
-                <kbd
-                  className={cn(
-                    "flex size-5 shrink-0 items-center justify-center rounded border border-border/50 text-[11px] font-medium tabular-nums transition-colors duration-150",
-                    "bg-background/35 text-secondary-label group-hover:border-border/70 group-hover:text-foreground",
-                  )}
+      {isMinimized ? null : (
+        <>
+          <p className="text-sm text-foreground/90">{activeQuestion.question}</p>
+          {activeQuestion.multiSelect ? (
+            <p className="mt-1 text-secondary-label text-xs">Select one or more options.</p>
+          ) : null}
+          <div className="mt-3 space-y-1.5">
+            {activeQuestion.options.map((option, index) => {
+              const isOptimisticallySelected =
+                optimisticSingleSelect?.questionId === activeQuestion.id &&
+                optimisticSingleSelect.optionLabel === option.label;
+              const isSelected =
+                isOptimisticallySelected ||
+                (!customAnswerActive && progress.selectedOptionLabels.includes(option.label));
+              const shortcutKey = index < 9 ? index + 1 : null;
+              const className = cn(
+                "group flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left outline-none transition-all duration-150 focus-visible:border-primary/40 focus-visible:ring-1 focus-visible:ring-primary/25",
+                isSelected
+                  ? "border-primary/30 bg-primary/8 text-foreground"
+                  : "border-transparent bg-muted/22 text-foreground/85 hover:border-border/45 hover:bg-muted/34",
+                isResponding && "opacity-50 cursor-not-allowed",
+                !isResponding && "cursor-pointer",
+              );
+              const content = (
+                <>
+                  <div className="min-w-0 flex-1 flex flex-col gap-0.5">
+                    <span className="text-sm font-medium">{option.label}</span>
+                    {option.description && option.description !== option.label ? (
+                      <span className="text-secondary-label text-xs">{option.description}</span>
+                    ) : null}
+                  </div>
+                  {isSelected ? (
+                    <CheckIcon className="size-3.5 shrink-0 text-primary" />
+                  ) : shortcutKey !== null ? (
+                    <kbd
+                      className={cn(
+                        "flex size-5 shrink-0 items-center justify-center rounded border border-border/50 text-[11px] font-medium tabular-nums transition-colors duration-150",
+                        "bg-background/35 text-secondary-label group-hover:border-border/70 group-hover:text-foreground",
+                      )}
+                    >
+                      {shortcutKey}
+                    </kbd>
+                  ) : null}
+                </>
+              );
+              return (
+                <button
+                  key={`${activeQuestion.id}:${option.label}`}
+                  type="button"
+                  disabled={isResponding}
+                  onClick={() => {
+                    handleOptionSelection(activeQuestion.id, option.label);
+                  }}
+                  className={className}
                 >
-                  {shortcutKey}
-                </kbd>
-              ) : null}
-            </>
-          );
-          return (
-            <button
-              key={`${activeQuestion.id}:${option.label}`}
-              type="button"
-              disabled={isResponding}
-              onClick={() => {
-                handleOptionSelection(activeQuestion.id, option.label);
-              }}
-              className={className}
-            >
-              {content}
-            </button>
-          );
-        })}
-      </div>
-      {activeQuestion.recommendation ? (
-        <div className="mt-3 rounded-lg border border-primary/20 bg-primary/6 px-3 py-2">
-          <p className="text-[11px] font-semibold tracking-wide text-primary uppercase">
-            Recommended: {activeQuestion.recommendation.optionLabel}
-          </p>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            {activeQuestion.recommendation.rationale}
-          </p>
-        </div>
-      ) : null}
+                  {content}
+                </button>
+              );
+            })}
+          </div>
+          {activeQuestion.recommendation ? (
+            <div className="mt-3 rounded-lg border border-primary/20 bg-primary/6 px-3 py-2">
+              <p className="text-[11px] font-semibold tracking-wide text-primary uppercase">
+                Recommended: {activeQuestion.recommendation.optionLabel}
+              </p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                {activeQuestion.recommendation.rationale}
+              </p>
+            </div>
+          ) : null}
+        </>
+      )}
     </div>
   );
 });
