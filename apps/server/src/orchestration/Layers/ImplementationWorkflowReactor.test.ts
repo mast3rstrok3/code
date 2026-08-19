@@ -936,35 +936,54 @@ function passFinalGate(system: ImplementationSystem, run: OrchestrationImplement
       createdAt: "2026-01-01T00:00:06.000Z",
     });
     yield* system.reactor.drain;
-    snapshot = yield* system.query.getSnapshot();
-    currentRun = snapshot.implementationRuns.find((candidate) => candidate.id === run.id);
+    yield* passChangeRequestBabysit(system, run, "2026-01-01T00:00:07.000Z");
+  });
+}
+
+/**
+ * Report green PR checks so a published run reaches `completed`.
+ *
+ * Publishing a change request no longer ends a run: it hands off to the
+ * babysitter that watches the pull request's checks. Any test that publishes
+ * and then expects a completed run has to walk that last stage.
+ */
+function passChangeRequestBabysit(
+  system: ImplementationSystem,
+  run: OrchestrationImplementationRun,
+  createdAt: string,
+) {
+  return Effect.gen(function* () {
+    const snapshot = yield* system.query.getSnapshot();
+    const currentRun = snapshot.implementationRuns.find((candidate) => candidate.id === run.id);
     if (
-      currentRun?.status === "babysitting-change-request" &&
-      currentRun.activeChangeRequestBabysitterThreadId !== null
+      currentRun?.status !== "babysitting-change-request" ||
+      currentRun.activeChangeRequestBabysitterThreadId === null
     ) {
-      yield* system.engine.dispatch({
-        type: "thread.activity.append",
-        commandId: commandId(`pr-babysit-pass-${currentRun.activeChangeRequestBabysitterThreadId}`),
-        threadId: currentRun.activeChangeRequestBabysitterThreadId,
-        activity: {
-          id: eventId(`pr-babysit-pass-${currentRun.activeChangeRequestBabysitterThreadId}`),
-          tone: "info",
-          kind: "implementation-change-request-babysit-result",
-          summary: "Pull request checks passed",
-          payload: {
-            type: "implementation-change-request-babysit-result",
-            runId: run.id,
-            status: "passed",
-            headSha: currentRun.validatedHeadSha ?? currentRun.codeReviewedHeadSha,
-            summaryMarkdown: "All checks passed on the latest commit.",
-          },
-          turnId: null,
-          createdAt: "2026-01-01T00:00:07.000Z",
-        },
-        createdAt: "2026-01-01T00:00:07.000Z",
-      });
-      yield* system.reactor.drain;
+      return;
     }
+    const babysitterThreadId = currentRun.activeChangeRequestBabysitterThreadId;
+    yield* system.engine.dispatch({
+      type: "thread.activity.append",
+      commandId: commandId(`pr-babysit-pass-${babysitterThreadId}`),
+      threadId: babysitterThreadId,
+      activity: {
+        id: eventId(`pr-babysit-pass-${babysitterThreadId}`),
+        tone: "info",
+        kind: "implementation-change-request-babysit-result",
+        summary: "Pull request checks passed",
+        payload: {
+          type: "implementation-change-request-babysit-result",
+          runId: run.id,
+          status: "passed",
+          headSha: currentRun.validatedHeadSha ?? currentRun.codeReviewedHeadSha,
+          summaryMarkdown: "All checks passed on the latest commit.",
+        },
+        turnId: null,
+        createdAt,
+      },
+      createdAt,
+    });
+    yield* system.reactor.drain;
   });
 }
 
@@ -3963,6 +3982,7 @@ describe("ImplementationWorkflowReactor", () => {
             createdAt: "2026-01-01T00:00:06.000Z",
           });
           yield* system.reactor.drain;
+          yield* passChangeRequestBabysit(system, run, "2026-01-01T00:00:07.000Z");
 
           snapshot = yield* system.query.getSnapshot();
           const completed = snapshot.implementationRuns.find((entry) => entry.id === run.id);
@@ -4013,6 +4033,7 @@ describe("ImplementationWorkflowReactor", () => {
           tag: "at-review-gate-budget",
         });
         yield* failFinalGate(system, run);
+        yield* passChangeRequestBabysit(system, run, "2026-01-01T00:00:07.000Z");
 
         snapshot = yield* system.query.getSnapshot();
         const completed = snapshot.implementationRuns.find((entry) => entry.id === run.id);
