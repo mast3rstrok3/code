@@ -15,6 +15,7 @@ import * as Stream from "effect/Stream";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as PreviewManager from "./Manager.ts";
+import * as PreviewRecordingPolicy from "./PreviewRecordingPolicy.ts";
 import {
   ServerBrowserManager,
   makeWithAdapter,
@@ -107,6 +108,26 @@ class FakePage extends FakeEventTarget {
     if (this.failScreenshot) throw new Error("screenshot failed");
     return Buffer.from("jpeg-frame");
   }
+
+  // rrweb recording surface.
+  failExposeBinding = false;
+  readonly initScripts: string[] = [];
+  readonly evaluated: string[] = [];
+  domRecorderBinding: ((source: unknown, payload: unknown) => unknown) | null = null;
+
+  async exposeBinding(_name: string, callback: (source: unknown, payload: unknown) => unknown) {
+    if (this.failExposeBinding) throw new Error("binding refused");
+    this.domRecorderBinding = callback;
+  }
+
+  async addInitScript(script: { readonly content: string }) {
+    this.initScripts.push(script.content);
+  }
+
+  async evaluate(expression: string) {
+    this.evaluated.push(expression);
+    return undefined;
+  }
 }
 
 class FakeCdp extends FakeEventTarget {
@@ -138,6 +159,7 @@ class FakeContext extends FakeEventTarget {
   deferClose = false;
   failCacheClear = false;
   deferPageGoto = false;
+  failPageExposeBinding = false;
   private closeResolver: (() => void) | null = null;
 
   pages() {
@@ -147,6 +169,7 @@ class FakeContext extends FakeEventTarget {
   async newPage() {
     const page = new FakePage();
     page.deferGoto = this.deferPageGoto;
+    page.failExposeBinding = this.failPageExposeBinding;
     this.createdPages.push(page);
     return page as unknown as Page;
   }
@@ -213,7 +236,7 @@ const fakeChildProcess = () => {
   return child;
 };
 
-const makeHarness = () => {
+const makeHarness = (options: { readonly recordingMode?: "auto" | "dom" | "video" } = {}) => {
   const contexts: FakeContext[] = [];
   const childProcesses: ReturnType<typeof fakeChildProcess>[] = [];
   let configureContext: ((context: FakeContext) => void) | null = null;
@@ -242,6 +265,8 @@ const makeHarness = () => {
         previewBrowserExecutablePath: "/bin/true",
         previewFfmpegExecutablePath: "/bin/true",
         previewBrowserIdleTtlMs: 60_000,
+        // These cases assert encoder behaviour; the DOM recorder has its own suite.
+        previewRecordingMode: options.recordingMode ?? "video",
       });
     }),
   ).pipe(Layer.provide(baseConfigLayer));
@@ -254,6 +279,8 @@ const makeHarness = () => {
   );
   const layer = Layer.effect(ServerBrowserManager, makeWithAdapter(adapter)).pipe(
     Layer.provideMerge(PreviewManager.layer),
+    // No projects exist in these tests, so the server setting is the whole policy.
+    Layer.provide(PreviewRecordingPolicy.layerServerConfigOnly),
     Layer.provide(environmentLayer),
     Layer.provide(configLayer),
     Layer.provide(NodeServices.layer),
@@ -381,6 +408,83 @@ describe("ServerBrowserManager lifecycle", () => {
       }).pipe(Effect.provide(harness.layer));
     },
   );
+
+  it.effect("records the DOM without an encoder or a screencast", () => {
+    const harness = makeHarness({ recordingMode: "auto" });
+    return Effect.gen(function* () {
+      const browser = yield* ServerBrowserManager;
+      yield* browser.ensureTab(tab("dom-recording"));
+      yield* browser.recordingStart(tab("dom-recording"));
+
+      const page = harness.contexts[0]!.managedPage()!;
+      const cdp = harness.contexts[0]!.managedCdp()!;
+      expect(harness.childProcesses).toHaveLength(0);
+      expect(cdp.commands).not.toContain("Page.startScreencast");
+      expect(page.initScripts).toHaveLength(1);
+
+      yield* Effect.promise(async () => {
+        await page.domRecorderBinding?.(null, [{ type: 2 }, { type: 3 }]);
+      });
+      const artifact = yield* browser.recordingStop({ threadId, tabId: "dom-recording" });
+
+      expect(artifact.mimeType).toBe("application/x-rrweb+jsonl");
+      expect(artifact.path.endsWith(".rrweb.jsonl")).toBe(true);
+      expect(artifact.sizeBytes).toBeGreaterThan(0);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("falls back to the encoder when the page refuses the recorder", () => {
+    const harness = makeHarness({ recordingMode: "auto" });
+    harness.configureNextContext((context) => {
+      context.failPageExposeBinding = true;
+    });
+    return Effect.gen(function* () {
+      const browser = yield* ServerBrowserManager;
+      yield* browser.ensureTab(tab("dom-fallback"));
+      yield* browser.recordingStart(tab("dom-fallback"));
+
+      expect(harness.childProcesses).toHaveLength(1);
+      expect(harness.contexts[0]!.managedCdp()!.commands).toContain("Page.startScreencast");
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("refuses to record when the DOM recorder is pinned and cannot attach", () => {
+    const harness = makeHarness({ recordingMode: "dom" });
+    harness.configureNextContext((context) => {
+      context.failPageExposeBinding = true;
+    });
+    return Effect.gen(function* () {
+      const browser = yield* ServerBrowserManager;
+      yield* browser.ensureTab(tab("dom-pinned"));
+      const exit = yield* Effect.exit(browser.recordingStart(tab("dom-pinned")));
+
+      expect(Exit.isFailure(exit)).toBe(true);
+      expect(harness.childProcesses).toHaveLength(0);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("aborts a recording that outlives its reviewer", () => {
+    vi.useFakeTimers();
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const browser = yield* ServerBrowserManager;
+      yield* browser.ensureTab(tab("recording-watchdog"));
+      yield* browser.recordingStart(tab("recording-watchdog"));
+      const cdp = harness.contexts[0]!.managedCdp()!;
+      expect(cdp.commands).not.toContain("Page.stopScreencast");
+
+      // Nobody calls recordingStop: the reviewer's session was stopped mid-review.
+      yield* Effect.promise(() => vi.advanceTimersByTimeAsync(30 * 60_000));
+      yield* Effect.promise(() =>
+        vi.waitFor(() => {
+          expect(cdp.commands.filter((command) => command === "Page.stopScreencast")).toHaveLength(
+            1,
+          );
+        }),
+      );
+      expect(harness.childProcesses[0]!.stdin.writableEnded).toBe(true);
+    }).pipe(Effect.provide(harness.layer));
+  });
 
   it.effect("releases the screencast when the recording process exits unexpectedly", () => {
     const harness = makeHarness();

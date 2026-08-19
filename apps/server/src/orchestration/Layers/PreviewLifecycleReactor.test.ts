@@ -60,6 +60,14 @@ describe("PreviewLifecycleReactor", () => {
     );
   });
 
+  it("closes the preview of a stopped session", () => {
+    expect(
+      previewThreadIdForEvent(
+        asEvent("thread.session-stop-requested", { threadId: reviewThreadId }),
+      ),
+    ).toBe(reviewThreadId);
+  });
+
   it.effect("handles duplicate terminal events harmlessly", () => {
     const closed: ThreadId[] = [];
     const coordinator = {

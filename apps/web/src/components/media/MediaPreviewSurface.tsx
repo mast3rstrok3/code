@@ -10,6 +10,13 @@ export function mediaElementErrorMessage(kind: MediaPreviewSurfaceKind): string 
   return kind === "video" ? "Unable to load video preview." : "Unable to load image preview.";
 }
 
+/** rrweb recordings replay through `DomReplaySurface`; everything else is a video. */
+export const DOM_REPLAY_MIME_TYPE = "application/x-rrweb+jsonl";
+
+export function isDomReplayRecording(mimeType: string | null): boolean {
+  return mimeType === DOM_REPLAY_MIME_TYPE;
+}
+
 function mediaDownloadName(name: string): string {
   const path = name.split(/[?#]/, 1)[0] ?? name;
   const pieces = path.split(/[\\/]/).filter(Boolean);

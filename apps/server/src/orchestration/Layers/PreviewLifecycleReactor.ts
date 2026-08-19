@@ -22,6 +22,7 @@ type PreviewLifecycleEvent = Extract<
       | "thread.implementation-run-cancel-requested"
       | "thread.app-review-workflow-cancel-requested"
       | "thread.app-review-workflow-updated"
+      | "thread.session-stop-requested"
       | "thread.deleted";
   }
 >;
@@ -54,6 +55,9 @@ export const previewThreadIdForEvent = (event: OrchestrationEvent): ThreadId | n
       return event.payload.run.status === "running"
         ? null
         : (event.payload.run.cycles.at(-1)?.reviewerThreadId ?? null);
+    // A stopped session never returns to call app_review_recording_stop, so its
+    // tab would hold a screencast lease and an ffmpeg child open indefinitely.
+    case "thread.session-stop-requested":
     case "thread.deleted":
       return event.payload.threadId;
     default:

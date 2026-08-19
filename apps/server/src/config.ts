@@ -6,6 +6,7 @@
  *
  * @module ServerConfig
  */
+import { PreviewRecordingMode } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -28,6 +29,9 @@ export type PreviewBrowserMode = typeof PreviewBrowserMode.Type;
 
 export const PreviewBrowserSource = Schema.Literals(["auto", "system", "playwright"]);
 export type PreviewBrowserSource = typeof PreviewBrowserSource.Type;
+
+/** Re-exported so config consumers do not need a second import for one field. */
+export { PreviewRecordingMode };
 
 export const PreviewBrowserSandbox = Schema.Literals(["auto", "on", "off"]);
 export type PreviewBrowserSandbox = typeof PreviewBrowserSandbox.Type;
@@ -138,6 +142,7 @@ export class ServerConfig extends Context.Service<
     readonly previewBrowserMaxFrameHeight: number;
     readonly previewBrowserJpegQuality: number;
     readonly previewBrowserIdleTtlMs: number;
+    readonly previewRecordingMode: PreviewRecordingMode;
   }
 >()("t3/config/ServerConfig") {
   /** @deprecated Import and use `layerTest` from this module. */
@@ -251,6 +256,7 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
     previewBrowserMaxFrameHeight: 1200,
     previewBrowserJpegQuality: 75,
     previewBrowserIdleTtlMs: 600_000,
+    previewRecordingMode: "auto",
     port: 0,
     host: undefined,
     desktopBootstrapToken: undefined,

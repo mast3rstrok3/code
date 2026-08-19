@@ -9,6 +9,7 @@
 import {
   IsoDateTime,
   ModelSelection,
+  PreviewRecordingMode,
   ProjectId,
   ProjectScript,
   ThreadEnvMode,
@@ -26,6 +27,7 @@ export const ProjectionProject = Schema.Struct({
   workspaceRoot: Schema.String,
   defaultModelSelection: Schema.NullOr(ModelSelection),
   defaultThreadEnvMode: Schema.NullOr(ThreadEnvMode),
+  previewRecordingMode: Schema.NullOr(PreviewRecordingMode),
   faviconPath: Schema.optional(Schema.NullOr(Schema.String)),
   scripts: Schema.Array(ProjectScript),
   createdAt: IsoDateTime,

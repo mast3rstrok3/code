@@ -15,12 +15,14 @@ import {
 import type {
   ContextMenuItem,
   ModelSelection,
+  PreviewRecordingMode,
   ProviderDriverKind,
   SidebarProjectGroupingMode,
   T3ProjectFileScript,
   ThreadEnvMode,
 } from "@t3tools/contracts";
 import { resolveEnvModeLabel } from "../BranchToolbar.logic";
+
 import { createModelSelection } from "@t3tools/shared/model";
 import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
 import { useCanGoBack, useNavigate } from "@tanstack/react-router";
@@ -139,6 +141,20 @@ export function useSettingsProjectGroups(): SidebarProjectSnapshot[] {
       }).sort((a, b) => a.displayName.localeCompare(b.displayName)),
     [environmentLabelById, primaryEnvironmentId, projectGroupingSettings, projects],
   );
+}
+
+/** `null` is the no-override case: the server's own recording mode applies. */
+export function recordingModeLabel(mode: PreviewRecordingMode | null): string {
+  switch (mode) {
+    case "auto":
+      return "Automatic";
+    case "dom":
+      return "Page only";
+    case "video":
+      return "Video";
+    case null:
+      return "Default (server setting)";
+  }
 }
 
 function memberKey(member: { environmentId: string; id: string }): string {
@@ -365,6 +381,7 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
         title: string;
         defaultModelSelection: ModelSelection | null;
         defaultThreadEnvMode: ThreadEnvMode | null;
+        previewRecordingMode: PreviewRecordingMode | null;
         faviconPath: string | null;
       }>,
       failureTitle: string,
@@ -438,6 +455,17 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
       void updateAllMembers(
         { defaultThreadEnvMode: mode },
         "Failed to update new-thread workspace",
+      ),
+    [updateAllMembers],
+  );
+
+  // ----- App Review recording -----
+  const storedRecordingMode = representative.previewRecordingMode ?? null;
+  const setPreviewRecordingMode = useCallback(
+    (mode: PreviewRecordingMode | null) =>
+      void updateAllMembers(
+        { previewRecordingMode: mode },
+        "Failed to update App Review recording",
       ),
     [updateAllMembers],
   );
@@ -905,6 +933,40 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
                   </SelectItem>
                   <SelectItem value="worktree">{resolveEnvModeLabel("worktree")}</SelectItem>
                   <SelectItem value="local">{resolveEnvModeLabel("local")}</SelectItem>
+                </SelectPopup>
+              </Select>
+            }
+          />
+          <SettingsRow
+            title="App Review recording"
+            description="How Browser App Reviews capture this project. Recording the page is small and cheap, but an app drawn in canvas or WebGL replays blank and needs video."
+            resetAction={
+              storedRecordingMode !== null ? (
+                <SettingResetButton
+                  label="App Review recording"
+                  onClick={() => setPreviewRecordingMode(null)}
+                />
+              ) : null
+            }
+            control={
+              <Select
+                value={storedRecordingMode ?? "inherit"}
+                onValueChange={(value) => {
+                  if (value === "auto" || value === "dom" || value === "video") {
+                    setPreviewRecordingMode(value);
+                  } else if (value === "inherit") {
+                    setPreviewRecordingMode(null);
+                  }
+                }}
+              >
+                <SelectTrigger aria-label="App Review recording">
+                  <SelectValue>{recordingModeLabel(storedRecordingMode)}</SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  <SelectItem value="inherit">{recordingModeLabel(null)}</SelectItem>
+                  <SelectItem value="auto">{recordingModeLabel("auto")}</SelectItem>
+                  <SelectItem value="dom">{recordingModeLabel("dom")}</SelectItem>
+                  <SelectItem value="video">{recordingModeLabel("video")}</SelectItem>
                 </SelectPopup>
               </Select>
             }

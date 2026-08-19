@@ -36,6 +36,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
@@ -45,6 +46,8 @@ import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Metrics from "../observability/Metrics.ts";
 import * as BrowserExecutableResolver from "./BrowserExecutableResolver.ts";
+import * as DomRecorder from "./DomRecorder.ts";
+import { PreviewRecordingPolicy } from "./PreviewRecordingPolicy.ts";
 import * as PreviewManager from "./Manager.ts";
 import * as VideoFrameSink from "./VideoFrameSink.ts";
 
@@ -89,19 +92,38 @@ type ServerBrowserTabDisposalReason =
   | "initialization-failed"
   | "shutdown";
 
-interface ActiveServerRecording {
+interface ActiveRecordingCommon {
   readonly tabId: string;
   readonly threadId: ThreadId;
   readonly id: string;
   readonly outputPath: string;
   readonly startedAt: string;
+  readonly mimeType: string;
+  stopping: boolean;
+  /** Watchdog that aborts a recording nobody stopped. Cleared by every stop path. */
+  maxDurationTimer: ReturnType<typeof setTimeout> | null;
+}
+
+/** A screencast piped into a realtime encoder. Full fidelity, one child process. */
+interface ActiveVideoRecording extends ActiveRecordingCommon {
+  readonly kind: "video";
   readonly sink: VideoFrameSink.VideoFrameSink;
   readonly process: NodeChildProcess.ChildProcess;
   readonly exited: Promise<number | null>;
   readonly stderrChunks: string[];
   readonly screencastLease: symbol;
-  stopping: boolean;
 }
+
+/** An rrweb event log written straight from the page. No encoder, no screencast. */
+interface ActiveDomRecording extends ActiveRecordingCommon {
+  readonly kind: "dom";
+  readonly handle: DomRecorder.DomRecordingHandle;
+}
+
+type ActiveServerRecording = ActiveVideoRecording | ActiveDomRecording;
+
+const RECORDING_VIDEO_MIME_TYPE = "video/webm";
+const RECORDING_DOM_MIME_TYPE = "application/x-rrweb+jsonl";
 
 const DEFAULT_VIEWPORT = { width: 1280, height: 800 } as const;
 const MAX_VISIBLE_TEXT_LENGTH = 20_000;
@@ -112,6 +134,12 @@ const RECORDING_FINAL_FRAME_HOLD_MS = 2_000;
 const RECORDING_DESKTOP_WIDTH = 1280;
 const RECORDING_DESKTOP_HEIGHT = 720;
 const RECORDING_FFMPEG_EXIT_TIMEOUT_MS = 10_000;
+/**
+ * A realtime vp8 encoder costs a core or three for as long as it runs, so no
+ * recording may outlive its reviewer without bound. Any path that ends a review
+ * without stopping its recording is capped here rather than left to run forever.
+ */
+const RECORDING_MAX_DURATION_MS = 30 * 60_000;
 const BROWSER_CACHE_CLEAR_TIMEOUT_MS = 3_000;
 const BROWSER_CONTEXT_CLOSE_TIMEOUT_MS = 5_000;
 const PAGE_NAVIGATION_TIMEOUT_MS = 60_000;
@@ -416,6 +444,7 @@ const defaultAdapter: ServerBrowserManagerAdapter = {
 function* serverBrowserManagerMake(adapter: ServerBrowserManagerAdapter) {
   const config = yield* ServerConfig.ServerConfig;
   const previewManager = yield* PreviewManager.PreviewManager;
+  const recordingPolicy = yield* PreviewRecordingPolicy;
   const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -532,10 +561,36 @@ function* serverBrowserManagerMake(adapter: ServerBrowserManagerAdapter) {
       }
     });
 
+  const armRecordingWatchdog = (recording: ActiveServerRecording) => {
+    recording.maxDurationTimer = setTimeout(() => {
+      recording.maxDurationTimer = null;
+      if (activeRecordings.get(recording.tabId) !== recording || recording.stopping) return;
+      runDetached(
+        Effect.logWarning("server preview recording exceeded its maximum duration", {
+          tabId: recording.tabId,
+          threadId: recording.threadId,
+        }),
+      );
+      void abortRecording(recording).catch(() => {});
+    }, RECORDING_MAX_DURATION_MS);
+    recording.maxDurationTimer.unref?.();
+  };
+
+  const clearRecordingWatchdog = (recording: ActiveServerRecording) => {
+    if (recording.maxDurationTimer === null) return;
+    clearTimeout(recording.maxDurationTimer);
+    recording.maxDurationTimer = null;
+  };
+
   const abortRecording = async (recording: ActiveServerRecording): Promise<void> => {
+    clearRecordingWatchdog(recording);
     if (!recording.stopping) recording.stopping = true;
     if (activeRecordings.get(recording.tabId) === recording) {
       activeRecordings.delete(recording.tabId);
+    }
+    if (recording.kind === "dom") {
+      await recording.handle.abort().catch(() => {});
+      return;
     }
     try {
       recording.process.stdin?.end();
@@ -941,7 +996,7 @@ function* serverBrowserManagerMake(adapter: ServerBrowserManagerAdapter) {
       if (typeof frame.data !== "string") return;
       const now = Date.now();
       const recording = activeRecordings.get(tab.tabId);
-      if (recording && !recording.stopping) {
+      if (recording && recording.kind === "video" && !recording.stopping) {
         try {
           recording.sink.pushFrame(Buffer.from(frame.data, "base64"), now);
         } catch {
@@ -1479,6 +1534,54 @@ function* serverBrowserManagerMake(adapter: ServerBrowserManagerAdapter) {
     });
   });
 
+  /**
+   * Attach the rrweb recorder to a tab. Fails when the page refuses the injection,
+   * which is the signal for `recordingStart` to fall back to the video encoder.
+   */
+  const startDomRecording = Effect.fn("ServerBrowserManager.startDomRecording")(function* (input: {
+    readonly tab: ServerBrowserTab;
+    readonly id: string;
+    readonly startedAt: string;
+  }) {
+    const outputPath = path.join(artifactDir, `${input.id}.rrweb.jsonl`);
+    return yield* Effect.tryPromise({
+      try: async (): Promise<ActiveDomRecording> => {
+        const recordScript = await DomRecorder.loadRrwebRecordScript();
+        const file = await NodeFSP.open(outputPath, "a");
+        let queue: Promise<unknown> = Promise.resolve();
+        const sink: DomRecorder.DomRecordingSink = {
+          // Serialize appends so batches cannot interleave inside a line.
+          write: (line) => {
+            queue = queue.then(() => file.write(line));
+            return queue.then(() => undefined);
+          },
+          close: async () => {
+            await queue.catch(() => {});
+            await file.close().catch(() => {});
+          },
+        };
+        const handle = await DomRecorder.startDomRecording({
+          page: input.tab.page as unknown as DomRecorder.DomRecorderPage,
+          sink,
+          recordScript,
+        });
+        return {
+          kind: "dom",
+          tabId: input.tab.tabId,
+          threadId: input.tab.threadId,
+          id: input.id,
+          outputPath,
+          startedAt: input.startedAt,
+          mimeType: RECORDING_DOM_MIME_TYPE,
+          stopping: false,
+          maxDurationTimer: null,
+          handle,
+        };
+      },
+      catch: browserError,
+    });
+  });
+
   const recordingSupported = Effect.suspend(() =>
     enabled ? BrowserExecutableResolver.resolveFfmpegAvailability(config) : Effect.succeed(false),
   );
@@ -1495,9 +1598,6 @@ function* serverBrowserManagerMake(adapter: ServerBrowserManagerAdapter) {
       };
     }
 
-    const ffmpegPath = yield* BrowserExecutableResolver.resolveFfmpegExecutable(config).pipe(
-      Effect.mapError(browserError),
-    );
     const tab = yield* getTab(input);
     yield* fileSystem
       .makeDirectory(artifactDir, { recursive: true })
@@ -1505,6 +1605,28 @@ function* serverBrowserManagerMake(adapter: ServerBrowserManagerAdapter) {
     const [startedAt, millis] = yield* Effect.all([nowIso, Clock.currentTimeMillis]);
     const safeTabId = tab.tabId.replace(/[^a-z0-9_-]/gi, "-").slice(-48);
     const id = `browser-recording-${millis.toString(36)}-${safeTabId}`;
+
+    // rrweb first unless this project pinned the encoder: it needs no child process
+    // and no screencast, so it is the cheaper recorder by a wide margin.
+    const recordingMode = yield* recordingPolicy.modeForThread(tab.threadId);
+    if (recordingMode !== "video") {
+      const domRecording = yield* startDomRecording({ tab, id, startedAt }).pipe(Effect.option);
+      if (Option.isSome(domRecording)) {
+        activeRecordings.set(tab.tabId, domRecording.value);
+        armRecordingWatchdog(domRecording.value);
+        return { tabId: tab.tabId as PreviewTabId, recording: true, startedAt };
+      }
+      if (recordingMode === "dom") {
+        return yield* browserError(new Error("The DOM recorder could not attach to the page."));
+      }
+      yield* Effect.logWarning("dom recording unavailable, falling back to the video encoder", {
+        tabId: tab.tabId,
+      });
+    }
+
+    const ffmpegPath = yield* BrowserExecutableResolver.resolveFfmpegExecutable(config).pipe(
+      Effect.mapError(browserError),
+    );
     const outputPath = path.join(artifactDir, `${id}.webm`);
     // Record to a stable 16:9 desktop canvas. Individual desktop and mobile
     // frames are scaled and letterboxed by ffmpeg, so viewport changes during
@@ -1544,7 +1666,9 @@ function* serverBrowserManagerMake(adapter: ServerBrowserManagerAdapter) {
             child.stdin?.write(frame);
           },
         });
-        const started: ActiveServerRecording = {
+        const started: ActiveVideoRecording = {
+          kind: "video",
+          mimeType: RECORDING_VIDEO_MIME_TYPE,
           tabId: tab.tabId,
           threadId: tab.threadId,
           id,
@@ -1556,12 +1680,14 @@ function* serverBrowserManagerMake(adapter: ServerBrowserManagerAdapter) {
           stderrChunks,
           screencastLease: Symbol("recording"),
           stopping: false,
+          maxDurationTimer: null,
         };
         return started;
       },
       catch: browserError,
     });
     activeRecordings.set(recording.tabId, recording);
+    armRecordingWatchdog(recording);
     void recording.exited.then(() => {
       if (activeRecordings.get(recording.tabId) !== recording || recording.stopping) return;
       runDetached(Effect.logWarning("server preview recording process exited unexpectedly"));
@@ -1604,11 +1730,35 @@ function* serverBrowserManagerMake(adapter: ServerBrowserManagerAdapter) {
     if (!recording || recording.stopping) {
       return yield* new PreviewRecordingNotActiveError({ tabId: input.tabId });
     }
+    clearRecordingWatchdog(recording);
     recording.stopping = true;
     activeRecordings.delete(recording.tabId);
     const recordingTab = tabs.get(recording.tabId);
 
     const [createdAt, stoppedAtMillis] = yield* Effect.all([nowIso, Clock.currentTimeMillis]);
+
+    if (recording.kind === "dom") {
+      const sizeBytes = yield* Effect.tryPromise({
+        try: async () => {
+          await recording.handle.stop();
+          if (recording.handle.eventCount() === 0) {
+            throw new Error("The page reported no DOM events for this recording.");
+          }
+          const stats = await NodeFSP.stat(recording.outputPath);
+          return stats.size;
+        },
+        catch: browserError,
+      });
+      return {
+        id: recording.id,
+        tabId: recording.tabId as PreviewTabId,
+        path: recording.outputPath,
+        mimeType: recording.mimeType,
+        sizeBytes,
+        createdAt,
+      };
+    }
+
     const sizeBytes = yield* Effect.tryPromise({
       try: async () => {
         recording.sink.flush(stoppedAtMillis);
@@ -1651,7 +1801,7 @@ function* serverBrowserManagerMake(adapter: ServerBrowserManagerAdapter) {
       id: recording.id,
       tabId: recording.tabId as PreviewTabId,
       path: recording.outputPath,
-      mimeType: "video/webm",
+      mimeType: recording.mimeType,
       sizeBytes,
       createdAt,
     };

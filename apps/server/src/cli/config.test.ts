@@ -65,6 +65,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     previewBrowserMaxFrameHeight: 1200,
     previewBrowserJpegQuality: 75,
     previewBrowserIdleTtlMs: 600_000,
+    previewRecordingMode: "auto",
   } as const;
 
   const openBootstrapFd = Effect.fn(function* (payload: DesktopBackendBootstrapValue) {

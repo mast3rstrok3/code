@@ -487,6 +487,7 @@ const buildAppUnderTest = (options?: {
       previewBrowserMaxFrameHeight: 1200,
       previewBrowserJpegQuality: 75,
       previewBrowserIdleTtlMs: 600_000,
+      previewRecordingMode: "auto",
       ...options?.config,
     };
     const layerConfig = ServerConfig.layer(config);

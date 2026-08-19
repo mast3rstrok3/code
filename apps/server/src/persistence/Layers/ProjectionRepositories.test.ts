@@ -29,6 +29,41 @@ const projectionRepositoriesLayer = it.layer(
 );
 
 projectionRepositoriesLayer("Projection repositories", (it) => {
+  it.effect("round-trips a project's App Review recording override", () =>
+    Effect.gen(function* () {
+      const projects = yield* ProjectionProjectRepository;
+      const projectId = ProjectId.make("project-recording-mode");
+
+      const row = {
+        projectId,
+        title: "Recording mode project",
+        workspaceRoot: "/tmp/project-recording-mode",
+        defaultModelSelection: null,
+        defaultThreadEnvMode: null,
+        previewRecordingMode: "video" as const,
+        scripts: [],
+        createdAt: "2026-08-19T00:00:00.000Z",
+        updatedAt: "2026-08-19T00:00:00.000Z",
+        deletedAt: null,
+      };
+      yield* projects.upsert(row);
+
+      const stored = yield* projects.getById({ projectId });
+      assert.strictEqual(
+        Option.isSome(stored) ? stored.value.previewRecordingMode : "missing",
+        "video",
+      );
+
+      // Clearing the override has to land as NULL, not stick at the old value.
+      yield* projects.upsert({ ...row, previewRecordingMode: null });
+      const cleared = yield* projects.getById({ projectId });
+      assert.strictEqual(
+        Option.isSome(cleared) ? cleared.value.previewRecordingMode : "missing",
+        null,
+      );
+    }),
+  );
+
   it.effect("stores SQL NULL for missing project model options", () =>
     Effect.gen(function* () {
       const projects = yield* ProjectionProjectRepository;
@@ -43,6 +78,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
           model: "gpt-5.4",
         },
         defaultThreadEnvMode: null,
+        previewRecordingMode: null,
         scripts: [],
         createdAt: "2026-03-24T00:00:00.000Z",
         updatedAt: "2026-03-24T00:00:00.000Z",

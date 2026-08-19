@@ -51,6 +51,7 @@ import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as WorkflowUserInputBroker from "./mcp/WorkflowUserInputBroker.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as PreviewCoordinator from "./preview/PreviewCoordinator.ts";
+import * as PreviewRecordingPolicy from "./preview/PreviewRecordingPolicy.ts";
 import * as ServerBrowserManager from "./preview/ServerBrowserManager.ts";
 import * as ServerPreviewAutomationHost from "./preview/ServerPreviewAutomationHost.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
@@ -350,6 +351,12 @@ const PreviewLayerLive = ServerPreviewAutomationHost.layer.pipe(
   Layer.provideMerge(PreviewAutomationBroker.layer),
   Layer.provideMerge(PreviewCoordinator.layer),
   Layer.provideMerge(ServerBrowserManager.layer),
+  Layer.provideMerge(
+    PreviewRecordingPolicy.layer.pipe(
+      Layer.provide(ProjectionProjectRepositoryLive),
+      Layer.provide(ProjectionThreadRepositoryLive),
+    ),
+  ),
   Layer.provideMerge(PreviewManager.layer),
   Layer.provideMerge(PortScannerLayerLive),
 );

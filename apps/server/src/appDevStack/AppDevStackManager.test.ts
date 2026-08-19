@@ -115,6 +115,7 @@ const makeConfigLayer = (input?: {
     previewBrowserMaxFrameHeight: 1200,
     previewBrowserJpegQuality: 75,
     previewBrowserIdleTtlMs: 600_000,
+    previewRecordingMode: "auto",
   });
 
 const makeLayer = (input: {

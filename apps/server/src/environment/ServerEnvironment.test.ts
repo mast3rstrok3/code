@@ -48,6 +48,7 @@ const makeServerConfig = Effect.fn(function* (baseDir: string) {
     previewBrowserMaxFrameHeight: 1200,
     previewBrowserJpegQuality: 75,
     previewBrowserIdleTtlMs: 600_000,
+    previewRecordingMode: "auto",
     port: 0,
     host: undefined,
     desktopBootstrapToken: undefined,

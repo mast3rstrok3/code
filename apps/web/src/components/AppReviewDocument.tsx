@@ -6,13 +6,17 @@ import type {
 } from "@t3tools/contracts";
 import { APP_REVIEW_RECORDING_EVIDENCE_ID } from "@t3tools/contracts";
 import { CheckCircle2, Circle, CircleDot, Info, XCircle } from "lucide-react";
-import { useMemo, useState } from "react";
+import { Suspense, lazy, useMemo, useState } from "react";
 
 import { useAssetUrls } from "~/assets/assetUrls";
 import { cn } from "~/lib/utils";
-import { MediaPreviewSurface } from "./media/MediaPreviewSurface";
+import { MediaPreviewSurface, isDomReplayRecording } from "./media/MediaPreviewSurface";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
+
+// rrweb's replayer is large and most reviews are never opened, so it stays out of
+// the main chunk until someone actually looks at a DOM recording.
+const DomReplaySurface = lazy(() => import("./media/DomReplaySurface"));
 
 const statusClassName = {
   pending: "text-muted-foreground",
@@ -66,15 +70,27 @@ function RecordingSection(props: {
       </div>
       {recording.status === "saved" ? (
         props.recordingUrl ? (
-          <MediaPreviewSurface
-            kind="video"
-            name={recording.path ?? "recording.webm"}
-            url={props.recordingUrl}
-            mediaClassName="max-h-[360px] w-full rounded-md border border-border bg-black"
-          />
+          isDomReplayRecording(recording.mimeType) ? (
+            <Suspense
+              fallback={
+                <div className="rounded-md border border-border px-3 py-4 text-sm text-muted-foreground">
+                  Loading replay...
+                </div>
+              }
+            >
+              <DomReplaySurface url={props.recordingUrl} />
+            </Suspense>
+          ) : (
+            <MediaPreviewSurface
+              kind="video"
+              name={recording.path ?? "recording.webm"}
+              url={props.recordingUrl}
+              mediaClassName="max-h-[360px] w-full rounded-md border border-border bg-black"
+            />
+          )
         ) : (
           <div className="rounded-md border border-border px-3 py-4 text-sm text-muted-foreground">
-            Preparing video...
+            Preparing recording...
           </div>
         )
       ) : (

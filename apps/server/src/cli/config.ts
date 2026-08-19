@@ -265,6 +265,10 @@ const EnvServerConfig = Config.all({
   previewBrowserIdleTtlMs: Config.int("T3CODE_PREVIEW_BROWSER_IDLE_TTL_MS").pipe(
     Config.withDefault(600_000),
   ),
+  previewRecordingMode: Config.schema(
+    ServerConfig.PreviewRecordingMode,
+    "T3CODE_PREVIEW_RECORDING_MODE",
+  ).pipe(Config.withDefault("auto")),
 });
 
 export interface CliServerFlags {
@@ -575,6 +579,7 @@ export const resolveServerConfig = (
       previewBrowserMaxFrameHeight: Math.max(240, Math.min(2160, env.previewBrowserMaxFrameHeight)),
       previewBrowserJpegQuality: Math.max(1, Math.min(100, env.previewBrowserJpegQuality)),
       previewBrowserIdleTtlMs: Math.max(60_000, env.previewBrowserIdleTtlMs),
+      previewRecordingMode: env.previewRecordingMode,
     };
 
     return config;
