@@ -78,6 +78,9 @@ export const AppDevStack = Schema.Struct({
   lastStartedAt: Schema.optionalKey(Schema.NullOr(IsoDateTime)),
   lastStoppedAt: Schema.optionalKey(Schema.NullOr(IsoDateTime)),
   previewUrls: Schema.optionalKey(Schema.NullOr(AppDevStackPreviewUrls)),
+  // Protected stacks survive workflow teardown and are the last thing the
+  // environment sheds under memory pressure. Older servers omit the field.
+  protected: Schema.optionalKey(Schema.NullOr(Schema.Boolean)),
 });
 export type AppDevStack = typeof AppDevStack.Type;
 
@@ -123,6 +126,24 @@ export const AppDevStackGetInput = Schema.Struct({
   stackId: TrimmedNonEmptyString,
 });
 export type AppDevStackGetInput = typeof AppDevStackGetInput.Type;
+
+export const AppDevStackSetProtectedInput = Schema.Struct({
+  stackId: TrimmedNonEmptyString,
+  protected: Schema.Boolean,
+});
+export type AppDevStackSetProtectedInput = typeof AppDevStackSetProtectedInput.Type;
+
+export const AppDevStackWorkflowTeardownInput = Schema.Struct({
+  workflowId: TrimmedNonEmptyString,
+});
+export type AppDevStackWorkflowTeardownInput = typeof AppDevStackWorkflowTeardownInput.Type;
+
+export const AppDevStackWorkflowTeardownResult = Schema.Struct({
+  stoppedStackIds: Schema.Array(TrimmedNonEmptyString),
+  skippedProtectedStackIds: Schema.Array(TrimmedNonEmptyString),
+  failedStackIds: Schema.Array(TrimmedNonEmptyString),
+});
+export type AppDevStackWorkflowTeardownResult = typeof AppDevStackWorkflowTeardownResult.Type;
 
 export const AppDevStackAutoCreateInput = Schema.Struct({
   worktreePath: TrimmedNonEmptyString,

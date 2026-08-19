@@ -44,6 +44,21 @@ Stacks created for a workflow are labeled **Workflow-owned**. If historical impl
 map more than one visible stack to the same workflow, the panel reports the conflict but never
 deletes either stack automatically.
 
+## Automatic teardown and protected stacks
+
+When a workflow finishes, it stops the stacks it created. Ticket stacks and the run's shared stack
+release their memory instead of idling until someone notices them; the run reports what it stopped
+in its activity log. Stacks you started yourself are untouched, since no workflow owns them.
+
+Expand a stack card and choose **Protect** to keep a stack out of that sweep. A protected stack
+shows a **Protected** badge, survives workflow teardown, and is the last one the environment stops
+when the host runs low on memory. Press the button again to release it. Protection only holds back
+the automatic paths: **Stop**, **Restart**, and **Delete** still do exactly what you ask.
+
+Under memory pressure an environment can also refuse to start new stacks and stop long-running ones
+to keep the machine responsive. A stack stopped that way says so in the error line on its card, and
+**Restart** brings it back once there is room.
+
 A stopped stack keeps its namespace, so **Restart** brings it back up. Deleting a stack
 removes its namespace, and the card leaves the list as soon as that namespace is gone —
 including when another T3 Code server or the controller removed it. To clean up several stacks, select

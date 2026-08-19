@@ -131,6 +131,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.appDevStackGet]: AuthOrchestrationReadScope,
   [WS_METHODS.appDevStackAutoCreate]: AuthOrchestrationOperateScope,
   [WS_METHODS.appDevStackStop]: AuthOrchestrationOperateScope,
+  [WS_METHODS.appDevStackSetProtected]: AuthOrchestrationOperateScope,
   [WS_METHODS.appDevStackRestart]: AuthOrchestrationOperateScope,
   [WS_METHODS.appDevStackDelete]: AuthOrchestrationOperateScope,
   [WS_METHODS.appDevStackListPods]: AuthOrchestrationReadScope,

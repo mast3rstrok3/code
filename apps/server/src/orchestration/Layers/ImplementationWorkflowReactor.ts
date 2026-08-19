@@ -5325,6 +5325,59 @@ const make = Effect.gen(function* () {
     }
   });
 
+  /**
+   * Releases the stacks a finished run owns.
+   *
+   * A completed run has nothing left to preview, so its ticket stacks and its
+   * shared stack are stopped to give the host its memory back. Protected
+   * stacks are left running and reported, so a stack somebody is still using
+   * survives the run that created it. Teardown never fails the run: the work
+   * is done either way.
+   */
+  const teardownWorkflowStacks = Effect.fn("ImplementationWorkflowReactor.teardownWorkflowStacks")(
+    function* (input: {
+      readonly readModel: OrchestrationReadModel;
+      readonly run: OrchestrationImplementationRun;
+      readonly createdAt: string;
+    }) {
+      const workflowId = workflowIdForRun(input.readModel, input.run);
+      if (workflowId === undefined) return;
+      const result = yield* appDevStackManager.workflowTeardown({ workflowId }).pipe(Effect.result);
+      if (result._tag === "Failure") {
+        yield* appendActivity({
+          threadId: input.run.orchestratorThreadId,
+          tone: "info",
+          kind: "implementation-run-stack-teardown-failed",
+          summary: `App Dev Stack teardown failed: ${errorDetail(result.failure)}`,
+          payload: { runId: input.run.id, workflowId },
+          createdAt: input.createdAt,
+        });
+        return;
+      }
+      const { stoppedStackIds, skippedProtectedStackIds, failedStackIds } = result.success;
+      if (
+        stoppedStackIds.length === 0 &&
+        skippedProtectedStackIds.length === 0 &&
+        failedStackIds.length === 0
+      ) {
+        return;
+      }
+      const parts = [`Stopped ${stoppedStackIds.length} App Dev Stack(s) after the run completed`];
+      if (skippedProtectedStackIds.length > 0) {
+        parts.push(`kept ${skippedProtectedStackIds.length} protected`);
+      }
+      if (failedStackIds.length > 0) parts.push(`${failedStackIds.length} failed to stop`);
+      yield* appendActivity({
+        threadId: input.run.orchestratorThreadId,
+        tone: failedStackIds.length > 0 ? "error" : "info",
+        kind: "implementation-run-stacks-torn-down",
+        summary: parts.join("; "),
+        payload: { runId: input.run.id, workflowId, ...result.success },
+        createdAt: input.createdAt,
+      });
+    },
+  );
+
   const handleChangeRequestBabysitResult = Effect.fn(
     "ImplementationWorkflowReactor.handleChangeRequestBabysitResult",
   )(function* (
@@ -5389,6 +5442,7 @@ const make = Effect.gen(function* () {
       payload: { runId: run.id, headSha: head.commitSha },
       createdAt: updatedAt,
     });
+    yield* teardownWorkflowStacks({ readModel, run: completedRun, createdAt: updatedAt });
   });
 
   const processActivity = Effect.fn("ImplementationWorkflowReactor.processActivity")(function* (

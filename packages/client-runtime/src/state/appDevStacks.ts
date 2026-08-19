@@ -59,6 +59,12 @@ export function createAppDevStackEnvironmentAtoms<R, E>(
       scheduler: lifecycleScheduler,
       concurrency: stackLifecycleConcurrency,
     }),
+    setProtected: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:app-dev-stack:set-protected",
+      tag: WS_METHODS.appDevStackSetProtected,
+      scheduler: lifecycleScheduler,
+      concurrency: stackLifecycleConcurrency,
+    }),
     restart: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:app-dev-stack:restart",
       tag: WS_METHODS.appDevStackRestart,

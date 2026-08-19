@@ -172,6 +172,7 @@ import {
   AppDevStackListPodsResult,
   AppDevStackListInput,
   AppDevStackListResult,
+  AppDevStackSetProtectedInput,
   AppDevStack,
 } from "./appDevStack.ts";
 import {
@@ -297,6 +298,7 @@ export const WS_METHODS = {
   appDevStackGet: "appDevStack.get",
   appDevStackAutoCreate: "appDevStack.autoCreate",
   appDevStackStop: "appDevStack.stop",
+  appDevStackSetProtected: "appDevStack.setProtected",
   appDevStackRestart: "appDevStack.restart",
   appDevStackDelete: "appDevStack.delete",
   appDevStackListPods: "appDevStack.listPods",
@@ -978,6 +980,12 @@ export const WsAppDevStackStopRpc = Rpc.make(WS_METHODS.appDevStackStop, {
   error: Schema.Union([AppDevStackError, EnvironmentAuthorizationError]),
 });
 
+export const WsAppDevStackSetProtectedRpc = Rpc.make(WS_METHODS.appDevStackSetProtected, {
+  payload: AppDevStackSetProtectedInput,
+  success: AppDevStack,
+  error: Schema.Union([AppDevStackError, EnvironmentAuthorizationError]),
+});
+
 export const WsAppDevStackRestartRpc = Rpc.make(WS_METHODS.appDevStackRestart, {
   payload: AppDevStackGetInput,
   success: AppDevStack,
@@ -1246,6 +1254,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsAppDevStackGetRpc,
   WsAppDevStackAutoCreateRpc,
   WsAppDevStackStopRpc,
+  WsAppDevStackSetProtectedRpc,
   WsAppDevStackRestartRpc,
   WsAppDevStackDeleteRpc,
   WsAppDevStackListPodsRpc,

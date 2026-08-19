@@ -27,6 +27,8 @@ import {
   Rows3Icon,
   RotateCcwIcon,
   ScrollTextIcon,
+  ShieldCheckIcon,
+  ShieldIcon,
   Trash2Icon,
   TriangleAlertIcon,
   XIcon,
@@ -53,8 +55,10 @@ import { appDevStackDisplayName } from "@t3tools/shared/appDevStack";
 import {
   appDevStackBulkDeleteConfirmation,
   appDevStackBulkDeleteFailureMessage,
+  appDevStackProtectionAction,
   appDevStackSelectionState,
   autoCreateNotice,
+  isProtectedAppDevStack,
   isTransitioningAppDevStackStatus,
   orderAppDevStacksForPanel,
   primaryPreviewForStack,
@@ -100,7 +104,7 @@ interface StartPathChoice {
   readonly path: string;
 }
 
-type StackPendingAction = "start" | "stop" | "restart" | "delete";
+type StackPendingAction = "start" | "stop" | "restart" | "delete" | "protect";
 
 function nonEmpty(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
@@ -596,6 +600,9 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
   });
   const stopStack = useAtomCommand(appDevStackEnvironment.stop, { reportFailure: false });
   const restartStack = useAtomCommand(appDevStackEnvironment.restart, { reportFailure: false });
+  const setStackProtected = useAtomCommand(appDevStackEnvironment.setProtected, {
+    reportFailure: false,
+  });
   const deleteStack = useAtomCommand(appDevStackEnvironment.delete, { reportFailure: false });
 
   const refreshStacks = useCallback(() => {
@@ -734,6 +741,30 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
       }
     },
     [props.environmentId, refreshStacks, setPendingAction, stopStack],
+  );
+
+  const runToggleProtection = useCallback(
+    async (stack: AppDevStack) => {
+      const { nextProtected } = appDevStackProtectionAction(stack);
+      setPendingAction(stack.id, "protect");
+      setActionError(null);
+      try {
+        const result = await setStackProtected({
+          environmentId: props.environmentId,
+          input: { stackId: stack.id, protected: nextProtected },
+        });
+        if (result._tag === "Failure") {
+          if (!isAtomCommandInterrupted(result)) {
+            setActionError(actionErrorMessage(squashAtomCommandFailure(result)));
+          }
+          return;
+        }
+        refreshStacks();
+      } finally {
+        setPendingAction(stack.id, null);
+      }
+    },
+    [props.environmentId, refreshStacks, setPendingAction, setStackProtected],
   );
 
   const runRestart = useCallback(
@@ -967,6 +998,12 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
                   </span>
                 ) : null}
                 <AppDevStackWorkflowOwnershipBadge stack={stack} />
+                {isProtectedAppDevStack(stack) ? (
+                  <span className="inline-flex h-5 items-center gap-1 rounded-full border border-border bg-muted px-2 text-[11px] font-medium text-muted-foreground">
+                    <ShieldCheckIcon className="size-3" />
+                    Protected
+                  </span>
+                ) : null}
                 <StatusBadge status={stack.status} />
               </span>
               <span className="mt-1 block truncate text-xs text-muted-foreground">
@@ -1071,6 +1108,25 @@ export function AppDevStackPanel(props: AppDevStackPanelProps) {
                   <PowerIcon />
                 )}
                 Stop
+              </Button>
+              <Button
+                size="xs"
+                variant="ghost"
+                onClick={() => void runToggleProtection(stack)}
+                disabled={pendingAction !== undefined}
+                data-pressed={isProtectedAppDevStack(stack) ? "" : undefined}
+                aria-pressed={isProtectedAppDevStack(stack)}
+                aria-label={appDevStackProtectionAction(stack).ariaLabel}
+                title="Protected stacks survive workflow teardown and are shed last under memory pressure"
+              >
+                {pendingAction === "protect" ? (
+                  <LoaderIcon className="size-3.5 animate-spin" />
+                ) : isProtectedAppDevStack(stack) ? (
+                  <ShieldCheckIcon className="size-3.5" />
+                ) : (
+                  <ShieldIcon className="size-3.5" />
+                )}
+                {appDevStackProtectionAction(stack).label}
               </Button>
             </div>
             <div className="mt-2 truncate text-xs text-muted-foreground">{stack.worktreePath}</div>

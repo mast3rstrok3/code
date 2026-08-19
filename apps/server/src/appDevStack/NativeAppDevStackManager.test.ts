@@ -1978,3 +1978,139 @@ it.effect("omits the credential wiring for stacks without a backend service", ()
     Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { force: true, recursive: true }))),
   );
 });
+
+const workflowNamespacesJson = JSON.stringify({
+  items: [
+    {
+      metadata: {
+        name: "ticket-a-dev",
+        creationTimestamp: "2026-08-19T10:00:00.000Z",
+        labels: {
+          "cortex.ai/component": "app-dev-stack",
+          "cortex.ai/stack-id": "ticket-a",
+        },
+        annotations: {
+          "cortex.ai/worktree-path": "/worktrees/ticket-a",
+          "cortex.ai/workflow-id": "workflow-123",
+        },
+      },
+    },
+    {
+      metadata: {
+        name: "ticket-b-dev",
+        creationTimestamp: "2026-08-19T10:00:00.000Z",
+        labels: {
+          "cortex.ai/component": "app-dev-stack",
+          "cortex.ai/stack-id": "ticket-b",
+        },
+        annotations: {
+          "cortex.ai/worktree-path": "/worktrees/ticket-b",
+          "cortex.ai/workflow-id": "workflow-123",
+          "cortex.ai/protected": "true",
+        },
+      },
+    },
+    {
+      metadata: {
+        name: "other-dev",
+        creationTimestamp: "2026-08-19T10:00:00.000Z",
+        labels: {
+          "cortex.ai/component": "app-dev-stack",
+          "cortex.ai/stack-id": "other",
+        },
+        annotations: {
+          "cortex.ai/worktree-path": "/worktrees/other",
+          "cortex.ai/workflow-id": "workflow-999",
+        },
+      },
+    },
+  ],
+});
+
+it.effect("workflow teardown scales down only the workflow's unprotected stacks", () => {
+  const calls: Array<string> = [];
+  const runKubectl: KubectlRunner = async (args) => {
+    const call = args.join(" ");
+    calls.push(call);
+    if (call === "get namespaces -l cortex.ai/component=app-dev-stack -o json") {
+      return workflowNamespacesJson;
+    }
+    if (call === "-n ticket-a-dev scale deployment --all --replicas=0") return "";
+    throw new Error(`unexpected kubectl call: ${call}`);
+  };
+  const service = makeNativeAppDevStackService(
+    {
+      ...nativeConfig,
+      id: undefined,
+      namespace: undefined,
+      worktreePath: undefined,
+    },
+    runKubectl,
+  );
+
+  return Effect.gen(function* () {
+    const result = yield* service.workflowTeardown({ workflowId: "workflow-123" });
+
+    assert.deepEqual(result.stoppedStackIds, ["ticket-a"]);
+    assert.deepEqual(result.skippedProtectedStackIds, ["ticket-b"]);
+    assert.deepEqual(result.failedStackIds, []);
+    assert.deepEqual(
+      calls.filter((call) => call.includes("scale")),
+      ["-n ticket-a-dev scale deployment --all --replicas=0"],
+    );
+  });
+});
+
+it.effect("protection is stored as a namespace annotation and read back", () => {
+  const calls: Array<string> = [];
+  let protectedAnnotation: string | undefined;
+  const runKubectl: KubectlRunner = async (args) => {
+    const call = args.join(" ");
+    calls.push(call);
+    if (call === "get namespaces -l cortex.ai/component=app-dev-stack -o json") {
+      return workflowNamespacesJson;
+    }
+    if (call.startsWith("annotate namespace ticket-a-dev cortex.ai/protected=")) {
+      protectedAnnotation = call.split("cortex.ai/protected=")[1]?.split(" ")[0];
+      return "";
+    }
+    if (call === "get namespace ticket-a-dev -o json") {
+      return JSON.stringify({
+        metadata: {
+          name: "ticket-a-dev",
+          creationTimestamp: "2026-08-19T10:00:00.000Z",
+          annotations: {
+            "cortex.ai/workflow-id": "workflow-123",
+            ...(protectedAnnotation === undefined
+              ? {}
+              : { "cortex.ai/protected": protectedAnnotation }),
+          },
+        },
+      });
+    }
+    if (call === "-n ticket-a-dev get deployments -o json") return deploymentsJson;
+    if (call.startsWith("-n ticket-a-dev get ingressroutes")) return JSON.stringify({ items: [] });
+    throw new Error(`unexpected kubectl call: ${call}`);
+  };
+  const service = makeNativeAppDevStackService(
+    {
+      ...nativeConfig,
+      id: undefined,
+      namespace: undefined,
+      worktreePath: undefined,
+      frontendUrl: undefined,
+      backendUrl: undefined,
+      keycloakUrl: undefined,
+      minioUrl: undefined,
+    },
+    runKubectl,
+  );
+
+  return Effect.gen(function* () {
+    const stack = yield* service.setProtected({ stackId: "ticket-a", protected: true });
+
+    assert.equal(protectedAnnotation, "true");
+    assert.equal(stack.protected, true);
+    assert.equal(stack.workflowId, "workflow-123");
+  });
+});

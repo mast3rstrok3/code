@@ -13,6 +13,34 @@ export function appDevStackOwnershipLabel(stack: AppDevStack): string | null {
   return stack.workflowId ? "Workflow-owned" : null;
 }
 
+export function isProtectedAppDevStack(stack: AppDevStack): boolean {
+  return stack.protected === true;
+}
+
+/**
+ * Labels the protection toggle. A protected stack survives workflow teardown
+ * and is the last one the environment sheds under memory pressure, so the
+ * button says what pressing it gives up.
+ */
+export function appDevStackProtectionAction(stack: AppDevStack): {
+  readonly label: string;
+  readonly ariaLabel: string;
+  readonly nextProtected: boolean;
+} {
+  const stackName = stack.displayName?.trim() || stack.namespace || stack.id;
+  return isProtectedAppDevStack(stack)
+    ? {
+        label: "Protected",
+        ariaLabel: `Stop protecting ${stackName} from automatic teardown`,
+        nextProtected: false,
+      }
+    : {
+        label: "Protect",
+        ariaLabel: `Protect ${stackName} from automatic teardown`,
+        nextProtected: true,
+      };
+}
+
 export function appDevStackWorkflowConflictSummary(conflict: WorkflowConflict): string {
   return `${conflict.stackIds.length} stacks · ${conflict.workflowId}`;
 }

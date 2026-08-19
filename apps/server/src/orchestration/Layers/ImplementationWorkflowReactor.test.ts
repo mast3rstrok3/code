@@ -147,6 +147,7 @@ interface ImplementationCalls {
       readonly workflowId?: string | null | undefined;
     }>
   >;
+  readonly workflowTeardownInputs: Ref.Ref<ReadonlyArray<{ readonly workflowId: string }>>;
   readonly createOrOpenChangeRequestCount: Ref.Ref<number>;
   readonly createOrOpenChangeRequestInputs: Ref.Ref<
     ReadonlyArray<{
@@ -468,6 +469,14 @@ function makeTestLayer(
               entries: [],
               fetchedAt: now,
             }),
+          workflowTeardown: (input) =>
+            Ref.update(calls.workflowTeardownInputs, (inputs) => [...inputs, input]).pipe(
+              Effect.as({
+                stoppedStackIds: ["stack-1"],
+                skippedProtectedStackIds: ["stack-protected"],
+                failedStackIds: [],
+              }),
+            ),
           autoCreate: (input) =>
             Ref.updateAndGet(calls.autoCreateInputs, (inputs) => [...inputs, input]).pipe(
               Effect.tap(() =>
@@ -556,6 +565,9 @@ function withSystem<A, E>(
         readonly workflowId?: string | null | undefined;
       }>
     >([]);
+    const workflowTeardownInputs = yield* Ref.make<ReadonlyArray<{ readonly workflowId: string }>>(
+      [],
+    );
     const createOrOpenChangeRequestCount = yield* Ref.make(0);
     const createOrOpenChangeRequestInputs = yield* Ref.make<
       ReadonlyArray<{
@@ -573,6 +585,7 @@ function withSystem<A, E>(
     const frontendProbeUrls = yield* Ref.make<ReadonlyArray<string>>([]);
     const calls = {
       autoCreateInputs,
+      workflowTeardownInputs,
       createOrOpenChangeRequestCount,
       createOrOpenChangeRequestInputs,
       createWorktreeInputs,
@@ -3773,6 +3786,21 @@ describe("ImplementationWorkflowReactor", () => {
         snapshot = yield* system.query.getSnapshot();
         const completedRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
         expect(completedRun?.status).toBe("completed");
+        // A finished run releases the stacks it owns, and says which protected
+        // ones it deliberately left running.
+        const orchestratorWorkflowId = snapshot.threads.find(
+          (thread) => thread.id === run.orchestratorThreadId,
+        )?.workflowContext?.workflowId;
+        expect(orchestratorWorkflowId).toBeDefined();
+        expect(yield* Ref.get(system.workflowTeardownInputs)).toEqual([
+          { workflowId: orchestratorWorkflowId },
+        ]);
+        const teardownActivity = snapshot.threads
+          .find((thread) => thread.id === run.orchestratorThreadId)
+          ?.activities.find((entry) => entry.kind === "implementation-run-stacks-torn-down");
+        expect(teardownActivity?.summary).toBe(
+          "Stopped 1 App Dev Stack(s) after the run completed; kept 1 protected",
+        );
         expect(completedRun?.mergeGateAttemptCount).toBe(2);
         expect(completedRun?.validatedHeadSha).toBe("def456");
         expect(completedRun?.changeRequest?.url).toBe("https://example.test/pr/1");

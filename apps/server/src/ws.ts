@@ -2864,6 +2864,12 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.appDevStackStop, appDevStackManager.stop(input), {
             "rpc.aggregate": "app-dev-stack",
           }),
+        [WS_METHODS.appDevStackSetProtected]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.appDevStackSetProtected,
+            appDevStackManager.setProtected(input),
+            { "rpc.aggregate": "app-dev-stack" },
+          ),
         [WS_METHODS.appDevStackRestart]: (input) =>
           observeRpcEffect(WS_METHODS.appDevStackRestart, appDevStackManager.restart(input), {
             "rpc.aggregate": "app-dev-stack",

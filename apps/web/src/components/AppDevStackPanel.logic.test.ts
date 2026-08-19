@@ -5,9 +5,11 @@ import {
   appDevStackBulkDeleteConfirmation,
   appDevStackBulkDeleteFailureMessage,
   appDevStackOwnershipLabel,
+  appDevStackProtectionAction,
   appDevStackSelectionState,
   appDevStackWorkflowConflictSummary,
   autoCreateNotice,
+  isProtectedAppDevStack,
   normalizePreviewHref,
   orderAppDevStacksForPanel,
   previewForPod,
@@ -257,5 +259,27 @@ describe("autoCreateNotice", () => {
       url: "https://code-dev.example.test",
       stackId: null,
     });
+  });
+});
+
+describe("app dev stack protection", () => {
+  it("reads protection defensively so an older server is not shown as protected", () => {
+    expect(isProtectedAppDevStack(makeStack({}))).toBe(false);
+    expect(isProtectedAppDevStack(makeStack({ protected: null }))).toBe(false);
+    expect(isProtectedAppDevStack(makeStack({ protected: true }))).toBe(true);
+  });
+
+  it("labels the toggle by what pressing it does", () => {
+    const unprotected = appDevStackProtectionAction(makeStack({ displayName: "hero" }));
+    expect(unprotected.label).toBe("Protect");
+    expect(unprotected.nextProtected).toBe(true);
+    expect(unprotected.ariaLabel).toBe("Protect hero from automatic teardown");
+
+    const guarded = appDevStackProtectionAction(
+      makeStack({ displayName: "hero", protected: true }),
+    );
+    expect(guarded.label).toBe("Protected");
+    expect(guarded.nextProtected).toBe(false);
+    expect(guarded.ariaLabel).toBe("Stop protecting hero from automatic teardown");
   });
 });

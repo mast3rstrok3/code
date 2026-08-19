@@ -772,3 +772,62 @@ it.effect("reports all-mode as unsupported for remote all-stack log reads", () =
     assert.deepEqual(requests, []);
   }).pipe(Effect.provide(layer));
 });
+
+it.effect("posts the protection toggle to the controller", () => {
+  const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+  const layer = makeLayer({
+    bearerToken: "backend-token",
+    requests,
+    response: () => Response.json({ ...stackJson, protected: true }),
+  });
+
+  return Effect.gen(function* () {
+    const manager = yield* AppDevStackManager;
+    const stack = yield* manager.setProtected({ stackId: stackJson.id, protected: true });
+
+    assert.equal(stack.protected, true);
+    const request = requests[0];
+    if (request === undefined) assert.fail("expected a protection request");
+    assert.equal(request.method, "POST");
+    assert.equal(
+      request.url,
+      `${backendUrl.href.replace(/\/+$/u, "")}/api/app-dev-stacks/${stackJson.id}/protection`,
+    );
+    if (request.body._tag !== "Uint8Array") assert.fail("expected JSON request body");
+    assert.deepStrictEqual(JSON.parse(new TextDecoder().decode(request.body.body)), {
+      protected: true,
+    });
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("tears a workflow's stacks down in one controller call", () => {
+  const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+  const layer = makeLayer({
+    requests,
+    response: () =>
+      Response.json({
+        stoppedStackIds: ["stack-a"],
+        skippedProtectedStackIds: ["stack-b"],
+        failedStackIds: [],
+      }),
+  });
+
+  return Effect.gen(function* () {
+    const manager = yield* AppDevStackManager;
+    const result = yield* manager.workflowTeardown({ workflowId: "workflow-123" });
+
+    assert.deepStrictEqual(result.stoppedStackIds, ["stack-a"]);
+    assert.deepStrictEqual(result.skippedProtectedStackIds, ["stack-b"]);
+    const request = requests[0];
+    if (request === undefined) assert.fail("expected a teardown request");
+    assert.equal(
+      request.url,
+      `${backendUrl.href.replace(/\/+$/u, "")}/api/app-dev-stacks/workflow-teardown`,
+    );
+    if (request.body._tag !== "Uint8Array") assert.fail("expected JSON request body");
+    assert.equal(
+      decodeWorkflowRequest(new TextDecoder().decode(request.body.body)).workflow_id,
+      "workflow-123",
+    );
+  }).pipe(Effect.provide(layer));
+});

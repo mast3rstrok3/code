@@ -20,6 +20,9 @@ import {
   type AppDevStackPod,
   type AppDevStackPodContainer,
   type AppDevStackPodLogEntry,
+  type AppDevStackSetProtectedInput,
+  type AppDevStackWorkflowTeardownInput,
+  AppDevStackWorkflowTeardownResult,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -75,6 +78,13 @@ export class AppDevStackManager extends Context.Service<
       input: AppDevStackAutoCreateInput,
     ) => Effect.Effect<AppDevStackAutoCreateResult, AppDevStackError>;
     readonly stop: (input: AppDevStackGetInput) => Effect.Effect<AppDevStack, AppDevStackError>;
+    readonly setProtected: (
+      input: AppDevStackSetProtectedInput,
+    ) => Effect.Effect<AppDevStack, AppDevStackError>;
+    /** Stops every unprotected stack a finished workflow owns. */
+    readonly workflowTeardown: (
+      input: AppDevStackWorkflowTeardownInput,
+    ) => Effect.Effect<AppDevStackWorkflowTeardownResult, AppDevStackError>;
     readonly restart: (input: AppDevStackGetInput) => Effect.Effect<AppDevStack, AppDevStackError>;
     readonly delete: (
       input: AppDevStackGetInput,
@@ -493,6 +503,32 @@ export class AppDevStackManager extends Context.Service<
         );
       });
 
+      const setProtected = Effect.fn("AppDevStackManager.setProtected")(function* (
+        input: AppDevStackSetProtectedInput,
+      ) {
+        const base = yield* requireBaseUrl("setProtected");
+        return yield* executeJson(
+          "setProtected",
+          HttpClientRequest.post(
+            appDevStackUrl(base, `/${encodeURIComponent(input.stackId)}/protection`),
+          ).pipe(HttpClientRequest.bodyJsonUnsafe({ protected: input.protected })),
+          AppDevStack,
+        );
+      });
+
+      const workflowTeardown = Effect.fn("AppDevStackManager.workflowTeardown")(function* (
+        input: AppDevStackWorkflowTeardownInput,
+      ) {
+        const base = yield* requireBaseUrl("workflowTeardown");
+        return yield* executeJson(
+          "workflowTeardown",
+          HttpClientRequest.post(appDevStackUrl(base, "/workflow-teardown")).pipe(
+            HttpClientRequest.bodyJsonUnsafe({ workflow_id: input.workflowId }),
+          ),
+          AppDevStackWorkflowTeardownResult,
+        );
+      });
+
       const restart = Effect.fn("AppDevStackManager.restart")(function* (
         input: AppDevStackGetInput,
       ) {
@@ -672,6 +708,8 @@ export class AppDevStackManager extends Context.Service<
         get,
         autoCreate,
         stop,
+        setProtected,
+        workflowTeardown,
         restart,
         delete: deleteStack,
         listPods,
