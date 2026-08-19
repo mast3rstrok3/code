@@ -488,12 +488,15 @@ function rerunRunStageForStep(
 
 /** Threads of a step that are still live, excluding the workflow root. */
 function collectRunningStepThreadIds(
+  allThreads: readonly EnvironmentThreadShell[],
   step: WorkflowTimelineStep<EnvironmentThreadShell>,
   rootThreadId: string,
 ): readonly ThreadId[] {
   const ids = new Set<ThreadId>();
   const consider = (thread: EnvironmentThreadShell) => {
     if (thread.id === rootThreadId) return;
+    // A paused scope is stopped even while a stale session row says otherwise.
+    if (findWorkflowPauseScope(allThreads, thread.id) !== null) return;
     if (!workflowStatusIsActive(resolveWorkflowThreadStatus(thread))) return;
     ids.add(thread.id);
   };
@@ -775,6 +778,7 @@ function TicketAppReviewCycles(props: {
                                 : threadById.get(props.run.activeThreadId),
                           })}
                           runningThreadIds={runningThreadIdsOf(
+                            props.threads,
                             props.run.activeThreadId === null
                               ? []
                               : [threadById.get(props.run.activeThreadId)].flatMap((thread) =>
@@ -1064,11 +1068,23 @@ export function workflowPauseOf(
   };
 }
 
-/** The threads a Stop would actually end, so the button can disable itself. */
-function runningThreadIdsOf(threads: readonly EnvironmentThreadShell[]): readonly ThreadId[] {
+/**
+ * The threads a Stop would actually end, so the button can disable itself.
+ *
+ * A paused thread never counts, whatever its session row says. That row can
+ * outlive the agent: the provider's last write is lost when the server restarts
+ * before it lands, and a stale "running" would leave a stopped wave reading as
+ * busy, with Clear and Start refusing to touch it.
+ */
+export function runningThreadIdsOf(
+  allThreads: readonly EnvironmentThreadShell[],
+  threads: readonly EnvironmentThreadShell[],
+): readonly ThreadId[] {
   return threads
     .filter(
-      (thread) => thread.session?.status === "running" || thread.session?.status === "starting",
+      (thread) =>
+        findWorkflowPauseScope(allThreads, thread.id) === null &&
+        (thread.session?.status === "running" || thread.session?.status === "starting"),
     )
     .map((thread) => thread.id);
 }
@@ -1117,7 +1133,7 @@ function TicketPhases(props: {
         const waveThreads = props.threads.filter((thread) =>
           thread.workflowContext?.ticketScope.some((ticketId) => waveTicketIds.has(ticketId)),
         );
-        const waveBusy = runningThreadIdsOf(waveThreads).length > 0;
+        const waveBusy = runningThreadIdsOf(props.threads, waveThreads).length > 0;
         const wavePause = workflowPauseOf(props.threads, waveThreads);
         const forEachWaveTicket = (
           act:
@@ -1155,7 +1171,7 @@ function TicketPhases(props: {
                 restartDisabledReason={
                   waveBusy ? "This wave is still running. Stop it before starting it again." : null
                 }
-                runningThreadIds={runningThreadIdsOf(waveThreads)}
+                runningThreadIds={runningThreadIdsOf(props.threads, waveThreads)}
                 pausedScopeThreadIds={wavePause.scopeThreadIds}
                 onSetStepModel={undefined}
                 onStop={props.onStopThreads}
@@ -1289,7 +1305,7 @@ function TicketPhases(props: {
                         threads: implementationThreads,
                         appReviewRun,
                       })}
-                      runningThreadIds={runningThreadIdsOf(linkedThreads)}
+                      runningThreadIds={runningThreadIdsOf(props.threads, linkedThreads)}
                       pausedScopeThreadIds={ticketPause.scopeThreadIds}
                       onSetStepModel={undefined}
                       onStop={props.onStopThreads}
@@ -1381,7 +1397,7 @@ function TicketPhases(props: {
                                   threads: stage.threads,
                                   appReviewRun,
                                 })}
-                                runningThreadIds={runningThreadIdsOf(stage.threads)}
+                                runningThreadIds={runningThreadIdsOf(props.threads, stage.threads)}
                                 pausedScopeThreadIds={
                                   workflowPauseOf(props.threads, stage.threads).scopeThreadIds
                                 }
@@ -1823,6 +1839,7 @@ function WorkflowGroupCard(props: {
                           // The workflow root is excluded: stopping it pauses the
                           // whole run, which is what the header's Pause is for.
                           const stepRunningThreadIds = collectRunningStepThreadIds(
+                            workflowThreads,
                             step,
                             props.workflowRoot.id,
                           );

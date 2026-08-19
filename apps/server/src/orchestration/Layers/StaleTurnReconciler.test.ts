@@ -1092,6 +1092,65 @@ describe("StaleTurnReconciler", () => {
     ),
   );
 
+  it.live("ends a paused thread's lost session instead of resuming it", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          // A pause stops the agents, but the last session write can be lost
+          // with the process. Resuming here would dispatch a turn the decider
+          // refuses under a pause, and the session would read "running" in
+          // every client until the user gave up and resumed the run.
+          const { run } = yield* launchRun(system);
+          const workerThreadId = requireWorkerThreadId(run);
+          const turnId = TurnId.make("turn-stale-worker-paused");
+          yield* system.directory.upsert({
+            threadId: workerThreadId,
+            provider: ProviderDriverKind.make("codex"),
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            status: "running",
+            runtimeMode: "full-access",
+            resumeCursor: { opaque: "resume-paused-worker" },
+          });
+          yield* setThreadSession(system, {
+            threadId: workerThreadId,
+            status: "running",
+            activeTurnId: turnId,
+            tag: "worker-paused-orphan",
+          });
+          yield* system.engine.dispatch({
+            type: "thread.workflow.pause",
+            commandId: CommandId.make("cmd-pause-stale-worker"),
+            threadId: workerThreadId,
+            createdAt: DateTime.formatIso(yield* DateTime.now),
+          });
+
+          yield* system.reconciler.start();
+          yield* waitUntil(
+            getThread(system, workerThreadId).pipe(
+              Effect.map((thread) => thread?.session?.status === "stopped"),
+            ),
+            "paused worker session ended",
+          );
+          yield* system.reactor.drain;
+
+          const workerThread = yield* getThread(system, workerThreadId);
+          expect(workerThread?.session?.status).toBe("stopped");
+          expect(workerThread?.session?.activeTurnId).toBeNull();
+          // Stopped by a pause, not by a fault: no error text to explain away.
+          expect(workerThread?.session?.lastError ?? null).toBeNull();
+
+          // No resume was attempted, so nothing was queued for the run to pick
+          // up when the user resumes it.
+          const resumes = yield* resumeActivities(system, workerThreadId);
+          expect(resumes).toHaveLength(0);
+
+          const binding = Option.getOrUndefined(yield* system.directory.getBinding(workerThreadId));
+          expect(binding?.status).toBe("stopped");
+        }),
+      { reconciler: bootOnlyOptions },
+    ),
+  );
+
   it.live("fails the ticket when the worker resume budget is exhausted", () =>
     withSystem(
       (system) =>

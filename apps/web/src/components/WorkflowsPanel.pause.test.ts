@@ -1,7 +1,7 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import { describe, expect, it } from "vite-plus/test";
 
-import { workflowPauseOf } from "./WorkflowsPanel";
+import { runningThreadIdsOf, workflowPauseOf } from "./WorkflowsPanel";
 
 const PAUSED_AT = "2026-08-19T20:07:42.541Z";
 
@@ -57,5 +57,38 @@ describe("workflowPauseOf", () => {
 
   it("leaves an empty row alone rather than calling it paused", () => {
     expect(workflowPauseOf(all, [])).toEqual({ scopeThreadIds: [], paused: false });
+  });
+});
+
+describe("runningThreadIdsOf", () => {
+  const running = (id: string, parentThreadId: string | null, workflowPausedAt: string | null) =>
+    ({
+      id,
+      parentThreadId,
+      workflowPausedAt,
+      session: { status: "running" },
+    }) as unknown as EnvironmentThreadShell;
+
+  it("ignores a thread under a pause, so a stopped scope never reads as busy", () => {
+    // The session row can outlive the agent: the provider's last write is lost
+    // when the server restarts before it lands. Counting it would leave a
+    // stopped wave looking busy, with Clear and Start refusing to touch it.
+    const all = [
+      running("root", null, PAUSED_AT),
+      running("orchestrator", "root", null),
+      running("worker", "orchestrator", null),
+    ];
+
+    expect(runningThreadIdsOf(all, [all[2]!])).toEqual([]);
+  });
+
+  it("still reports work outside the paused scope", () => {
+    const all = [
+      running("root", null, null),
+      running("paused-worker", "root", PAUSED_AT),
+      running("other-worker", "root", null),
+    ];
+
+    expect(runningThreadIdsOf(all, [all[1]!, all[2]!])).toEqual(["other-worker"]);
   });
 });

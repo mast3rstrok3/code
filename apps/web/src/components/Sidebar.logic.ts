@@ -130,6 +130,7 @@ export interface ThreadStatusPill {
     | "Monitoring"
     | "Connecting"
     | "Completed"
+    | "Paused"
     | "Pending Approval"
     | "Awaiting Input"
     | "Plan Ready";
@@ -148,6 +149,9 @@ const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
   Connecting: 4,
   "Plan Ready": 3,
   Monitoring: 2,
+  // A pause outranks Completed: the run stopped mid-flight and is waiting for
+  // the user, which is not the same as having finished.
+  Paused: 2,
   Completed: 1,
 };
 
@@ -160,6 +164,7 @@ type ThreadStatusInput = Pick<
   | "latestTurn"
   | "session"
   | "backgroundLiveness"
+  | "workflowPausedAt"
 > & {
   lastVisitedAt?: string | undefined;
 };
@@ -758,7 +763,11 @@ export type SidebarThreadStatus =
 
 type SidebarThreadStatusInput = Pick<
   SidebarThreadSummary,
-  "hasPendingApprovals" | "hasPendingUserInput" | "session" | "backgroundLiveness"
+  | "hasPendingApprovals"
+  | "hasPendingUserInput"
+  | "session"
+  | "backgroundLiveness"
+  | "workflowPausedAt"
 >;
 export type SidebarV2StatusInput = SidebarThreadStatusInput;
 export type SidebarV2Status = SidebarThreadStatus;
@@ -769,6 +778,12 @@ export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): Si
   }
   if (thread.hasPendingUserInput) {
     return "input";
+  }
+  // A stopped workflow is stopped whatever its session row still says. That row
+  // can outlive the agent: the provider's last write is lost when the server
+  // restarts before it lands.
+  if (thread.workflowPausedAt != null) {
+    return "ready";
   }
   if (thread.session?.status === "running" || thread.session?.status === "starting") {
     return "working";
@@ -1146,6 +1161,15 @@ export function resolveThreadStatusPill(input: {
       label: "Awaiting Input",
       colorClass: "text-indigo-600 dark:text-indigo-300/90",
       dotClass: "bg-indigo-500 dark:bg-indigo-300/90",
+      pulse: false,
+    };
+  }
+
+  if (thread.workflowPausedAt != null) {
+    return {
+      label: "Paused",
+      colorClass: "text-muted-foreground",
+      dotClass: "bg-muted-foreground/70",
       pulse: false,
     };
   }

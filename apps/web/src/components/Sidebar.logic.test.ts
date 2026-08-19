@@ -686,6 +686,28 @@ describe("resolveSidebarThreadStatus", () => {
     ).toBe("working");
   });
 
+  it("reports a paused workflow as idle, whatever its session row says", () => {
+    // The session row can outlive the agent: the provider's last write is lost
+    // when the server restarts before it lands, and a stopped workflow would
+    // then sit in the sidebar with a spinner nobody can turn off.
+    expect(
+      resolveSidebarThreadStatus({
+        ...idle,
+        session,
+        workflowPausedAt: "2026-08-19T21:09:10.877Z",
+      }),
+    ).toBe("ready");
+    // A raised hand still outranks the pause: it is addressed to the user.
+    expect(
+      resolveSidebarThreadStatus({
+        ...idle,
+        hasPendingApprovals: true,
+        session,
+        workflowPausedAt: "2026-08-19T21:09:10.877Z",
+      }),
+    ).toBe("approval");
+  });
+
   it("reports failed only while the session status is error", () => {
     expect(
       resolveSidebarThreadStatus({

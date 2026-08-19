@@ -41,6 +41,7 @@ import {
   WORKFLOW_NUDGE_INTERVAL_MS,
   WORKFLOW_NUDGE_MAX_ATTEMPTS,
 } from "../workflowNudge.ts";
+import { isWorkflowThreadPaused } from "../workflowPause.ts";
 
 const DEFAULT_SWEEP_INTERVAL_MS = 60 * 1000;
 const DEFAULT_GRACE_MS = 60 * 1000;
@@ -680,6 +681,8 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
         readonly updatedAt: string;
         readonly lastError?: string;
         readonly tag?: string;
+        /** "error" unless the session ended for a reason that is not a fault. */
+        readonly status?: "error" | "stopped";
       }) {
         const { thread, pinnedTurnId, updatedAt } = input;
 
@@ -689,14 +692,15 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
           threadId: thread.id,
           session: {
             threadId: thread.id,
-            status: "error",
+            status: input.status ?? "error",
             providerName: thread.session?.providerName ?? null,
             ...(thread.session?.providerInstanceId !== undefined
               ? { providerInstanceId: thread.session.providerInstanceId }
               : {}),
             runtimeMode: thread.session?.runtimeMode ?? thread.runtimeMode,
             activeTurnId: null,
-            lastError: input.lastError ?? STALE_TURN_ERROR_MESSAGE,
+            lastError:
+              input.status === "stopped" ? null : (input.lastError ?? STALE_TURN_ERROR_MESSAGE),
             updatedAt,
           },
           createdAt: updatedAt,
@@ -928,6 +932,27 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
         readonly updatedAt: string;
       }) {
         const { readModel, thread, pinnedTurnId, updatedAt } = input;
+
+        // A paused workflow is waiting for the user, so its lost session is not
+        // work to pick back up: resuming it would dispatch a turn the decider
+        // refuses, leaving the session reading "running" in every client for as
+        // long as the pause holds. Write the ending the provider never got to
+        // report and leave the run alone.
+        if (isWorkflowThreadPaused(readModel.threads, thread.id)) {
+          yield* settleSessionAndBinding({
+            thread,
+            pinnedTurnId,
+            updatedAt,
+            status: "stopped",
+            tag: "paused",
+          });
+          yield* Effect.logInfo("stale-turn.reconciler.settled-paused", {
+            threadId: thread.id,
+            turnId: pinnedTurnId,
+            workflowRole: thread.workflowRole,
+          });
+          return;
+        }
 
         // A reviewer interruption is itself a consumed review cycle. Restarting
         // the same reviewer turn could apply a stale directive after a newer

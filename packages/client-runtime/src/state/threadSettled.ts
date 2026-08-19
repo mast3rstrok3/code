@@ -237,6 +237,11 @@ export function effectiveSettled(
 ): boolean {
   // Blocked work must remain visible even when a user explicitly settled it.
   if (shell.hasPendingApprovals || shell.hasPendingUserInput) return false;
+  // A paused workflow is stopped whatever its session row still says. That row
+  // can outlive the agent: the provider's last write is lost if the server
+  // restarts before it lands, and a stale "running" would pin a stopped run to
+  // the inbox with a spinner nobody can turn off.
+  if (shell.workflowPausedAt != null) return true;
   if (shell.session?.status === "starting" || shell.session?.status === "running") return false;
   if (hasQueuedTurnStart(shell, { now: options.now })) {
     // The queued-turn blocker alone is forgivable: it is clock-derived, and
