@@ -6,6 +6,7 @@ import {
   EventId,
   IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
   MessageId,
+  type OrchestrationImplementationRerunTarget,
   type OrchestrationImplementationRun,
   type OrchestrationCommand,
   type OrchestrationEvent,
@@ -41,6 +42,7 @@ import {
   requireThreadNotArchived,
 } from "./commandInvariants.ts";
 import { WORKFLOW_PROMPT_IDS } from "../provider/WorkflowPromptRegistry.ts";
+import { appReviewPhaseStepPin, rerunTargetStepPin } from "./workflowSubagents.ts";
 import { validatePlanningTicketFileChanges } from "./planningTicketFiles.ts";
 import {
   PLANNING_REVIEWER_TICKET_EDIT_RULES,
@@ -685,6 +687,130 @@ function buildImplementationRun(input: {
     createdAt: input.command.createdAt,
     updatedAt: input.command.createdAt,
   };
+}
+
+/**
+ * The thread still working the stage a re-run targets, when there is one.
+ *
+ * A re-run has to refuse while its stage is live. Starting a second agent on
+ * the same branch is how one worktree ends up with two writers and a review
+ * that cannot name the HEAD it produced.
+ */
+function liveRerunTargetThreadId(input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly run: OrchestrationImplementationRun;
+  readonly target: OrchestrationImplementationRerunTarget;
+}): ThreadId | null {
+  const liveThread = (threadId: ThreadId | null | undefined): ThreadId | null => {
+    if (threadId == null) return null;
+    const thread = input.readModel.threads.find((candidate) => candidate.id === threadId);
+    if (thread === undefined || thread.deletedAt !== null) return null;
+    return thread.session?.status === "starting" || thread.session?.status === "running"
+      ? thread.id
+      : null;
+  };
+  const liveAppReviewWorkflow = (runId: string | null | undefined): ThreadId | null => {
+    if (runId == null) return null;
+    const reviewRun = (input.readModel.appReviewWorkflowRuns ?? []).find(
+      (candidate) => candidate.id === runId,
+    );
+    if (reviewRun === undefined || reviewRun.status !== "running") return null;
+    return reviewRun.activeThreadId ?? reviewRun.controllerThreadId;
+  };
+  if (input.target.kind === "ticket") {
+    const ticketId = input.target.ticketId;
+    const state = input.run.ticketStates.find((candidate) => candidate.ticketId === ticketId);
+    if (state === undefined) return null;
+    switch (input.target.stage) {
+      case "implementation":
+        return liveThread(state.workerThreadId);
+      case "app-review":
+        return liveAppReviewWorkflow(state.appReviewWorkflowRunId);
+      case "code-review":
+        return liveThread(state.codeReviewThreadId);
+    }
+  }
+  switch (input.target.stage) {
+    // Integration runs inline in the reactor, so no thread owns it.
+    case "integration":
+      return null;
+    case "merge-gate":
+      return liveThread(input.run.activeValidatorThreadId);
+    case "app-review":
+      return (
+        liveThread(input.run.activeAppReviewThreadId) ??
+        (input.readModel.appReviewWorkflowRuns ?? []).find(
+          (candidate) =>
+            candidate.caller.type === "implementation" &&
+            candidate.caller.implementationRunId === input.run.id &&
+            candidate.status === "running",
+        )?.activeThreadId ??
+        null
+      );
+    case "code-review":
+      return liveThread(input.run.activeCodeReviewThreadId);
+  }
+}
+
+/**
+ * The thread still working an App Review run's current phase, when there is one.
+ *
+ * The three phases share one worktree and one durable review record, so a phase
+ * cannot start again underneath the agent that owns them.
+ */
+function liveAppReviewPhaseThreadId(input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly run: AppReviewWorkflowRun;
+}): ThreadId | null {
+  const threadId = input.run.activeThreadId;
+  if (threadId === null) return null;
+  const thread = input.readModel.threads.find((candidate) => candidate.id === threadId);
+  if (thread === undefined || thread.deletedAt !== null) return null;
+  return thread.session?.status === "starting" || thread.session?.status === "running"
+    ? thread.id
+    : null;
+}
+
+/**
+ * The caller's own thread still working in the App Review's worktree.
+ *
+ * An embedded review borrows the worktree of the ticket or run that launched
+ * it. Reopening the review sends that ticket back to `app-reviewing`, so a
+ * repair would land beside whatever the caller has since started there.
+ */
+function liveAppReviewCallerThreadId(input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly run: AppReviewWorkflowRun;
+}): ThreadId | null {
+  const caller = input.run.caller;
+  if (caller.type !== "implementation") return null;
+  const implementationRun = input.readModel.implementationRuns.find(
+    (candidate) => candidate.id === caller.implementationRunId,
+  );
+  if (implementationRun === undefined) return null;
+  const ticketId = caller.ticketId;
+  const candidates =
+    ticketId === undefined
+      ? [
+          implementationRun.activeValidatorThreadId,
+          implementationRun.activeCodeReviewThreadId,
+          implementationRun.activeFixerThreadId,
+        ]
+      : (() => {
+          const state = implementationRun.ticketStates.find(
+            (candidate) => candidate.ticketId === ticketId,
+          );
+          return [state?.workerThreadId, state?.codeReviewThreadId];
+        })();
+  for (const threadId of candidates) {
+    if (threadId == null) continue;
+    const thread = input.readModel.threads.find((candidate) => candidate.id === threadId);
+    if (thread === undefined || thread.deletedAt !== null) continue;
+    if (thread.session?.status === "starting" || thread.session?.status === "running") {
+      return thread.id;
+    }
+  }
+  return null;
 }
 
 // Session adoption takes seconds; a user message still unadopted after this
@@ -3181,6 +3307,95 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.implementation-run.rerun": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const existingRun = readModel.implementationRuns.find((run) => run.id === command.runId);
+      if (existingRun === undefined) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Implementation Run '${command.runId}' does not exist.`,
+        });
+      }
+      if (existingRun.status === "canceled") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Implementation Run '${command.runId}' was canceled.`,
+        });
+      }
+      const target = command.target;
+      if (
+        target.kind === "ticket" &&
+        !existingRun.ticketStates.some((state) => state.ticketId === target.ticketId)
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Ticket '${target.ticketId}' is not part of Implementation Run '${command.runId}'.`,
+        });
+      }
+      // Refuse while the stage is live. Two agents on one branch is how a
+      // worktree ends up with two writers and a review that cannot name HEAD.
+      const liveThreadId = liveRerunTargetThreadId({
+        readModel,
+        run: existingRun,
+        target,
+      });
+      if (liveThreadId !== null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${liveThreadId}' is still running this stage. Stop it before starting the stage again.`,
+        });
+      }
+      const stepPin = rerunTargetStepPin(target);
+      if (command.modelSelection !== undefined && stepPin === null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Integration merges branches without an agent, so it takes no model.",
+        });
+      }
+      const occurredAt = command.createdAt;
+      const rerunEvent = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.implementation-run-rerun-requested" as const,
+        payload: { run: existingRun, target },
+      };
+      if (command.modelSelection === undefined || stepPin === null) return rerunEvent;
+      // Pins live on the workflow root, same as the Workflows panel writes them.
+      const rootThreadId = thread.workflowContext?.rootThreadId ?? thread.id;
+      const rootThread =
+        readModel.threads.find((candidate) => candidate.id === rootThreadId) ?? thread;
+      const modelSelection = command.modelSelection;
+      return [
+        {
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: rootThread.id,
+            occurredAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.workflow-step-model-set",
+          payload: {
+            threadId: rootThread.id,
+            workflowPromptId: stepPin.workflowPromptId,
+            ...(stepPin.stepWorkflowPromptId === undefined
+              ? {}
+              : { stepWorkflowPromptId: stepPin.stepWorkflowPromptId }),
+            modelSelection,
+            updatedAt: occurredAt,
+          },
+        },
+        rerunEvent,
+      ];
+    }
+
     case "thread.implementation-run.cancel": {
       yield* requireThread({ readModel, command, threadId: command.threadId });
       const existingRun = readModel.implementationRuns.find((run) => run.id === command.runId);
@@ -3484,6 +3699,107 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "thread.app-review-workflow-resume-requested",
         payload: { sourceThreadId: existing.targetThreadId, run },
       };
+    }
+
+    case "thread.app-review-workflow.rerun": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      const existing = (readModel.appReviewWorkflowRuns ?? []).find(
+        (run) => run.id === command.runId,
+      );
+      if (existing === undefined) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `App Review Workflow '${command.runId}' does not exist.`,
+        });
+      }
+      // Every phase entry point works on the run's latest cycle, so that is the
+      // one a re-run redoes. Earlier cycles are history.
+      const cycle = existing.cycles.at(-1);
+      if (cycle === undefined) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `App Review Workflow '${command.runId}' has not started a cycle yet.`,
+        });
+      }
+      const liveThread = liveAppReviewPhaseThreadId({ readModel, run: existing });
+      if (liveThread !== null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${liveThread}' is still running this App Review. Stop it before starting a phase again.`,
+        });
+      }
+      // The review shares a worktree with the work that called it. If that work
+      // has moved on and started an agent of its own, a repair would commit
+      // underneath it.
+      const liveCaller = liveAppReviewCallerThreadId({ readModel, run: existing });
+      if (liveCaller !== null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${liveCaller}' is working in this App Review's worktree. Stop it before starting a phase again.`,
+        });
+      }
+      // A redo of the browser review runs a new cycle rather than overwriting
+      // the one that disappointed, so it needs budget left to run in.
+      if (command.phase === "review" && existing.cyclesUsed >= existing.cycleBudget) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `App Review Workflow '${command.runId}' has used all ${String(existing.cycleBudget)} of its cycles.`,
+        });
+      }
+      if (command.phase === "planning" && cycle.actionableFindingsMarkdown === null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Gap analysis needs findings from the browser review of this cycle.",
+        });
+      }
+      if (command.phase === "fixing" && (cycle.repairTickets ?? []).length === 0) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "The repair step needs the repair tickets gap analysis writes.",
+        });
+      }
+      const occurredAt = command.createdAt;
+      const rerunEvent = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: existing.controllerThreadId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.app-review-workflow-rerun-requested" as const,
+        payload: {
+          sourceThreadId: existing.targetThreadId,
+          run: existing,
+          phase: command.phase,
+        },
+      };
+      if (command.modelSelection === undefined) return rerunEvent;
+      const stepPin = appReviewPhaseStepPin(command.phase);
+      const rootThreadId = thread.workflowContext?.rootThreadId ?? thread.id;
+      const rootThread =
+        readModel.threads.find((candidate) => candidate.id === rootThreadId) ?? thread;
+      const modelSelection = command.modelSelection;
+      return [
+        {
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: rootThread.id,
+            occurredAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.workflow-step-model-set",
+          payload: {
+            threadId: rootThread.id,
+            workflowPromptId: stepPin.workflowPromptId,
+            ...(stepPin.stepWorkflowPromptId === undefined
+              ? {}
+              : { stepWorkflowPromptId: stepPin.stepWorkflowPromptId }),
+            modelSelection,
+            updatedAt: occurredAt,
+          },
+        },
+        rerunEvent,
+      ];
     }
 
     case "thread.app-review.launch": {

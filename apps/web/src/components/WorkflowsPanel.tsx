@@ -1,7 +1,13 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import type {
+  AppReviewWorkflowCycle,
+  AppReviewWorkflowPhase,
   AppReviewWorkflowRun,
+  EnvironmentId,
   ModelSelection,
+  OrchestrationImplementationRerunRunStage,
+  OrchestrationImplementationRerunTarget,
+  OrchestrationImplementationRerunTicketStage,
   ThreadId,
   OrchestrationImplementationRun,
   OrchestrationPlanningSpec,
@@ -73,6 +79,8 @@ import {
   type WorkflowModelPinKey,
 } from "./WorkflowModelPins";
 import { workflowRoleShortLabel } from "./Sidebar.logic";
+import { WorkflowAppReviewPhaseRerunMenu } from "./WorkflowAppReviewPhaseRerunMenu";
+import { WorkflowTicketStageRerunMenu } from "./WorkflowTicketStageRerunMenu";
 
 const STATUS_VISUALS: Record<
   WorkflowThreadStatus,
@@ -388,6 +396,14 @@ function resolveStepRestart(input: {
   readonly resumeStepLabel: string | null;
   readonly onRestartPlanningStage: ((stage: RestartablePlanningStage) => void) | undefined;
   readonly onRetryImplementationRun: ((runId: string) => void) | undefined;
+  /** The run-wide stage this step starts again, when it owns one. */
+  readonly rerunRunStage: RerunRunStage | null;
+  readonly onRerunImplementationStage:
+    | ((input: {
+        readonly runId: string;
+        readonly target: OrchestrationImplementationRerunTarget;
+      }) => void)
+    | undefined;
   readonly onResumeWorkflow: (() => void) | undefined;
   readonly implementationRunId: string | null;
 }): { readonly run: (() => void) | undefined; readonly disabledReason: string | null } {
@@ -427,10 +443,42 @@ function resolveStepRestart(input: {
     const retry = input.onRetryImplementationRun;
     return { run: () => retry(runId), disabledReason: null };
   }
+  if (
+    input.rerunRunStage !== null &&
+    input.onRerunImplementationStage !== undefined &&
+    input.implementationRunId !== null
+  ) {
+    const runId = input.implementationRunId;
+    const stage = input.rerunRunStage;
+    const rerun = input.onRerunImplementationStage;
+    return {
+      run: () => rerun({ runId, target: { kind: "run", stage } }),
+      disabledReason: null,
+    };
+  }
   return {
     run: undefined,
     disabledReason: "This workflow cannot re-enter this step on its own.",
   };
+}
+
+/**
+ * The run-wide stage a step starts again, for the steps that own one.
+ *
+ * Ticket waves are deliberately absent: re-running the whole wave would restart
+ * the tickets that already succeeded, so those start again one ticket and one
+ * stage at a time from the ticket's own row.
+ */
+function rerunRunStageForStep(
+  step: WorkflowTimelineStep<EnvironmentThreadShell>,
+): RerunRunStage | null {
+  const label = workflowStepLabel(step).toLowerCase();
+  // Integration re-merges the terminal branches and then re-enters the merge
+  // gate, which is the whole of what this step does.
+  if (label.includes("merge ticket branches")) return "integration";
+  if (label.includes("app review")) return "app-review";
+  if (label.includes("code review")) return "code-review";
+  return null;
 }
 
 /** Threads of a step that are still live, excluding the workflow root. */
@@ -528,8 +576,68 @@ function PlanningArtifacts(props: {
   );
 }
 
+/** The Models-list pin each App Review phase reads. */
+const APP_REVIEW_PHASE_PIN = {
+  review: { workflowPromptId: "implementation.browser-app-review.codex" },
+  planning: {
+    workflowPromptId: "matt-pocock.to-tickets",
+    stepWorkflowPromptId: "implementation.browser-app-review.codex",
+  },
+  fixing: {
+    workflowPromptId: "matt-pocock.implement",
+    stepWorkflowPromptId: "implementation.browser-app-review.codex",
+  },
+} as const satisfies Record<AppReviewWorkflowPhase, WorkflowModelPinKey>;
+
+/**
+ * Why an App Review phase cannot start again yet, if it cannot.
+ *
+ * Mirrors the server's rules so the panel never offers an action the decider
+ * refuses: only the current cycle can be redone, the phases need what the
+ * phases before them produced, and nothing starts under a live agent.
+ */
+function appReviewPhaseRerunDisabledReason(input: {
+  readonly phaseLabel: string;
+  readonly phase: AppReviewWorkflowPhase;
+  readonly cycle: AppReviewWorkflowCycle;
+  readonly isCurrentCycle: boolean;
+  readonly callerBusyReason: string | null;
+  readonly cyclesUsed: number;
+  readonly cycleBudget: number;
+  readonly activeThread: EnvironmentThreadShell | undefined;
+}): string | null {
+  if (!input.isCurrentCycle) return "Only the newest cycle can start again.";
+  if (input.callerBusyReason !== null) return input.callerBusyReason;
+  const session = input.activeThread?.session?.status;
+  if (session === "starting" || session === "running") {
+    return "This App Review is still running. Stop it before starting a phase again.";
+  }
+  // A browser review redo runs a new cycle rather than overwriting this one, so
+  // it needs a cycle left to run in.
+  if (input.phase === "review" && input.cyclesUsed >= input.cycleBudget) {
+    return `Every one of the ${String(input.cycleBudget)} review cycles has been used.`;
+  }
+  if (input.phase === "planning" && input.cycle.actionableFindingsMarkdown === null) {
+    return "Gap analysis needs findings from this cycle's browser review.";
+  }
+  if (input.phase === "fixing" && (input.cycle.repairTickets?.length ?? 0) === 0) {
+    return "The repair needs the tickets gap analysis writes.";
+  }
+  return null;
+}
+
 function TicketAppReviewCycles(props: {
   readonly run: AppReviewWorkflowRun;
+  /**
+   * Set when the ticket or run that owns this review has an agent of its own in
+   * the shared worktree. A repair would land beside it, so the server refuses.
+   */
+  readonly callerBusyReason: string | null;
+  readonly environmentId: EnvironmentId;
+  readonly rootModelSelection: ModelSelection;
+  readonly pinFor: (key: WorkflowModelPinKey) => ModelSelection | null;
+  readonly onSetStepModel: SetWorkflowStepModel | undefined;
+  readonly onRerunPhase: ((phase: AppReviewWorkflowPhase) => void) | undefined;
   readonly threads: readonly EnvironmentThreadShell[];
   readonly onOpenThread: (thread: EnvironmentThreadShell) => void;
   readonly activeThreadKey: string | null;
@@ -550,6 +658,7 @@ function TicketAppReviewCycles(props: {
     );
   };
 
+  const latestCycleNumber = props.run.cycles.at(-1)?.cycleNumber ?? null;
   return (
     <div className="space-y-2 pt-1">
       {props.run.cycles
@@ -558,26 +667,37 @@ function TicketAppReviewCycles(props: {
           const steps = [
             {
               label: "App review",
+              phase: "review" as const,
               detail:
                 cycle.reviewVerdict ?? (cycle.status === "reviewing" ? "in progress" : "pending"),
+              threadId: cycle.reviewerThreadId,
               thread: threadRow(cycle.reviewerThreadId),
             },
             {
               label: "Gap analysis & repair tickets",
+              phase: "planning" as const,
               detail: cycle.repairTickets?.length
                 ? `${cycle.repairTickets.length} ticket${cycle.repairTickets.length === 1 ? "" : "s"}`
                 : cycle.status === "planning"
                   ? "in progress"
                   : "pending",
-              thread: threadRow(cycle.reviewerThreadId),
+              // Gap analysis has run in a thread of its own since it moved out
+              // of the reviewer; older cycles still carry only the reviewer.
+              threadId: cycle.plannerThreadId ?? cycle.reviewerThreadId,
+              thread: threadRow(cycle.plannerThreadId ?? cycle.reviewerThreadId),
             },
             {
               label: "Fix the problem",
+              phase: "fixing" as const,
               detail:
                 cycle.fixResult?.status ?? (cycle.status === "fixing" ? "in progress" : "pending"),
+              threadId: cycle.fixerThreadId,
               thread: threadRow(cycle.fixerThreadId),
             },
           ];
+          // Only the newest cycle can start again: every phase entry point on
+          // the server works on the run's current cycle.
+          const isCurrentCycle = cycle.cycleNumber === latestCycleNumber;
           return (
             <article
               key={cycle.cycleNumber}
@@ -603,9 +723,36 @@ function TicketAppReviewCycles(props: {
                     <span className="absolute -left-[1.05rem] top-0.5 flex size-3.5 items-center justify-center rounded-full border border-border bg-background text-[8px] text-muted-foreground">
                       {index + 1}
                     </span>
-                    <div className="text-[10px]">
+                    <div className="flex items-center gap-1.5 text-[10px]">
                       <span className="font-medium text-foreground">{step.label}</span>
                       <span className="capitalize text-muted-foreground"> · {step.detail}</span>
+                      {props.onRerunPhase === undefined ? null : (
+                        <WorkflowAppReviewPhaseRerunMenu
+                          environmentId={props.environmentId}
+                          cycleNumber={cycle.cycleNumber}
+                          phaseLabel={step.label}
+                          phase={step.phase}
+                          pinKey={APP_REVIEW_PHASE_PIN[step.phase]}
+                          pinnedSelection={props.pinFor(APP_REVIEW_PHASE_PIN[step.phase])}
+                          inheritedSelection={props.rootModelSelection}
+                          inheritedLabel="Follows the App Review step."
+                          disabledReason={appReviewPhaseRerunDisabledReason({
+                            phaseLabel: step.label,
+                            phase: step.phase,
+                            cycle,
+                            isCurrentCycle,
+                            callerBusyReason: props.callerBusyReason,
+                            cyclesUsed: props.run.cyclesUsed,
+                            cycleBudget: props.run.cycleBudget,
+                            activeThread:
+                              props.run.activeThreadId === null
+                                ? undefined
+                                : threadById.get(props.run.activeThreadId),
+                          })}
+                          onSetStepModel={props.onSetStepModel}
+                          onRerun={() => props.onRerunPhase?.(step.phase)}
+                        />
+                      )}
                     </div>
                     {step.thread}
                   </li>
@@ -647,6 +794,14 @@ function TicketAppReviewCycles(props: {
 
 function AppReviewRunsTimeline(props: {
   readonly runs: readonly AppReviewWorkflowRun[];
+  readonly callerBusyReason: string | null;
+  readonly environmentId: EnvironmentId;
+  readonly rootModelSelection: ModelSelection;
+  readonly pinFor: (key: WorkflowModelPinKey) => ModelSelection | null;
+  readonly onSetStepModel: SetWorkflowStepModel | undefined;
+  readonly onRerunAppReviewPhase:
+    | ((input: { readonly appReviewRunId: string; readonly phase: AppReviewWorkflowPhase }) => void)
+    | undefined;
   readonly threads: readonly EnvironmentThreadShell[];
   readonly onOpenThread: (thread: EnvironmentThreadShell) => void;
   readonly activeThreadKey: string | null;
@@ -665,6 +820,16 @@ function AppReviewRunsTimeline(props: {
             ) : null}
             <TicketAppReviewCycles
               run={run}
+              callerBusyReason={props.callerBusyReason}
+              environmentId={props.environmentId}
+              rootModelSelection={props.rootModelSelection}
+              pinFor={props.pinFor}
+              onSetStepModel={props.onSetStepModel}
+              onRerunPhase={
+                props.onRerunAppReviewPhase === undefined
+                  ? undefined
+                  : (phase) => props.onRerunAppReviewPhase?.({ appReviewRunId: run.id, phase })
+              }
               threads={props.threads}
               onOpenThread={props.onOpenThread}
               activeThreadKey={props.activeThreadKey}
@@ -766,9 +931,77 @@ function ThreadRowList(props: {
   );
 }
 
+/**
+ * The wave step every per-ticket agent runs under. Ticket reviews are sub-steps
+ * of it, so their pins carry it as the step id. Matches the id the ticket
+ * execution step already carries in the shared preset definitions.
+ */
+const TICKET_WAVE_PROMPT_ID = "implementation.tdd.codex";
+
+type RerunTicketStage = OrchestrationImplementationRerunTicketStage;
+type RerunRunStage = OrchestrationImplementationRerunRunStage;
+
+/**
+ * Why a ticket stage cannot start again yet, if it cannot.
+ *
+ * Mirrors the server's rule so the panel never offers an action the decider
+ * will refuse: a second agent on the same branch is exactly what the guard
+ * exists to prevent.
+ */
+function ticketStageRerunDisabledReason(input: {
+  readonly stageLabel: string;
+  readonly threads: readonly EnvironmentThreadShell[];
+  readonly appReviewRun: AppReviewWorkflowRun | null | undefined;
+}): string | null {
+  if (input.stageLabel === "App Review" && input.appReviewRun?.status === "running") {
+    return "This App Review is still running. Stop it before starting it again.";
+  }
+  const busy = input.threads.find(
+    (thread) => thread.session?.status === "starting" || thread.session?.status === "running",
+  );
+  return busy === undefined
+    ? null
+    : `${input.stageLabel} is still running. Stop it before starting it again.`;
+}
+
+/** The re-run pin and command target for one row of a ticket's stage list. */
+const TICKET_STAGE_RERUN = {
+  Implementation: {
+    stage: "implementation",
+    pinKey: { workflowPromptId: TICKET_WAVE_PROMPT_ID },
+  },
+  "App Review": {
+    stage: "app-review",
+    pinKey: {
+      workflowPromptId: "implementation.browser-app-review.codex",
+      stepWorkflowPromptId: TICKET_WAVE_PROMPT_ID,
+    },
+  },
+  "Code Review": {
+    stage: "code-review",
+    pinKey: {
+      workflowPromptId: "implementation.code-review.codex",
+      stepWorkflowPromptId: TICKET_WAVE_PROMPT_ID,
+    },
+  },
+} as const satisfies Record<
+  string,
+  { readonly stage: RerunTicketStage; readonly pinKey: WorkflowModelPinKey }
+>;
+
 function TicketPhases(props: {
   readonly tickets: readonly OrchestrationPlanningTicket[];
   readonly run: OrchestrationImplementationRun;
+  readonly environmentId: EnvironmentId;
+  readonly rootModelSelection: ModelSelection;
+  readonly pinFor: (key: WorkflowModelPinKey) => ModelSelection | null;
+  readonly onSetStepModel: SetWorkflowStepModel | undefined;
+  readonly onRerunTicketStage:
+    | ((input: { readonly ticketId: string; readonly stage: RerunTicketStage }) => void)
+    | undefined;
+  readonly onRerunAppReviewPhase:
+    | ((input: { readonly appReviewRunId: string; readonly phase: AppReviewWorkflowPhase }) => void)
+    | undefined;
   readonly threads: readonly EnvironmentThreadShell[];
   readonly appReviewWorkflowRuns: readonly AppReviewWorkflowRun[];
   readonly onOpenThread: (thread: EnvironmentThreadShell) => void;
@@ -916,10 +1149,56 @@ function TicketPhases(props: {
                                 Results <Eye className="size-3" aria-hidden />
                               </button>
                             ) : null}
+                            <WorkflowTicketStageRerunMenu
+                              environmentId={props.environmentId}
+                              ticketLabel={ticket.key ?? `Ticket ${ticket.ordinal + 1}`}
+                              stageLabel={stage.label}
+                              pinKey={TICKET_STAGE_RERUN[stage.label].pinKey}
+                              pinnedSelection={props.pinFor(TICKET_STAGE_RERUN[stage.label].pinKey)}
+                              inheritedSelection={props.rootModelSelection}
+                              inheritedLabel="Follows the workflow's model."
+                              disabledReason={ticketStageRerunDisabledReason({
+                                stageLabel: stage.label,
+                                threads: stage.threads,
+                                appReviewRun,
+                              })}
+                              onSetStepModel={props.onSetStepModel}
+                              onRerun={
+                                props.onRerunTicketStage === undefined
+                                  ? undefined
+                                  : () =>
+                                      props.onRerunTicketStage?.({
+                                        ticketId: ticket.id,
+                                        stage: TICKET_STAGE_RERUN[stage.label].stage,
+                                      })
+                              }
+                            />
                           </div>
                           {stage.label === "App Review" && appReviewRun ? (
                             <TicketAppReviewCycles
                               run={appReviewRun}
+                              callerBusyReason={
+                                [...implementationThreads, ...codeReviewThreads].some(
+                                  (thread) =>
+                                    thread.session?.status === "starting" ||
+                                    thread.session?.status === "running",
+                                )
+                                  ? "This ticket has an agent working in the same worktree. Stop it before starting a phase again."
+                                  : null
+                              }
+                              environmentId={props.environmentId}
+                              rootModelSelection={props.rootModelSelection}
+                              pinFor={props.pinFor}
+                              onSetStepModel={props.onSetStepModel}
+                              onRerunPhase={
+                                props.onRerunAppReviewPhase === undefined
+                                  ? undefined
+                                  : (phase) =>
+                                      props.onRerunAppReviewPhase?.({
+                                        appReviewRunId: appReviewRun.id,
+                                        phase,
+                                      })
+                              }
                               threads={props.threads}
                               onOpenThread={props.onOpenThread}
                               activeThreadKey={props.activeThreadKey}
@@ -984,6 +1263,15 @@ function WorkflowGroupCard(props: {
   readonly onOpenAppReview: () => void;
   readonly onCopyWorkflowLink: (workflowId: string) => void;
   readonly onRetryImplementationRun?: ((runId: string) => void) | undefined;
+  readonly onRerunImplementationStage?:
+    | ((input: {
+        readonly runId: string;
+        readonly target: OrchestrationImplementationRerunTarget;
+      }) => void)
+    | undefined;
+  readonly onRerunAppReviewPhase?:
+    | ((input: { readonly appReviewRunId: string; readonly phase: AppReviewWorkflowPhase }) => void)
+    | undefined;
   readonly onRestartPlanningStage?: ((stage: RestartablePlanningStage) => void) | undefined;
   readonly onResumeWorkflow?: (() => void) | undefined;
   readonly onSetStepModel?: SetWorkflowStepModel | undefined;
@@ -1242,6 +1530,8 @@ function WorkflowGroupCard(props: {
                               resumeStep === null ? null : workflowStepTitle(resumeStep),
                             onRestartPlanningStage: props.onRestartPlanningStage,
                             onRetryImplementationRun: props.onRetryImplementationRun,
+                            rerunRunStage: rerunRunStageForStep(step),
+                            onRerunImplementationStage: props.onRerunImplementationStage,
                             onResumeWorkflow: props.onResumeWorkflow,
                             implementationRunId: linkedImplementationRun?.id ?? null,
                           });
@@ -1353,6 +1643,20 @@ function WorkflowGroupCard(props: {
                                   <TicketPhases
                                     tickets={ticketWaveTickets}
                                     run={linkedImplementationRun}
+                                    environmentId={props.workflowRoot.environmentId}
+                                    rootModelSelection={props.workflowRoot.modelSelection}
+                                    pinFor={pinFor}
+                                    onSetStepModel={props.onSetStepModel}
+                                    onRerunAppReviewPhase={props.onRerunAppReviewPhase}
+                                    onRerunTicketStage={
+                                      props.onRerunImplementationStage === undefined
+                                        ? undefined
+                                        : ({ ticketId, stage }) =>
+                                            props.onRerunImplementationStage?.({
+                                              runId: linkedImplementationRun.id,
+                                              target: { kind: "ticket", ticketId, stage },
+                                            })
+                                    }
                                     threads={workflowThreads}
                                     appReviewWorkflowRuns={props.appReviewWorkflowRuns}
                                     onOpenThread={props.onOpenThread}
@@ -1366,6 +1670,16 @@ function WorkflowGroupCard(props: {
                                 combinedAppReviewRuns.length > 0 ? (
                                 <AppReviewRunsTimeline
                                   runs={combinedAppReviewRuns}
+                                  callerBusyReason={
+                                    stepRunningThreadIds.length > 0
+                                      ? "This step has an agent working in the same worktree. Stop it before starting a phase again."
+                                      : null
+                                  }
+                                  environmentId={props.workflowRoot.environmentId}
+                                  rootModelSelection={props.workflowRoot.modelSelection}
+                                  pinFor={pinFor}
+                                  onSetStepModel={props.onSetStepModel}
+                                  onRerunAppReviewPhase={props.onRerunAppReviewPhase}
                                   threads={workflowThreads}
                                   onOpenThread={props.onOpenThread}
                                   activeThreadKey={props.activeThreadKey}
@@ -1503,6 +1817,15 @@ export function WorkflowsPanel(props: {
   readonly onOpenAppReview: () => void;
   readonly onCopyWorkflowLink: (workflowId: string) => void;
   readonly onRetryImplementationRun?: ((runId: string) => void) | undefined;
+  readonly onRerunImplementationStage?:
+    | ((input: {
+        readonly runId: string;
+        readonly target: OrchestrationImplementationRerunTarget;
+      }) => void)
+    | undefined;
+  readonly onRerunAppReviewPhase?:
+    | ((input: { readonly appReviewRunId: string; readonly phase: AppReviewWorkflowPhase }) => void)
+    | undefined;
   readonly onRestartPlanningStage?: ((stage: RestartablePlanningStage) => void) | undefined;
   readonly onResumeWorkflow?: (() => void) | undefined;
   readonly onPauseWorkflow?: (() => void) | undefined;
@@ -1693,6 +2016,8 @@ export function WorkflowsPanel(props: {
                 onOpenAppReview={props.onOpenAppReview}
                 onCopyWorkflowLink={props.onCopyWorkflowLink}
                 onRetryImplementationRun={props.onRetryImplementationRun}
+                onRerunImplementationStage={props.onRerunImplementationStage}
+                onRerunAppReviewPhase={props.onRerunAppReviewPhase}
                 onRestartPlanningStage={props.onRestartPlanningStage}
                 onResumeWorkflow={props.onResumeWorkflow}
                 onSetStepModel={props.onSetStepModel}

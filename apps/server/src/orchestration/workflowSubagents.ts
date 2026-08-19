@@ -1,5 +1,7 @@
 import {
+  type AppReviewWorkflowPhase,
   type ModelSelection,
+  type OrchestrationImplementationRerunTarget,
   type OrchestrationThreadWorkflowRole,
   type ProviderInteractionMode,
   type ProviderOptionSelection,
@@ -373,4 +375,72 @@ export function resolveWorkflowStepModelSelection(input: {
     overrideApplied: true,
     fallbackDetail: null,
   };
+}
+
+/**
+ * The step pin a re-run of `target` would write.
+ *
+ * Re-running a stage with a different model sets the same pin the Workflows
+ * panel writes, so the choice survives the re-run and governs every later agent
+ * of that stage. Integration merges branches without an agent, so it has no
+ * pin and returns null.
+ */
+export function rerunTargetStepPin(target: OrchestrationImplementationRerunTarget): {
+  readonly workflowPromptId: string;
+  readonly stepWorkflowPromptId?: string;
+} | null {
+  if (target.kind === "ticket") {
+    // Per-ticket reviews are sub-steps of the wave that starts them.
+    switch (target.stage) {
+      case "implementation":
+        return { workflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex };
+      case "app-review":
+        return {
+          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+          stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+        };
+      case "code-review":
+        return {
+          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+          stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+        };
+    }
+  }
+  switch (target.stage) {
+    case "integration":
+      return null;
+    case "merge-gate":
+      return { workflowPromptId: WORKFLOW_PROMPT_IDS.implementationMergeGateCodex };
+    case "app-review":
+      return { workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex };
+    case "code-review":
+      return { workflowPromptId: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex };
+  }
+}
+
+/**
+ * The step pin one App Review phase reads.
+ *
+ * All three agents run under the App Review step, so they resolve as its
+ * sub-steps and carry it as `stepWorkflowPromptId`. Matches the sub-step ids
+ * the Workflows panel already writes pins against.
+ */
+export function appReviewPhaseStepPin(phase: AppReviewWorkflowPhase): {
+  readonly workflowPromptId: string;
+  readonly stepWorkflowPromptId?: string;
+} {
+  switch (phase) {
+    case "review":
+      return { workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex };
+    case "planning":
+      return {
+        workflowPromptId: "matt-pocock.to-tickets",
+        stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+      };
+    case "fixing":
+      return {
+        workflowPromptId: "matt-pocock.implement",
+        stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+      };
+  }
 }

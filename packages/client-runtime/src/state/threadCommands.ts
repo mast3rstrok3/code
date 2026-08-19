@@ -20,6 +20,8 @@ import {
   type RespondToThreadUserInputInput,
   type RevertThreadCheckpointInput,
   type RetryThreadImplementationChangeRequestInput,
+  type RerunThreadAppReviewPhaseInput,
+  type RerunThreadImplementationStageInput,
   type RetryThreadImplementationRunInput,
   type SetThreadInteractionModeInput,
   type SetThreadComposerModeInput,
@@ -56,6 +58,8 @@ import {
   respondToThreadUserInput,
   revertThreadCheckpoint,
   retryThreadImplementationChangeRequest,
+  rerunThreadAppReviewPhase,
+  rerunThreadImplementationStage,
   retryThreadImplementationRun,
   setThreadInteractionMode,
   setThreadComposerMode,
@@ -95,6 +99,8 @@ export type {
   RespondToThreadApprovalInput,
   RespondToThreadUserInputInput,
   RevertThreadCheckpointInput,
+  RerunThreadAppReviewPhaseInput,
+  RerunThreadImplementationStageInput,
   RetryThreadImplementationChangeRequestInput,
   RetryThreadImplementationRunInput,
   SetThreadInteractionModeInput,
@@ -379,6 +385,45 @@ export function createThreadEnvironmentAtoms<R, E>(
           environmentId: string;
           input: RetryThreadImplementationRunInput;
         }) => JSON.stringify([environmentId, input.threadId, input.runId]),
+      },
+    }),
+    rerunImplementationStage: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:implementation-run:rerun",
+      execute: (input: RerunThreadImplementationStageInput) =>
+        rerunThreadImplementationStage(input),
+      scheduler,
+      concurrency: {
+        mode: "serial" as const,
+        key: ({
+          environmentId,
+          input,
+        }: {
+          environmentId: string;
+          input: RerunThreadImplementationStageInput;
+        }) =>
+          JSON.stringify([
+            environmentId,
+            input.threadId,
+            input.runId,
+            input.target.kind === "ticket"
+              ? [input.target.ticketId, input.target.stage]
+              : input.target.stage,
+          ]),
+      },
+    }),
+    rerunAppReviewPhase: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:app-review-workflow:rerun",
+      execute: (input: RerunThreadAppReviewPhaseInput) => rerunThreadAppReviewPhase(input),
+      scheduler,
+      concurrency: {
+        mode: "serial" as const,
+        key: ({
+          environmentId,
+          input,
+        }: {
+          environmentId: string;
+          input: RerunThreadAppReviewPhaseInput;
+        }) => JSON.stringify([environmentId, input.threadId, input.runId, input.phase]),
       },
     }),
     cancelImplementationRun: createEnvironmentCommand(runtime, {

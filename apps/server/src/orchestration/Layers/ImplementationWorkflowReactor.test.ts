@@ -4707,4 +4707,214 @@ describe("ImplementationWorkflowReactor", () => {
       { serverSettings: { providers: { codex: { enabled: false } } } },
     ),
   );
+  it.effect("re-running a failed ticket reopens the tickets its failure took down", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { tickets, run } = yield* launchRun(system, {
+          tickets: [
+            {
+              key: "TICKET-1",
+              title: "Base",
+              bodyMarkdown: "Base work.",
+              plannedFileChanges: [{ path: "src/base.ts", action: "create" }],
+              dependencyKeys: [],
+            },
+            {
+              key: "TICKET-2",
+              title: "Dependent",
+              bodyMarkdown: "Dependent work.",
+              plannedFileChanges: [{ path: "src/dependent.ts", action: "create" }],
+              dependencyKeys: ["TICKET-1"],
+            },
+          ],
+        });
+        const base = tickets.find((ticket) => ticket.key === "TICKET-1")!;
+        const dependent = tickets.find((ticket) => ticket.key === "TICKET-2")!;
+        yield* appendWorkerResult(system, { run, status: "failed", ticketId: base.id });
+
+        let snapshot = yield* system.query.getSnapshot();
+        let current = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(current?.ticketStates.find((s) => s.ticketId === base.id)?.status).toBe("failed");
+        expect(current?.ticketStates.find((s) => s.ticketId === dependent.id)?.status).toBe(
+          "failed",
+        );
+        const workersBefore = snapshot.threads.filter(
+          (thread) => thread.workflowRole === "implementation-worker",
+        ).length;
+
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.rerun",
+          commandId: commandId("rerun-ticket-implementation"),
+          threadId: sourceThreadId,
+          runId: run.id,
+          target: { kind: "ticket", ticketId: base.id, stage: "implementation" },
+          createdAt: "2026-01-01T00:05:00.000Z",
+        });
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        current = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        const baseState = current?.ticketStates.find((s) => s.ticketId === base.id);
+        expect(baseState?.status).toBe("running");
+        expect(baseState?.workerResult).toBeNull();
+        expect(baseState?.warningMarkdown ?? null).toBeNull();
+        // The dependent carried no work of its own, so it waits again instead
+        // of staying failed forever.
+        expect(current?.ticketStates.find((s) => s.ticketId === dependent.id)?.status).toBe(
+          "blocked",
+        );
+        expect(current?.status).toBe("running");
+        expect(
+          snapshot.threads.filter((thread) => thread.workflowRole === "implementation-worker")
+            .length,
+        ).toBe(workersBefore + 1);
+      }),
+    ),
+  );
+
+  it.effect("re-running the run's code review starts a fresh reviewer thread", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+        yield* passMergeGate(system, run);
+        yield* passAppReview(system, run);
+        const seen = new Set<string>();
+        const firstReviewer = yield* nextThreadForRole(
+          system,
+          "implementation-code-reviewer",
+          seen,
+        );
+        yield* appendCodeReviewResult(system, {
+          run,
+          threadId: firstReviewer.id,
+          status: "clean",
+          tag: "rerun-clean",
+        });
+
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.rerun",
+          commandId: commandId("rerun-run-code-review"),
+          threadId: sourceThreadId,
+          runId: run.id,
+          target: { kind: "run", stage: "code-review" },
+          createdAt: "2026-01-01T00:05:00.000Z",
+        });
+        yield* system.reactor.drain;
+
+        const snapshot = yield* system.query.getSnapshot();
+        const current = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(current?.status).toBe("code-reviewing");
+        expect(current?.activeCodeReviewThreadId).not.toBe(firstReviewer.id);
+        expect(
+          snapshot.threads.filter(
+            (thread) => thread.workflowRole === "implementation-code-reviewer",
+          ).length,
+        ).toBe(2);
+      }),
+    ),
+  );
+
+  it.effect("a re-run with a model pins that step and starts it on the pinned model", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system, { modelSelection: claudeParentSelection });
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+        yield* passMergeGate(system, run);
+        yield* passAppReview(system, run);
+        const seen = new Set<string>();
+        const firstReviewer = yield* nextThreadForRole(
+          system,
+          "implementation-code-reviewer",
+          seen,
+        );
+        yield* appendCodeReviewResult(system, {
+          run,
+          threadId: firstReviewer.id,
+          status: "clean",
+          tag: "rerun-model-clean",
+        });
+        const pinned: ModelSelection = {
+          instanceId: ProviderInstanceId.make("claudeAgent"),
+          model: "claude-sonnet-5",
+        };
+
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.rerun",
+          commandId: commandId("rerun-with-model"),
+          threadId: sourceThreadId,
+          runId: run.id,
+          target: { kind: "run", stage: "code-review" },
+          modelSelection: pinned,
+          createdAt: "2026-01-01T00:05:00.000Z",
+        });
+        yield* system.reactor.drain;
+
+        const secondReviewer = yield* nextThreadForRole(
+          system,
+          "implementation-code-reviewer",
+          seen,
+        );
+        expect(secondReviewer.modelSelection).toEqual(pinned);
+        // The pin is durable, so every later agent of that step follows it too.
+        const snapshot = yield* system.query.getSnapshot();
+        const root = snapshot.threads.find((thread) => thread.id === sourceThreadId);
+        expect(root?.workflowStepModels).toContainEqual(
+          expect.objectContaining({ modelSelection: pinned }),
+        );
+      }),
+    ),
+  );
+  it.effect("refuses a re-run while the stage it targets is still running", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+        yield* passMergeGate(system, run);
+        yield* passAppReview(system, run);
+        const reviewer = yield* nextThreadForRole(
+          system,
+          "implementation-code-reviewer",
+          new Set<string>(),
+        );
+        yield* system.engine.dispatch({
+          type: "thread.session.set",
+          commandId: commandId("rerun-guard-reviewer-running"),
+          threadId: reviewer.id,
+          session: {
+            threadId: reviewer.id,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: "2026-01-01T00:04:00.000Z",
+          },
+          createdAt: "2026-01-01T00:04:00.000Z",
+        });
+        yield* system.reactor.drain;
+
+        // Starting a second reviewer on the same branch is how one worktree
+        // ends up with two writers, so the command is refused outright.
+        const error = yield* system.engine
+          .dispatch({
+            type: "thread.implementation-run.rerun",
+            commandId: commandId("rerun-while-live"),
+            threadId: sourceThreadId,
+            runId: run.id,
+            target: { kind: "run", stage: "code-review" },
+            createdAt: "2026-01-01T00:05:00.000Z",
+          })
+          .pipe(Effect.flip);
+        expect(String(error)).toContain(reviewer.id);
+
+        const snapshot = yield* system.query.getSnapshot();
+        expect(
+          snapshot.threads.filter(
+            (thread) => thread.workflowRole === "implementation-code-reviewer",
+          ).length,
+        ).toBe(1);
+      }),
+    ),
+  );
 });

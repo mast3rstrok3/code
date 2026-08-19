@@ -13,6 +13,7 @@ import {
   AppReviewId,
   AppReviewRecord,
   AppReviewWorkflowCaller,
+  AppReviewWorkflowPhase,
   AppReviewWorkflowCycleBudget,
   AppReviewWorkflowRun,
   AppReviewWorkflowRunId,
@@ -937,6 +938,46 @@ export const OrchestrationImplementationTicketState = Schema.Struct({
 });
 export type OrchestrationImplementationTicketState =
   typeof OrchestrationImplementationTicketState.Type;
+
+/** The stages of one ticket a user can start again from the Workflows panel. */
+export const OrchestrationImplementationRerunTicketStage = Schema.Literals([
+  "implementation",
+  "app-review",
+  "code-review",
+]);
+export type OrchestrationImplementationRerunTicketStage =
+  typeof OrchestrationImplementationRerunTicketStage.Type;
+
+/** The run-wide stages a user can start again once the run has reached them. */
+export const OrchestrationImplementationRerunRunStage = Schema.Literals([
+  "integration",
+  "merge-gate",
+  "app-review",
+  "code-review",
+]);
+export type OrchestrationImplementationRerunRunStage =
+  typeof OrchestrationImplementationRerunRunStage.Type;
+
+/**
+ * What a re-run starts again.
+ *
+ * A ticket target rewinds one ticket to the named stage and leaves its siblings
+ * alone; a run target re-enters a stage the whole run shares. Either way the
+ * stage runs in a fresh thread, so the previous attempt stays readable.
+ */
+export const OrchestrationImplementationRerunTarget = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("ticket"),
+    ticketId: OrchestrationPlanningTicketId,
+    stage: OrchestrationImplementationRerunTicketStage,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("run"),
+    stage: OrchestrationImplementationRerunRunStage,
+  }),
+]);
+export type OrchestrationImplementationRerunTarget =
+  typeof OrchestrationImplementationRerunTarget.Type;
 
 export const OrchestrationImplementationRun = Schema.Struct({
   id: OrchestrationImplementationRunId,
@@ -2039,6 +2080,21 @@ const ThreadImplementationRunRetryCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadImplementationRunRerunCommand = Schema.Struct({
+  type: Schema.Literal("thread.implementation-run.rerun"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  runId: OrchestrationImplementationRunId,
+  target: OrchestrationImplementationRerunTarget,
+  /**
+   * Pin the model for the stage before it starts again. The pin is the same one
+   * the Workflows panel writes, so it also governs every later agent that stage
+   * starts. Omit it to keep whatever the stage resolves to today.
+   */
+  modelSelection: Schema.optionalKey(ModelSelection),
+  createdAt: IsoDateTime,
+});
+
 const ThreadImplementationRunCancelCommand = Schema.Struct({
   type: Schema.Literal("thread.implementation-run.cancel"),
   commandId: CommandId,
@@ -2140,6 +2196,21 @@ const ThreadAppReviewWorkflowResumeCommand = Schema.Struct({
   runId: AppReviewWorkflowRunId,
   previewTargets: Schema.Array(TrimmedNonEmptyString).check(Schema.isMinLength(1)),
   workspaceRevision: AppReviewWorkflowWorkspaceRevision,
+  createdAt: IsoDateTime,
+});
+
+const ThreadAppReviewWorkflowRerunCommand = Schema.Struct({
+  type: Schema.Literal("thread.app-review-workflow.rerun"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  runId: AppReviewWorkflowRunId,
+  /**
+   * Which phase of the run's current cycle starts again. The phases after it
+   * are discarded; earlier phases keep what they produced.
+   */
+  phase: AppReviewWorkflowPhase,
+  /** Pins the phase's model before it starts again, same as the Models list. */
+  modelSelection: Schema.optionalKey(ModelSelection),
   createdAt: IsoDateTime,
 });
 
@@ -2340,11 +2411,13 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadImplementationRunLaunchCommand,
   ThreadFastFeatureRunLaunchCommand,
   ThreadImplementationRunRetryCommand,
+  ThreadImplementationRunRerunCommand,
   ThreadImplementationRunCancelCommand,
   ThreadImplementationChangeRequestRetryCommand,
   ThreadAppReviewWorkflowLaunchCommand,
   ThreadAppReviewWorkflowCancelCommand,
   ThreadAppReviewWorkflowResumeCommand,
+  ThreadAppReviewWorkflowRerunCommand,
   ThreadAppReviewLaunchCommand,
   ThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
@@ -2386,11 +2459,13 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadImplementationRunLaunchCommand,
   ThreadFastFeatureRunLaunchCommand,
   ThreadImplementationRunRetryCommand,
+  ThreadImplementationRunRerunCommand,
   ThreadImplementationRunCancelCommand,
   ThreadImplementationChangeRequestRetryCommand,
   ThreadAppReviewWorkflowLaunchCommand,
   ThreadAppReviewWorkflowCancelCommand,
   ThreadAppReviewWorkflowResumeCommand,
+  ThreadAppReviewWorkflowRerunCommand,
   ThreadAppReviewLaunchCommand,
   ClientThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
@@ -2565,12 +2640,14 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.implementation-run-launched",
   "thread.implementation-run-updated",
   "thread.implementation-run-retry-requested",
+  "thread.implementation-run-rerun-requested",
   "thread.implementation-run-cancel-requested",
   "thread.implementation-change-request-retry-requested",
   "thread.app-review-workflow-launched",
   "thread.app-review-workflow-updated",
   "thread.app-review-workflow-cancel-requested",
   "thread.app-review-workflow-resume-requested",
+  "thread.app-review-workflow-rerun-requested",
   "thread.message-sent",
   "thread.turn-start-requested",
   "thread.turn-interrupt-requested",
@@ -2845,6 +2922,11 @@ export const ThreadImplementationRunRetryRequestedPayload = Schema.Struct({
   run: OrchestrationImplementationRun,
 });
 
+export const ThreadImplementationRunRerunRequestedPayload = Schema.Struct({
+  run: OrchestrationImplementationRun,
+  target: OrchestrationImplementationRerunTarget,
+});
+
 export const ThreadImplementationRunCancelRequestedPayload = Schema.Struct({
   sourceThreadId: ThreadId,
   run: OrchestrationImplementationRun,
@@ -2870,6 +2952,13 @@ export const ThreadAppReviewWorkflowCancelRequestedPayload = Schema.Struct({
 export const ThreadAppReviewWorkflowResumeRequestedPayload = Schema.Struct({
   sourceThreadId: ThreadId,
   run: AppReviewWorkflowRun,
+});
+
+export const ThreadAppReviewWorkflowRerunRequestedPayload = Schema.Struct({
+  sourceThreadId: ThreadId,
+  run: AppReviewWorkflowRun,
+  /** The phase of the run's current cycle that starts again. */
+  phase: AppReviewWorkflowPhase,
 });
 
 export const ThreadMessageSentPayload = Schema.Struct({
@@ -3171,6 +3260,11 @@ export const OrchestrationEvent = Schema.Union([
   }),
   Schema.Struct({
     ...EventBaseFields,
+    type: Schema.Literal("thread.implementation-run-rerun-requested"),
+    payload: ThreadImplementationRunRerunRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
     type: Schema.Literal("thread.implementation-run-cancel-requested"),
     payload: ThreadImplementationRunCancelRequestedPayload,
   }),
@@ -3198,6 +3292,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.app-review-workflow-resume-requested"),
     payload: ThreadAppReviewWorkflowResumeRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.app-review-workflow-rerun-requested"),
+    payload: ThreadAppReviewWorkflowRerunRequestedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

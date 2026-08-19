@@ -79,6 +79,18 @@ A step is a phase of the run, not a single agent. "Execute ticket waves" starts 
 
 A pin set inside the panel belongs to that workflow run, applies to the next agent the step starts, and takes precedence over the Settings default. No step carries a model of its own: an unpinned step, including the browser review, runs whatever the workflow was started with. Settings defaults are keyed by the step's agent rather than by workflow, so setting the browser review once covers every workflow that runs one. Agents already running keep the model they launched with, so stop and start the step again to move work that is in flight. Pinning a step moves every agent it starts, including its per-ticket reviews; the final App Review and Code Review steps keep their own pins, so a ticket review and the final review of the same kind can differ. Steps that run in the workflow's main thread say so: a pin there covers the agents that step starts, while the main thread itself follows its own composer. If the pinned provider is later disabled, the step falls back to the workflow's model and records why in the workflow thread.
 
+## Starting a step again
+
+Work that failed does not have to sink the run. In the Workflows panel, a step's settings button offers **Start step again** for the merge gate, App Review, and Code Review, and each ticket in a wave carries its own **Re-run** for Implementation, App Review, and Code Review. Both start a fresh thread, so the attempt that failed stays readable next to the new one.
+
+Re-running a ticket's implementation also reopens the tickets that failed only because that one did. Those carried no work of their own, so they go back to waiting and run in dependency order once the re-run lands. Tickets that already succeeded are left alone, which is why a wave has no single re-run of its own.
+
+An App Review cycle is three phases: the browser review, the gap analysis that writes the repair tickets, and the repair itself. Each phase row in the newest cycle carries its own **Re-run**. Redoing the gap analysis drops the repair it planned, since that repair no longer stands once its analysis is being redone. Redoing the browser review runs a new cycle instead: the cycle that disappointed you keeps its findings and its verdict, and the retry spends one of the ten. Earlier cycles are history and cannot be started again.
+
+Starting a phase again accepts the worktree as it stands, including anything the repair you are redoing already committed. It is refused while the review itself is running, and while the ticket or step that owns the worktree has an agent of its own in it.
+
+The **Re-run** popover carries the same model pin as the Models list, so choosing a model there both moves this attempt and sticks for later agents of that step. A stage that is still running cannot start again: stop it first. Two agents on one branch is the situation the guard exists to prevent.
+
 Every workflow run has a durable workflow ID. Children that belong to the run inherit that ID; a nested App Review receives its own ID and records the parent workflow ID. Use **Copy workflow link** in the Workflows panel to copy a URL that opens the top-level conversation, opens the workflow panel, and focuses that exact run.
 
 ## Stopping a workflow

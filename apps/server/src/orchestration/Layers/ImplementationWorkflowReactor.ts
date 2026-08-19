@@ -9,6 +9,8 @@ import {
   MessageId,
   ThreadId,
   type OrchestrationEvent,
+  type OrchestrationImplementationRerunRunStage,
+  type OrchestrationImplementationRerunTicketStage,
   type OrchestrationImplementationRun,
   type OrchestrationImplementationValidationResult,
   type OrchestrationImplementationWorkerResult,
@@ -66,6 +68,7 @@ type ImplementationWorkflowEvent = Extract<
       | "thread.app-review-updated"
       | "thread.implementation-change-request-retry-requested"
       | "thread.implementation-run-retry-requested"
+      | "thread.implementation-run-rerun-requested"
       | "thread.implementation-run-cancel-requested"
       | "thread.app-review-workflow-launched"
       | "thread.app-review-workflow-updated"
@@ -278,6 +281,134 @@ function markDependentsReady(
     ),
     updatedAt,
   };
+}
+
+/**
+ * Rewind one ticket to the start of `stage`, and reopen everything that failed
+ * only because this ticket did.
+ *
+ * Cascade failures carry no work of their own: they were marked failed the
+ * moment a dependency went terminal. Sending them back to `blocked` lets
+ * `markDependentsReady` promote them in dependency order once the re-run lands,
+ * instead of leaving a graph that can never finish.
+ */
+function reopenTicketForRerun(input: {
+  readonly run: OrchestrationImplementationRun;
+  readonly ticketId: string;
+  readonly stage: OrchestrationImplementationRerunTicketStage;
+  readonly updatedAt: string;
+}): OrchestrationImplementationRun {
+  const reopenedIds = new Set([input.ticketId]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const state of input.run.ticketStates) {
+      if (reopenedIds.has(state.ticketId) || state.status !== "failed") continue;
+      if (!state.dependencyTicketIds.some((ticketId) => reopenedIds.has(ticketId))) continue;
+      reopenedIds.add(state.ticketId);
+      changed = true;
+    }
+  }
+  const ticketStates = input.run.ticketStates.map((state) => {
+    if (state.ticketId !== input.ticketId) {
+      return reopenedIds.has(state.ticketId)
+        ? {
+            ...state,
+            status: "blocked" as const,
+            warningMarkdown: null,
+            updatedAt: input.updatedAt,
+          }
+        : state;
+    }
+    const cleared = {
+      ...state,
+      codeReviewThreadId: null,
+      codeReviewOutcome: null,
+      warningMarkdown: null,
+      updatedAt: input.updatedAt,
+    };
+    if (input.stage === "code-review") return { ...cleared, status: "code-reviewing" as const };
+    const withoutAppReview = { ...cleared, appReviewWorkflowRunId: null, appReviewOutcome: null };
+    if (input.stage === "app-review") {
+      return { ...withoutAppReview, status: "app-reviewing" as const };
+    }
+    // The worker starts over, so its reported result stops standing for this
+    // ticket. The worktree and branch survive; the ticket keeps working there.
+    return {
+      ...withoutAppReview,
+      status: "ready" as const,
+      workerThreadId: null,
+      workerResult: null,
+      attemptCount: state.attemptCount + 1,
+    };
+  });
+  return {
+    ...input.run,
+    status: "running",
+    ticketStates,
+    workerResults:
+      input.stage === "implementation"
+        ? input.run.workerResults.filter((result) => result.ticketId !== input.ticketId)
+        : input.run.workerResults,
+    // The combined change gets rebuilt from whatever the re-run produces, so a
+    // sha from the previous integration must not reach the next merge gate.
+    integrationHeadSha: null,
+    retryableFailure: null,
+    updatedAt: input.updatedAt,
+  };
+}
+
+/**
+ * Clear the run-wide state one stage owns so it can start again.
+ *
+ * Each stage refuses to start while it still points at a thread, which is what
+ * keeps a sweep from spawning a second one. A re-run has to drop those pointers
+ * itself; the previous threads stay in history, just no longer current.
+ */
+function clearRunStageForRerun(input: {
+  readonly run: OrchestrationImplementationRun;
+  readonly stage: OrchestrationImplementationRerunRunStage;
+  readonly updatedAt: string;
+}): OrchestrationImplementationRun {
+  const base = {
+    ...input.run,
+    reviewGateExhaustedAt: null,
+    reviewGateExhaustionReason: null,
+    retryableFailure: null,
+    updatedAt: input.updatedAt,
+  };
+  switch (input.stage) {
+    case "integration":
+      return { ...base, status: "integrating" as const, integrationHeadSha: null };
+    case "merge-gate":
+      return {
+        ...base,
+        status: "validating" as const,
+        activeValidatorThreadId: null,
+        activeValidationHeadSha: null,
+        activeValidationKind: null,
+        validatedHeadSha: null,
+        finalValidation: null,
+      };
+    case "app-review":
+      return {
+        ...base,
+        status: "qa-reviewing" as const,
+        activeAppReviewThreadId: null,
+        activeAppReviewHeadSha: null,
+        appReviewedHeadSha: null,
+        appReviewExhaustedAt: null,
+        latestAppReviewWorkflowOutcome: null,
+      };
+    case "code-review":
+      return {
+        ...base,
+        status: "code-reviewing" as const,
+        activeCodeReviewThreadId: null,
+        activeCodeReviewHeadSha: null,
+        codeReviewedHeadSha: null,
+      };
+  }
 }
 
 export function implementationTicketStateIsTerminal(status: string): boolean {
@@ -5077,6 +5208,106 @@ const make = Effect.gen(function* () {
     );
   });
 
+  /**
+   * Start one stage of a run again, in a fresh thread.
+   *
+   * A ticket target rewinds that ticket to the named stage and reopens every
+   * ticket the failure took down with it, so a single bad review does not
+   * strand the rest of the graph. A run target re-enters a stage the whole run
+   * shares. The previous threads are left intact and still linked to the
+   * ticket, so the earlier attempt stays readable next to the new one.
+   */
+  const handleRunRerun = Effect.fn("ImplementationWorkflowReactor.handleRunRerun")(function* (
+    event: Extract<
+      ImplementationWorkflowEvent,
+      { type: "thread.implementation-run-rerun-requested" }
+    >,
+  ) {
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    const run = findRunById(readModel, event.payload.run.id) ?? event.payload.run;
+    const sourceThreadId = findRunSourceThreadId({ readModel, run });
+    if (sourceThreadId === null) return;
+    const target = event.payload.target;
+    const createdAt = event.occurredAt;
+
+    yield* appendActivity({
+      threadId: run.orchestratorThreadId,
+      tone: "info",
+      kind: "implementation-rerun-requested",
+      summary:
+        target.kind === "ticket"
+          ? `Starting ${target.stage} again for ticket ${target.ticketId}`
+          : `Starting ${target.stage} again`,
+      payload: { runId: run.id, target },
+      createdAt,
+    });
+
+    if (target.kind === "run") {
+      const rerunRun = clearRunStageForRerun({ run, stage: target.stage, updatedAt: createdAt });
+      yield* updateRun({ sourceThreadId, run: rerunRun, createdAt });
+      switch (target.stage) {
+        case "integration":
+          yield* integrateCompletedRun({ sourceThreadId, run: rerunRun, createdAt });
+          return;
+        case "merge-gate":
+          // A merge-gate re-run validates the branch as it stands; it merges
+          // nothing, so the prompt describes an integration that moved nothing.
+          yield* startMergeGate({
+            sourceThreadId,
+            run: rerunRun,
+            integration: {
+              baseTicketId: null,
+              baseRefName: rerunRun.orchestratorBranch,
+              mergedTicketIds: [],
+              conflictedTicketId: null,
+              conflictedRefName: null,
+              conflictedFiles: [],
+              remainingTicketIds: [],
+              remainingRefNames: [],
+            },
+            kind: "integration",
+            createdAt,
+          });
+          return;
+        case "app-review":
+          yield* startBrowserReview({ sourceThreadId, run: rerunRun, createdAt });
+          return;
+        case "code-review":
+          yield* startCodeReview({ sourceThreadId, run: rerunRun, createdAt });
+          return;
+      }
+    }
+
+    const rerunRun = reopenTicketForRerun({
+      run,
+      ticketId: target.ticketId,
+      stage: target.stage,
+      updatedAt: createdAt,
+    });
+    yield* updateRun({ sourceThreadId, run: rerunRun, createdAt });
+    switch (target.stage) {
+      case "implementation":
+        yield* startReadyWorkers({ sourceThreadId, run: rerunRun, createdAt });
+        return;
+      case "app-review":
+        yield* startTicketAppReview({
+          sourceThreadId,
+          run: rerunRun,
+          ticketId: target.ticketId,
+          createdAt,
+        });
+        return;
+      case "code-review":
+        yield* startTicketCodeReview({
+          sourceThreadId,
+          run: rerunRun,
+          ticketId: target.ticketId,
+          createdAt,
+        });
+        return;
+    }
+  });
+
   const handleRunCancel = Effect.fn("ImplementationWorkflowReactor.handleRunCancel")(function* (
     event: Extract<
       ImplementationWorkflowEvent,
@@ -5531,6 +5762,9 @@ const make = Effect.gen(function* () {
         return;
       case "thread.implementation-run-retry-requested":
         yield* handleRunRetry(event);
+        return;
+      case "thread.implementation-run-rerun-requested":
+        yield* handleRunRerun(event);
         return;
       case "thread.implementation-run-cancel-requested":
         yield* handleRunCancel(event);
@@ -6256,6 +6490,7 @@ const make = Effect.gen(function* () {
           event.type !== "thread.app-review-updated" &&
           event.type !== "thread.implementation-change-request-retry-requested" &&
           event.type !== "thread.implementation-run-retry-requested" &&
+          event.type !== "thread.implementation-run-rerun-requested" &&
           event.type !== "thread.implementation-run-cancel-requested" &&
           event.type !== "thread.app-review-workflow-launched" &&
           event.type !== "thread.app-review-workflow-updated" &&

@@ -6,6 +6,7 @@ import {
   hasScreenshotBackedAppReviewFailure,
   type AppReviewRecord,
   type AppReviewWorkflowCycle,
+  type AppReviewWorkflowPhase,
   type AppReviewWorkflowFailureReason,
   type AppReviewWorkflowFixResult,
   type AppReviewWorkflowRepairTicket,
@@ -55,6 +56,7 @@ type AppReviewWorkflowEvent = Extract<
     type:
       | "thread.app-review-workflow-launched"
       | "thread.app-review-workflow-resume-requested"
+      | "thread.app-review-workflow-rerun-requested"
       | "thread.app-review-workflow-cancel-requested"
       | "thread.app-review-updated"
       | "thread.proposed-plan-upserted"
@@ -1384,12 +1386,120 @@ const make = Effect.gen(function* () {
     }
   });
 
+  /**
+   * Start one phase of the run again, in a fresh thread.
+   *
+   * Redoing the browser review runs a new cycle: the cycle that disappointed
+   * you keeps its findings and its verdict, so nothing is destroyed to make
+   * room for the retry. Redoing gap analysis or the repair works on the current
+   * cycle and drops what the phases after it produced, since a repair no longer
+   * stands once the analysis that planned it is being redone.
+   *
+   * The worktree is re-baselined first. Every phase entry point refuses to run
+   * against a workspace that moved since the phase last recorded one, and the
+   * repair you are redoing has usually already committed. Asking for the redo
+   * is what accepts the worktree as it stands now.
+   */
+  const rerunPhase = Effect.fn("AppReviewWorkflowReactor.rerunPhase")(function* (
+    inputRun: AppReviewWorkflowRun,
+    phase: AppReviewWorkflowPhase,
+    occurredAt: string,
+  ) {
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    const run =
+      (readModel.appReviewWorkflowRuns ?? []).find((candidate) => candidate.id === inputRun.id) ??
+      inputRun;
+    const cycle = run.cycles.at(-1);
+    if (cycle === undefined) return;
+    const target = yield* resolveTarget(run.targetThreadId);
+    if (target === null) return;
+    const workspaceRevision = yield* computeWorkspaceRevision(target.cwd);
+    // A finished run reopens: the phase that ran is exactly what the user is
+    // saying was wrong, so its verdict cannot stand.
+    const reopened = {
+      ...run,
+      status: "running" as const,
+      outcome: null,
+      failure: null,
+      finalHeadSha: null,
+      activePhase: null,
+      activeThreadId: null,
+      completedAt: null,
+      workspaceRevision,
+      updatedAt: occurredAt,
+    };
+
+    if (phase === "review") {
+      yield* updateRun(reopened);
+      yield* startReview(reopened, occurredAt);
+      return;
+    }
+
+    if (phase === "planning") {
+      const controller = yield* resolveThread(run.controllerThreadId);
+      const review = controller === undefined ? null : reviewRecordForCycle(controller, cycle);
+      if (review === null || cycle.actionableFindingsMarkdown === null) return;
+      const planningRun: AppReviewWorkflowRun = {
+        ...reopened,
+        cycles: run.cycles.map((entry) =>
+          entry.cycleNumber === cycle.cycleNumber
+            ? {
+                ...entry,
+                status: "planning" as const,
+                planId: null,
+                ticketingTurnId: null,
+                repairTickets: [],
+                fixerThreadId: null,
+                fixResult: null,
+                workspaceRevision,
+                completedAt: null,
+              }
+            : entry,
+        ),
+      };
+      yield* updateRun(planningRun);
+      yield* startPlanning({
+        run: planningRun,
+        review,
+        actionableFindingsMarkdown: cycle.actionableFindingsMarkdown,
+        occurredAt,
+      });
+      return;
+    }
+
+    const repairTickets = cycle.repairTickets ?? [];
+    if (repairTickets.length === 0) return;
+    const fixingRun: AppReviewWorkflowRun = {
+      ...reopened,
+      cycles: run.cycles.map((entry) =>
+        entry.cycleNumber === cycle.cycleNumber
+          ? {
+              ...entry,
+              status: "fixing" as const,
+              fixerThreadId: null,
+              fixResult: null,
+              workspaceRevision,
+              completedAt: null,
+            }
+          : entry,
+      ),
+    };
+    yield* updateRun(fixingRun);
+    yield* startFixer({
+      run: fixingRun,
+      repairTickets,
+      plannerTurnId: cycle.plannerTurnId,
+      occurredAt,
+    });
+  });
+
   const runForEvent = Effect.fn("AppReviewWorkflowReactor.runForEvent")(function* (
     event: AppReviewWorkflowEvent,
   ) {
     if (
       event.type === "thread.app-review-workflow-launched" ||
-      event.type === "thread.app-review-workflow-resume-requested"
+      event.type === "thread.app-review-workflow-resume-requested" ||
+      event.type === "thread.app-review-workflow-rerun-requested"
     ) {
       return event.payload.run;
     }
@@ -1441,6 +1551,10 @@ const make = Effect.gen(function* () {
     }
     if (event.type === "thread.app-review-workflow-resume-requested") {
       yield* startReview(event.payload.run, event.occurredAt);
+      return;
+    }
+    if (event.type === "thread.app-review-workflow-rerun-requested") {
+      yield* rerunPhase(event.payload.run, event.payload.phase, event.occurredAt);
       return;
     }
     if (event.type === "thread.activity-appended") {
@@ -1549,6 +1663,7 @@ const make = Effect.gen(function* () {
         if (
           event.type !== "thread.app-review-workflow-launched" &&
           event.type !== "thread.app-review-workflow-resume-requested" &&
+          event.type !== "thread.app-review-workflow-rerun-requested" &&
           event.type !== "thread.app-review-workflow-cancel-requested" &&
           event.type !== "thread.app-review-updated" &&
           event.type !== "thread.proposed-plan-upserted" &&

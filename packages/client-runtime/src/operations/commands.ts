@@ -53,6 +53,7 @@ export type StartThreadTurnInput = CommandInput<"thread.turn.start">;
 export type LaunchThreadAppReviewInput = CommandInput<"thread.app-review.launch">;
 export type LaunchThreadAppReviewWorkflowInput = CommandInput<"thread.app-review-workflow.launch">;
 export type CancelThreadAppReviewWorkflowInput = CommandInput<"thread.app-review-workflow.cancel">;
+export type RerunThreadAppReviewPhaseInput = CommandInput<"thread.app-review-workflow.rerun">;
 export type CreateThreadPlanningSpecInput = CommandInput<"thread.planning-spec.create">;
 export type StartThreadPlanningStageInput = CommandInput<"thread.planning-stage.start">;
 export type LaunchThreadPlanningWorkflowInput = CommandInput<"thread.planning-workflow.launch">;
@@ -64,6 +65,7 @@ export type LaunchThreadFastFeatureRunInput = CommandInput<"thread.fast-feature-
 export type RetryThreadImplementationChangeRequestInput =
   CommandInput<"thread.implementation-change-request.retry">;
 export type RetryThreadImplementationRunInput = CommandInput<"thread.implementation-run.retry">;
+export type RerunThreadImplementationStageInput = CommandInput<"thread.implementation-run.rerun">;
 export type CancelThreadImplementationRunInput = CommandInput<"thread.implementation-run.cancel">;
 export type InterruptThreadTurnInput = CommandInput<"thread.turn.interrupt">;
 export type RespondToThreadApprovalInput = CommandInput<"thread.approval.respond">;
@@ -495,6 +497,31 @@ export const retryThreadImplementationRun: (
     });
   },
 );
+
+export const rerunThreadImplementationStage: (
+  input: RerunThreadImplementationStageInput,
+) => CommandEffect = Effect.fn("EnvironmentCommands.rerunThreadImplementationStage")(
+  function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "thread.implementation-run.rerun",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  },
+);
+
+export const rerunThreadAppReviewPhase: (input: RerunThreadAppReviewPhaseInput) => CommandEffect =
+  Effect.fn("EnvironmentCommands.rerunThreadAppReviewPhase")(function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "thread.app-review-workflow.rerun",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  });
 
 export const cancelThreadImplementationRun: (
   input: CancelThreadImplementationRunInput,

@@ -340,6 +340,18 @@ export function useRetryImplementationRunCommand() {
   });
 }
 
+export function useRerunImplementationStageCommand() {
+  return useAtomCommand(threadEnvironment.rerunImplementationStage, {
+    label: "implementation stage re-run",
+  });
+}
+
+export function useRerunAppReviewPhaseCommand() {
+  return useAtomCommand(threadEnvironment.rerunAppReviewPhase, {
+    label: "app review phase re-run",
+  });
+}
+
 export function useCancelImplementationRunCommand() {
   return useAtomCommand(threadEnvironment.cancelImplementationRun, {
     label: "implementation run cancel",

@@ -15,6 +15,9 @@ import {
   ProviderInstanceId,
   type ServerProvider,
   type ResolvedKeybindingsConfig,
+  type AppReviewWorkflowPhase,
+  AppReviewWorkflowRunId,
+  type OrchestrationImplementationRerunTarget,
   type ScopedThreadRef,
   type ThreadId,
   type TurnId,
@@ -268,6 +271,8 @@ import {
   useProject,
   useProjects,
   useCancelImplementationRunCommand,
+  useRerunAppReviewPhaseCommand,
+  useRerunImplementationStageCommand,
   useRetryImplementationRunCommand,
   resolveThreadDetailRef,
   useThread,
@@ -1269,6 +1274,8 @@ function ChatViewContent(props: ChatViewProps) {
     reportFailure: false,
   });
   const retryImplementationRun = useRetryImplementationRunCommand();
+  const rerunImplementationStage = useRerunImplementationStageCommand();
+  const rerunAppReviewPhase = useRerunAppReviewPhaseCommand();
   const restartPlanningStage = useAtomCommand(threadEnvironment.startPlanningStage, {
     label: "planning stage restart",
   });
@@ -3041,6 +3048,37 @@ function ChatViewContent(props: ChatViewProps) {
       });
     },
     [activeThread, retryImplementationRun],
+  );
+  const handleRerunImplementationStage = useCallback(
+    (input: {
+      readonly runId: string;
+      readonly target: OrchestrationImplementationRerunTarget;
+    }) => {
+      if (!activeThread) return;
+      void rerunImplementationStage({
+        environmentId: activeThread.environmentId,
+        input: {
+          threadId: activeThread.id,
+          runId: input.runId,
+          target: input.target,
+        },
+      });
+    },
+    [activeThread, rerunImplementationStage],
+  );
+  const handleRerunAppReviewPhase = useCallback(
+    (input: { readonly appReviewRunId: string; readonly phase: AppReviewWorkflowPhase }) => {
+      if (!activeThread) return;
+      void rerunAppReviewPhase({
+        environmentId: activeThread.environmentId,
+        input: {
+          threadId: activeThread.id,
+          runId: AppReviewWorkflowRunId.make(input.appReviewRunId),
+          phase: input.phase,
+        },
+      });
+    },
+    [activeThread, rerunAppReviewPhase],
   );
   const handleRestartPlanningStage = useCallback(
     (stage: "grill" | "spec" | "tickets") => {
@@ -6954,6 +6992,8 @@ function ChatViewContent(props: ChatViewProps) {
         }}
         onCopyWorkflowLink={copyWorkflowLink}
         onRetryImplementationRun={handleRetryImplementationRun}
+        onRerunImplementationStage={handleRerunImplementationStage}
+        onRerunAppReviewPhase={handleRerunAppReviewPhase}
         onRestartPlanningStage={handleRestartPlanningStage}
         onPauseWorkflow={handlePauseWorkflow}
         onResumeWorkflow={handleResumeWorkflow}
