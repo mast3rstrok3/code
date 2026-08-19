@@ -1,6 +1,6 @@
 import type { EnvironmentId, ModelSelection, ThreadId } from "@t3tools/contracts";
 import type { WorkflowPresetSubStep } from "@t3tools/shared/workflowPresets";
-import { Eraser, Pause, RotateCcw, Settings2 } from "lucide-react";
+import { Eraser, Pause, RotateCcw, Settings2, SkipForward } from "lucide-react";
 import { useState } from "react";
 
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
@@ -86,6 +86,9 @@ export function WorkflowStepSettingsMenu(props: {
   readonly clearDisabledReason?: string | null;
   /** Set when clearing covers more than one thing, so the menu asks first. */
   readonly confirmClearMessage?: string | null;
+  /** Whether the run is currently told to pass over this scope. */
+  readonly skipped?: boolean;
+  readonly onSetSkipped?: ((skipped: boolean) => void) | undefined;
 }) {
   const [open, setOpen] = useState(false);
   const [confirmingClear, setConfirmingClear] = useState(false);
@@ -216,6 +219,24 @@ export function WorkflowStepSettingsMenu(props: {
                 </p>
               ) : null}
             </>
+          )}
+          {props.onSetSkipped === undefined ? null : (
+            <button
+              type="button"
+              title={
+                props.skipped === true
+                  ? `Let the run do this ${noun} again`
+                  : `Have the run pass over this ${noun}`
+              }
+              onClick={() => {
+                props.onSetSkipped?.(props.skipped !== true);
+                setOpen(false);
+              }}
+              className="cursor-pointer flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium hover:bg-accent"
+            >
+              <SkipForward className="size-3.5" aria-hidden />
+              {props.skipped === true ? `Stop skipping ${noun}` : `Skip ${noun}`}
+            </button>
           )}
         </div>
       </PopoverPopup>

@@ -67,6 +67,7 @@ export type RetryThreadImplementationChangeRequestInput =
 export type RetryThreadImplementationRunInput = CommandInput<"thread.implementation-run.retry">;
 export type RerunThreadImplementationStageInput = CommandInput<"thread.implementation-run.rerun">;
 export type ResetThreadImplementationStageInput = CommandInput<"thread.implementation-run.reset">;
+export type SetThreadImplementationSkipInput = CommandInput<"thread.implementation-run.skip">;
 export type CancelThreadImplementationRunInput = CommandInput<"thread.implementation-run.cancel">;
 export type InterruptThreadTurnInput = CommandInput<"thread.turn.interrupt">;
 export type RespondToThreadApprovalInput = CommandInput<"thread.approval.respond">;
@@ -521,6 +522,20 @@ export const resetThreadImplementationStage: (
     return yield* dispatch({
       ...input,
       type: "thread.implementation-run.reset",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  },
+);
+
+export const setThreadImplementationSkip: (
+  input: SetThreadImplementationSkipInput,
+) => CommandEffect = Effect.fn("EnvironmentCommands.setThreadImplementationSkip")(
+  function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "thread.implementation-run.skip",
       commandId: metadata.commandId,
       createdAt: metadata.createdAt,
     });

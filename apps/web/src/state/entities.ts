@@ -352,6 +352,12 @@ export function useResetImplementationStageCommand() {
   });
 }
 
+export function useSetImplementationSkipCommand() {
+  return useAtomCommand(threadEnvironment.setImplementationSkip, {
+    label: "implementation skip",
+  });
+}
+
 export function useRerunAppReviewPhaseCommand() {
   return useAtomCommand(threadEnvironment.rerunAppReviewPhase, {
     label: "app review phase re-run",

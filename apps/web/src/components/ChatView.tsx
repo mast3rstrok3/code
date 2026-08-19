@@ -18,6 +18,7 @@ import {
   type AppReviewWorkflowPhase,
   AppReviewWorkflowRunId,
   type OrchestrationImplementationRerunTarget,
+  type OrchestrationImplementationSkipTarget,
   type ScopedThreadRef,
   type ThreadId,
   type TurnId,
@@ -274,6 +275,7 @@ import {
   useRerunAppReviewPhaseCommand,
   useRerunImplementationStageCommand,
   useResetImplementationStageCommand,
+  useSetImplementationSkipCommand,
   useRetryImplementationRunCommand,
   resolveThreadDetailRef,
   useThread,
@@ -1277,6 +1279,7 @@ function ChatViewContent(props: ChatViewProps) {
   const retryImplementationRun = useRetryImplementationRunCommand();
   const rerunImplementationStage = useRerunImplementationStageCommand();
   const resetImplementationStage = useResetImplementationStageCommand();
+  const setImplementationSkip = useSetImplementationSkipCommand();
   const rerunAppReviewPhase = useRerunAppReviewPhaseCommand();
   const restartPlanningStage = useAtomCommand(threadEnvironment.startPlanningStage, {
     label: "planning stage restart",
@@ -3084,6 +3087,25 @@ function ChatViewContent(props: ChatViewProps) {
       });
     },
     [activeThread, resetImplementationStage],
+  );
+  const handleSetImplementationSkip = useCallback(
+    (input: {
+      readonly runId: string;
+      readonly target: OrchestrationImplementationSkipTarget;
+      readonly skipped: boolean;
+    }) => {
+      if (!activeThread) return;
+      void setImplementationSkip({
+        environmentId: activeThread.environmentId,
+        input: {
+          threadId: activeThread.id,
+          runId: input.runId,
+          target: input.target,
+          skipped: input.skipped,
+        },
+      });
+    },
+    [activeThread, setImplementationSkip],
   );
   const handleRerunAppReviewPhase = useCallback(
     (input: { readonly appReviewRunId: string; readonly phase: AppReviewWorkflowPhase }) => {
@@ -7013,6 +7035,7 @@ function ChatViewContent(props: ChatViewProps) {
         onRetryImplementationRun={handleRetryImplementationRun}
         onRerunImplementationStage={handleRerunImplementationStage}
         onResetImplementationStage={handleResetImplementationStage}
+        onSetImplementationSkip={handleSetImplementationSkip}
         onRerunAppReviewPhase={handleRerunAppReviewPhase}
         onRestartPlanningStage={handleRestartPlanningStage}
         onPauseWorkflow={handlePauseWorkflow}

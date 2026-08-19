@@ -23,6 +23,7 @@ import {
   type RerunThreadAppReviewPhaseInput,
   type RerunThreadImplementationStageInput,
   type ResetThreadImplementationStageInput,
+  type SetThreadImplementationSkipInput,
   type RetryThreadImplementationRunInput,
   type SetThreadInteractionModeInput,
   type SetThreadComposerModeInput,
@@ -62,6 +63,7 @@ import {
   rerunThreadAppReviewPhase,
   rerunThreadImplementationStage,
   resetThreadImplementationStage,
+  setThreadImplementationSkip,
   retryThreadImplementationRun,
   setThreadInteractionMode,
   setThreadComposerMode,
@@ -105,6 +107,7 @@ export type {
   RerunThreadImplementationStageInput,
   ResetThreadImplementationStageInput,
   RetryThreadImplementationChangeRequestInput,
+  SetThreadImplementationSkipInput,
   RetryThreadImplementationRunInput,
   SetThreadInteractionModeInput,
   SetThreadComposerModeInput,
@@ -434,6 +437,29 @@ export function createThreadEnvironmentAtoms<R, E>(
             input.runId,
             input.target.kind === "ticket"
               ? [input.target.ticketId, input.target.stage]
+              : input.target.stage,
+          ]),
+      },
+    }),
+    setImplementationSkip: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:implementation-run:skip",
+      execute: (input: SetThreadImplementationSkipInput) => setThreadImplementationSkip(input),
+      scheduler,
+      concurrency: {
+        mode: "serial" as const,
+        key: ({
+          environmentId,
+          input,
+        }: {
+          environmentId: string;
+          input: SetThreadImplementationSkipInput;
+        }) =>
+          JSON.stringify([
+            environmentId,
+            input.threadId,
+            input.runId,
+            input.target.kind === "ticket"
+              ? [input.target.ticketId, input.target.stage ?? "all"]
               : input.target.stage,
           ]),
       },

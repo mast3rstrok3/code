@@ -1,3 +1,4 @@
+import { isTicketSkipped, isTicketStageSkipped } from "@t3tools/contracts";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import type {
   AppReviewWorkflowCycle,
@@ -8,6 +9,7 @@ import type {
   OrchestrationImplementationRerunRunStage,
   OrchestrationImplementationRerunTarget,
   OrchestrationImplementationRerunTicketStage,
+  OrchestrationImplementationSkipTarget,
   ThreadId,
   OrchestrationImplementationRun,
   OrchestrationPlanningSpec,
@@ -1021,6 +1023,14 @@ function TicketPhases(props: {
   readonly onResetTicketStage:
     | ((input: { readonly ticketId: string; readonly stage: RerunTicketStage }) => void)
     | undefined;
+  readonly skips: readonly OrchestrationImplementationSkipTarget[];
+  readonly onSetTicketSkip:
+    | ((input: {
+        readonly ticketId: string;
+        readonly stage?: RerunTicketStage;
+        readonly skipped: boolean;
+      }) => void)
+    | undefined;
   readonly onStopThreads: ((threadIds: readonly ThreadId[]) => void) | undefined;
   readonly onRerunAppReviewPhase:
     | ((input: { readonly appReviewRunId: string; readonly phase: AppReviewWorkflowPhase }) => void)
@@ -1230,6 +1240,12 @@ function TicketPhases(props: {
                                 stage: "implementation",
                               })
                       }
+                      skipped={isTicketSkipped(props.skips, ticket.id)}
+                      onSetSkipped={
+                        props.onSetTicketSkip === undefined
+                          ? undefined
+                          : (skipped) => props.onSetTicketSkip?.({ ticketId: ticket.id, skipped })
+                      }
                     />
                   </div>
                   {open ? (
@@ -1302,6 +1318,21 @@ function TicketPhases(props: {
                                         props.onResetTicketStage?.({
                                           ticketId: ticket.id,
                                           stage: TICKET_STAGE_RERUN[stage.label].stage,
+                                        })
+                                }
+                                skipped={isTicketStageSkipped(
+                                  props.skips,
+                                  ticket.id,
+                                  TICKET_STAGE_RERUN[stage.label].stage,
+                                )}
+                                onSetSkipped={
+                                  props.onSetTicketSkip === undefined
+                                    ? undefined
+                                    : (skipped) =>
+                                        props.onSetTicketSkip?.({
+                                          ticketId: ticket.id,
+                                          stage: TICKET_STAGE_RERUN[stage.label].stage,
+                                          skipped,
                                         })
                                 }
                               />
@@ -1407,6 +1438,13 @@ function WorkflowGroupCard(props: {
     | ((input: {
         readonly runId: string;
         readonly target: OrchestrationImplementationRerunTarget;
+      }) => void)
+    | undefined;
+  readonly onSetImplementationSkip?:
+    | ((input: {
+        readonly runId: string;
+        readonly target: OrchestrationImplementationSkipTarget;
+        readonly skipped: boolean;
       }) => void)
     | undefined;
   readonly onRerunAppReviewPhase?:
@@ -1823,6 +1861,20 @@ function WorkflowGroupCard(props: {
                                             })
                                     }
                                     onStopThreads={props.onStopThreads}
+                                    skips={linkedImplementationRun.skips}
+                                    onSetTicketSkip={
+                                      props.onSetImplementationSkip === undefined
+                                        ? undefined
+                                        : ({ ticketId, stage, skipped }) =>
+                                            props.onSetImplementationSkip?.({
+                                              runId: linkedImplementationRun.id,
+                                              target:
+                                                stage === undefined
+                                                  ? { kind: "ticket", ticketId }
+                                                  : { kind: "ticket", ticketId, stage },
+                                              skipped,
+                                            })
+                                    }
                                     threads={workflowThreads}
                                     appReviewWorkflowRuns={props.appReviewWorkflowRuns}
                                     onOpenThread={props.onOpenThread}
@@ -1994,6 +2046,13 @@ export function WorkflowsPanel(props: {
     | ((input: {
         readonly runId: string;
         readonly target: OrchestrationImplementationRerunTarget;
+      }) => void)
+    | undefined;
+  readonly onSetImplementationSkip?:
+    | ((input: {
+        readonly runId: string;
+        readonly target: OrchestrationImplementationSkipTarget;
+        readonly skipped: boolean;
       }) => void)
     | undefined;
   readonly onRerunAppReviewPhase?:
@@ -2191,6 +2250,7 @@ export function WorkflowsPanel(props: {
                 onRetryImplementationRun={props.onRetryImplementationRun}
                 onRerunImplementationStage={props.onRerunImplementationStage}
                 onResetImplementationStage={props.onResetImplementationStage}
+                onSetImplementationSkip={props.onSetImplementationSkip}
                 onRerunAppReviewPhase={props.onRerunAppReviewPhase}
                 onRestartPlanningStage={props.onRestartPlanningStage}
                 onResumeWorkflow={props.onResumeWorkflow}
