@@ -168,6 +168,7 @@ function makeTestLayer(
             hasWorkingTreeChanges: false,
             workingTree: { files: [], insertions: 0, deletions: 0 },
           }),
+        listChangedFiles: () => Effect.succeed([]),
         isAncestor: () => Effect.succeed(true),
         mergeRef: () => Effect.succeed({ status: "merged" as const }),
         createOrOpenChangeRequest: () =>
@@ -185,6 +186,27 @@ function makeTestLayer(
     ),
     Layer.provide(
       Layer.mock(AppDevStackManager)({
+        getByWorktree: (input) =>
+          Effect.succeed({
+            stack: {
+              id: "stack-1",
+              uuid: "stack-uuid-1",
+              userId: "user-1",
+              worktreePath: input.worktreePath,
+              composePath: "/tmp/compose.yml",
+              displayName: "Stale turn reconciler test",
+              description: null,
+              status: "running" as const,
+              services: null,
+              serviceCount: 0,
+              lastError: null,
+              errorCount: 0,
+              createdAt: now,
+              updatedAt: now,
+            },
+            frontendUrl: "http://127.0.0.1:5173",
+            frontendServiceName: "frontend",
+          }),
         autoCreate: (input) =>
           Effect.succeed({
             created: true,
@@ -606,7 +628,20 @@ function launchRun(system: ReconcilerSystem) {
     const snapshot = yield* system.query.getSnapshot();
     const run = snapshot.implementationRuns[0];
     if (!run) throw new Error("Run missing.");
-    return { run };
+    // These tests are about resuming and settling stage threads, so they pin the
+    // App Review strategy the way the Implementation reactor's own suite does.
+    // A nested review would put its stages in a workflow this layer does not
+    // run, leaving the stages under test unreachable.
+    const legacyRun = { ...run, appReviewStrategy: "legacy-inline" as const };
+    yield* system.engine.dispatch({
+      type: "thread.implementation-run.update",
+      commandId: commandId("implementation-mark-legacy-inline"),
+      threadId: sourceThreadId,
+      run: legacyRun,
+      createdAt: now,
+    });
+    yield* system.reactor.drain;
+    return { run: legacyRun };
   });
 }
 
@@ -657,19 +692,53 @@ function appendWorkerSuccess(system: ReconcilerSystem, run: OrchestrationImpleme
   });
 }
 
+function appendCleanCodeReview(
+  system: ReconcilerSystem,
+  run: OrchestrationImplementationRun,
+  threadId: ThreadId,
+  tag: string,
+) {
+  return Effect.gen(function* () {
+    yield* system.engine.dispatch({
+      type: "thread.activity.append",
+      commandId: commandId(`code-review-${tag}`),
+      threadId,
+      activity: {
+        id: eventId(`code-review-${tag}`),
+        tone: "info",
+        kind: "implementation-code-review-result",
+        summary: "Code review clean",
+        payload: {
+          type: "implementation-code-review-result",
+          runId: run.id,
+          status: "clean",
+          validations: [],
+          reportMarkdown: "## Standards\n- clean\n\n## Spec\n- clean",
+        },
+        turnId: null,
+        createdAt: "2026-01-01T00:00:02.500Z",
+      },
+      createdAt: "2026-01-01T00:00:02.500Z",
+    });
+    yield* system.reactor.drain;
+  });
+}
+
 function passMergeGate(system: ReconcilerSystem, run: OrchestrationImplementationRun) {
   return Effect.gen(function* () {
     const snapshot = yield* system.query.getSnapshot();
-    const validator = snapshot.threads.find(
-      (thread) => thread.workflowRole === "implementation-validator",
-    );
-    if (!validator) throw new Error("Validator missing.");
+    // The run names the validator it is waiting on, and the handler ignores a
+    // result from any other thread. A run reaches the gate more than once.
+    const validatorThreadId = snapshot.implementationRuns.find(
+      (candidate) => candidate.id === run.id,
+    )?.activeValidatorThreadId;
+    if (!validatorThreadId) throw new Error("Validator missing.");
     yield* system.engine.dispatch({
       type: "thread.activity.append",
-      commandId: commandId("merge-gate-pass"),
-      threadId: validator.id,
+      commandId: commandId(`merge-gate-pass-${validatorThreadId}`),
+      threadId: validatorThreadId,
       activity: {
-        id: eventId("merge-gate-pass"),
+        id: eventId(`merge-gate-pass-${validatorThreadId}`),
         tone: "info",
         kind: "implementation-merge-gate-result",
         summary: "Merge gate passed",
@@ -677,9 +746,12 @@ function passMergeGate(system: ReconcilerSystem, run: OrchestrationImplementatio
           type: "implementation-merge-gate-result",
           runId: run.id,
           status: "passed",
+          // The integration gate takes focused validation. Reporting one of the
+          // run's complete commands here is what the final gate is for, and the
+          // gate rejects it.
           validations: [
             {
-              command: "vp check",
+              command: "vp test run src/ticket-1.test.ts",
               status: "passed",
               outputMarkdown: "ok",
               completedAt: "2026-01-01T00:00:02.000Z",
@@ -693,6 +765,20 @@ function passMergeGate(system: ReconcilerSystem, run: OrchestrationImplementatio
       createdAt: "2026-01-01T00:00:02.000Z",
     });
     yield* system.reactor.drain;
+    // A passing gate hands the integrated change to one Code Review before App
+    // Review, and App Review only starts once that comes back clean.
+    const reviewingSnapshot = yield* system.query.getSnapshot();
+    const reviewingRun = reviewingSnapshot.implementationRuns.find(
+      (candidate) => candidate.id === run.id,
+    );
+    if (reviewingRun?.status === "code-reviewing" && reviewingRun.activeCodeReviewThreadId) {
+      yield* appendCleanCodeReview(
+        system,
+        run,
+        reviewingRun.activeCodeReviewThreadId,
+        "combined-before-app-review",
+      );
+    }
   });
 }
 
@@ -734,11 +820,18 @@ function failAppReview(system: ReconcilerSystem, run: OrchestrationImplementatio
   });
 }
 
+/**
+ * The newest thread holding a role.
+ *
+ * A run reaches some stages more than once: the integrated change gets one Code
+ * Review before App Review and another after it. These tests always mean the
+ * stage the run is in now, which is the last thread created for that role.
+ */
 function findThreadByRole(system: ReconcilerSystem, role: string) {
   return system.query
     .getSnapshot()
     .pipe(
-      Effect.map((snapshot) => snapshot.threads.find((thread) => thread.workflowRole === role)),
+      Effect.map((snapshot) => snapshot.threads.findLast((thread) => thread.workflowRole === role)),
     );
 }
 
@@ -999,7 +1092,7 @@ describe("StaleTurnReconciler", () => {
     ),
   );
 
-  it.live("fails the run when the worker resume budget is exhausted", () =>
+  it.live("fails the ticket when the worker resume budget is exhausted", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
@@ -1042,15 +1135,17 @@ describe("StaleTurnReconciler", () => {
           });
           yield* waitUntil(
             getRun(system, run.id).pipe(
-              Effect.map((entry) => entry?.status === "needs-human-attention"),
+              Effect.map((entry) => entry?.ticketStates[0]?.status === "failed"),
             ),
-            "run to need human attention",
+            "ticket to fail",
           );
           yield* system.reactor.drain;
 
+          // A blocked stage no longer stops the run. The ticket carries the
+          // failure and integration goes on with whatever branches are usable.
           const settledRun = yield* getRun(system, run.id);
-          expect(settledRun?.status).toBe("needs-human-attention");
           expect(settledRun?.ticketStates[0]?.status).toBe("failed");
+          expect(settledRun?.status).toBe("validating");
           expect(settledRun?.workerResults).toHaveLength(1);
           expect(settledRun?.workerResults[0]?.status).toBe("failed");
           expect(yield* resumeActivities(system, workerThreadId)).toHaveLength(2);
@@ -1191,7 +1286,9 @@ describe("StaleTurnReconciler", () => {
           const settledRun = yield* getRun(system, run.id);
           expect(settledRun?.status).toBe("fixing");
           expect(settledRun?.activeFixerThreadId).not.toBeNull();
-          expect(settledRun?.finalValidation?.status).toBe("failed");
+          // The gate a worker's success hands to is the integration one, and
+          // only the final gate records a finalValidation.
+          expect(settledRun?.activeValidationKind).toBe("integration");
           expect(yield* sessionStatus(system, validator.id)).toBe("error");
           expect(yield* resumeActivities(system, validator.id)).toHaveLength(2);
         }),
@@ -1199,7 +1296,7 @@ describe("StaleTurnReconciler", () => {
     ),
   );
 
-  it.live("blocks the run when the code reviewer resume budget is exhausted", () =>
+  it.live("publishes work in progress when the code reviewer resume budget is exhausted", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
@@ -1229,11 +1326,13 @@ describe("StaleTurnReconciler", () => {
           });
 
           yield* system.reconciler.start();
+          // Review problems do not interrupt the pipeline: the run files what it
+          // has and hands the pull request to the check babysitter.
           yield* waitUntil(
             getRun(system, run.id).pipe(
-              Effect.map((entry) => entry?.status === "needs-human-attention"),
+              Effect.map((entry) => entry?.status === "babysitting-change-request"),
             ),
-            "run to need human attention",
+            "run to publish its change request",
           );
 
           expect(yield* sessionStatus(system, reviewer.id)).toBe("error");
@@ -1242,7 +1341,7 @@ describe("StaleTurnReconciler", () => {
     ),
   );
 
-  it.live("blocks the run when the fixer resume budget is exhausted", () =>
+  it.live("replaces a fixer whose resume budget is exhausted", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
@@ -1274,11 +1373,20 @@ describe("StaleTurnReconciler", () => {
           });
 
           yield* system.reconciler.start();
+          // Settling the exhausted fixer leaves the stage incomplete, and stage
+          // recovery starts a fresh one rather than stopping the run.
           yield* waitUntil(
-            getRun(system, run.id).pipe(
-              Effect.map((entry) => entry?.status === "needs-human-attention"),
-            ),
-            "run to need human attention",
+            system.query
+              .getSnapshot()
+              .pipe(
+                Effect.map(
+                  (snapshot) =>
+                    snapshot.threads.filter(
+                      (thread) => thread.workflowRole === "implementation-fixer",
+                    ).length === 2,
+                ),
+              ),
+            "a replacement fixer",
           );
 
           expect(yield* sessionStatus(system, fixer.id)).toBe("error");
@@ -1447,15 +1555,15 @@ describe("StaleTurnReconciler", () => {
           yield* system.reconciler.start();
           yield* waitUntil(
             getRun(system, run.id).pipe(
-              Effect.map((entry) => entry?.status === "needs-human-attention"),
+              Effect.map((entry) => entry?.ticketStates[0]?.status === "failed"),
             ),
-            "run to need human attention",
+            "ticket to fail",
           );
           yield* system.reactor.drain;
 
           const settledRun = yield* getRun(system, run.id);
-          expect(settledRun?.status).toBe("needs-human-attention");
           expect(settledRun?.ticketStates[0]?.status).toBe("failed");
+          expect(settledRun?.status).toBe("validating");
           expect(settledRun?.workerResults).toHaveLength(1);
           expect(settledRun?.workerResults[0]?.status).toBe("failed");
           expect(yield* resumeActivities(system, workerThreadId)).toHaveLength(2);
