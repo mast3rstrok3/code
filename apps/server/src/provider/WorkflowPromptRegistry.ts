@@ -103,9 +103,11 @@ const STRUCTURED_GRILL_QUESTION_ADAPTER = `## T3 structured-question adapter
 
 Use T3's \`workflow_request_user_input\` tool for every interview round and for the final shared-understanding confirmation. Do not duplicate or summarize structured questions, choices, or recommendations in Markdown before or after the tool call.
 
+The tool is registered on this thread. Providers that reach T3 over MCP see it as \`mcp__t3-code__workflow_request_user_input\`; load it by name through tool search if it is not already listed. It is the only question tool the grill uses. Never substitute a provider's own smaller question tool while it is available.
+
 ${WORKFLOW_REQUEST_USER_INPUT_CODE_MODE_FORWARDING}
 
-Recompute the currently unblocked frontier before every round. When it contains one through seven questions, submit the entire frontier at its natural size. Seven is a maximum, never a target: do not aim for three, seven, or any other fixed batch size, and do not pad a round. If more than seven questions are independently ready, send the first seven in stable design-tree order and continue with the remainder after those answers resolve. Never put questions in the same call when one answer depends on another question in that call.
+Recompute the currently unblocked frontier before every round. When it contains one through ten questions, submit the entire frontier at its natural size. Ten is a maximum, never a target: do not aim for three, ten, or any other fixed batch size, and do not pad a round. If more than ten questions are independently ready, send the first ten in stable design-tree order and continue with the remainder after those answers resolve. Never put questions in the same call when one answer depends on another question in that call.
 
 Treat every answer returned by \`workflow_request_user_input\` as settled. Never repeat its question or the previously answered frontier unless the user explicitly reopens or contradicts that decision. When a custom answer needs clarification, ask only the narrower unresolved clarification instead of replaying the original question batch.
 
@@ -122,7 +124,7 @@ Put recommendation data only in the separate \`{ optionLabel, rationale }\` obje
 
 When the frontier is empty, use one \`workflow_request_user_input\` question for the final shared-understanding confirmation. Offer two choices equivalent to \`Lock it in\` and \`Keep grilling\`, recommend \`Lock it in\` in the separate recommendation object, and follow every rule above. Only that structured response may lock or continue the grill.
 
-Compatibility fallback: if and only if \`workflow_request_user_input\` is unavailable on this provider thread, use native \`request_user_input\` in chunks of at most three questions. Keep its option labels and descriptions neutral and unchanged. This fallback exists only for threads created before T3 registered the workflow tool.`;
+Compatibility fallback: if and only if \`workflow_request_user_input\` is unavailable on this provider thread, use the provider's native question tool (Codex \`request_user_input\`, Claude \`AskUserQuestion\`) in chunks of at most three questions, and put each recommendation in a short Markdown line before the call since those tools carry no recommendation field. Keep option labels and descriptions neutral and unchanged. This fallback exists only for threads that predate T3's workflow tool.`;
 
 const DOMAIN_MODELING_PROMPT = `<collaboration_mode># Domain Modeling
 
@@ -1793,7 +1795,7 @@ The selected product workflow is authoritative even when the user's wording soun
 
 Cover product direction only: the problem, audience, desired outcome, user-visible behavior and experience, success criteria, scope, and non-goals. Do not ask about implementation, architecture, testing, workflow sequencing, or operations.
 
-Restricting the design tree to product decisions is the product-scope adaptation to the Grilling blueprint. Its dependency-frontier mechanics remain authoritative, subject to the structured-question adapter's seven-question maximum.
+Restricting the design tree to product decisions is the product-scope adaptation to the Grilling blueprint. Its dependency-frontier mechanics remain authoritative, subject to the structured-question adapter's ten-question maximum.
 
 The session is done when every product branch has been visited and nothing remains silently assumed. Do not lock the intent until the user confirms you have reached a shared understanding.
 

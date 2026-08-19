@@ -4,6 +4,7 @@ import {
   inferDisplayedWorkflowPreset,
   interactionModeForWorkflowPreset,
   WORKFLOW_PRESET_DEFINITIONS,
+  workflowPromptIdForPreset,
 } from "./workflowPresets.js";
 
 describe("workflow presets", () => {
@@ -59,6 +60,13 @@ describe("workflow presets", () => {
     const planning = WORKFLOW_PRESET_DEFINITIONS.find((definition) => definition.id === "planning");
     expect(planning?.helpSteps[1]?.skillId).toBe("planning.grill-stage.codex");
     expect(planning?.helpSteps[1]?.note).toBe("human-guided");
+  });
+
+  it("starts the Engineering Workflow on its grill prompt", () => {
+    // The turn's prompt id is what provisions the structured-question tool, so
+    // a missing id silently downgrades the grill to the provider's own
+    // small-batch question tool.
+    expect(workflowPromptIdForPreset("planning")).toBe("planning.grill-stage.codex");
   });
 
   it("requires Product workflows to carry an explicit preset", () => {

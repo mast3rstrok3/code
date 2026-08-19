@@ -17,6 +17,8 @@ import { AppReviewToolkitHandlersLive } from "./toolkits/app-review/handlers.ts"
 import { AppReviewToolkit } from "./toolkits/app-review/tools.ts";
 import { WorkflowArtifactsToolkitHandlersLive } from "./toolkits/workflow-artifacts/handlers.ts";
 import { WorkflowArtifactsToolkit } from "./toolkits/workflow-artifacts/tools.ts";
+import { WorkflowUserInputToolkitHandlersLive } from "./toolkits/workflow-user-input/handlers.ts";
+import { WorkflowUserInputToolkit } from "./toolkits/workflow-user-input/tools.ts";
 import {
   PreviewSnapshotToolkitHandlersLive,
   PreviewStandardToolkitHandlersLive,
@@ -223,6 +225,10 @@ const WorkflowArtifactsToolkitRegistrationLive = McpServer.toolkit(WorkflowArtif
   Layer.provide(WorkflowArtifactsToolkitHandlersLive),
 );
 
+const WorkflowUserInputToolkitRegistrationLive = McpServer.toolkit(WorkflowUserInputToolkit).pipe(
+  Layer.provide(WorkflowUserInputToolkitHandlersLive),
+);
+
 export const PreviewToolkitRegistrationLive = Layer.mergeAll(
   PreviewStandardToolkitRegistrationLive,
   PreviewSnapshotRegistrationLive,
@@ -232,6 +238,7 @@ const McpToolkitRegistrationLive = Layer.mergeAll(
   PreviewToolkitRegistrationLive,
   AppReviewToolkitRegistrationLive,
   WorkflowArtifactsToolkitRegistrationLive,
+  WorkflowUserInputToolkitRegistrationLive,
 );
 
 const McpTransportLive = McpServer.layerHttp({

@@ -59,8 +59,10 @@ import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import type { McpCapability } from "../../mcp/McpInvocationContext.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
+import * as WorkflowUserInputBroker from "../../mcp/WorkflowUserInputBroker.ts";
 import {
   isAppReviewMcpWorkflowPromptId,
+  isInteractiveStructuredInputWorkflowPromptId,
   isRegisteredWorkflowPromptId,
 } from "../WorkflowPromptRegistry.ts";
 const isModelSelection = Schema.is(ModelSelection);
@@ -199,6 +201,11 @@ function mcpCapabilitiesForWorkflowPromptId(
     // and attaches evidence via the app_review_* tools.
     return new Set<McpCapability>(["preview", "app-review", "workflow-artifacts"]);
   }
+  if (isInteractiveStructuredInputWorkflowPromptId(workflowPromptId)) {
+    // Grills are the only workflows allowed to park a turn on a human, so
+    // they are the only ones handed the structured question tool.
+    return new Set<McpCapability>(["workflow-artifacts", "user-input"]);
+  }
   if (workflowPromptId !== undefined && isRegisteredWorkflowPromptId(workflowPromptId)) {
     return new Set<McpCapability>(["workflow-artifacts"]);
   }
@@ -239,11 +246,20 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
   const registry = yield* ProviderAdapterRegistry.ProviderAdapterRegistry;
   const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+  const workflowUserInputBroker = yield* WorkflowUserInputBroker.WorkflowUserInputBroker;
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   const clearMcpSession = (threadId: ThreadId) =>
     McpSessionRegistry.revokeActiveMcpThread(threadId).pipe(
       Effect.tap(() => Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId))),
+      // A question whose asker is gone can never be answered; leaving it
+      // parked would hold the tool call open until the process exits.
+      Effect.tap(() =>
+        workflowUserInputBroker.cancelThread({
+          threadId,
+          reason: "the provider session ended",
+        }),
+      ),
     );
   const prepareMcpSession = (input: {
     readonly threadId: ThreadId;
@@ -910,6 +926,16 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       schema: ProviderRespondToUserInputInput,
       payload: rawInput,
     });
+    // Questions asked through the MCP tool are parked in the broker, not in an
+    // adapter's pending map, so they are settled before session routing.
+    const handledByBroker = yield* workflowUserInputBroker.respond({
+      threadId: input.threadId,
+      requestId: input.requestId,
+      answers: input.answers,
+    });
+    if (handledByBroker) {
+      return;
+    }
     let metricProvider = "unknown";
     return yield* Effect.gen(function* () {
       const routed = yield* resolveRoutableSession({

@@ -245,6 +245,10 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
       "Plan with a Product or Engineering Grill, then implement, review, and publish the result.",
     route: "planning",
     interactionMode: "planning-workflow",
+    // The first turn is the grill, and naming it here is what earns the thread
+    // its structured-question tool: the session is provisioned from the prompt
+    // id the turn carries, not from the interaction mode alone.
+    workflowPromptId: "planning.grill-stage.codex",
     helpSteps: [
       { label: "Planning phase · Prepare shared worktree and App Dev Stack", note: "automatic" },
       {

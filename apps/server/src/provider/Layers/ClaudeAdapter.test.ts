@@ -455,6 +455,70 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("loads the T3 MCP server up front and holds grill questions open", () => {
+    const harness = makeHarness();
+    const threadId = ThreadId.make("thread-claude-mcp-grill");
+    return Effect.gen(function* () {
+      McpProviderSession.setMcpProviderSession({
+        environmentId: EnvironmentId.make("env-1"),
+        threadId,
+        providerSessionId: "provider-session-grill",
+        providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+        endpoint: "http://127.0.0.1/mcp",
+        authorizationHeader: "Bearer token",
+      });
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+        workflowPromptId: WORKFLOW_PROMPT_IDS.planningGrillStageCodex,
+      });
+
+      const server = harness.getLastCreateQueryInput()?.options.mcpServers?.["t3-code"] as
+        | { readonly timeout?: number; readonly alwaysLoad?: boolean }
+        | undefined;
+      assert.equal(server?.alwaysLoad, true);
+      assert.ok((server?.timeout ?? 0) >= 60 * 60 * 1000);
+      McpProviderSession.clearMcpProviderSession(threadId);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("leaves non-grill workflow MCP servers deferred and on the default timeout", () => {
+    const harness = makeHarness();
+    const threadId = ThreadId.make("thread-claude-mcp-non-grill");
+    return Effect.gen(function* () {
+      McpProviderSession.setMcpProviderSession({
+        environmentId: EnvironmentId.make("env-1"),
+        threadId,
+        providerSessionId: "provider-session-non-grill",
+        providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+        endpoint: "http://127.0.0.1/mcp",
+        authorizationHeader: "Bearer token",
+      });
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationOrchestratorPlanningCodex,
+      });
+
+      const server = harness.getLastCreateQueryInput()?.options.mcpServers?.["t3-code"] as
+        | { readonly timeout?: number; readonly alwaysLoad?: boolean }
+        | undefined;
+      assert.equal(server?.alwaysLoad, undefined);
+      assert.equal(server?.timeout, undefined);
+      McpProviderSession.clearMcpProviderSession(threadId);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("omits the T3 MCP server for non-workflow sessions", () => {
     const harness = makeHarness();
     const threadId = ThreadId.make("thread-claude-mcp-non-workflow");

@@ -395,7 +395,7 @@ function workflowQuestion(index: number) {
 }
 
 describe("workflow_request_user_input validation", () => {
-  for (const questionCount of [1, 2, 3, 4, 5, 6, 7]) {
+  for (const questionCount of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
     it.effect(`accepts a natural ${questionCount}-question frontier`, () =>
       Effect.gen(function* () {
         const decoded = yield* decodeWorkflowRequestUserInputArguments({
@@ -406,7 +406,7 @@ describe("workflow_request_user_input validation", () => {
     );
   }
 
-  for (const questionCount of [0, 8]) {
+  for (const questionCount of [0, 11]) {
     it.effect(`rejects a ${questionCount}-question frontier`, () =>
       Effect.gen(function* () {
         const error = yield* decodeWorkflowRequestUserInputArguments({

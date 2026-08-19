@@ -46,11 +46,12 @@ import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "../Services/ProviderAdapterRegistry.ts";
 import * as ProviderService from "../Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "../Services/ProviderSessionDirectory.ts";
-import { makeProviderServiceLive } from "./ProviderService.ts";
+import { makeProviderServiceLive as makeProviderServiceLiveBase } from "./ProviderService.ts";
 import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
 import { ProviderSessionDirectoryLive } from "./ProviderSessionDirectory.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as ProviderSessionRuntime from "../../persistence/ProviderSessionRuntime.ts";
+import * as WorkflowUserInputBroker from "../../mcp/WorkflowUserInputBroker.ts";
 import {
   makeSqlitePersistenceLive,
   SqlitePersistenceMemory,
@@ -59,6 +60,13 @@ import * as ServerConfig from "../../config.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
 import { makeAdapterRegistryMock } from "../testUtils/providerAdapterRegistryMock.ts";
+
+/**
+ * The live layer now depends on the workflow user-input broker, which the
+ * server shares with its MCP transport. Tests get a fresh broker per layer.
+ */
+const makeProviderServiceLive = (...args: Parameters<typeof makeProviderServiceLiveBase>) =>
+  makeProviderServiceLiveBase(...args).pipe(Layer.provideMerge(WorkflowUserInputBroker.layer));
 
 const defaultServerSettingsLayer = ServerSettings.ServerSettingsService.layerTest();
 const serverConfigTestLayer = ServerConfig.layerTest(process.cwd(), process.cwd()).pipe(
@@ -905,6 +913,24 @@ routing.layer("ProviderServiceLive routing", (it) => {
           },
         ],
       ]);
+
+      // A question asked through the MCP tool is parked in the broker, so its
+      // answer settles there and never reaches the adapter's pending map.
+      const broker = yield* WorkflowUserInputBroker.WorkflowUserInputBroker;
+      const parked = yield* broker
+        .awaitAnswers({ threadId: session.threadId, requestId: "workflow-user-input-1" })
+        .pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+      yield* provider.respondToUserInput({
+        threadId: session.threadId,
+        requestId: asRequestId("workflow-user-input-1"),
+        answers: { question_1: "Focused" },
+      });
+      assert.deepEqual(yield* Fiber.join(parked), {
+        _tag: "answered",
+        answers: { question_1: "Focused" },
+      });
+      assert.equal(routing.codex.respondToUserInput.mock.calls.length, 1);
 
       yield* provider.rollbackConversation({
         threadId: session.threadId,

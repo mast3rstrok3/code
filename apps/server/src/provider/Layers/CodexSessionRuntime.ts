@@ -4,7 +4,8 @@ import {
   EventId,
   ProviderDriverKind,
   ProviderItemId,
-  TrimmedNonEmptyString,
+  WORKFLOW_USER_INPUT_MAX_QUESTIONS,
+  WorkflowUserInputQuestions,
   type UserInputQuestion,
   type ProviderInstanceId,
   type ProviderApprovalDecision,
@@ -89,44 +90,8 @@ const isCodexUserInputAnswerObject = Schema.is(CodexUserInputAnswerObject);
 
 export const WORKFLOW_REQUEST_USER_INPUT_TOOL_NAME = "workflow_request_user_input";
 
-const WorkflowUserInputOption = Schema.Struct({
-  label: TrimmedNonEmptyString,
-  description: TrimmedNonEmptyString,
-});
-const WorkflowUserInputRecommendation = Schema.Struct({
-  optionLabel: TrimmedNonEmptyString,
-  rationale: TrimmedNonEmptyString,
-});
-const WorkflowUserInputQuestion = Schema.Struct({
-  id: TrimmedNonEmptyString,
-  header: TrimmedNonEmptyString,
-  question: TrimmedNonEmptyString,
-  options: Schema.Array(WorkflowUserInputOption).check(
-    Schema.isMinLength(2),
-    Schema.isMaxLength(3),
-  ),
-  recommendation: WorkflowUserInputRecommendation,
-}).check(
-  Schema.makeFilter((question) => {
-    const optionLabels = question.options.map((option) => option.label);
-    if (new Set(optionLabels).size !== optionLabels.length) {
-      return `Question '${question.id}' must use unique option labels.`;
-    }
-    if (!optionLabels.includes(question.recommendation.optionLabel)) {
-      return `Question '${question.id}' recommendation.optionLabel must match one of its option labels.`;
-    }
-    return true;
-  }),
-);
 export const WorkflowRequestUserInputArguments = Schema.Struct({
-  questions: Schema.Array(WorkflowUserInputQuestion)
-    .check(Schema.isMinLength(1), Schema.isMaxLength(7))
-    .check(
-      Schema.makeFilter((questions) => {
-        const questionIds = questions.map((question) => question.id);
-        return new Set(questionIds).size === questionIds.length || "Question IDs must be unique.";
-      }),
-    ),
+  questions: WorkflowUserInputQuestions,
 });
 export type WorkflowRequestUserInputArguments = typeof WorkflowRequestUserInputArguments.Type;
 export const decodeWorkflowRequestUserInputArguments = Schema.decodeUnknownEffect(
@@ -136,7 +101,7 @@ export const decodeWorkflowRequestUserInputArguments = Schema.decodeUnknownEffec
 export const WORKFLOW_REQUEST_USER_INPUT_TOOL = {
   type: "function",
   name: WORKFLOW_REQUEST_USER_INPUT_TOOL_NAME,
-  description: `Ask one through seven currently unblocked workflow questions and wait for the user's answers. ${WORKFLOW_REQUEST_USER_INPUT_CODE_MODE_FORWARDING}`,
+  description: `Ask up to ${WORKFLOW_USER_INPUT_MAX_QUESTIONS} currently unblocked workflow questions and wait for the user's answers. ${WORKFLOW_REQUEST_USER_INPUT_CODE_MODE_FORWARDING}`,
   inputSchema: {
     type: "object",
     additionalProperties: false,
@@ -145,7 +110,7 @@ export const WORKFLOW_REQUEST_USER_INPUT_TOOL = {
       questions: {
         type: "array",
         minItems: 1,
-        maxItems: 7,
+        maxItems: WORKFLOW_USER_INPUT_MAX_QUESTIONS,
         items: {
           type: "object",
           additionalProperties: false,

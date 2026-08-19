@@ -239,9 +239,9 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /workflow_request_user_input.*every interview round/);
     NodeAssert.match(rendered, /complete result.*outer text\(result\) helper/);
     NodeAssert.match(rendered, /contentItems, not result\.content/);
-    NodeAssert.match(rendered, /one through seven questions.*entire frontier/);
-    NodeAssert.match(rendered, /Seven is a maximum, never a target/);
-    NodeAssert.match(rendered, /first seven in stable design-tree order/);
+    NodeAssert.match(rendered, /one through ten questions.*entire frontier/);
+    NodeAssert.match(rendered, /Ten is a maximum, never a target/);
+    NodeAssert.match(rendered, /first ten in stable design-tree order/);
     NodeAssert.match(rendered, /Never put questions in the same call when one answer depends/);
     NodeAssert.match(rendered, /natural A\/B\/C order/);
     NodeAssert.match(rendered, /Exactly one separate recommendation object/);
@@ -688,9 +688,9 @@ describe("WorkflowPromptRegistry", () => {
       NodeAssert.match(preset.promptText, /workflow_request_user_input.*every interview round/);
       NodeAssert.match(preset.promptText, /complete result.*outer text\(result\) helper/);
       NodeAssert.match(preset.promptText, /contentItems, not result\.content/);
-      NodeAssert.match(preset.promptText, /one through seven questions.*entire frontier/);
-      NodeAssert.match(preset.promptText, /Seven is a maximum, never a target/);
-      NodeAssert.match(preset.promptText, /first seven in stable design-tree order/);
+      NodeAssert.match(preset.promptText, /one through ten questions.*entire frontier/);
+      NodeAssert.match(preset.promptText, /Ten is a maximum, never a target/);
+      NodeAssert.match(preset.promptText, /first ten in stable design-tree order/);
       NodeAssert.match(preset.promptText, /natural A\/B\/C order/);
       NodeAssert.match(preset.promptText, /Exactly one separate recommendation object/);
       NodeAssert.match(preset.promptText, /neutral, useful impact or tradeoff description/);

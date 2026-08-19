@@ -97,6 +97,7 @@ import {
 import { type ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import {
+  isInteractiveStructuredInputWorkflowPromptId,
   isRegisteredWorkflowPromptId,
   resolveWorkflowSystemInstructions,
 } from "../WorkflowPromptRegistry.ts";
@@ -1228,6 +1229,12 @@ const SUPPORTED_CLAUDE_IMAGE_MIME_TYPES = new Set([
   "image/png",
   "image/webp",
 ]);
+/**
+ * How long a structured grill question may wait for its human. The SDK treats
+ * this as a hard wall clock per MCP tool call, so it has to cover a user who
+ * walks away mid-round rather than a typical answer.
+ */
+const WORKFLOW_USER_INPUT_TOOL_TIMEOUT_MS = 6 * 60 * 60 * 1000;
 const CLAUDE_SETTING_SOURCES = [
   "user",
   "project",
@@ -4169,6 +4176,11 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const mcpSession = registeredWorkflow
         ? McpProviderSession.readMcpProviderSession(input.threadId)
         : undefined;
+      // A grill parks `workflow_request_user_input` on a human, so the tool call
+      // is held open for as long as someone might reasonably take to answer,
+      // and the toolkit is loaded up front instead of hiding behind tool search
+      // where the model settles for its own 4-question fallback.
+      const interactiveGrill = isInteractiveStructuredInputWorkflowPromptId(input.workflowPromptId);
       const mcpServers =
         registeredWorkflow && mcpSession
           ? {
@@ -4178,6 +4190,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
                 headers: {
                   Authorization: mcpSession.authorizationHeader,
                 },
+                ...(interactiveGrill
+                  ? {
+                      timeout: WORKFLOW_USER_INPUT_TOOL_TIMEOUT_MS,
+                      alwaysLoad: true,
+                    }
+                  : {}),
               },
             }
           : undefined;

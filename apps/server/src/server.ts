@@ -48,6 +48,7 @@ import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
+import * as WorkflowUserInputBroker from "./mcp/WorkflowUserInputBroker.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as PreviewCoordinator from "./preview/PreviewCoordinator.ts";
 import * as ServerBrowserManager from "./preview/ServerBrowserManager.ts";
@@ -274,6 +275,10 @@ const ProviderSessionDirectoryLayerLive = ProviderSessionDirectoryLive.pipe(
 const ProviderLayerLive = ProviderServiceLive.pipe(
   Layer.provide(ProviderAdapterRegistryLive),
   Layer.provideMerge(ProviderSessionDirectoryLayerLive),
+  // Shared with the MCP server: one broker holds the questions an MCP-side
+  // tool call is parked on, and ProviderService settles them from the client's
+  // answer.
+  Layer.provideMerge(WorkflowUserInputBroker.layer),
 );
 
 const PersistenceLayerLive = Layer.empty.pipe(Layer.provideMerge(SqlitePersistenceLayerLive));
