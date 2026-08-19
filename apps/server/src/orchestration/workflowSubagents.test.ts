@@ -15,6 +15,7 @@ import {
   resolveWorkflowStepModelSelection,
   resolveWorkflowSubagentModelSelection,
   resolveWorkflowSubagentSpawnDefinition,
+  type WorkflowSubagentSpawnDefinition,
 } from "./workflowSubagents.ts";
 
 const codexDriver = ProviderDriverKind.make("codex");
@@ -31,7 +32,20 @@ const claudeParentSelection: ModelSelection = {
   model: "claude-opus-4-8",
 };
 
-const hardlockOptions = [{ id: "reasoningEffort", value: "high" }];
+const overrideOptions = [{ id: "reasoningEffort", value: "high" }];
+
+/**
+ * No shipped definition pins a model, so the override path needs a fixture.
+ * Every real step follows the workflow's own selection unless the user pins it.
+ */
+const overriddenDefinition: WorkflowSubagentSpawnDefinition = {
+  ...browserAppReviewDefinition!,
+  modelOverride: {
+    driver: codexDriver,
+    model: "gpt-5.6-sol",
+    options: overrideOptions,
+  },
+};
 
 function settingsWith(input: {
   readonly legacyCodexEnabled?: boolean;
@@ -75,6 +89,14 @@ describe("resolveWorkflowSubagentSpawnDefinition", () => {
         "implementation-orchestrator",
       ),
     ).toBe(true);
+  });
+
+  it("ships no definition that overrides the workflow's model", () => {
+    for (const workflowPromptId of Object.values(WORKFLOW_PROMPT_IDS)) {
+      const definition = resolveWorkflowSubagentSpawnDefinition(workflowPromptId);
+      if (definition === undefined) continue;
+      expect(definition.modelOverride, workflowPromptId).toBeUndefined();
+    }
   });
 
   it("registers only the explicit Product workflow presets", () => {
@@ -127,7 +149,7 @@ describe("resolveWorkflowSubagentModelSelection", () => {
       model: "gpt-5.4",
     };
     const resolved = resolveWorkflowSubagentModelSelection({
-      definition: browserAppReviewDefinition,
+      definition: overriddenDefinition,
       parentModelSelection: parentSelection,
       settings: settingsWith({
         providerInstances: {
@@ -141,13 +163,13 @@ describe("resolveWorkflowSubagentModelSelection", () => {
     expect(resolved.modelSelection).toEqual({
       instanceId: "codex_work",
       model: "gpt-5.6-sol",
-      options: hardlockOptions,
+      options: overrideOptions,
     });
   });
 
   it("picks the default codex instance over other enabled instances", () => {
     const resolved = resolveWorkflowSubagentModelSelection({
-      definition: browserAppReviewDefinition,
+      definition: overriddenDefinition,
       parentModelSelection: claudeParentSelection,
       settings: settingsWith({
         providerInstances: {
@@ -159,13 +181,13 @@ describe("resolveWorkflowSubagentModelSelection", () => {
     expect(resolved.modelSelection).toEqual({
       instanceId: "codex",
       model: "gpt-5.6-sol",
-      options: hardlockOptions,
+      options: overrideOptions,
     });
   });
 
   it("falls back to another enabled codex instance when the default is disabled", () => {
     const resolved = resolveWorkflowSubagentModelSelection({
-      definition: browserAppReviewDefinition,
+      definition: overriddenDefinition,
       parentModelSelection: claudeParentSelection,
       settings: settingsWith({
         providerInstances: {
@@ -177,13 +199,13 @@ describe("resolveWorkflowSubagentModelSelection", () => {
     expect(resolved.modelSelection).toEqual({
       instanceId: "codex_work",
       model: "gpt-5.6-sol",
-      options: hardlockOptions,
+      options: overrideOptions,
     });
   });
 
   it("falls back to the parent selection when every codex instance is disabled", () => {
     const resolved = resolveWorkflowSubagentModelSelection({
-      definition: browserAppReviewDefinition,
+      definition: overriddenDefinition,
       parentModelSelection: claudeParentSelection,
       settings: settingsWith({
         legacyCodexEnabled: true,
@@ -205,20 +227,20 @@ describe("resolveWorkflowSubagentModelSelection", () => {
 
   it("uses the synthesized legacy codex instance when it is enabled", () => {
     const resolved = resolveWorkflowSubagentModelSelection({
-      definition: browserAppReviewDefinition,
+      definition: overriddenDefinition,
       parentModelSelection: claudeParentSelection,
       settings: settingsWith({ legacyCodexEnabled: true }),
     });
     expect(resolved.modelSelection).toEqual({
       instanceId: "codex",
       model: "gpt-5.6-sol",
-      options: hardlockOptions,
+      options: overrideOptions,
     });
   });
 
   it("falls back when only the legacy codex settings exist and are disabled", () => {
     const resolved = resolveWorkflowSubagentModelSelection({
-      definition: browserAppReviewDefinition,
+      definition: overriddenDefinition,
       parentModelSelection: claudeParentSelection,
       settings: settingsWith({ legacyCodexEnabled: false }),
     });
@@ -229,7 +251,7 @@ describe("resolveWorkflowSubagentModelSelection", () => {
 
   it("falls back to the parent selection when settings could not be read", () => {
     const resolved = resolveWorkflowSubagentModelSelection({
-      definition: browserAppReviewDefinition,
+      definition: overriddenDefinition,
       parentModelSelection: claudeParentSelection,
       settings: undefined,
     });
@@ -254,10 +276,10 @@ const enabledClaudeSettings = settingsWith({
 });
 
 describe("resolveWorkflowStepModelSelection", () => {
-  it("keeps the definition hardlock when the step carries no pin", () => {
+  it("keeps a definition model override when the step carries no pin", () => {
     const resolved = resolveWorkflowStepModelSelection({
       workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
-      definition: browserAppReviewDefinition,
+      definition: overriddenDefinition,
       stepModels: [],
       parentModelSelection: claudeParentSelection,
       settings: settingsWith({ legacyCodexEnabled: true }),
@@ -265,15 +287,15 @@ describe("resolveWorkflowStepModelSelection", () => {
     expect(resolved.modelSelection).toEqual({
       instanceId: "codex",
       model: "gpt-5.6-sol",
-      options: hardlockOptions,
+      options: overrideOptions,
     });
     expect(resolved.overrideApplied).toBe(true);
   });
 
-  it("prefers the user's pin over the definition hardlock", () => {
+  it("prefers the user's pin over a definition model override", () => {
     const resolved = resolveWorkflowStepModelSelection({
       workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
-      definition: browserAppReviewDefinition,
+      definition: overriddenDefinition,
       stepModels: [
         {
           workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,

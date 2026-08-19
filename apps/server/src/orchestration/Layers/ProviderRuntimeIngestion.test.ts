@@ -4232,7 +4232,7 @@ describe("ProviderRuntimeIngestion", () => {
     );
   });
 
-  it("creates durable browser app reviews from sub-agent directives with the codex hardlock", async () => {
+  it("creates durable browser app reviews from sub-agent directives on the parent model", async () => {
     const harness = await createHarness();
     const createdAt = "2026-01-01T00:00:00.000Z";
     const parentThreadId = asThreadId("thread-hardlock-parent");
@@ -4297,9 +4297,8 @@ describe("ProviderRuntimeIngestion", () => {
     const parentThread = snapshot.threads.find((thread) => thread.id === parentThreadId);
 
     expect(childThread?.modelSelection).toEqual({
-      instanceId: ProviderInstanceId.make("codex"),
-      model: "gpt-5.6-sol",
-      options: [{ id: "reasoningEffort", value: "high" }],
+      instanceId: ProviderInstanceId.make("claudeAgent"),
+      model: "claude-opus-4-8",
     });
     expect(parentThread?.appReviews).toHaveLength(1);
     expect(parentThread?.appReviews[0]?.reviewThreadId).toBe(childThread?.id);
@@ -4493,7 +4492,7 @@ describe("ProviderRuntimeIngestion", () => {
     expect(canonical?.evidence).toEqual(evidence);
   });
 
-  it("falls back to the parent selection for browser app review when codex is disabled", async () => {
+  it("keeps the parent selection for browser app review when codex is disabled", async () => {
     const harness = await createHarness({
       serverSettings: { providers: { codex: { enabled: false } } },
     });
@@ -4563,15 +4562,12 @@ describe("ProviderRuntimeIngestion", () => {
     expect(parentThread?.appReviews).toHaveLength(1);
     expect(parentThread?.appReviews[0]?.reviewThreadId).toBe(childThread?.id);
 
-    const fallbackActivity = parentThread?.activities.find(
-      (activity) => activity.kind === "workflow.subagent.model-fallback",
-    );
-    expect(fallbackActivity).toBeDefined();
-    expect(fallbackActivity?.tone).toBe("info");
-    expect(fallbackActivity?.payload).toMatchObject({
-      requestedDriver: "codex",
-      requestedModel: "gpt-5.6-sol",
-    });
+    // Nothing was demoted: the step never asked for a provider of its own.
+    expect(
+      parentThread?.activities.some(
+        (activity) => activity.kind === "workflow.subagent.model-fallback",
+      ),
+    ).toBe(false);
   });
 
   it("routes workflow agent messages to direct child agents by role", async () => {

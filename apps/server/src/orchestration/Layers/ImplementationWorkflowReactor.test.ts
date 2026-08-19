@@ -4660,7 +4660,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("hardlocks the browser app review thread to codex gpt-5.6-sol at high effort", () =>
+  it.effect("runs the browser app review on the model the workflow was started with", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         const { run } = yield* launchRun(system, { modelSelection: claudeParentSelection });
@@ -4671,11 +4671,7 @@ describe("ImplementationWorkflowReactor", () => {
         const reviewThread = snapshot.threads.find(
           (thread) => thread.workflowRole === "implementation-qa-reviewer",
         );
-        expect(reviewThread?.modelSelection).toEqual({
-          instanceId: "codex",
-          model: "gpt-5.6-sol",
-          options: [{ id: "reasoningEffort", value: "high" }],
-        });
+        expect(reviewThread?.modelSelection).toEqual(claudeParentSelection);
 
         const workerThread = snapshot.threads.find(
           (thread) => thread.workflowRole === "implementation-worker",
@@ -4685,7 +4681,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("falls back to the parent selection when no codex instance is enabled", () =>
+  it.effect("keeps inheriting the workflow model when codex is disabled entirely", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
@@ -4702,16 +4698,11 @@ describe("ImplementationWorkflowReactor", () => {
           const orchestratorThread = snapshot.threads.find(
             (thread) => thread.id === run.orchestratorThreadId,
           );
-          const fallbackActivity = orchestratorThread?.activities.find(
-            (activity) => activity.kind === "implementation-workflow.model-hardlock-fallback",
-          );
-          expect(fallbackActivity).toBeDefined();
-          expect(fallbackActivity?.tone).toBe("info");
-          expect(fallbackActivity?.payload).toMatchObject({
-            runId: run.id,
-            requestedDriver: "codex",
-            requestedModel: "gpt-5.6-sol",
-          });
+          expect(
+            orchestratorThread?.activities.some((activity) =>
+              activity.kind.endsWith("model-fallback"),
+            ),
+          ).toBe(false);
         }),
       { serverSettings: { providers: { codex: { enabled: false } } } },
     ),

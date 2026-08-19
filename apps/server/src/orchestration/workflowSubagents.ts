@@ -3,7 +3,7 @@ import {
   type OrchestrationThreadWorkflowRole,
   type ProviderInteractionMode,
   type ProviderOptionSelection,
-  ProviderDriverKind,
+  type ProviderDriverKind,
   type ServerSettings,
   type WorkflowStepModelOverride,
 } from "@t3tools/contracts";
@@ -27,10 +27,14 @@ export interface WorkflowSubagentSpawnDefinition {
   readonly allowedParentWorkflowRoles: "any" | ReadonlyArray<WorkflowSubagentParentWorkflowRole>;
   readonly disallowedParentWorkflowRoles?: ReadonlyArray<WorkflowSubagentParentWorkflowRole>;
   /**
-   * Hardlock this sub-agent to a specific driver/model regardless of the
-   * parent thread's selection. Applied at spawn time by
+   * Lock this sub-agent to a specific driver/model regardless of the parent
+   * thread's selection. Applied at spawn time by
    * `resolveWorkflowSubagentModelSelection`; when no enabled instance of the
    * driver exists the spawn falls back to the parent's selection.
+   *
+   * No shipped definition sets one. A workflow step runs the model the
+   * workflow was started with unless the user pins the step, so adding an
+   * override here silently overrides the user's own choice for every run.
    */
   readonly modelOverride?: {
     readonly driver: ProviderDriverKind;
@@ -143,11 +147,6 @@ const WORKFLOW_SUBAGENT_SPAWN_DEFINITIONS: ReadonlyArray<WorkflowSubagentSpawnDe
     defaultTitlePrefix: "Browser App Review",
     expectedResult: "app-review-document",
     allowedParentWorkflowRoles: "any",
-    modelOverride: {
-      driver: ProviderDriverKind.make("codex"),
-      model: "gpt-5.6-sol",
-      options: [{ id: "reasoningEffort", value: "high" }],
-    },
   },
   {
     workflowPromptId: WORKFLOW_PROMPT_IDS.implementationFixCodex,
