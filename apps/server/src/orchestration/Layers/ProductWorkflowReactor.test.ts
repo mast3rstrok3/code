@@ -1664,6 +1664,56 @@ describe("ProductWorkflowReactor", () => {
     ),
   );
 
+  it.effect("pins the Engineering Workflow preset when a planning stage starts", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        // Threads opened straight into the planning composer mode reach the
+        // stage machine without a preset; nothing upstream pins one.
+        yield* seedProjectAndThread(system, {
+          interactionMode: "planning-workflow",
+          workflowPreset: null,
+        });
+        yield* system.engine.dispatch({
+          type: "thread.planning-stage.start",
+          commandId: commandId("planning-stage-start-presetless"),
+          threadId: productThreadId,
+          stage: "grill",
+          createdAt: now,
+        });
+        yield* system.reactor.drain;
+
+        const snapshot = yield* system.query.getSnapshot();
+        const thread = snapshot.threads.find((entry) => entry.id === productThreadId);
+        expect(thread?.workflowPreset).toBe("planning");
+        expect(thread?.interactionMode).toBe("planning-workflow");
+      }),
+    ),
+  );
+
+  it.effect("leaves an existing preset alone when a planning stage starts", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        yield* seedProjectAndThread(system, {
+          interactionMode: "planning-workflow",
+          workflowPreset: "wayfinder",
+        });
+        yield* system.engine.dispatch({
+          type: "thread.planning-stage.start",
+          commandId: commandId("planning-stage-start-wayfinder"),
+          threadId: productThreadId,
+          stage: "grill",
+          createdAt: now,
+        });
+        yield* system.reactor.drain;
+
+        const snapshot = yield* system.query.getSnapshot();
+        expect(snapshot.threads.find((entry) => entry.id === productThreadId)?.workflowPreset).toBe(
+          "wayfinder",
+        );
+      }),
+    ),
+  );
+
   it.effect("ignores normal planning workflows", () =>
     withSystem((system) =>
       Effect.gen(function* () {
@@ -1725,6 +1775,13 @@ describe("ProductWorkflowReactor", () => {
 
         snapshot = yield* system.query.getSnapshot();
         expect(snapshot.implementationRuns.some((run) => run.specId === normalSpec.id)).toBe(false);
+        expect(
+          snapshot.threads
+            .find((thread) => thread.id === planningThreadId)
+            ?.activities.filter(
+              (activity) => activity.kind === "planning-workflow.implementation-not-started",
+            ),
+        ).toHaveLength(1);
       }),
     ),
   );

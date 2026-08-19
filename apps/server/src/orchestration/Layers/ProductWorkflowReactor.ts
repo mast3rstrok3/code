@@ -488,6 +488,26 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    // Planning is over for a thread that never earned the implementation
+    // handoff. Say so in the thread: the stage reads `completed` either way,
+    // and a workflow that stops here is otherwise indistinguishable from one
+    // that finished its work.
+    if (event.payload.stage === "completed") {
+      yield* appendActivity({
+        threadId: thread.id,
+        tone: "info",
+        kind: "planning-workflow.implementation-not-started",
+        summary: "Planning completed without starting implementation",
+        payload: {
+          specId: event.payload.specId,
+          reasonMarkdown:
+            "This thread is not running a workflow that hands off to implementation, so its Planning Tickets stay open. Start implementation from the tickets when you want them built.",
+        },
+        createdAt: event.payload.revisedAt,
+      });
+      return;
+    }
+
     if (cycle.cycleNumber >= PLANNING_REVIEW_MAX_CYCLES) {
       yield* completePlanningWithWarnings({
         planningThreadId: thread.id,

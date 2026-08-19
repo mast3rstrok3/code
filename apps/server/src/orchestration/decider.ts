@@ -1976,6 +1976,29 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           : command.stage === "spec"
             ? buildPlanningSpecStagePrompt()
             : buildPlanningTicketsStagePrompt(spec!);
+      // Nothing upstream of this command requires a preset: a thread reaches the
+      // planning stage machine on its interaction mode alone. Pin the
+      // Engineering Workflow preset here so the thread that runs planning is
+      // also the thread the implementation handoff recognises — without it,
+      // planning completes and the workflow stops with nothing to show for it.
+      const presetPinEvent: PlannedOrchestrationEvent | null =
+        thread.workflowPreset == null
+          ? {
+              ...(yield* withEventBase({
+                aggregateKind: "thread",
+                aggregateId: thread.id,
+                occurredAt: command.createdAt,
+                commandId: command.commandId,
+              })),
+              type: "thread.composer-mode-set",
+              payload: {
+                threadId: thread.id,
+                interactionMode: "planning-workflow",
+                workflowPreset: "planning",
+                updatedAt: command.createdAt,
+              },
+            }
+          : null;
       // The grill is the workflow's human gate; from Spec authoring on, the
       // thread runs unattended.
       const runtimeModeSetEvent: PlannedOrchestrationEvent = {
@@ -2046,7 +2069,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           createdAt: command.createdAt,
         },
       };
-      return [runtimeModeSetEvent, stageStartedEvent, promptEvent, turnStartRequestedEvent];
+      return [
+        ...(presetPinEvent === null ? [] : [presetPinEvent]),
+        runtimeModeSetEvent,
+        stageStartedEvent,
+        promptEvent,
+        turnStartRequestedEvent,
+      ];
     }
 
     case "thread.planning-workflow.stage.set": {
