@@ -92,40 +92,6 @@ export const AppReviewWorkflowRepairTicket = Schema.Struct({
 });
 export type AppReviewWorkflowRepairTicket = typeof AppReviewWorkflowRepairTicket.Type;
 
-export const AppReviewWorkflowCycleStatus = Schema.Literals([
-  "reviewing",
-  "review-failed",
-  "planning",
-  "fixing",
-  "completed",
-]);
-export type AppReviewWorkflowCycleStatus = typeof AppReviewWorkflowCycleStatus.Type;
-
-export const AppReviewWorkflowCycle = Schema.Struct({
-  cycleNumber: PositiveInt,
-  status: AppReviewWorkflowCycleStatus,
-  reviewId: AppReviewId,
-  reviewerThreadId: ThreadId,
-  reviewVerdict: Schema.NullOr(Schema.Literals(["pending", "passed", "failed"])),
-  actionableFindingsMarkdown: Schema.NullOr(Schema.String),
-  planId: Schema.NullOr(TrimmedNonEmptyString),
-  /**
-   * The thread that runs gap analysis and writes the cycle's repair tickets.
-   * Absent on cycles recorded before gap analysis moved out of the reviewer
-   * thread; those still reconcile against `reviewerThreadId`.
-   */
-  plannerThreadId: Schema.optionalKey(Schema.NullOr(ThreadId)),
-  plannerTurnId: Schema.NullOr(TurnId),
-  fixerThreadId: Schema.NullOr(ThreadId),
-  repairTickets: Schema.optionalKey(Schema.Array(AppReviewWorkflowRepairTicket)),
-  ticketingTurnId: Schema.optionalKey(Schema.NullOr(TurnId)),
-  fixResult: Schema.NullOr(AppReviewWorkflowFixResult),
-  workspaceRevision: AppReviewWorkflowWorkspaceRevision,
-  startedAt: IsoDateTime,
-  completedAt: Schema.NullOr(IsoDateTime),
-});
-export type AppReviewWorkflowCycle = typeof AppReviewWorkflowCycle.Type;
-
 export const AppReviewWorkflowFailureReason = Schema.Literals([
   "review-blocked",
   "plan-missing",
@@ -150,6 +116,47 @@ export const AppReviewWorkflowFailure = Schema.Struct({
   failedAt: IsoDateTime,
 });
 export type AppReviewWorkflowFailure = typeof AppReviewWorkflowFailure.Type;
+
+export const AppReviewWorkflowCycleStatus = Schema.Literals([
+  "reviewing",
+  "review-failed",
+  "planning",
+  "fixing",
+  "completed",
+  /** The cycle could not finish its own work. The run spends it and reviews again. */
+  "failed",
+]);
+export type AppReviewWorkflowCycleStatus = typeof AppReviewWorkflowCycleStatus.Type;
+
+export const AppReviewWorkflowCycle = Schema.Struct({
+  cycleNumber: PositiveInt,
+  status: AppReviewWorkflowCycleStatus,
+  reviewId: AppReviewId,
+  reviewerThreadId: ThreadId,
+  reviewVerdict: Schema.NullOr(Schema.Literals(["pending", "passed", "failed"])),
+  actionableFindingsMarkdown: Schema.NullOr(Schema.String),
+  planId: Schema.NullOr(TrimmedNonEmptyString),
+  /**
+   * The thread that runs gap analysis and writes the cycle's repair tickets.
+   * Absent on cycles recorded before gap analysis moved out of the reviewer
+   * thread; those still reconcile against `reviewerThreadId`.
+   */
+  plannerThreadId: Schema.optionalKey(Schema.NullOr(ThreadId)),
+  plannerTurnId: Schema.NullOr(TurnId),
+  fixerThreadId: Schema.NullOr(ThreadId),
+  repairTickets: Schema.optionalKey(Schema.Array(AppReviewWorkflowRepairTicket)),
+  ticketingTurnId: Schema.optionalKey(Schema.NullOr(TurnId)),
+  fixResult: Schema.NullOr(AppReviewWorkflowFixResult),
+  /**
+   * Why this cycle stopped short, when it did. The run keeps going, so the
+   * cycle is the only place a spent cycle's reason survives.
+   */
+  failure: Schema.optionalKey(Schema.NullOr(AppReviewWorkflowFailure)),
+  workspaceRevision: AppReviewWorkflowWorkspaceRevision,
+  startedAt: IsoDateTime,
+  completedAt: Schema.NullOr(IsoDateTime),
+});
+export type AppReviewWorkflowCycle = typeof AppReviewWorkflowCycle.Type;
 
 export const AppReviewWorkflowRun = Schema.Struct({
   id: AppReviewWorkflowRunId,

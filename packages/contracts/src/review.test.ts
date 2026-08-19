@@ -199,6 +199,36 @@ it.effect("decodes cycles recorded before gap analysis had its own thread", () =
   }),
 );
 
+it.effect("decodes cycles recorded before a cycle could carry its own failure", () =>
+  Effect.gen(function* () {
+    const run = yield* decodeAppReviewWorkflowRun({ ...workflowRun, cycles: [legacyCycle] });
+    assert.strictEqual(run.cycles[0]?.failure, undefined);
+  }),
+);
+
+it.effect("keeps why a spent cycle stopped short", () =>
+  Effect.gen(function* () {
+    const run = yield* decodeAppReviewWorkflowRun({
+      ...workflowRun,
+      cycles: [
+        {
+          ...legacyCycle,
+          status: "failed",
+          failure: {
+            reason: "review-blocked",
+            phase: "review",
+            cycleNumber: 1,
+            detailMarkdown: "You've hit your usage limit.",
+            failedAt: "2026-01-01T00:00:00.000Z",
+          },
+        },
+      ],
+    });
+    assert.strictEqual(run.cycles[0]?.status, "failed");
+    assert.strictEqual(run.cycles[0]?.failure?.reason, "review-blocked");
+  }),
+);
+
 it.effect("carries the gap analysis thread on new cycles", () =>
   Effect.gen(function* () {
     const run = yield* decodeAppReviewWorkflowRun({

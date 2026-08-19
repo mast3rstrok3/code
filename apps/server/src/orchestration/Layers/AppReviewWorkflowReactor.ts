@@ -7,6 +7,7 @@ import {
   type AppReviewRecord,
   type AppReviewWorkflowCycle,
   type AppReviewWorkflowPhase,
+  type AppReviewWorkflowFailure,
   type AppReviewWorkflowFailureReason,
   type AppReviewWorkflowFixResult,
   type AppReviewWorkflowRepairTicket,
@@ -141,7 +142,7 @@ export function selectStandalonePreviewTargets(input: {
 
 export function nextAppReviewWorkflowAction(
   run: AppReviewWorkflowRun,
-): "none" | "review" | "reconcile-review" | "reconcile-plan" | "reconcile-fix" {
+): "none" | "review" | "exhaust" | "reconcile-review" | "reconcile-plan" | "reconcile-fix" {
   if (run.status !== "running") return "none";
   switch (run.activePhase) {
     case null:
@@ -151,7 +152,10 @@ export function nextAppReviewWorkflowAction(
       ) {
         return "none";
       }
-      return run.cyclesUsed < run.cycleBudget ? "review" : "none";
+      // Between cycles with nothing left to spend, the run is over. Saying so
+      // here rather than only where the last cycle ended is what lets a restart
+      // finish a run whose final cycle landed and whose close did not.
+      return run.cyclesUsed < run.cycleBudget ? "review" : "exhaust";
     case "review":
       return "reconcile-review";
     case "planning":
@@ -212,10 +216,19 @@ export function findAppReviewParentTicket(
   return undefined;
 }
 
+/**
+ * Whether the thread driving a phase has stopped for good.
+ *
+ * A session that is starting or running answers this on its own, whatever the
+ * latest turn says. A checkpoint that fails while the provider is still coming
+ * up rewrites the latest turn to `error` before the agent has run a token, and
+ * reading that as a dead thread ends runs whose reviewer was only queued.
+ */
 export function threadTurnFailed(thread: {
   readonly latestTurn: { readonly state: string } | null;
   readonly session: { readonly status: string } | null;
 }): boolean {
+  if (thread.session?.status === "starting" || thread.session?.status === "running") return false;
   return (
     thread.latestTurn?.state === "error" ||
     thread.latestTurn?.state === "interrupted" ||
@@ -252,6 +265,55 @@ export function successfulFixAction(
 ): "exhausted" | "review" | "await-preview-refresh" {
   if (run.cyclesUsed >= run.cycleBudget) return "exhausted";
   return run.caller.type === "standalone" ? "review" : "await-preview-refresh";
+}
+
+/**
+ * What a cycle that could not finish its own work means for the run.
+ *
+ * Cycles exist to catch and repair what implementation missed, and a reviewer
+ * that died, a gap analysis that wrote nothing, or a repair that failed its
+ * validation all leave that job undone. So the cycle is spent, not the run: the
+ * next one starts a fresh review, and only an empty budget stops the loop. The
+ * caller then gets an exhausted run, which it already takes to the merge gate
+ * the same way it takes a run whose last repair never satisfied the review.
+ */
+export function cycleFailureAction(run: AppReviewWorkflowRun): "next-cycle" | "exhausted" {
+  return run.cyclesUsed < run.cycleBudget ? "next-cycle" : "exhausted";
+}
+
+/**
+ * Close the run's latest cycle on a failure, leaving the run idle between
+ * cycles.
+ *
+ * The cycle keeps the reason it stopped, because the run moves on and would
+ * otherwise carry only the last one of ten. The workspace is re-baselined from
+ * what the caller measured: a repair that failed its validation may still have
+ * committed, and every phase entry point refuses to run against a workspace
+ * that moved since the phase before it recorded one.
+ */
+export function spendFailedCycle(input: {
+  readonly run: AppReviewWorkflowRun;
+  readonly failure: AppReviewWorkflowFailure;
+  readonly workspaceRevision: AppReviewWorkflowWorkspaceRevision;
+}): AppReviewWorkflowRun {
+  const cycleNumber = input.run.cycles.at(-1)?.cycleNumber;
+  return {
+    ...input.run,
+    activePhase: null,
+    activeThreadId: null,
+    workspaceRevision: input.workspaceRevision,
+    cycles: input.run.cycles.map((cycle) =>
+      cycle.cycleNumber === cycleNumber
+        ? {
+            ...cycle,
+            status: "failed" as const,
+            failure: input.failure,
+            completedAt: input.failure.failedAt,
+          }
+        : cycle,
+    ),
+    updatedAt: input.failure.failedAt,
+  };
 }
 
 /**
@@ -735,6 +797,14 @@ const make = Effect.gen(function* () {
     });
   });
 
+  /**
+   * Stop after the last cycle, without calling the run a failure.
+   *
+   * A budget can run out two ways: every cycle repaired something and the
+   * review still had more to say, or the cycles kept breaking. Only the second
+   * has a reason to show, so the run surfaces the last cycle's failure and
+   * leaves `failure` null when there was none.
+   */
   const finishExhausted = Effect.fn("AppReviewWorkflowReactor.finishExhausted")(function* (
     run: AppReviewWorkflowRun,
     occurredAt: string,
@@ -746,10 +816,59 @@ const make = Effect.gen(function* () {
       activePhase: null,
       activeThreadId: null,
       finalHeadSha: run.workspaceRevision.headSha,
-      failure: null,
+      failure: run.cycles.at(-1)?.failure ?? null,
       updatedAt: occurredAt,
       completedAt: occurredAt,
     });
+  });
+
+  /**
+   * End the current cycle on a failure and keep the run going.
+   *
+   * Only the work a cycle owns belongs here: the review, the gap analysis and
+   * the repair. A broken precondition, such as no worktree, no preview target,
+   * or a workspace that moved, is not something another cycle can get past, and
+   * still goes through `failRun`.
+   *
+   * The next cycle re-baselines the workspace first, the same way an operator's
+   * phase re-run does. A repair that failed its validation may still have
+   * committed, and that head is what the next review has to look at.
+   */
+  const failCycle = Effect.fn("AppReviewWorkflowReactor.failCycle")(function* (input: {
+    readonly run: AppReviewWorkflowRun;
+    readonly reason: AppReviewWorkflowFailureReason;
+    readonly detailMarkdown: string;
+    readonly occurredAt: string;
+  }) {
+    const run = input.run;
+    if (terminalStatuses.has(run.status)) return;
+    const cycle = run.cycles.at(-1);
+    if (cycle === undefined) {
+      yield* failRun(input);
+      return;
+    }
+    const target = yield* resolveTarget(run.targetThreadId);
+    const spentRun = spendFailedCycle({
+      run,
+      failure: {
+        reason: input.reason,
+        phase: run.activePhase,
+        cycleNumber: cycle.cycleNumber,
+        detailMarkdown: input.detailMarkdown,
+        failedAt: input.occurredAt,
+      },
+      workspaceRevision:
+        target === null ? run.workspaceRevision : yield* computeWorkspaceRevision(target.cwd),
+    });
+    yield* updateRun(spentRun);
+    switch (cycleFailureAction(spentRun)) {
+      case "next-cycle":
+        yield* startReview(spentRun, input.occurredAt);
+        return;
+      case "exhausted":
+        yield* finishExhausted(spentRun, input.occurredAt);
+        return;
+    }
   });
 
   const startPlanning = Effect.fn("AppReviewWorkflowReactor.startPlanning")(function* (input: {
@@ -921,7 +1040,7 @@ const make = Effect.gen(function* () {
       threadTurnFailed(reviewer)
     ) {
       if ((yield* phaseThreadState(reviewer)) === "nudging") return;
-      yield* failRun({
+      yield* failCycle({
         run,
         reason: "review-blocked",
         detailMarkdown:
@@ -1132,7 +1251,7 @@ const make = Effect.gen(function* () {
     if (planner === undefined) return;
     if (threadTurnFailed(planner) && !hasSettledCheckpoint(planner)) {
       if ((yield* phaseThreadState(planner)) === "nudging") return;
-      yield* failRun({
+      yield* failCycle({
         run,
         reason: "plan-missing",
         detailMarkdown:
@@ -1146,7 +1265,7 @@ const make = Effect.gen(function* () {
     const turn = planner.latestTurn;
     if (turn === null) return;
     if (turn.state === "error" || turn.state === "interrupted") {
-      yield* failRun({
+      yield* failCycle({
         run,
         reason: "plan-missing",
         detailMarkdown: "The non-interactive planning turn did not complete successfully.",
@@ -1169,7 +1288,7 @@ const make = Effect.gen(function* () {
         ? ticketActivity.payload["tickets"]
         : undefined;
     if (!Array.isArray(rawTickets) || rawTickets.length === 0) {
-      yield* failRun({
+      yield* failCycle({
         run,
         reason: "plan-missing",
         detailMarkdown: "The App Review thread completed gap analysis without repair tickets.",
@@ -1217,7 +1336,7 @@ const make = Effect.gen(function* () {
       parentKeys.size !== 1 ||
       !keysAreSequential
     ) {
-      yield* failRun({
+      yield* failCycle({
         run,
         reason: "plan-malformed",
         detailMarkdown:
@@ -1278,7 +1397,7 @@ const make = Effect.gen(function* () {
     const result = parseFixResult(fixer, run, cycle);
     if (result === null && threadTurnFailed(fixer)) {
       if ((yield* phaseThreadState(fixer)) === "nudging") return;
-      yield* failRun({
+      yield* failCycle({
         run,
         reason: "fixer-failed",
         detailMarkdown:
@@ -1290,7 +1409,7 @@ const make = Effect.gen(function* () {
     }
     if (result === null || !hasSettledCheckpoint(fixer)) return;
     if (result.status !== "succeeded") {
-      yield* failRun({
+      yield* failCycle({
         run,
         reason: "fixer-failed",
         detailMarkdown: result.notesMarkdown || `The App Review implementation ${result.status}.`,
@@ -1302,7 +1421,7 @@ const make = Effect.gen(function* () {
       result.validations.length === 0 ||
       result.validations.some((validation) => validation.status !== "passed")
     ) {
-      yield* failRun({
+      yield* failCycle({
         run,
         reason: "fixer-failed",
         detailMarkdown:
@@ -1373,6 +1492,9 @@ const make = Effect.gen(function* () {
         return;
       case "review":
         yield* startReview(run, occurredAt);
+        return;
+      case "exhaust":
+        yield* finishExhausted(run, occurredAt);
         return;
       case "reconcile-review":
         yield* reconcileReview(run, occurredAt);
@@ -1581,19 +1703,22 @@ const make = Effect.gen(function* () {
       if (run !== null && run.activeThreadId === event.payload.threadId) {
         const active = yield* resolveThread(event.payload.threadId);
         if (active !== undefined && (yield* phaseThreadState(active)) === "nudging") return;
-        yield* failRun({
-          run,
-          reason:
-            run.activePhase === "fixing"
-              ? "fixer-failed"
-              : run.activePhase === "review"
-                ? "review-blocked"
-                : "unknown",
-          detailMarkdown:
-            event.payload.session.lastError ??
-            `The ${run.activePhase ?? "workflow"} provider session failed.`,
-          occurredAt: event.occurredAt,
-        });
+        // A phase we can name is that cycle's work failing, so the cycle pays
+        // for it. A session error with no phase to blame has no cycle to spend.
+        const phaseReason =
+          run.activePhase === "fixing"
+            ? ("fixer-failed" as const)
+            : run.activePhase === "review"
+              ? ("review-blocked" as const)
+              : run.activePhase === "planning"
+                ? ("plan-missing" as const)
+                : null;
+        const detailMarkdown =
+          event.payload.session.lastError ??
+          `The ${run.activePhase ?? "workflow"} provider session failed.`;
+        yield* phaseReason === null
+          ? failRun({ run, reason: "unknown", detailMarkdown, occurredAt: event.occurredAt })
+          : failCycle({ run, reason: phaseReason, detailMarkdown, occurredAt: event.occurredAt });
         return;
       }
     }

@@ -11,14 +11,17 @@ import {
 import { WORKFLOW_NUDGE_EXHAUSTED_MESSAGE, type WorkflowNudgeThread } from "../workflowNudge.ts";
 import {
   appReviewPhaseThreadState,
+  cycleFailureAction,
   findAppReviewParentTicket,
   nextAppReviewWorkflowAction,
   selectReviewRunToStart,
+  spendFailedCycle,
   selectStandalonePreviewTargets,
   successfulFixAction,
   terminalReviewAction,
   terminalReviewEvidenceFailure,
   terminalReviewPassFailure,
+  threadTurnFailed,
 } from "./AppReviewWorkflowReactor.ts";
 
 const now = "2026-01-01T00:00:00.000Z";
@@ -99,6 +102,109 @@ function review(verdict: "passed" | "failed", withFinding = verdict === "failed"
 
 it("always begins a nonterminal run with Browser App Review", () => {
   expect(nextAppReviewWorkflowAction(run())).toBe("review");
+});
+
+it("spends a broken cycle and reviews again instead of ending the run", () => {
+  expect(cycleFailureAction(run({ cyclesUsed: 1 }))).toBe("next-cycle");
+  expect(cycleFailureAction(run({ cyclesUsed: 9 }))).toBe("next-cycle");
+});
+
+it("stops once a broken cycle spends the last of the budget", () => {
+  expect(cycleFailureAction(run({ cyclesUsed: 10 }))).toBe("exhausted");
+});
+
+function reviewingRun(cyclesUsed = 1): AppReviewWorkflowRun {
+  return run({
+    cyclesUsed,
+    activePhase: "review",
+    activeThreadId: ThreadId.make("thread-reviewer"),
+    cycles: [
+      {
+        cycleNumber: cyclesUsed,
+        status: "reviewing",
+        reviewId: AppReviewId.make("app-review-1"),
+        reviewerThreadId: ThreadId.make("thread-reviewer"),
+        reviewVerdict: null,
+        actionableFindingsMarkdown: null,
+        planId: null,
+        plannerTurnId: null,
+        fixerThreadId: null,
+        fixResult: null,
+        workspaceRevision: {
+          headSha: "abc123",
+          workingTreeDiffHash: "working",
+          branchDiffHash: "branch",
+          fingerprint: "abc123:working:branch",
+        },
+        startedAt: now,
+        completedAt: null,
+      },
+    ],
+  });
+}
+
+const blocked = {
+  reason: "review-blocked",
+  phase: "review",
+  cycleNumber: 1,
+  detailMarkdown: "You've hit your usage limit.",
+  failedAt: "2026-01-01T00:01:00.000Z",
+} as const;
+
+const movedRevision = {
+  headSha: "def456",
+  workingTreeDiffHash: "working",
+  branchDiffHash: "branch",
+  fingerprint: "def456:working:branch",
+} as const;
+
+it("keeps a broken cycle's reason on the cycle and leaves the run running", () => {
+  const spent = spendFailedCycle({
+    run: reviewingRun(),
+    failure: blocked,
+    workspaceRevision: movedRevision,
+  });
+
+  expect(spent.status).toBe("running");
+  expect(spent.outcome).toBeNull();
+  expect(spent.activePhase).toBeNull();
+  expect(spent.activeThreadId).toBeNull();
+  expect(spent.cycles[0]?.status).toBe("failed");
+  expect(spent.cycles[0]?.failure).toEqual(blocked);
+  expect(spent.cycles[0]?.completedAt).toBe(blocked.failedAt);
+});
+
+it("re-baselines the workspace a repair may have moved before the next cycle", () => {
+  const spent = spendFailedCycle({
+    run: reviewingRun(),
+    failure: blocked,
+    workspaceRevision: movedRevision,
+  });
+
+  expect(spent.workspaceRevision).toEqual(movedRevision);
+  expect(selectReviewRunToStart(spent.id, [spent])).toBe(spent);
+});
+
+it("leaves earlier cycles untouched when a later one breaks", () => {
+  const twoCycles = {
+    ...reviewingRun(2),
+    cycles: [...reviewingRun(1).cycles, ...reviewingRun(2).cycles],
+  };
+  const spent = spendFailedCycle({
+    run: twoCycles,
+    failure: blocked,
+    workspaceRevision: movedRevision,
+  });
+
+  expect(spent.cycles[0]?.status).toBe("reviewing");
+  expect(spent.cycles[1]?.status).toBe("failed");
+});
+
+it("exhausts a run left between cycles with nothing to spend", () => {
+  // The close after the final cycle can be lost to a restart. Reading the
+  // action off the run is what finishes it on the next sweep.
+  expect(nextAppReviewWorkflowAction(run({ cyclesUsed: 10 }))).toBe("exhaust");
+  expect(nextAppReviewWorkflowAction(run({ cyclesUsed: 9 }))).toBe("review");
 });
 
 it("selects only the latest idle run for a new review cycle", () => {
@@ -539,6 +645,21 @@ it("fails the run once nudging gives up or nobody is nudging", () => {
 
   expect(phaseState(exhausted)).toBe("failed");
   expect(phaseState(interrupted)).toBe("failed");
+});
+
+it("leaves a queued phase thread alone when its checkpoint failed first", () => {
+  // A checkpoint captured while the provider was still starting rewrites the
+  // latest turn to "error". The session is the one that knows better.
+  expect(
+    threadTurnFailed({ latestTurn: { state: "error" }, session: { status: "starting" } }),
+  ).toBe(false);
+  expect(threadTurnFailed({ latestTurn: { state: "error" }, session: { status: "running" } })).toBe(
+    false,
+  );
+  expect(threadTurnFailed({ latestTurn: { state: "error" }, session: { status: "error" } })).toBe(
+    true,
+  );
+  expect(threadTurnFailed({ latestTurn: { state: "error" }, session: null })).toBe(true);
 });
 
 it("leaves a working phase thread alone", () => {

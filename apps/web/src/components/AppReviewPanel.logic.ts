@@ -71,31 +71,45 @@ export function appReviewRunStatusLabel(run: AppReviewWorkflowRun): string {
   return `${phase} · Cycle ${Math.max(1, cycle)} of ${run.cycleBudget}`;
 }
 
-export type AppReviewCycleStepStatus = "complete" | "current" | "pending" | "not-needed";
+export type AppReviewCycleStepStatus = "complete" | "current" | "pending" | "not-needed" | "failed";
 
 export function appReviewCycleStepStatuses(
   cycle: AppReviewWorkflowCycle,
 ): readonly [AppReviewCycleStepStatus, AppReviewCycleStepStatus, AppReviewCycleStepStatus] {
+  // A spent cycle names the step that broke, so the two after it read as never
+  // reached rather than as work still to come. Cycles recorded before the
+  // failure moved onto the cycle blame the review, where the run used to end.
+  const brokeAt = cycle.status === "failed" ? (cycle.failure?.phase ?? "review") : null;
   const reviewPassed = cycle.reviewVerdict === "passed";
   const reviewComplete = cycle.reviewVerdict !== null && cycle.reviewVerdict !== "pending";
   const planComplete = cycle.planId !== null;
   const fixComplete = cycle.fixResult?.status === "succeeded";
   return [
-    reviewComplete ? "complete" : cycle.status === "reviewing" ? "current" : "pending",
-    reviewPassed
-      ? "not-needed"
-      : planComplete
+    brokeAt === "review"
+      ? "failed"
+      : reviewComplete
         ? "complete"
-        : cycle.status === "planning"
+        : cycle.status === "reviewing"
           ? "current"
           : "pending",
-    reviewPassed
-      ? "not-needed"
-      : fixComplete
-        ? "complete"
-        : cycle.status === "fixing"
-          ? "current"
-          : "pending",
+    brokeAt === "planning"
+      ? "failed"
+      : reviewPassed
+        ? "not-needed"
+        : planComplete
+          ? "complete"
+          : cycle.status === "planning"
+            ? "current"
+            : "pending",
+    brokeAt === "fixing"
+      ? "failed"
+      : reviewPassed
+        ? "not-needed"
+        : fixComplete
+          ? "complete"
+          : cycle.status === "fixing"
+            ? "current"
+            : "pending",
   ];
 }
 

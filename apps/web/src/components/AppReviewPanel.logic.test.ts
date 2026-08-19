@@ -117,6 +117,44 @@ describe("App Review workflow panel logic", () => {
     ).toEqual(["complete", "not-needed", "not-needed"]);
   });
 
+  it("marks the step a spent cycle broke on and leaves the rest unreached", () => {
+    const run = makeAppReviewWorkflowRun();
+    const spent = {
+      ...run.cycles[0]!,
+      status: "failed" as const,
+      reviewVerdict: null,
+      planId: null,
+      fixerThreadId: null,
+      failure: {
+        reason: "review-blocked" as const,
+        phase: "review" as const,
+        cycleNumber: 1,
+        detailMarkdown: "You've hit your usage limit.",
+        failedAt: "2026-01-01T00:01:00.000Z",
+      },
+    };
+    expect(appReviewCycleStepStatuses(spent)).toEqual(["failed", "pending", "pending"]);
+    expect(
+      appReviewCycleStepStatuses({
+        ...spent,
+        failure: { ...spent.failure, phase: "planning" as const },
+      }),
+    ).toEqual(["pending", "failed", "pending"]);
+  });
+
+  it("blames the review when a spent cycle predates per-cycle failures", () => {
+    const run = makeAppReviewWorkflowRun();
+    expect(
+      appReviewCycleStepStatuses({
+        ...run.cycles[0]!,
+        status: "failed",
+        reviewVerdict: null,
+        planId: null,
+        fixerThreadId: null,
+      }),
+    ).toEqual(["failed", "pending", "pending"]);
+  });
+
   it("selects the latest run controlled by the open thread", () => {
     const threadId = ThreadId.make("thread-controller");
     const older = makeAppReviewWorkflowRun();

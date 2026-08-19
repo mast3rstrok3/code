@@ -53,6 +53,35 @@ it("reads a terminated failed turn as blocked, whatever the provider did with it
   ).toBe(true);
 });
 
+it("claims a failed session that still names the turn it gave up on", () => {
+  // The provider reports the failure, then clears the active turn. A stage
+  // owner reconciling between the two used to see a thread nobody would nudge.
+  expect(
+    isBlockedAfterFailedTurn(
+      thread({
+        session: {
+          status: "error",
+          activeTurnId: "turn-1",
+          lastError: "You've hit your usage limit.",
+          updatedAt: blockedAt,
+        },
+      }),
+    ),
+  ).toBe(true);
+  expect(
+    isBlockedAfterFailedTurn(
+      thread({
+        session: {
+          status: "stopped",
+          activeTurnId: "turn-1",
+          lastError: "boom",
+          updatedAt: blockedAt,
+        },
+      }),
+    ),
+  ).toBe(true);
+});
+
 it("leaves running, interrupted and never-started threads alone", () => {
   const running = thread({
     session: { status: "running", activeTurnId: "turn-1", lastError: null, updatedAt: blockedAt },

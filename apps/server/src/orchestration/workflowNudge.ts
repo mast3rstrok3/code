@@ -103,17 +103,20 @@ export interface WorkflowNudgeThread extends WorkflowPauseThread {
  * its session down after an error leaves `stopped`, one that keeps it leaves
  * `error`, and neither says whether a turn was lost. An interrupted turn is
  * excluded — that is a human pressing Stop.
+ *
+ * A session that has given up counts even while it still names the turn it
+ * gave up on. Providers report the failure first and clear the active turn in a
+ * second event, and a stage owner that reconciles inside that window would read
+ * a failed thread the nudge path had not claimed, and end the run on it.
  */
 export function isBlockedAfterFailedTurn(thread: WorkflowNudgeThread): boolean {
   const session = thread.session;
-  return (
-    thread.deletedAt === null &&
-    thread.latestTurn?.state === "error" &&
-    session !== null &&
-    session.status !== "running" &&
-    session.status !== "starting" &&
-    session.activeTurnId === null
-  );
+  if (thread.deletedAt !== null || thread.latestTurn?.state !== "error" || session === null) {
+    return false;
+  }
+  if (session.status === "running" || session.status === "starting") return false;
+  const sessionGaveUp = session.status === "error" || session.status === "stopped";
+  return sessionGaveUp || session.activeTurnId === null;
 }
 
 /** True once the nudge path has given up on this thread. */

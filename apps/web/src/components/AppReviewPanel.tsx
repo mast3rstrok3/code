@@ -26,6 +26,7 @@ import { Button } from "./ui/button";
 import { DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { AppReviewDocument } from "./AppReviewDocument";
 import { AppReviewLaunchDialog } from "./AppReviewLaunchDialog";
+import { cn } from "~/lib/utils";
 
 export function AppReviewPanel(props: {
   mode: DiffPanelMode;
@@ -207,7 +208,8 @@ function RunDetails(props: {
         {props.run.failure ? (
           <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3">
             <p className="text-xs font-medium text-destructive">
-              Blocked · {props.run.failure.reason}
+              {props.run.status === "exhausted" ? "Last cycle" : "Blocked"} ·{" "}
+              {props.run.failure.reason}
             </p>
             <p className="mt-1 whitespace-pre-wrap text-xs text-muted-foreground">
               {props.run.failure.detailMarkdown}
@@ -265,6 +267,11 @@ function RunDetails(props: {
                     : {})}
                 />
               </ol>
+              {cycle.failure ? (
+                <p className="whitespace-pre-wrap border-b px-3 py-2 text-xs text-destructive">
+                  Cycle spent · {cycle.failure.reason}: {cycle.failure.detailMarkdown}
+                </p>
+              ) : null}
               {cycle.actionableFindingsMarkdown ? (
                 <p className="whitespace-pre-wrap border-b px-3 py-2 text-xs text-muted-foreground">
                   {cycle.actionableFindingsMarkdown}
@@ -300,7 +307,9 @@ function CycleStep(props: {
         ? "Complete"
         : props.status === "current"
           ? "In progress"
-          : "Pending";
+          : props.status === "failed"
+            ? "Failed"
+            : "Pending";
   return (
     <li className="flex items-start justify-between gap-3">
       <div className="min-w-0">
@@ -310,7 +319,14 @@ function CycleStep(props: {
         <p className="mt-0.5 text-xs text-muted-foreground">{props.description}</p>
       </div>
       <div className="flex shrink-0 items-center gap-1.5">
-        <span className="text-[11px] text-muted-foreground">{statusLabel}</span>
+        <span
+          className={cn(
+            "text-[11px]",
+            props.status === "failed" ? "text-destructive" : "text-muted-foreground",
+          )}
+        >
+          {statusLabel}
+        </span>
         {props.onOpen ? (
           <Button type="button" size="xs" variant="ghost" onClick={props.onOpen}>
             {props.actionLabel} <ExternalLink className="size-3" />
