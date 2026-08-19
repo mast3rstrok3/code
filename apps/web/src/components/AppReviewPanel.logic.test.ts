@@ -13,9 +13,11 @@ import {
   appReviewCycleStepStatuses,
   appReviewRunFailureSummary,
   appReviewRunStatusLabel,
+  appReviewRunTicketLabel,
   isValidAppReviewWorkflowLaunch,
   selectActiveAppReviewRecord,
   selectAppReviewRunsForPanel,
+  selectHeadlineAppReviewRun,
   selectLatestAppReviewControllerRun,
 } from "./AppReviewPanel.logic";
 
@@ -175,7 +177,7 @@ describe("App Review workflow panel logic", () => {
     );
   });
 
-  it("shows every run from a workflow-scoped artifact response", () => {
+  it("shows every run from a workflow-scoped artifact response, oldest first", () => {
     const older = makeAppReviewWorkflowRun();
     const newer = {
       ...older,
@@ -191,7 +193,7 @@ describe("App Review workflow panel logic", () => {
         openedThreadId: ThreadId.make("workflow-root"),
         workflowScoped: true,
       }).map((run) => run.id),
-    ).toEqual([newer.id, older.id]);
+    ).toEqual([older.id, newer.id]);
     expect(
       selectAppReviewRunsForPanel({
         runs: [older, newer],
@@ -199,6 +201,87 @@ describe("App Review workflow panel logic", () => {
         workflowScoped: false,
       }).map((run) => run.id),
     ).toEqual([older.id]);
+  });
+
+  it("orders runs by ticket and then by cycle, with the workflow's own review last", () => {
+    const base = makeAppReviewWorkflowRun();
+    const secondTicket = makeTicketRun({
+      id: "app-review-workflow-ticket-2",
+      ticketId: "ticket-2",
+      createdAt: "2026-08-11T00:01:00.000Z",
+    });
+    const firstTicket = makeTicketRun({
+      id: "app-review-workflow-ticket-1",
+      ticketId: "ticket-1",
+      createdAt: "2026-08-11T00:02:00.000Z",
+    });
+    const firstTicketRerun = makeTicketRun({
+      id: "app-review-workflow-ticket-1-again",
+      ticketId: "ticket-1",
+      createdAt: "2026-08-11T00:03:00.000Z",
+    });
+    const runLevel = {
+      ...base,
+      id: AppReviewWorkflowRunId.make("app-review-workflow-run-level"),
+      caller: {
+        type: "implementation" as const,
+        implementationRunId: "implementation-run-1",
+        orchestratorThreadId: ThreadId.make("thread-orchestrator"),
+      },
+      createdAt: "2026-08-11T00:00:00.000Z",
+    };
+
+    expect(
+      selectAppReviewRunsForPanel({
+        runs: [runLevel, firstTicketRerun, secondTicket, firstTicket],
+        openedThreadId: ThreadId.make("workflow-root"),
+        workflowScoped: true,
+        tickets: [makeTicket("ticket-1", 0), makeTicket("ticket-2", 1)],
+      }).map((run) => run.id),
+    ).toEqual([firstTicket.id, firstTicketRerun.id, secondTicket.id, runLevel.id]);
+  });
+
+  it("names a ticket run by its ticket and leaves the workflow's own review unnamed", () => {
+    const tickets = [makeTicket("ticket-1", 0)];
+    const ticketRun = makeTicketRun({
+      id: "app-review-workflow-ticket-1",
+      ticketId: "ticket-1",
+      createdAt: "2026-08-11T00:02:00.000Z",
+    });
+
+    expect(appReviewRunTicketLabel(ticketRun, tickets)).toBe("TICKET-1 · Ticket ticket-1");
+    expect(appReviewRunTicketLabel(makeAppReviewWorkflowRun(), tickets)).toBeNull();
+    expect(
+      appReviewRunTicketLabel(
+        makeTicketRun({
+          id: "app-review-workflow-dropped",
+          ticketId: "ticket-dropped",
+          createdAt: "2026-08-11T00:02:00.000Z",
+        }),
+        tickets,
+      ),
+    ).toBe("ticket-dropped");
+  });
+
+  it("headlines the running review, and the last one when nothing runs", () => {
+    const running = makeAppReviewWorkflowRun();
+    const settled: AppReviewWorkflowRun = {
+      ...running,
+      id: AppReviewWorkflowRunId.make("app-review-workflow-settled"),
+      status: "passed",
+      outcome: "passed",
+      activePhase: null,
+    };
+
+    expect(selectHeadlineAppReviewRun([settled, running])?.id).toBe(running.id);
+    expect(selectHeadlineAppReviewRun([running, settled])?.id).toBe(running.id);
+    expect(
+      selectHeadlineAppReviewRun([
+        { ...settled, id: AppReviewWorkflowRunId.make("first") },
+        settled,
+      ])?.id,
+    ).toBe(settled.id);
+    expect(selectHeadlineAppReviewRun([])).toBeNull();
   });
 
   it("summarizes a launch failure without exposing its stack trace", () => {
@@ -291,5 +374,39 @@ function makeAppReviewWorkflowRun(): AppReviewWorkflowRun {
     createdAt: "2026-08-11T00:00:00.000Z",
     updatedAt: "2026-08-11T00:01:00.000Z",
     completedAt: null,
+  };
+}
+
+function makeTicket(id: string, ordinal: number) {
+  return {
+    id,
+    key: `TICKET-${String(ordinal + 1)}`,
+    specId: "spec-1",
+    ordinal,
+    title: `Ticket ${id}`,
+    bodyMarkdown: "Body",
+    plannedFileChanges: [],
+    dependencies: [],
+    status: "open",
+    createdAt: "2026-08-11T00:00:00.000Z",
+    updatedAt: "2026-08-11T00:00:00.000Z",
+  };
+}
+
+function makeTicketRun(input: {
+  id: string;
+  ticketId: string;
+  createdAt: string;
+}): AppReviewWorkflowRun {
+  return {
+    ...makeAppReviewWorkflowRun(),
+    id: AppReviewWorkflowRunId.make(input.id),
+    caller: {
+      type: "implementation",
+      implementationRunId: "implementation-run-1",
+      orchestratorThreadId: ThreadId.make("thread-orchestrator"),
+      ticketId: input.ticketId,
+    },
+    createdAt: input.createdAt,
   };
 }

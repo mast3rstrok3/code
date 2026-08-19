@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { ExternalLink, PlayCircle, Square } from "lucide-react";
+import { ChevronDown, ChevronRight, ExternalLink, PlayCircle, Square } from "lucide-react";
 import type {
   AppReviewWorkflowRun,
   ScopedThreadRef,
@@ -19,7 +19,9 @@ import type {
 import {
   appReviewCycleStepStatuses,
   appReviewRunStatusLabel,
+  appReviewRunTicketLabel,
   selectAppReviewRunsForPanel,
+  selectHeadlineAppReviewRun,
 } from "./AppReviewPanel.logic";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -58,11 +60,13 @@ export function AppReviewPanel(props: {
         runs,
         openedThreadId: props.threadRef.threadId,
         workflowScoped: props.workflowArtifacts != null,
+        tickets: planningWorkflow?.tickets ?? [],
       }),
-    [props.threadRef.threadId, props.workflowArtifacts, runs],
+    [planningWorkflow?.tickets, props.threadRef.threadId, props.workflowArtifacts, runs],
   );
-  const currentRun = relevantRuns[0] ?? null;
+  const currentRun = selectHeadlineAppReviewRun(relevantRuns);
   const activeRun = relevantRuns.find((run) => run.status === "running") ?? null;
+  const [expandedRunIds, setExpandedRunIds] = useState<Record<string, boolean>>({});
   const legacyRecords = records.filter(
     (record) => !runs.some((run) => run.cycles.some((cycle) => cycle.reviewId === record.id)),
   );
@@ -116,7 +120,14 @@ export function AppReviewPanel(props: {
                 records={records}
                 environmentId={props.threadRef.environmentId}
                 onOpenThread={props.onOpenThread}
-                label={relevantRuns.length > 1 ? `App Review ${relevantRuns.length - index}` : null}
+                label={
+                  appReviewRunTicketLabel(run, planningWorkflow?.tickets ?? []) ??
+                  (relevantRuns.length > 1 ? `App Review ${String(index + 1)}` : "App Review")
+                }
+                open={expandedRunIds[run.id] ?? false}
+                onToggle={() =>
+                  setExpandedRunIds((current) => ({ ...current, [run.id]: !current[run.id] }))
+                }
               />
             ))}
           </div>
@@ -179,115 +190,158 @@ export function AppReviewPanel(props: {
   );
 }
 
+/**
+ * One App Review run, folded down to its ticket and status. A workflow can
+ * carry a review per ticket plus its own, so every run and every cycle inside
+ * it starts closed and the panel opens as a list the user can scan.
+ */
 function RunDetails(props: {
   readonly run: AppReviewWorkflowRun;
   readonly records: WorkflowArtifactsSnapshot["appReviews"];
   readonly environmentId: ScopedThreadRef["environmentId"];
   readonly onOpenThread: (threadId: ThreadId) => void;
-  readonly label: string | null;
+  readonly label: string;
+  readonly open: boolean;
+  readonly onToggle: () => void;
 }) {
+  const [expandedCycles, setExpandedCycles] = useState<Record<number, boolean>>({});
   const recordById = new Map(props.records.map((record) => [record.id, record] as const));
   return (
     <section>
-      <div className="space-y-3 border-b border-border px-4 py-3">
-        {props.label ? <h3 className="text-sm font-semibold">{props.label}</h3> : null}
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="outline" size="sm">
-            {appReviewRunStatusLabel(props.run)}
-          </Badge>
-          <span className="text-xs text-muted-foreground">
-            {props.run.cyclesUsed} of {props.run.cycleBudget} cycles used
-          </span>
-        </div>
-        <div>
-          <p className="text-xs font-medium text-foreground">Original brief</p>
-          <p className="mt-1 whitespace-pre-wrap text-sm text-muted-foreground">
-            {props.run.briefMarkdown}
-          </p>
-        </div>
-        {props.run.failure ? (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3">
-            <p className="text-xs font-medium text-destructive">
-              {props.run.status === "exhausted" ? "Last cycle" : "Blocked"} ·{" "}
-              {props.run.failure.reason}
-            </p>
-            <p className="mt-1 whitespace-pre-wrap text-xs text-muted-foreground">
-              {props.run.failure.detailMarkdown}
-            </p>
-          </div>
-        ) : null}
-      </div>
+      <button
+        type="button"
+        aria-expanded={props.open}
+        onClick={props.onToggle}
+        className="flex w-full cursor-pointer items-center gap-2 px-4 py-3 text-left"
+      >
+        {props.open ? (
+          <ChevronDown className="size-3.5 shrink-0" />
+        ) : (
+          <ChevronRight className="size-3.5 shrink-0" />
+        )}
+        <span className="min-w-0 flex-1 truncate text-sm font-medium">{props.label}</span>
+        <Badge variant="outline" size="sm">
+          {appReviewRunStatusLabel(props.run)}
+        </Badge>
+      </button>
 
-      <div className="space-y-3 p-4">
-        {props.run.cycles.map((cycle) => {
-          const record = recordById.get(cycle.reviewId);
-          const [reviewStatus, planningStatus, implementationStatus] =
-            appReviewCycleStepStatuses(cycle);
-          return (
-            <article key={cycle.cycleNumber} className="overflow-hidden rounded-lg border">
-              <div className="flex items-center justify-between gap-3 border-b px-3 py-2">
-                <div>
-                  <h3 className="text-sm font-medium">
-                    Cycle {cycle.cycleNumber} of {props.run.cycleBudget}
-                  </h3>
-                </div>
-                <Badge variant="outline" size="sm">
-                  {cycle.status}
-                </Badge>
+      {props.open ? (
+        <>
+          <div className="space-y-3 border-b border-t border-border px-4 py-3">
+            <p className="text-xs text-muted-foreground">
+              {props.run.cyclesUsed} of {props.run.cycleBudget} cycles used
+            </p>
+            <div>
+              <p className="text-xs font-medium text-foreground">Original brief</p>
+              <p className="mt-1 whitespace-pre-wrap text-sm text-muted-foreground">
+                {props.run.briefMarkdown}
+              </p>
+            </div>
+            {props.run.failure ? (
+              <div className="rounded-md border border-destructive/30 bg-destructive/5 p-3">
+                <p className="text-xs font-medium text-destructive">
+                  {props.run.status === "exhausted" ? "Last cycle" : "Blocked"} ·{" "}
+                  {props.run.failure.reason}
+                </p>
+                <p className="mt-1 whitespace-pre-wrap text-xs text-muted-foreground">
+                  {props.run.failure.detailMarkdown}
+                </p>
               </div>
-              <ol className="space-y-2 border-b px-3 py-3">
-                <CycleStep
-                  number={1}
-                  title="Human-style UI review"
-                  description="Use the app UI, test the acceptance brief, and save evidence."
-                  status={reviewStatus}
-                  actionLabel="Review thread"
-                  onOpen={() => props.onOpenThread(cycle.reviewerThreadId)}
-                />
-                <CycleStep
-                  number={2}
-                  title="Gap analysis & repair tickets"
-                  description="Analyze failures and create durable child tickets in the same review thread."
-                  status={planningStatus}
-                  actionLabel={
-                    cycle.repairTickets?.length
-                      ? `${cycle.repairTickets.length} repair ticket${cycle.repairTickets.length === 1 ? "" : "s"}`
-                      : "Review thread"
-                  }
-                  onOpen={() => props.onOpenThread(cycle.reviewerThreadId)}
-                />
-                <CycleStep
-                  number={3}
-                  title="Implement the repair tickets"
-                  description="Use the Implement skill in a fresh thread and validate every child ticket."
-                  status={implementationStatus}
-                  actionLabel="Implementation thread"
-                  {...(cycle.fixerThreadId
-                    ? { onOpen: () => props.onOpenThread(cycle.fixerThreadId!) }
-                    : {})}
-                />
-              </ol>
-              {cycle.failure ? (
-                <p className="whitespace-pre-wrap border-b px-3 py-2 text-xs text-destructive">
-                  Cycle spent · {cycle.failure.reason}: {cycle.failure.detailMarkdown}
-                </p>
-              ) : null}
-              {cycle.actionableFindingsMarkdown ? (
-                <p className="whitespace-pre-wrap border-b px-3 py-2 text-xs text-muted-foreground">
-                  {cycle.actionableFindingsMarkdown}
-                </p>
-              ) : null}
-              {record ? (
-                <AppReviewDocument record={record} environmentId={props.environmentId} />
-              ) : (
-                <p className="px-3 py-4 text-xs text-muted-foreground">
-                  Review evidence is still being prepared.
-                </p>
-              )}
-            </article>
-          );
-        })}
-      </div>
+            ) : null}
+          </div>
+
+          <div className="space-y-3 p-4">
+            {props.run.cycles.map((cycle) => {
+              const record = recordById.get(cycle.reviewId);
+              const cycleOpen = expandedCycles[cycle.cycleNumber] ?? false;
+              const [reviewStatus, planningStatus, implementationStatus] =
+                appReviewCycleStepStatuses(cycle);
+              return (
+                <article key={cycle.cycleNumber} className="overflow-hidden rounded-lg border">
+                  <button
+                    type="button"
+                    aria-expanded={cycleOpen}
+                    onClick={() =>
+                      setExpandedCycles((current) => ({
+                        ...current,
+                        [cycle.cycleNumber]: !cycleOpen,
+                      }))
+                    }
+                    className="flex w-full cursor-pointer items-center justify-between gap-3 px-3 py-2 text-left"
+                  >
+                    <span className="flex min-w-0 items-center gap-2">
+                      {cycleOpen ? (
+                        <ChevronDown className="size-3.5 shrink-0" />
+                      ) : (
+                        <ChevronRight className="size-3.5 shrink-0" />
+                      )}
+                      <span className="truncate text-sm font-medium">
+                        Cycle {cycle.cycleNumber} of {props.run.cycleBudget}
+                      </span>
+                    </span>
+                    <Badge variant="outline" size="sm">
+                      {cycle.status}
+                    </Badge>
+                  </button>
+                  {cycleOpen ? (
+                    <>
+                      <ol className="space-y-2 border-b border-t px-3 py-3">
+                        <CycleStep
+                          number={1}
+                          title="Human-style UI review"
+                          description="Use the app UI, test the acceptance brief, and save evidence."
+                          status={reviewStatus}
+                          actionLabel="Review thread"
+                          onOpen={() => props.onOpenThread(cycle.reviewerThreadId)}
+                        />
+                        <CycleStep
+                          number={2}
+                          title="Gap analysis & repair tickets"
+                          description="Analyze failures and create durable child tickets in the same review thread."
+                          status={planningStatus}
+                          actionLabel={
+                            cycle.repairTickets?.length
+                              ? `${cycle.repairTickets.length} repair ticket${cycle.repairTickets.length === 1 ? "" : "s"}`
+                              : "Review thread"
+                          }
+                          onOpen={() => props.onOpenThread(cycle.reviewerThreadId)}
+                        />
+                        <CycleStep
+                          number={3}
+                          title="Implement the repair tickets"
+                          description="Use the Implement skill in a fresh thread and validate every child ticket."
+                          status={implementationStatus}
+                          actionLabel="Implementation thread"
+                          {...(cycle.fixerThreadId
+                            ? { onOpen: () => props.onOpenThread(cycle.fixerThreadId!) }
+                            : {})}
+                        />
+                      </ol>
+                      {cycle.failure ? (
+                        <p className="whitespace-pre-wrap border-b px-3 py-2 text-xs text-destructive">
+                          Cycle spent · {cycle.failure.reason}: {cycle.failure.detailMarkdown}
+                        </p>
+                      ) : null}
+                      {cycle.actionableFindingsMarkdown ? (
+                        <p className="whitespace-pre-wrap border-b px-3 py-2 text-xs text-muted-foreground">
+                          {cycle.actionableFindingsMarkdown}
+                        </p>
+                      ) : null}
+                      {record ? (
+                        <AppReviewDocument record={record} environmentId={props.environmentId} />
+                      ) : (
+                        <p className="px-3 py-4 text-xs text-muted-foreground">
+                          Review evidence is still being prepared.
+                        </p>
+                      )}
+                    </>
+                  ) : null}
+                </article>
+              );
+            })}
+          </div>
+        </>
+      ) : null}
     </section>
   );
 }

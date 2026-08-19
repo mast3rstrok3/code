@@ -90,6 +90,35 @@ export const getWorkflowArtifactsForThread = Effect.fn("getWorkflowArtifactsForT
         candidate.workflowContext?.rootThreadId === context.rootThreadId &&
         workflowIds.has(candidate.workflowContext.workflowId),
     );
+
+    // The lineage only reaches upwards, so a workflow root cannot see the
+    // nested workflows its own steps started and a ticket cannot see its
+    // siblings. App Reviews belong to the workflow rather than to the level
+    // that launched them, so widen the set by descending the parent links too.
+    // Only declared parentage counts: sharing a root thread is not membership.
+    const familyContexts = readModel.threads.flatMap((candidate) =>
+      candidate.projectId === thread.projectId &&
+      candidate.workflowContext?.rootThreadId === context.rootThreadId
+        ? [candidate.workflowContext]
+        : [],
+    );
+    const familyWorkflowIds = new Set(workflowIds);
+    for (let grew = true; grew; ) {
+      grew = false;
+      for (const candidateContext of familyContexts) {
+        if (familyWorkflowIds.has(candidateContext.workflowId)) continue;
+        if (candidateContext.parentWorkflowId == null) continue;
+        if (!familyWorkflowIds.has(candidateContext.parentWorkflowId)) continue;
+        familyWorkflowIds.add(candidateContext.workflowId);
+        grew = true;
+      }
+    }
+    const familyThreads = readModel.threads.filter(
+      (candidate) =>
+        candidate.projectId === thread.projectId &&
+        candidate.workflowContext?.rootThreadId === context.rootThreadId &&
+        familyWorkflowIds.has(candidate.workflowContext.workflowId),
+    );
     const planningWorkflow = workflowLineage
       .flatMap((workflowId) =>
         workflowThreads
@@ -111,13 +140,13 @@ export const getWorkflowArtifactsForThread = Effect.fn("getWorkflowArtifactsForT
     const appReviewWorkflowRuns = (readModel.appReviewWorkflowRuns ?? []).filter(
       (run) =>
         run.id === relatedAppReviewRun?.id ||
-        workflowThreads.some(
+        familyThreads.some(
           (candidate) =>
             candidate.id === run.targetThreadId || candidate.id === run.controllerThreadId,
         ),
     );
     const reviewsById = new Map(
-      [...workflowThreads, targetThread, controllerThread]
+      [...familyThreads, targetThread, controllerThread]
         .flatMap((candidate) => candidate.appReviews)
         .concat(
           appReviewWorkflowRuns.flatMap((run) =>

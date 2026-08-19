@@ -210,17 +210,29 @@ export type AppReviewCheckStatus = typeof AppReviewCheckStatus.Type;
 export const AppReviewVerdict = Schema.Literals(["pending", "passed", "failed"]);
 export type AppReviewVerdict = typeof AppReviewVerdict.Type;
 
+/**
+ * One acceptance check in a review's matrix.
+ *
+ * `carriedFromCycle` names the earlier cycle of the same run whose pass still
+ * stands, and is set only when this cycle did not exercise the check again. A
+ * repair usually cannot reach most of what already passed, and re-driving the
+ * whole flow through the browser every cycle is the run's biggest cost, so a
+ * carried check keeps the matrix complete without paying for it twice. The
+ * absence of the field means the browser did the work this cycle.
+ */
+export const AppReviewCheck = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  label: TrimmedNonEmptyString,
+  status: AppReviewCheckStatus,
+  notes: Schema.String,
+  carriedFromCycle: Schema.optionalKey(PositiveInt),
+});
+export type AppReviewCheck = typeof AppReviewCheck.Type;
+
 export const AppReviewDocument = Schema.Struct({
   verdict: AppReviewVerdict,
   summary: Schema.String,
-  checks: Schema.Array(
-    Schema.Struct({
-      id: TrimmedNonEmptyString,
-      label: TrimmedNonEmptyString,
-      status: AppReviewCheckStatus,
-      notes: Schema.String,
-    }),
-  ),
+  checks: Schema.Array(AppReviewCheck),
   findings: Schema.Array(
     Schema.Struct({
       id: TrimmedNonEmptyString,

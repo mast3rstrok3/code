@@ -316,6 +316,66 @@ export function spendFailedCycle(input: {
   };
 }
 
+/** A check an earlier cycle passed, offered to the next reviewer to carry forward. */
+export type CarryableAppReviewCheck = {
+  readonly id: string;
+  readonly label: string;
+  /** The cycle that actually drove the browser, not the one that last carried it. */
+  readonly cycleNumber: number;
+};
+
+/**
+ * What earlier cycles of a run established, in the form the next cycle needs.
+ *
+ * Prior actionable findings never become carryable. A repair verified against
+ * the cycle before it is not verified against the repair that followed, so
+ * those checks are exercised again every cycle. Everything else the browser has
+ * already passed is offered to the next reviewer, which is where the savings
+ * are: re-driving an untouched flow is the most expensive thing a cycle can do.
+ * A check a later cycle stopped passing drops back out of the offer.
+ */
+export function priorCycleChecks(input: {
+  readonly run: AppReviewWorkflowRun;
+  readonly currentCycleNumber: number;
+  readonly priorReviews: ReadonlyArray<AppReviewRecord>;
+}): {
+  readonly findingIds: ReadonlyArray<string>;
+  readonly carryable: ReadonlyArray<CarryableAppReviewCheck>;
+  readonly passedCheckIdsByCycle: ReadonlyMap<number, ReadonlySet<string>>;
+} {
+  const priorCycles = input.run.cycles
+    .filter((cycle) => cycle.cycleNumber < input.currentCycleNumber)
+    .toSorted((left, right) => left.cycleNumber - right.cycleNumber);
+  const reviewById = new Map(input.priorReviews.map((review) => [review.id, review]));
+  const findingIds = priorCycles
+    .flatMap((cycle) => reviewById.get(cycle.reviewId)?.document.findings ?? [])
+    .filter((finding) => finding.severity !== "note")
+    .map((finding) => finding.id);
+  const findingIdSet = new Set(findingIds);
+  const carryable = new Map<string, CarryableAppReviewCheck>();
+  const passedCheckIdsByCycle = new Map<number, ReadonlySet<string>>();
+  for (const cycle of priorCycles) {
+    const checks = reviewById.get(cycle.reviewId)?.document.checks ?? [];
+    passedCheckIdsByCycle.set(
+      cycle.cycleNumber,
+      new Set(checks.filter((check) => check.status === "passed").map((check) => check.id)),
+    );
+    for (const check of checks) {
+      if (check.status !== "passed") {
+        carryable.delete(check.id);
+        continue;
+      }
+      if (findingIdSet.has(check.id)) continue;
+      carryable.set(check.id, {
+        id: check.id,
+        label: check.label,
+        cycleNumber: check.carriedFromCycle ?? cycle.cycleNumber,
+      });
+    }
+  }
+  return { findingIds, carryable: [...carryable.values()], passedCheckIdsByCycle };
+}
+
 /**
  * A reviewer-authored verdict is not enough to close the workflow. Passing reviews must contain a
  * complete, internally consistent check matrix and must explicitly verify every actionable finding
@@ -348,24 +408,89 @@ export function terminalReviewPassFailure(input: {
   }
 
   const currentCycle = input.run.cycles.at(-1)?.cycleNumber ?? 0;
-  const priorReviewIds = new Set(
-    input.run.cycles
-      .filter((cycle) => cycle.cycleNumber < currentCycle)
-      .map((cycle) => cycle.reviewId),
+  const prior = priorCycleChecks({
+    run: input.run,
+    currentCycleNumber: currentCycle,
+    priorReviews: input.priorReviews,
+  });
+  const carriedFindingChecks = checks.filter(
+    (check) => check.carriedFromCycle !== undefined && prior.findingIds.includes(check.id),
   );
-  const priorFindingIds = input.priorReviews
-    .filter((review) => priorReviewIds.has(review.id))
-    .flatMap((review) => review.document.findings)
-    .filter((finding) => finding.severity !== "note")
-    .map((finding) => finding.id);
+  if (carriedFindingChecks.length > 0) {
+    return `Browser App Review carried prior findings forward instead of verifying them: ${carriedFindingChecks
+      .map((check) => check.id)
+      .join(", ")}.`;
+  }
+  const unsupportedCarries = checks.filter(
+    (check) =>
+      check.carriedFromCycle !== undefined &&
+      !(prior.passedCheckIdsByCycle.get(check.carriedFromCycle)?.has(check.id) ?? false),
+  );
+  if (unsupportedCarries.length > 0) {
+    return `Browser App Review carried checks forward from cycles that never passed them: ${unsupportedCarries
+      .map((check) => `${check.id}@${String(check.carriedFromCycle)}`)
+      .join(", ")}.`;
+  }
   const passedCheckIds = new Set(checks.map((check) => check.id));
-  const missingFindingChecks = priorFindingIds.filter(
+  const missingFindingChecks = prior.findingIds.filter(
     (findingId) => !passedCheckIds.has(findingId),
   );
   if (missingFindingChecks.length > 0) {
     return `Browser App Review did not explicitly verify prior findings: ${missingFindingChecks.join(", ")}.`;
   }
   return null;
+}
+
+/**
+ * What the reviewer is told to do this cycle.
+ *
+ * A repair cycle is scoped rather than replayed: the prior findings are
+ * exercised again in the browser, and what already passed is carried forward by
+ * id unless the repair could plausibly have reached it. The reviewer still owns
+ * that judgement, because only it can see what the repair touched.
+ */
+export function buildReviewPrompt(input: {
+  readonly run: AppReviewWorkflowRun;
+  readonly cycle: AppReviewWorkflowCycle;
+  readonly priorFindingIds: ReadonlyArray<string>;
+  readonly carryableChecks: ReadonlyArray<CarryableAppReviewCheck>;
+}): string {
+  const { run, cycle } = input;
+  return appendWorkflowSkillCommandSection(
+    [
+      `Run Browser App Review cycle ${cycle.cycleNumber} of ${run.cycleBudget}.`,
+      "",
+      "The original brief is the acceptance boundary for every cycle:",
+      run.briefMarkdown,
+      ...(run.supportingContextMarkdown === null
+        ? []
+        : ["", "Supporting source context:", run.supportingContextMarkdown]),
+      "",
+      "Preview targets (try in order):",
+      ...run.previewTargets.map((target) => `- ${target}`),
+      "These preview targets are authoritative for this App Review cycle. Do not substitute deployment URLs from repository documentation, supporting source context, browser history, or environment conventions. If every listed target is unavailable, report the review failed with concrete details.",
+      "",
+      "Use the linked durable App Review record. Record the complete flow, capture captioned screenshots, and report every actionable finding. A missing or unavailable preview is a failed review.",
+      "A passed verdict requires a non-empty check matrix in which every check is passed. Do not mark required or deferred acceptance work not-applicable; use failed or blocked with concrete detail.",
+      ...(input.priorFindingIds.length === 0
+        ? []
+        : [
+            "",
+            "This is a repair verification cycle. Exercise each prior actionable finding in the browser again and add one passed check with the exact same id before reporting passed:",
+            ...input.priorFindingIds.map((findingId) => `- ${findingId}`),
+          ]),
+      ...(input.carryableChecks.length === 0
+        ? []
+        : [
+            "",
+            "These checks already passed earlier in this run. Read what the repair changed, and exercise one again only when the repair could plausibly have broken it. Otherwise carry it forward: repeat it in the matrix with the same id, status passed, and `carriedFromCycle` set to the cycle shown here, and spend no browser steps on it. Carried checks count toward the matrix, so a pass still needs every one of them present.",
+            ...input.carryableChecks.map(
+              (check) => `- ${check.id} (cycle ${check.cycleNumber}): ${check.label}`,
+            ),
+          ]),
+    ].join("\n"),
+    WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+  );
 }
 
 export function terminalReviewEvidenceFailure(
@@ -581,38 +706,6 @@ const make = Effect.gen(function* () {
     }).modelSelection;
   });
 
-  const buildReviewPrompt = (
-    run: AppReviewWorkflowRun,
-    cycle: AppReviewWorkflowCycle,
-    priorFindingIds: ReadonlyArray<string>,
-  ) =>
-    appendWorkflowSkillCommandSection(
-      [
-        `Run Browser App Review cycle ${cycle.cycleNumber} of ${run.cycleBudget}.`,
-        "",
-        "The original brief is the acceptance boundary for every cycle:",
-        run.briefMarkdown,
-        ...(run.supportingContextMarkdown === null
-          ? []
-          : ["", "Supporting source context:", run.supportingContextMarkdown]),
-        "",
-        "Preview targets (try in order):",
-        ...run.previewTargets.map((target) => `- ${target}`),
-        "These preview targets are authoritative for this App Review cycle. Do not substitute deployment URLs from repository documentation, supporting source context, browser history, or environment conventions. If every listed target is unavailable, report the review failed with concrete details.",
-        "",
-        "Use the linked durable App Review record. Record the complete flow, capture captioned screenshots, and report every actionable finding. A missing or unavailable preview is a failed review.",
-        "A passed verdict requires a non-empty check matrix in which every check is passed. Do not mark required or deferred acceptance work not-applicable; use failed or blocked with concrete detail.",
-        ...(priorFindingIds.length === 0
-          ? []
-          : [
-              "",
-              "This is a repair verification cycle. Add one passed check with the exact same id for every prior actionable finding before reporting passed:",
-              ...priorFindingIds.map((findingId) => `- ${findingId}`),
-            ]),
-      ].join("\n"),
-      WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
-    );
-
   const ensureReviewLaunch = Effect.fn("AppReviewWorkflowReactor.ensureReviewLaunch")(function* (
     run: AppReviewWorkflowRun,
     cycle: AppReviewWorkflowCycle,
@@ -629,16 +722,11 @@ const make = Effect.gen(function* () {
       });
       return;
     }
-    const priorReviewIds = new Set(
-      run.cycles
-        .filter((candidate) => candidate.cycleNumber < cycle.cycleNumber)
-        .map((candidate) => candidate.reviewId),
-    );
-    const priorFindingIds = controller.appReviews
-      .filter((review) => priorReviewIds.has(review.id))
-      .flatMap((review) => review.document.findings)
-      .filter((finding) => finding.severity !== "note")
-      .map((finding) => finding.id);
+    const prior = priorCycleChecks({
+      run,
+      currentCycleNumber: cycle.cycleNumber,
+      priorReviews: controller.appReviews,
+    });
     yield* orchestrationEngine.dispatch({
       type: "thread.app-review.launch",
       commandId: yield* serverCommandId("app-review-workflow-review-launch"),
@@ -649,7 +737,12 @@ const make = Effect.gen(function* () {
       message: {
         messageId: yield* serverMessageId("app-review-workflow-review"),
         role: "user",
-        text: buildReviewPrompt(run, cycle, priorFindingIds),
+        text: buildReviewPrompt({
+          run,
+          cycle,
+          priorFindingIds: prior.findingIds,
+          carryableChecks: prior.carryable,
+        }),
         attachments: [],
       },
       modelSelection: yield* modelForPrompt(

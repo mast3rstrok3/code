@@ -121,7 +121,7 @@ export const AppReviewGetTool = Tool.make("app_review_get", {
 export const AppReviewUpdateTool = appReviewTool(
   Tool.make("app_review_update", {
     description:
-      "Persist the App Review document and/or final status. Send the complete document each time, not a partial patch. Passed requires a saved recording and screenshot. Failed accepts the same complete evidence, or screenshot-backed findings with failed checks when recording finalization failed.",
+      "Persist the App Review document and/or final status. Send the complete document each time, not a partial patch. Passed requires a saved recording and screenshot. Failed accepts the same complete evidence, or screenshot-backed findings with failed checks when recording finalization failed. A check this cycle did not exercise, because an earlier cycle of the same run passed it and the repair could not reach it, is repeated with status passed and carriedFromCycle set to the cycle that ran it.",
     parameters: AppReviewUpdateInput,
     success: AppReviewRecord,
     failure: AppReviewToolFailure,

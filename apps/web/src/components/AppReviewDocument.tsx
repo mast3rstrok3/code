@@ -211,7 +211,11 @@ export function AppReviewDocument(props: {
               <div key={check.id} className="py-2">
                 <div className="flex items-center justify-between gap-3 text-sm">
                   <span className="font-medium">{check.label}</span>
-                  <span className="shrink-0 text-xs text-muted-foreground">{check.status}</span>
+                  <span className="shrink-0 text-xs text-muted-foreground">
+                    {check.carriedFromCycle === undefined
+                      ? check.status
+                      : `${check.status} · carried from cycle ${check.carriedFromCycle}`}
+                  </span>
                 </div>
                 {check.notes ? (
                   <p className="mt-1 text-sm leading-relaxed text-muted-foreground">

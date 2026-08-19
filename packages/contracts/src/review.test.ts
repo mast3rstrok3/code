@@ -69,6 +69,63 @@ it.effect("round-trips App Review records with browser evidence", () =>
   }),
 );
 
+it.effect("keeps a check's origin cycle when it was carried forward, and omits it otherwise", () =>
+  Effect.gen(function* () {
+    const record = yield* decodeAppReviewRecord({
+      id: "app-review-2",
+      sourceThreadId: "thread-source",
+      reviewThreadId: "thread-review",
+      sourceTurnId: null,
+      status: "passed",
+      document: {
+        ...emptyDocument,
+        verdict: "passed",
+        checks: [
+          { id: "login", label: "Login", status: "passed", notes: "", carriedFromCycle: 1 },
+          { id: "submit-recovery", label: "Submit recovery", status: "passed", notes: "" },
+        ],
+      },
+      evidence: savedEvidence,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:01.000Z",
+    });
+    assert.strictEqual(record.document.checks[0]?.carriedFromCycle, 1);
+    assert.strictEqual(record.document.checks[1]?.carriedFromCycle, undefined);
+
+    const encoded = yield* encodeAppReviewRecord(record);
+    assert.deepStrictEqual(encoded.document.checks[1], {
+      id: "submit-recovery",
+      label: "Submit recovery",
+      status: "passed",
+      notes: "",
+    });
+  }),
+);
+
+it.effect("rejects a carried check that names cycle zero", () =>
+  Effect.gen(function* () {
+    const result = yield* Effect.exit(
+      decodeAppReviewRecord({
+        id: "app-review-3",
+        sourceThreadId: "thread-source",
+        reviewThreadId: "thread-review",
+        sourceTurnId: null,
+        status: "passed",
+        document: {
+          ...emptyDocument,
+          checks: [
+            { id: "login", label: "Login", status: "passed", notes: "", carriedFromCycle: 0 },
+          ],
+        },
+        evidence: savedEvidence,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:01.000Z",
+      }),
+    );
+    assert.strictEqual(result._tag, "Failure");
+  }),
+);
+
 it.effect("decodes EMPTY_APP_REVIEW_EVIDENCE against AppReviewEvidence", () =>
   Effect.gen(function* () {
     const decoded = yield* decodeAppReviewEvidence(EMPTY_APP_REVIEW_EVIDENCE);

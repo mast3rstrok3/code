@@ -4,14 +4,18 @@ import {
   AppReviewWorkflowCycleBudget,
   AppReviewWorkflowRunId,
   ThreadId,
+  type AppReviewCheck,
   type AppReviewRecord,
+  type AppReviewWorkflowCycle,
   type AppReviewWorkflowRun,
 } from "@t3tools/contracts";
 
 import { WORKFLOW_NUDGE_EXHAUSTED_MESSAGE, type WorkflowNudgeThread } from "../workflowNudge.ts";
 import {
   appReviewPhaseThreadState,
+  buildReviewPrompt,
   cycleFailureAction,
+  priorCycleChecks,
   findAppReviewParentTicket,
   nextAppReviewWorkflowAction,
   selectReviewRunToStart,
@@ -445,6 +449,228 @@ it("requires repair cycles to verify every prior actionable finding by id", () =
       priorReviews: [failed],
     }),
   ).toBeNull();
+});
+
+function carryCycle(cycleNumber: number, reviewId: AppReviewId): AppReviewWorkflowCycle {
+  return {
+    cycleNumber,
+    status: "completed",
+    reviewId,
+    reviewerThreadId: ThreadId.make(`thread-reviewer-${cycleNumber}`),
+    reviewVerdict: "failed",
+    actionableFindingsMarkdown: null,
+    planId: null,
+    plannerTurnId: null,
+    fixerThreadId: null,
+    fixResult: null,
+    workspaceRevision: run().workspaceRevision,
+    startedAt: now,
+    completedAt: now,
+  };
+}
+
+function carryReview(input: {
+  readonly id: string;
+  readonly verdict: "passed" | "failed";
+  readonly checks: ReadonlyArray<AppReviewCheck>;
+  readonly findingIds?: ReadonlyArray<string>;
+}): AppReviewRecord {
+  const base = review(input.verdict, false);
+  return {
+    ...base,
+    id: AppReviewId.make(input.id),
+    document: {
+      ...base.document,
+      checks: input.checks,
+      findings: (input.findingIds ?? []).map((findingId) => ({
+        id: findingId,
+        severity: "major" as const,
+        title: "Submit does not recover",
+        details: "The button remains disabled.",
+        reproduction: "Submit invalid credentials.",
+        evidenceIds: [],
+      })),
+    },
+  };
+}
+
+const cycleOneReview = carryReview({
+  id: "app-review-1",
+  verdict: "failed",
+  checks: [
+    { id: "login", label: "Login", status: "passed", notes: "Signed in." },
+    { id: "checkout", label: "Checkout", status: "failed", notes: "Submit stays disabled." },
+  ],
+  findingIds: ["finding-1"],
+});
+
+const secondCycleRun = run({
+  cyclesUsed: 2,
+  cycles: [carryCycle(1, cycleOneReview.id), carryCycle(2, AppReviewId.make("app-review-2"))],
+});
+
+function passedCycleTwo(checks: ReadonlyArray<AppReviewCheck>): AppReviewRecord {
+  return carryReview({ id: "app-review-2", verdict: "passed", checks });
+}
+
+it("offers only what an earlier cycle passed and the repair has not touched", () => {
+  const prior = priorCycleChecks({
+    run: secondCycleRun,
+    currentCycleNumber: 2,
+    priorReviews: [cycleOneReview],
+  });
+  expect(prior.findingIds).toEqual(["finding-1"]);
+  expect(prior.carryable).toEqual([{ id: "login", label: "Login", cycleNumber: 1 }]);
+
+  const prompt = buildReviewPrompt({
+    run: secondCycleRun,
+    cycle: secondCycleRun.cycles[1]!,
+    priorFindingIds: prior.findingIds,
+    carryableChecks: prior.carryable,
+  });
+  expect(prompt).toContain("- login (cycle 1): Login");
+  expect(prompt).toContain("- finding-1");
+  expect(prompt).not.toContain("- checkout (cycle");
+});
+
+it("says nothing about carrying checks forward on the first cycle", () => {
+  const prior = priorCycleChecks({ run: run(), currentCycleNumber: 1, priorReviews: [] });
+  expect(prior.carryable).toEqual([]);
+  const prompt = buildReviewPrompt({
+    run: run(),
+    cycle: carryCycle(1, AppReviewId.make("app-review-1")),
+    priorFindingIds: prior.findingIds,
+    carryableChecks: prior.carryable,
+  });
+  expect(prompt).not.toContain("These checks already passed earlier in this run.");
+});
+
+it("accepts a pass whose untouched checks are carried from the cycle that ran them", () => {
+  const passed = passedCycleTwo([
+    { id: "finding-1", label: "Submit recovery", status: "passed", notes: "Recovers now." },
+    {
+      id: "login",
+      label: "Login",
+      status: "passed",
+      notes: "Passed in cycle 1.",
+      carriedFromCycle: 1,
+    },
+    { id: "checkout", label: "Checkout", status: "passed", notes: "Submit completes." },
+  ]);
+  expect(
+    terminalReviewPassFailure({
+      run: secondCycleRun,
+      review: passed,
+      priorReviews: [cycleOneReview],
+    }),
+  ).toBeNull();
+});
+
+it("rejects a carried check the named cycle never passed", () => {
+  const passed = passedCycleTwo([
+    { id: "finding-1", label: "Submit recovery", status: "passed", notes: "Recovers now." },
+    {
+      id: "checkout",
+      label: "Checkout",
+      status: "passed",
+      notes: "Claimed without running it.",
+      carriedFromCycle: 1,
+    },
+  ]);
+  expect(
+    terminalReviewPassFailure({
+      run: secondCycleRun,
+      review: passed,
+      priorReviews: [cycleOneReview],
+    }),
+  ).toContain("checkout@1");
+});
+
+it("rejects a prior finding carried forward instead of verified again", () => {
+  const passed = passedCycleTwo([
+    {
+      id: "finding-1",
+      label: "Submit recovery",
+      status: "passed",
+      notes: "Assumed fixed.",
+      carriedFromCycle: 1,
+    },
+    { id: "login", label: "Login", status: "passed", notes: "Passed.", carriedFromCycle: 1 },
+  ]);
+  expect(
+    terminalReviewPassFailure({
+      run: secondCycleRun,
+      review: passed,
+      priorReviews: [cycleOneReview],
+    }),
+  ).toContain("carried prior findings forward");
+});
+
+it("credits a twice-carried check to the cycle that actually ran it", () => {
+  const cycleTwoReview = carryReview({
+    id: "app-review-2",
+    verdict: "failed",
+    checks: [
+      { id: "login", label: "Login", status: "passed", notes: "Carried.", carriedFromCycle: 1 },
+      { id: "checkout", label: "Checkout", status: "failed", notes: "Still broken." },
+    ],
+    findingIds: ["finding-1"],
+  });
+  const thirdCycleRun = run({
+    cyclesUsed: 3,
+    cycles: [
+      carryCycle(1, cycleOneReview.id),
+      carryCycle(2, cycleTwoReview.id),
+      carryCycle(3, AppReviewId.make("app-review-3")),
+    ],
+  });
+  const prior = priorCycleChecks({
+    run: thirdCycleRun,
+    currentCycleNumber: 3,
+    priorReviews: [cycleOneReview, cycleTwoReview],
+  });
+  expect(prior.carryable).toEqual([{ id: "login", label: "Login", cycleNumber: 1 }]);
+
+  const passed = carryReview({
+    id: "app-review-3",
+    verdict: "passed",
+    checks: [
+      { id: "finding-1", label: "Submit recovery", status: "passed", notes: "Recovers now." },
+      { id: "login", label: "Login", status: "passed", notes: "Carried.", carriedFromCycle: 1 },
+      { id: "checkout", label: "Checkout", status: "passed", notes: "Submit completes." },
+    ],
+  });
+  expect(
+    terminalReviewPassFailure({
+      run: thirdCycleRun,
+      review: passed,
+      priorReviews: [cycleOneReview, cycleTwoReview],
+    }),
+  ).toBeNull();
+});
+
+it("stops offering a check a later cycle found broken", () => {
+  const cycleTwoReview = carryReview({
+    id: "app-review-2",
+    verdict: "failed",
+    checks: [{ id: "login", label: "Login", status: "failed", notes: "Regressed." }],
+    findingIds: ["finding-2"],
+  });
+  const thirdCycleRun = run({
+    cyclesUsed: 3,
+    cycles: [
+      carryCycle(1, cycleOneReview.id),
+      carryCycle(2, cycleTwoReview.id),
+      carryCycle(3, AppReviewId.make("app-review-3")),
+    ],
+  });
+  expect(
+    priorCycleChecks({
+      run: thirdCycleRun,
+      currentCycleNumber: 3,
+      priorReviews: [cycleOneReview, cycleTwoReview],
+    }).carryable,
+  ).toEqual([]);
 });
 
 it("plans a repair after the final failed review so the last budget unit is a full cycle", () => {

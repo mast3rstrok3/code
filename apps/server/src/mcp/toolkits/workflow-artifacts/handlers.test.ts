@@ -303,12 +303,31 @@ describe("workflow-artifacts toolkit handlers", () => {
     }).pipe(Effect.provide(Layer.mergeAll(queryLayer, nestedReviewerInvocationLayer))),
   );
 
+  it.effect("shows the workflow's App Reviews from any level of it", () =>
+    Effect.gen(function* () {
+      // The root sits above the nested workflow that launched the review, and
+      // the reviewer sits inside it. Both are the same workflow to the user.
+      for (const threadId of [rootThreadId, childThreadId, nestedReviewerThreadId]) {
+        const snapshot = yield* getWorkflowArtifactsForThread({ threadId });
+        assert.deepStrictEqual(
+          snapshot.appReviewWorkflowRuns.map((run) => String(run.id)),
+          [String(appReviewWorkflowId)],
+        );
+        assert.include(
+          snapshot.appReviews.map((review) => String(review.id)),
+          "app-review-nested",
+        );
+      }
+    }).pipe(Effect.provide(queryLayer)),
+  );
+
   it.effect("does not authorize artifacts by shared root thread alone", () =>
     Effect.gen(function* () {
       const snapshot = yield* getWorkflowArtifactsForThread({ threadId: detachedThreadId });
 
       assert.strictEqual(snapshot.spec, null);
       assert.deepStrictEqual(snapshot.tickets, []);
+      assert.deepStrictEqual(snapshot.appReviewWorkflowRuns, []);
     }).pipe(Effect.provide(queryLayer)),
   );
 

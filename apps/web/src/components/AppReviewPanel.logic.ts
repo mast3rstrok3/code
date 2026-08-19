@@ -3,6 +3,7 @@ import {
   type AppReviewRecord,
   type AppReviewWorkflowCycle,
   type AppReviewWorkflowRun,
+  type OrchestrationPlanningTicket,
   type ThreadId,
 } from "@t3tools/contracts";
 
@@ -44,17 +45,64 @@ export function appReviewRunContainsThread(run: AppReviewWorkflowRun, threadId: 
   );
 }
 
+/** The ticket an App Review was launched for, when it was launched for one. */
+export function appReviewRunTicketId(run: AppReviewWorkflowRun): string | null {
+  return run.caller.type === "implementation" ? (run.caller.ticketId ?? null) : null;
+}
+
+/**
+ * How a run is named in the panel. A ticket's own reviews carry the ticket, so
+ * a workflow's reviews read as a list of tickets rather than a pile of runs.
+ */
+export function appReviewRunTicketLabel(
+  run: AppReviewWorkflowRun,
+  tickets: readonly OrchestrationPlanningTicket[],
+): string | null {
+  const ticketId = appReviewRunTicketId(run);
+  if (ticketId === null) return null;
+  const ticket = tickets.find((candidate) => candidate.id === ticketId);
+  if (ticket === undefined) return ticketId;
+  return `${ticket.key ?? `Ticket ${String(ticket.ordinal + 1)}`} · ${ticket.title}`;
+}
+
+/**
+ * Runs in reading order: ticket by ticket in plan order, and within a ticket
+ * oldest first, so a re-review follows the review it repeats. Reviews of the
+ * run as a whole sort last, since they only happen once the tickets are done.
+ * A ticket the plan no longer lists sorts just ahead of those.
+ */
 export function selectAppReviewRunsForPanel(input: {
   readonly runs: readonly AppReviewWorkflowRun[];
   readonly openedThreadId: ThreadId;
   readonly workflowScoped: boolean;
+  readonly tickets?: readonly OrchestrationPlanningTicket[];
 }): readonly AppReviewWorkflowRun[] {
+  const ordinalByTicketId = new Map(
+    (input.tickets ?? []).map((ticket) => [ticket.id, ticket.ordinal] as const),
+  );
+  const rank = (run: AppReviewWorkflowRun): number => {
+    const ticketId = appReviewRunTicketId(run);
+    if (ticketId === null) return Number.MAX_SAFE_INTEGER;
+    return ordinalByTicketId.get(ticketId) ?? Number.MAX_SAFE_INTEGER - 1;
+  };
   return input.runs
     .filter((run) => input.workflowScoped || appReviewRunContainsThread(run, input.openedThreadId))
     .toSorted(
       (left, right) =>
-        right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id),
+        rank(left) - rank(right) ||
+        left.createdAt.localeCompare(right.createdAt) ||
+        left.id.localeCompare(right.id),
     );
+}
+
+/**
+ * The run the panel header speaks for. Whatever is running wins, so the header
+ * tracks live work rather than whichever ticket happens to sort last.
+ */
+export function selectHeadlineAppReviewRun(
+  runs: readonly AppReviewWorkflowRun[],
+): AppReviewWorkflowRun | null {
+  return runs.find((run) => run.status === "running") ?? runs.at(-1) ?? null;
 }
 
 export function appReviewRunStatusLabel(run: AppReviewWorkflowRun): string {
