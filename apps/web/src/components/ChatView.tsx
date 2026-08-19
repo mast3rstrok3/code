@@ -273,6 +273,7 @@ import {
   useCancelImplementationRunCommand,
   useRerunAppReviewPhaseCommand,
   useRerunImplementationStageCommand,
+  useResetImplementationStageCommand,
   useRetryImplementationRunCommand,
   resolveThreadDetailRef,
   useThread,
@@ -1275,6 +1276,7 @@ function ChatViewContent(props: ChatViewProps) {
   });
   const retryImplementationRun = useRetryImplementationRunCommand();
   const rerunImplementationStage = useRerunImplementationStageCommand();
+  const resetImplementationStage = useResetImplementationStageCommand();
   const rerunAppReviewPhase = useRerunAppReviewPhaseCommand();
   const restartPlanningStage = useAtomCommand(threadEnvironment.startPlanningStage, {
     label: "planning stage restart",
@@ -3065,6 +3067,23 @@ function ChatViewContent(props: ChatViewProps) {
       });
     },
     [activeThread, rerunImplementationStage],
+  );
+  const handleResetImplementationStage = useCallback(
+    (input: {
+      readonly runId: string;
+      readonly target: OrchestrationImplementationRerunTarget;
+    }) => {
+      if (!activeThread) return;
+      void resetImplementationStage({
+        environmentId: activeThread.environmentId,
+        input: {
+          threadId: activeThread.id,
+          runId: input.runId,
+          target: input.target,
+        },
+      });
+    },
+    [activeThread, resetImplementationStage],
   );
   const handleRerunAppReviewPhase = useCallback(
     (input: { readonly appReviewRunId: string; readonly phase: AppReviewWorkflowPhase }) => {
@@ -6993,6 +7012,7 @@ function ChatViewContent(props: ChatViewProps) {
         onCopyWorkflowLink={copyWorkflowLink}
         onRetryImplementationRun={handleRetryImplementationRun}
         onRerunImplementationStage={handleRerunImplementationStage}
+        onResetImplementationStage={handleResetImplementationStage}
         onRerunAppReviewPhase={handleRerunAppReviewPhase}
         onRestartPlanningStage={handleRestartPlanningStage}
         onPauseWorkflow={handlePauseWorkflow}

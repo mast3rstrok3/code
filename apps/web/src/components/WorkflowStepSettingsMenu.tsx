@@ -1,6 +1,6 @@
 import type { EnvironmentId, ModelSelection, ThreadId } from "@t3tools/contracts";
 import type { WorkflowPresetSubStep } from "@t3tools/shared/workflowPresets";
-import { Pause, RotateCcw, Settings2, Trash2 } from "lucide-react";
+import { Eraser, Pause, RotateCcw, Settings2 } from "lucide-react";
 import { useState } from "react";
 
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
@@ -82,24 +82,24 @@ export function WorkflowStepSettingsMenu(props: {
   readonly onStop: ((threadIds: readonly ThreadId[]) => void) | undefined;
   /** What the buttons act on. "step" unless the menu sits on a smaller scope. */
   readonly scopeNoun?: string;
-  readonly onDelete?: (() => void) | undefined;
-  readonly deleteDisabledReason?: string | null;
+  readonly onClear?: (() => void) | undefined;
+  readonly clearDisabledReason?: string | null;
   /** Set when clearing covers more than one thing, so the menu asks first. */
-  readonly confirmDeleteMessage?: string | null;
+  readonly confirmClearMessage?: string | null;
 }) {
   const [open, setOpen] = useState(false);
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [confirmingClear, setConfirmingClear] = useState(false);
   const { workflowPromptId, onSetStepModel } = props;
   const noun = props.scopeNoun ?? "step";
-  const deleteDisabledReason = props.deleteDisabledReason ?? null;
-  const confirmDeleteMessage = props.confirmDeleteMessage ?? null;
+  const clearDisabledReason = props.clearDisabledReason ?? null;
+  const confirmClearMessage = props.confirmClearMessage ?? null;
 
   return (
     <Popover
       open={open}
       onOpenChange={(next) => {
         setOpen(next);
-        if (!next) setConfirmingDelete(false);
+        if (!next) setConfirmingClear(false);
       }}
     >
       <PopoverTrigger
@@ -176,43 +176,43 @@ export function WorkflowStepSettingsMenu(props: {
               {props.restartDisabledReason}
             </p>
           ) : null}
-          {props.onDelete === undefined ? null : (
+          {props.onClear === undefined ? null : (
             <>
               <button
                 type="button"
-                disabled={deleteDisabledReason !== null}
-                title={deleteDisabledReason ?? `Clear this ${noun} without starting it`}
+                disabled={clearDisabledReason !== null}
+                title={clearDisabledReason ?? `Clear this ${noun} without starting it`}
                 onClick={() => {
-                  if (confirmDeleteMessage !== null && !confirmingDelete) {
-                    setConfirmingDelete(true);
+                  if (confirmClearMessage !== null && !confirmingClear) {
+                    setConfirmingClear(true);
                     return;
                   }
-                  props.onDelete?.();
-                  setConfirmingDelete(false);
+                  props.onClear?.();
+                  setConfirmingClear(false);
                   setOpen(false);
                 }}
                 className="cursor-pointer flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium text-destructive hover:bg-destructive/10 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
               >
-                <Trash2 className="size-3.5" aria-hidden />
-                {confirmingDelete ? `Yes, delete ${noun}` : `Delete ${noun}`}
+                <Eraser className="size-3.5" aria-hidden />
+                {confirmingClear ? `Yes, clear ${noun}` : `Clear ${noun}`}
               </button>
-              {confirmingDelete && confirmDeleteMessage !== null ? (
+              {confirmingClear && confirmClearMessage !== null ? (
                 <>
                   <p className="px-2 text-[11px] leading-relaxed text-muted-foreground">
-                    {confirmDeleteMessage}
+                    {confirmClearMessage}
                   </p>
                   <button
                     type="button"
-                    onClick={() => setConfirmingDelete(false)}
+                    onClick={() => setConfirmingClear(false)}
                     className="cursor-pointer flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium hover:bg-accent"
                   >
                     Cancel
                   </button>
                 </>
               ) : null}
-              {deleteDisabledReason !== null ? (
+              {clearDisabledReason !== null ? (
                 <p className="px-2 text-[11px] leading-relaxed text-muted-foreground">
-                  {deleteDisabledReason}
+                  {clearDisabledReason}
                 </p>
               ) : null}
             </>

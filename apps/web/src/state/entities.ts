@@ -346,6 +346,12 @@ export function useRerunImplementationStageCommand() {
   });
 }
 
+export function useResetImplementationStageCommand() {
+  return useAtomCommand(threadEnvironment.resetImplementationStage, {
+    label: "implementation stage clear",
+  });
+}
+
 export function useRerunAppReviewPhaseCommand() {
   return useAtomCommand(threadEnvironment.rerunAppReviewPhase, {
     label: "app review phase re-run",

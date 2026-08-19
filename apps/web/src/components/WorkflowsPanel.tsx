@@ -79,8 +79,6 @@ import {
   type WorkflowModelPinKey,
 } from "./WorkflowModelPins";
 import { workflowRoleShortLabel } from "./Sidebar.logic";
-import { WorkflowAppReviewPhaseRerunMenu } from "./WorkflowAppReviewPhaseRerunMenu";
-import { WorkflowTicketStageRerunMenu } from "./WorkflowTicketStageRerunMenu";
 
 const STATUS_VISUALS: Record<
   WorkflowThreadStatus,
@@ -638,6 +636,7 @@ function TicketAppReviewCycles(props: {
   readonly pinFor: (key: WorkflowModelPinKey) => ModelSelection | null;
   readonly onSetStepModel: SetWorkflowStepModel | undefined;
   readonly onRerunPhase: ((phase: AppReviewWorkflowPhase) => void) | undefined;
+  readonly onStopThreads: ((threadIds: readonly ThreadId[]) => void) | undefined;
   readonly threads: readonly EnvironmentThreadShell[];
   readonly onOpenThread: (thread: EnvironmentThreadShell) => void;
   readonly activeThreadKey: string | null;
@@ -727,16 +726,17 @@ function TicketAppReviewCycles(props: {
                       <span className="font-medium text-foreground">{step.label}</span>
                       <span className="capitalize text-muted-foreground"> · {step.detail}</span>
                       {props.onRerunPhase === undefined ? null : (
-                        <WorkflowAppReviewPhaseRerunMenu
+                        <WorkflowStepSettingsMenu
                           environmentId={props.environmentId}
-                          cycleNumber={cycle.cycleNumber}
-                          phaseLabel={step.label}
-                          phase={step.phase}
-                          pinKey={APP_REVIEW_PHASE_PIN[step.phase]}
-                          pinnedSelection={props.pinFor(APP_REVIEW_PHASE_PIN[step.phase])}
-                          inheritedSelection={props.rootModelSelection}
-                          inheritedLabel="Follows the App Review step."
-                          disabledReason={appReviewPhaseRerunDisabledReason({
+                          scopeNoun="phase"
+                          stepLabel={`Cycle ${String(cycle.cycleNumber)} · ${step.label}`}
+                          workflowPromptId={APP_REVIEW_PHASE_PIN[step.phase].workflowPromptId}
+                          subSteps={[]}
+                          pinFor={props.pinFor}
+                          usesRootThread={false}
+                          rootModelSelection={props.rootModelSelection}
+                          restartLabel={`Start ${step.label} again in cycle ${String(cycle.cycleNumber)}`}
+                          restartDisabledReason={appReviewPhaseRerunDisabledReason({
                             phaseLabel: step.label,
                             phase: step.phase,
                             cycle,
@@ -749,8 +749,16 @@ function TicketAppReviewCycles(props: {
                                 ? undefined
                                 : threadById.get(props.run.activeThreadId),
                           })}
+                          runningThreadIds={runningThreadIdsOf(
+                            props.run.activeThreadId === null
+                              ? []
+                              : [threadById.get(props.run.activeThreadId)].flatMap((thread) =>
+                                  thread === undefined ? [] : [thread],
+                                ),
+                          )}
                           onSetStepModel={props.onSetStepModel}
-                          onRerun={() => props.onRerunPhase?.(step.phase)}
+                          onStop={props.onStopThreads}
+                          onRestart={() => props.onRerunPhase?.(step.phase)}
                         />
                       )}
                     </div>
@@ -795,6 +803,7 @@ function TicketAppReviewCycles(props: {
 function AppReviewRunsTimeline(props: {
   readonly runs: readonly AppReviewWorkflowRun[];
   readonly callerBusyReason: string | null;
+  readonly onStopThreads: ((threadIds: readonly ThreadId[]) => void) | undefined;
   readonly environmentId: EnvironmentId;
   readonly rootModelSelection: ModelSelection;
   readonly pinFor: (key: WorkflowModelPinKey) => ModelSelection | null;
@@ -821,6 +830,7 @@ function AppReviewRunsTimeline(props: {
             <TicketAppReviewCycles
               run={run}
               callerBusyReason={props.callerBusyReason}
+              onStopThreads={props.onStopThreads}
               environmentId={props.environmentId}
               rootModelSelection={props.rootModelSelection}
               pinFor={props.pinFor}
@@ -989,6 +999,15 @@ const TICKET_STAGE_RERUN = {
   { readonly stage: RerunTicketStage; readonly pinKey: WorkflowModelPinKey }
 >;
 
+/** The threads a Stop would actually end, so the button can disable itself. */
+function runningThreadIdsOf(threads: readonly EnvironmentThreadShell[]): readonly ThreadId[] {
+  return threads
+    .filter(
+      (thread) => thread.session?.status === "running" || thread.session?.status === "starting",
+    )
+    .map((thread) => thread.id);
+}
+
 function TicketPhases(props: {
   readonly tickets: readonly OrchestrationPlanningTicket[];
   readonly run: OrchestrationImplementationRun;
@@ -999,6 +1018,10 @@ function TicketPhases(props: {
   readonly onRerunTicketStage:
     | ((input: { readonly ticketId: string; readonly stage: RerunTicketStage }) => void)
     | undefined;
+  readonly onResetTicketStage:
+    | ((input: { readonly ticketId: string; readonly stage: RerunTicketStage }) => void)
+    | undefined;
+  readonly onStopThreads: ((threadIds: readonly ThreadId[]) => void) | undefined;
   readonly onRerunAppReviewPhase:
     | ((input: { readonly appReviewRunId: string; readonly phase: AppReviewWorkflowPhase }) => void)
     | undefined;
@@ -1013,219 +1036,330 @@ function TicketPhases(props: {
   const states = new Map(props.run.ticketStates.map((state) => [state.ticketId, state] as const));
   return (
     <div className="space-y-2">
-      {buildTicketWaves(props.tickets).map((wave, waveIndex) => (
-        <section
-          key={wave.map((ticket) => ticket.id).join(":")}
-          className="rounded-md border border-border/70 bg-background/40 p-2"
-        >
-          <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-            Wave {waveIndex + 1} · {wave.length} ticket{wave.length === 1 ? "" : "s"}
-          </div>
-          {wave.map((ticket) => {
-            const open = expanded[ticket.id] ?? false;
-            const state = states.get(ticket.id);
-            const appReviewRun = props.appReviewWorkflowRuns.find(
-              (run) => run.id === state?.appReviewWorkflowRunId,
-            );
-            const linkedThreadIds = new Set(
-              [
-                state?.workerThreadId,
-                state?.codeReviewThreadId,
-                appReviewRun?.controllerThreadId,
-                ...props.threads
-                  .filter(
-                    (thread) =>
-                      thread.workflowContext?.ticketScope.includes(ticket.id) === true &&
-                      (thread.workflowRole === "implementation-worker" ||
-                        thread.workflowRole === "implementation-code-reviewer" ||
-                        thread.workflowRole === "app-review-orchestrator" ||
-                        thread.workflowRole === "app-review-reviewer" ||
-                        thread.workflowRole === "app-review-fixer"),
-                  )
-                  .map((thread) => thread.id),
-              ].flatMap((threadId) => (threadId == null ? [] : [threadId])),
-            );
-            const linkedThreads = [...linkedThreadIds]
-              .map((threadId) => props.threads.find((thread) => thread.id === threadId))
-              .filter((thread): thread is EnvironmentThreadShell => thread !== undefined)
-              .toSorted(
-                (left, right) =>
-                  Date.parse(left.createdAt) - Date.parse(right.createdAt) ||
-                  left.id.localeCompare(right.id),
-              );
-            const implementationThreads = linkedThreads.filter(
-              (thread) => thread.workflowRole === "implementation-worker",
-            );
-            const appReviewThreads = linkedThreads.filter(
-              (thread) => thread.workflowRole?.startsWith("app-review-") === true,
-            );
-            const codeReviewThreads = linkedThreads.filter(
-              (thread) => thread.workflowRole === "implementation-code-reviewer",
-            );
-            const ticketTimeRanges = linkedThreads.map(resolveWorkflowThreadTimeRange);
-            const ticketTimeRange =
-              ticketTimeRanges.length === 0
-                ? null
-                : {
-                    startedAt: ticketTimeRanges.reduce(
-                      (earliest, range) =>
-                        range.startedAt < earliest ? range.startedAt : earliest,
-                      ticketTimeRanges[0]!.startedAt,
-                    ),
-                    endedAt: ticketTimeRanges.some((range) => range.endedAt === null)
-                      ? null
-                      : ticketTimeRanges.reduce<string | null>(
-                          (latest, range) =>
-                            range.endedAt !== null && (latest === null || range.endedAt > latest)
-                              ? range.endedAt
-                              : latest,
-                          ticketTimeRanges[0]!.endedAt,
-                        ),
-                  };
-            const stageDetails = implementationTicketStageDetails(state, ticket);
-            const stages = [
-              {
-                label: "Implementation",
-                detail: stageDetails.implementation,
-                threads: implementationThreads,
-              },
-              {
-                label: "App Review",
-                detail: stageDetails.appReview,
-                threads: appReviewThreads,
-              },
-              {
-                label: "Code Review",
-                detail: stageDetails.codeReview,
-                threads: codeReviewThreads,
-              },
-            ] as const;
-            return (
-              <div key={ticket.id} className="border-t border-border/60 first:border-t-0">
-                <button
-                  type="button"
-                  aria-expanded={open}
-                  onClick={() => setExpanded((current) => ({ ...current, [ticket.id]: !open }))}
-                  className="cursor-pointer flex w-full items-center gap-2 py-2 text-left"
-                >
-                  {open ? (
-                    <ChevronDown className="size-3.5" />
-                  ) : (
-                    <ChevronRight className="size-3.5" />
-                  )}
-                  <span className="min-w-0 flex-1 truncate text-xs font-medium">
-                    {ticket.key ?? `Ticket ${ticket.ordinal + 1}`} · {ticket.title}
-                  </span>
-                  <span className="text-[10px] capitalize text-muted-foreground">
-                    {state?.status ?? ticket.status}
-                  </span>
-                </button>
-                {open ? (
-                  <div className="mb-2 ml-5 border-l border-border/70 pl-3">
-                    {ticketTimeRange ? (
-                      <TimelineTimeRange
-                        {...ticketTimeRange}
-                        timestampFormat={props.timestampFormat}
-                        className="mb-2"
-                      />
-                    ) : null}
-                    <div className="space-y-2">
-                      {stages.map((stage, stageIndex) => (
-                        <section key={stage.label} className="relative">
-                          <span className="absolute -left-[1.05rem] top-1 flex size-4 items-center justify-center rounded-full border border-border bg-background text-[9px] font-medium text-muted-foreground">
-                            {stageIndex + 1}
-                          </span>
-                          <div className="mb-1 flex items-center gap-1.5 text-[11px]">
-                            <span className="font-medium text-foreground">{stage.label}</span>
-                            <span className="capitalize text-muted-foreground">
-                              · {stage.detail}
-                            </span>
-                            {stage.label === "App Review" && appReviewRun ? (
-                              <button
-                                type="button"
-                                onClick={props.onOpenAppReview}
-                                className="cursor-pointer ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] hover:bg-accent hover:text-foreground"
-                              >
-                                Results <Eye className="size-3" aria-hidden />
-                              </button>
-                            ) : null}
-                            <WorkflowTicketStageRerunMenu
-                              environmentId={props.environmentId}
-                              ticketLabel={ticket.key ?? `Ticket ${ticket.ordinal + 1}`}
-                              stageLabel={stage.label}
-                              pinKey={TICKET_STAGE_RERUN[stage.label].pinKey}
-                              pinnedSelection={props.pinFor(TICKET_STAGE_RERUN[stage.label].pinKey)}
-                              inheritedSelection={props.rootModelSelection}
-                              inheritedLabel="Follows the workflow's model."
-                              disabledReason={ticketStageRerunDisabledReason({
-                                stageLabel: stage.label,
-                                threads: stage.threads,
-                                appReviewRun,
-                              })}
-                              onSetStepModel={props.onSetStepModel}
-                              onRerun={
-                                props.onRerunTicketStage === undefined
-                                  ? undefined
-                                  : () =>
-                                      props.onRerunTicketStage?.({
-                                        ticketId: ticket.id,
-                                        stage: TICKET_STAGE_RERUN[stage.label].stage,
-                                      })
-                              }
-                            />
-                          </div>
-                          {stage.label === "App Review" && appReviewRun ? (
-                            <TicketAppReviewCycles
-                              run={appReviewRun}
-                              callerBusyReason={
-                                [...implementationThreads, ...codeReviewThreads].some(
-                                  (thread) =>
-                                    thread.session?.status === "starting" ||
-                                    thread.session?.status === "running",
-                                )
-                                  ? "This ticket has an agent working in the same worktree. Stop it before starting a phase again."
-                                  : null
-                              }
-                              environmentId={props.environmentId}
-                              rootModelSelection={props.rootModelSelection}
-                              pinFor={props.pinFor}
-                              onSetStepModel={props.onSetStepModel}
-                              onRerunPhase={
-                                props.onRerunAppReviewPhase === undefined
-                                  ? undefined
-                                  : (phase) =>
-                                      props.onRerunAppReviewPhase?.({
-                                        appReviewRunId: appReviewRun.id,
-                                        phase,
-                                      })
-                              }
-                              threads={props.threads}
-                              onOpenThread={props.onOpenThread}
-                              activeThreadKey={props.activeThreadKey}
-                              timestampFormat={props.timestampFormat}
-                            />
-                          ) : stage.threads.length > 0 ? (
-                            <ThreadRowList
-                              threads={stage.threads}
-                              timestampFormat={props.timestampFormat}
-                              activeThreadKey={props.activeThreadKey}
-                              onOpenThread={props.onOpenThread}
-                            />
-                          ) : (
-                            <div className="py-1 text-[10px] text-muted-foreground/65">
-                              No thread created
-                            </div>
-                          )}
-                        </section>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
+      {buildTicketWaves(props.tickets).map((wave, waveIndex) => {
+        const waveTicketIds = new Set(wave.map((ticket) => ticket.id));
+        // A wave is derived from the dependency graph rather than stored, so
+        // every action names the ticket ids this row is rendering right now.
+        const waveThreads = props.threads.filter((thread) =>
+          thread.workflowContext?.ticketScope.some((ticketId) => waveTicketIds.has(ticketId)),
+        );
+        const waveBusy = runningThreadIdsOf(waveThreads).length > 0;
+        const forEachWaveTicket = (
+          act:
+            | ((input: { readonly ticketId: string; readonly stage: RerunTicketStage }) => void)
+            | undefined,
+        ) =>
+          act === undefined
+            ? undefined
+            : () => {
+                for (const ticket of wave) act({ ticketId: ticket.id, stage: "implementation" });
+              };
+        return (
+          <section
+            key={wave.map((ticket) => ticket.id).join(":")}
+            className="rounded-md border border-border/70 bg-background/40 p-2"
+          >
+            <div className="mb-1 flex items-center gap-1">
+              <div className="min-w-0 flex-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                Wave {waveIndex + 1} · {wave.length} ticket{wave.length === 1 ? "" : "s"}
               </div>
-            );
-          })}
-        </section>
-      ))}
+              <WorkflowStepSettingsMenu
+                environmentId={props.environmentId}
+                scopeNoun="wave"
+                stepLabel={`Wave ${String(waveIndex + 1)}`}
+                workflowPromptId={null}
+                subSteps={[]}
+                pinFor={props.pinFor}
+                usesRootThread={false}
+                rootModelSelection={props.rootModelSelection}
+                restartLabel={`Start wave ${String(waveIndex + 1)} again`}
+                restartDisabledReason={
+                  waveBusy ? "This wave is still running. Stop it before starting it again." : null
+                }
+                runningThreadIds={runningThreadIdsOf(waveThreads)}
+                onSetStepModel={undefined}
+                onStop={props.onStopThreads}
+                onRestart={forEachWaveTicket(props.onRerunTicketStage)}
+                clearDisabledReason={
+                  waveBusy ? "This wave is still running. Stop it before clearing it." : null
+                }
+                confirmClearMessage={`Clears all ${String(wave.length)} ticket${wave.length === 1 ? "" : "s"} in this wave, including the ones that succeeded. Branches and commits stay; the wave rebuilds in dependency order.`}
+                onClear={forEachWaveTicket(props.onResetTicketStage)}
+              />
+            </div>
+            {wave.map((ticket) => {
+              const open = expanded[ticket.id] ?? false;
+              const state = states.get(ticket.id);
+              const appReviewRun = props.appReviewWorkflowRuns.find(
+                (run) => run.id === state?.appReviewWorkflowRunId,
+              );
+              const linkedThreadIds = new Set(
+                [
+                  state?.workerThreadId,
+                  state?.codeReviewThreadId,
+                  appReviewRun?.controllerThreadId,
+                  ...props.threads
+                    .filter(
+                      (thread) =>
+                        thread.workflowContext?.ticketScope.includes(ticket.id) === true &&
+                        (thread.workflowRole === "implementation-worker" ||
+                          thread.workflowRole === "implementation-code-reviewer" ||
+                          thread.workflowRole === "app-review-orchestrator" ||
+                          thread.workflowRole === "app-review-reviewer" ||
+                          thread.workflowRole === "app-review-fixer"),
+                    )
+                    .map((thread) => thread.id),
+                ].flatMap((threadId) => (threadId == null ? [] : [threadId])),
+              );
+              const linkedThreads = [...linkedThreadIds]
+                .map((threadId) => props.threads.find((thread) => thread.id === threadId))
+                .filter((thread): thread is EnvironmentThreadShell => thread !== undefined)
+                .toSorted(
+                  (left, right) =>
+                    Date.parse(left.createdAt) - Date.parse(right.createdAt) ||
+                    left.id.localeCompare(right.id),
+                );
+              const implementationThreads = linkedThreads.filter(
+                (thread) => thread.workflowRole === "implementation-worker",
+              );
+              const appReviewThreads = linkedThreads.filter(
+                (thread) => thread.workflowRole?.startsWith("app-review-") === true,
+              );
+              const codeReviewThreads = linkedThreads.filter(
+                (thread) => thread.workflowRole === "implementation-code-reviewer",
+              );
+              const ticketTimeRanges = linkedThreads.map(resolveWorkflowThreadTimeRange);
+              const ticketTimeRange =
+                ticketTimeRanges.length === 0
+                  ? null
+                  : {
+                      startedAt: ticketTimeRanges.reduce(
+                        (earliest, range) =>
+                          range.startedAt < earliest ? range.startedAt : earliest,
+                        ticketTimeRanges[0]!.startedAt,
+                      ),
+                      endedAt: ticketTimeRanges.some((range) => range.endedAt === null)
+                        ? null
+                        : ticketTimeRanges.reduce<string | null>(
+                            (latest, range) =>
+                              range.endedAt !== null && (latest === null || range.endedAt > latest)
+                                ? range.endedAt
+                                : latest,
+                            ticketTimeRanges[0]!.endedAt,
+                          ),
+                    };
+              const stageDetails = implementationTicketStageDetails(state, ticket);
+              const stages = [
+                {
+                  label: "Implementation",
+                  detail: stageDetails.implementation,
+                  threads: implementationThreads,
+                },
+                {
+                  label: "App Review",
+                  detail: stageDetails.appReview,
+                  threads: appReviewThreads,
+                },
+                {
+                  label: "Code Review",
+                  detail: stageDetails.codeReview,
+                  threads: codeReviewThreads,
+                },
+              ] as const;
+              const ticketLabel = ticket.key ?? `Ticket ${ticket.ordinal + 1}`;
+              return (
+                <div key={ticket.id} className="border-t border-border/60 first:border-t-0">
+                  <div className="flex w-full items-center gap-1">
+                    <button
+                      type="button"
+                      aria-expanded={open}
+                      onClick={() => setExpanded((current) => ({ ...current, [ticket.id]: !open }))}
+                      className="cursor-pointer flex min-w-0 flex-1 items-center gap-2 py-2 text-left"
+                    >
+                      {open ? (
+                        <ChevronDown className="size-3.5" />
+                      ) : (
+                        <ChevronRight className="size-3.5" />
+                      )}
+                      <span className="min-w-0 flex-1 truncate text-xs font-medium">
+                        {ticketLabel} · {ticket.title}
+                      </span>
+                      <span className="text-[10px] capitalize text-muted-foreground">
+                        {state?.status ?? ticket.status}
+                      </span>
+                    </button>
+                    <WorkflowStepSettingsMenu
+                      environmentId={props.environmentId}
+                      scopeNoun="ticket"
+                      stepLabel={ticketLabel}
+                      workflowPromptId={null}
+                      subSteps={[]}
+                      pinFor={props.pinFor}
+                      usesRootThread={false}
+                      rootModelSelection={props.rootModelSelection}
+                      restartLabel={`Start ${ticketLabel} again`}
+                      restartDisabledReason={ticketStageRerunDisabledReason({
+                        stageLabel: "Implementation",
+                        threads: implementationThreads,
+                        appReviewRun,
+                      })}
+                      runningThreadIds={runningThreadIdsOf(linkedThreads)}
+                      onSetStepModel={undefined}
+                      onStop={props.onStopThreads}
+                      onRestart={
+                        props.onRerunTicketStage === undefined
+                          ? undefined
+                          : () =>
+                              props.onRerunTicketStage?.({
+                                ticketId: ticket.id,
+                                stage: "implementation",
+                              })
+                      }
+                      clearDisabledReason={ticketStageRerunDisabledReason({
+                        stageLabel: "Implementation",
+                        threads: implementationThreads,
+                        appReviewRun,
+                      })}
+                      confirmClearMessage={`Clears every stage of ${ticketLabel}. Its branch and commits stay; it starts again once its dependencies have succeeded.`}
+                      onClear={
+                        props.onResetTicketStage === undefined
+                          ? undefined
+                          : () =>
+                              props.onResetTicketStage?.({
+                                ticketId: ticket.id,
+                                stage: "implementation",
+                              })
+                      }
+                    />
+                  </div>
+                  {open ? (
+                    <div className="mb-2 ml-5 border-l border-border/70 pl-3">
+                      {ticketTimeRange ? (
+                        <TimelineTimeRange
+                          {...ticketTimeRange}
+                          timestampFormat={props.timestampFormat}
+                          className="mb-2"
+                        />
+                      ) : null}
+                      <div className="space-y-2">
+                        {stages.map((stage, stageIndex) => (
+                          <section key={stage.label} className="relative">
+                            <span className="absolute -left-[1.05rem] top-1 flex size-4 items-center justify-center rounded-full border border-border bg-background text-[9px] font-medium text-muted-foreground">
+                              {stageIndex + 1}
+                            </span>
+                            <div className="mb-1 flex items-center gap-1.5 text-[11px]">
+                              <span className="font-medium text-foreground">{stage.label}</span>
+                              <span className="capitalize text-muted-foreground">
+                                · {stage.detail}
+                              </span>
+                              {stage.label === "App Review" && appReviewRun ? (
+                                <button
+                                  type="button"
+                                  onClick={props.onOpenAppReview}
+                                  className="cursor-pointer ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] hover:bg-accent hover:text-foreground"
+                                >
+                                  Results <Eye className="size-3" aria-hidden />
+                                </button>
+                              ) : null}
+                              <WorkflowStepSettingsMenu
+                                environmentId={props.environmentId}
+                                scopeNoun="stage"
+                                stepLabel={`${ticket.key ?? `Ticket ${ticket.ordinal + 1}`} · ${stage.label}`}
+                                workflowPromptId={
+                                  TICKET_STAGE_RERUN[stage.label].pinKey.workflowPromptId
+                                }
+                                subSteps={[]}
+                                pinFor={props.pinFor}
+                                usesRootThread={false}
+                                rootModelSelection={props.rootModelSelection}
+                                restartLabel={`Start ${stage.label} again`}
+                                restartDisabledReason={ticketStageRerunDisabledReason({
+                                  stageLabel: stage.label,
+                                  threads: stage.threads,
+                                  appReviewRun,
+                                })}
+                                runningThreadIds={runningThreadIdsOf(stage.threads)}
+                                onSetStepModel={props.onSetStepModel}
+                                onStop={props.onStopThreads}
+                                onRestart={
+                                  props.onRerunTicketStage === undefined
+                                    ? undefined
+                                    : () =>
+                                        props.onRerunTicketStage?.({
+                                          ticketId: ticket.id,
+                                          stage: TICKET_STAGE_RERUN[stage.label].stage,
+                                        })
+                                }
+                                clearDisabledReason={ticketStageRerunDisabledReason({
+                                  stageLabel: stage.label,
+                                  threads: stage.threads,
+                                  appReviewRun,
+                                })}
+                                onClear={
+                                  props.onResetTicketStage === undefined
+                                    ? undefined
+                                    : () =>
+                                        props.onResetTicketStage?.({
+                                          ticketId: ticket.id,
+                                          stage: TICKET_STAGE_RERUN[stage.label].stage,
+                                        })
+                                }
+                              />
+                            </div>
+                            {stage.label === "App Review" && appReviewRun ? (
+                              <TicketAppReviewCycles
+                                run={appReviewRun}
+                                onStopThreads={props.onStopThreads}
+                                callerBusyReason={
+                                  [...implementationThreads, ...codeReviewThreads].some(
+                                    (thread) =>
+                                      thread.session?.status === "starting" ||
+                                      thread.session?.status === "running",
+                                  )
+                                    ? "This ticket has an agent working in the same worktree. Stop it before starting a phase again."
+                                    : null
+                                }
+                                environmentId={props.environmentId}
+                                rootModelSelection={props.rootModelSelection}
+                                pinFor={props.pinFor}
+                                onSetStepModel={props.onSetStepModel}
+                                onRerunPhase={
+                                  props.onRerunAppReviewPhase === undefined
+                                    ? undefined
+                                    : (phase) =>
+                                        props.onRerunAppReviewPhase?.({
+                                          appReviewRunId: appReviewRun.id,
+                                          phase,
+                                        })
+                                }
+                                threads={props.threads}
+                                onOpenThread={props.onOpenThread}
+                                activeThreadKey={props.activeThreadKey}
+                                timestampFormat={props.timestampFormat}
+                              />
+                            ) : stage.threads.length > 0 ? (
+                              <ThreadRowList
+                                threads={stage.threads}
+                                timestampFormat={props.timestampFormat}
+                                activeThreadKey={props.activeThreadKey}
+                                onOpenThread={props.onOpenThread}
+                              />
+                            ) : (
+                              <div className="py-1 text-[10px] text-muted-foreground/65">
+                                No thread created
+                              </div>
+                            )}
+                          </section>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </section>
+        );
+      })}
     </div>
   );
 }
@@ -1264,6 +1398,12 @@ function WorkflowGroupCard(props: {
   readonly onCopyWorkflowLink: (workflowId: string) => void;
   readonly onRetryImplementationRun?: ((runId: string) => void) | undefined;
   readonly onRerunImplementationStage?:
+    | ((input: {
+        readonly runId: string;
+        readonly target: OrchestrationImplementationRerunTarget;
+      }) => void)
+    | undefined;
+  readonly onResetImplementationStage?:
     | ((input: {
         readonly runId: string;
         readonly target: OrchestrationImplementationRerunTarget;
@@ -1535,6 +1675,20 @@ function WorkflowGroupCard(props: {
                             onResumeWorkflow: props.onResumeWorkflow,
                             implementationRunId: linkedImplementationRun?.id ?? null,
                           });
+                          // Only a step that owns a run-wide stage has something
+                          // to clear; the rest are phases of a thread's own work.
+                          const stepClearStage = rerunRunStageForStep(step);
+                          const stepClearRunId = linkedImplementationRun?.id ?? null;
+                          const onClearStep =
+                            stepClearStage === null ||
+                            stepClearRunId === null ||
+                            props.onResetImplementationStage === undefined
+                              ? undefined
+                              : () =>
+                                  props.onResetImplementationStage?.({
+                                    runId: stepClearRunId,
+                                    target: { kind: "run", stage: stepClearStage },
+                                  });
                           // The workflow root is excluded: stopping it pauses the
                           // whole run, which is what the header's Pause is for.
                           const stepRunningThreadIds = collectRunningStepThreadIds(
@@ -1627,6 +1781,8 @@ function WorkflowGroupCard(props: {
                                     onSetStepModel={props.onSetStepModel}
                                     onRestart={stepRestart.run}
                                     onStop={props.onStopThreads}
+                                    onClear={onClearStep}
+                                    confirmClearMessage={`Clears this step's recorded work for the whole run. Branches and commits stay.`}
                                   />
                                 </div>
                                 <TimelineTimeRange
@@ -1657,6 +1813,16 @@ function WorkflowGroupCard(props: {
                                               target: { kind: "ticket", ticketId, stage },
                                             })
                                     }
+                                    onResetTicketStage={
+                                      props.onResetImplementationStage === undefined
+                                        ? undefined
+                                        : ({ ticketId, stage }) =>
+                                            props.onResetImplementationStage?.({
+                                              runId: linkedImplementationRun.id,
+                                              target: { kind: "ticket", ticketId, stage },
+                                            })
+                                    }
+                                    onStopThreads={props.onStopThreads}
                                     threads={workflowThreads}
                                     appReviewWorkflowRuns={props.appReviewWorkflowRuns}
                                     onOpenThread={props.onOpenThread}
@@ -1670,6 +1836,7 @@ function WorkflowGroupCard(props: {
                                 combinedAppReviewRuns.length > 0 ? (
                                 <AppReviewRunsTimeline
                                   runs={combinedAppReviewRuns}
+                                  onStopThreads={props.onStopThreads}
                                   callerBusyReason={
                                     stepRunningThreadIds.length > 0
                                       ? "This step has an agent working in the same worktree. Stop it before starting a phase again."
@@ -1818,6 +1985,12 @@ export function WorkflowsPanel(props: {
   readonly onCopyWorkflowLink: (workflowId: string) => void;
   readonly onRetryImplementationRun?: ((runId: string) => void) | undefined;
   readonly onRerunImplementationStage?:
+    | ((input: {
+        readonly runId: string;
+        readonly target: OrchestrationImplementationRerunTarget;
+      }) => void)
+    | undefined;
+  readonly onResetImplementationStage?:
     | ((input: {
         readonly runId: string;
         readonly target: OrchestrationImplementationRerunTarget;
@@ -2017,6 +2190,7 @@ export function WorkflowsPanel(props: {
                 onCopyWorkflowLink={props.onCopyWorkflowLink}
                 onRetryImplementationRun={props.onRetryImplementationRun}
                 onRerunImplementationStage={props.onRerunImplementationStage}
+                onResetImplementationStage={props.onResetImplementationStage}
                 onRerunAppReviewPhase={props.onRerunAppReviewPhase}
                 onRestartPlanningStage={props.onRestartPlanningStage}
                 onResumeWorkflow={props.onResumeWorkflow}
