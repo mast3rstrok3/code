@@ -1,6 +1,6 @@
 import type { EnvironmentId, ModelSelection, ThreadId } from "@t3tools/contracts";
 import type { WorkflowPresetSubStep } from "@t3tools/shared/workflowPresets";
-import { Eraser, Pause, RotateCcw, Settings2, SkipForward } from "lucide-react";
+import { Eraser, Pause, Play, RotateCcw, Settings2, SkipForward } from "lucide-react";
 import { useState } from "react";
 
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
@@ -80,6 +80,12 @@ export function WorkflowStepSettingsMenu(props: {
   readonly onSetStepModel: SetWorkflowStepModel | undefined;
   readonly onRestart: (() => void) | undefined;
   readonly onStop: ((threadIds: readonly ThreadId[]) => void) | undefined;
+  /**
+   * The paused scopes covering this one, empty when it is running. A row can
+   * sit under more than one: its own pause and the workflow's.
+   */
+  readonly pausedScopeThreadIds?: readonly ThreadId[];
+  readonly onResume?: ((threadIds: readonly ThreadId[]) => void) | undefined;
   /** What the buttons act on. "step" unless the menu sits on a smaller scope. */
   readonly scopeNoun?: string;
   readonly onClear?: (() => void) | undefined;
@@ -94,6 +100,16 @@ export function WorkflowStepSettingsMenu(props: {
   const [confirmingClear, setConfirmingClear] = useState(false);
   const { workflowPromptId, onSetStepModel } = props;
   const noun = props.scopeNoun ?? "step";
+  const pausedScopeThreadIds = props.pausedScopeThreadIds ?? [];
+  // A paused scope has nothing to stop and everything to resume, so the two
+  // trade places rather than sitting next to each other.
+  const paused = pausedScopeThreadIds.length > 0;
+  // Starting a paused scope again would run one agent and then stall: the run
+  // still refuses to take the next step under a pause. Resume is the way
+  // forward, and it re-enters the same stage.
+  const restartDisabledReason = paused
+    ? `This ${noun} is paused. Resume it to pick the run back up.`
+    : props.restartDisabledReason;
   const clearDisabledReason = props.clearDisabledReason ?? null;
   const confirmClearMessage = props.confirmClearMessage ?? null;
 
@@ -144,27 +160,43 @@ export function WorkflowStepSettingsMenu(props: {
         </div>
 
         <div className="space-y-1 border-t border-border/70 px-2 py-2">
+          {paused ? (
+            <button
+              type="button"
+              disabled={props.onResume === undefined}
+              title={`Let the run pick this ${noun} back up where it stopped`}
+              onClick={() => {
+                props.onResume?.(pausedScopeThreadIds);
+                setOpen(false);
+              }}
+              className="cursor-pointer flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+            >
+              <Play className="size-3.5" aria-hidden />
+              Resume {noun}
+            </button>
+          ) : (
+            <button
+              type="button"
+              disabled={props.runningThreadIds.length === 0 || props.onStop === undefined}
+              title={
+                props.runningThreadIds.length === 0
+                  ? "Nothing is running in this step"
+                  : "Stop this step and its active agent sessions"
+              }
+              onClick={() => {
+                props.onStop?.(props.runningThreadIds);
+                setOpen(false);
+              }}
+              className="cursor-pointer flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+            >
+              <Pause className="size-3.5" aria-hidden />
+              Stop {noun}
+            </button>
+          )}
           <button
             type="button"
-            disabled={props.runningThreadIds.length === 0 || props.onStop === undefined}
-            title={
-              props.runningThreadIds.length === 0
-                ? "Nothing is running in this step"
-                : "Stop this step and its active agent sessions"
-            }
-            onClick={() => {
-              props.onStop?.(props.runningThreadIds);
-              setOpen(false);
-            }}
-            className="cursor-pointer flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
-          >
-            <Pause className="size-3.5" aria-hidden />
-            Stop {noun}
-          </button>
-          <button
-            type="button"
-            disabled={props.restartDisabledReason !== null || props.onRestart === undefined}
-            title={props.restartDisabledReason ?? props.restartLabel}
+            disabled={restartDisabledReason !== null || props.onRestart === undefined}
+            title={restartDisabledReason ?? props.restartLabel}
             onClick={() => {
               props.onRestart?.();
               setOpen(false);
@@ -174,9 +206,9 @@ export function WorkflowStepSettingsMenu(props: {
             <RotateCcw className="size-3.5" aria-hidden />
             Start {noun} again
           </button>
-          {props.restartDisabledReason !== null ? (
+          {restartDisabledReason !== null ? (
             <p className="px-2 text-[11px] leading-relaxed text-muted-foreground">
-              {props.restartDisabledReason}
+              {restartDisabledReason}
             </p>
           ) : null}
           {props.onClear === undefined ? null : (

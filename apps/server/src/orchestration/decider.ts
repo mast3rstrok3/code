@@ -40,6 +40,7 @@ import {
   requireThreadArchived,
   requireThreadAbsent,
   requireThreadNotArchived,
+  requireWorkflowNotPaused,
 } from "./commandInvariants.ts";
 import { WORKFLOW_PROMPT_IDS } from "../provider/WorkflowPromptRegistry.ts";
 import { appReviewPhaseStepPin, rerunTargetStepPin } from "./workflowSubagents.ts";
@@ -1421,6 +1422,26 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           (thread.deletedAt === null && thread.archivedAt === null),
       );
       const events: PlannedOrchestrationEvent[] = [];
+      // The pause itself is one mark on the scope the user stopped. Descendants
+      // inherit it by the parent walk, which also covers a thread the run
+      // created between the click and the last agent going quiet. Settling the
+      // subtree below is inbox housekeeping and no longer carries the pause:
+      // a stopped agent's trailing session write un-settles its thread, and
+      // that used to read as a resume.
+      events.push({
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.workflow-paused",
+        payload: {
+          threadId: command.threadId,
+          pausedAt: command.createdAt,
+          updatedAt: command.createdAt,
+        },
+      });
       for (const thread of targets) {
         if (thread.session !== null) {
           events.push({
@@ -1454,6 +1475,19 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
 
     case "thread.workflow.resume": {
       yield* requireThreadNotArchived({ readModel, command, threadId: command.threadId });
+      // Resume clears every pause mark in the subtree, not just the one on the
+      // thread the user clicked: a run can be paused at more than one scope
+      // (a wave, then the whole workflow), and leaving an inner mark set would
+      // resume a run that then refuses to start the branch it was told to.
+      const pausedTargets = collectHierarchyPostOrder(readModel.threads, command.threadId, {
+        getId: (thread) => thread.id,
+        getParentId: (thread) => thread.parentThreadId,
+      }).filter(
+        (thread) =>
+          thread.workflowPausedAt != null &&
+          (thread.id === command.threadId ||
+            (thread.deletedAt === null && thread.archivedAt === null)),
+      );
       // Pause settles the whole subtree, so resume has to clear the whole
       // subtree: a still-settled descendant keeps failing the paused-ancestor
       // invariant the moment a reactor tries to re-enter its stage.
@@ -1467,6 +1501,21 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             (thread.deletedAt === null && thread.archivedAt === null)),
       );
       const events: PlannedOrchestrationEvent[] = [];
+      for (const thread of pausedTargets) {
+        events.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: thread.id,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.workflow-resumed",
+          payload: {
+            threadId: thread.id,
+            updatedAt: command.createdAt,
+          },
+        });
+      }
       for (const thread of targets) {
         events.push({
           ...(yield* withEventBase({
@@ -1932,6 +1981,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      yield* requireWorkflowNotPaused({ readModel, command, threadId: command.threadId });
       if (!isProductWorkflowRoot(productRootThread)) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -2068,6 +2118,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      yield* requireWorkflowNotPaused({ readModel, command, threadId: command.threadId });
       if (thread.interactionMode !== "planning-workflow") {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -2242,6 +2293,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      yield* requireWorkflowNotPaused({ readModel, command, threadId: command.threadId });
       if (thread.interactionMode !== "planning-workflow") {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -2497,6 +2549,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      yield* requireWorkflowNotPaused({ readModel, command, threadId: command.threadId });
       const workflow = planningThread.planningWorkflow;
       const spec = workflow?.spec ?? null;
       const tickets = workflow?.tickets ?? [];
@@ -3896,6 +3949,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.sourceThreadId,
       });
+      yield* requireWorkflowNotPaused({ readModel, command, threadId: command.sourceThreadId });
       yield* requireThreadAbsent({
         readModel,
         command,
@@ -4142,6 +4196,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.parentThreadId,
       });
+      yield* requireWorkflowNotPaused({ readModel, command, threadId: command.parentThreadId });
       yield* requireThreadAbsent({ readModel, command, threadId: command.threadId });
       const batch = parent.workflowSubagentBatches?.find((entry) => entry.id === command.batchId);
       const child = batch?.children.find((entry) => entry.index === command.childIndex);
@@ -4355,6 +4410,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           createdAt: command.completedAt,
         },
       };
+      // A pause withholds the hand-back turn but keeps the batch's bookkeeping:
+      // its children are already finished, and nothing re-drives a completion
+      // that was refused outright, so failing here would strand the batch as
+      // running forever. Resume re-enters the stage through recovery.
+      if (isWorkflowThreadPaused(readModel.threads, parent.id)) {
+        return [completedEvent, messageEvent];
+      }
       return [completedEvent, messageEvent, turnEvent];
     }
 

@@ -56,6 +56,8 @@ import {
   ThreadUnpinnedPayload,
   ThreadUnarchivedPayload,
   ThreadUnsettledPayload,
+  ThreadWorkflowPausedPayload,
+  ThreadWorkflowResumedPayload,
   ThreadUnsnoozedPayload,
   ThreadRevertedPayload,
   ThreadSessionSetPayload,
@@ -466,6 +468,33 @@ export function projectEvent(
           threads: updateThread(nextBase.threads, payload.threadId, {
             settledOverride: payload.reason === "user" ? "active" : null,
             settledAt: null,
+            updatedAt: payload.updatedAt,
+          }),
+        })),
+      );
+
+    case "thread.workflow-paused":
+      return decodeForEvent(ThreadWorkflowPausedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            workflowPausedAt: payload.pausedAt,
+            updatedAt: payload.updatedAt,
+          }),
+        })),
+      );
+
+    case "thread.workflow-resumed":
+      return decodeForEvent(
+        ThreadWorkflowResumedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            workflowPausedAt: null,
             updatedAt: payload.updatedAt,
           }),
         })),

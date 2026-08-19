@@ -28,6 +28,8 @@ import {
   ThreadDeletedPayload as ContractsThreadDeletedPayloadSchema,
   ThreadUnarchivedPayload as ContractsThreadUnarchivedPayloadSchema,
   ThreadUnsettledPayload as ContractsThreadUnsettledPayloadSchema,
+  ThreadWorkflowPausedPayload as ContractsThreadWorkflowPausedPayloadSchema,
+  ThreadWorkflowResumedPayload as ContractsThreadWorkflowResumedPayloadSchema,
   ThreadSnoozedPayload as ContractsThreadSnoozedPayloadSchema,
   ThreadUnsnoozedPayload as ContractsThreadUnsnoozedPayloadSchema,
   ThreadPinnedPayload as ContractsThreadPinnedPayloadSchema,
@@ -96,6 +98,8 @@ export const ThreadAppReviewWorkflowResumeRequestedPayload =
 export const ThreadDeletedPayload = ContractsThreadDeletedPayloadSchema;
 export const ThreadUnarchivedPayload = ContractsThreadUnarchivedPayloadSchema;
 export const ThreadUnsettledPayload = ContractsThreadUnsettledPayloadSchema;
+export const ThreadWorkflowPausedPayload = ContractsThreadWorkflowPausedPayloadSchema;
+export const ThreadWorkflowResumedPayload = ContractsThreadWorkflowResumedPayloadSchema;
 export const ThreadSnoozedPayload = ContractsThreadSnoozedPayloadSchema;
 export const ThreadUnsnoozedPayload = ContractsThreadUnsnoozedPayloadSchema;
 export const ThreadPinnedPayload = ContractsThreadPinnedPayloadSchema;

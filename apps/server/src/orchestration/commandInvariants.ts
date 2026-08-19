@@ -10,6 +10,7 @@ import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 import * as Effect from "effect/Effect";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
+import { findWorkflowPauseScope } from "./workflowPause.ts";
 
 function invariantError(commandType: string, detail: string): OrchestrationCommandInvariantError {
   return new OrchestrationCommandInvariantError({
@@ -147,6 +148,34 @@ export function requireThreadNotArchived(input: {
               `Thread '${input.threadId}' is already archived and cannot handle command '${input.command.type}'.`,
             ),
           ),
+    ),
+  );
+}
+
+/**
+ * Refuses a server-driven start beneath a paused scope of a workflow.
+ *
+ * Every command that starts a turn goes through here, not just
+ * `thread.turn.start`: the workflow launch commands create a thread and start
+ * its turn in one shot, so a guard that only covered the plain start let a
+ * paused run keep spawning agents. `threadId` is the thread that already
+ * exists: the parent or source of whatever is about to be launched.
+ *
+ * Only server-driven commands are blocked. A user starting a step again is the
+ * user overruling their own pause, and the client clears it as part of that.
+ */
+export function requireWorkflowNotPaused(input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly command: OrchestrationCommand;
+  readonly threadId: ThreadId;
+}): Effect.Effect<void, OrchestrationCommandInvariantError> {
+  if (!input.command.commandId.startsWith("server:")) return Effect.void;
+  const scope = findWorkflowPauseScope(input.readModel.threads, input.threadId);
+  if (scope === null) return Effect.void;
+  return Effect.fail(
+    invariantError(
+      input.command.type,
+      `Workflow scope '${scope.id}' is paused, so '${input.command.type}' cannot start work under '${input.threadId}'.`,
     ),
   );
 }

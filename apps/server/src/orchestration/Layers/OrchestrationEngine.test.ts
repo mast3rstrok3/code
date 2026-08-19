@@ -411,6 +411,105 @@ describe("OrchestrationEngine", () => {
     await system.dispose();
   });
 
+  it("refuses a server-driven App Review launch under a paused scope", async () => {
+    // The launch creates a thread and starts its turn in one command, so the
+    // guard on a plain turn start never saw it: a stopped workflow kept opening
+    // browser reviewers for as long as its reactors had queued work.
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const createdAt = now();
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-project-paused-launch"),
+        projectId: asProjectId("project-paused-launch"),
+        title: "Paused Launch Project",
+        workspaceRoot: "/tmp/project-paused-launch",
+        defaultModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-thread-paused-launch-source"),
+        threadId: ThreadId.make("thread-paused-launch-source"),
+        projectId: asProjectId("project-paused-launch"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+        title: "Implementation",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "full-access",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.workflow.pause",
+        commandId: CommandId.make("cmd-paused-launch-pause"),
+        threadId: ThreadId.make("thread-paused-launch-source"),
+        createdAt,
+      }),
+    );
+
+    const launch = (commandId: string) =>
+      engine.dispatch({
+        type: "thread.app-review.launch",
+        commandId: CommandId.make(commandId),
+        sourceThreadId: ThreadId.make("thread-paused-launch-source"),
+        reviewThreadId: ThreadId.make("thread-paused-launch-review"),
+        reviewId: AppReviewId.make("app-review-paused-1"),
+        message: {
+          messageId: asMessageId("msg-paused-app-review-launch"),
+          role: "user",
+          text: "Run Browser App Review",
+          attachments: [],
+        },
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        runtimeMode: "full-access",
+        workflowPromptId: "implementation.browser-app-review.codex",
+        createdAt,
+      });
+    await expect(system.run(launch("server:paused-app-review-launch"))).rejects.toThrow();
+
+    const paused = await system.readModel();
+    expect(
+      paused.threads.find((thread) => thread.id === "thread-paused-launch-review"),
+    ).toBeUndefined();
+
+    // Resume, and the same launch lands.
+    await system.run(
+      engine.dispatch({
+        type: "thread.workflow.resume",
+        commandId: CommandId.make("cmd-paused-launch-resume"),
+        threadId: ThreadId.make("thread-paused-launch-source"),
+        createdAt,
+      }),
+    );
+    // Reactors mint a fresh command id per attempt, so the retry is a new
+    // command rather than one the engine remembers rejecting.
+    await system.run(launch("server:paused-app-review-relaunch"));
+
+    const resumed = await system.readModel();
+    expect(
+      resumed.threads.find((thread) => thread.id === "thread-paused-launch-review"),
+    ).toBeDefined();
+
+    await system.dispose();
+  });
+
   it("anchors an App Review to the source thread's proposed plan when no Spec exists", async () => {
     const system = await createOrchestrationSystem();
     const { engine } = system;

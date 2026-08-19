@@ -834,7 +834,7 @@ function phaseThread(overrides: Partial<WorkflowNudgeThread> = {}): WorkflowNudg
   return {
     id: "thread-reviewer",
     parentThreadId: "thread-controller",
-    settledOverride: null,
+    workflowPausedAt: null,
     workflowRole: "app-review-reviewer",
     deletedAt: null,
     session: {

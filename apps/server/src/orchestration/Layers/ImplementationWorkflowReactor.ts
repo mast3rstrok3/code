@@ -78,7 +78,7 @@ type ImplementationWorkflowEvent = Extract<
       | "thread.implementation-run-cancel-requested"
       | "thread.app-review-workflow-launched"
       | "thread.app-review-workflow-updated"
-      | "thread.unsettled";
+      | "thread.workflow-resumed";
   }
 >;
 
@@ -5961,19 +5961,21 @@ const make = Effect.gen(function* () {
   });
 
   /**
-   * Resuming a paused workflow un-settles its threads, and stage recovery is
-   * what turns that back into running work — sweeping here rather than waiting
-   * for the periodic pass is what makes "Start step again" start something the
-   * user can see.
+   * Clearing a pause is what turns a stopped run back into running work, and
+   * sweeping here rather than waiting for the periodic pass is what makes
+   * "Resume" start something the user can see.
    *
-   * A resume un-settles the whole subtree, so this reacts to the thread that
-   * owns the run and no other. Sweeping once per un-settled descendant would
-   * start one duplicate stage thread per thread in the run, none of which has a
-   * session yet for the next sweep to recognize. Resuming a single paused
-   * branch instead of the workflow root is picked up by the periodic sweep.
+   * The cleared mark is the trigger, not the un-settle that rides along with
+   * it: threads un-settle for reasons that have nothing to do with a pause, and
+   * sweeping twice for one resume starts a duplicate stage thread that the next
+   * sweep cannot recognize, because it has no session yet.
+   *
+   * A resume covers the whole subtree, so this reacts to the thread that owns
+   * the run and no other. Resuming a single paused branch instead of the
+   * workflow root is picked up by the periodic sweep.
    */
-  const handleThreadUnsettled = Effect.fn("ImplementationWorkflowReactor.handleThreadUnsettled")(
-    function* (event: Extract<ImplementationWorkflowEvent, { type: "thread.unsettled" }>) {
+  const handleWorkflowResumed = Effect.fn("ImplementationWorkflowReactor.handleWorkflowResumed")(
+    function* (event: Extract<ImplementationWorkflowEvent, { type: "thread.workflow-resumed" }>) {
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
       const ownsThread = readModel.implementationRuns.some(
         (run) =>
@@ -6024,8 +6026,8 @@ const make = Effect.gen(function* () {
       case "thread.app-review-workflow-updated":
         yield* handleNestedAppReviewWorkflow(event);
         return;
-      case "thread.unsettled":
-        yield* handleThreadUnsettled(event);
+      case "thread.workflow-resumed":
+        yield* handleWorkflowResumed(event);
         return;
     }
   });
@@ -6747,7 +6749,7 @@ const make = Effect.gen(function* () {
           event.type !== "thread.implementation-run-cancel-requested" &&
           event.type !== "thread.app-review-workflow-launched" &&
           event.type !== "thread.app-review-workflow-updated" &&
-          event.type !== "thread.unsettled"
+          event.type !== "thread.workflow-resumed"
         ) {
           return Effect.void;
         }

@@ -165,6 +165,26 @@ export function applyThreadDetailEvent(
         },
       };
 
+    case "thread.workflow-paused":
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          workflowPausedAt: event.payload.pausedAt,
+          updatedAt: event.payload.updatedAt,
+        },
+      };
+
+    case "thread.workflow-resumed":
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          workflowPausedAt: null,
+          updatedAt: event.payload.updatedAt,
+        },
+      };
+
     case "thread.snoozed":
       return {
         kind: "updated",

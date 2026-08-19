@@ -3126,9 +3126,10 @@ function ChatViewContent(props: ChatViewProps) {
       const root = activeWorkflowNavigation?.root;
       if (!root) return;
       void (async () => {
-        if (root.settledOverride === "settled") {
-          // Un-settle the whole paused subtree, not just the root: a settled
-          // descendant still fails the paused-ancestor invariant.
+        if (root.workflowPausedAt != null) {
+          // Clear the pause before restarting: the decider refuses a
+          // server-driven start under a paused scope, and a restart is the
+          // user overruling their own Stop.
           const resumed = await resumeWorkflowTree({
             environmentId: root.environmentId,
             input: { threadId: root.id },
@@ -3143,7 +3144,7 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [activeWorkflowNavigation, restartPlanningStage, resumeWorkflowTree],
   );
-  // Resuming un-settles the paused subtree; the run's reactor then re-enters
+  // Resuming clears the paused subtree; the run's reactor then re-enters
   // whichever stage it stopped at, reusing the worktrees and branches it
   // already has and starting fresh agents on the step's current model pin.
   const handleResumeWorkflow = useCallback(() => {
@@ -3154,6 +3155,22 @@ function ChatViewContent(props: ChatViewProps) {
       input: { threadId: root.id },
     });
   }, [activeWorkflowNavigation, resumeWorkflowTree]);
+  // Resume from a scope menu inside the run: the panel already resolved which
+  // scopes cover the row that was clicked, which is not always the row itself.
+  // One resume per scope, because each carries its own mark.
+  const handleResumeWorkflowThreads = useCallback(
+    (threadIds: readonly ThreadId[]) => {
+      const root = activeWorkflowNavigation?.root;
+      if (!root) return;
+      for (const threadId of threadIds) {
+        void resumeWorkflowTree({
+          environmentId: root.environmentId,
+          input: { threadId },
+        });
+      }
+    },
+    [activeWorkflowNavigation, resumeWorkflowTree],
+  );
   const handlePauseWorkflow = useCallback(() => {
     const root = activeWorkflowNavigation?.root;
     if (!root) return;
@@ -7042,6 +7059,7 @@ function ChatViewContent(props: ChatViewProps) {
         onResumeWorkflow={handleResumeWorkflow}
         onSetStepModel={handleSetWorkflowStepModel}
         onStopThreads={handleStopWorkflowThreads}
+        onResumeThreads={handleResumeWorkflowThreads}
       />
     ) : activeRightPanelSurface?.kind === "instructions" ? (
       <WorkflowInstructionsPanel

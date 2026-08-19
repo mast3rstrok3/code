@@ -1,4 +1,9 @@
-import { isRunStageSkipped, isTicketSkipped, isTicketStageSkipped } from "@t3tools/contracts";
+import {
+  findWorkflowPauseScope,
+  isRunStageSkipped,
+  isTicketSkipped,
+  isTicketStageSkipped,
+} from "@t3tools/contracts";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import type {
   AppReviewWorkflowCycle,
@@ -499,6 +504,23 @@ function collectRunningStepThreadIds(
   return [...ids];
 }
 
+/** Every thread a step owns, whatever it is doing right now. */
+function collectStepThreads(
+  step: WorkflowTimelineStep<EnvironmentThreadShell>,
+  rootThreadId: string,
+): readonly EnvironmentThreadShell[] {
+  const byId = new Map<ThreadId, EnvironmentThreadShell>();
+  const consider = (thread: EnvironmentThreadShell) => {
+    if (thread.id === rootThreadId) return;
+    byId.set(thread.id, thread);
+  };
+  for (const entry of step.entries) {
+    if (entry.kind === "thread") consider(entry.row.thread);
+    else for (const row of entry.group.rows) consider(row.thread);
+  }
+  return [...byId.values()];
+}
+
 function planningStepProgress(
   step: WorkflowTimelineStep<EnvironmentThreadShell>,
   currentStage: OrchestrationPlanningWorkflowStage,
@@ -639,6 +661,7 @@ function TicketAppReviewCycles(props: {
   readonly onSetStepModel: SetWorkflowStepModel | undefined;
   readonly onRerunPhase: ((phase: AppReviewWorkflowPhase) => void) | undefined;
   readonly onStopThreads: ((threadIds: readonly ThreadId[]) => void) | undefined;
+  readonly onResumeThreads: ((threadIds: readonly ThreadId[]) => void) | undefined;
   readonly threads: readonly EnvironmentThreadShell[];
   readonly onOpenThread: (thread: EnvironmentThreadShell) => void;
   readonly activeThreadKey: string | null;
@@ -758,8 +781,19 @@ function TicketAppReviewCycles(props: {
                                   thread === undefined ? [] : [thread],
                                 ),
                           )}
+                          pausedScopeThreadIds={
+                            workflowPauseOf(
+                              props.threads,
+                              props.run.activeThreadId === null
+                                ? []
+                                : [threadById.get(props.run.activeThreadId)].flatMap((thread) =>
+                                    thread === undefined ? [] : [thread],
+                                  ),
+                            ).scopeThreadIds
+                          }
                           onSetStepModel={props.onSetStepModel}
                           onStop={props.onStopThreads}
+                          onResume={props.onResumeThreads}
                           onRestart={() => props.onRerunPhase?.(step.phase)}
                         />
                       )}
@@ -806,6 +840,7 @@ function AppReviewRunsTimeline(props: {
   readonly runs: readonly AppReviewWorkflowRun[];
   readonly callerBusyReason: string | null;
   readonly onStopThreads: ((threadIds: readonly ThreadId[]) => void) | undefined;
+  readonly onResumeThreads: ((threadIds: readonly ThreadId[]) => void) | undefined;
   readonly environmentId: EnvironmentId;
   readonly rootModelSelection: ModelSelection;
   readonly pinFor: (key: WorkflowModelPinKey) => ModelSelection | null;
@@ -833,6 +868,7 @@ function AppReviewRunsTimeline(props: {
               run={run}
               callerBusyReason={props.callerBusyReason}
               onStopThreads={props.onStopThreads}
+              onResumeThreads={props.onResumeThreads}
               environmentId={props.environmentId}
               rootModelSelection={props.rootModelSelection}
               pinFor={props.pinFor}
@@ -1001,6 +1037,33 @@ const TICKET_STAGE_RERUN = {
   { readonly stage: RerunTicketStage; readonly pinKey: WorkflowModelPinKey }
 >;
 
+/**
+ * The pause covering one row of the panel.
+ *
+ * A row is only shown as paused when every thread in it is: stopping one
+ * ticket of a wave leaves the wave running, and saying otherwise would hide
+ * the work that is still going. `scopeThreadIds` names the scopes a Resume has
+ * to clear, which may be the row's own threads or an ancestor the user stopped
+ * from a wider menu.
+ */
+export function workflowPauseOf(
+  allThreads: readonly EnvironmentThreadShell[],
+  rowThreads: readonly EnvironmentThreadShell[],
+): { readonly scopeThreadIds: readonly ThreadId[]; readonly paused: boolean } {
+  const scopeThreadIds = new Set<ThreadId>();
+  let pausedCount = 0;
+  for (const thread of rowThreads) {
+    const scope = findWorkflowPauseScope(allThreads, thread.id);
+    if (scope === null) continue;
+    pausedCount += 1;
+    scopeThreadIds.add(scope.id);
+  }
+  return {
+    scopeThreadIds: [...scopeThreadIds],
+    paused: rowThreads.length > 0 && pausedCount === rowThreads.length,
+  };
+}
+
 /** The threads a Stop would actually end, so the button can disable itself. */
 function runningThreadIdsOf(threads: readonly EnvironmentThreadShell[]): readonly ThreadId[] {
   return threads
@@ -1032,6 +1095,7 @@ function TicketPhases(props: {
       }) => void)
     | undefined;
   readonly onStopThreads: ((threadIds: readonly ThreadId[]) => void) | undefined;
+  readonly onResumeThreads: ((threadIds: readonly ThreadId[]) => void) | undefined;
   readonly onRerunAppReviewPhase:
     | ((input: { readonly appReviewRunId: string; readonly phase: AppReviewWorkflowPhase }) => void)
     | undefined;
@@ -1054,6 +1118,7 @@ function TicketPhases(props: {
           thread.workflowContext?.ticketScope.some((ticketId) => waveTicketIds.has(ticketId)),
         );
         const waveBusy = runningThreadIdsOf(waveThreads).length > 0;
+        const wavePause = workflowPauseOf(props.threads, waveThreads);
         const forEachWaveTicket = (
           act:
             | ((input: { readonly ticketId: string; readonly stage: RerunTicketStage }) => void)
@@ -1075,6 +1140,7 @@ function TicketPhases(props: {
                 {wave.every((ticket) => isTicketSkipped(props.skips, ticket.id))
                   ? " · skipped"
                   : ""}
+                {wavePause.paused ? " · paused" : ""}
               </div>
               <WorkflowStepSettingsMenu
                 environmentId={props.environmentId}
@@ -1090,8 +1156,10 @@ function TicketPhases(props: {
                   waveBusy ? "This wave is still running. Stop it before starting it again." : null
                 }
                 runningThreadIds={runningThreadIdsOf(waveThreads)}
+                pausedScopeThreadIds={wavePause.scopeThreadIds}
                 onSetStepModel={undefined}
                 onStop={props.onStopThreads}
+                onResume={props.onResumeThreads}
                 onRestart={forEachWaveTicket(props.onRerunTicketStage)}
                 clearDisabledReason={
                   waveBusy ? "This wave is still running. Stop it before clearing it." : null
@@ -1180,6 +1248,7 @@ function TicketPhases(props: {
                 },
               ] as const;
               const ticketLabel = ticket.key ?? `Ticket ${ticket.ordinal + 1}`;
+              const ticketPause = workflowPauseOf(props.threads, linkedThreads);
               return (
                 <div key={ticket.id} className="border-t border-border/60 first:border-t-0">
                   <div className="flex w-full items-center gap-1">
@@ -1200,7 +1269,9 @@ function TicketPhases(props: {
                       <span className="text-[10px] capitalize text-muted-foreground">
                         {isTicketSkipped(props.skips, ticket.id)
                           ? "skipped"
-                          : (state?.status ?? ticket.status)}
+                          : ticketPause.paused
+                            ? "paused"
+                            : (state?.status ?? ticket.status)}
                       </span>
                     </button>
                     <WorkflowStepSettingsMenu
@@ -1219,8 +1290,10 @@ function TicketPhases(props: {
                         appReviewRun,
                       })}
                       runningThreadIds={runningThreadIdsOf(linkedThreads)}
+                      pausedScopeThreadIds={ticketPause.scopeThreadIds}
                       onSetStepModel={undefined}
                       onStop={props.onStopThreads}
+                      onResume={props.onResumeThreads}
                       onRestart={
                         props.onRerunTicketStage === undefined
                           ? undefined
@@ -1278,7 +1351,9 @@ function TicketPhases(props: {
                                   TICKET_STAGE_RERUN[stage.label].stage,
                                 )
                                   ? "skipped"
-                                  : stage.detail}
+                                  : workflowPauseOf(props.threads, stage.threads).paused
+                                    ? "paused"
+                                    : stage.detail}
                               </span>
                               {stage.label === "App Review" && appReviewRun ? (
                                 <button
@@ -1307,8 +1382,12 @@ function TicketPhases(props: {
                                   appReviewRun,
                                 })}
                                 runningThreadIds={runningThreadIdsOf(stage.threads)}
+                                pausedScopeThreadIds={
+                                  workflowPauseOf(props.threads, stage.threads).scopeThreadIds
+                                }
                                 onSetStepModel={props.onSetStepModel}
                                 onStop={props.onStopThreads}
+                                onResume={props.onResumeThreads}
                                 onRestart={
                                   props.onRerunTicketStage === undefined
                                     ? undefined
@@ -1353,6 +1432,7 @@ function TicketPhases(props: {
                               <TicketAppReviewCycles
                                 run={appReviewRun}
                                 onStopThreads={props.onStopThreads}
+                                onResumeThreads={props.onResumeThreads}
                                 callerBusyReason={
                                   [...implementationThreads, ...codeReviewThreads].some(
                                     (thread) =>
@@ -1466,6 +1546,7 @@ function WorkflowGroupCard(props: {
   readonly onResumeWorkflow?: (() => void) | undefined;
   readonly onSetStepModel?: SetWorkflowStepModel | undefined;
   readonly onStopThreads?: ((threadIds: readonly ThreadId[]) => void) | undefined;
+  readonly onResumeThreads?: ((threadIds: readonly ThreadId[]) => void) | undefined;
   readonly tickets: readonly OrchestrationPlanningTicket[];
   readonly spec: OrchestrationPlanningSpec | null;
   readonly skillTitlesById: ReadonlyMap<string, string>;
@@ -1523,10 +1604,10 @@ function WorkflowGroupCard(props: {
     readonly markdown: string;
   } | null>(null);
   const phases = groupWorkflowStepsByPhase(steps);
-  // Pausing settles the whole workflow, so a resume is workflow-wide. Only the
-  // step the run actually stopped at offers it, so "Start step again" never
-  // claims to restart a step the runtime would skip.
-  const workflowPaused = props.workflowRoot.settledOverride === "settled";
+  // A pause on the workflow root stops the whole run, and the header's Resume
+  // clears it. Scopes inside the run carry their own marks and their own
+  // Resume; this one is only about the run as a whole.
+  const workflowPaused = props.workflowRoot.workflowPausedAt != null;
   const resumeStage =
     workflowPaused && linkedImplementationRun !== null
       ? implementationRunCurrentStage(linkedImplementationRun)
@@ -1745,6 +1826,10 @@ function WorkflowGroupCard(props: {
                             step,
                             props.workflowRoot.id,
                           );
+                          const stepPause = workflowPauseOf(
+                            workflowThreads,
+                            collectStepThreads(step, props.workflowRoot.id),
+                          );
                           const stepOpen = expandedSteps[step.id] ?? false;
                           const isTicketExecutionStep =
                             group.preset === "planning" &&
@@ -1828,9 +1913,11 @@ function WorkflowGroupCard(props: {
                                     restartLabel={`Start ${workflowStepTitle(step)} again`}
                                     restartDisabledReason={stepRestart.disabledReason}
                                     runningThreadIds={stepRunningThreadIds}
+                                    pausedScopeThreadIds={stepPause.scopeThreadIds}
                                     onSetStepModel={props.onSetStepModel}
                                     onRestart={stepRestart.run}
                                     onStop={props.onStopThreads}
+                                    onResume={props.onResumeThreads}
                                     onClear={onClearStep}
                                     confirmClearMessage={`Clears this step's recorded work for the whole run. Branches and commits stay.`}
                                     skipped={
@@ -1894,6 +1981,7 @@ function WorkflowGroupCard(props: {
                                             })
                                     }
                                     onStopThreads={props.onStopThreads}
+                                    onResumeThreads={props.onResumeThreads}
                                     skips={linkedImplementationRun.skips}
                                     onSetTicketSkip={
                                       props.onSetImplementationSkip === undefined
@@ -1922,6 +2010,7 @@ function WorkflowGroupCard(props: {
                                 <AppReviewRunsTimeline
                                   runs={combinedAppReviewRuns}
                                   onStopThreads={props.onStopThreads}
+                                  onResumeThreads={props.onResumeThreads}
                                   callerBusyReason={
                                     stepRunningThreadIds.length > 0
                                       ? "This step has an agent working in the same worktree. Stop it before starting a phase again."
@@ -2096,6 +2185,7 @@ export function WorkflowsPanel(props: {
   readonly onPauseWorkflow?: (() => void) | undefined;
   readonly onSetStepModel?: SetWorkflowStepModel | undefined;
   readonly onStopThreads?: ((threadIds: readonly ThreadId[]) => void) | undefined;
+  readonly onResumeThreads?: ((threadIds: readonly ThreadId[]) => void) | undefined;
 }) {
   const groups = props.workflow?.groups ?? [];
   const focusedGroupRef = useRef<HTMLElement>(null);
@@ -2221,7 +2311,7 @@ export function WorkflowsPanel(props: {
             rootModelSelection={workflow.root.modelSelection}
             onSetStepModel={props.onSetStepModel}
           />
-          {workflow.root.settledOverride !== "settled" && props.onPauseWorkflow ? (
+          {workflow.root.workflowPausedAt == null && props.onPauseWorkflow ? (
             <button
               type="button"
               onClick={props.onPauseWorkflow}
@@ -2230,7 +2320,7 @@ export function WorkflowsPanel(props: {
             >
               <Pause className="size-3" aria-hidden /> Pause
             </button>
-          ) : workflow.root.settledOverride === "settled" && props.onResumeWorkflow ? (
+          ) : workflow.root.workflowPausedAt != null && props.onResumeWorkflow ? (
             <button
               type="button"
               onClick={props.onResumeWorkflow}
@@ -2239,7 +2329,7 @@ export function WorkflowsPanel(props: {
             >
               <Play className="size-3" aria-hidden /> Resume
             </button>
-          ) : workflow.root.settledOverride === "settled" ? (
+          ) : workflow.root.workflowPausedAt != null ? (
             <span className="mt-1 rounded-md bg-muted px-2 py-1 text-xs font-medium text-muted-foreground">
               Paused
             </span>
@@ -2287,6 +2377,7 @@ export function WorkflowsPanel(props: {
                 onRerunAppReviewPhase={props.onRerunAppReviewPhase}
                 onRestartPlanningStage={props.onRestartPlanningStage}
                 onResumeWorkflow={props.onResumeWorkflow}
+                onResumeThreads={props.onResumeThreads}
                 onSetStepModel={props.onSetStepModel}
                 onStopThreads={props.onStopThreads}
               />

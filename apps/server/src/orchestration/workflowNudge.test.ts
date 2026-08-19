@@ -19,7 +19,7 @@ function thread(overrides: Partial<WorkflowNudgeThread> = {}): WorkflowNudgeThre
   return {
     id: "worker",
     parentThreadId: "orchestrator",
-    settledOverride: null,
+    workflowPausedAt: null,
     workflowRole: "implementation-worker",
     deletedAt: null,
     session: {
@@ -34,7 +34,7 @@ function thread(overrides: Partial<WorkflowNudgeThread> = {}): WorkflowNudgeThre
 }
 
 const withThread = (entry: WorkflowNudgeThread) => ({
-  threads: [{ id: "orchestrator", parentThreadId: null, settledOverride: null }, entry].map(
+  threads: [{ id: "orchestrator", parentThreadId: null, workflowPausedAt: null }, entry].map(
     (candidate) => candidate as WorkflowNudgeThread,
   ),
   thread: entry,
@@ -109,7 +109,10 @@ it("only nudges the roles a workflow drives on its own", () => {
 it("does not nudge inside a paused subtree", () => {
   const worker = thread();
   const threads: ReadonlyArray<WorkflowNudgeThread> = [
-    { ...thread({ id: "orchestrator", parentThreadId: null }), settledOverride: "settled" },
+    {
+      ...thread({ id: "orchestrator", parentThreadId: null }),
+      workflowPausedAt: "2026-01-01T00:01:00.000Z",
+    },
     worker,
   ];
 

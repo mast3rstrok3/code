@@ -1387,6 +1387,12 @@ export const OrchestrationThread = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   settledAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  // A workflow pause is its own fact, not a settle. Settling parks a thread in
+  // the inbox and any real activity clears it again; a pause has to survive
+  // exactly that, because the agents it stopped keep writing for a while after
+  // the click. Set on the scope the user stopped, read through ancestors.
+  // Optional so payloads from pre-pause servers still decode.
+  workflowPausedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   // Snooze is an overlay on the active lifecycle, not a fourth destination:
   // a snoozed thread stays "active" in the model and is only suppressed from
   // the inbox until snoozedUntil passes (or the thread raises its hand).
@@ -1483,6 +1489,7 @@ export const OrchestrationThreadShell = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   settledAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  workflowPausedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   snoozedUntil: Schema.optional(Schema.NullOr(IsoDateTime)),
   snoozedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   pinnedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
@@ -2140,6 +2147,49 @@ const ThreadImplementationRunResetCommand = Schema.Struct({
 });
 
 /**
+ * A thread as the pause walk needs it: an id, its parent, and its own pause
+ * mark. Both the server's decider and a client's workflow panel pass their own
+ * thread shape in.
+ */
+export interface WorkflowPauseThread {
+  readonly id: string;
+  readonly parentThreadId: string | null;
+  readonly workflowPausedAt?: string | null | undefined;
+}
+
+/**
+ * The paused scope covering `threadId`: the thread itself or its nearest
+ * paused ancestor, or null when nothing above it is paused.
+ *
+ * A pause is stamped once, on the scope the user stopped, and inherited
+ * downward by this walk, so a thread the run created after the click is
+ * covered too. Unknown ids are not paused: a thread the read model has not seen
+ * yet cannot be under a pause the user set.
+ */
+export function findWorkflowPauseScope<TThread extends WorkflowPauseThread>(
+  threads: ReadonlyArray<TThread>,
+  threadId: string,
+): TThread | null {
+  const seen = new Set<string>();
+  let current = threads.find((thread) => thread.id === threadId);
+  while (current !== undefined && !seen.has(current.id)) {
+    if (current.workflowPausedAt != null) return current;
+    seen.add(current.id);
+    const parentId: string | null = current.parentThreadId;
+    current = parentId === null ? undefined : threads.find((thread) => thread.id === parentId);
+  }
+  return null;
+}
+
+/** True when `threadId` or any of its ancestors is paused. */
+export function isWorkflowThreadPaused<TThread extends WorkflowPauseThread>(
+  threads: ReadonlyArray<TThread>,
+  threadId: string,
+): boolean {
+  return findWorkflowPauseScope(threads, threadId) !== null;
+}
+
+/**
  * Whether the run has been told to pass over a ticket's stage.
  *
  * A whole-ticket skip covers every stage of it, so a caller asking about one
@@ -2754,6 +2804,8 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.planning-spec-bundle-loaded",
   "thread.planning-workflow-stage-set",
   "thread.workflow-step-model-set",
+  "thread.workflow-paused",
+  "thread.workflow-resumed",
   "thread.implementation-run-launched",
   "thread.implementation-run-updated",
   "thread.implementation-run-retry-requested",
@@ -2872,6 +2924,23 @@ export const ThreadSettledPayload = Schema.Struct({
 export const ThreadUnsettledPayload = Schema.Struct({
   threadId: ThreadId,
   reason: Schema.Literals(["user", "activity"]),
+  updatedAt: IsoDateTime,
+});
+
+/**
+ * A workflow pause on one scope of a run: the workflow root, a ticket's
+ * worker, a stage's thread. Every thread beneath the scope is paused with it,
+ * derived by walking parents rather than stamped on each descendant, so a
+ * thread created after the click is covered too.
+ */
+export const ThreadWorkflowPausedPayload = Schema.Struct({
+  threadId: ThreadId,
+  pausedAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+
+export const ThreadWorkflowResumedPayload = Schema.Struct({
+  threadId: ThreadId,
   updatedAt: IsoDateTime,
 });
 
@@ -3287,6 +3356,16 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.unsettled"),
     payload: ThreadUnsettledPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.workflow-paused"),
+    payload: ThreadWorkflowPausedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.workflow-resumed"),
+    payload: ThreadWorkflowResumedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

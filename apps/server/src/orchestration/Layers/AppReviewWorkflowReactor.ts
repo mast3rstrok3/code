@@ -45,6 +45,7 @@ import {
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { isAwaitingWorkflowNudge, type WorkflowNudgeThread } from "../workflowNudge.ts";
+import { isWorkflowThreadPaused } from "../workflowPause.ts";
 import {
   findWorkflowStepModels,
   resolveWorkflowStepModelSelection,
@@ -765,6 +766,10 @@ const make = Effect.gen(function* () {
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
     const currentRun = selectReviewRunToStart(inputRun.id, readModel.appReviewWorkflowRuns ?? []);
     if (currentRun === null) return;
+    // A paused run is waiting for the user. The decider refuses a launch under
+    // a paused scope, so going on would spend a cycle on a command that cannot
+    // land. That is how a stopped workflow kept opening browser reviewers.
+    if (isWorkflowThreadPaused(readModel.threads, currentRun.controllerThreadId)) return;
     const target = yield* resolveTarget(currentRun.targetThreadId);
     if (target === null) {
       yield* failRun({
@@ -1850,6 +1855,7 @@ const make = Effect.gen(function* () {
     const occurredAt = yield* nowIso;
     for (const run of readModel.appReviewWorkflowRuns ?? []) {
       if (run.status !== "running") continue;
+      if (isWorkflowThreadPaused(readModel.threads, run.controllerThreadId)) continue;
       yield* reconcileRun(run, occurredAt).pipe(
         Effect.catchCause((cause) =>
           Cause.hasInterruptsOnly(cause)

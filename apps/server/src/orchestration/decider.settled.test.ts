@@ -25,6 +25,7 @@ function makeReadModel(
   session: OrchestrationSession | null = null,
   activities: OrchestrationThread["activities"] = [],
   messages: OrchestrationThread["messages"] = [],
+  workflowPausedAt: string | null = null,
 ): OrchestrationReadModel {
   return {
     snapshotSequence: 0,
@@ -49,6 +50,7 @@ function makeReadModel(
         archivedAt,
         settledOverride,
         settledAt: settledOverride === "settled" ? SETTLED_AT : null,
+        workflowPausedAt,
         deletedAt: null,
         messages,
         proposedPlans: [],
@@ -676,7 +678,10 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
         readModel: makeReadModel(null, null, makeSession("running")),
       });
       const events = Array.isArray(result) ? result : [result];
+      // The mark comes first and is what every guard reads; the stop and the
+      // settle are what the user sees happen to the agent and the inbox.
       expect(events.map((event) => event.type)).toEqual([
+        "thread.workflow-paused",
         "thread.session-stop-requested",
         "thread.settled",
       ]);
@@ -700,9 +705,67 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
           interactionMode: "default",
           createdAt: NOW,
         },
-        readModel: makeReadModel("settled"),
+        readModel: makeReadModel(null, null, null, [], [], NOW),
       }).pipe(Effect.flip);
       expect(error._tag).toBe("OrchestrationCommandInvariantError");
+    }),
+  );
+
+  it.effect("keeps a paused workflow paused when its stopped agent writes again", () =>
+    Effect.gen(function* () {
+      // The trailing session write of an agent that was told to stop used to
+      // un-settle its thread, and a pause read off the settle went with it.
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.session.set",
+          commandId: CommandId.make("provider:late-session-write"),
+          threadId: ThreadId.make("thread-1"),
+          session: makeSession("running"),
+          createdAt: NOW,
+        },
+        readModel: makeReadModel("settled", null, makeSession("running"), [], [], NOW),
+      });
+      const events = Array.isArray(result) ? result : [result];
+      expect(events.map((event) => event.type)).toContain("thread.session-set");
+
+      const blocked = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.turn.start",
+          commandId: CommandId.make("server:workflow-recovery"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: MessageId.make("message-after-late-write"),
+            role: "user",
+            text: "Recover",
+            attachments: [],
+          },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          createdAt: NOW,
+        },
+        // The un-settle landed, the pause mark did not move.
+        readModel: makeReadModel(null, null, makeSession("running"), [], [], NOW),
+      }).pipe(Effect.flip);
+      expect(blocked._tag).toBe("OrchestrationCommandInvariantError");
+    }),
+  );
+
+  it.effect("clears every pause mark in the subtree on resume", () =>
+    Effect.gen(function* () {
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.workflow.resume",
+          commandId: CommandId.make("cmd-resume-workflow"),
+          threadId: ThreadId.make("thread-1"),
+          createdAt: NOW,
+        },
+        readModel: makeReadModel("settled", null, null, [], [], NOW),
+      });
+      const events = Array.isArray(result) ? result : [result];
+      expect(events.map((event) => event.type)).toEqual([
+        "thread.workflow-resumed",
+        "thread.unsettled",
+      ]);
     }),
   );
 });
