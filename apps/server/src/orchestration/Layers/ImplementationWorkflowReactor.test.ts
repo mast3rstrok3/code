@@ -4728,6 +4728,71 @@ describe("ImplementationWorkflowReactor", () => {
       { serverSettings: { providers: { codex: { enabled: false } } } },
     ),
   );
+  it.effect("skipping a ticket's App Review sends it straight to Code Review", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, ticket } = yield* launchRun(system, {
+          appReviewStrategy: "nested-workflow",
+        });
+
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.skip",
+          commandId: commandId("skip-ticket-app-review"),
+          threadId: sourceThreadId,
+          runId: run.id,
+          target: { kind: "ticket", ticketId: ticket.id, stage: "app-review" },
+          skipped: true,
+          createdAt: "2026-01-01T00:00:00.500Z",
+        });
+        yield* system.reactor.drain;
+        yield* appendWorkerResult(system, {
+          run,
+          status: "succeeded",
+          ticketId: ticket.id,
+          completeTicketReview: false,
+        });
+
+        const snapshot = yield* system.query.getSnapshot();
+        const current = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        const state = current?.ticketStates.find((entry) => entry.ticketId === ticket.id);
+        expect(current?.skips).toHaveLength(1);
+        expect(state?.status).toBe("code-reviewing");
+        expect(state?.appReviewWorkflowRunId ?? null).toBeNull();
+        expect(snapshot.appReviewWorkflowRuns ?? []).toHaveLength(0);
+      }),
+    ),
+  );
+
+  it.effect("lifting a skip leaves the run with none recorded", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, ticket } = yield* launchRun(system);
+        const target = {
+          kind: "ticket" as const,
+          ticketId: ticket.id,
+          stage: "app-review" as const,
+        };
+        for (const skipped of [true, false]) {
+          yield* system.engine.dispatch({
+            type: "thread.implementation-run.skip",
+            commandId: commandId(`toggle-skip-${String(skipped)}`),
+            threadId: sourceThreadId,
+            runId: run.id,
+            target,
+            skipped,
+            createdAt: "2026-01-01T00:00:00.500Z",
+          });
+          yield* system.reactor.drain;
+        }
+
+        const current = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (entry) => entry.id === run.id,
+        );
+        expect(current?.skips).toHaveLength(0);
+      }),
+    ),
+  );
+
   it.effect("clearing a ticket puts it back in the queue instead of starting it", () =>
     withSystem((system) =>
       Effect.gen(function* () {

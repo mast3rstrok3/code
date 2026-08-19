@@ -1,7 +1,9 @@
 import {
   type AppDevStackAutoCreateResult,
+  applyImplementationSkip,
   CommandId,
   AppReviewId,
+  isTicketStageSkipped,
   EventId,
   GitCommandError,
   IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
@@ -70,6 +72,7 @@ type ImplementationWorkflowEvent = Extract<
       | "thread.implementation-run-retry-requested"
       | "thread.implementation-run-rerun-requested"
       | "thread.implementation-run-reset-requested"
+      | "thread.implementation-run-skip-set"
       | "thread.implementation-run-cancel-requested"
       | "thread.app-review-workflow-launched"
       | "thread.app-review-workflow-updated"
@@ -2004,7 +2007,13 @@ const make = Effect.gen(function* () {
         return;
       const ticket = ticketsById(sourceThread ?? orchestratorThread).get(input.ticketId);
       if (ticket === undefined) return;
-      if (ticket.appReviewEligible !== true || !ticket.appReviewPlanMarkdown) {
+      // A skip reads the same way as a ticket the plan never made eligible: the
+      // stage does not run and the ticket carries on to the next one.
+      if (
+        isTicketStageSkipped(input.run.skips, input.ticketId, "app-review") ||
+        ticket.appReviewEligible !== true ||
+        !ticket.appReviewPlanMarkdown
+      ) {
         yield* startTicketCodeReview({
           sourceThreadId: input.sourceThreadId,
           run: input.run,
@@ -5382,6 +5391,31 @@ const make = Effect.gen(function* () {
     yield* updateRun({ sourceThreadId, run: clearedRun, createdAt });
   });
 
+  /**
+   * Record a skip, and let the run reach the skipped stage to act on it.
+   *
+   * Nothing is started or stopped here. A stage already running keeps running,
+   * because a skip is a decision about the next time the run would start it;
+   * stopping what is in flight is the caller's move.
+   */
+  const handleRunSkipSet = Effect.fn("ImplementationWorkflowReactor.handleRunSkipSet")(function* (
+    event: Extract<ImplementationWorkflowEvent, { type: "thread.implementation-run-skip-set" }>,
+  ) {
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    const run = findRunById(readModel, event.payload.run.id) ?? event.payload.run;
+    const sourceThreadId = findRunSourceThreadId({ readModel, run });
+    if (sourceThreadId === null) return;
+    yield* updateRun({
+      sourceThreadId,
+      run: {
+        ...run,
+        skips: applyImplementationSkip(run.skips, event.payload.target, event.payload.skipped),
+        updatedAt: event.occurredAt,
+      },
+      createdAt: event.occurredAt,
+    });
+  });
+
   const handleRunCancel = Effect.fn("ImplementationWorkflowReactor.handleRunCancel")(function* (
     event: Extract<
       ImplementationWorkflowEvent,
@@ -5842,6 +5876,9 @@ const make = Effect.gen(function* () {
         return;
       case "thread.implementation-run-reset-requested":
         yield* handleRunReset(event);
+        return;
+      case "thread.implementation-run-skip-set":
+        yield* handleRunSkipSet(event);
         return;
       case "thread.implementation-run-cancel-requested":
         yield* handleRunCancel(event);
@@ -6569,6 +6606,7 @@ const make = Effect.gen(function* () {
           event.type !== "thread.implementation-run-retry-requested" &&
           event.type !== "thread.implementation-run-rerun-requested" &&
           event.type !== "thread.implementation-run-reset-requested" &&
+          event.type !== "thread.implementation-run-skip-set" &&
           event.type !== "thread.implementation-run-cancel-requested" &&
           event.type !== "thread.app-review-workflow-launched" &&
           event.type !== "thread.app-review-workflow-updated" &&

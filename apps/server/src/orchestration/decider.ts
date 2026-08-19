@@ -587,6 +587,7 @@ function buildImplementationRun(input: {
   return {
     id: input.runId,
     artifactSource: "planning-spec",
+    skips: [],
     specId: input.command.specId,
     sourceProposedPlan: null,
     planningTicketIds: ticketIds,
@@ -2960,6 +2961,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       });
       const run: OrchestrationImplementationRun = {
         id: `implementation-run-${runUuid}`,
+        skips: [],
         artifactSource: "proposed-plan",
         specId: null,
         sourceProposedPlan: { threadId: sourceThread.id, planId: plan.id },
@@ -3439,6 +3441,46 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         })),
         type: "thread.implementation-run-reset-requested" as const,
         payload: { run: existingRun, target },
+      };
+    }
+
+    case "thread.implementation-run.skip": {
+      yield* requireThread({ readModel, command, threadId: command.threadId });
+      const existingRun = readModel.implementationRuns.find((run) => run.id === command.runId);
+      if (existingRun === undefined) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Implementation Run '${command.runId}' does not exist.`,
+        });
+      }
+      if (existingRun.status === "canceled") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Implementation Run '${command.runId}' was canceled.`,
+        });
+      }
+      const target = command.target;
+      if (
+        target.kind === "ticket" &&
+        !existingRun.ticketStates.some((state) => state.ticketId === target.ticketId)
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Ticket '${target.ticketId}' is not part of Implementation Run '${command.runId}'.`,
+        });
+      }
+      // A skip is a standing decision, so it is allowed to land on a stage that
+      // is running. Stopping that stage is the caller's move, and the run reads
+      // the skip the next time it would start the stage.
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.implementation-run-skip-set" as const,
+        payload: { run: existingRun, target, skipped: command.skipped },
       };
     }
 

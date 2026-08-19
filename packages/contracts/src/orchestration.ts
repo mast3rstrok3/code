@@ -959,6 +959,28 @@ export type OrchestrationImplementationRerunRunStage =
   typeof OrchestrationImplementationRerunRunStage.Type;
 
 /**
+ * What the run is told not to do.
+ *
+ * A skip is a standing decision rather than a state, so it survives the stage
+ * being reached and can be taken back. Omitting `stage` skips the whole ticket:
+ * it keeps its place in the dependency graph and its branch, so what depends on
+ * it still builds on it, and simply carries no work of its own.
+ */
+export const OrchestrationImplementationSkipTarget = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("ticket"),
+    ticketId: OrchestrationPlanningTicketId,
+    stage: Schema.optionalKey(OrchestrationImplementationRerunTicketStage),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("run"),
+    stage: OrchestrationImplementationRerunRunStage,
+  }),
+]);
+export type OrchestrationImplementationSkipTarget =
+  typeof OrchestrationImplementationSkipTarget.Type;
+
+/**
  * What a re-run starts again.
  *
  * A ticket target rewinds one ticket to the named stage and leaves its siblings
@@ -1005,6 +1027,10 @@ export const OrchestrationImplementationRun = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   terminalLineageTicketIds: Schema.Array(OrchestrationPlanningTicketId).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+  /** Stages the run has been told to pass over. Empty on runs recorded before skips existed. */
+  skips: Schema.Array(OrchestrationImplementationSkipTarget).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   integrationHeadSha: Schema.NullOr(TrimmedNonEmptyString).pipe(
@@ -2113,6 +2139,75 @@ const ThreadImplementationRunResetCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+/**
+ * Whether the run has been told to pass over a ticket's stage.
+ *
+ * A whole-ticket skip covers every stage of it, so a caller asking about one
+ * stage does not have to know how the skip was expressed.
+ */
+export function isTicketStageSkipped(
+  skips: ReadonlyArray<OrchestrationImplementationSkipTarget>,
+  ticketId: string,
+  stage: OrchestrationImplementationRerunTicketStage,
+): boolean {
+  return skips.some(
+    (skip) =>
+      skip.kind === "ticket" &&
+      skip.ticketId === ticketId &&
+      (skip.stage === undefined || skip.stage === stage),
+  );
+}
+
+/** Whether the whole ticket is skipped, rather than one of its stages. */
+export function isTicketSkipped(
+  skips: ReadonlyArray<OrchestrationImplementationSkipTarget>,
+  ticketId: string,
+): boolean {
+  return skips.some(
+    (skip) => skip.kind === "ticket" && skip.ticketId === ticketId && skip.stage === undefined,
+  );
+}
+
+/** Whether the run has been told to pass over one of its own stages. */
+export function isRunStageSkipped(
+  skips: ReadonlyArray<OrchestrationImplementationSkipTarget>,
+  stage: OrchestrationImplementationRerunRunStage,
+): boolean {
+  return skips.some((skip) => skip.kind === "run" && skip.stage === stage);
+}
+
+/**
+ * Apply a skip decision, keeping the list free of entries the decision covers.
+ *
+ * Skipping a whole ticket replaces any stage skips it already had, and lifting
+ * a whole-ticket skip lifts those with it: two ways of saying the same thing
+ * would otherwise disagree the moment one of them is taken back.
+ */
+export function applyImplementationSkip(
+  skips: ReadonlyArray<OrchestrationImplementationSkipTarget>,
+  target: OrchestrationImplementationSkipTarget,
+  skipped: boolean,
+): ReadonlyArray<OrchestrationImplementationSkipTarget> {
+  const covers = (skip: OrchestrationImplementationSkipTarget): boolean => {
+    if (target.kind === "run") return skip.kind === "run" && skip.stage === target.stage;
+    if (skip.kind !== "ticket" || skip.ticketId !== target.ticketId) return false;
+    return target.stage === undefined || skip.stage === undefined || skip.stage === target.stage;
+  };
+  const remaining = skips.filter((skip) => !covers(skip));
+  return skipped ? [...remaining, target] : remaining;
+}
+
+/** Set or lift a skip. One command both ways, so a skip is never a one-way door. */
+const ThreadImplementationRunSkipCommand = Schema.Struct({
+  type: Schema.Literal("thread.implementation-run.skip"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  runId: OrchestrationImplementationRunId,
+  target: OrchestrationImplementationSkipTarget,
+  skipped: Schema.Boolean,
+  createdAt: IsoDateTime,
+});
+
 const ThreadImplementationRunCancelCommand = Schema.Struct({
   type: Schema.Literal("thread.implementation-run.cancel"),
   commandId: CommandId,
@@ -2431,6 +2526,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadImplementationRunRetryCommand,
   ThreadImplementationRunRerunCommand,
   ThreadImplementationRunResetCommand,
+  ThreadImplementationRunSkipCommand,
   ThreadImplementationRunCancelCommand,
   ThreadImplementationChangeRequestRetryCommand,
   ThreadAppReviewWorkflowLaunchCommand,
@@ -2480,6 +2576,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadImplementationRunRetryCommand,
   ThreadImplementationRunRerunCommand,
   ThreadImplementationRunResetCommand,
+  ThreadImplementationRunSkipCommand,
   ThreadImplementationRunCancelCommand,
   ThreadImplementationChangeRequestRetryCommand,
   ThreadAppReviewWorkflowLaunchCommand,
@@ -2662,6 +2759,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.implementation-run-retry-requested",
   "thread.implementation-run-rerun-requested",
   "thread.implementation-run-reset-requested",
+  "thread.implementation-run-skip-set",
   "thread.implementation-run-cancel-requested",
   "thread.implementation-change-request-retry-requested",
   "thread.app-review-workflow-launched",
@@ -2951,6 +3049,12 @@ export const ThreadImplementationRunRerunRequestedPayload = Schema.Struct({
 export const ThreadImplementationRunResetRequestedPayload = Schema.Struct({
   run: OrchestrationImplementationRun,
   target: OrchestrationImplementationRerunTarget,
+});
+
+export const ThreadImplementationRunSkipSetPayload = Schema.Struct({
+  run: OrchestrationImplementationRun,
+  target: OrchestrationImplementationSkipTarget,
+  skipped: Schema.Boolean,
 });
 
 export const ThreadImplementationRunCancelRequestedPayload = Schema.Struct({
@@ -3293,6 +3397,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.implementation-run-reset-requested"),
     payload: ThreadImplementationRunResetRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.implementation-run-skip-set"),
+    payload: ThreadImplementationRunSkipSetPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,
