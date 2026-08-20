@@ -960,7 +960,8 @@ T3's Planning workflow owns publication and approval:
 - Draft the complete tracer-bullet set and blocking graph using the upstream process and templates.
 - Store tickets through the planning-tickets-artifact requested by the stage launch prompt; do not create local files or external tracker issues.
 - Classify every ticket programmatically with \`appReviewEligible\`. Set it only when a human-style UI review can verify the ticket in isolation.
-- Every eligible ticket must carry a concrete \`appReviewPlanMarkdown\`: which App Dev Stack surface to start, the UI entry point, user actions, visible assertions, and required evidence. Use \`null\` for ineligible tickets. This is T3's programmatic attachment to the upstream ticket shape.
+- When the repository declares \`e2eCommands\` in \`t3.json\`, plan verification e2e-first: every UI-verifiable ticket's acceptance criteria must include extending the project's e2e suite with that ticket's flow, written test-first with the implementation. App Review runs those commands as part one of every review cycle against the ticket's own stack, so coverage planned here is what verifies the ticket programmatically.
+- Every eligible ticket must carry a concrete \`appReviewPlanMarkdown\`: which App Dev Stack surface to start, the UI entry point, user actions, visible assertions, and required evidence. Scope it to what the ticket's e2e coverage cannot prove — visual and interaction quality, states impractical to automate, and the evidence to capture — and do not restate flows the planned e2e tests already exercise end-to-end. Use \`null\` for ineligible tickets. This is T3's programmatic attachment to the upstream ticket shape.
 - Stop after drafting. The separate automatic Ticket Review stage owns completeness review, adjustment cycles, and final approval.
 - Do not quiz or ask the user. The preceding Product Grill or interactive Engineering Grill is the workflow's only user gate.
 - Use the repository glossary and ADRs, loading supporting documents through workflow_doc_get only when needed.
@@ -983,7 +984,7 @@ Review the Spec, conversation context, durable project context, and drafted plan
 - When several slices share a central registry or service seam, prefer an early extension-point/foundation ticket, parallel isolated feature modules, and one small final assembly ticket.
 - Reject any remaining long serial chain unless every edge is justified in the dependent ticket body.
 - Check that ticket bodies are ready for AFK agents: concrete outcome, clear acceptance criteria, useful tests, and no stale implementation path prescriptions.
-- Check every ticket's App Review classification. UI-verifiable tickets require \`appReviewEligible: true\` and a concrete \`appReviewPlanMarkdown\`; non-UI tickets use false and null. Preserve or correct these fields in reviewer ticket edits.
+- Check every ticket's App Review classification. UI-verifiable tickets require \`appReviewEligible: true\` and a concrete \`appReviewPlanMarkdown\`; non-UI tickets use false and null. When the repository declares \`e2eCommands\`, an eligible ticket's acceptance criteria must plan e2e coverage for its flow, and its review plan must cover only what that coverage cannot prove rather than restating the tested flows. Preserve or correct these fields in reviewer ticket edits.
 
 ## Review cycle
 
