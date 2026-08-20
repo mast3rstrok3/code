@@ -519,6 +519,7 @@ export interface ChatComposerProps {
   appReviewCycleBudget: number;
   appReviewDefaultCycleBudget: number;
   appReviewReviewUrl: string;
+  appReviewReviewOnly: boolean;
 
   // Provider / model
   lockedProvider: ProviderDriverKind | null;
@@ -572,6 +573,7 @@ export interface ChatComposerProps {
   ) => void;
   onAppReviewCycleBudgetChange: (budget: number) => void;
   onAppReviewReviewUrlChange: (reviewUrl: string) => void;
+  onAppReviewReviewOnlyChange: (reviewOnly: boolean) => void;
 
   focusComposer: () => void;
   scheduleComposerFocus: () => void;
@@ -621,6 +623,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     appReviewCycleBudget,
     appReviewDefaultCycleBudget,
     appReviewReviewUrl,
+    appReviewReviewOnly,
     lockedProvider,
     providerStatuses,
     activeProjectDefaultModelSelection,
@@ -651,6 +654,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     handleInteractionModeChange,
     onAppReviewCycleBudgetChange,
     onAppReviewReviewUrlChange,
+    onAppReviewReviewOnlyChange,
     focusComposer,
     scheduleComposerFocus,
     setThreadError,
@@ -3249,7 +3253,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     cycleBudget={appReviewCycleBudget}
                     defaultCycleBudget={appReviewDefaultCycleBudget}
                     onCycleBudgetChange={onAppReviewCycleBudgetChange}
+                    onReviewOnlyChange={onAppReviewReviewOnlyChange}
                     onReviewUrlChange={onAppReviewReviewUrlChange}
+                    reviewOnly={appReviewReviewOnly}
                     reviewUrl={appReviewReviewUrl}
                   />
                 ) : null}

@@ -341,8 +341,10 @@ export function collectUserMessageBlobPreviewUrls(message: ChatMessage): string[
 export interface AppReviewWorkflowLaunchRequest {
   readonly brief: string;
   readonly cycleBudget: number;
-  /** Empty means "resolve this worktree's App Dev Stack", as before. */
+  /** Empty means "resolve this worktree's App Dev Stack". */
   readonly reviewUrl: string;
+  /** Review and ticket the gaps once, without repairing them. */
+  readonly reviewOnly: boolean;
 }
 
 export interface BrowserAppReviewSourceContextMessage {

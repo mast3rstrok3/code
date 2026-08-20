@@ -94,6 +94,7 @@ function makeReadModel(input: {
   readonly cycleBudget?: number;
   /** The ticket worker sharing the review's worktree, when one is live. */
   readonly ticketWorkerSession?: "running" | "ready";
+  readonly reviewOnly?: boolean;
 }): OrchestrationReadModel {
   const run: AppReviewWorkflowRun = {
     id: RUN_ID,
@@ -106,6 +107,7 @@ function makeReadModel(input: {
       ticketId: "planning-ticket-1",
     },
     briefMarkdown: "Verify the flow.",
+    ...(input.reviewOnly === undefined ? {} : { reviewOnly: input.reviewOnly }),
     supportingContextMarkdown: null,
     previewTargets: ["http://localhost:3000"],
     cycleBudget: input.cycleBudget ?? 10,
@@ -228,6 +230,32 @@ it.layer(NodeServices.layer)("App Review phase re-run decider", (it) => {
         readModel: makeReadModel({ cycles: [cycle({ repairTickets: [] })] }),
       }).pipe(Effect.flip);
       expect(error._tag).toBe("OrchestrationCommandInvariantError");
+    }),
+  );
+
+  it.effect("refuses the repair on a run launched to review only", () =>
+    Effect.gen(function* () {
+      const error = yield* decideOrchestrationCommand({
+        command: rerun("fixing"),
+        readModel: makeReadModel({
+          reviewOnly: true,
+          cycles: [
+            cycle({
+              repairTickets: [
+                {
+                  key: "TICKET-1.1",
+                  parentTicketKey: "TICKET-1",
+                  title: "Fix the gap",
+                  bodyMarkdown: "Repair it.",
+                  dependencyKeys: [],
+                },
+              ],
+            }),
+          ],
+        }),
+      }).pipe(Effect.flip);
+      expect(error._tag).toBe("OrchestrationCommandInvariantError");
+      expect(String(error)).toContain("review only");
     }),
   );
 

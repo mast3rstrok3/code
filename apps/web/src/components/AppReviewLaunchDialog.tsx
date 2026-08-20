@@ -13,6 +13,7 @@ import {
 } from "./ChatView.logic";
 import { isValidAppReviewWorkflowLaunch } from "./AppReviewPanel.logic";
 import { Button } from "./ui/button";
+import { Checkbox } from "./ui/checkbox";
 import {
   Dialog,
   DialogDescription,
@@ -41,6 +42,7 @@ interface AppReviewLaunchDialogProps {
 export function AppReviewLaunchDialog(props: AppReviewLaunchDialogProps) {
   const [brief, setBrief] = useState("");
   const [reviewUrl, setReviewUrl] = useState("");
+  const [reviewOnly, setReviewOnly] = useState(false);
   const [cycleBudget, setCycleBudget] = useState(
     props.initialCycleBudget ?? APP_REVIEW_WORKFLOW_DEFAULT_CYCLES,
   );
@@ -65,6 +67,7 @@ export function AppReviewLaunchDialog(props: AppReviewLaunchDialogProps) {
     if (!props.open) return;
     setCycleBudget(props.initialCycleBudget ?? APP_REVIEW_WORKFLOW_DEFAULT_CYCLES);
     setReviewUrl(props.initialReviewUrl ?? "");
+    setReviewOnly(false);
   }, [props.initialCycleBudget, props.initialReviewUrl, props.open]);
 
   return (
@@ -79,7 +82,7 @@ export function AppReviewLaunchDialog(props: AppReviewLaunchDialogProps) {
           <DialogTitle>Launch App Review</DialogTitle>
           <DialogDescription>
             Each cycle reviews the app, analyzes gaps and plans in that same thread, then implements
-            the plan in a new thread.
+            the plan in a new thread. Only review stops after the gap analysis.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-4">
@@ -93,17 +96,33 @@ export function AppReviewLaunchDialog(props: AppReviewLaunchDialogProps) {
               autoFocus
             />
           </label>
-          <label className="grid gap-2">
-            <span className="text-xs font-medium text-foreground">App Review cycle budget</span>
-            <Input
-              type="number"
-              min={1}
-              max={APP_REVIEW_WORKFLOW_MAX_CYCLES}
-              value={cycleBudget}
-              onChange={(event) => setCycleBudget(Number(event.currentTarget.value))}
+          <label className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-2 gap-y-1">
+            <Checkbox
+              checked={reviewOnly}
+              className="mt-0.5"
+              onCheckedChange={(checked) => setReviewOnly(checked === true)}
             />
-            <span className="text-xs text-muted-foreground">Between 1 and 50 complete cycles.</span>
+            <span className="text-xs font-medium text-foreground">Only review</span>
+            <span className="col-start-2 text-xs text-muted-foreground">
+              One browser review and the gap analysis that tickets what it finds, then stop. Nothing
+              is repaired.
+            </span>
           </label>
+          {reviewOnly ? null : (
+            <label className="grid gap-2">
+              <span className="text-xs font-medium text-foreground">App Review cycle budget</span>
+              <Input
+                type="number"
+                min={1}
+                max={APP_REVIEW_WORKFLOW_MAX_CYCLES}
+                value={cycleBudget}
+                onChange={(event) => setCycleBudget(Number(event.currentTarget.value))}
+              />
+              <span className="text-xs text-muted-foreground">
+                Between 1 and 50 complete cycles.
+              </span>
+            </label>
+          )}
           <label className="grid gap-2">
             <span className="text-xs font-medium text-foreground">Review URL</span>
             <Input
@@ -159,7 +178,9 @@ export function AppReviewLaunchDialog(props: AppReviewLaunchDialogProps) {
           <Button
             type="button"
             disabled={props.launchInFlight || !validLaunch}
-            onClick={() => props.onLaunch({ brief: normalizedBrief, cycleBudget, reviewUrl })}
+            onClick={() =>
+              props.onLaunch({ brief: normalizedBrief, cycleBudget, reviewUrl, reviewOnly })
+            }
           >
             Launch App Review
           </Button>

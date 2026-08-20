@@ -2399,6 +2399,8 @@ export const ThreadAppReviewWorkflowLaunchCommand = Schema.Struct({
   previewTargets: Schema.Array(TrimmedNonEmptyString),
   /** Reviews `previewTargets` as given instead of resolving an App Dev Stack. */
   previewTargetsPinned: Schema.optionalKey(Schema.Boolean),
+  /** Reviews and writes repair tickets once, without repairing. Forces one cycle. */
+  reviewOnly: Schema.optionalKey(Schema.Boolean),
   cycleBudget: AppReviewWorkflowCycleBudget.pipe(
     Schema.withDecodingDefault(Effect.succeed(APP_REVIEW_WORKFLOW_DEFAULT_CYCLES)),
   ),

@@ -2395,6 +2395,24 @@ function buildWorkflowCatalog(): WorkflowCatalog {
     }
     workflowIdsBySkill.set(skillId, ids);
   }
+  // A skill's workflow pills link into this catalog, so an id it does not
+  // contain has nothing to open. The implicit map above still names retired
+  // presets such as Full Feature, which historical runs render from but the
+  // catalog no longer exposes. Ordering follows the catalog rather than the
+  // order the ids happened to be discovered in.
+  const catalogWorkflowOrder = new Map<string, number>(
+    workflows.map((workflow, index) => [workflow.id, index]),
+  );
+  for (const [skillId, ids] of workflowIdsBySkill) {
+    workflowIdsBySkill.set(
+      skillId,
+      ids
+        .filter((workflowId) => catalogWorkflowOrder.has(workflowId))
+        .toSorted(
+          (left, right) => catalogWorkflowOrder.get(left)! - catalogWorkflowOrder.get(right)!,
+        ),
+    );
+  }
 
   const promptIdsBySkill = new Map<string, string[]>();
   for (const contract of promptContracts) {

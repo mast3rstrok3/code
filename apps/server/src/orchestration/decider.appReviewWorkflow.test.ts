@@ -135,6 +135,24 @@ it.layer(NodeServices.layer)("App Review workflow decider", (it) => {
     }),
   );
 
+  it.effect("holds a review-only run to a single cycle", () =>
+    Effect.gen(function* () {
+      const decided = yield* decideOrchestrationCommand({
+        command: {
+          ...launchCommand(ThreadId.make("thread-controller")),
+          cycleBudget: AppReviewWorkflowCycleBudget.make(10),
+          reviewOnly: true,
+        },
+        readModel: readModel(),
+      });
+      const events = Array.isArray(decided) ? decided : [decided];
+      const launched = events.at(-1);
+      if (launched?.type !== "thread.app-review-workflow-launched") return;
+      expect(launched.payload.run.reviewOnly).toBe(true);
+      expect(launched.payload.run.cycleBudget).toBe(1);
+    }),
+  );
+
   it.effect("refuses a pinned launch that names no target", () =>
     Effect.gen(function* () {
       const rejected = yield* Effect.exit(

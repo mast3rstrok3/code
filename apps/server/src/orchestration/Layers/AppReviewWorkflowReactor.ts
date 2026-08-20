@@ -468,7 +468,9 @@ export function buildReviewPrompt(input: {
   const { run, cycle } = input;
   return appendWorkflowSkillCommandSection(
     [
-      `Run Browser App Review cycle ${cycle.cycleNumber} of ${run.cycleBudget}.`,
+      run.reviewOnly === true
+        ? "Run a single Browser App Review. This run reviews once and does not repair."
+        : `Run Browser App Review cycle ${cycle.cycleNumber} of ${run.cycleBudget}.`,
       "",
       "The original brief is the acceptance boundary for every cycle:",
       run.briefMarkdown,
@@ -481,6 +483,11 @@ export function buildReviewPrompt(input: {
       "These preview targets are authoritative for this App Review cycle. Do not substitute deployment URLs from repository documentation, supporting source context, browser history, or environment conventions. If every listed target is unavailable, report the review failed with concrete details.",
       "",
       "Use the linked durable App Review record. Record the complete flow, capture captioned screenshots, and report every actionable finding. A missing or unavailable preview is a failed review.",
+      ...(run.reviewOnly === true
+        ? [
+            "This run reviews only. Nothing you find will be repaired, so the findings you record are the whole deliverable: state every one concretely enough that someone else can reproduce and fix it. Do not edit files.",
+          ]
+        : []),
       "A passed verdict requires a non-empty check matrix in which every check is passed. Do not mark required or deferred acceptance work not-applicable; use failed or blocked with concrete detail.",
       ...(input.priorFindingIds.length === 0
         ? []
@@ -1349,6 +1356,47 @@ const make = Effect.gen(function* () {
     yield* ensureFixerLaunch(fixingRun, fixingCycle);
   });
 
+  /**
+   * End a review-only run once its repair tickets are written.
+   *
+   * The cycle did everything it was launched to do, so it completes rather
+   * than failing; the run itself ends `exhausted` because the findings it
+   * recorded are still unresolved and no cycle remains to verify a repair.
+   * That is the same terminal a one-cycle run reaches today after its fix.
+   */
+  const finishReviewedWithoutFixing = Effect.fn(
+    "AppReviewWorkflowReactor.finishReviewedWithoutFixing",
+  )(function* (input: {
+    readonly run: AppReviewWorkflowRun;
+    readonly repairTickets: ReadonlyArray<AppReviewWorkflowRepairTicket>;
+    readonly plannerTurnId: AppReviewWorkflowCycle["plannerTurnId"];
+    readonly occurredAt: string;
+  }) {
+    const cycle = input.run.cycles.at(-1);
+    if (cycle === undefined) return;
+    const reviewedRun: AppReviewWorkflowRun = {
+      ...input.run,
+      activePhase: null,
+      activeThreadId: null,
+      cycles: input.run.cycles.map((entry) =>
+        entry.cycleNumber === cycle.cycleNumber
+          ? {
+              ...entry,
+              status: "completed",
+              planId: `app-review-repair-tickets:${input.run.id}:${cycle.cycleNumber}`,
+              plannerTurnId: input.plannerTurnId,
+              ticketingTurnId: input.plannerTurnId,
+              repairTickets: input.repairTickets,
+              completedAt: input.occurredAt,
+            }
+          : entry,
+      ),
+      updatedAt: input.occurredAt,
+    };
+    yield* updateRun(reviewedRun);
+    yield* finishExhausted(reviewedRun, input.occurredAt);
+  });
+
   const reconcilePlanning = Effect.fn("AppReviewWorkflowReactor.reconcilePlanning")(function* (
     run: AppReviewWorkflowRun,
     occurredAt: string,
@@ -1452,6 +1500,15 @@ const make = Effect.gen(function* () {
         reason: "plan-malformed",
         detailMarkdown:
           "The App Review thread must persist unique, consecutively numbered child repair tickets under one parent key.",
+        occurredAt,
+      });
+      return;
+    }
+    if (run.reviewOnly === true) {
+      yield* finishReviewedWithoutFixing({
+        run,
+        repairTickets,
+        plannerTurnId: turn.turnId,
         occurredAt,
       });
       return;
@@ -1701,7 +1758,7 @@ const make = Effect.gen(function* () {
     }
 
     const repairTickets = cycle.repairTickets ?? [];
-    if (repairTickets.length === 0) return;
+    if (repairTickets.length === 0 || run.reviewOnly === true) return;
     const fixingRun: AppReviewWorkflowRun = {
       ...reopened,
       cycles: run.cycles.map((entry) =>

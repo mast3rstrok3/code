@@ -566,6 +566,33 @@ it("offers only what an earlier cycle passed and the repair has not touched", ()
   expect(prompt).not.toContain("- checkout (cycle");
 });
 
+it("tells a review-only reviewer that its findings are the whole deliverable", () => {
+  const reviewOnlyRun = run({
+    reviewOnly: true,
+    cycleBudget: AppReviewWorkflowCycleBudget.make(1),
+  });
+  const prompt = buildReviewPrompt({
+    run: reviewOnlyRun,
+    cycle: carryCycle(1, AppReviewId.make("app-review-1")),
+    priorFindingIds: [],
+    carryableChecks: [],
+  });
+  expect(prompt).toContain("This run reviews once and does not repair.");
+  expect(prompt).toContain("Nothing you find will be repaired");
+  expect(prompt).not.toContain("cycle 1 of 1");
+});
+
+it("still counts cycles for a run that repairs what it finds", () => {
+  const prompt = buildReviewPrompt({
+    run: run(),
+    cycle: carryCycle(1, AppReviewId.make("app-review-1")),
+    priorFindingIds: [],
+    carryableChecks: [],
+  });
+  expect(prompt).toContain("Run Browser App Review cycle 1 of");
+  expect(prompt).not.toContain("Nothing you find will be repaired");
+});
+
 it("says nothing about carrying checks forward on the first cycle", () => {
   const prior = priorCycleChecks({ run: run(), currentCycleNumber: 1, priorReviews: [] });
   expect(prior.carryable).toEqual([]);

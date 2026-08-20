@@ -38,6 +38,10 @@ const decodeWorkflowRequest = Schema.decodeUnknownSync(
   Schema.fromJsonString(Schema.Struct({ workflow_id: Schema.optional(Schema.String) })),
 );
 
+const decodeProtectionRequest = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Struct({ protected: Schema.Boolean })),
+);
+
 const derivedPaths = {
   stateDir: "/tmp/t3-app-dev-stack-manager-test/state",
   dbPath: "/tmp/t3-app-dev-stack-manager-test/state/state.sqlite",
@@ -795,7 +799,7 @@ it.effect("posts the protection toggle to the controller", () => {
       `${backendUrl.href.replace(/\/+$/u, "")}/api/app-dev-stacks/${stackJson.id}/protection`,
     );
     if (request.body._tag !== "Uint8Array") assert.fail("expected JSON request body");
-    assert.deepStrictEqual(JSON.parse(new TextDecoder().decode(request.body.body)), {
+    assert.deepStrictEqual(decodeProtectionRequest(new TextDecoder().decode(request.body.body)), {
       protected: true,
     });
   }).pipe(Effect.provide(layer));

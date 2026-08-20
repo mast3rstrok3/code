@@ -172,6 +172,13 @@ export const AppReviewWorkflowRun = Schema.Struct({
    * Stack first and falls back to those targets only when no stack matches.
    */
   previewTargetsPinned: Schema.optionalKey(Schema.Boolean),
+  /**
+   * Set when the run stops after gap analysis instead of repairing what it
+   * found. It still spends its one cycle on the browser review and the repair
+   * tickets, and then ends `exhausted` with those findings unresolved, the
+   * same way a budget that runs out on a failing review does.
+   */
+  reviewOnly: Schema.optionalKey(Schema.Boolean),
   cycleBudget: AppReviewWorkflowCycleBudget.pipe(
     Schema.withDecodingDefault(Effect.succeed(APP_REVIEW_WORKFLOW_DEFAULT_CYCLES)),
   ),

@@ -1670,6 +1670,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       });
       for (const run of readModel.appReviewWorkflowRuns ?? []) {
         if (run.status !== "running" || run.cycleBudget === budget) continue;
+        // A review-only run is one cycle by definition, so a budget set for the
+        // step it shares does not reach it.
+        if (run.reviewOnly === true) continue;
         if (!appReviewRunMatchesCycleKey(readModel, run, rootThread.id, key)) continue;
         events.push({
           ...(yield* withEventBase({
@@ -3800,7 +3803,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         ...(command.previewTargetsPinned === undefined
           ? {}
           : { previewTargetsPinned: command.previewTargetsPinned }),
-        cycleBudget: command.cycleBudget,
+        ...(command.reviewOnly === undefined ? {} : { reviewOnly: command.reviewOnly }),
+        // A review-only run has nothing for a second cycle to verify, so its
+        // budget is one whatever the client asked for.
+        cycleBudget:
+          command.reviewOnly === true ? AppReviewWorkflowCycleBudget.make(1) : command.cycleBudget,
         cyclesUsed: 0,
         status: "running",
         cycles: [],
@@ -4021,6 +4028,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: "Gap analysis needs findings from the browser review of this cycle.",
+        });
+      }
+      if (command.phase === "fixing" && existing.reviewOnly === true) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `App Review Workflow '${command.runId}' was launched to review only, so it has no repair step.`,
         });
       }
       if (command.phase === "fixing" && (cycle.repairTickets ?? []).length === 0) {

@@ -343,7 +343,6 @@ import {
   hasServerAcknowledgedLocalDispatch,
   isBranchMismatchDismissedForSession,
   normalizeAppReviewCycleBudget,
-  normalizeAppReviewPreviewTarget,
   shouldShowBranchMismatchBanner,
   getStartedThreadModelChangeBlockReason,
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
@@ -483,6 +482,7 @@ const FilePreviewPanel = lazy(() => import("./files/FilePreviewPanel"));
 const EMPTY_PENDING_FILE_SURFACE_IDS: ReadonlySet<string> = new Set();
 const APP_REVIEW_CYCLE_BUDGET_STORAGE_KEY = "t3code.app-review-cycle-budget";
 const APP_REVIEW_REVIEW_URL_STORAGE_KEY = "t3code.app-review-review-url";
+const APP_REVIEW_REVIEW_ONLY_STORAGE_KEY = "t3code.app-review-review-only";
 const STOP_WORKFLOW_RUN_CONFIRM_MESSAGE = [
   "Stop this workflow run?",
   "The current turn is interrupted and the run is canceled, so it will not resume on its own.",
@@ -1499,6 +1499,11 @@ function ChatViewContent(props: ChatViewProps) {
     APP_REVIEW_REVIEW_URL_STORAGE_KEY,
     "",
     Schema.String,
+  );
+  const [appReviewReviewOnly, setAppReviewReviewOnly] = useLocalStorage(
+    APP_REVIEW_REVIEW_ONLY_STORAGE_KEY,
+    false,
+    Schema.Boolean,
   );
   const legendListRef = useRef<LegendListRef | null>(null);
   const [composerOverlayElement, setComposerOverlayElement] = useState<HTMLDivElement | null>(null);
@@ -3967,7 +3972,10 @@ function ChatViewContent(props: ChatViewProps) {
             brief: request.brief,
             activeBrowserUrl: appReviewPreviewTargets[0] ?? null,
           }),
-          cycleBudget: AppReviewWorkflowCycleBudget.make(request.cycleBudget),
+          ...(request.reviewOnly ? { reviewOnly: true } : {}),
+          cycleBudget: AppReviewWorkflowCycleBudget.make(
+            request.reviewOnly ? 1 : request.cycleBudget,
+          ),
           modelSelection: sendCtx.selectedModelSelection,
           createdAt,
         },
@@ -5843,17 +5851,6 @@ function ChatViewContent(props: ChatViewProps) {
       );
       return;
     }
-    if (isAppReviewWorkflowSend && normalizeAppReviewPreviewTarget(appReviewReviewUrl) === null) {
-      toastManager.add(
-        stackedThreadToast({
-          type: "warning",
-          title: "Add a review URL",
-          description:
-            "App Review drives a running app. Open the cycles control and paste the URL it should review.",
-        }),
-      );
-      return;
-    }
     if (isAppReviewWorkflowSend && activeWorktreeAppReviewRun) {
       toastManager.add(
         stackedThreadToast({
@@ -6143,8 +6140,9 @@ function ChatViewContent(props: ChatViewProps) {
                 brief: trimmed,
                 activeBrowserUrl: appReviewPreviewTargets[0] ?? null,
               }),
+              ...(appReviewReviewOnly ? { reviewOnly: true } : {}),
               cycleBudget: AppReviewWorkflowCycleBudget.make(
-                normalizeAppReviewCycleBudget(appReviewCycleBudget),
+                appReviewReviewOnly ? 1 : normalizeAppReviewCycleBudget(appReviewCycleBudget),
               ),
               modelSelection: ctxSelectedModelSelection,
               ...(bootstrap ? { bootstrap } : {}),
@@ -7402,6 +7400,7 @@ function ChatViewContent(props: ChatViewProps) {
                               appReviewCycleBudget,
                             )}
                             appReviewDefaultCycleBudget={appReviewDefaultCycleBudget}
+                            appReviewReviewOnly={appReviewReviewOnly}
                             appReviewReviewUrl={appReviewReviewUrl}
                             lockedProvider={lockedProvider}
                             providerStatuses={providerStatuses as ServerProvider[]}
@@ -7446,6 +7445,7 @@ function ChatViewContent(props: ChatViewProps) {
                                 ),
                               )
                             }
+                            onAppReviewReviewOnlyChange={setAppReviewReviewOnly}
                             onAppReviewReviewUrlChange={setAppReviewReviewUrl}
                             focusComposer={focusComposer}
                             scheduleComposerFocus={scheduleComposerFocus}
