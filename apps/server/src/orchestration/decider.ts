@@ -1,5 +1,6 @@
 import {
   type AppReviewDocument,
+  AppReviewWorkflowCycleBudget,
   AppReviewWorkflowRunId,
   type AppReviewWorkflowRun,
   EMPTY_APP_REVIEW_EVIDENCE,
@@ -54,6 +55,12 @@ import { buildPlanImplementationThreadTitle } from "@t3tools/shared/orchestratio
 import { resolveImplementationValidationCommands } from "@t3tools/shared/t3ProjectFile";
 import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 import { isProductWorkflowPreset, isProductWorkflowRoot } from "@t3tools/shared/workflowPresets";
+import {
+  findWorkflowStepCycleTarget,
+  resolveWorkflowStepCycleBudget,
+  workflowStepCycleKeysEqual,
+  type WorkflowStepCycleKey,
+} from "@t3tools/shared/workflowStepCycles";
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
@@ -830,6 +837,38 @@ const QUEUED_TURN_START_GRACE_MS = 2 * 60 * 1_000;
  * failure detail marks the request stale/unknown — or settle would be
  * rejected on threads whose shell flags read as clear.
  */
+/**
+ * Whether a live App Review run is the one a cycle budget just changed.
+ *
+ * The two App Review budgets run the same agent and are told apart by the step
+ * above them: a review launched for a single ticket belongs to "Execute ticket
+ * waves", and one launched for the whole run belongs to the App Review step.
+ * A standalone review from the App Review panel carries its own budget from
+ * its launch dialog and is left alone.
+ */
+function appReviewRunMatchesCycleKey(
+  readModel: OrchestrationReadModel,
+  run: AppReviewWorkflowRun,
+  rootThreadId: ThreadId,
+  key: WorkflowStepCycleKey,
+): boolean {
+  const caller = run.caller;
+  if (caller.type !== "implementation") return false;
+  const expected: WorkflowStepCycleKey =
+    caller.ticketId === undefined
+      ? { workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex }
+      : {
+          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+          stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+        };
+  if (!workflowStepCycleKeysEqual(expected, key)) return false;
+  const orchestrator = readModel.threads.find(
+    (candidate) => candidate.id === caller.orchestratorThreadId,
+  );
+  if (orchestrator === undefined) return false;
+  return (orchestrator.workflowContext?.rootThreadId ?? orchestrator.id) === rootThreadId;
+}
+
 function isStaleRequestFailureDetail(payload: Record<string, unknown> | null): boolean {
   const detail = typeof payload?.detail === "string" ? payload.detail.toLowerCase() : null;
   if (detail === null) return false;
@@ -1572,6 +1611,85 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           updatedAt: occurredAt,
         },
       };
+    }
+
+    case "thread.workflow.step-cycles.set": {
+      const thread = yield* requireThreadNotArchived({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      // Budgets live on the workflow root, like the step model pins.
+      const rootThreadId = thread.workflowContext?.rootThreadId ?? thread.id;
+      const rootThread =
+        readModel.threads.find((candidate) => candidate.id === rootThreadId) ?? thread;
+      const key = {
+        workflowPromptId: command.workflowPromptId,
+        ...(command.stepWorkflowPromptId === undefined
+          ? {}
+          : { stepWorkflowPromptId: command.stepWorkflowPromptId }),
+      };
+      const target = findWorkflowStepCycleTarget(key);
+      if (target === undefined) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Workflow step '${command.workflowPromptId}' does not run in cycles, so it has no cycle budget.`,
+        });
+      }
+      if (command.maxCycles !== null && command.maxCycles > target.maxCycles) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `${target.label} accepts at most ${String(target.maxCycles)} cycles.`,
+        });
+      }
+      const occurredAt = yield* nowIso;
+      const events: PlannedOrchestrationEvent[] = [
+        {
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: rootThread.id,
+            occurredAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.workflow-step-cycles-set",
+          payload: {
+            threadId: rootThread.id,
+            ...key,
+            maxCycles: command.maxCycles,
+            updatedAt: occurredAt,
+          },
+        },
+      ];
+      // A budget the run is already spending has to move with it, or the panel
+      // keeps counting toward the old number and a review that ran out of
+      // cycles can never be given more.
+      const budget = resolveWorkflowStepCycleBudget({
+        key,
+        threadOverrides:
+          command.maxCycles === null ? [] : [{ ...key, maxCycles: command.maxCycles }],
+      });
+      for (const run of readModel.appReviewWorkflowRuns ?? []) {
+        if (run.status !== "running" || run.cycleBudget === budget) continue;
+        if (!appReviewRunMatchesCycleKey(readModel, run, rootThread.id, key)) continue;
+        events.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: run.controllerThreadId,
+            occurredAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.app-review-workflow-updated",
+          payload: {
+            sourceThreadId: run.targetThreadId,
+            run: {
+              ...run,
+              cycleBudget: AppReviewWorkflowCycleBudget.make(budget),
+              updatedAt: occurredAt,
+            },
+          },
+        });
+      }
+      return events;
     }
 
     case "thread.unsettle": {

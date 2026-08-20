@@ -366,6 +366,26 @@ export const WorkflowStepModelOverride = Schema.Struct({
 });
 export type WorkflowStepModelOverride = typeof WorkflowStepModelOverride.Type;
 
+/**
+ * How many times one workflow step repeats before the run moves on.
+ *
+ * Only steps that loop can carry one — App Review reviews, plans a repair and
+ * fixes until it passes; Planning ticket review revises until the reviewer is
+ * satisfied. `workflowStepCycles` in `@t3tools/shared/workflowStepCycles` is
+ * the catalog of which steps those are and what each one's ceiling is.
+ *
+ * Keyed exactly like a model pin, so the same (step, sub-step) pair addresses
+ * both: a ticket App Review and the final App Review run the same agent under
+ * different steps and get separate budgets.
+ */
+export const WorkflowStepCycleOverride = Schema.Struct({
+  workflowPromptId: TrimmedNonEmptyString,
+  /** Set when the budget targets one sub-step of a step rather than the step. */
+  stepWorkflowPromptId: Schema.optionalKey(TrimmedNonEmptyString),
+  maxCycles: PositiveInt,
+});
+export type WorkflowStepCycleOverride = typeof WorkflowStepCycleOverride.Type;
+
 export const OrchestrationPlanningSpec = Schema.Struct({
   id: OrchestrationPlanningSpecId,
   title: TrimmedNonEmptyString,
@@ -448,7 +468,13 @@ export const OrchestrationPlanningReviewTicketFeedback = Schema.Struct({
 export type OrchestrationPlanningReviewTicketFeedback =
   typeof OrchestrationPlanningReviewTicketFeedback.Type;
 
-export const PLANNING_REVIEW_MAX_CYCLES = 5;
+/**
+ * Ticket review and revision cycles a Planning run does before it gives up and
+ * completes with warnings. A per-step cycle budget raises or lowers it for one
+ * run; `PLANNING_REVIEW_MAX_CYCLES` is the ceiling no budget can pass.
+ */
+export const PLANNING_REVIEW_DEFAULT_CYCLES = 5;
+export const PLANNING_REVIEW_MAX_CYCLES = 20;
 
 export const OrchestrationPlanningReviewMode = Schema.Literals(["full", "targeted"]);
 export type OrchestrationPlanningReviewMode = typeof OrchestrationPlanningReviewMode.Type;
@@ -1380,6 +1406,11 @@ export const OrchestrationThread = Schema.Struct({
    * root threads carry entries; every other thread omits the key.
    */
   workflowStepModels: Schema.optionalKey(Schema.Array(WorkflowStepModelOverride)),
+  /**
+   * Per-step cycle budgets for the workflow rooted at this thread. Like the
+   * model pins, only workflow root threads carry entries.
+   */
+  workflowStepCycles: Schema.optionalKey(Schema.Array(WorkflowStepCycleOverride)),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -1483,6 +1514,11 @@ export const OrchestrationThreadShell = Schema.Struct({
    * root threads carry entries; every other thread omits the key.
    */
   workflowStepModels: Schema.optionalKey(Schema.Array(WorkflowStepModelOverride)),
+  /**
+   * Per-step cycle budgets for the workflow rooted at this thread. Like the
+   * model pins, only workflow root threads carry entries.
+   */
+  workflowStepCycles: Schema.optionalKey(Schema.Array(WorkflowStepCycleOverride)),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -1818,6 +1854,21 @@ const ThreadWorkflowStepModelSetCommand = Schema.Struct({
   /** Set when the pin targets one sub-step of a step rather than the step. */
   stepWorkflowPromptId: Schema.optionalKey(TrimmedNonEmptyString),
   modelSelection: Schema.NullOr(ModelSelection),
+  createdAt: IsoDateTime,
+});
+
+/**
+ * Set how many cycles one looping workflow step gets, or clear the budget
+ * (`maxCycles: null`) so the step falls back to the standing default.
+ */
+const ThreadWorkflowStepCyclesSetCommand = Schema.Struct({
+  type: Schema.Literal("thread.workflow.step-cycles.set"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  workflowPromptId: TrimmedNonEmptyString,
+  /** Set when the budget targets one sub-step of a step rather than the step. */
+  stepWorkflowPromptId: Schema.optionalKey(TrimmedNonEmptyString),
+  maxCycles: Schema.NullOr(PositiveInt),
   createdAt: IsoDateTime,
 });
 
@@ -2568,6 +2619,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadWorkflowPauseCommand,
   ThreadWorkflowResumeCommand,
   ThreadWorkflowStepModelSetCommand,
+  ThreadWorkflowStepCyclesSetCommand,
   ThreadUnsettleCommand,
   ThreadSnoozeCommand,
   ThreadUnsnoozeCommand,
@@ -2618,6 +2670,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadWorkflowPauseCommand,
   ThreadWorkflowResumeCommand,
   ThreadWorkflowStepModelSetCommand,
+  ThreadWorkflowStepCyclesSetCommand,
   ThreadUnsettleCommand,
   ThreadSnoozeCommand,
   ThreadUnsnoozeCommand,
@@ -2816,6 +2869,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.planning-spec-bundle-loaded",
   "thread.planning-workflow-stage-set",
   "thread.workflow-step-model-set",
+  "thread.workflow-step-cycles-set",
   "thread.workflow-paused",
   "thread.workflow-resumed",
   "thread.implementation-run-launched",
@@ -3024,6 +3078,16 @@ export const ThreadWorkflowStepModelSetPayload = Schema.Struct({
   stepWorkflowPromptId: Schema.optionalKey(TrimmedNonEmptyString),
   /** Null clears the pin and returns the step to auto mode. */
   modelSelection: Schema.NullOr(ModelSelection),
+  updatedAt: IsoDateTime,
+});
+
+export const ThreadWorkflowStepCyclesSetPayload = Schema.Struct({
+  threadId: ThreadId,
+  workflowPromptId: TrimmedNonEmptyString,
+  /** Set when the budget targets one sub-step of a step rather than the step. */
+  stepWorkflowPromptId: Schema.optionalKey(TrimmedNonEmptyString),
+  /** Null clears the budget and returns the step to the standing default. */
+  maxCycles: Schema.NullOr(PositiveInt),
   updatedAt: IsoDateTime,
 });
 
@@ -3464,6 +3528,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.workflow-step-model-set"),
     payload: ThreadWorkflowStepModelSetPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.workflow-step-cycles-set"),
+    payload: ThreadWorkflowStepCyclesSetPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

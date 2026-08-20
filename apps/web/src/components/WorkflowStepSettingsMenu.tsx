@@ -1,9 +1,15 @@
-import type { EnvironmentId, ModelSelection, ThreadId } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  ModelSelection,
+  ThreadId,
+  WorkflowStepCycleOverride,
+} from "@t3tools/contracts";
 import type { WorkflowPresetSubStep } from "@t3tools/shared/workflowPresets";
 import { Eraser, Pause, Play, RotateCcw, Settings2, SkipForward } from "lucide-react";
 import { useState } from "react";
 
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
+import { WorkflowStepCyclePins, type SetWorkflowStepCycles } from "./WorkflowStepCycles";
 import {
   useWorkflowModelChoices,
   WorkflowStepModelPins,
@@ -78,6 +84,10 @@ export function WorkflowStepSettingsMenu(props: {
   readonly restartDisabledReason: string | null;
   readonly runningThreadIds: readonly ThreadId[];
   readonly onSetStepModel: SetWorkflowStepModel | undefined;
+  /** The workflow root's cycle budgets, and the standing defaults behind them. */
+  readonly stepCycles?: ReadonlyArray<WorkflowStepCycleOverride> | undefined;
+  readonly defaultStepCycles?: ReadonlyArray<WorkflowStepCycleOverride> | undefined;
+  readonly onSetStepCycles?: SetWorkflowStepCycles | undefined;
   readonly onRestart: (() => void) | undefined;
   readonly onStop: ((threadIds: readonly ThreadId[]) => void) | undefined;
   /**
@@ -158,6 +168,17 @@ export function WorkflowStepSettingsMenu(props: {
             </p>
           )}
         </div>
+
+        {workflowPromptId !== null && props.onSetStepCycles !== undefined ? (
+          <WorkflowStepCyclePins
+            workflowPromptId={workflowPromptId}
+            subStepWorkflowPromptIds={props.subSteps.map((subStep) => subStep.workflowPromptId)}
+            overrides={props.stepCycles ?? []}
+            defaults={props.defaultStepCycles}
+            onSetStepCycles={props.onSetStepCycles}
+            className="space-y-2 border-t border-border/70 px-3 py-2"
+          />
+        ) : null}
 
         <div className="space-y-1 border-t border-border/70 px-2 py-2">
           {paused ? (

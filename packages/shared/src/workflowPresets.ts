@@ -150,7 +150,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
       {
         label: "Ticket review and revision cycles",
         skillId: "planning.ticket-reviewer.codex",
-        note: "automatic; up to five cycles",
+        note: "automatic; five cycles by default",
       },
       {
         label: "TDD implementation workers",
@@ -210,7 +210,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
       {
         label: "Execute ticket waves",
         skillId: "implementation.tdd.codex",
-        note: "workers, up to ten App Review cycles, and one Code Review per ticket",
+        note: "workers, ten App Review cycles by default, and one Code Review per ticket",
         subSteps: [
           { label: "TDD implementation worker", workflowPromptId: "implementation.tdd.codex" },
           {
@@ -228,7 +228,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
       {
         label: "Run App Review",
         skillId: "implementation.browser-app-review.codex",
-        note: "up to ten review, repair-plan, and fix cycles",
+        note: "ten review, repair-plan, and fix cycles by default",
         subSteps: APP_REVIEW_SUB_STEPS,
       },
       {
@@ -269,7 +269,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
       {
         label: "Planning phase · Ticket review and revision cycles",
         skillId: "planning.ticket-reviewer.codex",
-        note: "automatic; up to five cycles",
+        note: "automatic; five cycles by default",
       },
       {
         label: "Implementation phase · Execute ticket waves",
@@ -293,7 +293,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
       {
         label: "Implementation phase · App Review",
         skillId: "implementation.browser-app-review.codex",
-        note: "automatic; up to ten review, repair-plan, and fix cycles",
+        note: "automatic; ten review, repair-plan, and fix cycles by default",
         subSteps: APP_REVIEW_SUB_STEPS,
       },
       {

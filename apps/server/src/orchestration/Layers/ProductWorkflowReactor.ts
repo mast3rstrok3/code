@@ -6,7 +6,7 @@ import {
   type OrchestrationThread,
   type OrchestrationPlanningReviewCycle,
   type OrchestrationProposedPlan,
-  PLANNING_REVIEW_MAX_CYCLES,
+  PLANNING_REVIEW_DEFAULT_CYCLES,
   type ProjectId,
   ThreadId,
   type TurnId,
@@ -23,6 +23,7 @@ import {
 } from "@t3tools/shared/orchestrationPlanning";
 import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import { resolveWorkflowStepCycleBudget } from "@t3tools/shared/workflowStepCycles";
 import {
   expectedIntentKindForWorkflowPreset,
   isProductWorkflowRoot,
@@ -39,6 +40,7 @@ import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import { T3ProjectFileLoader } from "../../project/T3ProjectFileLoader.ts";
 import { WORKFLOW_PROMPT_IDS } from "../../provider/WorkflowPromptRegistry.ts";
 import { forkParked, ServerActivation } from "../../serverActivation.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   ProductWorkflowReactor,
@@ -67,9 +69,15 @@ const PRODUCT_CONTEXT_RECOVERY_PROMPT_PREFIX =
   "The previous automatic Product Context turn completed without its required workflow directive.";
 
 const isProductWorkflowThread = isProductWorkflowRoot;
-const isRecoverablePlanningGrillThread = (thread: OrchestrationThread) =>
+/**
+ * A thread that plans in its own root: a Product workflow root, or the standalone
+ * Planning preset. Both hand off to implementation, so both belong to every sweep
+ * that recovers a planning workflow.
+ */
+const isPlanningRootThread = (thread: OrchestrationThread) =>
   isProductWorkflowThread(thread) ||
   (thread.workflowRole === null && thread.workflowPreset === "planning");
+const isRecoverablePlanningGrillThread = isPlanningRootThread;
 
 const isProductPlanningOrchestratorThread = (thread: {
   readonly interactionMode: string;
@@ -193,6 +201,7 @@ const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const gitWorkflow = yield* GitWorkflowService;
   const projectFileLoader = yield* T3ProjectFileLoader;
+  const serverSettingsService = yield* ServerSettingsService;
 
   const serverCommandId = (tag: string) =>
     crypto.randomUUIDv4.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
@@ -204,6 +213,27 @@ const make = Effect.gen(function* () {
 
   const resolveThread = (threadId: ThreadId) =>
     projectionSnapshotQuery.getThreadDetailById(threadId).pipe(Effect.map(Option.getOrUndefined));
+
+  /**
+   * How many ticket review and revision cycles this Planning run gets: the
+   * run's own budget, else the standing default, else the built-in five.
+   */
+  const planningReviewCycleBudget = Effect.fn("ProductWorkflowReactor.planningReviewCycleBudget")(
+    function* (thread: OrchestrationThread) {
+      const settings = yield* serverSettingsService.getSettings.pipe(
+        Effect.orElseSucceed(() => undefined),
+      );
+      const rootThreadId = thread.workflowContext?.rootThreadId ?? thread.id;
+      const root =
+        rootThreadId === thread.id ? thread : ((yield* resolveThread(rootThreadId)) ?? thread);
+      return resolveWorkflowStepCycleBudget({
+        key: { workflowPromptId: WORKFLOW_PROMPT_IDS.planningTicketReviewerCodex },
+        threadOverrides: root.workflowStepCycles,
+        settingsOverrides: settings?.workflowStepCycles,
+        fallbackCycles: PLANNING_REVIEW_DEFAULT_CYCLES,
+      });
+    },
+  );
 
   const resolveProject = (projectId: ProjectId) =>
     projectionSnapshotQuery.getProjectShellById(projectId).pipe(Effect.map(Option.getOrUndefined));
@@ -299,10 +329,8 @@ const make = Effect.gen(function* () {
     const planningWorkflow = thread.planningWorkflow;
     const spec = planningWorkflow?.spec;
     if (!spec || spec.id !== event.payload.specId) return;
-    if (
-      planningWorkflow.stage !== "ticket-review" ||
-      planningWorkflow.reviewCycles.length >= PLANNING_REVIEW_MAX_CYCLES
-    ) {
+    if (planningWorkflow.stage !== "ticket-review") return;
+    if (planningWorkflow.reviewCycles.length >= (yield* planningReviewCycleBudget(thread))) {
       return;
     }
 
@@ -378,13 +406,6 @@ const make = Effect.gen(function* () {
     const workflowWorkspace = resolveWorkflowWorkspaceIdentity(
       context.productRootThread.activities,
     );
-    if (
-      workflowWorkspace !== null &&
-      (context.productRootThread.branch === null ||
-        isTemporaryWorktreeBranch(context.productRootThread.branch))
-    ) {
-      return;
-    }
     const identity =
       workflowWorkspace === null
         ? resolveImplementationBranchIdentity({
@@ -403,6 +424,20 @@ const make = Effect.gen(function* () {
             orchestratorBranch: context.productRootThread.branch ?? workflowWorkspace.branch,
             orchestratorWorktreePath: workflowWorkspace.worktreePath,
           };
+
+    // Planning runs for many turns after the first-turn rename, so a branch that is still
+    // temporary here means the rename never landed at all. Handing off on the bootstrap ref
+    // costs an unlovely branch name; refusing to hand off strands finished tickets forever.
+    if (isTemporaryWorktreeBranch(identity.orchestratorBranch)) {
+      yield* Effect.logWarning(
+        "product workflow launching implementation on a temporary workspace branch",
+        {
+          threadId: context.productRootThread.id,
+          specId: spec.id,
+          branch: identity.orchestratorBranch,
+        },
+      );
+    }
 
     yield* orchestrationEngine.dispatch({
       type: "thread.implementation-run.launch",
@@ -443,7 +478,7 @@ const make = Effect.gen(function* () {
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
     for (const planningThread of readModel.threads) {
       const plansInOwnThread =
-        isProductWorkflowThread(planningThread) && planningThread.planningWorkflow != null;
+        isPlanningRootThread(planningThread) && planningThread.planningWorkflow != null;
       if (!plansInOwnThread && !isProductPlanningOrchestratorThread(planningThread)) continue;
       const workflow = planningThread.planningWorkflow;
       if (
@@ -453,17 +488,22 @@ const make = Effect.gen(function* () {
       ) {
         continue;
       }
-      const productContext = yield* resolveProductPlanningContext(planningThread);
+      // The command read model carries no activities, and the workflow workspace lives in one.
+      // Hydrating here is what keeps a recovered launch on the same branch and worktree the
+      // event-driven launch would have used.
+      const hydratedThread = yield* resolveThread(planningThread.id);
+      if (!hydratedThread) continue;
+      const productContext = yield* resolveProductPlanningContext(hydratedThread);
       const context =
         productContext ??
-        (planningThread.workflowRole === null && planningThread.workflowPreset === "planning"
-          ? { planningThread, productRootThread: planningThread }
+        (hydratedThread.workflowRole === null && hydratedThread.workflowPreset === "planning"
+          ? { planningThread: hydratedThread, productRootThread: hydratedThread }
           : null);
       if (context === null) continue;
       yield* launchImplementationForContext({
         context,
         specId: workflow.spec.id,
-        occurredAt: planningThread.updatedAt,
+        occurredAt: hydratedThread.updatedAt,
       });
     }
   });
@@ -508,7 +548,7 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    if (cycle.cycleNumber >= PLANNING_REVIEW_MAX_CYCLES) {
+    if (cycle.cycleNumber >= (yield* planningReviewCycleBudget(thread))) {
       yield* completePlanningWithWarnings({
         planningThreadId: thread.id,
         activityThreadId: context?.productRootThread.id ?? thread.id,

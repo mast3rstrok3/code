@@ -34,7 +34,7 @@ describe("workflow presets", () => {
       "Implementation phase · App Review",
       "Implementation phase · Final Code Review, pull request, and green checks",
     ]);
-    expect(engineeringWorkflow?.helpSteps.at(-2)?.note).toContain("up to ten");
+    expect(engineeringWorkflow?.helpSteps.at(-2)?.note).toContain("ten review");
   });
 
   it("maps presets to provider modes and intent kinds", () => {

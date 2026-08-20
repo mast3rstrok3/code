@@ -5,13 +5,15 @@ import {
   DEFAULT_WORKSPACE_USER_ID,
   EventId,
   MessageId,
-  PLANNING_REVIEW_MAX_CYCLES,
+  PLANNING_REVIEW_DEFAULT_CYCLES,
+  type ServerSettings,
   ProviderInstanceId,
   ProjectId,
   ThreadId,
   TurnId,
   type WorkflowPreset,
 } from "@t3tools/contracts";
+import { type DeepPartial } from "@t3tools/shared/Struct";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -31,6 +33,7 @@ import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import { ProductWorkflowReactorLive } from "./ProductWorkflowReactor.ts";
+import { layerTest as serverSettingsLayerTest } from "../../serverSettings.ts";
 import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
 import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
 import {
@@ -134,7 +137,10 @@ function settleTurn(
   });
 }
 
-function makeTestLayer(validationCommands?: ReadonlyArray<string>) {
+function makeTestLayer(
+  validationCommands?: ReadonlyArray<string>,
+  serverSettings: DeepPartial<ServerSettings> = {},
+) {
   const coreLayer = Layer.mergeAll(
     OrchestrationEngineLive.pipe(
       Layer.provide(OrchestrationProjectionSnapshotQueryLive),
@@ -161,6 +167,7 @@ function makeTestLayer(validationCommands?: ReadonlyArray<string>) {
           resolveCommit: () => Effect.succeed({ commitSha: "abc123" }),
         }),
       ),
+      Layer.provide(serverSettingsLayerTest(serverSettings)),
       Layer.provide(
         Layer.mock(T3ProjectFileLoader)({
           load: () =>
@@ -181,6 +188,7 @@ function withSystem<A, E>(
     /** Leave the reactor stopped so a test can dispatch events it must recover from on start. */
     readonly startReactor?: boolean;
     readonly validationCommands?: ReadonlyArray<string>;
+    readonly serverSettings?: DeepPartial<ServerSettings>;
   },
 ) {
   return Effect.scoped(
@@ -191,7 +199,7 @@ function withSystem<A, E>(
       if (options?.startReactor !== false) yield* reactor.start();
       return yield* use({ engine, query, reactor });
     }),
-  ).pipe(Effect.provide(makeTestLayer(options?.validationCommands)));
+  ).pipe(Effect.provide(makeTestLayer(options?.validationCommands, options?.serverSettings)));
 }
 
 function seedProjectAndThread(
@@ -1037,7 +1045,7 @@ describe("ProductWorkflowReactor", () => {
         const planningThread = yield* lockProductIntent(system);
         const spec = yield* seedProductSpecAndTickets(system, planningThread.id);
 
-        for (let index = 1; index <= PLANNING_REVIEW_MAX_CYCLES; index += 1) {
+        for (let index = 1; index <= PLANNING_REVIEW_DEFAULT_CYCLES; index += 1) {
           const beforeVerdict = yield* system.query.getSnapshot();
           const workflow = beforeVerdict.threads.find(
             (entry) => entry.id === planningThread.id,
@@ -1079,6 +1087,118 @@ describe("ProductWorkflowReactor", () => {
         expect(snapshot.implementationRuns.some((run) => run.specId === spec.id)).toBe(true);
         expect(events).toBeDefined();
       }),
+    ),
+  );
+
+  it.effect("stops ticket review at the step's cycle budget instead of the built-in five", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          yield* seedProjectAndThread(system);
+          const planningThread = yield* lockProductIntent(system);
+          yield* seedProductSpecAndTickets(system, planningThread.id);
+
+          for (let index = 1; index <= 2; index += 1) {
+            const beforeVerdict = yield* system.query.getSnapshot();
+            const workflow = beforeVerdict.threads.find(
+              (entry) => entry.id === planningThread.id,
+            )?.planningWorkflow;
+            const activeReview = workflow?.activeReview;
+            const ticketId = workflow?.tickets[0]?.id;
+            if (activeReview == null || ticketId === undefined) {
+              throw new Error(`Review cycle ${index} was not active.`);
+            }
+            yield* system.engine.dispatch({
+              type: "thread.planning-reviewer-verdict.apply",
+              commandId: commandId(`budgeted-verdict-${index}`),
+              threadId: planningThread.id,
+              reviewerThreadId: activeReview.reviewerThreadId,
+              reviewerMessageId: messageId(`budgeted-reviewer-${index}`),
+              cycleNumber: activeReview.cycleNumber,
+              mode: activeReview.mode,
+              targetPlanningTicketIds: [...activeReview.targetPlanningTicketIds],
+              verdictMarkdown: "failed: missing acceptance detail",
+              passed: false,
+              failingPlanningTicketIds: [ticketId],
+              createdAt: `2026-01-01T00:00:0${String(index)}.000Z`,
+            });
+            yield* system.reactor.drain;
+          }
+
+          const snapshot = yield* system.query.getSnapshot();
+          const workflow = snapshot.threads.find(
+            (entry) => entry.id === planningThread.id,
+          )?.planningWorkflow;
+          expect(workflow?.stage).toBe("completed-with-warnings");
+          expect(workflow?.reviewCycles).toHaveLength(2);
+        }),
+      {
+        serverSettings: {
+          workflowStepCycles: [
+            {
+              workflowPromptId: WORKFLOW_PROMPT_IDS.planningTicketReviewerCodex,
+              maxCycles: 2,
+            },
+          ],
+        },
+      },
+    ),
+  );
+
+  it.effect("keeps reviewing past the built-in five cycles when the budget asks for more", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          yield* seedProjectAndThread(system);
+          const planningThread = yield* lockProductIntent(system);
+          yield* seedProductSpecAndTickets(system, planningThread.id);
+
+          // Five failed cycles used to be the end of ticket review, no matter
+          // what: the decider refused a sixth.
+          for (let index = 1; index <= 5; index += 1) {
+            const beforeVerdict = yield* system.query.getSnapshot();
+            const workflow = beforeVerdict.threads.find(
+              (entry) => entry.id === planningThread.id,
+            )?.planningWorkflow;
+            const activeReview = workflow?.activeReview;
+            const ticketId = workflow?.tickets[0]?.id;
+            if (activeReview == null || ticketId === undefined) {
+              throw new Error(`Review cycle ${index} was not active.`);
+            }
+            yield* system.engine.dispatch({
+              type: "thread.planning-reviewer-verdict.apply",
+              commandId: commandId(`raised-verdict-${index}`),
+              threadId: planningThread.id,
+              reviewerThreadId: activeReview.reviewerThreadId,
+              reviewerMessageId: messageId(`raised-reviewer-${index}`),
+              cycleNumber: activeReview.cycleNumber,
+              mode: activeReview.mode,
+              targetPlanningTicketIds: [...activeReview.targetPlanningTicketIds],
+              verdictMarkdown: "failed: missing acceptance detail",
+              passed: false,
+              failingPlanningTicketIds: [ticketId],
+              createdAt: `2026-01-01T00:00:0${String(index)}.000Z`,
+            });
+            yield* system.reactor.drain;
+          }
+
+          const snapshot = yield* system.query.getSnapshot();
+          const workflow = snapshot.threads.find(
+            (entry) => entry.id === planningThread.id,
+          )?.planningWorkflow;
+          expect(workflow?.stage).toBe("ticket-review");
+          expect(workflow?.activeReview?.cycleNumber).toBe(6);
+        }),
+      {
+        serverSettings: {
+          workflowStepCycles: [
+            {
+              workflowPromptId: WORKFLOW_PROMPT_IDS.planningTicketReviewerCodex,
+              maxCycles: 7,
+            },
+          ],
+        },
+      },
     ),
   );
 
@@ -1138,6 +1258,100 @@ describe("ProductWorkflowReactor", () => {
             expect(implementationOrchestrator?.parentThreadId).toBe(productThreadId);
           }),
         { validationCommands: ["pnpm check:full"] },
+      ),
+  );
+
+  it.effect(
+    "launches implementation on the Product workspace when its temporary branch was never renamed",
+    () =>
+      withSystem((system) =>
+        Effect.gen(function* () {
+          // Branch naming runs a model, and that model can be out of credits or offline. When it
+          // never renames the bootstrap ref, finished tickets must still reach implementation.
+          yield* seedProjectAndThread(system, {
+            workflowPreset: "full-feature",
+            branch: "worktree/1234abcd",
+            worktreePath: "/tmp/product-reactor.worktrees/full-feature",
+          });
+          yield* prepareWorkflowWorkspace(system, {
+            baseBranch: "main",
+            branch: "worktree/1234abcd",
+            worktreePath: "/tmp/product-reactor.worktrees/full-feature",
+          });
+          const planningThread = yield* lockProductIntent(system);
+          const spec = yield* seedProductSpecAndTickets(system, planningThread.id);
+          const beforeVerdict = yield* system.query.getSnapshot();
+          const activeReview = beforeVerdict.threads.find(
+            (thread) => thread.id === planningThread.id,
+          )?.planningWorkflow?.activeReview;
+          if (activeReview == null) throw new Error("Review was not active.");
+          yield* system.engine.dispatch({
+            type: "thread.planning-reviewer-verdict.apply",
+            commandId: commandId("passed-verdict"),
+            threadId: planningThread.id,
+            reviewerThreadId: activeReview.reviewerThreadId,
+            reviewerMessageId: messageId("reviewer-pass"),
+            cycleNumber: activeReview.cycleNumber,
+            mode: activeReview.mode,
+            targetPlanningTicketIds: [...activeReview.targetPlanningTicketIds],
+            verdictMarkdown: "passed",
+            passed: true,
+            createdAt: "2026-01-01T00:00:10.000Z",
+          });
+          yield* system.reactor.drain;
+
+          const snapshot = yield* system.query.getSnapshot();
+          expect(snapshot.implementationRuns.find((run) => run.specId === spec.id)).toMatchObject({
+            baseBranch: "main",
+            orchestratorBranch: "worktree/1234abcd",
+            orchestratorWorktreePath: "/tmp/product-reactor.worktrees/full-feature",
+          });
+        }),
+      ),
+  );
+
+  it.effect(
+    "recovers a standalone Planning thread whose implementation handoff never happened",
+    () =>
+      withSystem(
+        (system) =>
+          Effect.gen(function* () {
+            // The Planning preset hands off to implementation the same way a Product workflow
+            // does, so the startup sweep has to see it too. It used to skip these threads, which
+            // left a finished plan with no way back into implementation short of replanning it.
+            yield* seedProjectAndThread(system, {
+              interactionMode: "planning-workflow",
+              workflowPreset: "planning",
+              branch: "planning-branch",
+              worktreePath: "/tmp/product-reactor.worktrees/planning",
+            });
+            yield* prepareWorkflowWorkspace(system, {
+              baseBranch: "main",
+              branch: "planning-branch",
+              worktreePath: "/tmp/product-reactor.worktrees/planning",
+            });
+            const spec = yield* seedProductSpecAndTickets(system, productThreadId);
+            yield* system.engine.dispatch({
+              type: "thread.planning-workflow.stage.set",
+              commandId: commandId("planning-stage-completed-before-handoff-recovery"),
+              threadId: productThreadId,
+              stage: "completed",
+              createdAt: now,
+            });
+
+            yield* system.reactor.start();
+            yield* system.reactor.drain;
+
+            const snapshot = yield* system.query.getSnapshot();
+            expect(snapshot.implementationRuns.find((run) => run.specId === spec.id)).toMatchObject(
+              {
+                baseBranch: "main",
+                orchestratorBranch: "planning-branch",
+                orchestratorWorktreePath: "/tmp/product-reactor.worktrees/planning",
+              },
+            );
+          }),
+        { startReactor: false },
       ),
   );
 

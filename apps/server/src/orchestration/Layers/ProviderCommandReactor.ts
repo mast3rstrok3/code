@@ -314,6 +314,19 @@ function buildGeneratedWorktreeBranchName(raw: string): string {
   return safeFragment;
 }
 
+/**
+ * Branch name to use when the model cannot supply one: the opening words of the
+ * user's own message.
+ *
+ * A thread left on its temporary worktree branch blocks the handoff from
+ * planning to implementation, so the rename must not depend on a provider that
+ * can be out of credits, offline, or misconfigured.
+ */
+function deriveWorktreeBranchNameFromMessage(messageText: string): string {
+  const firstLine = messageText.split("\n").find((line) => line.trim().length > 0) ?? "";
+  return firstLine.trim().split(/\s+/).slice(0, 6).join(" ");
+}
+
 const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const orchestrationEngine = yield* OrchestrationEngineService;
@@ -893,15 +906,30 @@ const make = Effect.gen(function* () {
               yield* providerRegistry.getProviders,
             );
 
-      const generated = yield* textGeneration.generateBranchName({
-        cwd,
-        message: input.messageText,
-        ...(attachments.length > 0 ? { attachments } : {}),
-        modelSelection,
-      });
-      if (!generated) return;
+      const generated = yield* textGeneration
+        .generateBranchName({
+          cwd,
+          message: input.messageText,
+          ...(attachments.length > 0 ? { attachments } : {}),
+          modelSelection,
+        })
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning(
+              "provider command reactor could not generate a worktree branch name, naming the branch from the user message instead",
+              {
+                threadId: input.threadId,
+                cwd,
+                oldBranch,
+                cause: Cause.pretty(cause),
+              },
+            ).pipe(Effect.as(null)),
+          ),
+        );
 
-      const targetBranch = buildGeneratedWorktreeBranchName(generated.branch);
+      const targetBranch = buildGeneratedWorktreeBranchName(
+        generated?.branch ?? deriveWorktreeBranchNameFromMessage(input.messageText),
+      );
       if (targetBranch === oldBranch) return;
 
       const renamed = yield* gitWorkflow.renameBranch({ cwd, oldBranch, newBranch: targetBranch });

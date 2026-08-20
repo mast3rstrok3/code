@@ -36,6 +36,7 @@ import { AppDevStackManager } from "../../appDevStack/AppDevStackManager.ts";
 import { ServerConfig } from "../../config.ts";
 import { GitWorkflowService, type GitMergeRefInput } from "../../git/GitWorkflowService.ts";
 import { layerTest as serverSettingsLayerTest } from "../../serverSettings.ts";
+import { WORKFLOW_PROMPT_IDS } from "../../provider/WorkflowPromptRegistry.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
@@ -648,6 +649,8 @@ function seedPlanning(
         readonly action: "create" | "update" | "delete";
       }>;
       readonly dependencyKeys: ReadonlyArray<string>;
+      readonly appReviewEligible?: boolean;
+      readonly appReviewPlanMarkdown?: string;
     }>;
   },
 ) {
@@ -840,6 +843,32 @@ function appendWorkerResult(
       });
       yield* system.reactor.drain;
     }
+  });
+}
+
+/** A run whose one ticket has passed its worker and is waiting on a live nested App Review. */
+function launchTicketAppReview(system: ImplementationSystem) {
+  return Effect.gen(function* () {
+    const { run, ticket } = yield* launchRun(system, {
+      appReviewStrategy: "nested-workflow",
+      tickets: [
+        {
+          ...planningTicket("TICKET-1"),
+          appReviewEligible: true,
+          appReviewPlanMarkdown: "Open the page and check the header.",
+        },
+      ],
+    });
+    yield* appendWorkerResult(system, { run, status: "succeeded", completeTicketReview: false });
+    const snapshot = yield* system.query.getSnapshot();
+    const nestedRun = (snapshot.appReviewWorkflowRuns ?? [])[0];
+    const state = snapshot.implementationRuns
+      .find((entry) => entry.id === run.id)
+      ?.ticketStates.find((entry) => entry.ticketId === ticket.id);
+    if (!nestedRun || state?.appReviewWorkflowRunId !== nestedRun.id) {
+      throw new Error("Ticket App Review was not launched.");
+    }
+    return { run, ticket, nestedRun };
   });
 }
 
@@ -3798,6 +3827,66 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
+  it.effect("gives the run's own App Review the cycles its step budget asks for", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
+          yield* appendWorkerResult(system, { run, status: "succeeded" });
+
+          let snapshot = yield* system.query.getSnapshot();
+          const validator = snapshot.threads.find(
+            (thread) =>
+              thread.workflowRole === "implementation-validator" &&
+              thread.title === "Implementation merge gate",
+          );
+          if (!validator) throw new Error("Merge gate missing.");
+          yield* system.engine.dispatch({
+            type: "thread.activity.append",
+            commandId: commandId("budgeted-merge-gate-pass"),
+            threadId: validator.id,
+            activity: {
+              id: eventId("budgeted-merge-gate-pass"),
+              tone: "info",
+              kind: "implementation-merge-gate-result",
+              summary: "Merge gate passed",
+              payload: {
+                type: "implementation-merge-gate-result",
+                runId: run.id,
+                status: "passed",
+                validations: requiredValidations(),
+                summaryMarkdown: "ok",
+              },
+              turnId: null,
+              createdAt: "2026-01-01T00:00:02.000Z",
+            },
+            createdAt: "2026-01-01T00:00:02.000Z",
+          });
+          yield* system.reactor.drain;
+
+          snapshot = yield* system.query.getSnapshot();
+          const review = snapshot.appReviewWorkflowRuns?.find(
+            (candidate) =>
+              candidate.caller.type === "implementation" &&
+              candidate.caller.implementationRunId === run.id &&
+              candidate.caller.ticketId === undefined,
+          );
+          // 25 is above the run's launch-plan number, which used to cap it.
+          expect(review?.cycleBudget).toBe(25);
+        }),
+      {
+        serverSettings: {
+          workflowStepCycles: [
+            {
+              workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+              maxCycles: 25,
+            },
+          ],
+        },
+      },
+    ),
+  );
+
   it.effect("runs merge gate, browser review, files a PR, and completes after worker success", () =>
     withSystem((system) =>
       Effect.gen(function* () {
@@ -5038,6 +5127,155 @@ describe("ImplementationWorkflowReactor", () => {
         expect(after?.branch).toBe(before?.branch);
         expect(after?.worktreePath).toBe(before?.worktreePath);
         expect(after?.workerResult?.commitSha).toBe(before?.workerResult?.commitSha);
+      }),
+    ),
+  );
+
+  it.effect("a ticket App Review runs the cycles the step's budget asks for", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { nestedRun } = yield* launchTicketAppReview(system);
+          expect(nestedRun.cycleBudget).toBe(3);
+        }),
+      {
+        serverSettings: {
+          workflowStepCycles: [
+            {
+              workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+              stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+              maxCycles: 3,
+            },
+          ],
+        },
+      },
+    ),
+  );
+
+  it.effect("a ticket App Review ignores the budget set for the run's own App Review", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          // The two steps run the same agent. A budget on the run's App Review
+          // must not reach the per-ticket reviews inside the ticket waves.
+          const { nestedRun } = yield* launchTicketAppReview(system);
+          expect(nestedRun.cycleBudget).toBe(10);
+        }),
+      {
+        serverSettings: {
+          workflowStepCycles: [
+            {
+              workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+              maxCycles: 25,
+            },
+          ],
+        },
+      },
+    ),
+  );
+
+  it.effect("clearing a ticket stops the App Review it was waiting on", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, ticket, nestedRun } = yield* launchTicketAppReview(system);
+
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.reset",
+          commandId: commandId("clear-ticket-with-app-review"),
+          threadId: sourceThreadId,
+          runId: run.id,
+          target: { kind: "ticket", ticketId: ticket.id, stage: "implementation" },
+          createdAt: "2026-01-01T00:05:00.000Z",
+        });
+        yield* system.reactor.drain;
+
+        const snapshot = yield* system.query.getSnapshot();
+        const cleared = snapshot.implementationRuns
+          .find((entry) => entry.id === run.id)
+          ?.ticketStates.find((state) => state.ticketId === ticket.id);
+        expect(cleared?.status).toBe("blocked");
+        expect(cleared?.appReviewWorkflowRunId ?? null).toBeNull();
+        expect(
+          (snapshot.appReviewWorkflowRuns ?? []).find((entry) => entry.id === nestedRun.id)?.status,
+        ).toBe("failed");
+      }),
+    ),
+  );
+
+  it.effect("a cleared ticket ignores a late update from the App Review it disowned", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, ticket, nestedRun } = yield* launchTicketAppReview(system);
+
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.reset",
+          commandId: commandId("clear-ticket-before-late-update"),
+          threadId: sourceThreadId,
+          runId: run.id,
+          target: { kind: "ticket", ticketId: ticket.id, stage: "implementation" },
+          createdAt: "2026-01-01T00:05:00.000Z",
+        });
+        yield* system.reactor.drain;
+
+        // The controller was mid-cycle when the clear landed, so its next write
+        // still reports the review as running, from a pre-clear snapshot.
+        yield* system.engine.dispatch({
+          type: "thread.app-review-workflow.update",
+          commandId: commandId("late-app-review-update"),
+          threadId: nestedRun.controllerThreadId,
+          run: { ...nestedRun, status: "running", updatedAt: "2026-01-01T00:04:59.000Z" },
+          createdAt: "2026-01-01T00:05:01.000Z",
+        });
+        yield* system.reactor.drain;
+
+        const state = (yield* system.query.getSnapshot()).implementationRuns
+          .find((entry) => entry.id === run.id)
+          ?.ticketStates.find((entry) => entry.ticketId === ticket.id);
+        expect(state?.status).toBe("blocked");
+        expect(state?.appReviewWorkflowRunId ?? null).toBeNull();
+      }),
+    ),
+  );
+
+  it.effect("stage recovery reaps an App Review its ticket stopped waiting on", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, ticket, nestedRun } = yield* launchTicketAppReview(system);
+
+        // A ticket rewound while its review was in flight, the way one was
+        // before clearing cancelled it: the review keeps running with nothing
+        // pointing at it.
+        const current = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (entry) => entry.id === run.id,
+        )!;
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("orphan-ticket-app-review"),
+          threadId: sourceThreadId,
+          run: {
+            ...current,
+            ticketStates: current.ticketStates.map((state) =>
+              state.ticketId === ticket.id
+                ? { ...state, status: "blocked" as const, appReviewWorkflowRunId: null }
+                : state,
+            ),
+          },
+          createdAt: "2026-01-01T00:05:00.000Z",
+        });
+        yield* system.reactor.drain;
+
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+
+        const snapshot = yield* system.query.getSnapshot();
+        expect(
+          (snapshot.appReviewWorkflowRuns ?? []).find((entry) => entry.id === nestedRun.id)?.status,
+        ).toBe("failed");
+        expect(
+          snapshot.implementationRuns
+            .find((entry) => entry.id === run.id)
+            ?.ticketStates.find((state) => state.ticketId === ticket.id)?.status,
+        ).toBe("blocked");
       }),
     ),
   );

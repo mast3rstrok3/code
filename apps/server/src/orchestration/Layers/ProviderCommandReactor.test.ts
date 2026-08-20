@@ -1577,6 +1577,48 @@ describe("ProviderCommandReactor", () => {
     expect(renameInput.newBranch).not.toMatch(/^t3code\//);
   });
 
+  // The harness fails `generateBranchName`, which is what a provider out of credits looks like.
+  // A thread left on its temporary branch blocks the handoff from planning to implementation, so
+  // the rename falls back to the user's own words rather than not happening at all.
+  it("names the worktree branch from the user message when generation fails", async () => {
+    const harness = await createHarness();
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.make("cmd-thread-branch-fallback"),
+        threadId: ThreadId.make("thread-1"),
+        branch: "worktree/1234abcd",
+        worktreePath: "/tmp/provider-project-worktree",
+      }),
+    );
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-branch-fallback"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-branch-fallback"),
+          role: "user",
+          text: "Please check if our email capabilities are all working as intended.\n\nFix what is broken.",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+
+    await waitFor(() => harness.renameBranch.mock.calls.length === 1);
+    const renameInput = harness.renameBranch.mock.calls[0]?.[0] as {
+      readonly oldBranch?: string;
+      readonly newBranch?: string;
+    };
+    expect(renameInput.oldBranch).toBe("worktree/1234abcd");
+    expect(renameInput.newBranch).toBe("please-check-if-our-email-capabilities");
+  });
+
   it("injects authoritative worktree and App Dev Stack state into provider turns", async () => {
     const harness = await createHarness({ threadWorkflowPreset: "fast-feature" });
     const now = "2026-01-01T00:00:00.000Z";

@@ -166,6 +166,7 @@ import { PullRequestDetailGhost } from "./pullRequest/PullRequestGhosts";
 import { PullRequestsUnavailableState } from "./pullRequest/PullRequestsUnavailableState";
 import { AgentsPanel } from "./AgentsPanel";
 import type { SetWorkflowStepModel } from "./WorkflowModelPins";
+import type { SetWorkflowStepCycles } from "./WorkflowStepCycles";
 import { WorkflowsPanel } from "./WorkflowsPanel";
 import { WorkflowInstructionsPanel } from "./WorkflowInstructionsPanel";
 import { useWorkflowCatalog } from "../workflowCatalogState";
@@ -1289,6 +1290,9 @@ function ChatViewContent(props: ChatViewProps) {
   });
   const setWorkflowStepModel = useAtomCommand(threadEnvironment.setWorkflowStepModel, {
     label: "workflow step model",
+  });
+  const setWorkflowStepCycles = useAtomCommand(threadEnvironment.setWorkflowStepCycles, {
+    label: "workflow step cycles",
   });
   const resumeWorkflowTree = useAtomCommand(threadEnvironment.resumeWorkflow, {
     label: "workflow tree resume",
@@ -3196,6 +3200,24 @@ function ChatViewContent(props: ChatViewProps) {
       });
     },
     [activeWorkflowNavigation, setWorkflowStepModel],
+  );
+  const handleSetWorkflowStepCycles = useCallback<SetWorkflowStepCycles>(
+    (key, maxCycles) => {
+      const root = activeWorkflowNavigation?.root;
+      if (!root) return;
+      void setWorkflowStepCycles({
+        environmentId: root.environmentId,
+        input: {
+          threadId: root.id,
+          workflowPromptId: key.workflowPromptId,
+          ...(key.stepWorkflowPromptId === undefined
+            ? {}
+            : { stepWorkflowPromptId: key.stepWorkflowPromptId }),
+          maxCycles,
+        },
+      });
+    },
+    [activeWorkflowNavigation, setWorkflowStepCycles],
   );
   // Stopping a step stops each of its threads and the sessions beneath them;
   // the workflow root is never in this list, so the run itself stays active.
@@ -7058,6 +7080,8 @@ function ChatViewContent(props: ChatViewProps) {
         onPauseWorkflow={handlePauseWorkflow}
         onResumeWorkflow={handleResumeWorkflow}
         onSetStepModel={handleSetWorkflowStepModel}
+        defaultStepCycles={settings.workflowStepCycles}
+        onSetStepCycles={handleSetWorkflowStepCycles}
         onStopThreads={handleStopWorkflowThreads}
         onResumeThreads={handleResumeWorkflowThreads}
       />

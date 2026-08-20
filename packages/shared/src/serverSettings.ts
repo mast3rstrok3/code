@@ -219,6 +219,9 @@ export function applyServerSettingsPatch(
     ...(patch.workflowStepModels !== undefined
       ? { workflowStepModels: patch.workflowStepModels }
       : {}),
+    ...(patch.workflowStepCycles !== undefined
+      ? { workflowStepCycles: patch.workflowStepCycles }
+      : {}),
     ...(patch.workspaceUsers !== undefined
       ? {
           workspaceUsers: normalizeWorkspaceUsersPatch(

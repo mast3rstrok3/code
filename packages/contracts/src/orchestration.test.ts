@@ -26,6 +26,7 @@ import {
   OrchestrationThreadWorkflowRole,
   OrchestrationThread,
   OrchestrationThreadShell,
+  PLANNING_REVIEW_DEFAULT_CYCLES,
   PLANNING_REVIEW_MAX_CYCLES,
   ProjectCreateCommand,
   ThreadMetaUpdatedPayload,
@@ -77,8 +78,9 @@ it("exports the QA repair cap with deprecated compatibility aliases", () => {
   assert.strictEqual(IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS, IMPLEMENTATION_RUN_MAX_QA_REPAIRS);
 });
 
-it("allows up to five planning ticket review cycles", () => {
-  assert.strictEqual(PLANNING_REVIEW_MAX_CYCLES, 5);
+it("runs five planning ticket review cycles by default and never more than twenty", () => {
+  assert.strictEqual(PLANNING_REVIEW_DEFAULT_CYCLES, 5);
+  assert.strictEqual(PLANNING_REVIEW_MAX_CYCLES, 20);
 });
 
 it.effect("rejects legacy YOLO Workflow interaction mode", () =>

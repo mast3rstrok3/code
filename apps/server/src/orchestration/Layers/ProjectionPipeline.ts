@@ -930,6 +930,39 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
         }
 
+        case "thread.workflow-step-cycles-set": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          // Keyed by step and sub-step together — see the projector.
+          const otherStepCycles = (existingRow.value.workflowStepCycles ?? []).filter(
+            (entry) =>
+              entry.workflowPromptId !== event.payload.workflowPromptId ||
+              entry.stepWorkflowPromptId !== event.payload.stepWorkflowPromptId,
+          );
+          const maxCycles = event.payload.maxCycles;
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            workflowStepCycles:
+              maxCycles === null
+                ? otherStepCycles
+                : [
+                    ...otherStepCycles,
+                    {
+                      workflowPromptId: event.payload.workflowPromptId,
+                      ...(event.payload.stepWorkflowPromptId === undefined
+                        ? {}
+                        : { stepWorkflowPromptId: event.payload.stepWorkflowPromptId }),
+                      maxCycles,
+                    },
+                  ],
+          });
+          return;
+        }
+
         case "thread.runtime-mode-set": {
           const existingRow = yield* projectionThreadRepository.getById({
             threadId: event.payload.threadId,

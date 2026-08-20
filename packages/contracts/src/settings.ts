@@ -9,7 +9,11 @@ import {
   DEFAULT_TEXT_GENERATION_REASONING_EFFORT,
   ProviderOptionSelections,
 } from "./model.ts";
-import { ModelSelection, WorkflowStepModelOverride } from "./orchestration.ts";
+import {
+  ModelSelection,
+  WorkflowStepCycleOverride,
+  WorkflowStepModelOverride,
+} from "./orchestration.ts";
 import { ProviderInstanceConfig, ProviderInstanceId } from "./providerInstance.ts";
 import {
   DEFAULT_WORKSPACE_USER,
@@ -609,6 +613,14 @@ export const ServerSettings = Schema.Struct({
   workflowStepModels: Schema.Array(WorkflowStepModelOverride).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
+  /**
+   * Default cycle budget per looping workflow step, used by every workflow
+   * that does not set the step's budget itself. Same standing-default role as
+   * `workflowStepModels`.
+   */
+  workflowStepCycles: Schema.Array(WorkflowStepCycleOverride).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
 
   // Legacy single-instance-per-driver settings. Continues to be the source
   // of truth until `providerInstances` (below) lands per-driver migration
@@ -772,6 +784,7 @@ export const ServerSettingsPatch = Schema.Struct({
   // Whole-array replacement, like `providerInstances`: the list is small and
   // the client always sends the complete set of default step pins.
   workflowStepModels: Schema.optionalKey(Schema.Array(WorkflowStepModelOverride)),
+  workflowStepCycles: Schema.optionalKey(Schema.Array(WorkflowStepCycleOverride)),
   observability: Schema.optionalKey(
     Schema.Struct({
       otlpTracesUrl: Schema.optionalKey(TrimmedString),

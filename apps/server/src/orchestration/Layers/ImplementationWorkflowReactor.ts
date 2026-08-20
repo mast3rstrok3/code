@@ -8,6 +8,7 @@ import {
   isTicketStageSkipped,
   EventId,
   GitCommandError,
+  AppReviewWorkflowCycleBudget,
   IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
   IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES,
   MessageId,
@@ -16,6 +17,7 @@ import {
   type OrchestrationImplementationRerunRunStage,
   type OrchestrationImplementationRerunTicketStage,
   type OrchestrationImplementationRun,
+  type OrchestrationImplementationTicketState,
   type OrchestrationImplementationValidationResult,
   type OrchestrationImplementationWorkerResult,
   type OrchestrationPlanningTicket,
@@ -55,6 +57,10 @@ import {
   resolveWorkflowStepModelSelection,
   resolveWorkflowSubagentSpawnDefinition,
 } from "../workflowSubagents.ts";
+import {
+  resolveWorkflowStepCycleBudget,
+  type WorkflowStepCycleKey,
+} from "@t3tools/shared/workflowStepCycles";
 import { isWorkflowThreadPaused } from "../workflowPause.ts";
 import { isAwaitingWorkflowNudge } from "../workflowNudge.ts";
 
@@ -287,6 +293,25 @@ function markDependentsReady(
     ),
     updatedAt,
   };
+}
+
+/**
+ * Whether a nested App Review still speaks for the ticket it was launched for.
+ *
+ * True while the ticket points at it, and in the window between launching a
+ * review and the launch landing, where the ticket waits with no pointer yet.
+ * False once a clear or a re-run has rewound the ticket past its App Review:
+ * the review is then an orphan, and what it reports is about a ticket that has
+ * moved on.
+ */
+export function ticketAwaitsAppReviewRun(
+  state: OrchestrationImplementationTicketState,
+  appReviewWorkflowRunId: string,
+): boolean {
+  return (
+    state.appReviewWorkflowRunId === appReviewWorkflowRunId ||
+    (state.appReviewWorkflowRunId == null && state.status === "app-reviewing")
+  );
 }
 
 /**
@@ -1263,6 +1288,35 @@ const make = Effect.gen(function* () {
     return resolved.modelSelection;
   });
 
+  /**
+   * Cycle budget for one looping workflow step: the run's own budget when the
+   * workflow root carries one, otherwise the standing default from Settings,
+   * otherwise `fallbackCycles` — which the final App Review takes from its
+   * launch plan, since a run can be launched with a smaller review than the
+   * step's default.
+   */
+  const cyclesForStep = Effect.fn("ImplementationWorkflowReactor.cyclesForStep")(function* (input: {
+    readonly key: WorkflowStepCycleKey;
+    readonly orchestratorThread: OrchestrationThread;
+    readonly fallbackCycles?: number;
+  }) {
+    const settings = yield* serverSettingsService.getSettings.pipe(
+      Effect.orElseSucceed(() => undefined),
+    );
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    const rootThreadId =
+      input.orchestratorThread.workflowContext?.rootThreadId ?? input.orchestratorThread.id;
+    const root =
+      readModel.threads.find((candidate) => candidate.id === rootThreadId) ??
+      input.orchestratorThread;
+    return resolveWorkflowStepCycleBudget({
+      key: input.key,
+      threadOverrides: root.workflowStepCycles,
+      settingsOverrides: settings?.workflowStepCycles,
+      ...(input.fallbackCycles === undefined ? {} : { fallbackCycles: input.fallbackCycles }),
+    });
+  });
+
   const requestRunRetry = Effect.fn("ImplementationWorkflowReactor.requestRunRetry")(
     function* (input: {
       readonly sourceThreadId: ThreadId;
@@ -2172,7 +2226,15 @@ const make = Effect.gen(function* () {
         briefMarkdown: ticket.appReviewPlanMarkdown,
         supportingContextMarkdown: `Review only ticket ${input.ticketId}: ${ticket.title}. Treat its attached plan and acceptance criteria as authoritative.`,
         previewTargets: [frontendUrl],
-        cycleBudget: 10,
+        cycleBudget: AppReviewWorkflowCycleBudget.make(
+          yield* cyclesForStep({
+            key: {
+              workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+              stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+            },
+            orchestratorThread,
+          }),
+        ),
         modelSelection: yield* modelForStep({
           workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
           // Per-ticket reviews belong to "Execute ticket waves", so that
@@ -2785,9 +2847,17 @@ const make = Effect.gen(function* () {
             ...(artifactMarkdown === undefined ? {} : { artifactMarkdown }),
           }),
           previewTargets: [frontendUrl],
-          cycleBudget: Math.min(
-            IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
-            Math.max(1, cycleRun.launchSummary.finalAppReview.maxCycles),
+          cycleBudget: AppReviewWorkflowCycleBudget.make(
+            yield* cyclesForStep({
+              key: {
+                workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+              },
+              orchestratorThread,
+              fallbackCycles: Math.min(
+                IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
+                Math.max(1, cycleRun.launchSummary.finalAppReview.maxCycles),
+              ),
+            }),
           ),
           modelSelection: yield* modelForStep({
             workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
@@ -5373,6 +5443,41 @@ const make = Effect.gen(function* () {
   });
 
   /**
+   * Stop the nested App Review a ticket is about to stop waiting on.
+   *
+   * Rewinding a ticket past its App Review drops the pointer, but the review
+   * itself is a live controller thread with a live session. Left running it
+   * keeps reviewing a worktree nobody is waiting for, and keeps reporting
+   * against a ticket that has moved on.
+   */
+  const cancelTicketAppReview = Effect.fn("ImplementationWorkflowReactor.cancelTicketAppReview")(
+    function* (input: {
+      readonly run: OrchestrationImplementationRun;
+      readonly ticketId: string;
+      readonly reason: string;
+      readonly createdAt: string;
+    }) {
+      const nestedRunId = input.run.ticketStates.find(
+        (state) => state.ticketId === input.ticketId,
+      )?.appReviewWorkflowRunId;
+      if (nestedRunId == null) return;
+      const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+      const nestedRun = (readModel.appReviewWorkflowRuns ?? []).find(
+        (candidate) => candidate.id === nestedRunId,
+      );
+      if (nestedRun === undefined || nestedRun.status !== "running") return;
+      yield* orchestrationEngine.dispatch({
+        type: "thread.app-review-workflow.cancel",
+        commandId: yield* serverCommandId("implementation-ticket-app-review-cancel"),
+        threadId: nestedRun.controllerThreadId,
+        runId: nestedRun.id,
+        reason: input.reason,
+        createdAt: input.createdAt,
+      });
+    },
+  );
+
+  /**
    * Start one stage of a run again, in a fresh thread.
    *
    * A ticket target rewinds that ticket to the named stage and reopens every
@@ -5442,6 +5547,14 @@ const make = Effect.gen(function* () {
       }
     }
 
+    if (target.stage !== "code-review") {
+      yield* cancelTicketAppReview({
+        run,
+        ticketId: target.ticketId,
+        reason: "The ticket was sent back to an earlier stage.",
+        createdAt,
+      });
+    }
     const rerunRun = reopenTicketForRerun({
       run,
       ticketId: target.ticketId,
@@ -5516,6 +5629,14 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    if (target.stage !== "code-review") {
+      yield* cancelTicketAppReview({
+        run,
+        ticketId: target.ticketId,
+        reason: "The ticket was cleared.",
+        createdAt,
+      });
+    }
     const rewound = reopenTicketForRerun({
       run,
       ticketId: target.ticketId,
@@ -5571,13 +5692,16 @@ const make = Effect.gen(function* () {
   ) {
     const run = event.payload.run;
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
-    const activeNestedAppReview = (readModel.appReviewWorkflowRuns ?? []).find(
+    // A run with per-ticket reviews has one nested run per ticket in flight, so
+    // cancel every one of them. Leaving any behind leaves a controller thread
+    // running against a run that is over.
+    const activeNestedAppReviews = (readModel.appReviewWorkflowRuns ?? []).filter(
       (candidate) =>
         candidate.caller.type === "implementation" &&
         candidate.caller.implementationRunId === run.id &&
         candidate.status === "running",
     );
-    if (activeNestedAppReview !== undefined) {
+    for (const activeNestedAppReview of activeNestedAppReviews) {
       yield* orchestrationEngine.dispatch({
         type: "thread.app-review-workflow.cancel",
         commandId: yield* serverCommandId("implementation-nested-app-review-cancel"),
@@ -5644,6 +5768,11 @@ const make = Effect.gen(function* () {
     if (ticketId !== undefined) {
       const ticketState = run.ticketStates.find((state) => state.ticketId === ticketId);
       if (ticketState === undefined) return;
+      // An orphaned review keeps running until its cancel lands, and writing
+      // what it says back would not only undo the rewind that orphaned it, it
+      // would carry every other ticket along with it, from the pre-rewind
+      // snapshot this update was built on.
+      if (!ticketAwaitsAppReviewRun(ticketState, nestedRun.id)) return;
       const linkedTicketRun: OrchestrationImplementationRun = {
         ...run,
         ticketStates: run.ticketStates.map((state) =>
@@ -6269,6 +6398,32 @@ const make = Effect.gen(function* () {
       if (isWorkflowThreadPaused(readModel.threads, run.orchestratorThreadId)) continue;
       const sourceThreadId = findRunSourceThreadId({ readModel, run });
       if (sourceThreadId === null) continue;
+      // Reap the ticket App Reviews no ticket is waiting on any more. A clear
+      // or a re-run cancels the review it rewinds past, but one whose cancel
+      // never landed has nothing left pointing at it: no stage will finish it,
+      // and the App Review reactor resumes every running review on restart, so
+      // it would otherwise outlive the run that started it.
+      for (const nestedRun of readModel.appReviewWorkflowRuns ?? []) {
+        if (nestedRun.status !== "running") continue;
+        if (nestedRun.caller.type !== "implementation") continue;
+        if (nestedRun.caller.implementationRunId !== run.id) continue;
+        const ticketId = nestedRun.caller.ticketId;
+        if (ticketId === undefined) continue;
+        const state = run.ticketStates.find((candidate) => candidate.ticketId === ticketId);
+        if (state !== undefined && ticketAwaitsAppReviewRun(state, nestedRun.id)) continue;
+        yield* recoverRunStage(
+          run.id,
+          "orphaned-ticket-app-review",
+          orchestrationEngine.dispatch({
+            type: "thread.app-review-workflow.cancel",
+            commandId: yield* serverCommandId("implementation-orphaned-app-review-cancel"),
+            threadId: nestedRun.controllerThreadId,
+            runId: nestedRun.id,
+            reason: "Its ticket is no longer waiting on this App Review.",
+            createdAt,
+          }),
+        );
+      }
       const childThreads = readModel.threads.filter(
         (thread) => thread.parentThreadId === run.orchestratorThreadId && thread.deletedAt === null,
       );

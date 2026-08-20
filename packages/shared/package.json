@@ -141,6 +141,14 @@
       "import": "./src/workflowPresets.ts",
       "default": "./src/workflowPresets.ts"
     },
+    "./workflowStepCycles": {
+      "types": "./src/workflowStepCycles.ts",
+      "module": "./src/workflowStepCycles.ts",
+      "browser": "./src/workflowStepCycles.ts",
+      "development": "./src/workflowStepCycles.ts",
+      "import": "./src/workflowStepCycles.ts",
+      "default": "./src/workflowStepCycles.ts"
+    },
     "./remote": {
       "types": "./src/remote.ts",
       "import": "./src/remote.ts"

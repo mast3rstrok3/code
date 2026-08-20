@@ -17,6 +17,7 @@ import {
   ThreadId,
   OrchestrationPlanningWorkflowStage,
   OrchestrationPlanningActiveReviewRequest,
+  WorkflowStepCycleOverride,
   WorkflowStepModelOverride,
   OrchestrationThreadWorkflowRole,
   ThreadWorkflowContext,
@@ -69,6 +70,7 @@ export const ProjectionThread = Schema.Struct({
   planningWorkflowStage: Schema.NullOr(OrchestrationPlanningWorkflowStage),
   planningActiveReview: Schema.optionalKey(Schema.NullOr(OrchestrationPlanningActiveReviewRequest)),
   workflowStepModels: Schema.optionalKey(Schema.NullOr(Schema.Array(WorkflowStepModelOverride))),
+  workflowStepCycles: Schema.optionalKey(Schema.NullOr(Schema.Array(WorkflowStepCycleOverride))),
   deletedAt: Schema.NullOr(IsoDateTime),
 });
 export type ProjectionThread = typeof ProjectionThread.Type;

@@ -7,6 +7,7 @@ import {
   ThreadSettledPayload as ContractsThreadSettledPayloadSchema,
   ThreadMetaUpdatedPayload as ContractsThreadMetaUpdatedPayloadSchema,
   ThreadRuntimeModeSetPayload as ContractsThreadRuntimeModeSetPayloadSchema,
+  ThreadWorkflowStepCyclesSetPayload as ContractsThreadWorkflowStepCyclesSetPayloadSchema,
   ThreadWorkflowStepModelSetPayload as ContractsThreadWorkflowStepModelSetPayloadSchema,
   ThreadInteractionModeSetPayload as ContractsThreadInteractionModeSetPayloadSchema,
   ThreadComposerModeSetPayload as ContractsThreadComposerModeSetPayloadSchema,
@@ -65,6 +66,7 @@ export const ThreadSettledPayload = ContractsThreadSettledPayloadSchema;
 export const ThreadMetaUpdatedPayload = ContractsThreadMetaUpdatedPayloadSchema;
 export const ThreadRuntimeModeSetPayload = ContractsThreadRuntimeModeSetPayloadSchema;
 export const ThreadWorkflowStepModelSetPayload = ContractsThreadWorkflowStepModelSetPayloadSchema;
+export const ThreadWorkflowStepCyclesSetPayload = ContractsThreadWorkflowStepCyclesSetPayloadSchema;
 export const ThreadInteractionModeSetPayload = ContractsThreadInteractionModeSetPayloadSchema;
 export const ThreadComposerModeSetPayload = ContractsThreadComposerModeSetPayloadSchema;
 export const ThreadPlanningStageStartedPayload = ContractsThreadPlanningStageStartedPayloadSchema;

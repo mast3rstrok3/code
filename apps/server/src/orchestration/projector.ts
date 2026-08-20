@@ -48,6 +48,7 @@ import {
   ThreadPlanningWorkflowStageSetPayload,
   ThreadProposedPlanUpsertedPayload,
   ThreadRuntimeModeSetPayload,
+  ThreadWorkflowStepCyclesSetPayload,
   ThreadWorkflowStepModelSetPayload,
   ThreadSettledPayload,
   ThreadPinnedPayload,
@@ -621,6 +622,45 @@ export function projectEvent(
                     ],
               // A pin is configuration, not activity: leave updatedAt alone so
               // the run does not jump around the inbox when a step is retuned.
+              updatedAt: thread.updatedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.workflow-step-cycles-set":
+      return decodeForEvent(
+        ThreadWorkflowStepCyclesSetPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((candidate) => candidate.id === payload.threadId);
+          if (thread === undefined) return nextBase;
+          // Keyed by step and sub-step together, like a model pin.
+          const others = (thread.workflowStepCycles ?? []).filter(
+            (entry) =>
+              entry.workflowPromptId !== payload.workflowPromptId ||
+              entry.stepWorkflowPromptId !== payload.stepWorkflowPromptId,
+          );
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              workflowStepCycles:
+                payload.maxCycles === null
+                  ? others
+                  : [
+                      ...others,
+                      {
+                        workflowPromptId: payload.workflowPromptId,
+                        ...(payload.stepWorkflowPromptId === undefined
+                          ? {}
+                          : { stepWorkflowPromptId: payload.stepWorkflowPromptId }),
+                        maxCycles: payload.maxCycles,
+                      },
+                    ],
+              // Configuration, not activity: see the step-model case.
               updatedAt: thread.updatedAt,
             }),
           };

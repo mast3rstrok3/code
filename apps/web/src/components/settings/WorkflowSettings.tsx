@@ -25,6 +25,7 @@ import {
   type SetWorkflowStepModel,
   type WorkflowModelPinKey,
 } from "../WorkflowModelPins";
+import { WorkflowStepCyclePins, type SetWorkflowStepCycles } from "../WorkflowStepCycles";
 import { Badge } from "../ui/badge";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { WorkflowCatalogContent } from "./WorkflowCatalogContent";
@@ -33,6 +34,7 @@ import {
   workflowStepModelDefaultTargets,
   workflowStepModelPinKeysEqual,
 } from "./workflowStepModelDefaults";
+import { setWorkflowStepCycleOverride } from "@t3tools/shared/workflowStepCycles";
 
 function PageIntro({ title, description }: { title: string; description: string }) {
   return (
@@ -114,10 +116,18 @@ function WorkflowStepModelDefaults() {
       environmentId={environmentId}
       defaults={settings.workflowStepModels}
       seedSelection={resolveAppModelSelectionState(settings, providers)}
+      cycleDefaults={settings.workflowStepCycles}
       onSetStepModel={(key, selection) => {
         updateSettings({
           workflowStepModels: [
             ...setWorkflowStepModelDefault(settings.workflowStepModels, key, selection),
+          ],
+        });
+      }}
+      onSetStepCycles={(key, maxCycles) => {
+        updateSettings({
+          workflowStepCycles: [
+            ...setWorkflowStepCycleOverride(settings.workflowStepCycles, key, maxCycles),
           ],
         });
       }}
@@ -128,8 +138,10 @@ function WorkflowStepModelDefaults() {
 function WorkflowStepModelDefaultsBody(props: {
   readonly environmentId: EnvironmentId;
   readonly defaults: ServerSettings["workflowStepModels"];
+  readonly cycleDefaults: ServerSettings["workflowStepCycles"];
   readonly seedSelection: ModelSelection;
   readonly onSetStepModel: SetWorkflowStepModel;
+  readonly onSetStepCycles: SetWorkflowStepCycles;
 }) {
   const choices = useWorkflowModelChoices(props.environmentId);
   const pinFor = (key: WorkflowModelPinKey): ModelSelection | null =>
@@ -137,19 +149,19 @@ function WorkflowStepModelDefaultsBody(props: {
     null;
   return (
     <SettingsSection
-      title="Default step models"
+      title="Default step models and cycles"
       icon={<SlidersHorizontalIcon className="size-3.5" />}
       headerAction={
-        props.defaults.length === 0 ? null : (
+        props.defaults.length + props.cycleDefaults.length === 0 ? null : (
           <Badge variant="secondary" size="sm">
-            {props.defaults.length} set
+            {props.defaults.length + props.cycleDefaults.length} set
           </Badge>
         )
       }
     >
       <SettingsRow
-        title="Model per step and sub-step"
-        description="Every step runs on the workflow's own model unless you set one here. A workflow's Models menu overrides these for that run, and changes apply to agents started from now on."
+        title="Model per step and sub-step, and how often a step repeats"
+        description="Every step runs on the workflow's own model unless you set one here, and repeats its built-in number of times unless you set a cycle budget. A running workflow's step settings override these for that run, and changes apply to agents started from now on."
       >
         <div className="mt-1 space-y-3 pb-3">
           {workflowStepModelDefaultTargets().map((target) => (
@@ -166,6 +178,16 @@ function WorkflowStepModelDefaultsBody(props: {
                 rootLabel="The model the workflow runs on"
                 choices={choices}
                 onSetStepModel={props.onSetStepModel}
+              />
+              <WorkflowStepCyclePins
+                workflowPromptId={target.workflowPromptId}
+                subStepWorkflowPromptIds={target.subSteps.map(
+                  (subStep) => subStep.workflowPromptId,
+                )}
+                overrides={props.cycleDefaults}
+                inheritedLabel="Runs the built-in number of cycles"
+                onSetStepCycles={props.onSetStepCycles}
+                className="mt-3 space-y-2 border-t border-border/60 pt-3"
               />
             </div>
           ))}

@@ -169,6 +169,10 @@ One complete App Review budget unit: UI review, gap analysis and plan after a fa
 
 The terminal result of an App Review Workflow: `passed`, `failed`, or `exhausted`. Exhausted means every complete cycle in the configured budget was consumed and the final implemented repair has no remaining verification cycle. Failed means automation could not complete a valid cycle; cancellation is recorded as a failed run with diagnostic detail rather than as a separate verdict.
 
+#### Workflow step cycle budget
+
+How many times one looping workflow step repeats before the run moves on, keyed by the step and, for a sub-step, the agent within it — the same key a [step model pin](#workflow-preset) uses. A budget on the workflow root governs that run; `workflowStepCycles` in server settings is the standing default behind it. `WORKFLOW_STEP_CYCLE_TARGETS` in [`packages/shared/src/workflowStepCycles.ts`](../../packages/shared/src/workflowStepCycles.ts) is the list of steps that have one, with each step's default and ceiling. Only three steps loop: [ticket review](#ticket-review), the run's own [App Review](#app-review-workflow), and a ticket's App Review. The ticket and run-level App Reviews run the same agent under different steps and carry separate budgets.
+
 #### Skill (workflow prompt)
 
 The focused built-in instructions for one workflow step, identified by a stable prompt ID such as `planning.spec.codex`. Skills are inline constants in [WorkflowPromptRegistry.ts][26], derived near-verbatim from Matt Pocock's skills with a T3 adapter section.
@@ -195,7 +199,7 @@ A tracer-bullet vertical slice of a Spec (or a Wayfinder decision), with depende
 
 #### Ticket review
 
-The planning stage where reviewer sub-threads check the ticket set against the Spec for up to five cycles, editing tickets directly through the `planning-reviewer-verdict` directive's `ticketEdits`. The cap is `PLANNING_REVIEW_MAX_CYCLES` in [the contracts][1].
+The planning stage where reviewer sub-threads check the ticket set against the Spec, editing tickets directly through the `planning-reviewer-verdict` directive's `ticketEdits`. Five cycles by default, raised or lowered per run by a [workflow step cycle budget](#workflow-step-cycle-budget); `PLANNING_REVIEW_MAX_CYCLES` in [the contracts][1] is the ceiling no budget can pass.
 
 #### Wayfinder map
 

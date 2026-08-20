@@ -520,7 +520,7 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /derive one or more tracer-bullet tickets from the user's prompt/);
     NodeAssert.match(rendered, /fresh prompt-originated Implementation thread/);
     NodeAssert.match(rendered, /T3 launches implementation automatically/);
-    NodeAssert.match(rendered, /up to ten complete cycles when eligible/);
+    NodeAssert.match(rendered, /its configured cycle budget when eligible/);
     NodeAssert.match(rendered, /exactly one Code Review/);
     NodeAssert.match(rendered, /create one integration thread/);
     NodeAssert.match(rendered, /Run exactly one Code Review on the combined changes/);

@@ -21,6 +21,7 @@ import type {
   OrchestrationPlanningTicket,
   OrchestrationPlanningWorkflowStage,
   WorkflowPreset,
+  WorkflowStepCycleOverride,
 } from "@t3tools/contracts";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 import {
@@ -85,6 +86,7 @@ import {
 
 import ChatMarkdown from "./ChatMarkdown";
 import { WorkflowStepSettingsMenu } from "./WorkflowStepSettingsMenu";
+import type { SetWorkflowStepCycles } from "./WorkflowStepCycles";
 import { WorkflowModelsMenu } from "./WorkflowModelsMenu";
 import {
   workflowModelPinKey,
@@ -1780,6 +1782,8 @@ function WorkflowGroupCard(props: {
   readonly onRestartPlanningStage?: ((stage: RestartablePlanningStage) => void) | undefined;
   readonly onResumeWorkflow?: (() => void) | undefined;
   readonly onSetStepModel?: SetWorkflowStepModel | undefined;
+  readonly defaultStepCycles?: ReadonlyArray<WorkflowStepCycleOverride> | undefined;
+  readonly onSetStepCycles?: SetWorkflowStepCycles | undefined;
   readonly onStopThreads?: ((threadIds: readonly ThreadId[]) => void) | undefined;
   readonly onResumeThreads?: ((threadIds: readonly ThreadId[]) => void) | undefined;
   readonly tickets: readonly OrchestrationPlanningTicket[];
@@ -2260,6 +2264,9 @@ function WorkflowGroupCard(props: {
                                     runningThreadIds={stepRunningThreadIds}
                                     pausedScopeThreadIds={stepPause.scopeThreadIds}
                                     onSetStepModel={props.onSetStepModel}
+                                    stepCycles={props.workflowRoot.workflowStepCycles}
+                                    defaultStepCycles={props.defaultStepCycles}
+                                    onSetStepCycles={props.onSetStepCycles}
                                     onRestart={stepRestart.run}
                                     onStop={props.onStopThreads}
                                     onResume={props.onResumeThreads}
@@ -2529,6 +2536,8 @@ export function WorkflowsPanel(props: {
   readonly onResumeWorkflow?: (() => void) | undefined;
   readonly onPauseWorkflow?: (() => void) | undefined;
   readonly onSetStepModel?: SetWorkflowStepModel | undefined;
+  readonly defaultStepCycles?: ReadonlyArray<WorkflowStepCycleOverride> | undefined;
+  readonly onSetStepCycles?: SetWorkflowStepCycles | undefined;
   readonly onStopThreads?: ((threadIds: readonly ThreadId[]) => void) | undefined;
   readonly onResumeThreads?: ((threadIds: readonly ThreadId[]) => void) | undefined;
 }) {
@@ -2716,6 +2725,8 @@ export function WorkflowsPanel(props: {
                 timestampFormat={props.timestampFormat}
                 appReviewWorkflowRuns={props.appReviewWorkflowRuns}
                 implementationRuns={props.implementationRuns}
+                defaultStepCycles={props.defaultStepCycles}
+                onSetStepCycles={props.onSetStepCycles}
                 spec={props.spec}
                 tickets={props.tickets}
                 skillTitlesById={props.skillTitlesById}

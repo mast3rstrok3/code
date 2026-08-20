@@ -192,6 +192,29 @@ describe("serverSettings helpers", () => {
     );
   });
 
+  it("replaces workflow step cycle defaults so a budget can be removed", () => {
+    const current = {
+      ...DEFAULT_SERVER_SETTINGS,
+      workflowStepCycles: [
+        { workflowPromptId: "implementation.browser-app-review.codex", maxCycles: 20 },
+        {
+          workflowPromptId: "implementation.browser-app-review.codex",
+          stepWorkflowPromptId: "implementation.tdd.codex",
+          maxCycles: 3,
+        },
+      ],
+    };
+
+    expect(
+      applyServerSettingsPatch(current, {
+        workflowStepCycles: [current.workflowStepCycles[1]!],
+      }).workflowStepCycles,
+    ).toEqual([current.workflowStepCycles[1]]);
+    expect(applyServerSettingsPatch(current, {}).workflowStepCycles).toEqual(
+      current.workflowStepCycles,
+    );
+  });
+
   it("replaces source control writer selection without retaining stale options", () => {
     const current = {
       ...DEFAULT_SERVER_SETTINGS,

@@ -93,9 +93,9 @@ Planning first creates a dedicated branch and worktree from the selected branch.
 Loads reviewed Planning tickets when present. A prompt-originated run instead invokes the ticket-authoring prompt first, persists a synthetic Spec anchor and durable tickets, and launches automatically from the thread's current branch and worktree.
 
 1. Starts every unblocked ticket concurrently. Each worker has its own thread, branch, and worktree; dependencies branch from the reviewed commit of their blockers.
-2. For an App Review–eligible ticket, creates a worktree-owned AppDevStack and launches the attached review plan for up to ten complete cycles. Ineligible tickets record a skipped review. App Review terminates as passed, failed, or exhausted; every result continues to exactly one ticket Code Review.
+2. For an App Review–eligible ticket, creates a worktree-owned AppDevStack and launches the attached review plan for its step cycle budget, ten by default. Ineligible tickets record a skipped review. App Review terminates as passed, failed, or exhausted; every result continues to exactly one ticket Code Review.
 3. Treats worker failures and dependent tickets they block as terminal warnings instead of pausing the workflow. Once all tickets are terminal, merges every usable reviewed ticket branch in one integration thread on the workflow's starting branch and worktree.
-4. Runs one combined Code Review, then a combined App Review of up to ten cycles. Its brief includes cross-ticket flows and every ticket-level failure or warning. App Review exhaustion, blockage, or cancellation continues to the final Code Review.
+4. Runs one combined Code Review, then a combined App Review of its step cycle budget, ten by default. Its brief includes cross-ticket flows and every ticket-level failure or warning. App Review exhaustion, blockage, or cancellation continues to the final Code Review.
 5. Runs one final Code Review and one complete validation gate, then publishes the change request. Validation or review problems never reopen the fixed review sequence; publication continues as work in progress, with ticket and combined-review warnings in the PR body and workflow panel.
 
 ### Nested and panel-launched App Review
