@@ -92,6 +92,22 @@ export const T3ProjectFile = Schema.Struct({
       })
       .check(Schema.isMinLength(1), Schema.isMaxLength(T3_PROJECT_FILE_MAX_VALIDATION_COMMANDS)),
   ),
+  e2eCommands: Schema.optionalKey(
+    Schema.Array(
+      trimmedNonEmpty(
+        {
+          description:
+            "Complete end-to-end test command App Review runs from the worktree before each browser review.",
+        },
+        T3_PROJECT_FILE_VALIDATION_COMMAND_MAX_LENGTH,
+      ),
+    )
+      .annotate({
+        description:
+          "Ordered end-to-end test commands App Review runs at the start of every review cycle. Absent means reviews go straight to the browser.",
+      })
+      .check(Schema.isMinLength(1), Schema.isMaxLength(T3_PROJECT_FILE_MAX_VALIDATION_COMMANDS)),
+  ),
   defaultThreadEnvMode: Schema.optionalKey(
     ThreadEnvMode.annotate({
       description:

@@ -15,6 +15,7 @@ import {
   appReviewPhaseThreadState,
   buildReviewPrompt,
   cycleFailureAction,
+  e2eCheckIdsForCommands,
   priorCycleChecks,
   findAppReviewParentTicket,
   nextAppReviewWorkflowAction,
@@ -603,6 +604,104 @@ it("says nothing about carrying checks forward on the first cycle", () => {
     carryableChecks: prior.carryable,
   });
   expect(prompt).not.toContain("These checks already passed earlier in this run.");
+});
+
+it("derives stable e2e check ids from command order", () => {
+  expect(e2eCheckIdsForCommands(["pnpm test:e2e", "pnpm test:e2e:mobile"])).toEqual([
+    "e2e-1",
+    "e2e-2",
+  ]);
+});
+
+it("puts the project's e2e commands before browser work with their check ids", () => {
+  const prompt = buildReviewPrompt({
+    run: run(),
+    cycle: carryCycle(1, AppReviewId.make("app-review-1")),
+    priorFindingIds: [],
+    carryableChecks: [],
+    e2eCommands: ["pnpm test:e2e", "pnpm test:e2e:mobile"],
+  });
+  expect(prompt).toContain("- e2e-1: pnpm test:e2e");
+  expect(prompt).toContain("- e2e-2: pnpm test:e2e:mobile");
+  expect(prompt.indexOf("Before any browser work")).toBeLessThan(
+    prompt.indexOf("Use the linked durable App Review record"),
+  );
+});
+
+it("says nothing about e2e commands when the project declares none", () => {
+  const prompt = buildReviewPrompt({
+    run: run(),
+    cycle: carryCycle(1, AppReviewId.make("app-review-1")),
+    priorFindingIds: [],
+    carryableChecks: [],
+  });
+  expect(prompt).not.toContain("e2e-1");
+});
+
+it("never offers an e2e check back as carryable", () => {
+  const prompt = buildReviewPrompt({
+    run: secondCycleRun,
+    cycle: secondCycleRun.cycles[1]!,
+    priorFindingIds: [],
+    carryableChecks: [
+      { id: "e2e-1", label: "pnpm test:e2e", cycleNumber: 1 },
+      { id: "login", label: "Login", cycleNumber: 1 },
+    ],
+    e2eCommands: ["pnpm test:e2e"],
+  });
+  expect(prompt).toContain("- login (cycle 1): Login");
+  expect(prompt).not.toContain("- e2e-1 (cycle 1)");
+});
+
+it("rejects a pass that skipped a required e2e check", () => {
+  const passed = passedCycleTwo([
+    { id: "finding-1", label: "Submit recovery", status: "passed", notes: "Recovers now." },
+    { id: "login", label: "Login", status: "passed", notes: "Passed." },
+  ]);
+  expect(
+    terminalReviewPassFailure({
+      run: secondCycleRun,
+      review: passed,
+      priorReviews: [cycleOneReview],
+      e2eCheckIds: ["e2e-1"],
+    }),
+  ).toContain("without the required end-to-end checks: e2e-1");
+});
+
+it("rejects a pass that carried an e2e check instead of rerunning it", () => {
+  const passed = passedCycleTwo([
+    { id: "finding-1", label: "Submit recovery", status: "passed", notes: "Recovers now." },
+    {
+      id: "e2e-1",
+      label: "pnpm test:e2e",
+      status: "passed",
+      notes: "Passed in cycle 1.",
+      carriedFromCycle: 1,
+    },
+  ]);
+  expect(
+    terminalReviewPassFailure({
+      run: secondCycleRun,
+      review: passed,
+      priorReviews: [cycleOneReview],
+      e2eCheckIds: ["e2e-1"],
+    }),
+  ).toContain("carried end-to-end checks forward");
+});
+
+it("accepts a pass whose e2e checks ran fresh this cycle", () => {
+  const passed = passedCycleTwo([
+    { id: "finding-1", label: "Submit recovery", status: "passed", notes: "Recovers now." },
+    { id: "e2e-1", label: "pnpm test:e2e", status: "passed", notes: "42 tests passed." },
+  ]);
+  expect(
+    terminalReviewPassFailure({
+      run: secondCycleRun,
+      review: passed,
+      priorReviews: [cycleOneReview],
+      e2eCheckIds: ["e2e-1"],
+    }),
+  ).toBeNull();
 });
 
 it("accepts a pass whose untouched checks are carried from the cycle that ran them", () => {

@@ -24,6 +24,17 @@ export function resolveImplementationValidationCommands(input: {
 }
 
 /**
+ * End-to-end test commands App Review runs before each browser review cycle.
+ * Opt-in with no defaults: a project without `e2eCommands` reviews in the
+ * browser only.
+ */
+export function resolveAppReviewE2eCommands(
+  projectFile: T3ProjectFile | null | undefined,
+): ReadonlyArray<string> {
+  return projectFile?.e2eCommands ?? [];
+}
+
+/**
  * Codec between the raw `t3.json` file contents (lenient JSONC string) and the
  * decoded {@link T3ProjectFile}.
  */

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   buildT3ProjectFileJsonSchema,
   parseT3ProjectFile,
+  resolveAppReviewE2eCommands,
   resolveImplementationValidationCommands,
   T3ProjectFileFromJson,
 } from "./t3ProjectFile.ts";
@@ -41,10 +42,15 @@ describe("buildT3ProjectFileJsonSchema", () => {
     expect(Object.keys(schema.properties).sort()).toEqual([
       "$schema",
       "defaultThreadEnvMode",
+      "e2eCommands",
       "iconPath",
       "scripts",
       "validationCommands",
     ]);
+    const e2eCommands = JSON.stringify(schema.properties.e2eCommands);
+    expect(e2eCommands).toContain('"minItems":1');
+    expect(e2eCommands).toContain('"maxItems":10');
+    expect(e2eCommands).toContain('"maxLength":512');
     expect(schema.required).toBeUndefined();
     expect(schema.properties.iconPath?.description).toContain("Workspace-relative path");
     const validationCommands = JSON.stringify(schema.properties.validationCommands);
@@ -102,6 +108,16 @@ describe("resolveImplementationValidationCommands", () => {
     ).toEqual(["pnpm explicit"]);
     expect(resolveImplementationValidationCommands({ projectFile })).toEqual(["pnpm check:full"]);
     expect(resolveImplementationValidationCommands({})).toEqual(["vp check", "vp run typecheck"]);
+  });
+});
+
+describe("resolveAppReviewE2eCommands", () => {
+  it("returns the project's e2eCommands and stays empty without them", () => {
+    const projectFile = decodeJson(`{ "e2eCommands": ["pnpm test:e2e"] }`);
+
+    expect(resolveAppReviewE2eCommands(projectFile)).toEqual(["pnpm test:e2e"]);
+    expect(resolveAppReviewE2eCommands(decodeJson("{}"))).toEqual([]);
+    expect(resolveAppReviewE2eCommands(null)).toEqual([]);
   });
 });
 

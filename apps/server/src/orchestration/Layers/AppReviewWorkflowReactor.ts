@@ -21,6 +21,7 @@ import {
 } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { extractPreviewUrls } from "@t3tools/shared/preview";
+import { resolveAppReviewE2eCommands } from "@t3tools/shared/t3ProjectFile";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -32,6 +33,7 @@ import * as Stream from "effect/Stream";
 
 import { AppDevStackManager } from "../../appDevStack/AppDevStackManager.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
+import { T3ProjectFileLoader } from "../../project/T3ProjectFileLoader.ts";
 import {
   appendWorkflowSkillCommandSection,
   WORKFLOW_PROMPT_IDS,
@@ -392,10 +394,20 @@ export function priorCycleChecks(input: {
  * from earlier cycles. This prevents a narrow happy-path rerun from silently closing a broader
  * failed review.
  */
+/**
+ * Stable check ids for a project's e2e commands: the first command is `e2e-1`
+ * in every cycle, so repair verification and the pass gate can find it by id.
+ */
+export function e2eCheckIdsForCommands(commands: ReadonlyArray<string>): ReadonlyArray<string> {
+  return commands.map((_, index) => `e2e-${index + 1}`);
+}
+
 export function terminalReviewPassFailure(input: {
   readonly run: AppReviewWorkflowRun;
   readonly review: AppReviewRecord;
   readonly priorReviews: ReadonlyArray<AppReviewRecord>;
+  /** Required e2e check ids when the project configures `e2eCommands`. */
+  readonly e2eCheckIds?: ReadonlyArray<string>;
 }): string | null {
   if (input.review.status !== "passed" || input.review.document.verdict !== "passed") return null;
   const checks = input.review.document.checks;
@@ -407,6 +419,17 @@ export function terminalReviewPassFailure(input: {
     return `Browser App Review reported a pass with incomplete checks: ${incompleteChecks
       .map((check) => `${check.id}=${check.status}`)
       .join(", ")}.`;
+  }
+  const checksById = new Map(checks.map((check) => [check.id, check]));
+  const missingE2eChecks = (input.e2eCheckIds ?? []).filter((id) => !checksById.has(id));
+  if (missingE2eChecks.length > 0) {
+    return `Browser App Review reported a pass without the required end-to-end checks: ${missingE2eChecks.join(", ")}.`;
+  }
+  const carriedE2eChecks = (input.e2eCheckIds ?? []).filter(
+    (id) => checksById.get(id)?.carriedFromCycle !== undefined,
+  );
+  if (carriedE2eChecks.length > 0) {
+    return `Browser App Review carried end-to-end checks forward instead of rerunning them: ${carriedE2eChecks.join(", ")}.`;
   }
   const actionableFindings = input.review.document.findings.filter(
     (finding) => finding.severity !== "note",
@@ -464,8 +487,15 @@ export function buildReviewPrompt(input: {
   readonly cycle: AppReviewWorkflowCycle;
   readonly priorFindingIds: ReadonlyArray<string>;
   readonly carryableChecks: ReadonlyArray<CarryableAppReviewCheck>;
+  /** The project's `e2eCommands` from t3.json; empty or absent skips the e2e step. */
+  readonly e2eCommands?: ReadonlyArray<string>;
 }): string {
   const { run, cycle } = input;
+  const e2eCommands = input.e2eCommands ?? [];
+  // E2e checks are rerun every cycle, so a prior cycle's pass is never offered
+  // back as carryable.
+  const e2eCheckIds = new Set(e2eCheckIdsForCommands(e2eCommands));
+  const carryableChecks = input.carryableChecks.filter((check) => !e2eCheckIds.has(check.id));
   return appendWorkflowSkillCommandSection(
     [
       run.reviewOnly === true
@@ -481,6 +511,14 @@ export function buildReviewPrompt(input: {
       "Preview targets (try in order):",
       ...run.previewTargets.map((target) => `- ${target}`),
       "These preview targets are authoritative for this App Review cycle. Do not substitute deployment URLs from repository documentation, supporting source context, browser history, or environment conventions. If every listed target is unavailable, report the review failed with concrete details.",
+      ...(e2eCommands.length === 0
+        ? []
+        : [
+            "",
+            "Before any browser work, run the project's end-to-end test commands from the selected worktree, in order, and record each one as a check with the exact id shown:",
+            ...e2eCommands.map((command, index) => `- e2e-${index + 1}: ${command}`),
+            "A passing command is a passed check whose notes summarize the suite result. A failing command is a failed check whose notes name the failing tests, and each distinct product failure it reveals is an actionable finding. Run these commands fresh every cycle and never carry an e2e check forward. Their results are the cycle's first evidence; they never replace exercising the flows in the browser.",
+          ]),
       "",
       "Use the linked durable App Review record. Record the complete flow, capture captioned screenshots, and report every actionable finding. A missing or unavailable preview is a failed review.",
       ...(run.reviewOnly === true
@@ -496,12 +534,12 @@ export function buildReviewPrompt(input: {
             "This is a repair verification cycle. Exercise each prior actionable finding in the browser again and add one passed check with the exact same id before reporting passed:",
             ...input.priorFindingIds.map((findingId) => `- ${findingId}`),
           ]),
-      ...(input.carryableChecks.length === 0
+      ...(carryableChecks.length === 0
         ? []
         : [
             "",
             "These checks already passed earlier in this run. Read what the repair changed, and exercise one again only when the repair could plausibly have broken it. Otherwise carry it forward: repeat it in the matrix with the same id, status passed, and `carriedFromCycle` set to the cycle shown here, and spend no browser steps on it. Carried checks count toward the matrix, so a pass still needs every one of them present.",
-            ...input.carryableChecks.map(
+            ...carryableChecks.map(
               (check) => `- ${check.id} (cycle ${check.cycleNumber}): ${check.label}`,
             ),
           ]),
@@ -534,6 +572,7 @@ const make = Effect.gen(function* () {
   const appDevStackManager = yield* AppDevStackManager;
   const reviewService = yield* ReviewService;
   const serverSettingsService = yield* ServerSettingsService;
+  const projectFileLoader = yield* T3ProjectFileLoader;
 
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   const serverCommandId = (tag: string) =>
@@ -559,6 +598,14 @@ const make = Effect.gen(function* () {
     const project = readModel.projects.find((candidate) => candidate.id === thread.projectId);
     const cwd = thread.worktreePath ?? project?.workspaceRoot ?? null;
     return cwd === null ? null : { thread, cwd };
+  });
+
+  /** The target worktree's `e2eCommands` from t3.json; best-effort, absent means none. */
+  const e2eCommandsForCwd = Effect.fn("AppReviewWorkflowReactor.e2eCommandsForCwd")(function* (
+    cwd: string | null,
+  ) {
+    if (cwd === null) return [] as ReadonlyArray<string>;
+    return resolveAppReviewE2eCommands(Option.getOrUndefined(yield* projectFileLoader.load(cwd)));
   });
 
   const updateRun = Effect.fn("AppReviewWorkflowReactor.updateRun")(function* (
@@ -748,6 +795,8 @@ const make = Effect.gen(function* () {
       currentCycleNumber: cycle.cycleNumber,
       priorReviews: controller.appReviews,
     });
+    const target = yield* resolveTarget(run.targetThreadId);
+    const e2eCommands = yield* e2eCommandsForCwd(target?.cwd ?? null);
     yield* orchestrationEngine.dispatch({
       type: "thread.app-review.launch",
       commandId: yield* serverCommandId("app-review-workflow-review-launch"),
@@ -763,6 +812,7 @@ const make = Effect.gen(function* () {
           cycle,
           priorFindingIds: prior.findingIds,
           carryableChecks: prior.carryable,
+          e2eCommands,
         }),
         attachments: [],
       },
@@ -1092,6 +1142,7 @@ const make = Effect.gen(function* () {
             `Run gap analysis and create repair tickets for App Review cycle ${cycle.cycleNumber}.`,
             "",
             "The review that produced these findings ran in a separate thread; the brief and the complete actionable findings below are the whole input. Do not edit files, browse the app, or ask questions. Apply the To Tickets vertical-slice discipline to every actionable finding.",
+            "Work test-first: every ticket must name the automated test that reproduces its gap — an extension of the project's end-to-end suite when the gap is a user-visible flow, otherwise a focused test — and its acceptance criteria must require that the test fails before the repair and passes after it.",
             "This App Review adapter owns persistence. Do not emit planning-tickets-artifact, create external issues, or modify the parent planning-ticket set; emit only app-review-repair-tickets below.",
             `Use '${parentTicketKey}' as the parent key. Number child tickets consecutively from '${firstChildKey}' (for example '${parentTicketKey}.1', '${parentTicketKey}.2').`,
             input.run.caller.type === "implementation" && input.run.caller.ticketId !== undefined
@@ -1179,6 +1230,7 @@ const make = Effect.gen(function* () {
       run: stableRun,
       review,
       priorReviews: controller?.appReviews ?? [],
+      e2eCheckIds: e2eCheckIdsForCommands(yield* e2eCommandsForCwd(target.cwd)),
     });
     if (passFailure !== null) {
       yield* startPlanning({
@@ -1218,12 +1270,19 @@ const make = Effect.gen(function* () {
   const buildFixPrompt = (input: {
     readonly run: AppReviewWorkflowRun;
     readonly cycle: AppReviewWorkflowCycle;
+    readonly e2eCommands: ReadonlyArray<string>;
   }) =>
     appendWorkflowSkillCommandSection(
       [
         `Implement the App Review repair tickets for run '${input.run.id}', cycle ${input.cycle.cycleNumber}.`,
         "",
-        "Use TDD. Address every actionable finding together, preserve unrelated work, and run focused validation. Do not ask the user questions.",
+        "Use TDD: write the test each ticket names, watch it fail, then repair. Address every actionable finding together, preserve unrelated work, and run focused validation. Do not ask the user questions.",
+        ...(input.e2eCommands.length === 0
+          ? []
+          : [
+              "Before reporting succeeded, run the project's end-to-end test commands and report each as a validation entry:",
+              ...input.e2eCommands.map((command) => `- ${command}`),
+            ]),
         input.run.caller.type === "implementation"
           ? "Commit the complete repair, leave the orchestrator worktree clean, and report a commit SHA matching HEAD."
           : "Edit the selected worktree in place. A commit and initially clean worktree are not required; preserve unrelated WIP and rely on T3 checkpoints for recovery.",
@@ -1277,6 +1336,9 @@ const make = Effect.gen(function* () {
     const reviewer = yield* resolveThread(cycle.reviewerThreadId);
     const target = yield* resolveThread(run.targetThreadId);
     if (reviewer === undefined || target === undefined) return;
+    const e2eCommands = yield* e2eCommandsForCwd(
+      (yield* resolveTarget(run.targetThreadId))?.cwd ?? null,
+    );
     yield* orchestrationEngine.dispatch({
       type: "thread.create",
       commandId: yield* serverCommandId("app-review-workflow-fixer-create"),
@@ -1302,7 +1364,7 @@ const make = Effect.gen(function* () {
       message: {
         messageId: yield* serverMessageId("app-review-workflow-fixer"),
         role: "user",
-        text: buildFixPrompt({ run, cycle }),
+        text: buildFixPrompt({ run, cycle, e2eCommands }),
         attachments: [],
       },
       runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,

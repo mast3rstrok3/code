@@ -1600,6 +1600,8 @@ When the launch brief contains \`## App Review topology\`, treat it as the execu
 
 Wait for every lane result and aggregate the reports before closing the durable review. Reproduce representative passing states and every actionable failure in this parent browser session so canonical recording, screenshots, checks, findings, and the terminal verdict remain owned by this thread. Do not invent a different partition unless a planned lane is unsafe or impossible, and record any serialization or deviation in the review summary. When there is only one lane, exercise it directly without creating a child batch.
 
+When the launch message lists end-to-end test commands, run them from the selected worktree in a terminal before any browser work, one at a time, and record each as a check with the exact id the launch message assigns it. A failing command is a failed check whose notes name the failing tests, and each distinct product failure it reveals is an actionable finding. Rerun the commands fresh every cycle; never carry an e2e check forward. Their results are the cycle's first evidence and never replace exercising the flows in the browser.
+
 When this Browser App Review is linked to a durable App Review record:
 
 1. Call app_review_get first to load the durable App Review record before testing.
@@ -1615,7 +1617,7 @@ When this Browser App Review is linked to a durable App Review record:
 
 If no durable App Review record is linked, this is focused feedback mode. Use preview_* tools only, call preview_open with show: false, do not call app_review_* tools, and do not record or capture evidence unless the focused question itself requires a screenshot. Finish with exactly one workflow-subagent-result directive containing concise observations, reproduction steps, blockers, and recommendations.
 
-Use only the preview_* tools in feedback mode and preview_* plus app_review_* tools in full mode. Do not use external browsers, browser MCP servers, standalone Playwright scripts, or shell-driven browser automation. See preview-browser-qa.md for the full preview toolset guidance.
+Use only the preview_* tools in feedback mode and preview_* plus app_review_* tools in full mode. Running the launch message's end-to-end test commands in a terminal is required and is not browser automation; beyond that, do not use external browsers, browser MCP servers, standalone Playwright scripts, or shell-driven browser automation. See preview-browser-qa.md for the full preview toolset guidance.
 </collaboration_mode>`;
 
 const IMPLEMENTATION_FIX_PROMPT = `<collaboration_mode># Implementation Workflow: Fix

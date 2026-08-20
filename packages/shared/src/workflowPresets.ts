@@ -41,16 +41,19 @@ export interface WorkflowPresetDefinition {
 
 /**
  * The three agents an App Review cycle runs, each in its own thread: the
- * browser review, the gap analysis that writes repair tickets, and the fix.
+ * review (the project's e2e commands first, then the browser), the gap
+ * analysis that writes repair tickets, and the fix.
  */
 const APP_REVIEW_SUB_STEPS: ReadonlyArray<WorkflowPresetSubStep> = [
   {
-    label: "Browser review",
+    label: "E2E tests & browser review",
     workflowPromptId: "implementation.browser-app-review.codex",
+    note: "runs the project's e2eCommands first when t3.json declares them",
   },
   {
     label: "Gap analysis & repair tickets",
     workflowPromptId: "matt-pocock.to-tickets",
+    note: "each ticket names the failing test its repair must make pass",
   },
   {
     label: "Repair implementation",
@@ -172,7 +175,8 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
   {
     id: "app-review",
     label: "App Review",
-    description: "Drive the running app in a browser, ticket every gap it finds, and fix it.",
+    description:
+      "Run the project's e2e tests, drive the running app in a browser, ticket every gap, and fix it.",
     route: "review",
     interactionMode: "default",
     // No entry prompt: sending in this mode dispatches an App Review launch
