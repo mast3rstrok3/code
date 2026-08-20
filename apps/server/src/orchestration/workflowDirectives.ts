@@ -203,7 +203,38 @@ export type WorkflowDirectiveParseResult =
   | { readonly kind: "parsed"; readonly directive: WorkflowDirective }
   | { readonly kind: "error"; readonly message: string };
 
-const JSON_FENCE_PATTERN = /```json\s*([\s\S]*?)```/gi;
+/**
+ * Extracts the contents of each ```json fence. Directive string fields may themselves contain
+ * fenced code samples, so a block closes at the first subsequent ``` whose accumulated content
+ * parses as JSON; when none does, it closes at the first ``` so malformed blocks still surface
+ * one at a time. An opener with no closing fence is ignored, matching the lazy-regex behavior
+ * this replaces.
+ */
+function extractJsonFenceBlocks(markdown: string): ReadonlyArray<string> {
+  const blocks: string[] = [];
+  const opener = /```json\s*/gi;
+  for (let open = opener.exec(markdown); open !== null; open = opener.exec(markdown)) {
+    const contentStart = open.index + open[0].length;
+    const firstFence = markdown.indexOf("```", contentStart);
+    if (firstFence === -1) {
+      break;
+    }
+    let closer = -1;
+    for (let at = firstFence; at !== -1; at = markdown.indexOf("```", at + 3)) {
+      try {
+        JSON.parse(markdown.slice(contentStart, at));
+        closer = at;
+        break;
+      } catch {
+        // Keep extending to the next fence; the ``` we hit may sit inside a JSON string.
+      }
+    }
+    const end = closer === -1 ? firstFence : closer;
+    blocks.push(markdown.slice(contentStart, end).trim());
+    opener.lastIndex = end + 3;
+  }
+  return blocks;
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
@@ -1047,7 +1078,7 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
 }
 
 export function parseWorkflowDirectiveFromMarkdown(markdown: string): WorkflowDirectiveParseResult {
-  const matches = [...markdown.matchAll(JSON_FENCE_PATTERN)];
+  const matches = extractJsonFenceBlocks(markdown);
   if (matches.length === 0) {
     const trimmed = markdown.trim();
     if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
@@ -1075,7 +1106,7 @@ export function parseWorkflowDirectiveFromMarkdown(markdown: string): WorkflowDi
     return { kind: "error", message: "Workflow directives require exactly one fenced JSON block." };
   }
 
-  const rawJson = matches[0]?.[1]?.trim();
+  const rawJson = matches[0];
   if (!rawJson) {
     return { kind: "error", message: "Workflow directive JSON block is empty." };
   }

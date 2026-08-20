@@ -181,6 +181,54 @@ describe("workflowDirectives", () => {
     NodeAssert.equal(review.kind, "parsed");
   });
 
+  it("parses a directive whose markdown fields embed fenced code samples", () => {
+    const summary = [
+      "## Coverage",
+      "",
+      "```python",
+      '@pytest.mark.capability("email.capability.id")',
+      "```",
+      "",
+      "Then run:",
+      "",
+      "```bash",
+      "pnpm check:full",
+      "```",
+    ].join("\n");
+    const result = parseWorkflowDirectiveFromMarkdown(
+      [
+        "```json",
+        JSON.stringify({
+          type: "planning-spec-artifact",
+          title: "Email capability certification",
+          summaryMarkdown: summary,
+        }),
+        "```",
+      ].join("\n"),
+    );
+
+    NodeAssert.equal(result.kind, "parsed");
+    if (result.kind !== "parsed" || result.directive.type !== "planning-spec-artifact") return;
+    NodeAssert.equal(result.directive.summaryMarkdown, summary);
+  });
+
+  it("still rejects a message containing two fenced JSON blocks", () => {
+    const block = '```json\n{ "type": "planning-grill-complete" }\n```';
+    const result = parseWorkflowDirectiveFromMarkdown(`${block}\n\nAnd again:\n\n${block}`);
+
+    NodeAssert.equal(result.kind, "error");
+    if (result.kind !== "error") return;
+    NodeAssert.equal(result.message, "Workflow directives require exactly one fenced JSON block.");
+  });
+
+  it("still reports malformed JSON inside a single fence", () => {
+    const result = parseWorkflowDirectiveFromMarkdown('```json\n{ "type": "planning-\n```');
+
+    NodeAssert.equal(result.kind, "error");
+    if (result.kind !== "error") return;
+    NodeAssert.equal(result.message, "Workflow directive JSON is malformed.");
+  });
+
   it("rejects missing, empty, duplicate, and non-relative planned ticket files", () => {
     for (const plannedFileChanges of [
       undefined,
