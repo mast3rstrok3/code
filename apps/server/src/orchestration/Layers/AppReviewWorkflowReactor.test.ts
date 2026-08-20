@@ -623,7 +623,8 @@ it("puts the project's e2e commands before browser work with their check ids", (
   });
   expect(prompt).toContain("- e2e-1: pnpm test:e2e");
   expect(prompt).toContain("- e2e-2: pnpm test:e2e:mobile");
-  expect(prompt.indexOf("Before any browser work")).toBeLessThan(
+  expect(prompt).toContain("APP_REVIEW_PREVIEW_URL");
+  expect(prompt.indexOf("Part one of this review is the end-to-end test run")).toBeLessThan(
     prompt.indexOf("Use the linked durable App Review record"),
   );
 });

@@ -14,6 +14,14 @@ import { VcsError } from "./vcs.ts";
 export const AppReviewId = TrimmedNonEmptyString.pipe(Schema.brand("AppReviewId"));
 export type AppReviewId = typeof AppReviewId.Type;
 
+/**
+ * Environment variable App Review sets when running a project's `e2eCommands`:
+ * the review's authoritative preview target, so a suite that tests a deployed
+ * frontend hits the stack under review (per-ticket stacks included) instead of
+ * a hardcoded default.
+ */
+export const APP_REVIEW_PREVIEW_URL_ENV = "APP_REVIEW_PREVIEW_URL";
+
 /** Default and hard limit for complete review, gap-analysis, and implementation cycles. */
 export const APP_REVIEW_WORKFLOW_DEFAULT_CYCLES = 10;
 export const APP_REVIEW_WORKFLOW_MAX_CYCLES = 50;

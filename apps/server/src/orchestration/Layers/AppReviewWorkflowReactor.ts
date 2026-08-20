@@ -1,5 +1,6 @@
 import {
   type AppDevStackStatus,
+  APP_REVIEW_PREVIEW_URL_ENV,
   CommandId,
   AppReviewId,
   hasCompleteAppReviewEvidence,
@@ -515,9 +516,10 @@ export function buildReviewPrompt(input: {
         ? []
         : [
             "",
-            "Before any browser work, run the project's end-to-end test commands from the selected worktree, in order, and record each one as a check with the exact id shown:",
+            `Part one of this review is the end-to-end test run. Run each command from the selected worktree, in order, with the environment variable ${APP_REVIEW_PREVIEW_URL_ENV} set to the first preview target above, and record each command as a check with the exact id shown:`,
             ...e2eCommands.map((command, index) => `- e2e-${index + 1}: ${command}`),
-            "A passing command is a passed check whose notes summarize the suite result. A failing command is a failed check whose notes name the failing tests, and each distinct product failure it reveals is an actionable finding. Run these commands fresh every cycle and never carry an e2e check forward. Their results are the cycle's first evidence; they never replace exercising the flows in the browser.",
+            "A passing command is a passed check whose notes summarize the suite result. A failing command is a failed check whose notes name the failing tests, and each distinct product failure it reveals is an actionable finding. Run these commands fresh every cycle and never carry an e2e check forward.",
+            "Part two is the browser review, scoped to what the tests did not prove: acceptance criteria without e2e coverage, visual and interaction quality, and every failure the run surfaced. Do not re-drive a flow a passing e2e test already exercises end-to-end. Evidence requirements are unchanged: still record the session and capture screenshots of the states you verify.",
           ]),
       "",
       "Use the linked durable App Review record. Record the complete flow, capture captioned screenshots, and report every actionable finding. A missing or unavailable preview is a failed review.",
@@ -1280,7 +1282,11 @@ const make = Effect.gen(function* () {
         ...(input.e2eCommands.length === 0
           ? []
           : [
-              "Before reporting succeeded, run the project's end-to-end test commands and report each as a validation entry:",
+              `Before reporting succeeded, run the project's end-to-end test commands${
+                input.run.previewTargets[0] === undefined
+                  ? ""
+                  : ` with ${APP_REVIEW_PREVIEW_URL_ENV}=${input.run.previewTargets[0]}`
+              } and report each as a validation entry:`,
               ...input.e2eCommands.map((command) => `- ${command}`),
             ]),
         input.run.caller.type === "implementation"
