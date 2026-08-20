@@ -164,6 +164,25 @@ export function providerModelsFromSettings(
   return [...resolvedBuiltInModels, ...customEntries];
 }
 
+const BELOW_HIGH_REASONING_EFFORTS = new Set(["minimal", "low", "medium"]);
+
+/**
+ * T3 policy: a model selected without an explicit reasoning effort runs on high. Providers pass
+ * their catalog default through this before publishing reasoning descriptors, so lower catalog
+ * defaults are promoted while defaults at or above high (and unrecognized tiers) are kept.
+ */
+export function promoteDefaultReasoningEffort(
+  supportedEfforts: ReadonlyArray<string>,
+  catalogDefault: string | undefined,
+): string | undefined {
+  if (!supportedEfforts.includes("high")) {
+    return catalogDefault;
+  }
+  return catalogDefault === undefined || BELOW_HIGH_REASONING_EFFORTS.has(catalogDefault)
+    ? "high"
+    : catalogDefault;
+}
+
 export function buildSelectOptionDescriptor(input: {
   readonly id: string;
   readonly label: string;

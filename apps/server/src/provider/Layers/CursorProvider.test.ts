@@ -372,14 +372,14 @@ describe("buildCursorProviderSnapshot", () => {
 });
 
 describe("buildCursorCapabilitiesFromConfigOptions", () => {
-  it("derives model capabilities from parameterized Cursor ACP config options", () => {
+  it("derives model capabilities from parameterized Cursor ACP config options, promoting the medium default to high", () => {
     expect(buildCursorCapabilitiesFromConfigOptions(parameterizedGpt54ConfigOptions)).toEqual(
       createModelCapabilities({
         optionDescriptors: [
           selectDescriptor("reasoning", "Reasoning", [
             { id: "low", label: "Low" },
-            { id: "medium", label: "Medium", isDefault: true },
-            { id: "high", label: "High" },
+            { id: "medium", label: "Medium" },
+            { id: "high", label: "High", isDefault: true },
             { id: "xhigh", label: "Extra High" },
           ]),
           selectDescriptor("contextWindow", "Context", [

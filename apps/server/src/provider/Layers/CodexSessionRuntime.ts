@@ -503,7 +503,7 @@ function buildCodexCollaborationMode(input: {
     usesInteractiveStructuredInput && input.workflowUserInputToolAvailable !== true;
   const mode: "default" | "plan" =
     input.interactionMode === "plan" || usesNativeUserInputFallback ? "plan" : "default";
-  const reasoningEffort = input.effort ?? "medium";
+  const reasoningEffort = input.effort ?? "high";
   const baseDeveloperInstructions = buildCodexDeveloperInstructions(
     usesNativeUserInputFallback ? "interactive-grill" : mode,
     {

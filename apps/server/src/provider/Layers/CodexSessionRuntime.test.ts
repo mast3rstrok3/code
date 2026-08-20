@@ -301,10 +301,10 @@ describe("buildTurnStartParams", () => {
         mode: "default",
         settings: {
           model: "gpt-5.3-codex",
-          reasoning_effort: "medium",
+          reasoning_effort: "high",
           developer_instructions: buildCodexDeveloperInstructions("default", {
             model: "gpt-5.3-codex",
-            reasoningEffort: "medium",
+            reasoningEffort: "high",
           }),
         },
       },
@@ -323,8 +323,8 @@ describe("buildTurnStartParams", () => {
 
     const settings = params.collaborationMode?.settings;
     NodeAssert.equal(settings?.model, DEFAULT_MODEL);
-    NodeAssert.equal(settings?.reasoning_effort, "medium");
-    NodeAssert.ok(settings?.developer_instructions?.includes(`as ${DEFAULT_MODEL} with medium`));
+    NodeAssert.equal(settings?.reasoning_effort, "high");
+    NodeAssert.ok(settings?.developer_instructions?.includes(`as ${DEFAULT_MODEL} with high`));
   });
 
   it.effect("routes approvals to the auto reviewer in auto mode", () =>
@@ -691,7 +691,7 @@ describe("Codex workflow prompt browser scoping", () => {
       NodeAssert.match(instructions, /app_review_recording_start/);
       NodeAssert.match(instructions, /app_review_capture_screenshot/);
       NodeAssert.match(instructions, /preview-browser-qa\.md/);
-      NodeAssert.match(instructions, /Never turn evidenced product defects into blocked/);
+      NodeAssert.match(instructions, /never a third verdict/);
       NodeAssert.doesNotMatch(instructions, /Agent Browser CLI/);
       NodeAssert.doesNotMatch(instructions, /agent-browser/);
       NodeAssert.doesNotMatch(instructions, /rrweb/i);

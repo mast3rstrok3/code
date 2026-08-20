@@ -30,6 +30,7 @@ import { codexAppServerArgs, resolveCodexLaunchArgs } from "./codexLaunchArgs.ts
 import {
   AUTH_PROBE_TIMEOUT_MS,
   buildServerProvider,
+  promoteDefaultReasoningEffort,
   type ServerProviderDraft,
 } from "../providerSnapshot.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
@@ -115,8 +116,12 @@ function codexAccountEmail(account: CodexSchema.V2GetAccountResponse["account"])
 export function mapCodexModelCapabilities(
   model: CodexSchema.V2ModelListResponse__Model,
 ): ModelCapabilities {
+  const defaultReasoningEffort = promoteDefaultReasoningEffort(
+    model.supportedReasoningEfforts.map(({ reasoningEffort }) => reasoningEffort),
+    model.defaultReasoningEffort,
+  );
   const reasoningOptions = model.supportedReasoningEfforts.map(({ reasoningEffort }) =>
-    reasoningEffort === model.defaultReasoningEffort
+    reasoningEffort === defaultReasoningEffort
       ? {
           id: reasoningEffort,
           label: reasoningEffortLabel(reasoningEffort),

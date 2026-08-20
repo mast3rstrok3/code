@@ -83,6 +83,32 @@ it("maps current Codex model capability fields", () => {
   ]);
 });
 
+it("promotes a low catalog reasoning default to high", () => {
+  const capabilities = mapCodexModelCapabilities({
+    additionalSpeedTiers: [],
+    defaultReasoningEffort: "low",
+    defaultServiceTier: null,
+    description: "Test model",
+    displayName: "GPT Test",
+    hidden: false,
+    id: "gpt-test",
+    isDefault: true,
+    model: "gpt-test",
+    serviceTiers: [],
+    supportedReasoningEfforts: [
+      { description: "Low", reasoningEffort: "low" },
+      { description: "Medium", reasoningEffort: "medium" },
+      { description: "High", reasoningEffort: "high" },
+      { description: "Extra High", reasoningEffort: "xhigh" },
+    ],
+  });
+
+  const reasoning = capabilities.optionDescriptors?.find(
+    (descriptor) => descriptor.id === "reasoningEffort",
+  );
+  assert.strictEqual(reasoning?.type === "select" ? reasoning.currentValue : undefined, "high");
+});
+
 it("uses standard routing when the catalog has no default service tier", () => {
   const capabilities = mapCodexModelCapabilities({
     additionalSpeedTiers: ["fast"],

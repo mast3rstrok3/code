@@ -36,6 +36,7 @@ import {
   buildServerProvider,
   collectStreamAsString,
   isCommandMissingCause,
+  promoteDefaultReasoningEffort,
   providerModelsFromSettings,
   type CommandResult,
   type ServerProviderDraft,
@@ -257,24 +258,22 @@ export function buildCursorCapabilitiesFromConfigOptions(
   }
 
   const reasoningConfig = findCursorEffortConfigOption(configOptions);
-  const reasoningEffortLevels =
+  const reasoningEffortEntries =
     reasoningConfig?.type === "select"
       ? flattenSessionConfigSelectOptions(reasoningConfig).flatMap((entry) => {
           const normalizedValue = normalizeCursorReasoningValue(entry.value);
-          if (!normalizedValue) {
-            return [];
-          }
-          return [
-            {
-              value: normalizedValue,
-              label: entry.name,
-              ...(normalizeCursorReasoningValue(reasoningConfig.currentValue) === normalizedValue
-                ? { isDefault: true }
-                : {}),
-            },
-          ];
+          return normalizedValue ? [{ value: normalizedValue, label: entry.name }] : [];
         })
       : [];
+  const defaultReasoningEffort = promoteDefaultReasoningEffort(
+    reasoningEffortEntries.map((entry) => entry.value),
+    reasoningConfig?.type === "select"
+      ? normalizeCursorReasoningValue(reasoningConfig.currentValue)
+      : undefined,
+  );
+  const reasoningEffortLevels = reasoningEffortEntries.map((entry) =>
+    entry.value === defaultReasoningEffort ? { ...entry, isDefault: true } : entry,
+  );
 
   const contextOption = configOptions.find(
     (option) => option.category === "model_config" && isCursorContextConfigOption(option),
