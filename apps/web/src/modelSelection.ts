@@ -22,7 +22,12 @@ import {
   resolveSelectableProvider,
 } from "./providerModels";
 import { ModelEsque } from "./components/chat/providerIconUtils";
-import { type ProviderInstanceEntry, deriveProviderInstanceEntries } from "./providerInstances";
+import {
+  type ProviderInstanceEntry,
+  applyProviderInstanceSettings,
+  deriveProviderInstanceEntries,
+  sortProviderInstanceEntries,
+} from "./providerInstances";
 import { sortModelsForProviderInstance } from "./modelOrdering";
 
 const MAX_CUSTOM_MODEL_COUNT = 32;
@@ -327,5 +332,46 @@ export function resolveAppModelSelectionState(
     modelOptions: keptSelectedProvider ? selection.options : undefined,
   });
 
+  return createModelSelection(defaultInstanceIdForDriver(provider), model, modelOptionsForDispatch);
+}
+
+/**
+ * The agent model a fresh launch would use: the first enabled, available
+ * provider instance in picker order and that instance's default model.
+ *
+ * This seeds previews that stand in for "the model the workflow runs on"
+ * before any run exists, so it deliberately ignores
+ * `textGenerationModelSelection` — that choice is for titles and summaries,
+ * not agents.
+ */
+export function resolveDefaultAgentModelSelectionState(
+  settings: UnifiedSettings,
+  providers: ReadonlyArray<ServerProvider>,
+): ModelSelection {
+  const entry = sortProviderInstanceEntries(
+    applyProviderInstanceSettings(deriveProviderInstanceEntries(providers), settings),
+  ).find((candidate) => candidate.enabled && candidate.isAvailable);
+  if (entry) {
+    const model =
+      entry.models.find((candidate) => candidate.isDefault && !candidate.isCustom)?.slug ??
+      entry.models.find((candidate) => !candidate.isCustom)?.slug ??
+      getDefaultServerModel(providers, entry.driverKind);
+    const { modelOptionsForDispatch } = getComposerProviderState({
+      provider: entry.driverKind,
+      model,
+      models: entry.models,
+      modelOptions: undefined,
+    });
+    return createModelSelection(entry.instanceId, model, modelOptionsForDispatch);
+  }
+
+  const provider = resolveSelectableProvider(providers, null);
+  const model = getDefaultServerModel(providers, provider);
+  const { modelOptionsForDispatch } = getComposerProviderState({
+    provider,
+    model,
+    models: getProviderModels(providers, provider),
+    modelOptions: undefined,
+  });
   return createModelSelection(defaultInstanceIdForDriver(provider), model, modelOptionsForDispatch);
 }

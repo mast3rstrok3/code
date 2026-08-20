@@ -6,6 +6,7 @@ import {
   getAppModelOptionsForInstance,
   resolveAppModelSelectionForInstance,
   resolveAppModelSelectionState,
+  resolveDefaultAgentModelSelectionState,
 } from "./modelSelection";
 
 function provider(input: {
@@ -318,6 +319,45 @@ describe("instance-scoped model selection", () => {
     expect(resolveAppModelSelectionState(settings, providers)).toEqual({
       instanceId: ProviderInstanceId.make("claude_openrouter"),
       model: "openai/gpt-5.5",
+    });
+  });
+});
+
+describe("resolveDefaultAgentModelSelectionState", () => {
+  it("seeds from the provider's default agent model, not the text-generation choice", () => {
+    const baseProvider = provider({
+      instanceId: "codex",
+      models: ["gpt-5.6-luna", "gpt-5.6-sol"],
+    });
+    const providers = [
+      {
+        ...baseProvider,
+        models: baseProvider.models.map((model) => ({
+          ...model,
+          isDefault: model.slug === "gpt-5.6-sol",
+        })),
+      },
+    ];
+    const settings: UnifiedSettings = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      textGenerationModelSelection: {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5.6-luna",
+      },
+    };
+
+    expect(resolveDefaultAgentModelSelectionState(settings, providers)).toEqual({
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5.6-sol",
+    });
+  });
+
+  it("falls back to the first non-custom model when no default is flagged", () => {
+    const providers = [provider({ instanceId: "codex", models: ["gpt-5.6-terra"] })];
+
+    expect(resolveDefaultAgentModelSelectionState(DEFAULT_UNIFIED_SETTINGS, providers)).toEqual({
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5.6-terra",
     });
   });
 });

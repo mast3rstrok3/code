@@ -16,7 +16,7 @@ import { useEffect, useRef } from "react";
 
 import { type WorkflowCatalogState, useWorkflowCatalog } from "../../workflowCatalogState";
 import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
-import { resolveAppModelSelectionState } from "../../modelSelection";
+import { resolveDefaultAgentModelSelectionState } from "../../modelSelection";
 import { primaryServerProvidersAtom } from "../../state/server";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import {
@@ -115,7 +115,7 @@ function WorkflowStepModelDefaults() {
     <WorkflowStepModelDefaultsBody
       environmentId={environmentId}
       defaults={settings.workflowStepModels}
-      seedSelection={resolveAppModelSelectionState(settings, providers)}
+      seedSelection={resolveDefaultAgentModelSelectionState(settings, providers)}
       cycleDefaults={settings.workflowStepCycles}
       onSetStepModel={(key, selection) => {
         updateSettings({
