@@ -9,8 +9,13 @@ import {
   resolveGroupImplementationRun,
   resolveWorkflowGroupTimeRange,
   resolveWorkflowLifecycle,
+  resolveWorkflowPhaseStatus,
   resolveWorkflowRollupStatus,
+  resolveWorkflowStageDetailStatus,
+  resolveWorkflowStepRollup,
+  resolveWorkflowStepStatus,
   resolveWorkflowStepTimeRange,
+  resolveWorkflowTicketStatus,
   resolveWorkflowThreadTimeRange,
   resolveWorkflowThreadStatus,
   selectWorkflowRootForThread,
@@ -991,5 +996,168 @@ describe("buildWorkflowViewModel", () => {
     ]);
     expect(model.topLevelThreads).toHaveLength(2);
     expect(localSearch("Secret worker")).toEqual([]);
+  });
+});
+
+describe("resolveWorkflowStepStatus", () => {
+  it("ranks what the step asks of a human above what its agents are doing", () => {
+    expect(resolveWorkflowStepStatus({ threadStatuses: ["working"], blocked: true })).toBe(
+      "blocked",
+    );
+    expect(resolveWorkflowStepStatus({ threadStatuses: ["working"], paused: true })).toBe("paused");
+    expect(
+      resolveWorkflowStepStatus({ threadStatuses: ["working"], paused: true, blocked: true }),
+    ).toBe("blocked");
+    expect(resolveWorkflowStepStatus({ threadStatuses: ["completed", "approval"] })).toBe(
+      "awaiting",
+    );
+    expect(
+      resolveWorkflowStepStatus({ threadStatuses: ["working"], skipped: true, blocked: true }),
+    ).toBe("skipped");
+  });
+
+  it("keeps a step the run is still sitting at running once its agent settles", () => {
+    expect(resolveWorkflowStepStatus({ threadStatuses: ["completed"], progress: "current" })).toBe(
+      "running",
+    );
+    expect(resolveWorkflowStepStatus({ threadStatuses: ["failed"], progress: "current" })).toBe(
+      "running",
+    );
+    expect(resolveWorkflowStepStatus({ threadStatuses: [], progress: "current" })).toBe("running");
+  });
+
+  it("reads a step that owns no agent from the workflow's own progress", () => {
+    expect(resolveWorkflowStepStatus({ threadStatuses: [], progress: "completed" })).toBe("done");
+    expect(resolveWorkflowStepStatus({ threadStatuses: [], progress: "upcoming" })).toBe("pending");
+    expect(resolveWorkflowStepStatus({ threadStatuses: [] })).toBe("pending");
+  });
+
+  it("reports the worst outcome a settled step recorded", () => {
+    expect(resolveWorkflowStepStatus({ threadStatuses: ["completed", "failed"] })).toBe("failed");
+    expect(resolveWorkflowStepStatus({ threadStatuses: ["completed", "stopped"] })).toBe("stopped");
+    expect(resolveWorkflowStepStatus({ threadStatuses: ["completed", "completed"] })).toBe("done");
+  });
+});
+
+describe("resolveWorkflowPhaseStatus", () => {
+  it("never hides one blocked step behind the steps beside it that are fine", () => {
+    expect(resolveWorkflowPhaseStatus(["done", "running", "blocked", "pending"])).toBe("blocked");
+    expect(resolveWorkflowPhaseStatus(["done", "running", "pending"])).toBe("running");
+    expect(resolveWorkflowPhaseStatus(["running", "awaiting"])).toBe("awaiting");
+  });
+
+  it("claims done only once every step is done or skipped", () => {
+    expect(resolveWorkflowPhaseStatus(["done", "skipped", "done"])).toBe("done");
+    expect(resolveWorkflowPhaseStatus(["done", "done", "pending"])).toBe("pending");
+    expect(resolveWorkflowPhaseStatus([])).toBe("pending");
+  });
+});
+
+describe("resolveWorkflowStepRollup", () => {
+  it("shows the most demanding part of a row split across several", () => {
+    expect(resolveWorkflowStepRollup(["done", "done"])).toBe("done");
+    expect(resolveWorkflowStepRollup(["done", "queued"])).toBe("queued");
+    expect(resolveWorkflowStepRollup(["done", "running", "queued"])).toBe("running");
+    expect(resolveWorkflowStepRollup(["failed", "running"])).toBe("failed");
+    expect(resolveWorkflowStepRollup([])).toBe("pending");
+  });
+});
+
+describe("resolveWorkflowTicketStatus", () => {
+  it("separates a ticket queued behind its dependencies from one nobody started", () => {
+    expect(
+      resolveWorkflowTicketStatus({
+        ticketState: "blocked",
+        threadStatuses: [],
+        skipped: false,
+        paused: false,
+      }),
+    ).toBe("queued");
+    expect(
+      resolveWorkflowTicketStatus({
+        ticketState: "ready",
+        threadStatuses: [],
+        skipped: false,
+        paused: false,
+      }),
+    ).toBe("pending");
+  });
+
+  it("lets a ticket waiting on the user outrank the state the run recorded", () => {
+    expect(
+      resolveWorkflowTicketStatus({
+        ticketState: "running",
+        threadStatuses: ["approval"],
+        skipped: false,
+        paused: false,
+      }),
+    ).toBe("awaiting");
+    expect(
+      resolveWorkflowTicketStatus({
+        ticketState: "running",
+        threadStatuses: ["approval"],
+        skipped: false,
+        paused: true,
+      }),
+    ).toBe("paused");
+  });
+
+  it("reads a review stage of a running ticket as running", () => {
+    for (const state of ["running", "app-reviewing", "code-reviewing"]) {
+      expect(
+        resolveWorkflowTicketStatus({
+          ticketState: state,
+          threadStatuses: ["completed"],
+          skipped: false,
+          paused: false,
+        }),
+      ).toBe("running");
+    }
+    expect(
+      resolveWorkflowTicketStatus({
+        ticketState: "succeeded",
+        threadStatuses: ["completed"],
+        skipped: false,
+        paused: false,
+      }),
+    ).toBe("done");
+  });
+
+  it("falls back to the ticket's own threads when the run has no state for it", () => {
+    expect(
+      resolveWorkflowTicketStatus({
+        ticketState: null,
+        threadStatuses: ["working"],
+        skipped: false,
+        paused: false,
+      }),
+    ).toBe("running");
+    expect(
+      resolveWorkflowTicketStatus({
+        ticketState: "open",
+        threadStatuses: [],
+        skipped: false,
+        paused: false,
+      }),
+    ).toBe("pending");
+  });
+});
+
+describe("resolveWorkflowStageDetailStatus", () => {
+  it("colors the words a stage already reports", () => {
+    expect(resolveWorkflowStageDetailStatus("running")).toBe("running");
+    expect(resolveWorkflowStageDetailStatus("in review")).toBe("running");
+    expect(resolveWorkflowStageDetailStatus("in progress")).toBe("running");
+    expect(resolveWorkflowStageDetailStatus("succeeded")).toBe("done");
+    expect(resolveWorkflowStageDetailStatus("clean")).toBe("done");
+    expect(resolveWorkflowStageDetailStatus("3 tickets")).toBe("done");
+    expect(resolveWorkflowStageDetailStatus("findings")).toBe("awaiting");
+    expect(resolveWorkflowStageDetailStatus("exhausted")).toBe("failed");
+    expect(resolveWorkflowStageDetailStatus("blocked")).toBe("blocked");
+    expect(resolveWorkflowStageDetailStatus("skipped — not planned for browser review")).toBe(
+      "skipped",
+    );
+    expect(resolveWorkflowStageDetailStatus("not started")).toBe("pending");
+    expect(resolveWorkflowStageDetailStatus("eligible")).toBe("pending");
   });
 });

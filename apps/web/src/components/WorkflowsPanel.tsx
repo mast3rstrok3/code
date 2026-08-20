@@ -56,14 +56,20 @@ import {
   implementationTicketStageDetails,
   resolveGroupImplementationRun,
   resolveWorkflowGroupTimeRange,
+  resolveWorkflowPhaseStatus,
+  resolveWorkflowStageDetailStatus,
+  resolveWorkflowStepStatus,
+  resolveWorkflowStepRollup,
   resolveWorkflowStepTimeRange,
   resolveWorkflowThreadTimeRange,
   resolveWorkflowThreadStatus,
+  resolveWorkflowTicketStatus,
   workflowStatusIsActive,
   workflowStepMatchesImplementationFailure,
   workflowThreadKey,
   type WorkflowGroup,
   type WorkflowRoot,
+  type WorkflowStepStatus,
   type WorkflowTimelineStep,
   type WorkflowThreadStatus,
 } from "~/workflowModel";
@@ -128,6 +134,130 @@ const STATUS_VISUALS: Record<
     textClass: "text-muted-foreground",
   },
 };
+
+/**
+ * One color per thing the user can do about a row.
+ *
+ * Six hues carry ten states: sky is moving, amber wants the user, red stopped
+ * badly, violet was stopped on purpose, emerald finished, and muted has not
+ * started or never will. The label is what the row says when it has room for
+ * words; the rail and tint are what make the live step findable in a long
+ * collapsed list without reading any of them.
+ */
+const STEP_VISUALS: Record<
+  WorkflowStepStatus,
+  {
+    readonly label: string;
+    readonly dotClass: string;
+    readonly textClass: string;
+    readonly railClass: string;
+    readonly tintClass: string;
+  }
+> = {
+  running: {
+    label: "Running",
+    dotClass: "bg-sky-500",
+    textClass: "text-sky-600 dark:text-sky-400",
+    railClass: "bg-sky-500",
+    tintClass: "bg-sky-500/5",
+  },
+  awaiting: {
+    label: "Needs you",
+    dotClass: "bg-amber-500",
+    textClass: "text-amber-700 dark:text-amber-300",
+    railClass: "bg-amber-500",
+    tintClass: "bg-amber-500/5",
+  },
+  blocked: {
+    label: "Blocked",
+    dotClass: "bg-red-500",
+    textClass: "text-red-700 dark:text-red-300",
+    railClass: "bg-red-500",
+    tintClass: "bg-red-500/5",
+  },
+  failed: {
+    label: "Failed",
+    dotClass: "bg-red-500",
+    textClass: "text-red-700 dark:text-red-300",
+    railClass: "bg-red-500/60",
+    tintClass: "",
+  },
+  paused: {
+    label: "Paused",
+    dotClass: "bg-violet-500",
+    textClass: "text-violet-600 dark:text-violet-300",
+    railClass: "bg-violet-500",
+    tintClass: "bg-violet-500/5",
+  },
+  stopped: {
+    label: "Stopped",
+    dotClass: "bg-muted-foreground/60",
+    textClass: "text-muted-foreground",
+    railClass: "bg-muted-foreground/40",
+    tintClass: "",
+  },
+  queued: {
+    label: "Queued",
+    dotClass: "border border-muted-foreground/60 bg-muted-foreground/20",
+    textClass: "text-muted-foreground",
+    railClass: "bg-border",
+    tintClass: "",
+  },
+  skipped: {
+    label: "Skipped",
+    dotClass: "border border-dashed border-muted-foreground/60",
+    textClass: "text-muted-foreground/70",
+    railClass: "bg-transparent",
+    tintClass: "",
+  },
+  pending: {
+    label: "Not started",
+    dotClass: "border border-muted-foreground/50",
+    textClass: "text-muted-foreground/70",
+    railClass: "bg-transparent",
+    tintClass: "",
+  },
+  done: {
+    label: "Done",
+    dotClass: "bg-emerald-500",
+    textClass: "text-emerald-700 dark:text-emerald-300",
+    railClass: "bg-emerald-500/50",
+    tintClass: "",
+  },
+};
+
+function StatusDot(props: { readonly status: WorkflowStepStatus; readonly className?: string }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "size-2 shrink-0 rounded-full",
+        STEP_VISUALS[props.status].dotClass,
+        props.className,
+      )}
+    />
+  );
+}
+
+/** The step-level color for a row whose status is a thread's own. */
+function threadStatusAsStepStatus(status: WorkflowThreadStatus): WorkflowStepStatus {
+  switch (status) {
+    case "approval":
+    case "input":
+      return "awaiting";
+    case "working":
+    case "monitoring":
+      return "running";
+    case "failed":
+      return "failed";
+    case "stopped":
+      return "stopped";
+    case "archived":
+      return "skipped";
+    case "completed":
+      return "done";
+  }
+}
 
 function elapsedBetween(startedAt: string, endedAt: string | null): string {
   const start = Date.parse(startedAt);
@@ -725,16 +855,18 @@ function TicketAppReviewCycles(props: {
           // Only the newest cycle can start again: every phase entry point on
           // the server works on the run's current cycle.
           const isCurrentCycle = cycle.cycleNumber === latestCycleNumber;
+          const cycleStatus = resolveWorkflowStageDetailStatus(cycle.status);
           return (
             <article
               key={cycle.cycleNumber}
               className="rounded-md border border-border/70 bg-background/60 p-2"
             >
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <StatusDot status={cycleStatus} className="size-1.5" />
                 <span className="text-[11px] font-medium">
                   Cycle {cycle.cycleNumber} of {props.run.cycleBudget}
                 </span>
-                <span className="text-[10px] capitalize text-muted-foreground">
+                <span className={cn("text-[10px] capitalize", STEP_VISUALS[cycleStatus].textClass)}>
                   · {cycle.status}
                 </span>
               </div>
@@ -745,66 +877,78 @@ function TicketAppReviewCycles(props: {
                 className="mt-1"
               />
               <ol className="mt-2 space-y-1.5 border-l border-border/70 pl-3">
-                {steps.map((step, index) => (
-                  <li key={step.label} className="relative">
-                    <span className="absolute -left-[1.05rem] top-0.5 flex size-3.5 items-center justify-center rounded-full border border-border bg-background text-[8px] text-muted-foreground">
-                      {index + 1}
-                    </span>
-                    <div className="flex items-center gap-1.5 text-[10px]">
-                      <span className="font-medium text-foreground">{step.label}</span>
-                      <span className="capitalize text-muted-foreground"> · {step.detail}</span>
-                      {props.onRerunPhase === undefined ? null : (
-                        <WorkflowStepSettingsMenu
-                          environmentId={props.environmentId}
-                          scopeNoun="phase"
-                          stepLabel={`Cycle ${String(cycle.cycleNumber)} · ${step.label}`}
-                          workflowPromptId={APP_REVIEW_PHASE_PIN[step.phase].workflowPromptId}
-                          subSteps={[]}
-                          pinFor={props.pinFor}
-                          usesRootThread={false}
-                          rootModelSelection={props.rootModelSelection}
-                          restartLabel={`Start ${step.label} again in cycle ${String(cycle.cycleNumber)}`}
-                          restartDisabledReason={appReviewPhaseRerunDisabledReason({
-                            phaseLabel: step.label,
-                            phase: step.phase,
-                            cycle,
-                            isCurrentCycle,
-                            callerBusyReason: props.callerBusyReason,
-                            cyclesUsed: props.run.cyclesUsed,
-                            cycleBudget: props.run.cycleBudget,
-                            activeThread:
-                              props.run.activeThreadId === null
-                                ? undefined
-                                : threadById.get(props.run.activeThreadId),
-                          })}
-                          runningThreadIds={runningThreadIdsOf(
-                            props.threads,
-                            props.run.activeThreadId === null
-                              ? []
-                              : [threadById.get(props.run.activeThreadId)].flatMap((thread) =>
-                                  thread === undefined ? [] : [thread],
-                                ),
-                          )}
-                          pausedScopeThreadIds={
-                            workflowPauseOf(
+                {steps.map((step, index) => {
+                  const phaseStatus = resolveWorkflowStageDetailStatus(step.detail);
+                  return (
+                    <li key={step.label} className="relative">
+                      <span
+                        className={cn(
+                          "absolute -left-[1.05rem] top-0.5 flex size-3.5 items-center justify-center rounded-full border border-border bg-background text-[8px]",
+                          STEP_VISUALS[phaseStatus].textClass,
+                        )}
+                      >
+                        {index + 1}
+                      </span>
+                      <div className="flex items-center gap-1.5 text-[10px]">
+                        <StatusDot status={phaseStatus} className="size-1.5" />
+                        <span className="font-medium text-foreground">{step.label}</span>
+                        <span className={cn("capitalize", STEP_VISUALS[phaseStatus].textClass)}>
+                          {" "}
+                          · {step.detail}
+                        </span>
+                        {props.onRerunPhase === undefined ? null : (
+                          <WorkflowStepSettingsMenu
+                            environmentId={props.environmentId}
+                            scopeNoun="phase"
+                            stepLabel={`Cycle ${String(cycle.cycleNumber)} · ${step.label}`}
+                            workflowPromptId={APP_REVIEW_PHASE_PIN[step.phase].workflowPromptId}
+                            subSteps={[]}
+                            pinFor={props.pinFor}
+                            usesRootThread={false}
+                            rootModelSelection={props.rootModelSelection}
+                            restartLabel={`Start ${step.label} again in cycle ${String(cycle.cycleNumber)}`}
+                            restartDisabledReason={appReviewPhaseRerunDisabledReason({
+                              phaseLabel: step.label,
+                              phase: step.phase,
+                              cycle,
+                              isCurrentCycle,
+                              callerBusyReason: props.callerBusyReason,
+                              cyclesUsed: props.run.cyclesUsed,
+                              cycleBudget: props.run.cycleBudget,
+                              activeThread:
+                                props.run.activeThreadId === null
+                                  ? undefined
+                                  : threadById.get(props.run.activeThreadId),
+                            })}
+                            runningThreadIds={runningThreadIdsOf(
                               props.threads,
                               props.run.activeThreadId === null
                                 ? []
                                 : [threadById.get(props.run.activeThreadId)].flatMap((thread) =>
                                     thread === undefined ? [] : [thread],
                                   ),
-                            ).scopeThreadIds
-                          }
-                          onSetStepModel={props.onSetStepModel}
-                          onStop={props.onStopThreads}
-                          onResume={props.onResumeThreads}
-                          onRestart={() => props.onRerunPhase?.(step.phase)}
-                        />
-                      )}
-                    </div>
-                    {step.thread}
-                  </li>
-                ))}
+                            )}
+                            pausedScopeThreadIds={
+                              workflowPauseOf(
+                                props.threads,
+                                props.run.activeThreadId === null
+                                  ? []
+                                  : [threadById.get(props.run.activeThreadId)].flatMap((thread) =>
+                                      thread === undefined ? [] : [thread],
+                                    ),
+                              ).scopeThreadIds
+                            }
+                            onSetStepModel={props.onSetStepModel}
+                            onStop={props.onStopThreads}
+                            onResume={props.onResumeThreads}
+                            onRestart={() => props.onRerunPhase?.(step.phase)}
+                          />
+                        )}
+                      </div>
+                      {step.thread}
+                    </li>
+                  );
+                })}
               </ol>
               {cycle.repairTickets && cycle.repairTickets.length > 0 ? (
                 <div className="mt-2 space-y-1 rounded border border-border/60 p-1.5">
@@ -1124,6 +1268,14 @@ function TicketPhases(props: {
 }) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const states = new Map(props.run.ticketStates.map((state) => [state.ticketId, state] as const));
+  const threadsByTicketId = new Map<string, EnvironmentThreadShell[]>();
+  for (const thread of props.threads) {
+    for (const ticketId of thread.workflowContext?.ticketScope ?? []) {
+      const scoped = threadsByTicketId.get(ticketId);
+      if (scoped) scoped.push(thread);
+      else threadsByTicketId.set(ticketId, [thread]);
+    }
+  }
   return (
     <div className="space-y-2">
       {buildTicketWaves(props.tickets).map((wave, waveIndex) => {
@@ -1135,6 +1287,20 @@ function TicketPhases(props: {
         );
         const waveBusy = runningThreadIdsOf(props.threads, waveThreads).length > 0;
         const wavePause = workflowPauseOf(props.threads, waveThreads);
+        // A wave is only done once its last ticket is, so it shows the most
+        // demanding of them rather than an average nobody can act on.
+        const waveStatus = resolveWorkflowStepRollup(
+          wave.map((ticket) =>
+            resolveWorkflowTicketStatus({
+              ticketState: states.get(ticket.id)?.status ?? null,
+              threadStatuses: (threadsByTicketId.get(ticket.id) ?? []).map(
+                resolveWorkflowThreadStatus,
+              ),
+              skipped: isTicketSkipped(props.skips, ticket.id),
+              paused: wavePause.paused,
+            }),
+          ),
+        );
         const forEachWaveTicket = (
           act:
             | ((input: { readonly ticketId: string; readonly stage: RerunTicketStage }) => void)
@@ -1150,14 +1316,19 @@ function TicketPhases(props: {
             key={wave.map((ticket) => ticket.id).join(":")}
             className="rounded-md border border-border/70 bg-background/40 p-2"
           >
-            <div className="mb-1 flex items-center gap-1">
+            <div className="mb-1 flex items-center gap-1.5">
+              <StatusDot status={waveStatus} className="size-1.5" />
               <div className="min-w-0 flex-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
                 Wave {waveIndex + 1} · {wave.length} ticket{wave.length === 1 ? "" : "s"}
-                {wave.every((ticket) => isTicketSkipped(props.skips, ticket.id))
-                  ? " · skipped"
-                  : ""}
-                {wavePause.paused ? " · paused" : ""}
               </div>
+              <span
+                className={cn(
+                  "shrink-0 text-[10px] font-medium",
+                  STEP_VISUALS[waveStatus].textClass,
+                )}
+              >
+                {STEP_VISUALS[waveStatus].label}
+              </span>
               <WorkflowStepSettingsMenu
                 environmentId={props.environmentId}
                 scopeNoun="wave"
@@ -1265,6 +1436,18 @@ function TicketPhases(props: {
               ] as const;
               const ticketLabel = ticket.key ?? `Ticket ${ticket.ordinal + 1}`;
               const ticketPause = workflowPauseOf(props.threads, linkedThreads);
+              const ticketStatus = resolveWorkflowTicketStatus({
+                ticketState: state?.status ?? null,
+                threadStatuses: linkedThreads.map(resolveWorkflowThreadStatus),
+                skipped: isTicketSkipped(props.skips, ticket.id),
+                paused: ticketPause.paused,
+              });
+              const ticketDetail =
+                ticketStatus === "skipped"
+                  ? "skipped"
+                  : ticketStatus === "paused"
+                    ? "paused"
+                    : (state?.status ?? ticket.status);
               return (
                 <div key={ticket.id} className="border-t border-border/60 first:border-t-0">
                   <div className="flex w-full items-center gap-1">
@@ -1279,15 +1462,22 @@ function TicketPhases(props: {
                       ) : (
                         <ChevronRight className="size-3.5" />
                       )}
-                      <span className="min-w-0 flex-1 truncate text-xs font-medium">
+                      <StatusDot status={ticketStatus} className="size-1.5" />
+                      <span
+                        className={cn(
+                          "min-w-0 flex-1 truncate text-xs font-medium",
+                          ticketStatus === "skipped" && "text-muted-foreground line-through",
+                        )}
+                      >
                         {ticketLabel} · {ticket.title}
                       </span>
-                      <span className="text-[10px] capitalize text-muted-foreground">
-                        {isTicketSkipped(props.skips, ticket.id)
-                          ? "skipped"
-                          : ticketPause.paused
-                            ? "paused"
-                            : (state?.status ?? ticket.status)}
+                      <span
+                        className={cn(
+                          "text-[10px] capitalize",
+                          STEP_VISUALS[ticketStatus].textClass,
+                        )}
+                      >
+                        {ticketDetail}
                       </span>
                     </button>
                     <WorkflowStepSettingsMenu
@@ -1352,144 +1542,173 @@ function TicketPhases(props: {
                         />
                       ) : null}
                       <div className="space-y-2">
-                        {stages.map((stage, stageIndex) => (
-                          <section key={stage.label} className="relative">
-                            <span className="absolute -left-[1.05rem] top-1 flex size-4 items-center justify-center rounded-full border border-border bg-background text-[9px] font-medium text-muted-foreground">
-                              {stageIndex + 1}
-                            </span>
-                            <div className="mb-1 flex items-center gap-1.5 text-[11px]">
-                              <span className="font-medium text-foreground">{stage.label}</span>
-                              <span className="capitalize text-muted-foreground">
-                                ·{" "}
-                                {isTicketStageSkipped(
-                                  props.skips,
-                                  ticket.id,
-                                  TICKET_STAGE_RERUN[stage.label].stage,
-                                )
-                                  ? "skipped"
-                                  : workflowPauseOf(props.threads, stage.threads).paused
-                                    ? "paused"
-                                    : stage.detail}
-                              </span>
-                              {stage.label === "App Review" && appReviewRun ? (
-                                <button
-                                  type="button"
-                                  onClick={props.onOpenAppReview}
-                                  className="cursor-pointer ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] hover:bg-accent hover:text-foreground"
-                                >
-                                  Results <Eye className="size-3" aria-hidden />
-                                </button>
-                              ) : null}
-                              <WorkflowStepSettingsMenu
-                                environmentId={props.environmentId}
-                                scopeNoun="stage"
-                                stepLabel={`${ticket.key ?? `Ticket ${ticket.ordinal + 1}`} · ${stage.label}`}
-                                workflowPromptId={
-                                  TICKET_STAGE_RERUN[stage.label].pinKey.workflowPromptId
-                                }
-                                subSteps={[]}
-                                pinFor={props.pinFor}
-                                usesRootThread={false}
-                                rootModelSelection={props.rootModelSelection}
-                                restartLabel={`Start ${stage.label} again`}
-                                restartDisabledReason={ticketStageRerunDisabledReason({
-                                  stageLabel: stage.label,
-                                  threads: stage.threads,
-                                  appReviewRun,
-                                })}
-                                runningThreadIds={runningThreadIdsOf(props.threads, stage.threads)}
-                                pausedScopeThreadIds={
-                                  workflowPauseOf(props.threads, stage.threads).scopeThreadIds
-                                }
-                                onSetStepModel={props.onSetStepModel}
-                                onStop={props.onStopThreads}
-                                onResume={props.onResumeThreads}
-                                onRestart={
-                                  props.onRerunTicketStage === undefined
-                                    ? undefined
-                                    : () =>
-                                        props.onRerunTicketStage?.({
-                                          ticketId: ticket.id,
-                                          stage: TICKET_STAGE_RERUN[stage.label].stage,
-                                        })
-                                }
-                                clearDisabledReason={ticketStageRerunDisabledReason({
-                                  stageLabel: stage.label,
-                                  threads: stage.threads,
-                                  appReviewRun,
-                                })}
-                                onClear={
-                                  props.onResetTicketStage === undefined
-                                    ? undefined
-                                    : () =>
-                                        props.onResetTicketStage?.({
-                                          ticketId: ticket.id,
-                                          stage: TICKET_STAGE_RERUN[stage.label].stage,
-                                        })
-                                }
-                                skipped={isTicketStageSkipped(
-                                  props.skips,
-                                  ticket.id,
-                                  TICKET_STAGE_RERUN[stage.label].stage,
+                        {stages.map((stage, stageIndex) => {
+                          const stageSkipped = isTicketStageSkipped(
+                            props.skips,
+                            ticket.id,
+                            TICKET_STAGE_RERUN[stage.label].stage,
+                          );
+                          const stagePaused = workflowPauseOf(props.threads, stage.threads).paused;
+                          const stageStatus = stageSkipped
+                            ? "skipped"
+                            : stagePaused
+                              ? "paused"
+                              : resolveWorkflowStageDetailStatus(stage.detail);
+                          const stageDetail = stageSkipped
+                            ? "skipped"
+                            : stagePaused
+                              ? "paused"
+                              : stage.detail;
+                          return (
+                            <section key={stage.label} className="relative">
+                              <span
+                                className={cn(
+                                  "absolute -left-[1.05rem] top-1 flex size-4 items-center justify-center rounded-full border border-border bg-background text-[9px] font-medium",
+                                  STEP_VISUALS[stageStatus].textClass,
                                 )}
-                                onSetSkipped={
-                                  props.onSetTicketSkip === undefined
-                                    ? undefined
-                                    : (skipped) =>
-                                        props.onSetTicketSkip?.({
-                                          ticketId: ticket.id,
-                                          stage: TICKET_STAGE_RERUN[stage.label].stage,
-                                          skipped,
-                                        })
-                                }
-                              />
-                            </div>
-                            {stage.label === "App Review" && appReviewRun ? (
-                              <TicketAppReviewCycles
-                                run={appReviewRun}
-                                onStopThreads={props.onStopThreads}
-                                onResumeThreads={props.onResumeThreads}
-                                callerBusyReason={
-                                  [...implementationThreads, ...codeReviewThreads].some(
-                                    (thread) =>
-                                      thread.session?.status === "starting" ||
-                                      thread.session?.status === "running",
-                                  )
-                                    ? "This ticket has an agent working in the same worktree. Stop it before starting a phase again."
-                                    : null
-                                }
-                                environmentId={props.environmentId}
-                                rootModelSelection={props.rootModelSelection}
-                                pinFor={props.pinFor}
-                                onSetStepModel={props.onSetStepModel}
-                                onRerunPhase={
-                                  props.onRerunAppReviewPhase === undefined
-                                    ? undefined
-                                    : (phase) =>
-                                        props.onRerunAppReviewPhase?.({
-                                          appReviewRunId: appReviewRun.id,
-                                          phase,
-                                        })
-                                }
-                                threads={props.threads}
-                                onOpenThread={props.onOpenThread}
-                                activeThreadKey={props.activeThreadKey}
-                                timestampFormat={props.timestampFormat}
-                              />
-                            ) : stage.threads.length > 0 ? (
-                              <ThreadRowList
-                                threads={stage.threads}
-                                timestampFormat={props.timestampFormat}
-                                activeThreadKey={props.activeThreadKey}
-                                onOpenThread={props.onOpenThread}
-                              />
-                            ) : (
-                              <div className="py-1 text-[10px] text-muted-foreground/65">
-                                No thread created
+                              >
+                                {stageIndex + 1}
+                              </span>
+                              <div className="mb-1 flex items-center gap-1.5 text-[11px]">
+                                <StatusDot status={stageStatus} className="size-1.5" />
+                                <span
+                                  className={cn(
+                                    "font-medium",
+                                    stageStatus === "skipped"
+                                      ? "text-muted-foreground line-through"
+                                      : "text-foreground",
+                                  )}
+                                >
+                                  {stage.label}
+                                </span>
+                                <span
+                                  className={cn("capitalize", STEP_VISUALS[stageStatus].textClass)}
+                                >
+                                  · {stageDetail}
+                                </span>
+                                {stage.label === "App Review" && appReviewRun ? (
+                                  <button
+                                    type="button"
+                                    onClick={props.onOpenAppReview}
+                                    className="cursor-pointer ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] hover:bg-accent hover:text-foreground"
+                                  >
+                                    Results <Eye className="size-3" aria-hidden />
+                                  </button>
+                                ) : null}
+                                <WorkflowStepSettingsMenu
+                                  environmentId={props.environmentId}
+                                  scopeNoun="stage"
+                                  stepLabel={`${ticket.key ?? `Ticket ${ticket.ordinal + 1}`} · ${stage.label}`}
+                                  workflowPromptId={
+                                    TICKET_STAGE_RERUN[stage.label].pinKey.workflowPromptId
+                                  }
+                                  subSteps={[]}
+                                  pinFor={props.pinFor}
+                                  usesRootThread={false}
+                                  rootModelSelection={props.rootModelSelection}
+                                  restartLabel={`Start ${stage.label} again`}
+                                  restartDisabledReason={ticketStageRerunDisabledReason({
+                                    stageLabel: stage.label,
+                                    threads: stage.threads,
+                                    appReviewRun,
+                                  })}
+                                  runningThreadIds={runningThreadIdsOf(
+                                    props.threads,
+                                    stage.threads,
+                                  )}
+                                  pausedScopeThreadIds={
+                                    workflowPauseOf(props.threads, stage.threads).scopeThreadIds
+                                  }
+                                  onSetStepModel={props.onSetStepModel}
+                                  onStop={props.onStopThreads}
+                                  onResume={props.onResumeThreads}
+                                  onRestart={
+                                    props.onRerunTicketStage === undefined
+                                      ? undefined
+                                      : () =>
+                                          props.onRerunTicketStage?.({
+                                            ticketId: ticket.id,
+                                            stage: TICKET_STAGE_RERUN[stage.label].stage,
+                                          })
+                                  }
+                                  clearDisabledReason={ticketStageRerunDisabledReason({
+                                    stageLabel: stage.label,
+                                    threads: stage.threads,
+                                    appReviewRun,
+                                  })}
+                                  onClear={
+                                    props.onResetTicketStage === undefined
+                                      ? undefined
+                                      : () =>
+                                          props.onResetTicketStage?.({
+                                            ticketId: ticket.id,
+                                            stage: TICKET_STAGE_RERUN[stage.label].stage,
+                                          })
+                                  }
+                                  skipped={isTicketStageSkipped(
+                                    props.skips,
+                                    ticket.id,
+                                    TICKET_STAGE_RERUN[stage.label].stage,
+                                  )}
+                                  onSetSkipped={
+                                    props.onSetTicketSkip === undefined
+                                      ? undefined
+                                      : (skipped) =>
+                                          props.onSetTicketSkip?.({
+                                            ticketId: ticket.id,
+                                            stage: TICKET_STAGE_RERUN[stage.label].stage,
+                                            skipped,
+                                          })
+                                  }
+                                />
                               </div>
-                            )}
-                          </section>
-                        ))}
+                              {stage.label === "App Review" && appReviewRun ? (
+                                <TicketAppReviewCycles
+                                  run={appReviewRun}
+                                  onStopThreads={props.onStopThreads}
+                                  onResumeThreads={props.onResumeThreads}
+                                  callerBusyReason={
+                                    [...implementationThreads, ...codeReviewThreads].some(
+                                      (thread) =>
+                                        thread.session?.status === "starting" ||
+                                        thread.session?.status === "running",
+                                    )
+                                      ? "This ticket has an agent working in the same worktree. Stop it before starting a phase again."
+                                      : null
+                                  }
+                                  environmentId={props.environmentId}
+                                  rootModelSelection={props.rootModelSelection}
+                                  pinFor={props.pinFor}
+                                  onSetStepModel={props.onSetStepModel}
+                                  onRerunPhase={
+                                    props.onRerunAppReviewPhase === undefined
+                                      ? undefined
+                                      : (phase) =>
+                                          props.onRerunAppReviewPhase?.({
+                                            appReviewRunId: appReviewRun.id,
+                                            phase,
+                                          })
+                                  }
+                                  threads={props.threads}
+                                  onOpenThread={props.onOpenThread}
+                                  activeThreadKey={props.activeThreadKey}
+                                  timestampFormat={props.timestampFormat}
+                                />
+                              ) : stage.threads.length > 0 ? (
+                                <ThreadRowList
+                                  threads={stage.threads}
+                                  timestampFormat={props.timestampFormat}
+                                  activeThreadKey={props.activeThreadKey}
+                                  onOpenThread={props.onOpenThread}
+                                />
+                              ) : (
+                                <div className="py-1 text-[10px] text-muted-foreground/65">
+                                  No thread created
+                                </div>
+                              )}
+                            </section>
+                          );
+                        })}
                       </div>
                     </div>
                   ) : null}
@@ -1593,13 +1812,6 @@ function WorkflowGroupCard(props: {
       : props.tickets.filter((ticket) =>
           linkedImplementationRun.planningTicketIds.includes(ticket.id),
         );
-  const status =
-    linkedImplementationRun?.status === "needs-human-attention"
-      ? "failed"
-      : linkedAppReviewRun === null
-        ? groupStatus(group)
-        : runPresentation.status;
-  const visual = STATUS_VISUALS[status];
   // Pins are keyed by step *and* sub-step: the same agent prompt appears under
   // more than one step, so a bare prompt id would collide.
   const stepModelByPinKey = new Map(
@@ -1641,6 +1853,84 @@ function WorkflowGroupCard(props: {
     ...props.groups.flatMap((candidate) => candidate.rows.map((row) => row.thread)),
   ];
 
+  const retryableFailure = linkedImplementationRun?.retryableFailure ?? null;
+  const planningStage = props.workflowRoot.planningWorkflowSummary?.stage ?? null;
+  // The stage the run is sitting at right now, which is what tells a step that
+  // owns no agent of its own whether the run has reached it, passed it, or has
+  // not got there yet.
+  const currentImplementationStage =
+    linkedImplementationRun === null
+      ? null
+      : implementationRunCurrentStage(linkedImplementationRun);
+  const stepStatusById = new Map(
+    steps.map((step) => {
+      const planningProgress =
+        workflowStepPhase(step) === "Planning" && planningStage !== null
+          ? planningStepProgress(step, planningStage)
+          : null;
+      const progress =
+        planningProgress !== null
+          ? (planningProgress.toLowerCase() as "completed" | "current" | "upcoming")
+          : currentImplementationStage !== null &&
+              workflowStepMatchesImplementationFailure(step, currentImplementationStage)
+            ? ("current" as const)
+            : null;
+      const runStage = rerunRunStageForStep(step);
+      const stepThreads = collectStepThreads(step, props.workflowRoot.id);
+      return [
+        step.id,
+        resolveWorkflowStepStatus({
+          threadStatuses: stepThreads.map(resolveWorkflowThreadStatus),
+          skipped:
+            runStage !== null &&
+            linkedImplementationRun !== null &&
+            isRunStageSkipped(linkedImplementationRun.skips, runStage),
+          blocked:
+            linkedImplementationRun?.status === "needs-human-attention" &&
+            retryableFailure !== null &&
+            workflowStepMatchesImplementationFailure(step, retryableFailure.stage),
+          // A run-wide pause reads as paused only on the step it stopped at.
+          // Marking every step paused would bury the one a resume re-enters.
+          paused:
+            workflowPauseOf(workflowThreads, stepThreads).paused ||
+            (workflowPaused && progress === "current"),
+          progress,
+        }),
+      ] as const;
+    }),
+  );
+  const stepStatusOf = (step: WorkflowTimelineStep<EnvironmentThreadShell>): WorkflowStepStatus =>
+    stepStatusById.get(step.id) ?? "pending";
+  const groupStepStatus = resolveWorkflowStepRollup(steps.map(stepStatusOf));
+  /** The step a collapsed row points at: whatever is holding the run up. */
+  const liveStepOf = (
+    candidates: readonly WorkflowTimelineStep<EnvironmentThreadShell>[],
+  ): WorkflowTimelineStep<EnvironmentThreadShell> | null =>
+    candidates.find((step) => stepStatusOf(step) === "blocked") ??
+    candidates.find((step) => stepStatusOf(step) === "awaiting") ??
+    candidates.find((step) => stepStatusOf(step) === "running") ??
+    candidates.find((step) => stepStatusOf(step) === "paused") ??
+    null;
+  const currentStep = liveStepOf(steps);
+  // The card's own color: a run that stopped for a human outranks everything,
+  // then a pause on the whole workflow, then the most demanding step under it.
+  const headerStatus: WorkflowStepStatus =
+    linkedImplementationRun?.status === "needs-human-attention"
+      ? "blocked"
+      : workflowPaused
+        ? "paused"
+        : linkedAppReviewRun !== null
+          ? threadStatusAsStepStatus(runPresentation.status)
+          : steps.length > 0
+            ? groupStepStatus
+            : threadStatusAsStepStatus(groupStatus(group));
+  const headerLabel =
+    headerStatus === "blocked"
+      ? "Needs attention"
+      : linkedAppReviewRun !== null && runPresentation.label !== null && !workflowPaused
+        ? runPresentation.label
+        : STEP_VISUALS[headerStatus].label;
+
   return (
     <div className={cn("relative", props.nested && "ml-3 my-1.5")}>
       {props.nested ? (
@@ -1675,13 +1965,26 @@ function WorkflowGroupCard(props: {
             )}
             <span className="min-w-0 flex-1">
               <span className="flex items-center gap-2">
+                <StatusDot status={headerStatus} className="mt-0.5" />
                 <span className="min-w-0 flex-1 truncate text-sm font-medium">
                   {props.cycleLabel ?? groupTitle(group)}
                 </span>
-                <span className={cn("text-[11px]", visual.textClass)}>
-                  {runPresentation.label ?? visual.label}
+                <span className={cn("text-[11px]", STEP_VISUALS[headerStatus].textClass)}>
+                  {headerLabel}
                 </span>
               </span>
+              {currentStep ? (
+                <span
+                  className={cn(
+                    "mt-1 flex min-w-0 items-center gap-1.5 text-[11px]",
+                    STEP_VISUALS[headerStatus].textClass,
+                  )}
+                >
+                  <span className="shrink-0">{workflowStepPhase(currentStep)}</span>
+                  <span aria-hidden>·</span>
+                  <span className="min-w-0 truncate">{workflowStepLabel(currentStep)}</span>
+                </span>
+              ) : null}
               <span className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[11px] text-muted-foreground">
                 {group.depth > 0 ? (
                   <>
@@ -1737,13 +2040,12 @@ function WorkflowGroupCard(props: {
             {phases.map(([phase, availableSteps]) => {
               const phaseId = `${group.id}:${phase}`;
               const phaseOpen = expandedPhases[phaseId] ?? false;
-              const runningStep = availableSteps.find((step) =>
-                step.entries.some((entry) =>
-                  entry.kind === "thread"
-                    ? resolveWorkflowThreadStatus(entry.row.thread) === "working"
-                    : entry.group.isActive,
-                ),
-              );
+              const phaseStatuses = availableSteps.map(stepStatusOf);
+              const phaseStatus = resolveWorkflowPhaseStatus(phaseStatuses);
+              const phaseSettled = phaseStatuses.filter(
+                (status) => status === "done" || status === "skipped",
+              ).length;
+              const runningStep = liveStepOf(availableSteps);
               return (
                 <section key={phaseId} className="border-b border-border/70 last:border-b-0">
                   <button
@@ -1759,11 +2061,20 @@ function WorkflowGroupCard(props: {
                     ) : (
                       <ChevronRight className="size-3.5" />
                     )}
+                    <StatusDot status={phaseStatus} />
                     <span className="min-w-0 flex-1 text-xs font-semibold">{phase}</span>
-                    <span className="max-w-[55%] truncate text-[10px] text-muted-foreground">
-                      {runningStep
-                        ? workflowStepLabel(runningStep)
-                        : `${availableSteps.length} steps`}
+                    {runningStep ? (
+                      <span
+                        className={cn(
+                          "max-w-[45%] truncate text-[10px]",
+                          STEP_VISUALS[phaseStatus].textClass,
+                        )}
+                      >
+                        {workflowStepLabel(runningStep)}
+                      </span>
+                    ) : null}
+                    <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+                      {phaseSettled}/{phaseStatuses.length} done
                     </span>
                   </button>
                   {phaseOpen ? (
@@ -1791,13 +2102,6 @@ function WorkflowGroupCard(props: {
                           const planningRestartStage =
                             phase === "Planning" && props.workflowRoot.planningWorkflowSummary
                               ? restartablePlanningStage(
-                                  step,
-                                  props.workflowRoot.planningWorkflowSummary.stage,
-                                )
-                              : null;
-                          const planningProgress =
-                            phase === "Planning" && props.workflowRoot.planningWorkflowSummary
-                              ? planningStepProgress(
                                   step,
                                   props.workflowRoot.planningWorkflowSummary.stage,
                                 )
@@ -1863,8 +2167,21 @@ function WorkflowGroupCard(props: {
                                     run.caller.implementationRunId === linkedImplementationRun.id &&
                                     run.caller.ticketId === undefined,
                                 );
+                          const stepStatus = stepStatusOf(step);
+                          const stepVisual = STEP_VISUALS[stepStatus];
                           return (
-                            <section key={step.id} className="px-1 py-1">
+                            <section
+                              key={step.id}
+                              data-step-status={stepStatus}
+                              className={cn("relative px-1 py-1", stepVisual.tintClass)}
+                            >
+                              <span
+                                aria-hidden
+                                className={cn(
+                                  "absolute inset-y-1 left-0 w-[3px] rounded-full",
+                                  stepVisual.railClass,
+                                )}
+                              />
                               <header className="px-1">
                                 <div className="flex items-start gap-1">
                                   <button
@@ -1883,18 +2200,29 @@ function WorkflowGroupCard(props: {
                                     ) : (
                                       <ChevronRight className="mt-0.5 size-3.5 shrink-0" />
                                     )}
+                                    <StatusDot status={stepStatus} className="mt-1" />
                                     <div className="min-w-0 flex-1">
-                                      <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                                        Step {index + 1}
+                                      <div className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wider">
+                                        <span className="text-muted-foreground">
+                                          Step {index + 1}
+                                        </span>
+                                        <span aria-hidden className="text-muted-foreground/50">
+                                          ·
+                                        </span>
+                                        <span className={stepVisual.textClass}>
+                                          {stepVisual.label}
+                                        </span>
                                       </div>
-                                      <h4 className="truncate text-sm font-semibold text-foreground">
+                                      <h4
+                                        className={cn(
+                                          "truncate text-sm font-semibold",
+                                          stepStatus === "skipped"
+                                            ? "text-muted-foreground line-through"
+                                            : "text-foreground",
+                                        )}
+                                      >
                                         {workflowStepLabel(step)}
                                       </h4>
-                                      {planningProgress ? (
-                                        <div className="mt-0.5 text-[10px] text-muted-foreground">
-                                          {planningProgress}
-                                        </div>
-                                      ) : null}
                                     </div>
                                   </button>
                                   {step.skillId ? (
@@ -2258,8 +2586,10 @@ export function WorkflowsPanel(props: {
               {groups
                 .filter((group) => group.parentGroupId === null)
                 .map((group) => {
-                  const status = groupStatus(group);
-                  const visual = STATUS_VISUALS[status];
+                  const chipStatus =
+                    workflow.root.workflowPausedAt != null
+                      ? "paused"
+                      : threadStatusAsStepStatus(groupStatus(group));
                   const activeStep = buildWorkflowSteps(group, groups, workflow.root).find((step) =>
                     step.entries.some((entry) =>
                       entry.kind === "thread"
@@ -2279,15 +2609,22 @@ export function WorkflowsPanel(props: {
                       }}
                       className="cursor-pointer flex min-w-36 shrink-0 items-start gap-2 rounded-md border border-border/70 px-2.5 py-2 text-left hover:bg-accent"
                     >
-                      <span className={cn("mt-1 size-2 shrink-0 rounded-full", visual.dotClass)} />
+                      <StatusDot status={chipStatus} className="mt-1" />
                       <span className="min-w-0">
                         <span className="block truncate text-xs font-medium">
                           {groupTitle(group)}
                         </span>
-                        <span className="block truncate text-[10px] text-muted-foreground">
+                        <span
+                          className={cn(
+                            "block truncate text-[10px]",
+                            activeStep === undefined
+                              ? STEP_VISUALS[chipStatus].textClass
+                              : "text-muted-foreground",
+                          )}
+                        >
                           {activeStep
                             ? `${workflowStepPhase(activeStep)} · ${workflowStepLabel(activeStep)}`
-                            : visual.label}
+                            : STEP_VISUALS[chipStatus].label}
                         </span>
                       </span>
                     </button>

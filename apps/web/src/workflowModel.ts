@@ -737,6 +737,191 @@ export function resolveWorkflowRollupStatus(
   return highest;
 }
 
+/**
+ * What one row of the Workflows panel is doing, as the panel colors it.
+ *
+ * Wider than a thread's own status because a row is not always a thread. A
+ * step can be skipped, paused, waiting on the step before it, or sitting at a
+ * stage that has not started an agent yet, and those read very differently to
+ * someone scanning the panel for the thing to act on.
+ */
+export type WorkflowStepStatus =
+  | "pending"
+  | "queued"
+  | "running"
+  | "awaiting"
+  | "blocked"
+  | "paused"
+  | "skipped"
+  | "failed"
+  | "stopped"
+  | "done";
+
+/** Most demanding first: what a row rolls up to when it holds several states. */
+const WORKFLOW_STEP_STATUS_PRIORITY: readonly WorkflowStepStatus[] = [
+  "blocked",
+  "awaiting",
+  "failed",
+  "running",
+  "paused",
+  "stopped",
+  "queued",
+  "pending",
+  "skipped",
+  "done",
+];
+
+/** The states that are worth a color because someone is waiting on them. */
+const WORKFLOW_STEP_STATUS_DEMANDING: ReadonlySet<WorkflowStepStatus> = new Set([
+  "blocked",
+  "awaiting",
+  "failed",
+  "running",
+  "paused",
+  "stopped",
+]);
+
+export interface WorkflowStepStatusInput {
+  /** Statuses of the threads the step owns, excluding the workflow root. */
+  readonly threadStatuses: readonly WorkflowThreadStatus[];
+  readonly skipped?: boolean;
+  readonly paused?: boolean;
+  /** The run stopped here and cannot go on until a human intervenes. */
+  readonly blocked?: boolean;
+  /**
+   * Where the workflow's own progress puts this step. Steps that run in the
+   * main thread own no agent to read a status from, so this is the only thing
+   * that says whether they are ahead of the run or behind it.
+   */
+  readonly progress?: "completed" | "current" | "upcoming" | null;
+}
+
+export function resolveWorkflowStepStatus(input: WorkflowStepStatusInput): WorkflowStepStatus {
+  if (input.skipped === true) return "skipped";
+  if (input.blocked === true) return "blocked";
+  if (input.paused === true) return "paused";
+  const has = (status: WorkflowThreadStatus) => input.threadStatuses.includes(status);
+  if (has("approval") || has("input")) return "awaiting";
+  if (has("working") || has("monitoring")) return "running";
+  // A settled agent under a stage the run is still sitting at means the run is
+  // between attempts here, not finished with the step. Reading the settled
+  // thread instead would call the live step done and color the next one wrong.
+  if (input.progress === "current") return "running";
+  if (has("failed")) return "failed";
+  if (has("stopped")) return "stopped";
+  if (input.threadStatuses.length > 0) return "done";
+  if (input.progress === "completed") return "done";
+  return "pending";
+}
+
+/**
+ * The single status a row of several shows, ranked by what it asks of the user.
+ *
+ * Used where the row is one piece of work split across parts, such as a ticket
+ * wave: the wave is only done once its last ticket is, and one blocked ticket
+ * is the thing the user needs to see.
+ */
+export function resolveWorkflowStepRollup(
+  statuses: readonly WorkflowStepStatus[],
+): WorkflowStepStatus {
+  if (statuses.length === 0) return "pending";
+  return (
+    WORKFLOW_STEP_STATUS_PRIORITY.find((candidate) => statuses.includes(candidate)) ?? "pending"
+  );
+}
+
+/**
+ * The status a phase shows for the steps under it.
+ *
+ * A phase reports the most demanding thing under it, so one blocked step is
+ * never hidden by the four beside it that are fine. With nothing demanding
+ * left it claims done only once every step is done or skipped; a phase that is
+ * part way through with nothing running reports as not started and leaves its
+ * step count to say how far it got.
+ */
+export function resolveWorkflowPhaseStatus(
+  statuses: readonly WorkflowStepStatus[],
+): WorkflowStepStatus {
+  if (statuses.length === 0) return "pending";
+  const demanding = statuses.filter((status) => WORKFLOW_STEP_STATUS_DEMANDING.has(status));
+  if (demanding.length > 0) return resolveWorkflowStepRollup(demanding);
+  return statuses.every((status) => status === "done" || status === "skipped") ? "done" : "pending";
+}
+
+/**
+ * The status one ticket row of an implementation run shows.
+ *
+ * The run's own ticket state says whether a ticket is waiting on its
+ * dependencies, done, or failed; the ticket's threads say whether it is
+ * waiting on the user right now. Neither alone describes the row.
+ */
+export function resolveWorkflowTicketStatus(input: {
+  readonly ticketState: string | null;
+  readonly threadStatuses: readonly WorkflowThreadStatus[];
+  readonly skipped: boolean;
+  readonly paused: boolean;
+}): WorkflowStepStatus {
+  if (input.skipped) return "skipped";
+  if (input.paused) return "paused";
+  if (input.threadStatuses.includes("approval") || input.threadStatuses.includes("input")) {
+    return "awaiting";
+  }
+  switch (input.ticketState) {
+    // A run marks a ticket blocked while its dependencies are still building,
+    // which is a queue rather than something the user has to unblock.
+    case "blocked":
+      return "queued";
+    case "ready":
+      return "pending";
+    case "running":
+    case "app-reviewing":
+    case "code-reviewing":
+      return "running";
+    case "succeeded":
+      return "done";
+    case "failed":
+      return "failed";
+    default:
+      return resolveWorkflowStepStatus({ threadStatuses: input.threadStatuses });
+  }
+}
+
+/**
+ * The status behind one ticket stage's reported detail.
+ *
+ * `implementationTicketStageDetails` writes the words the row already shows,
+ * so this only decides the color beside them rather than restating them.
+ */
+export function resolveWorkflowStageDetailStatus(detail: string): WorkflowStepStatus {
+  const value = detail.toLowerCase();
+  if (value.startsWith("skipped")) return "skipped";
+  if (
+    value === "running" ||
+    value === "in review" ||
+    value === "in progress" ||
+    value === "reviewing" ||
+    value === "planning" ||
+    value === "fixing"
+  ) {
+    return "running";
+  }
+  if (
+    value === "succeeded" ||
+    value === "passed" ||
+    value === "clean" ||
+    value === "completed" ||
+    // Gap analysis reports the repair tickets it wrote, which is its outcome.
+    /^\d+ tickets?$/.test(value)
+  ) {
+    return "done";
+  }
+  if (value === "failed" || value === "review-failed" || value === "exhausted") return "failed";
+  if (value === "blocked") return "blocked";
+  // A review that landed findings is waiting on the fix its run will make.
+  if (value === "findings") return "awaiting";
+  return "pending";
+}
+
 export function resolveWorkflowLifecycle<TThread extends WorkflowModelThread>(
   members: readonly TThread[],
   classify: (thread: TThread) => "active" | "snoozed" | "settled",
