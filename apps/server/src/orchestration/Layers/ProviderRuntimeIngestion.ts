@@ -130,6 +130,13 @@ export const MAX_PRODUCT_INTENT_LOCK_REJECTION_BOUNCES = 3;
  * letting a reviewer that cannot produce a verdict at all stall the stage.
  */
 export const MAX_PLANNING_REVIEWER_VERDICT_RETRIES = 2;
+/**
+ * How many times a planning root thread is handed its rejected Spec or Ticket artifact back for
+ * re-emission. Past this the thread surfaces a needs-attention activity instead of retrying, so a
+ * model that cannot produce the shape at all does not loop forever. Without any retry the stage
+ * stalls silently: the rejection was only a server-side WARN while the thread sat "ready".
+ */
+export const MAX_PLANNING_ARTIFACT_RETRIES = 2;
 
 /**
  * Server-synthesized user messages carry the `message-` prefix (see `serverMessageId` and the
@@ -2605,6 +2612,91 @@ const make = Effect.gen(function* () {
     });
   });
 
+  // A planning root thread whose Spec or Ticket artifact is rejected gets the parser's complaint
+  // back as a retry turn, mirroring the reviewer-verdict retry above. Without this the stage
+  // stalls silently: the rejection was a WARN log, the model got no feedback, and the thread sat
+  // "ready" until the session reaper collected it.
+  const consumePlanningArtifactFailure = Effect.fn(
+    "ProviderRuntimeIngestion.consumePlanningArtifactFailure",
+  )(function* (input: {
+    readonly event: ProviderRuntimeEvent;
+    readonly threadId: ThreadId;
+    readonly messageId: MessageId;
+    readonly detail: string;
+    readonly createdAt: string;
+    /** Aligns the retry with the turn that produced the bad artifact, so one turn buys one retry. */
+    readonly dedupeScope?: string;
+  }) {
+    const thread = yield* resolveThreadDetail(input.threadId);
+    if (!thread || !isPlanningArtifactThread(thread)) return;
+    const stage = thread.planningWorkflow?.stage;
+    if (stage !== "spec-authoring" && stage !== "tickets-authoring") return;
+    const directiveType =
+      stage === "spec-authoring" ? "planning-spec-artifact" : "planning-tickets-artifact";
+
+    const retryKey = `${input.threadId}:${stage}:${input.dedupeScope ?? input.messageId}:planning-artifact-retry`;
+    const retried = yield* Cache.getOption(processedWorkflowDirectiveKeys, retryKey);
+    if (Option.getOrElse(retried, () => false)) return;
+    yield* Cache.set(processedWorkflowDirectiveKeys, retryKey, true);
+
+    const priorRejections = thread.activities.filter(
+      (activity) =>
+        activity.kind === "workflow.directive.rejected" &&
+        (activity.payload as { directiveType?: string } | null)?.directiveType === directiveType,
+    ).length;
+    yield* appendWorkflowDirectiveRejectedActivity({
+      event: input.event,
+      threadId: thread.id,
+      directiveType,
+      summary:
+        stage === "spec-authoring"
+          ? "Planning Spec artifact rejected"
+          : "Planning Ticket artifact rejected",
+      detail: input.detail,
+      createdAt: input.createdAt,
+    });
+
+    if (priorRejections >= MAX_PLANNING_ARTIFACT_RETRIES) {
+      yield* orchestrationEngine.dispatch({
+        type: "thread.activity.append",
+        commandId: yield* providerCommandId(input.event, "planning-artifact-blocked"),
+        threadId: thread.id,
+        activity: {
+          id: EventId.make(yield* crypto.randomUUIDv4),
+          tone: "error",
+          kind: "planning-workflow.needs-human-attention",
+          summary: "Planning workflow needs human attention",
+          payload: {
+            reasonMarkdown: `The ${directiveType} directive was rejected ${priorRejections + 1} times. Latest rejection: ${input.detail}`,
+          },
+          turnId: null,
+          createdAt: input.createdAt,
+        },
+        createdAt: input.createdAt,
+      });
+      return;
+    }
+
+    yield* orchestrationEngine.dispatch({
+      type: "thread.turn.start",
+      commandId: yield* providerCommandId(input.event, "workflow-planning-artifact-retry"),
+      threadId: thread.id,
+      message: {
+        messageId: yield* serverMessageId("planning-artifact-retry"),
+        role: "user",
+        text: [
+          `Your ${directiveType} directive was rejected: ${input.detail}`,
+          "",
+          "Nothing was applied. Correct exactly this problem and re-emit the complete artifact as one fenced JSON block in the shape the stage instructions describe. Do not redo the analysis.",
+        ].join("\n"),
+        attachments: [],
+      },
+      runtimeMode: thread.runtimeMode,
+      interactionMode: thread.interactionMode,
+      createdAt: input.createdAt,
+    });
+  });
+
   const consumeFastFeatureBuildFailure = Effect.fn(
     "ProviderRuntimeIngestion.consumeFastFeatureBuildFailure",
   )(function* (input: {
@@ -2805,6 +2897,10 @@ const make = Effect.gen(function* () {
           detail: parseResult.message,
         });
         if (synthesizeFailure) {
+          yield* consumePlanningArtifactFailure({
+            ...failureInput,
+            detail: parseResult.message,
+          });
           yield* consumePlanningReviewerFailure({
             ...failureInput,
             detail: `Reviewer directive was rejected: ${parseResult.message}`,
@@ -3008,7 +3104,35 @@ const make = Effect.gen(function* () {
           : thread?.workflowRole === "implementation-fixer"
             ? "implementation-fix-result"
             : null;
-    if (thread === undefined || expectedDirectiveType === null) return;
+    if (thread === undefined) return;
+
+    if (expectedDirectiveType === null) {
+      // A planning root thread in an artifact stage gets a rejected artifact handed back as a
+      // retry. Turns that end without attempting a directive are ordinary conversation and stay
+      // quiet, and an aborted turn was stopped on purpose — no retry behind the user's back.
+      const stage = thread.planningWorkflow?.stage;
+      if (
+        input.event.type === "turn.completed" &&
+        isPlanningArtifactThread(thread) &&
+        (stage === "spec-authoring" || stage === "tickets-authoring")
+      ) {
+        const lastArtifactMessage = findLastAssistantMessageForTurn(thread.messages, input.turnId);
+        const artifactParseResult = parseWorkflowDirectiveFromMarkdown(
+          lastArtifactMessage?.text ?? "",
+        );
+        if (artifactParseResult.kind === "error") {
+          yield* consumePlanningArtifactFailure({
+            event: input.event,
+            threadId: input.threadId,
+            messageId: lastArtifactMessage?.id ?? MessageId.make(`assistant:${input.turnId}`),
+            dedupeScope: input.turnId,
+            createdAt: input.createdAt,
+            detail: artifactParseResult.message,
+          });
+        }
+      }
+      return;
+    }
 
     const lastAssistantMessage = findLastAssistantMessageForTurn(thread.messages, input.turnId);
     const parseResult = parseWorkflowDirectiveFromMarkdown(lastAssistantMessage?.text ?? "");

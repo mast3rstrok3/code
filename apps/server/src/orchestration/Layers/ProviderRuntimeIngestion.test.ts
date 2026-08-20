@@ -3842,6 +3842,103 @@ describe("ProviderRuntimeIngestion", () => {
     expect(failed.planningWorkflow?.reviewCycles[0]?.status).toBe("runtime-failed");
   });
 
+  it("retries a rejected planning artifact on the root thread, then flags for human attention", async () => {
+    const harness = await createHarness();
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    const planningThreadId = asThreadId("thread-planning-artifact-retry");
+
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-planning-artifact-retry-create"),
+        threadId: planningThreadId,
+        projectId: asProjectId("project-1"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+        parentThreadId: null,
+        workflowRole: "planning-orchestrator",
+        title: "Plan Checkout",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: "planning-workflow",
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.planning-workflow.stage.set",
+        commandId: CommandId.make("cmd-planning-artifact-retry-stage"),
+        threadId: planningThreadId,
+        stage: "spec-authoring",
+        createdAt,
+      }),
+    );
+
+    // The production stall: an artifact rejected over its shape was only a server-side WARN,
+    // so the stage sat open with the thread "ready". Each rejected turn buys one retry.
+    for (const attempt of [1, 2, 3]) {
+      harness.emit({
+        type: "item.completed",
+        eventId: asEventId(`evt-artifact-retry-${attempt}`),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt,
+        threadId: planningThreadId,
+        turnId: asTurnId(`turn-artifact-retry-${attempt}`),
+        itemId: asItemId(`item-artifact-retry-${attempt}`),
+        payload: {
+          itemType: "assistant_message",
+          status: "completed",
+          detail: '```json\n{ "type": "planning-spec-artifact", "title": "Checkout" }\n```',
+        },
+      });
+      harness.emit({
+        type: "turn.completed",
+        eventId: asEventId(`evt-artifact-retry-turn-${attempt}`),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt,
+        threadId: planningThreadId,
+        turnId: asTurnId(`turn-artifact-retry-${attempt}`),
+        payload: { state: "completed" },
+      });
+      if (attempt === 1) {
+        const retried = await waitForThread(
+          harness.readModel,
+          (thread) =>
+            thread.messages.some(
+              (message) =>
+                message.role === "user" &&
+                message.text.includes("planning-spec-artifact directive was rejected"),
+            ),
+          2_000,
+          planningThreadId,
+        );
+        const retryPrompt = retried.messages.find(
+          (message) =>
+            message.role === "user" &&
+            message.text.includes("planning-spec-artifact directive was rejected"),
+        );
+        expect(retryPrompt?.text).toContain("Nothing was applied");
+      }
+    }
+
+    const blocked = await waitForThread(
+      harness.readModel,
+      (thread) =>
+        thread.activities.some(
+          (activity) => activity.kind === "planning-workflow.needs-human-attention",
+        ),
+      2_000,
+      planningThreadId,
+    );
+    expect(
+      blocked.activities.filter((activity) => activity.kind === "workflow.directive.rejected"),
+    ).toHaveLength(3);
+  });
+
   it("creates workflow sub-agent threads from provider directives", async () => {
     const harness = await createHarness();
     const createdAt = "2026-01-01T00:00:00.000Z";
