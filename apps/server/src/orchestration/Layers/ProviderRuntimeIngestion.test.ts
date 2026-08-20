@@ -4046,6 +4046,153 @@ describe("ProviderRuntimeIngestion", () => {
     expect(child?.failureDetail).toContain("only feedback-mode browser lanes");
   });
 
+  it("records App Review repair tickets emitted by the gap analysis planner", async () => {
+    const harness = await createHarness();
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    const plannerThreadId = asThreadId("thread-app-review-planner-tickets");
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-app-review-planner-tickets-create"),
+        threadId: plannerThreadId,
+        projectId: asProjectId("project-1"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+        parentThreadId: null,
+        workflowRole: "app-review-planner",
+        title: "App Review gap analysis 8",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: "default",
+        runtimeMode: "full-access",
+        branch: "feature/review",
+        worktreePath: "/tmp/app-review-planner",
+        createdAt,
+      }),
+    );
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-planner-repair-tickets"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt,
+      threadId: plannerThreadId,
+      turnId: asTurnId("turn-planner-repair-tickets"),
+      itemId: asItemId("item-planner-repair-tickets"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail: `\`\`\`json
+{
+  "type": "app-review-repair-tickets",
+  "runId": "app-review-workflow-run-1",
+  "cycleNumber": 8,
+  "tickets": [
+    {
+      "key": "TICKET-1.1",
+      "parentTicketKey": "TICKET-1",
+      "title": "Reflow the capture banner at narrow widths",
+      "bodyMarkdown": "What to build and acceptance criteria.",
+      "dependencyKeys": []
+    }
+  ]
+}
+\`\`\``,
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) =>
+        entry.activities.some(
+          (activity: ProviderRuntimeTestActivity) => activity.kind === "app-review-repair-tickets",
+        ),
+      2_000,
+      plannerThreadId,
+    );
+    const activity = thread.activities.find(
+      (entry: ProviderRuntimeTestActivity) => entry.kind === "app-review-repair-tickets",
+    );
+    const payload =
+      activity?.payload && typeof activity.payload === "object"
+        ? (activity.payload as Record<string, unknown>)
+        : undefined;
+
+    expect(payload?.["runId"]).toBe("app-review-workflow-run-1");
+    expect(payload?.["cycleNumber"]).toBe(8);
+    expect(Array.isArray(payload?.["tickets"]) ? payload["tickets"].length : 0).toBe(1);
+  });
+
+  it("ignores App Review repair tickets from a thread outside the review workflow", async () => {
+    const harness = await createHarness();
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    const workerThreadId = asThreadId("thread-app-review-tickets-wrong-role");
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-app-review-tickets-wrong-role-create"),
+        threadId: workerThreadId,
+        projectId: asProjectId("project-1"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+        parentThreadId: null,
+        workflowRole: "implementation-worker",
+        title: "Implementation Worker",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: "implementation-workflow",
+        runtimeMode: "full-access",
+        branch: "feature/review",
+        worktreePath: "/tmp/app-review-wrong-role",
+        createdAt,
+      }),
+    );
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-wrong-role-repair-tickets"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt,
+      threadId: workerThreadId,
+      turnId: asTurnId("turn-wrong-role-repair-tickets"),
+      itemId: asItemId("item-wrong-role-repair-tickets"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail: `\`\`\`json
+{
+  "type": "app-review-repair-tickets",
+  "runId": "app-review-workflow-run-1",
+  "cycleNumber": 8,
+  "tickets": [
+    {
+      "key": "TICKET-1.1",
+      "parentTicketKey": "TICKET-1",
+      "title": "Reflow the capture banner at narrow widths",
+      "bodyMarkdown": "What to build and acceptance criteria.",
+      "dependencyKeys": []
+    }
+  ]
+}
+\`\`\``,
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) => entry.messages.length > 0,
+      2_000,
+      workerThreadId,
+    );
+    expect(
+      thread.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.kind === "app-review-repair-tickets",
+      ),
+    ).toBe(false);
+  });
+
   it("launches all 50 focused browser reviewers in one durable batch", async () => {
     const harness = await createHarness();
     const createdAt = "2026-01-01T00:00:00.000Z";

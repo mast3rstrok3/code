@@ -2345,9 +2345,14 @@ const make = Effect.gen(function* () {
         }
 
         case "app-review-repair-tickets": {
-          if (thread.workflowRole !== "app-review-reviewer") {
+          // Gap analysis runs on the planner thread. Cycles recorded before it
+          // moved out of the reviewer still emit from there.
+          if (
+            thread.workflowRole !== "app-review-planner" &&
+            thread.workflowRole !== "app-review-reviewer"
+          ) {
             yield* Effect.logWarning(
-              "provider App Review repair tickets ignored for non-reviewer thread",
+              "provider App Review repair tickets ignored for non-planner thread",
               { threadId: thread.id, workflowRole: thread.workflowRole },
             );
             return;
