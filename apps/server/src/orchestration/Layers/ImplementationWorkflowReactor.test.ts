@@ -49,6 +49,7 @@ import {
   implementationTicketStateIsTerminal,
   failImplementationTickets,
   ImplementationWorkflowReactorLive,
+  nestedAppReviewAwaitsPreviewRefresh,
   passedAppReviewContinuation,
   workflowIdForRun,
 } from "./ImplementationWorkflowReactor.ts";
@@ -78,6 +79,36 @@ it("treats reviewed successes and best-effort failures as terminal tickets", () 
   expect(implementationTicketStateIsTerminal("failed")).toBe(true);
   expect(implementationTicketStateIsTerminal("app-reviewing")).toBe(false);
   expect(implementationTicketStateIsTerminal("code-reviewing")).toBe(false);
+});
+
+it("knows when an embedded App Review is parked awaiting a preview refresh", () => {
+  const parked = {
+    caller: { type: "implementation", implementationRunId: "run-1", ticketId: "ticket-1" },
+    status: "running",
+    activePhase: null,
+    cycles: [{ cycleNumber: 1, status: "completed", fixResult: { status: "succeeded" } }],
+  } as unknown as Parameters<typeof nestedAppReviewAwaitsPreviewRefresh>[0];
+  expect(nestedAppReviewAwaitsPreviewRefresh(parked)).toBe(true);
+  expect(
+    nestedAppReviewAwaitsPreviewRefresh({
+      ...parked,
+      caller: { type: "standalone", sourceThreadId: "thread-1" },
+    } as unknown as Parameters<typeof nestedAppReviewAwaitsPreviewRefresh>[0]),
+  ).toBe(false);
+  expect(nestedAppReviewAwaitsPreviewRefresh({ ...parked, activePhase: "review" })).toBe(false);
+  expect(nestedAppReviewAwaitsPreviewRefresh({ ...parked, status: "passed" })).toBe(false);
+  expect(
+    nestedAppReviewAwaitsPreviewRefresh({
+      ...parked,
+      cycles: [{ cycleNumber: 1, status: "failed", fixResult: null }],
+    } as unknown as Parameters<typeof nestedAppReviewAwaitsPreviewRefresh>[0]),
+  ).toBe(false);
+  expect(
+    nestedAppReviewAwaitsPreviewRefresh({
+      ...parked,
+      cycles: [],
+    } as unknown as Parameters<typeof nestedAppReviewAwaitsPreviewRefresh>[0]),
+  ).toBe(false);
 });
 
 it("formats ticket review problems for pull request publication", () => {

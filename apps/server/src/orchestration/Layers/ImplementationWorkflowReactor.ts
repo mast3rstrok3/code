@@ -1,6 +1,7 @@
 import {
   type AppDevStackAutoCreateResult,
   applyImplementationSkip,
+  type AppReviewWorkflowRun,
   CommandId,
   AppReviewId,
   isRunStageSkipped,
@@ -311,6 +312,24 @@ export function ticketAwaitsAppReviewRun(
   return (
     state.appReviewWorkflowRunId === appReviewWorkflowRunId ||
     (state.appReviewWorkflowRunId == null && state.status === "app-reviewing")
+  );
+}
+
+/**
+ * Whether an embedded App Review is parked between cycles waiting for its
+ * caller to refresh the preview.
+ *
+ * A successful embedded fix ends its cycle with `await-preview-refresh`: the
+ * run stops itself so the next browser review exercises the repaired code
+ * instead of a stale deployment, and only the caller can say when the preview
+ * is fresh. A run in this state never moves again on its own.
+ */
+export function nestedAppReviewAwaitsPreviewRefresh(run: AppReviewWorkflowRun): boolean {
+  return (
+    run.caller.type === "implementation" &&
+    run.status === "running" &&
+    run.activePhase === null &&
+    run.cycles.at(-1)?.fixResult?.status === "succeeded"
   );
 }
 
@@ -5478,6 +5497,60 @@ const make = Effect.gen(function* () {
   );
 
   /**
+   * Resume a ticket's nested App Review once its repair has landed.
+   *
+   * The combined post-merge review gets its preview refresh from
+   * `startBrowserReview`; this is the ticket-scoped counterpart. Re-ensure the
+   * ticket worktree's App Dev Stack so the next cycle reviews the repaired
+   * code, then resume the parked run with the refreshed frontend URL. A stack
+   * that yields no frontend cancels the review instead, which routes the
+   * ticket to Code Review with a warning the same way a launch without a
+   * frontend does.
+   */
+  const resumeTicketAppReview = Effect.fn("ImplementationWorkflowReactor.resumeTicketAppReview")(
+    function* (input: {
+      readonly run: OrchestrationImplementationRun;
+      readonly ticketId: string;
+      readonly nestedRun: AppReviewWorkflowRun;
+      readonly createdAt: string;
+    }) {
+      const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+      const orchestratorThread = findThread(readModel, input.run.orchestratorThreadId);
+      const state = input.run.ticketStates.find(
+        (candidate) => candidate.ticketId === input.ticketId,
+      );
+      if (orchestratorThread === null || state?.worktreePath == null) return;
+      const stackResult = yield* appDevStackManager
+        .autoCreate({
+          worktreePath: state.worktreePath,
+          displayName: `Ticket ${input.ticketId}`,
+          gitBranch: state.branch ?? input.run.orchestratorBranch,
+          workflowId: orchestratorThread.workflowContext?.workflowId,
+        })
+        .pipe(Effect.result);
+      const frontendUrl = stackResult._tag === "Success" ? stackResult.success.frontendUrl : null;
+      if (frontendUrl === null) {
+        yield* cancelTicketAppReview({
+          run: input.run,
+          ticketId: input.ticketId,
+          reason: `Ticket App Review could not resume after its repair because the App Dev Stack did not provide a frontend URL${stackResult._tag === "Failure" ? `: ${errorDetail(stackResult.failure)}` : "."}`,
+          createdAt: input.createdAt,
+        });
+        return;
+      }
+      yield* orchestrationEngine.dispatch({
+        type: "thread.app-review-workflow.resume",
+        commandId: yield* serverCommandId("implementation-ticket-app-review-preview-refresh"),
+        threadId: input.nestedRun.controllerThreadId,
+        runId: input.nestedRun.id,
+        previewTargets: [frontendUrl],
+        workspaceRevision: input.nestedRun.workspaceRevision,
+        createdAt: input.createdAt,
+      });
+    },
+  );
+
+  /**
    * Start one stage of a run again, in a fresh thread.
    *
    * A ticket target rewinds that ticket to the named stage and reopens every
@@ -5789,6 +5862,16 @@ const make = Effect.gen(function* () {
       };
       if (event.type === "thread.app-review-workflow-launched" || nestedRun.status === "running") {
         yield* updateRun({ sourceThreadId, run: linkedTicketRun, createdAt: event.occurredAt });
+        // A successful repair parks the nested run until its caller refreshes
+        // the preview. Nothing else resumes a ticket-scoped run, so do it here.
+        if (nestedAppReviewAwaitsPreviewRefresh(nestedRun)) {
+          yield* resumeTicketAppReview({
+            run: linkedTicketRun,
+            ticketId,
+            nestedRun,
+            createdAt: event.occurredAt,
+          });
+        }
         return;
       }
       const outcome = nestedRun.outcome ?? nestedRun.status;
@@ -6920,6 +7003,42 @@ const make = Effect.gen(function* () {
     },
   );
 
+  /**
+   * Resume every ticket App Review already parked awaiting a preview refresh.
+   *
+   * The event path resumes a run the moment it parks, but a run that parked
+   * before a restart — or before this recovery existed — has no further
+   * events coming. One startup sweep re-drives those, the same way the other
+   * recoveries re-drive interrupted work.
+   */
+  const resumeAwaitingTicketAppReviews = Effect.fn(
+    "ImplementationWorkflowReactor.resumeAwaitingTicketAppReviews",
+  )(function* () {
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    const createdAt = DateTime.formatIso(yield* DateTime.now);
+    for (const nestedRun of readModel.appReviewWorkflowRuns ?? []) {
+      if (!nestedAppReviewAwaitsPreviewRefresh(nestedRun)) continue;
+      if (nestedRun.caller.type !== "implementation") continue;
+      const ticketId = nestedRun.caller.ticketId;
+      // Combined post-merge reviews get their refresh from startBrowserReview.
+      if (ticketId === undefined) continue;
+      const run = findRunById(readModel, nestedRun.caller.implementationRunId);
+      if (run === null || run.status !== "running" || run.appReviewStrategy !== "nested-workflow") {
+        continue;
+      }
+      const state = run.ticketStates.find((candidate) => candidate.ticketId === ticketId);
+      if (state === undefined || !ticketAwaitsAppReviewRun(state, nestedRun.id)) continue;
+      yield* resumeTicketAppReview({ run, ticketId, nestedRun, createdAt }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("ticket App Review preview-refresh resume failed", {
+            runId: nestedRun.id,
+            cause: Cause.pretty(cause),
+          }),
+        ),
+      );
+    }
+  });
+
   const start: ImplementationWorkflowReactorShape["start"] = Effect.fn("start")(function* () {
     yield* Effect.forkScoped(
       Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
@@ -6967,6 +7086,13 @@ const make = Effect.gen(function* () {
     yield* recoverIncompleteStages().pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning("implementation workflow stage recovery failed", {
+          cause: Cause.pretty(cause),
+        }),
+      ),
+    );
+    yield* resumeAwaitingTicketAppReviews().pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("implementation workflow ticket App Review resume sweep failed", {
           cause: Cause.pretty(cause),
         }),
       ),
