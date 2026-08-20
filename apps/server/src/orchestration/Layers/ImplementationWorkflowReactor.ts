@@ -7004,12 +7004,16 @@ const make = Effect.gen(function* () {
   );
 
   /**
-   * Resume every ticket App Review already parked awaiting a preview refresh.
+   * Resume every ticket App Review parked awaiting a preview refresh.
    *
    * The event path resumes a run the moment it parks, but a run that parked
    * before a restart — or before this recovery existed — has no further
-   * events coming. One startup sweep re-drives those, the same way the other
-   * recoveries re-drive interrupted work.
+   * events coming. This sweep runs on the periodic recovery schedule rather
+   * than once at startup: reactors start in sequence, so a startup dispatch
+   * can emit its resume before the App Review reactor is subscribed, and the
+   * event is lost. A parked run keeps looking parked until a resume lands, so
+   * the next sweep simply tries again; a duplicate resume is rejected once a
+   * cycle claims the run.
    */
   const resumeAwaitingTicketAppReviews = Effect.fn(
     "ImplementationWorkflowReactor.resumeAwaitingTicketAppReviews",
@@ -7022,6 +7026,9 @@ const make = Effect.gen(function* () {
       const ticketId = nestedRun.caller.ticketId;
       // Combined post-merge reviews get their refresh from startBrowserReview.
       if (ticketId === undefined) continue;
+      // A paused workflow refuses the resume; retrying every sweep would only
+      // churn events until the user unpauses.
+      if (isWorkflowThreadPaused(readModel.threads, nestedRun.controllerThreadId)) continue;
       const run = findRunById(readModel, nestedRun.caller.implementationRunId);
       if (run === null || run.status !== "running" || run.appReviewStrategy !== "nested-workflow") {
         continue;
@@ -7090,13 +7097,6 @@ const make = Effect.gen(function* () {
         }),
       ),
     );
-    yield* resumeAwaitingTicketAppReviews().pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("implementation workflow ticket App Review resume sweep failed", {
-          cause: Cause.pretty(cause),
-        }),
-      ),
-    );
     yield* Effect.forkScoped(
       Effect.gen(function* () {
         yield* recoverRetryableRuns().pipe(
@@ -7109,6 +7109,13 @@ const make = Effect.gen(function* () {
         yield* recoverIncompleteStages().pipe(
           Effect.catchCause((cause) =>
             Effect.logWarning("implementation workflow periodic stage recovery failed", {
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        );
+        yield* resumeAwaitingTicketAppReviews().pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("implementation workflow ticket App Review resume sweep failed", {
               cause: Cause.pretty(cause),
             }),
           ),
