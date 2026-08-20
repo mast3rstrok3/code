@@ -20,6 +20,7 @@ import {
   buildExpiredTerminalContextToastCopy,
   buildLoadingThreadFromShell,
   buildThreadTurnInterruptInput,
+  buildAppReviewLaunchTargets,
   collectAppReviewLaunchPreviewTargets,
   createLocalDispatchSnapshot,
   deriveComposerSendState,
@@ -31,6 +32,7 @@ import {
   hasServerAcknowledgedLocalDispatch,
   isBranchMismatchDismissedForSession,
   normalizeAppReviewCycleBudget,
+  normalizeAppReviewPreviewTarget,
   reconcileMountedTerminalThreadIds,
   reconcileRetainedMountedThreadIds,
   resolveProductWorkflowPlanningThreadId,
@@ -220,6 +222,48 @@ describe("collectAppReviewLaunchPreviewTargets", () => {
         activeBrowserUrl: null,
       }),
     ).toEqual([]);
+  });
+});
+
+describe("normalizeAppReviewPreviewTarget", () => {
+  it("completes a host the way the preview surfaces do", () => {
+    expect(normalizeAppReviewPreviewTarget("localhost:5173")).toBe("http://localhost:5173/");
+    expect(normalizeAppReviewPreviewTarget(" staging.example.test/app ")).toBe(
+      "https://staging.example.test/app",
+    );
+  });
+
+  it("treats an empty or unusable target as no target", () => {
+    expect(normalizeAppReviewPreviewTarget("   ")).toBeNull();
+    expect(normalizeAppReviewPreviewTarget("ftp://example.test")).toBeNull();
+  });
+});
+
+describe("buildAppReviewLaunchTargets", () => {
+  it("pins the URL the user named over anything in the brief", () => {
+    expect(
+      buildAppReviewLaunchTargets({
+        reviewUrl: "staging.example.test",
+        brief: "Review https://feature.example.test/login.",
+        activeBrowserUrl: "https://older.example.test/",
+      }),
+    ).toEqual({
+      previewTargets: ["https://staging.example.test/"],
+      previewTargetsPinned: true,
+    });
+  });
+
+  it("falls back to brief and browser targets when no URL is named", () => {
+    expect(
+      buildAppReviewLaunchTargets({
+        reviewUrl: "",
+        brief: "Review https://feature.example.test/login.",
+        activeBrowserUrl: null,
+      }),
+    ).toEqual({
+      previewTargets: ["https://feature.example.test/login"],
+      previewTargetsPinned: false,
+    });
   });
 });
 

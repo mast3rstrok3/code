@@ -79,14 +79,6 @@ const LEGACY_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
     workflowPromptId: "product.fix.codex",
     helpSteps: [],
   },
-  {
-    id: "app-review",
-    label: "App Review",
-    description: "Nested or panel-launched browser review workflow.",
-    route: "review",
-    interactionMode: "default",
-    helpSteps: [],
-  },
 ];
 
 // Keep every previously shipped definition available for rendering durable runs, while exposing
@@ -175,6 +167,23 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         note: "automatic; single pass, applies fixes and commits",
       },
       { label: "Change request publication", note: "automatic" },
+    ],
+  },
+  {
+    id: "app-review",
+    label: "App Review",
+    description: "Drive the running app in a browser, ticket every gap it finds, and fix it.",
+    route: "review",
+    interactionMode: "default",
+    // No entry prompt: sending in this mode dispatches an App Review launch
+    // rather than a turn, and the run's reactor owns all three agents' prompts.
+    helpSteps: [
+      {
+        label: "App Review cycles",
+        skillId: "implementation.browser-app-review.codex",
+        note: "ten review, repair-ticket, and fix cycles by default; a passing review ends the run early",
+        subSteps: APP_REVIEW_SUB_STEPS,
+      },
     ],
   },
   {
@@ -309,6 +318,7 @@ export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
   "fast-feature",
   "planning",
   "wayfinder",
+  "app-review",
 ].map((id) => GUIDED_WORKFLOW_PRESET_DEFINITIONS.find((definition) => definition.id === id)!);
 
 export const WORKFLOW_PRESET_DEFINITION_BY_ID = Object.fromEntries(

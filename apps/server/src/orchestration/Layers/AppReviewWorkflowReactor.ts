@@ -95,7 +95,16 @@ export function selectStandalonePreviewTargets(input: {
   readonly lookup: AppDevStackPreviewLookup | null;
   readonly lookupError: string | null;
   readonly fallbackTargets: ReadonlyArray<string>;
+  /**
+   * Targets the user named at launch. They review exactly what they asked for,
+   * so a matching App Dev Stack does not get to substitute its own frontend.
+   */
+  readonly pinnedTargets?: ReadonlyArray<string>;
 }): StandalonePreviewTargetResolution {
+  const pinnedTargets = Array.from(
+    new Set((input.pinnedTargets ?? []).map((target) => target.trim()).filter(Boolean)),
+  );
+  if (pinnedTargets.length > 0) return { _tag: "Resolved", previewTargets: pinnedTargets };
   const fallbackTargets = Array.from(
     new Set(input.fallbackTargets.map((target) => target.trim()).filter(Boolean)),
   );
@@ -642,18 +651,22 @@ const make = Effect.gen(function* () {
     "AppReviewWorkflowReactor.resolveStandalonePreviewTargetsForRun",
   )(function* (run: AppReviewWorkflowRun, cwd: string, occurredAt: string) {
     if (run.caller.type !== "standalone") return run;
-    const lookupResult = yield* appDevStackManager
-      .getByWorktree({ worktreePath: cwd })
-      .pipe(Effect.result);
+    // A pinned run already knows its target, so it never pays for the stack
+    // lookup — and an unhealthy stack it was never pointed at cannot block it.
+    const lookupResult =
+      run.previewTargetsPinned === true
+        ? null
+        : yield* appDevStackManager.getByWorktree({ worktreePath: cwd }).pipe(Effect.result);
     const resolution = selectStandalonePreviewTargets({
-      lookup: lookupResult._tag === "Success" ? lookupResult.success : null,
+      lookup: lookupResult?._tag === "Success" ? lookupResult.success : null,
       lookupError:
-        lookupResult._tag === "Failure"
+        lookupResult?._tag === "Failure"
           ? lookupResult.failure instanceof Error
             ? lookupResult.failure.message
             : String(lookupResult.failure)
           : null,
       fallbackTargets: [...extractPreviewUrls(run.briefMarkdown), ...run.previewTargets],
+      ...(run.previewTargetsPinned === true ? { pinnedTargets: run.previewTargets } : {}),
     });
     if (resolution._tag === "Blocked") {
       yield* failRun({

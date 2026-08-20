@@ -14,7 +14,7 @@ import {
   type TurnId,
 } from "@t3tools/contracts";
 import { isProductWorkflowRoot } from "@t3tools/shared/workflowPresets";
-import { extractPreviewUrls } from "@t3tools/shared/preview";
+import { extractPreviewUrls, normalizePreviewUrl } from "@t3tools/shared/preview";
 import { type ChatMessage, type SessionPhase, type Thread, type ThreadShell } from "../types";
 import { type ComposerImageAttachment, type DraftThreadState } from "../composerDraftStore";
 import * as Schema from "effect/Schema";
@@ -48,6 +48,44 @@ export function collectAppReviewLaunchPreviewTargets(input: {
         .filter((target): target is string => Boolean(target)),
     ),
   );
+}
+
+/**
+ * The review target a user typed, as a full URL, or null when they typed
+ * nothing usable. `localhost:5173` and `staging.example.com` both work; the
+ * scheme is filled in the same way the preview surfaces fill it.
+ */
+export function normalizeAppReviewPreviewTarget(value: string): string | null {
+  if (value.trim().length === 0) return null;
+  try {
+    return normalizePreviewUrl(value);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * What one App Review launch reviews.
+ *
+ * A target the user named is pinned: the run uses it as given, rather than
+ * letting the worktree's App Dev Stack substitute its own frontend. With no
+ * named target the run keeps the old behavior — resolve the stack first, and
+ * fall back to URLs found in the brief or the thread's open browser tab.
+ */
+export function buildAppReviewLaunchTargets(input: {
+  readonly reviewUrl: string;
+  readonly brief: string;
+  readonly activeBrowserUrl: string | null;
+}): { readonly previewTargets: ReadonlyArray<string>; readonly previewTargetsPinned: boolean } {
+  const pinned = normalizeAppReviewPreviewTarget(input.reviewUrl);
+  if (pinned !== null) return { previewTargets: [pinned], previewTargetsPinned: true };
+  return {
+    previewTargets: collectAppReviewLaunchPreviewTargets({
+      brief: input.brief,
+      activeBrowserUrl: input.activeBrowserUrl,
+    }),
+    previewTargetsPinned: false,
+  };
 }
 
 export const LastInvokedScriptByProjectSchema = Schema.Record(ProjectId, Schema.String);
@@ -303,6 +341,8 @@ export function collectUserMessageBlobPreviewUrls(message: ChatMessage): string[
 export interface AppReviewWorkflowLaunchRequest {
   readonly brief: string;
   readonly cycleBudget: number;
+  /** Empty means "resolve this worktree's App Dev Stack", as before. */
+  readonly reviewUrl: string;
 }
 
 export interface BrowserAppReviewSourceContextMessage {

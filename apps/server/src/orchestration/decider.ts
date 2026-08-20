@@ -3757,6 +3757,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           });
         }
       }
+      if (command.previewTargetsPinned === true && command.previewTargets.length === 0) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "A pinned App Review must name at least one preview target.",
+        });
+      }
       const duplicate = (readModel.appReviewWorkflowRuns ?? []).find((run) => {
         if (run.status !== "running") return false;
         const runTarget = readModel.threads.find((thread) => thread.id === run.targetThreadId);
@@ -3791,6 +3797,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         briefMarkdown: command.briefMarkdown,
         supportingContextMarkdown: command.supportingContextMarkdown ?? null,
         previewTargets: command.previewTargets,
+        ...(command.previewTargetsPinned === undefined
+          ? {}
+          : { previewTargetsPinned: command.previewTargetsPinned }),
         cycleBudget: command.cycleBudget,
         cyclesUsed: 0,
         status: "running",

@@ -13,7 +13,6 @@ import type {
   WorkflowPreset,
 } from "@t3tools/contracts";
 import {
-  APP_REVIEW_WORKFLOW_MAX_CYCLES,
   ProviderDriverKind,
   ProviderInstanceId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
@@ -109,6 +108,7 @@ import { ContextWindowMeter } from "./ContextWindowMeter";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { basenameOfPath } from "../../pierre-icons";
 import { cn, randomUUID } from "~/lib/utils";
+import { AppReviewLaunchControls } from "./AppReviewLaunchControls";
 import { Separator } from "../ui/separator";
 import { useWorkflowCatalog } from "../../workflowCatalogState";
 
@@ -517,6 +517,8 @@ export interface ChatComposerProps {
   workflowPreset: WorkflowPreset | null;
   lastWorkflowPreset: WorkflowPreset | null;
   appReviewCycleBudget: number;
+  appReviewDefaultCycleBudget: number;
+  appReviewReviewUrl: string;
 
   // Provider / model
   lockedProvider: ProviderDriverKind | null;
@@ -569,6 +571,7 @@ export interface ChatComposerProps {
     preset: WorkflowPreset | null,
   ) => void;
   onAppReviewCycleBudgetChange: (budget: number) => void;
+  onAppReviewReviewUrlChange: (reviewUrl: string) => void;
 
   focusComposer: () => void;
   scheduleComposerFocus: () => void;
@@ -616,6 +619,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     workflowPreset,
     lastWorkflowPreset,
     appReviewCycleBudget,
+    appReviewDefaultCycleBudget,
+    appReviewReviewUrl,
     lockedProvider,
     providerStatuses,
     activeProjectDefaultModelSelection,
@@ -645,6 +650,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     handleRuntimeModeChange,
     handleInteractionModeChange,
     onAppReviewCycleBudgetChange,
+    onAppReviewReviewUrlChange,
     focusComposer,
     scheduleComposerFocus,
     setThreadError,
@@ -3239,20 +3245,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   </>
                 )}
                 {workflowPreset === "app-review" ? (
-                  <label className="ml-1 flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
-                    <span>Attempts</span>
-                    <input
-                      aria-label="App Review attempts"
-                      className="h-7 w-12 rounded-md border border-input bg-transparent px-1.5 text-center text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      type="number"
-                      min={1}
-                      max={APP_REVIEW_WORKFLOW_MAX_CYCLES}
-                      value={appReviewCycleBudget}
-                      onChange={(event) =>
-                        onAppReviewCycleBudgetChange(Number(event.currentTarget.value))
-                      }
-                    />
-                  </label>
+                  <AppReviewLaunchControls
+                    cycleBudget={appReviewCycleBudget}
+                    defaultCycleBudget={appReviewDefaultCycleBudget}
+                    onCycleBudgetChange={onAppReviewCycleBudgetChange}
+                    onReviewUrlChange={onAppReviewReviewUrlChange}
+                    reviewUrl={appReviewReviewUrl}
+                  />
                 ) : null}
               </div>
 

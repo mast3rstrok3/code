@@ -8,11 +8,28 @@ import {
 } from "./workflowPresets.js";
 
 describe("workflow presets", () => {
-  it("exposes Fast Feature, Engineering Workflow, and Wayfinder", () => {
+  it("exposes Fast Feature, Engineering Workflow, Wayfinder, and App Review", () => {
     expect(WORKFLOW_PRESET_DEFINITIONS.map((definition) => definition.id)).toEqual([
       "fast-feature",
       "planning",
       "wayfinder",
+      "app-review",
+    ]);
+  });
+
+  it("makes App Review one looping step over its three agents", () => {
+    const appReview = WORKFLOW_PRESET_DEFINITIONS.find(
+      (definition) => definition.id === "app-review",
+    );
+    // Sending in this mode launches a run instead of starting a turn, so the
+    // preset carries no entry prompt of its own.
+    expect(workflowPromptIdForPreset("app-review")).toBeUndefined();
+    expect(interactionModeForWorkflowPreset("app-review")).toBe("default");
+    expect(appReview?.helpSteps).toHaveLength(1);
+    expect(appReview?.helpSteps[0]?.subSteps?.map((subStep) => subStep.workflowPromptId)).toEqual([
+      "implementation.browser-app-review.codex",
+      "matt-pocock.to-tickets",
+      "matt-pocock.implement",
     ]);
   });
 

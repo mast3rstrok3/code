@@ -6,9 +6,10 @@ import {
 import { truncate } from "@t3tools/shared/String";
 import { extractPreviewUrls } from "@t3tools/shared/preview";
 
-import type {
-  BrowserAppReviewSourceContext,
-  AppReviewWorkflowLaunchRequest,
+import {
+  type BrowserAppReviewSourceContext,
+  type AppReviewWorkflowLaunchRequest,
+  normalizeAppReviewPreviewTarget,
 } from "./ChatView.logic";
 import { isValidAppReviewWorkflowLaunch } from "./AppReviewPanel.logic";
 import { Button } from "./ui/button";
@@ -33,15 +34,18 @@ interface AppReviewLaunchDialogProps {
   readonly sourceContext: BrowserAppReviewSourceContext | null;
   readonly previewTargets: ReadonlyArray<string>;
   readonly initialCycleBudget?: number;
+  readonly initialReviewUrl?: string;
   readonly onLaunch: (request: AppReviewWorkflowLaunchRequest) => void;
 }
 
 export function AppReviewLaunchDialog(props: AppReviewLaunchDialogProps) {
   const [brief, setBrief] = useState("");
+  const [reviewUrl, setReviewUrl] = useState("");
   const [cycleBudget, setCycleBudget] = useState(
     props.initialCycleBudget ?? APP_REVIEW_WORKFLOW_DEFAULT_CYCLES,
   );
   const normalizedBrief = brief.trim();
+  const pinnedTarget = normalizeAppReviewPreviewTarget(reviewUrl);
   const resolvedPreviewTargets = useMemo(
     () => Array.from(new Set([...extractPreviewUrls(normalizedBrief), ...props.previewTargets])),
     [normalizedBrief, props.previewTargets],
@@ -60,7 +64,8 @@ export function AppReviewLaunchDialog(props: AppReviewLaunchDialogProps) {
   useEffect(() => {
     if (!props.open) return;
     setCycleBudget(props.initialCycleBudget ?? APP_REVIEW_WORKFLOW_DEFAULT_CYCLES);
-  }, [props.initialCycleBudget, props.open]);
+    setReviewUrl(props.initialReviewUrl ?? "");
+  }, [props.initialCycleBudget, props.initialReviewUrl, props.open]);
 
   return (
     <Dialog
@@ -99,28 +104,44 @@ export function AppReviewLaunchDialog(props: AppReviewLaunchDialogProps) {
             />
             <span className="text-xs text-muted-foreground">Between 1 and 50 complete cycles.</span>
           </label>
+          <label className="grid gap-2">
+            <span className="text-xs font-medium text-foreground">Review URL</span>
+            <Input
+              type="text"
+              placeholder="localhost:5173"
+              value={reviewUrl}
+              onChange={(event) => setReviewUrl(event.currentTarget.value)}
+            />
+            <span className="text-xs text-muted-foreground">
+              {pinnedTarget === null
+                ? "Leave empty to resolve this worktree's App Dev Stack."
+                : `Reviews ${pinnedTarget} as given, without resolving an App Dev Stack.`}
+            </span>
+          </label>
+          {pinnedTarget === null ? (
+            <div className="rounded-lg border bg-muted/30 p-3">
+              <p className="text-xs font-medium text-foreground">Preview targets</p>
+              {resolvedPreviewTargets.length > 0 ? (
+                <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
+                  {resolvedPreviewTargets.map((url) => (
+                    <li key={url} className="truncate" title={url}>
+                      {url}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  The matching App Dev Stack will be resolved from this worktree when the workflow
+                  starts.
+                </p>
+              )}
+            </div>
+          ) : null}
           <div className="rounded-lg border bg-muted/30 p-3">
             <p className="text-xs font-medium text-foreground">Supporting source context</p>
             <pre className="mt-2 max-h-28 whitespace-pre-wrap break-words text-xs leading-5 text-muted-foreground">
               {sourcePreview}
             </pre>
-          </div>
-          <div className="rounded-lg border bg-muted/30 p-3">
-            <p className="text-xs font-medium text-foreground">Preview targets</p>
-            {resolvedPreviewTargets.length > 0 ? (
-              <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
-                {resolvedPreviewTargets.map((url) => (
-                  <li key={url} className="truncate" title={url}>
-                    {url}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="mt-2 text-xs text-muted-foreground">
-                The matching App Dev Stack will be resolved from this worktree when the workflow
-                starts. For another target, paste its full URL into the review brief above.
-              </p>
-            )}
           </div>
           {!props.sourceSettled ? (
             <p className="text-xs text-destructive">Wait for the current source turn to settle.</p>
@@ -138,7 +159,7 @@ export function AppReviewLaunchDialog(props: AppReviewLaunchDialogProps) {
           <Button
             type="button"
             disabled={props.launchInFlight || !validLaunch}
-            onClick={() => props.onLaunch({ brief: normalizedBrief, cycleBudget })}
+            onClick={() => props.onLaunch({ brief: normalizedBrief, cycleBudget, reviewUrl })}
           >
             Launch App Review
           </Button>

@@ -2338,6 +2338,7 @@ function buildWorkflowCatalog(): WorkflowCatalog {
     "fast-feature",
     "planning",
     "wayfinder",
+    "app-review",
     "full-feature",
     "product-planning",
     "implementation",
@@ -2379,7 +2380,8 @@ function buildWorkflowCatalog(): WorkflowCatalog {
   const implicitWorkflowIdsBySkill: Readonly<Record<string, readonly string[]>> = {
     "matt-pocock.grill-with-docs": ["planning"],
     "matt-pocock.domain-modeling": ["full-feature", "product-planning", "wayfinder", "planning"],
-    "matt-pocock.implement": ["full-feature", "implementation"],
+    "matt-pocock.implement": ["full-feature", "implementation", "app-review"],
+    "matt-pocock.to-tickets": ["app-review"],
     [WORKFLOW_PROMPT_IDS.implementationFixCodex]: [
       "fast-feature",
       "full-feature",

@@ -252,6 +252,39 @@ it("keeps manual preview targets as a fallback when no App Dev Stack matches", (
   ).toEqual({ _tag: "Resolved", previewTargets: ["http://localhost:3000"] });
 });
 
+it("reviews a pinned target instead of the worktree's App Dev Stack", () => {
+  expect(
+    selectStandalonePreviewTargets({
+      lookup: {
+        stack: {
+          id: "stack-1",
+          displayName: "feature checkout",
+          status: "running",
+          services: [{ name: "frontend", status: "running", health: "healthy" }],
+        },
+        frontendUrl: "https://feature.example.test",
+      },
+      lookupError: null,
+      fallbackTargets: ["http://localhost:3000"],
+      pinnedTargets: [" https://staging.example.test ", "https://staging.example.test"],
+    }),
+  ).toEqual({ _tag: "Resolved", previewTargets: ["https://staging.example.test"] });
+});
+
+it("keeps a pinned target usable while the worktree's App Dev Stack is unhealthy", () => {
+  expect(
+    selectStandalonePreviewTargets({
+      lookup: {
+        stack: { id: "stack-1", displayName: null, status: "starting", services: null },
+        frontendUrl: null,
+      },
+      lookupError: null,
+      fallbackTargets: [],
+      pinnedTargets: ["https://staging.example.test"],
+    }),
+  ).toEqual({ _tag: "Resolved", previewTargets: ["https://staging.example.test"] });
+});
+
 it("blocks before launching a reviewer when the matching App Dev Stack is not ready", () => {
   const resolution = selectStandalonePreviewTargets({
     lookup: {

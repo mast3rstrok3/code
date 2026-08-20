@@ -117,6 +117,40 @@ it.layer(NodeServices.layer)("App Review workflow decider", (it) => {
     }),
   );
 
+  it.effect("carries a pinned preview target onto the run", () =>
+    Effect.gen(function* () {
+      const decided = yield* decideOrchestrationCommand({
+        command: {
+          ...launchCommand(ThreadId.make("thread-controller")),
+          previewTargets: ["https://staging.example.test"],
+          previewTargetsPinned: true,
+        },
+        readModel: readModel(),
+      });
+      const events = Array.isArray(decided) ? decided : [decided];
+      const launched = events.at(-1);
+      if (launched?.type !== "thread.app-review-workflow-launched") return;
+      expect(launched.payload.run.previewTargetsPinned).toBe(true);
+      expect(launched.payload.run.previewTargets).toEqual(["https://staging.example.test"]);
+    }),
+  );
+
+  it.effect("refuses a pinned launch that names no target", () =>
+    Effect.gen(function* () {
+      const rejected = yield* Effect.exit(
+        decideOrchestrationCommand({
+          command: {
+            ...launchCommand(ThreadId.make("thread-controller")),
+            previewTargets: [],
+            previewTargetsPinned: true,
+          },
+          readModel: readModel(),
+        }),
+      );
+      expect(rejected._tag).toBe("Failure");
+    }),
+  );
+
   it.effect("rejects a second active run targeting the same canonical worktree", () =>
     Effect.gen(function* () {
       const initial = readModel();

@@ -49,7 +49,7 @@ describe("WorkflowPromptRegistry", () => {
     );
     NodeAssert.deepEqual(
       catalog.workflows.map((workflow) => workflow.id),
-      ["fast-feature", "planning", "wayfinder"],
+      ["fast-feature", "planning", "wayfinder", "app-review"],
     );
     NodeAssert.equal(
       catalog.skills.filter((skill) => skill.id.startsWith("matt-pocock.")).length,

@@ -166,6 +166,12 @@ export const AppReviewWorkflowRun = Schema.Struct({
   briefMarkdown: TrimmedNonEmptyString,
   supportingContextMarkdown: Schema.NullOr(Schema.String),
   previewTargets: Schema.Array(TrimmedNonEmptyString),
+  /**
+   * Set when the user named the target themselves. A pinned run reviews
+   * exactly `previewTargets`; an unpinned one resolves the worktree's App Dev
+   * Stack first and falls back to those targets only when no stack matches.
+   */
+  previewTargetsPinned: Schema.optionalKey(Schema.Boolean),
   cycleBudget: AppReviewWorkflowCycleBudget.pipe(
     Schema.withDecodingDefault(Effect.succeed(APP_REVIEW_WORKFLOW_DEFAULT_CYCLES)),
   ),

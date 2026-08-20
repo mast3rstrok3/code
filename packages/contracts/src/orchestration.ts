@@ -2397,6 +2397,8 @@ export const ThreadAppReviewWorkflowLaunchCommand = Schema.Struct({
   briefMarkdown: TrimmedNonEmptyString,
   supportingContextMarkdown: Schema.optionalKey(Schema.NullOr(Schema.String)),
   previewTargets: Schema.Array(TrimmedNonEmptyString),
+  /** Reviews `previewTargets` as given instead of resolving an App Dev Stack. */
+  previewTargetsPinned: Schema.optionalKey(Schema.Boolean),
   cycleBudget: AppReviewWorkflowCycleBudget.pipe(
     Schema.withDecodingDefault(Effect.succeed(APP_REVIEW_WORKFLOW_DEFAULT_CYCLES)),
   ),
