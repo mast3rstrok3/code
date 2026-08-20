@@ -1,6 +1,7 @@
 import {
   type AppDevStackStatus,
   APP_REVIEW_PREVIEW_URL_ENV,
+  type AppReviewScope,
   CommandId,
   AppReviewId,
   hasCompleteAppReviewEvidence,
@@ -403,6 +404,20 @@ export function e2eCheckIdsForCommands(commands: ReadonlyArray<string>): Readonl
   return commands.map((_, index) => `e2e-${index + 1}`);
 }
 
+/**
+ * The parts this run actually verifies with. The ticket's declared scope is an
+ * intent; a project that declares no `e2eCommands` has no e2e part to run, so
+ * every scope degrades to browser there rather than launching a review with
+ * nothing to do.
+ */
+export function effectiveAppReviewScope(
+  run: Pick<AppReviewWorkflowRun, "appReviewScope">,
+  e2eCommandCount: number,
+): AppReviewScope {
+  if (e2eCommandCount === 0) return "browser";
+  return run.appReviewScope ?? "both";
+}
+
 export function terminalReviewPassFailure(input: {
   readonly run: AppReviewWorkflowRun;
   readonly review: AppReviewRecord;
@@ -490,9 +505,13 @@ export function buildReviewPrompt(input: {
   readonly carryableChecks: ReadonlyArray<CarryableAppReviewCheck>;
   /** The project's `e2eCommands` from t3.json; empty or absent skips the e2e step. */
   readonly e2eCommands?: ReadonlyArray<string>;
+  /** The run's effective scope; absent derives from whether e2e commands exist. */
+  readonly reviewScope?: AppReviewScope;
 }): string {
   const { run, cycle } = input;
-  const e2eCommands = input.e2eCommands ?? [];
+  const scope: AppReviewScope =
+    input.reviewScope ?? ((input.e2eCommands?.length ?? 0) > 0 ? "both" : "browser");
+  const e2eCommands = scope === "browser" ? [] : (input.e2eCommands ?? []);
   // E2e checks are rerun every cycle, so a prior cycle's pass is never offered
   // back as carryable.
   const e2eCheckIds = new Set(e2eCheckIdsForCommands(e2eCommands));
@@ -519,10 +538,14 @@ export function buildReviewPrompt(input: {
             `Part one of this review is the end-to-end test run. Run each command from the selected worktree, in order, with the environment variable ${APP_REVIEW_PREVIEW_URL_ENV} set to the first preview target above, and record each command as a check with the exact id shown:`,
             ...e2eCommands.map((command, index) => `- e2e-${index + 1}: ${command}`),
             "A passing command is a passed check whose notes summarize the suite result. A failing command is a failed check whose notes name the failing tests, and each distinct product failure it reveals is an actionable finding. Run these commands fresh every cycle and never carry an e2e check forward.",
-            "Part two is the browser review, scoped to what the tests did not prove: acceptance criteria without e2e coverage, visual and interaction quality, and every failure the run surfaced. Do not re-drive a flow a passing e2e test already exercises end-to-end. Evidence requirements are unchanged: still record the session and capture screenshots of the states you verify.",
+            scope === "e2e"
+              ? "This review is end-to-end only: the test run is the verification. Skip the browser entirely — do not open the preview or start a recording, and no screenshots are required. Base the verdict on the check matrix."
+              : "Part two is the browser review, scoped to what the tests did not prove: acceptance criteria without e2e coverage, visual and interaction quality, and every failure the run surfaced. Do not re-drive a flow a passing e2e test already exercises end-to-end. Evidence requirements are unchanged: still record the session and capture screenshots of the states you verify.",
           ]),
       "",
-      "Use the linked durable App Review record. Record the complete flow, capture captioned screenshots, and report every actionable finding. A missing or unavailable preview is a failed review.",
+      scope === "e2e"
+        ? "Use the linked durable App Review record and report every actionable finding."
+        : "Use the linked durable App Review record. Record the complete flow, capture captioned screenshots, and report every actionable finding. A missing or unavailable preview is a failed review.",
       ...(run.reviewOnly === true
         ? [
             "This run reviews only. Nothing you find will be repaired, so the findings you record are the whole deliverable: state every one concretely enough that someone else can reproduce and fix it. Do not edit files.",
@@ -533,7 +556,9 @@ export function buildReviewPrompt(input: {
         ? []
         : [
             "",
-            "This is a repair verification cycle. Exercise each prior actionable finding in the browser again and add one passed check with the exact same id before reporting passed:",
+            scope === "e2e"
+              ? "This is a repair verification cycle. Verify each prior actionable finding again through the test run and add one passed check with the exact same id before reporting passed:"
+              : "This is a repair verification cycle. Exercise each prior actionable finding in the browser again and add one passed check with the exact same id before reporting passed:",
             ...input.priorFindingIds.map((findingId) => `- ${findingId}`),
           ]),
       ...(carryableChecks.length === 0
@@ -799,6 +824,7 @@ const make = Effect.gen(function* () {
     });
     const target = yield* resolveTarget(run.targetThreadId);
     const e2eCommands = yield* e2eCommandsForCwd(target?.cwd ?? null);
+    const reviewScope = effectiveAppReviewScope(run, e2eCommands.length);
     yield* orchestrationEngine.dispatch({
       type: "thread.app-review.launch",
       commandId: yield* serverCommandId("app-review-workflow-review-launch"),
@@ -815,6 +841,7 @@ const make = Effect.gen(function* () {
           priorFindingIds: prior.findingIds,
           carryableChecks: prior.carryable,
           e2eCommands,
+          reviewScope,
         }),
         attachments: [],
       },
@@ -1228,11 +1255,13 @@ const make = Effect.gen(function* () {
     const stableRun = yield* assertStableRevision(run, target.cwd, occurredAt);
     if (stableRun === null) return;
     const action = terminalReviewAction(review);
+    const e2eCommands = yield* e2eCommandsForCwd(target.cwd);
+    const reviewScope = effectiveAppReviewScope(stableRun, e2eCommands.length);
     const passFailure = terminalReviewPassFailure({
       run: stableRun,
       review,
       priorReviews: controller?.appReviews ?? [],
-      e2eCheckIds: e2eCheckIdsForCommands(yield* e2eCommandsForCwd(target.cwd)),
+      e2eCheckIds: reviewScope === "browser" ? [] : e2eCheckIdsForCommands(e2eCommands),
     });
     if (passFailure !== null) {
       yield* startPlanning({
@@ -1243,7 +1272,10 @@ const make = Effect.gen(function* () {
       });
       return;
     }
-    const evidenceFailure = terminalReviewEvidenceFailure(action, review);
+    // An e2e-only review has no browser part, so recordings and screenshots
+    // are not part of its contract.
+    const evidenceFailure =
+      reviewScope === "e2e" ? null : terminalReviewEvidenceFailure(action, review);
     if (evidenceFailure !== null) {
       yield* startPlanning({
         run: stableRun,
@@ -1342,9 +1374,15 @@ const make = Effect.gen(function* () {
     const reviewer = yield* resolveThread(cycle.reviewerThreadId);
     const target = yield* resolveThread(run.targetThreadId);
     if (reviewer === undefined || target === undefined) return;
-    const e2eCommands = yield* e2eCommandsForCwd(
+    const declaredE2eCommands = yield* e2eCommandsForCwd(
       (yield* resolveTarget(run.targetThreadId))?.cwd ?? null,
     );
+    // A browser-only review never gates on the e2e suite, so its fixer is not
+    // asked to run it either.
+    const e2eCommands =
+      effectiveAppReviewScope(run, declaredE2eCommands.length) === "browser"
+        ? []
+        : declaredE2eCommands;
     yield* orchestrationEngine.dispatch({
       type: "thread.create",
       commandId: yield* serverCommandId("app-review-workflow-fixer-create"),

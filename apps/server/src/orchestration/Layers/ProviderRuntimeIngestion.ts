@@ -2156,6 +2156,9 @@ const make = Effect.gen(function* () {
               plannedFileChanges: ticket.plannedFileChanges.map((change) => ({ ...change })),
               dependencyKeys: [...ticket.dependencyKeys],
               appReviewEligible: ticket.appReviewEligible,
+              ...(ticket.appReviewScope === undefined
+                ? {}
+                : { appReviewScope: ticket.appReviewScope }),
               appReviewPlanMarkdown: ticket.appReviewPlanMarkdown,
             })),
             createdAt: input.createdAt,
@@ -2226,6 +2229,15 @@ const make = Effect.gen(function* () {
                     ...(edit.dependencyKeys === undefined
                       ? {}
                       : { dependencyKeys: [...edit.dependencyKeys] }),
+                    ...(edit.appReviewEligible === undefined
+                      ? {}
+                      : { appReviewEligible: edit.appReviewEligible }),
+                    ...(edit.appReviewScope === undefined
+                      ? {}
+                      : { appReviewScope: edit.appReviewScope }),
+                    ...(edit.appReviewPlanMarkdown === undefined
+                      ? {}
+                      : { appReviewPlanMarkdown: edit.appReviewPlanMarkdown }),
                   };
                 case "create":
                   return {

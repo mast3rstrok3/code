@@ -51,6 +51,7 @@ export type WorkflowDirective =
         readonly plannedFileChanges: ReadonlyArray<OrchestrationPlanningFileChange>;
         readonly dependencyKeys: ReadonlyArray<string>;
         readonly appReviewEligible: boolean;
+        readonly appReviewScope?: "e2e" | "browser" | "both";
         readonly appReviewPlanMarkdown: string | null;
       }>;
     }
@@ -76,6 +77,7 @@ export type WorkflowDirective =
             readonly plannedFileChanges?: ReadonlyArray<OrchestrationPlanningFileChange>;
             readonly dependencyKeys?: ReadonlyArray<string>;
             readonly appReviewEligible?: boolean;
+            readonly appReviewScope?: "e2e" | "browser" | "both";
             readonly appReviewPlanMarkdown?: string | null;
           }
         | {
@@ -86,6 +88,7 @@ export type WorkflowDirective =
             readonly plannedFileChanges: ReadonlyArray<OrchestrationPlanningFileChange>;
             readonly dependencyKeys: ReadonlyArray<string>;
             readonly appReviewEligible: boolean;
+            readonly appReviewScope?: "e2e" | "browser" | "both";
             readonly appReviewPlanMarkdown: string | null;
             readonly replacesPlanningTicketIds: ReadonlyArray<string>;
           }
@@ -423,6 +426,13 @@ function parsePlanningFileChanges(
   return validatePlanningTicketFileChanges(changes) ?? changes;
 }
 
+const APP_REVIEW_SCOPES = ["e2e", "browser", "both"] as const;
+type ParsedAppReviewScope = (typeof APP_REVIEW_SCOPES)[number];
+
+function isAppReviewScope(value: unknown): value is ParsedAppReviewScope {
+  return APP_REVIEW_SCOPES.includes(value as ParsedAppReviewScope);
+}
+
 function parsePlanningTickets(value: unknown):
   | ReadonlyArray<{
       readonly key: string;
@@ -431,6 +441,7 @@ function parsePlanningTickets(value: unknown):
       readonly plannedFileChanges: ReadonlyArray<OrchestrationPlanningFileChange>;
       readonly dependencyKeys: ReadonlyArray<string>;
       readonly appReviewEligible: boolean;
+      readonly appReviewScope?: ParsedAppReviewScope;
       readonly appReviewPlanMarkdown: string | null;
     }>
   | string {
@@ -473,6 +484,13 @@ function parsePlanningTickets(value: unknown):
     if (appReviewEligible && appReviewPlanMarkdown === null) {
       return "planning-tickets-artifact App Review eligible tickets require appReviewPlanMarkdown.";
     }
+    const appReviewScope = record["appReviewScope"];
+    if (appReviewScope !== undefined && !isAppReviewScope(appReviewScope)) {
+      return "planning-tickets-artifact appReviewScope must be 'e2e', 'browser', or 'both'.";
+    }
+    if (appReviewScope !== undefined && !appReviewEligible) {
+      return "planning-tickets-artifact appReviewScope requires appReviewEligible.";
+    }
     tickets.push({
       key,
       title,
@@ -480,6 +498,7 @@ function parsePlanningTickets(value: unknown):
       plannedFileChanges,
       dependencyKeys,
       appReviewEligible,
+      ...(appReviewScope === undefined ? {} : { appReviewScope }),
       appReviewPlanMarkdown,
     });
   }
@@ -566,6 +585,11 @@ function parsePlanningTicketEdits(
         return "ticket edit appReviewPlanMarkdown must be a non-empty string or null.";
       if (appReviewEligible && appReviewPlanMarkdown === null)
         return "App Review eligible ticket edits require appReviewPlanMarkdown.";
+      const appReviewScope = record["appReviewScope"];
+      if (appReviewScope !== undefined && !isAppReviewScope(appReviewScope))
+        return "ticket edit appReviewScope must be 'e2e', 'browser', or 'both'.";
+      if (appReviewScope !== undefined && !appReviewEligible)
+        return "ticket edit appReviewScope requires appReviewEligible.";
       edits.push({
         type,
         key,
@@ -575,6 +599,7 @@ function parsePlanningTicketEdits(
         dependencyKeys,
         replacesPlanningTicketIds,
         appReviewEligible,
+        ...(appReviewScope === undefined ? {} : { appReviewScope }),
         appReviewPlanMarkdown,
       });
       continue;
@@ -606,6 +631,9 @@ function parsePlanningTicketEdits(
         (typeof appReviewPlanMarkdown !== "string" || appReviewPlanMarkdown.trim().length === 0)
       )
         return "ticket edit appReviewPlanMarkdown must be a non-empty string or null.";
+      const appReviewScope = record["appReviewScope"];
+      if (appReviewScope !== undefined && !isAppReviewScope(appReviewScope))
+        return "ticket edit appReviewScope must be 'e2e', 'browser', or 'both'.";
       edits.push({
         type,
         ticketId,
@@ -614,6 +642,7 @@ function parsePlanningTicketEdits(
         ...(plannedFileChanges === undefined ? {} : { plannedFileChanges }),
         ...(dependencyKeys === undefined ? {} : { dependencyKeys }),
         ...(appReviewEligible === undefined ? {} : { appReviewEligible }),
+        ...(appReviewScope === undefined ? {} : { appReviewScope }),
         ...(appReviewPlanMarkdown === undefined ? {} : { appReviewPlanMarkdown }),
       });
       continue;

@@ -122,6 +122,9 @@ function validatePlanningTicketGraph(
     if (ticket.appReviewEligible === true && !ticket.appReviewPlanMarkdown) {
       return `Planning Ticket '${ticket.id}' is App Review eligible but has no review plan.`;
     }
+    if (ticket.appReviewScope !== undefined && ticket.appReviewEligible !== true) {
+      return `Planning Ticket '${ticket.id}' sets appReviewScope without being App Review eligible.`;
+    }
     for (const dependency of ticket.dependencies) {
       if (dependency.specId !== specId) {
         return `Planning Ticket '${ticket.id}' has a dependency in a different Spec.`;
@@ -219,6 +222,7 @@ function buildPlanningTicketsFromArtifact(input: {
       plannedFileChanges: [...ticket.plannedFileChanges],
       dependencies,
       appReviewEligible: ticket.appReviewEligible ?? false,
+      ...(ticket.appReviewScope === undefined ? {} : { appReviewScope: ticket.appReviewScope }),
       appReviewPlanMarkdown: ticket.appReviewPlanMarkdown ?? null,
       status: "open",
       createdAt: input.command.createdAt,
@@ -305,6 +309,7 @@ function applyPlanningReviewerEdits(input: {
         plannedFileChanges: [...edit.plannedFileChanges],
         dependencies: [],
         appReviewEligible: edit.appReviewEligible,
+        ...(edit.appReviewScope === undefined ? {} : { appReviewScope: edit.appReviewScope }),
         appReviewPlanMarkdown: edit.appReviewPlanMarkdown,
         status: "open",
         createdAt: input.updatedAt,
@@ -355,6 +360,7 @@ function applyPlanningReviewerEdits(input: {
       ...(edit.appReviewEligible === undefined
         ? {}
         : { appReviewEligible: edit.appReviewEligible }),
+      ...(edit.appReviewScope === undefined ? {} : { appReviewScope: edit.appReviewScope }),
       ...(edit.appReviewPlanMarkdown === undefined
         ? {}
         : { appReviewPlanMarkdown: edit.appReviewPlanMarkdown }),
@@ -467,6 +473,7 @@ function buildPlanningTicketsStagePrompt(spec: OrchestrationPlanningSpec): strin
             plannedFileChanges: [{ path: "apps/example/src/feature.ts", action: "update" }],
             dependencyKeys: [],
             appReviewEligible: true,
+            appReviewScope: "both",
             appReviewPlanMarkdown:
               "Start the ticket worktree's App Dev Stack, open the affected UI, exercise the primary flow, and capture the expected visible result.",
           },
@@ -3804,6 +3811,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ? {}
           : { previewTargetsPinned: command.previewTargetsPinned }),
         ...(command.reviewOnly === undefined ? {} : { reviewOnly: command.reviewOnly }),
+        ...(command.appReviewScope === undefined ? {} : { appReviewScope: command.appReviewScope }),
         // A review-only run has nothing for a second cycle to verify, so its
         // budget is one whatever the client asked for.
         cycleBudget:

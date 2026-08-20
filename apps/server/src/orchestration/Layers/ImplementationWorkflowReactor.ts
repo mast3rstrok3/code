@@ -2245,6 +2245,7 @@ const make = Effect.gen(function* () {
         briefMarkdown: ticket.appReviewPlanMarkdown,
         supportingContextMarkdown: `Review only ticket ${input.ticketId}: ${ticket.title}. Treat its attached plan and acceptance criteria as authoritative.`,
         previewTargets: [frontendUrl],
+        ...(ticket.appReviewScope === undefined ? {} : { appReviewScope: ticket.appReviewScope }),
         cycleBudget: AppReviewWorkflowCycleBudget.make(
           yield* cyclesForStep({
             key: {

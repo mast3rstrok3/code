@@ -260,6 +260,52 @@ ${JSON.stringify({
     NodeAssert.equal(result.directive.tickets[0]?.appReviewPlanMarkdown, null);
   });
 
+  it("parses and validates the App Review scope on tickets", () => {
+    const ticket = (overrides: Record<string, unknown>) => ({
+      key: "ticket-1",
+      title: "Implement checkout",
+      bodyMarkdown: "Build checkout.",
+      plannedFileChanges: [{ path: "src/checkout.ts", action: "create" }],
+      dependencyKeys: [],
+      appReviewEligible: true,
+      appReviewPlanMarkdown: "Verify what the e2e journey cannot prove.",
+      ...overrides,
+    });
+    const artifact = (overrides: Record<string, unknown>) => `\`\`\`json
+${JSON.stringify({ type: "planning-tickets-artifact", specId: "spec-1", tickets: [ticket(overrides)] })}
+\`\`\``;
+
+    const scoped = parseWorkflowDirectiveFromMarkdown(artifact({ appReviewScope: "e2e" }));
+    NodeAssert.equal(scoped.kind, "parsed");
+    if (scoped.kind === "parsed" && scoped.directive.type === "planning-tickets-artifact") {
+      NodeAssert.equal(scoped.directive.tickets[0]?.appReviewScope, "e2e");
+    }
+
+    const invalid = parseWorkflowDirectiveFromMarkdown(artifact({ appReviewScope: "manual" }));
+    NodeAssert.equal(invalid.kind, "error");
+    if (invalid.kind === "error") {
+      NodeAssert.equal(
+        invalid.message,
+        "planning-tickets-artifact appReviewScope must be 'e2e', 'browser', or 'both'.",
+      );
+    }
+
+    const ineligible = parseWorkflowDirectiveFromMarkdown(
+      artifact({
+        appReviewEligible: false,
+        appReviewPlanMarkdown: null,
+        appReviewScope: "browser",
+      }),
+    );
+    NodeAssert.equal(ineligible.kind, "error");
+    if (ineligible.kind === "error") {
+      NodeAssert.equal(
+        ineligible.message,
+        "planning-tickets-artifact appReviewScope requires appReviewEligible.",
+      );
+    }
+  });
+
   it("parses ticket-scoped Code Review results", () => {
     const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
 {

@@ -16,6 +16,7 @@ import {
   buildReviewPrompt,
   cycleFailureAction,
   e2eCheckIdsForCommands,
+  effectiveAppReviewScope,
   priorCycleChecks,
   findAppReviewParentTicket,
   nextAppReviewWorkflowAction,
@@ -611,6 +612,47 @@ it("derives stable e2e check ids from command order", () => {
     "e2e-1",
     "e2e-2",
   ]);
+});
+
+it("degrades every scope to browser when the project declares no e2e commands", () => {
+  expect(effectiveAppReviewScope({ appReviewScope: "e2e" }, 0)).toBe("browser");
+  expect(effectiveAppReviewScope({ appReviewScope: "both" }, 0)).toBe("browser");
+  expect(effectiveAppReviewScope({}, 0)).toBe("browser");
+  expect(effectiveAppReviewScope({ appReviewScope: "e2e" }, 1)).toBe("e2e");
+  expect(effectiveAppReviewScope({ appReviewScope: "browser" }, 1)).toBe("browser");
+  expect(effectiveAppReviewScope({}, 1)).toBe("both");
+});
+
+it("tells an e2e-only reviewer to skip the browser and its evidence", () => {
+  const prompt = buildReviewPrompt({
+    run: run(),
+    cycle: carryCycle(1, AppReviewId.make("app-review-1")),
+    priorFindingIds: [],
+    carryableChecks: [],
+    e2eCommands: ["pnpm e2e:review"],
+    reviewScope: "e2e",
+  });
+  // Assert on the launch section only; the embedded skill text legitimately
+  // describes the browser part for reviews that have one.
+  const launchSection = prompt.split("<workflow-skill")[0]!;
+  expect(launchSection).toContain("- e2e-1: pnpm e2e:review");
+  expect(launchSection).toContain("This review is end-to-end only");
+  expect(launchSection).not.toContain("Part two is the browser review");
+  expect(launchSection).not.toContain("Record the complete flow, capture captioned screenshots");
+});
+
+it("omits the e2e part for a browser-only review even when commands are declared", () => {
+  const prompt = buildReviewPrompt({
+    run: run(),
+    cycle: carryCycle(1, AppReviewId.make("app-review-1")),
+    priorFindingIds: [],
+    carryableChecks: [],
+    e2eCommands: ["pnpm e2e:review"],
+    reviewScope: "browser",
+  });
+  const launchSection = prompt.split("<workflow-skill")[0]!;
+  expect(launchSection).not.toContain("e2e-1");
+  expect(launchSection).toContain("Record the complete flow, capture captioned screenshots");
 });
 
 it("puts the project's e2e commands before browser work with their check ids", () => {

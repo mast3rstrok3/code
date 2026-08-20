@@ -22,6 +22,15 @@ export type AppReviewId = typeof AppReviewId.Type;
  */
 export const APP_REVIEW_PREVIEW_URL_ENV = "APP_REVIEW_PREVIEW_URL";
 
+/**
+ * How an App Review verifies its target: the project's e2e commands only, the
+ * browser only, or both. Tickets carry it as `appReviewScope` next to
+ * `appReviewEligible`; absent means both. A run whose project declares no
+ * `e2eCommands` degrades to browser whatever the scope says.
+ */
+export const AppReviewScope = Schema.Literals(["e2e", "browser", "both"]);
+export type AppReviewScope = typeof AppReviewScope.Type;
+
 /** Default and hard limit for complete review, gap-analysis, and implementation cycles. */
 export const APP_REVIEW_WORKFLOW_DEFAULT_CYCLES = 10;
 export const APP_REVIEW_WORKFLOW_MAX_CYCLES = 50;
@@ -187,6 +196,8 @@ export const AppReviewWorkflowRun = Schema.Struct({
    * same way a budget that runs out on a failing review does.
    */
   reviewOnly: Schema.optionalKey(Schema.Boolean),
+  /** How this run verifies its target; absent means e2e and browser both. */
+  appReviewScope: Schema.optionalKey(AppReviewScope),
   cycleBudget: AppReviewWorkflowCycleBudget.pipe(
     Schema.withDecodingDefault(Effect.succeed(APP_REVIEW_WORKFLOW_DEFAULT_CYCLES)),
   ),

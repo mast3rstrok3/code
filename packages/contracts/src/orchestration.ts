@@ -12,6 +12,7 @@ import {
   AppReviewEvidence,
   AppReviewId,
   AppReviewRecord,
+  AppReviewScope,
   AppReviewWorkflowCaller,
   AppReviewWorkflowPhase,
   AppReviewWorkflowCycleBudget,
@@ -453,6 +454,8 @@ export const OrchestrationPlanningTicket = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   appReviewEligible: Schema.optionalKey(Schema.Boolean),
+  /** How the ticket's App Review verifies it; absent means both. */
+  appReviewScope: Schema.optionalKey(AppReviewScope),
   appReviewPlanMarkdown: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
   status: TrimmedNonEmptyString.pipe(Schema.withDecodingDefault(Effect.succeed("open"))),
   createdAt: IsoDateTime,
@@ -2033,6 +2036,7 @@ export const ThreadPlanningTicketArtifactInput = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   appReviewEligible: Schema.optionalKey(Schema.Boolean),
+  appReviewScope: Schema.optionalKey(AppReviewScope),
   appReviewPlanMarkdown: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
 });
 export type ThreadPlanningTicketArtifactInput = typeof ThreadPlanningTicketArtifactInput.Type;
@@ -2046,6 +2050,7 @@ export const PlanningReviewerTicketEdit = Schema.Union([
     plannedFileChanges: Schema.optional(NonEmptyOrchestrationPlanningFileChanges),
     dependencyKeys: Schema.optional(Schema.Array(OrchestrationPlanningTicketKey)),
     appReviewEligible: Schema.optional(Schema.Boolean),
+    appReviewScope: Schema.optional(AppReviewScope),
     appReviewPlanMarkdown: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   }),
   Schema.Struct({
@@ -2058,6 +2063,7 @@ export const PlanningReviewerTicketEdit = Schema.Union([
       Schema.withDecodingDefault(Effect.succeed([])),
     ),
     appReviewEligible: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+    appReviewScope: Schema.optional(AppReviewScope),
     appReviewPlanMarkdown: Schema.NullOr(TrimmedNonEmptyString).pipe(
       Schema.withDecodingDefault(Effect.succeed(null)),
     ),
@@ -2401,6 +2407,8 @@ export const ThreadAppReviewWorkflowLaunchCommand = Schema.Struct({
   previewTargetsPinned: Schema.optionalKey(Schema.Boolean),
   /** Reviews and writes repair tickets once, without repairing. Forces one cycle. */
   reviewOnly: Schema.optionalKey(Schema.Boolean),
+  /** How the run verifies its target; absent means e2e and browser both. */
+  appReviewScope: Schema.optionalKey(AppReviewScope),
   cycleBudget: AppReviewWorkflowCycleBudget.pipe(
     Schema.withDecodingDefault(Effect.succeed(APP_REVIEW_WORKFLOW_DEFAULT_CYCLES)),
   ),

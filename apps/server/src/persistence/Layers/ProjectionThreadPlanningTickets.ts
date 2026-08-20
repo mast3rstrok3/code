@@ -34,13 +34,13 @@ const makeProjectionThreadPlanningTicketRepository = Effect.gen(function* () {
       INSERT INTO projection_thread_planning_tickets (
         ticket_id, ticket_key, spec_id, thread_id, ordinal, title, body_markdown,
         planned_file_changes_json, dependencies_json, app_review_eligible,
-        app_review_plan_markdown, status, created_at, updated_at
+        app_review_scope, app_review_plan_markdown, status, created_at, updated_at
       )
       VALUES (
         ${row.ticketId}, ${row.ticketKey}, ${row.specId}, ${row.threadId}, ${row.ordinal},
         ${row.title}, ${row.bodyMarkdown}, ${JSON.stringify(row.plannedFileChanges)},
         ${JSON.stringify(row.dependencies)}, ${row.appReviewEligible},
-        ${row.appReviewPlanMarkdown},
+        ${row.appReviewScope}, ${row.appReviewPlanMarkdown},
         ${row.status}, ${row.createdAt}, ${row.updatedAt}
       )
       ON CONFLICT (ticket_id)
@@ -54,6 +54,7 @@ const makeProjectionThreadPlanningTicketRepository = Effect.gen(function* () {
         planned_file_changes_json = excluded.planned_file_changes_json,
         dependencies_json = excluded.dependencies_json,
         app_review_eligible = excluded.app_review_eligible,
+        app_review_scope = excluded.app_review_scope,
         app_review_plan_markdown = excluded.app_review_plan_markdown,
         status = excluded.status,
         created_at = excluded.created_at,
@@ -76,6 +77,7 @@ const makeProjectionThreadPlanningTicketRepository = Effect.gen(function* () {
         planned_file_changes_json AS "plannedFileChanges",
         dependencies_json AS "dependencies",
         app_review_eligible AS "appReviewEligible",
+        app_review_scope AS "appReviewScope",
         app_review_plan_markdown AS "appReviewPlanMarkdown",
         status,
         created_at AS "createdAt",
