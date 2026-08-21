@@ -21,6 +21,7 @@ import {
 import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
 import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
 import { createModelSelection, normalizeModelSlug } from "@t3tools/shared/model";
+import { interactionModeForWorkflowPreset } from "@t3tools/shared/workflowPresets";
 import {
   memo,
   type ReactNode,
@@ -89,7 +90,13 @@ import { ProviderModelPicker } from "./ProviderModelPicker";
 import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommandMenu";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
-import type { ComposerBuildSkill } from "./ComposerModePicker";
+import {
+  resolveComposerPrimaryMode,
+  resolveWorkflowPresetForPicker,
+  type ComposerBuildSkill,
+  type ComposerModeCatalog,
+} from "./ComposerModePicker";
+import { ComposerModeCatalogDialog } from "./ComposerModeCatalogDialog";
 import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
 import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
@@ -111,6 +118,7 @@ import { cn, randomUUID } from "~/lib/utils";
 import { AppReviewLaunchControls } from "./AppReviewLaunchControls";
 import { Separator } from "../ui/separator";
 import { useWorkflowCatalog } from "../../workflowCatalogState";
+import { useUpdateEnvironmentSettings } from "../../hooks/useSettings";
 
 type ComposerCommandMenuPosition = {
   bottom: number;
@@ -661,6 +669,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     onExpandImage,
   } = props;
   const isSendDisabled = sendDisabledReason !== null;
+  const updateEnvironmentSettings = useUpdateEnvironmentSettings(environmentId);
 
   // ------------------------------------------------------------------
   // Store subscriptions (prompt / images / terminal contexts)
@@ -683,6 +692,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     [catalogSkills],
   );
   const [selectedBuildSkillId, setSelectedBuildSkillId] = useState<string | null>(null);
+  const [modeCatalog, setModeCatalog] = useState<ComposerModeCatalog | null>(null);
 
   useEffect(() => {
     if (workflowCatalogState.status !== "loaded") return;
@@ -895,6 +905,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   const selectedPromptEffort = composerProviderState.promptEffort;
   const selectedModelOptionsForDispatch = composerProviderState.modelOptionsForDispatch;
+  const selectedModelSelection = useMemo<ModelSelection>(
+    () => createModelSelection(selectedInstanceId, selectedModel, selectedModelOptionsForDispatch),
+    [selectedInstanceId, selectedModel, selectedModelOptionsForDispatch],
+  );
   // Plan mode is a legacy feature behind Settings → Beta. With the flag off,
   // ChatView forces the effective mode to "default", so hiding the toggle
   // can't trap anyone in plan mode.
@@ -909,6 +923,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const planningWorkflowAvailable = useMemo(
     () => isPlanningWorkflowAvailableForProvider(selectedProvider),
     [selectedProvider],
+  );
+  const handleWorkflowDefaultsChange = useCallback(
+    (defaults: {
+      readonly stepModels: UnifiedSettings["workflowStepModels"];
+      readonly stepCycles: UnifiedSettings["workflowStepCycles"];
+      readonly stepReviewParts: UnifiedSettings["workflowStepReviewParts"];
+    }) => {
+      updateEnvironmentSettings({
+        workflowStepModels: [...defaults.stepModels],
+        workflowStepCycles: [...defaults.stepCycles],
+        workflowStepReviewParts: [...defaults.stepReviewParts],
+      });
+    },
+    [updateEnvironmentSettings],
   );
   // Workflows and Build skills are not plan mode, so they survive the legacy
   // plan-mode beta being off; only the Build/Plan rows follow that toggle. The
@@ -929,17 +957,32 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       showPrimaryModes: composerProviderControls.showInteractionModeToggle,
       buildSkills,
       selectedBuildSkillId,
+      workflowDefaults: {
+        environmentId,
+        rootModelSelection: selectedModelSelection,
+        stepModels: settings.workflowStepModels,
+        stepCycles: settings.workflowStepCycles,
+        stepReviewParts: settings.workflowStepReviewParts,
+        onChange: handleWorkflowDefaultsChange,
+      },
+      onOpenCatalog: setModeCatalog,
       onInteractionModeChange: handleInteractionModeChange,
       onBuildSkillChange: setSelectedBuildSkillId,
     };
   }, [
     buildSkills,
     composerProviderControls.showInteractionModeToggle,
+    environmentId,
     handleInteractionModeChange,
+    handleWorkflowDefaultsChange,
     interactionMode,
     lastWorkflowPreset,
     planningWorkflowAvailable,
     selectedBuildSkillId,
+    selectedModelSelection,
+    settings.workflowStepCycles,
+    settings.workflowStepModels,
+    settings.workflowStepReviewParts,
     workflowPreset,
   ]);
 
@@ -963,10 +1006,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     workflowPreset,
   ]);
 
-  const selectedModelSelection = useMemo<ModelSelection>(
-    () => createModelSelection(selectedInstanceId, selectedModel, selectedModelOptionsForDispatch),
-    [selectedInstanceId, selectedModel, selectedModelOptionsForDispatch],
-  );
   const selectedModelForPicker = selectedModel;
   // Instance-keyed option list so the picker can show each configured
   // instance (built-in + custom) as a first-class sidebar entry. The
@@ -3297,6 +3336,34 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           )}
         </div>
       </div>
+      {composerModeControls ? (
+        <ComposerModeCatalogDialog
+          catalog={modeCatalog}
+          activePreset={
+            resolveComposerPrimaryMode(composerModeControls) === "workflow"
+              ? resolveWorkflowPresetForPicker(composerModeControls)
+              : null
+          }
+          buildSkills={composerModeControls.buildSkills}
+          selectedBuildSkillId={composerModeControls.selectedBuildSkillId}
+          workflowAvailable={composerModeControls.workflowAvailable}
+          workflowDefaults={composerModeControls.workflowDefaults}
+          onOpenChange={(open) => {
+            if (!open) setModeCatalog(null);
+          }}
+          onSelectPreset={(preset) => {
+            composerModeControls.onBuildSkillChange(null);
+            composerModeControls.onInteractionModeChange(
+              interactionModeForWorkflowPreset(preset),
+              preset,
+            );
+          }}
+          onSelectSkill={(skillId) => {
+            composerModeControls.onInteractionModeChange("default", null);
+            composerModeControls.onBuildSkillChange(skillId);
+          }}
+        />
+      ) : null}
     </form>
   );
 });

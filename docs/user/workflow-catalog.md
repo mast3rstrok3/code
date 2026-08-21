@@ -8,11 +8,11 @@ The Settings catalog separates workflow automation into three layers:
 
 All three catalogs are read-only and versioned with the T3 Code server; the default model per step, on the same Workflows page, is yours to change. Skills are sorted alphabetically. Each skill shows a **Build** pill when it can be invoked directly and workflow pills for every guided workflow that uses it. Document pills link to the supporting references associated with that skill.
 
-To invoke a skill directly, open the composer's model settings — the control next to the model name that also holds reasoning and context window — go to **Mode**, choose **Skills**, and select the skill. The control then names the skill. That skill applies to the next turn and clears after the turn starts successfully. This path is built into T3 Code and works independently of provider-installed project or personal skills; `$skill` mentions still invoke skills discovered from the active provider.
+To invoke a skill directly, open the composer's model settings next to the model name, go to **Mode**, and choose **Skills**. T3 Code opens the skill catalog in a dialog. Select a skill to use it, or open its help button to read the full instructions first. The composer control then names the skill. That skill applies to the next turn and clears after the turn starts successfully. This path is built into T3 Code and works independently of provider-installed project or personal skills. `$skill` mentions still invoke skills discovered from the active provider.
 
 ## Choosing a workflow
 
-Workflows live in the same composer control as skills: open the model settings next to the model name and pick **Workflow** under **Mode**. Build and Plan appear alongside them only while the legacy plan mode setting is on; workflows and skills do not depend on it.
+Workflows live in the same composer control as skills. Open the model settings next to the model name and pick **Workflows** under **Mode**. The dialog lists Fast Feature, Engineering Workflow, Wayfinder, and App Review. Each help button shows the workflow steps. Selecting a workflow opens its model, cycle, and review-part settings before the composer switches modes. Keep the standing defaults or change them, then choose **Use workflow**. You can still override the same settings from the Workflows panel after the run starts. Build and Plan appear alongside these catalogs only while the legacy plan mode setting is on. Workflows and skills do not depend on it.
 
 - **Fast Feature** plans and implements a focused change without the full Spec-and-tickets pipeline.
 - **Engineering Workflow** begins directly with Grill with Docs, then proceeds through Planning and Implementation without another workflow handoff.
@@ -75,7 +75,7 @@ Nothing is nudged while it is working, and nothing is nudged inside a paused run
 
 ### Choosing a model per step
 
-By default every step runs on the model the workflow was started with. There are three ways to change that. **Settings → Workflows → Default step models** sets the standing choice every new run starts from. Inside a run, **Models** at the top of the Workflows panel lays out the whole run at once, and each step's own settings button tunes one step; those two edit the same per-run pins, and a per-run pin wins over the default.
+By default every step runs on the model the workflow was started with. There are three ways to change that. **Settings → Workflows → Default step models** sets the standing choice every new run starts from. The workflow dialog exposes those defaults before a run starts. Inside a run, **Settings** at the top of the Workflows panel lays out the whole run at once, and each step's own settings button tunes one step. Those two edit the same per-run pins, and a per-run pin wins over the default.
 
 A step is a phase of the run, not a single agent. "Execute ticket waves" starts TDD workers, a ticket App Review, and a ticket Code Review; an App Review cycle runs a browser review, a gap analysis that writes the repair tickets, and the repair implementation. Each of those agents can take its own model, and each follows its step unless you give it one:
 

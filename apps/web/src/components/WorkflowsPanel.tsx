@@ -89,7 +89,7 @@ import ChatMarkdown from "./ChatMarkdown";
 import { WorkflowStepSettingsMenu } from "./WorkflowStepSettingsMenu";
 import { type SetWorkflowStepReviewParts } from "./WorkflowStepReviewParts";
 import type { SetWorkflowStepCycles } from "./WorkflowStepCycles";
-import { WorkflowModelsMenu } from "./WorkflowModelsMenu";
+import { WorkflowSettingsMenu } from "./WorkflowSettingsMenu";
 import {
   workflowModelPinKey,
   type SetWorkflowStepModel,
@@ -2672,7 +2672,7 @@ export function WorkflowsPanel(props: {
               />
             </span>
           </button>
-          <WorkflowModelsMenu
+          <WorkflowSettingsMenu
             environmentId={workflow.root.environmentId}
             preset={workflow.root.workflowPreset ?? null}
             pinFor={(key) =>
@@ -2682,6 +2682,12 @@ export function WorkflowsPanel(props: {
             }
             rootModelSelection={workflow.root.modelSelection}
             onSetStepModel={props.onSetStepModel}
+            stepCycles={workflow.root.workflowStepCycles}
+            defaultStepCycles={props.defaultStepCycles}
+            onSetStepCycles={props.onSetStepCycles}
+            stepReviewParts={workflow.root.workflowStepReviewParts}
+            defaultStepReviewParts={props.defaultStepReviewParts}
+            onSetStepReviewParts={props.onSetStepReviewParts}
           />
           {workflow.root.workflowPausedAt == null && props.onPauseWorkflow ? (
             <button

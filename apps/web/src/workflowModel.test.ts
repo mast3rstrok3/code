@@ -719,6 +719,93 @@ describe("buildWorkflowViewModel", () => {
     ]);
   });
 
+  it("keeps the run coordinator off the final code review step", () => {
+    // The coordinator thread is created with the first ticket wave and reads
+    // as settled whenever it is idle, so attaching it to the last step called
+    // the final code review done before it had started.
+    const root = thread("root", {
+      workflowPreset: "planning",
+      workflowContext: { workflowId: "planning-run", rootThreadId: "root" },
+    });
+    const orchestrator = thread("orchestrator", {
+      parentThreadId: "root",
+      workflowRole: "implementation-orchestrator",
+      workflowContext: {
+        workflowId: "implementation-run",
+        parentWorkflowId: "planning-run",
+        rootThreadId: "root",
+        ticketScope: ["ticket-1", "ticket-2"],
+      },
+    });
+    const worker = thread("worker", {
+      parentThreadId: "root",
+      workflowRole: "implementation-worker",
+      workflowContext: {
+        workflowId: "implementation-run",
+        parentWorkflowId: "planning-run",
+        rootThreadId: "root",
+        ticketScope: ["ticket-1"],
+      },
+    });
+    const model = buildWorkflowViewModel([root, orchestrator, worker]);
+    const groups = model.rootsByThreadKey.get("env:root")?.groups ?? [];
+    const planning = groups.find((group) => group.sourceId === "planning-run");
+    const steps = planning
+      ? buildWorkflowSteps(planning, groups, root, { flattenNestedWorkflows: true })
+      : [];
+    const byLabel = (needle: string) => steps.find((step) => step.label?.includes(needle));
+
+    // The coordinator lands on the step its own turn does, and nothing falls
+    // through to a fallback step after the last defined one.
+    expect(byLabel("Execute ticket waves")?.entries.map((entry) => entry.id)).toEqual([
+      "env:orchestrator",
+      "env:worker",
+    ]);
+    expect(byLabel("Final Code Review")?.entries.map((entry) => entry.id)).toEqual(["env:root"]);
+    expect(steps).toHaveLength(9);
+
+    // The panel reads a step's status from the threads it owns other than the
+    // workflow root, and the final step owns none until the review starts.
+    const finalStepThreads = (byLabel("Final Code Review")?.entries ?? []).flatMap((entry) =>
+      entry.kind === "thread" && entry.row.thread.id !== root.id ? [entry.row.thread] : [],
+    );
+    expect(
+      resolveWorkflowStepStatus({
+        threadStatuses: finalStepThreads.map(resolveWorkflowThreadStatus),
+      }),
+    ).toBe("pending");
+  });
+
+  it("leaves the run coordinator on the step the Implementation preset gives it", () => {
+    const root = thread("root", {
+      workflowPreset: "implementation",
+      workflowContext: { workflowId: "implementation-run", rootThreadId: "root" },
+    });
+    const orchestrator = thread("orchestrator", {
+      parentThreadId: "root",
+      workflowRole: "implementation-orchestrator",
+      workflowContext: {
+        workflowId: "implementation-run",
+        rootThreadId: "root",
+        ticketScope: ["ticket-1"],
+      },
+    });
+    const model = buildWorkflowViewModel([root, orchestrator]);
+    const groups = model.rootsByThreadKey.get("env:root")?.groups ?? [];
+    const implementation = groups.find((group) => group.sourceId === "implementation-run");
+    const steps = implementation
+      ? buildWorkflowSteps(implementation, groups, root, { flattenNestedWorkflows: true })
+      : [];
+    const byLabel = (needle: string) => steps.find((step) => step.label?.includes(needle));
+
+    expect(byLabel("Load Planning tickets")?.entries.map((entry) => entry.id)).toEqual([
+      "env:root",
+      "env:orchestrator",
+    ]);
+    expect(byLabel("Execute ticket waves")?.entries).toEqual([]);
+    expect(byLabel("Final Code Review")?.entries).toEqual([]);
+  });
+
   it("maps every implementation stage onto a guided preset step", () => {
     // Guided presets prefix labels with their phase and name the work
     // differently from the legacy presets; a stage that matches no step

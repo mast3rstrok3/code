@@ -325,6 +325,9 @@ function workflowStepIdentity<TThread extends WorkflowModelThread>(
   return `role:${entry.row.thread.workflowRole ?? "workflow-child"}`;
 }
 
+/** The skill a preset names when it gives the run's coordinator a step of its own. */
+const IMPLEMENTATION_COORDINATOR_SKILL_ID = "implementation.orchestrator-planning.codex";
+
 function entrySkillIds<TThread extends WorkflowModelThread>(
   entry: WorkflowTimelineEntry<TThread>,
 ): ReadonlySet<string> {
@@ -347,7 +350,7 @@ function entrySkillIds<TThread extends WorkflowModelThread>(
     case "planning-reviewer":
       return new Set(["planning.ticket-reviewer.codex"]);
     case "implementation-orchestrator":
-      return new Set(["implementation.orchestrator-planning.codex"]);
+      return new Set([IMPLEMENTATION_COORDINATOR_SKILL_ID]);
     case "implementation-worker":
     case "implementation-fixer":
     case "product-fix-implementer":
@@ -374,11 +377,17 @@ function entrySkillIds<TThread extends WorkflowModelThread>(
 function entryMatchesDefinedStep<TThread extends WorkflowModelThread>(
   entry: WorkflowTimelineEntry<TThread>,
   step: WorkflowPresetHelpStep,
+  options: { readonly coordinatorHasStep: boolean },
 ): boolean {
   if (entry.kind === "workflow") return false;
   const role = entry.row.thread.workflowRole;
   const label = step.label.toLowerCase();
   if (label.includes("execute ticket waves")) {
+    // The run's coordinator opens the implementation phase and stays alive for
+    // the rest of it, so it describes no single step. Presets that give it a
+    // step of its own keep it there; the ones without land it on the step that
+    // starts the phase, which is the work its own turn does.
+    if (role === "implementation-orchestrator") return !options.coordinatorHasStep;
     return (
       entry.row.thread.workflowContext?.ticketScope?.length === 1 &&
       (role === "implementation-worker" ||
@@ -405,8 +414,10 @@ function entryMatchesDefinedStep<TThread extends WorkflowModelThread>(
     );
   }
   if (label.includes("final code review")) {
+    // Deliberately not the run's coordinator: it exists from the first ticket
+    // wave onward and reads as settled whenever it is idle, which called the
+    // final review done before it had started.
     return (
-      role === "implementation-orchestrator" ||
       role === "implementation-change-request-babysitter" ||
       (role === "implementation-code-reviewer" &&
         entry.row.thread.workflowContext?.ticketScope?.length !== 1) ||
@@ -547,9 +558,14 @@ export function buildWorkflowSteps<TThread extends WorkflowModelThread>(
   const definedSteps =
     group.preset === null ? [] : WORKFLOW_PRESET_DEFINITION_BY_ID[group.preset].helpSteps;
   if (definedSteps.length > 0) {
+    const coordinatorHasStep = definedSteps.some(
+      (definition) => definition.skillId === IMPLEMENTATION_COORDINATOR_SKILL_ID,
+    );
     const matchedEntryIds = new Set<string>();
     const steps = definedSteps.map((definition, index): WorkflowTimelineStep<TThread> => {
-      const matchedEntries = timeline.filter((entry) => entryMatchesDefinedStep(entry, definition));
+      const matchedEntries = timeline.filter((entry) =>
+        entryMatchesDefinedStep(entry, definition, { coordinatorHasStep }),
+      );
       for (const entry of matchedEntries) matchedEntryIds.add(entry.id);
       const usesRootThread =
         group.preset !== null && definedStepUsesRootThread(group.preset, definition);

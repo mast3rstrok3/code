@@ -47,6 +47,7 @@ import {
   OrchestrationPlanningActiveReviewRequest,
   WorkflowStepCycleOverride,
   WorkflowStepModelOverride,
+  WorkflowStepReviewPartsOverride,
   AppReviewId,
   type WorkspaceUserView,
 } from "@t3tools/contracts";
@@ -171,6 +172,9 @@ const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
     ),
     workflowStepCycles: Schema.NullOr(
       Schema.fromJsonString(Schema.Array(WorkflowStepCycleOverride)),
+    ),
+    workflowStepReviewParts: Schema.NullOr(
+      Schema.fromJsonString(Schema.Array(WorkflowStepReviewPartsOverride)),
     ),
   }),
 );
@@ -648,6 +652,10 @@ function mapThreadShellRow(input: {
     ...(input.thread.workflowStepCycles != null && input.thread.workflowStepCycles.length > 0
       ? { workflowStepCycles: input.thread.workflowStepCycles }
       : {}),
+    ...(input.thread.workflowStepReviewParts != null &&
+    input.thread.workflowStepReviewParts.length > 0
+      ? { workflowStepReviewParts: input.thread.workflowStepReviewParts }
+      : {}),
     title: input.thread.title,
     modelSelection: input.thread.modelSelection,
     runtimeMode: input.thread.runtimeMode,
@@ -807,6 +815,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           planning_active_review_json AS "planningActiveReview",
           workflow_step_models_json AS "workflowStepModels",
           workflow_step_cycles_json AS "workflowStepCycles",
+          workflow_step_review_parts_json AS "workflowStepReviewParts",
           deleted_at AS "deletedAt"
         FROM projection_threads
         ORDER BY created_at ASC, thread_id ASC
@@ -858,6 +867,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           planning_active_review_json AS "planningActiveReview",
           workflow_step_models_json AS "workflowStepModels",
           workflow_step_cycles_json AS "workflowStepCycles",
+          workflow_step_review_parts_json AS "workflowStepReviewParts",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE deleted_at IS NULL
@@ -911,6 +921,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           planning_active_review_json AS "planningActiveReview",
           workflow_step_models_json AS "workflowStepModels",
           workflow_step_cycles_json AS "workflowStepCycles",
+          workflow_step_review_parts_json AS "workflowStepReviewParts",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE deleted_at IS NULL
@@ -1524,6 +1535,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           planning_active_review_json AS "planningActiveReview",
           workflow_step_models_json AS "workflowStepModels",
           workflow_step_cycles_json AS "workflowStepCycles",
+          workflow_step_review_parts_json AS "workflowStepReviewParts",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE thread_id = ${threadId}
@@ -2431,6 +2443,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 ...(row.workflowStepCycles != null && row.workflowStepCycles.length > 0
                   ? { workflowStepCycles: row.workflowStepCycles }
                   : {}),
+                ...(row.workflowStepReviewParts != null && row.workflowStepReviewParts.length > 0
+                  ? { workflowStepReviewParts: row.workflowStepReviewParts }
+                  : {}),
                 title: row.title,
                 modelSelection: row.modelSelection,
                 runtimeMode: row.runtimeMode,
@@ -2864,6 +2879,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                     : {}),
                   ...(row.workflowStepCycles != null && row.workflowStepCycles.length > 0
                     ? { workflowStepCycles: row.workflowStepCycles }
+                    : {}),
+                  ...(row.workflowStepReviewParts != null && row.workflowStepReviewParts.length > 0
+                    ? { workflowStepReviewParts: row.workflowStepReviewParts }
                     : {}),
                   title: row.title,
                   modelSelection: row.modelSelection,
@@ -3767,6 +3785,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         ...(threadRow.value.workflowStepCycles != null &&
         threadRow.value.workflowStepCycles.length > 0
           ? { workflowStepCycles: threadRow.value.workflowStepCycles }
+          : {}),
+        ...(threadRow.value.workflowStepReviewParts != null &&
+        threadRow.value.workflowStepReviewParts.length > 0
+          ? { workflowStepReviewParts: threadRow.value.workflowStepReviewParts }
           : {}),
         title: threadRow.value.title,
         modelSelection: threadRow.value.modelSelection,

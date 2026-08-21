@@ -54,9 +54,21 @@ describe("ComposerModePicker state", () => {
   it("sorts Build skills alphabetically with stable ID tie-breaking", () => {
     expect(
       sortComposerBuildSkills([
-        { id: "z", title: "TDD", description: "TDD", workflowIds: [] },
-        { id: "b", title: "Code Review", description: "Review", workflowIds: [] },
-        { id: "a", title: "Code Review", description: "Review", workflowIds: [] },
+        { id: "z", title: "TDD", description: "TDD", promptText: "TDD", workflowIds: [] },
+        {
+          id: "b",
+          title: "Code Review",
+          description: "Review",
+          promptText: "Review",
+          workflowIds: [],
+        },
+        {
+          id: "a",
+          title: "Code Review",
+          description: "Review",
+          promptText: "Review",
+          workflowIds: [],
+        },
       ]).map((skill) => skill.id),
     ).toEqual(["a", "b", "z"]);
   });
@@ -67,7 +79,9 @@ describe("buildComposerModeTriggerDisplay", () => {
     interactionMode: "default" as const,
     workflowPreset: null,
     lastWorkflowPreset: null,
-    buildSkills: [{ id: "tdd", title: "TDD", description: "TDD", workflowIds: [] }],
+    buildSkills: [
+      { id: "tdd", title: "TDD", description: "TDD", promptText: "TDD", workflowIds: [] },
+    ],
     selectedBuildSkillId: null,
   };
 

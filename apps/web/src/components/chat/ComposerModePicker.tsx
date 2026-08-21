@@ -1,7 +1,12 @@
 import type {
+  EnvironmentId,
+  ModelSelection,
   ProviderInteractionMode,
   WorkflowPreset,
   WorkflowSkillContract,
+  WorkflowStepCycleOverride,
+  WorkflowStepModelOverride,
+  WorkflowStepReviewPartsOverride,
 } from "@t3tools/contracts";
 import {
   inferDisplayedWorkflowPreset,
@@ -10,7 +15,6 @@ import {
   type WorkflowPresetDefinition,
 } from "@t3tools/shared/workflowPresets";
 import {
-  ArrowLeftIcon,
   BotIcon,
   CheckIcon,
   ChevronRightIcon,
@@ -25,12 +29,25 @@ import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 
 export type ComposerPrimaryMode = "build" | "plan" | "workflow";
-export type ComposerModePickerView = "primary" | "workflow" | "skills";
+export type ComposerModeCatalog = "skills" | "workflows";
 
 export type ComposerBuildSkill = Pick<
   WorkflowSkillContract,
-  "id" | "title" | "description" | "workflowIds"
+  "id" | "title" | "description" | "promptText" | "workflowIds"
 >;
+
+export interface ComposerWorkflowDefaults {
+  readonly environmentId: EnvironmentId;
+  readonly rootModelSelection: ModelSelection;
+  readonly stepModels: ReadonlyArray<WorkflowStepModelOverride>;
+  readonly stepCycles: ReadonlyArray<WorkflowStepCycleOverride>;
+  readonly stepReviewParts: ReadonlyArray<WorkflowStepReviewPartsOverride>;
+  readonly onChange: (defaults: {
+    readonly stepModels: ReadonlyArray<WorkflowStepModelOverride>;
+    readonly stepCycles: ReadonlyArray<WorkflowStepCycleOverride>;
+    readonly stepReviewParts: ReadonlyArray<WorkflowStepReviewPartsOverride>;
+  }) => void;
+}
 
 export function sortComposerBuildSkills(
   skills: ReadonlyArray<ComposerBuildSkill>,
@@ -52,10 +69,8 @@ export function resolveComposerPrimaryMode(input: {
 
 /**
  * Label and icon for the control that opens the mode section. `shortLabel` is
- * null for plain Build — the default mode is not worth the horizontal space
- * next to the model traits, and the bot icon already carries it — so callers
- * that sit beside other labels should render the icon plus `shortLabel` and
- * fall back to `label` when they stand alone.
+ * null for plain Build, which keeps the default from taking space beside the
+ * model traits.
  */
 export function buildComposerModeTriggerDisplay(input: {
   readonly interactionMode: ProviderInteractionMode;
@@ -109,19 +124,13 @@ function focusRelativeOption(container: HTMLElement, direction: 1 | -1) {
   options[nextIndex]?.focus();
 }
 
-function optionKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
+export function composerModeOptionKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
   if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
   event.preventDefault();
   const container = event.currentTarget.closest<HTMLElement>("[data-composer-mode-view]");
   if (container) focusRelativeOption(container, event.key === "ArrowDown" ? 1 : -1);
 }
 
-/**
- * Hover card for one workflow row. Open state belongs to the popover: driving
- * it from the trigger's own focus and blur fought the popup's focus handling —
- * opening moved focus off the trigger, the blur closed it, the focus handed
- * back reopened it, and the card strobed until the pointer left the row.
- */
 function WorkflowHelp({ definition }: { readonly definition: WorkflowPresetDefinition }) {
   return (
     <Popover>
@@ -143,7 +152,6 @@ function WorkflowHelp({ definition }: { readonly definition: WorkflowPresetDefin
       <PopoverPopup
         align="end"
         className="max-h-[min(28rem,var(--available-height))] w-[min(22rem,var(--available-width))]"
-        // Hovering a row must not pull focus out of the mode list behind it.
         initialFocus={false}
         side="right"
         sideOffset={8}
@@ -157,7 +165,7 @@ function WorkflowHelp({ definition }: { readonly definition: WorkflowPresetDefin
                 <span className="font-medium text-foreground">{step.label}</span>
                 {step.threadBoundary || step.note ? (
                   <span className="text-muted-foreground">
-                    {" — "}
+                    {" · "}
                     {[step.threadBoundary, step.note].filter(Boolean).join(", ")}
                   </span>
                 ) : null}
@@ -193,7 +201,7 @@ export function WorkflowPresetRows(props: {
               data-composer-mode-option
               disabled={!props.workflowAvailable}
               onClick={() => props.onSelect(definition.id)}
-              onKeyDown={optionKeyDown}
+              onKeyDown={composerModeOptionKeyDown}
               role="menuitemradio"
               type="button"
             >
@@ -218,103 +226,14 @@ export function WorkflowPresetRows(props: {
 }
 
 export function ComposerModePickerContent(props: {
-  readonly view: ComposerModePickerView;
   readonly activeMode: ComposerPrimaryMode;
-  readonly activePreset: WorkflowPreset | null;
   readonly workflowAvailable: boolean;
-  /**
-   * Build and Plan are the provider's own modes, and Plan is a legacy beta.
-   * With it off there is no choice left to offer, so the rows drop out and the
-   * section is just Workflow and Skills — neither of which is plan mode.
-   */
   readonly showPrimaryModes: boolean;
   readonly buildSkills: ReadonlyArray<ComposerBuildSkill>;
-  readonly selectedBuildSkillId: string | null;
-  readonly onBack: () => void;
   readonly onOpenSkills: () => void;
   readonly onOpenWorkflow: () => void;
-  readonly onSelectSkill: (skillId: string) => void;
   readonly onSelectPrimary: (mode: "build" | "plan") => void;
-  readonly onSelectPreset: (preset: WorkflowPreset) => void;
 }) {
-  if (props.view === "skills") {
-    return (
-      <div
-        className="grid w-[24rem] max-w-[calc(100vw-1rem)] gap-2 motion-safe:animate-in motion-safe:slide-in-from-right-3 motion-safe:duration-200"
-        data-composer-mode-view="skills-shell"
-      >
-        <div className="grid grid-cols-[2rem_1fr_2rem] items-center">
-          <Button
-            aria-label="Back to composer modes"
-            onClick={props.onBack}
-            size="icon-xs"
-            variant="ghost"
-          >
-            <ArrowLeftIcon aria-hidden="true" />
-          </Button>
-          <div className="text-center font-semibold text-sm">Build with a skill</div>
-        </div>
-        <div
-          className="grid max-h-[min(28rem,var(--available-height))] gap-1 overflow-y-auto"
-          data-composer-mode-view="skills"
-          role="menu"
-        >
-          {sortComposerBuildSkills(props.buildSkills).map((skill) => {
-            const selected = props.selectedBuildSkillId === skill.id;
-            return (
-              <button
-                aria-checked={selected}
-                className="grid min-h-12 grid-cols-[1rem_minmax(0,1fr)] gap-x-2 rounded-md px-2 py-2 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
-                data-composer-mode-option
-                key={skill.id}
-                onClick={() => props.onSelectSkill(skill.id)}
-                onKeyDown={optionKeyDown}
-                role="menuitemradio"
-                type="button"
-              >
-                <span className="mt-0.5 size-4">
-                  {selected ? <CheckIcon aria-hidden="true" className="size-4" /> : null}
-                </span>
-                <span className="grid min-w-0 gap-0.5">
-                  <span className="font-medium text-sm">{skill.title}</span>
-                  <span className="text-muted-foreground text-xs leading-4">
-                    {skill.description}
-                  </span>
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    );
-  }
-
-  if (props.view === "workflow") {
-    return (
-      <div
-        className="grid w-[24rem] max-w-[calc(100vw-1rem)] gap-2 motion-safe:animate-in motion-safe:slide-in-from-right-3 motion-safe:duration-200"
-        data-composer-mode-view="workflow-shell"
-      >
-        <div className="grid grid-cols-[2rem_1fr_2rem] items-center">
-          <Button
-            aria-label="Back to composer modes"
-            onClick={props.onBack}
-            size="icon-xs"
-            variant="ghost"
-          >
-            <ArrowLeftIcon aria-hidden="true" />
-          </Button>
-          <div className="text-center font-semibold text-sm">Workflow</div>
-        </div>
-        <WorkflowPresetRows
-          activePreset={props.activePreset}
-          onSelect={props.onSelectPreset}
-          workflowAvailable={props.workflowAvailable}
-        />
-      </div>
-    );
-  }
-
   const options: ReadonlyArray<{
     readonly id: ComposerPrimaryMode | "skills";
     readonly label: string;
@@ -339,8 +258,8 @@ export function ComposerModePickerContent(props: {
       : []),
     {
       id: "workflow",
-      label: "Workflow",
-      description: "Choose a guided multi-thread workflow.",
+      label: "Workflows",
+      description: "Choose and configure a guided workflow.",
       icon: WorkflowIcon,
     },
     {
@@ -352,11 +271,7 @@ export function ComposerModePickerContent(props: {
   ];
 
   return (
-    <div
-      className="grid w-64 gap-1 motion-safe:animate-in motion-safe:slide-in-from-left-3 motion-safe:duration-200"
-      data-composer-mode-view="primary"
-      role="menu"
-    >
+    <div className="grid w-64 gap-1" data-composer-mode-view="primary" role="menu">
       {options.map((option) => {
         const Icon = option.icon;
         const selected = props.activeMode === option.id;
@@ -377,7 +292,7 @@ export function ComposerModePickerContent(props: {
                   ? props.onOpenSkills()
                   : props.onSelectPrimary(option.id)
             }
-            onKeyDown={optionKeyDown}
+            onKeyDown={composerModeOptionKeyDown}
             role="menuitemradio"
             type="button"
           >

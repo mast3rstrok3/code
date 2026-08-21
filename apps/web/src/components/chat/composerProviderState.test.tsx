@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
+  EnvironmentId,
   ProviderDriverKind,
+  ProviderInstanceId,
   type ProviderOptionDescriptor,
   type ProviderOptionSelection,
   type ServerProviderModel,
@@ -29,6 +31,18 @@ const MODE_CONTROLS: ComposerModeControls = {
   showPrimaryModes: false,
   buildSkills: [],
   selectedBuildSkillId: null,
+  workflowDefaults: {
+    environmentId: EnvironmentId.make("environment-1"),
+    rootModelSelection: {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: MODEL,
+    },
+    stepModels: [],
+    stepCycles: [],
+    stepReviewParts: [],
+    onChange: () => {},
+  },
+  onOpenCatalog: () => {},
   onInteractionModeChange: () => {},
   onBuildSkillChange: () => {},
 };

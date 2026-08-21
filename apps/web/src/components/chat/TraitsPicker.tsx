@@ -16,7 +16,6 @@ import {
   getProviderOptionDescriptors,
   isClaudeUltrathinkPrompt,
 } from "@t3tools/shared/model";
-import { interactionModeForWorkflowPreset } from "@t3tools/shared/workflowPresets";
 import { memo, useCallback, useState } from "react";
 import type { VariantProps } from "class-variance-authority";
 import { ZapIcon } from "lucide-react";
@@ -34,9 +33,9 @@ import {
   buildComposerModeTriggerDisplay,
   ComposerModePickerContent,
   resolveComposerPrimaryMode,
-  resolveWorkflowPresetForPicker,
   type ComposerBuildSkill,
-  type ComposerModePickerView,
+  type ComposerModeCatalog,
+  type ComposerWorkflowDefaults,
 } from "./ComposerModePicker";
 import { useComposerDraftStore, DraftId } from "../../composerDraftStore";
 import { getProviderModelCapabilities } from "../../providerModels";
@@ -59,6 +58,8 @@ export type ComposerModeControls = {
   readonly showPrimaryModes: boolean;
   readonly buildSkills: ReadonlyArray<ComposerBuildSkill>;
   readonly selectedBuildSkillId: string | null;
+  readonly workflowDefaults: ComposerWorkflowDefaults;
+  readonly onOpenCatalog: (catalog: ComposerModeCatalog) => void;
   readonly onInteractionModeChange: (
     mode: ProviderInteractionMode,
     preset: WorkflowPreset | null,
@@ -470,8 +471,8 @@ export function buildTraitsTriggerDisplay(input: {
  * The composer's model settings control: how the model thinks (reasoning,
  * context window, fast mode) and, when `modeControls` is passed, what it is
  * asked to do (Build/Plan, a guided workflow, or a Build skill). The mode
- * sub-pages replace the menu body rather than stacking under it, so picking a
- * workflow never scrolls the traits off the bottom.
+ * catalog rows open in a dialog so long skill and workflow lists have enough
+ * room for their help and configuration controls.
  */
 export const TraitsPicker = memo(function TraitsPicker({
   provider,
@@ -488,7 +489,6 @@ export const TraitsPicker = memo(function TraitsPicker({
   ...persistence
 }: TraitsMenuContentProps & TraitsPersistence & { modeControls?: ComposerModeControls }) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [modeView, setModeView] = useState<ComposerModePickerView>("primary");
   const { descriptors, primarySelectDescriptor, ultrathinkPromptControlled, hasAnyControls } =
     getTraitsSectionVisibility({
       provider,
@@ -532,15 +532,7 @@ export const TraitsPicker = memo(function TraitsPicker({
   const isCodexStyle = provider === "codex";
 
   return (
-    <Menu
-      open={isMenuOpen}
-      onOpenChange={(open) => {
-        setIsMenuOpen(open);
-        if (open) {
-          setModeView("primary");
-        }
-      }}
-    >
+    <Menu open={isMenuOpen} onOpenChange={setIsMenuOpen}>
       <MenuTrigger
         render={
           <ComposerControl
@@ -573,59 +565,40 @@ export const TraitsPicker = memo(function TraitsPicker({
       <MenuPopup align="start">
         {modeControls ? (
           <>
-            {modeView === "primary" ? (
-              <div className="px-2 pt-1.5 pb-1 font-medium text-muted-foreground text-xs">Mode</div>
-            ) : null}
+            <div className="px-2 pt-1.5 pb-1 font-medium text-muted-foreground text-xs">Mode</div>
             <ComposerModePickerContent
               activeMode={resolveComposerPrimaryMode(modeControls)}
-              activePreset={
-                resolveComposerPrimaryMode(modeControls) === "workflow"
-                  ? resolveWorkflowPresetForPicker(modeControls)
-                  : null
-              }
               buildSkills={modeControls.buildSkills}
-              selectedBuildSkillId={modeControls.selectedBuildSkillId}
               showPrimaryModes={modeControls.showPrimaryModes}
-              view={modeView}
               workflowAvailable={modeControls.workflowAvailable}
-              onBack={() => setModeView("primary")}
-              onOpenSkills={() => setModeView("skills")}
-              onOpenWorkflow={() => setModeView("workflow")}
+              onOpenSkills={() => {
+                setIsMenuOpen(false);
+                modeControls.onOpenCatalog("skills");
+              }}
+              onOpenWorkflow={() => {
+                setIsMenuOpen(false);
+                modeControls.onOpenCatalog("workflows");
+              }}
               onSelectPrimary={(mode) => {
                 modeControls.onBuildSkillChange(null);
                 modeControls.onInteractionModeChange(mode === "build" ? "default" : "plan", null);
                 setIsMenuOpen(false);
               }}
-              onSelectPreset={(preset) => {
-                modeControls.onBuildSkillChange(null);
-                modeControls.onInteractionModeChange(
-                  interactionModeForWorkflowPreset(preset),
-                  preset,
-                );
-                setIsMenuOpen(false);
-              }}
-              onSelectSkill={(skillId) => {
-                modeControls.onInteractionModeChange("default", null);
-                modeControls.onBuildSkillChange(skillId);
-                setIsMenuOpen(false);
-              }}
             />
-            {modeView === "primary" && hasAnyControls ? <MenuDivider /> : null}
+            {hasAnyControls ? <MenuDivider /> : null}
           </>
         ) : null}
-        {modeView === "primary" ? (
-          <TraitsMenuContent
-            provider={provider}
-            {...(instanceId ? { instanceId } : {})}
-            models={models}
-            model={model}
-            prompt={prompt}
-            onPromptChange={onPromptChange}
-            modelOptions={modelOptions}
-            allowPromptInjectedEffort={allowPromptInjectedEffort}
-            {...persistence}
-          />
-        ) : null}
+        <TraitsMenuContent
+          provider={provider}
+          {...(instanceId ? { instanceId } : {})}
+          models={models}
+          model={model}
+          prompt={prompt}
+          onPromptChange={onPromptChange}
+          modelOptions={modelOptions}
+          allowPromptInjectedEffort={allowPromptInjectedEffort}
+          {...persistence}
+        />
       </MenuPopup>
     </Menu>
   );
