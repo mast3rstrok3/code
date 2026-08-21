@@ -170,6 +170,7 @@ import { PullRequestsUnavailableState } from "./pullRequest/PullRequestsUnavaila
 import { AgentsPanel } from "./AgentsPanel";
 import type { SetWorkflowStepModel } from "./WorkflowModelPins";
 import type { SetWorkflowStepCycles } from "./WorkflowStepCycles";
+import type { SetWorkflowStepReviewParts } from "./WorkflowStepReviewParts";
 import { WorkflowsPanel } from "./WorkflowsPanel";
 import { WorkflowInstructionsPanel } from "./WorkflowInstructionsPanel";
 import { useWorkflowCatalog } from "../workflowCatalogState";
@@ -1299,6 +1300,9 @@ function ChatViewContent(props: ChatViewProps) {
   });
   const setWorkflowStepCycles = useAtomCommand(threadEnvironment.setWorkflowStepCycles, {
     label: "workflow step cycles",
+  });
+  const setWorkflowStepReviewParts = useAtomCommand(threadEnvironment.setWorkflowStepReviewParts, {
+    label: "workflow step review parts",
   });
   const resumeWorkflowTree = useAtomCommand(threadEnvironment.resumeWorkflow, {
     label: "workflow tree resume",
@@ -3240,6 +3244,24 @@ function ChatViewContent(props: ChatViewProps) {
       });
     },
     [activeWorkflowNavigation, setWorkflowStepCycles],
+  );
+  const handleSetWorkflowStepReviewParts = useCallback<SetWorkflowStepReviewParts>(
+    (key, parts) => {
+      const root = activeWorkflowNavigation?.root;
+      if (!root) return;
+      void setWorkflowStepReviewParts({
+        environmentId: root.environmentId,
+        input: {
+          threadId: root.id,
+          workflowPromptId: key.workflowPromptId,
+          ...(key.stepWorkflowPromptId === undefined
+            ? {}
+            : { stepWorkflowPromptId: key.stepWorkflowPromptId }),
+          parts,
+        },
+      });
+    },
+    [activeWorkflowNavigation, setWorkflowStepReviewParts],
   );
   // Stopping a step stops each of its threads and the sessions beneath them;
   // the workflow root is never in this list, so the run itself stays active.
@@ -7110,6 +7132,8 @@ function ChatViewContent(props: ChatViewProps) {
         onSetStepModel={handleSetWorkflowStepModel}
         defaultStepCycles={settings.workflowStepCycles}
         onSetStepCycles={handleSetWorkflowStepCycles}
+        defaultStepReviewParts={settings.workflowStepReviewParts}
+        onSetStepReviewParts={handleSetWorkflowStepReviewParts}
         onStopThreads={handleStopWorkflowThreads}
         onResumeThreads={handleResumeWorkflowThreads}
       />

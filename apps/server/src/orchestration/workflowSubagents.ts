@@ -8,6 +8,7 @@ import {
   type ProviderDriverKind,
   type ServerSettings,
   type WorkflowStepModelOverride,
+  type WorkflowStepReviewPartsOverride,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 
@@ -276,6 +277,29 @@ export function findWorkflowStepModels(
   return (
     threads.find((candidate) => candidate.id === rootThreadId)?.workflowStepModels ??
     thread.workflowStepModels
+  );
+}
+
+/** A thread as far as run-level App Review parts are concerned. */
+export interface WorkflowStepReviewPartsThread {
+  readonly id: string;
+  readonly workflowContext?: { readonly rootThreadId: string } | null | undefined;
+  readonly workflowStepReviewParts?: ReadonlyArray<WorkflowStepReviewPartsOverride> | undefined;
+}
+
+/**
+ * Find the run-level App Review parts that govern `thread`'s run. Like the
+ * step pins, they live on the workflow root.
+ */
+export function findWorkflowStepReviewParts(
+  thread: WorkflowStepReviewPartsThread,
+  threads: ReadonlyArray<WorkflowStepReviewPartsThread>,
+): ReadonlyArray<WorkflowStepReviewPartsOverride> | undefined {
+  const rootThreadId = thread.workflowContext?.rootThreadId ?? thread.id;
+  if (rootThreadId === thread.id) return thread.workflowStepReviewParts;
+  return (
+    threads.find((candidate) => candidate.id === rootThreadId)?.workflowStepReviewParts ??
+    thread.workflowStepReviewParts
   );
 }
 

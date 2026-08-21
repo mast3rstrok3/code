@@ -8,6 +8,7 @@ import {
   ThreadMetaUpdatedPayload as ContractsThreadMetaUpdatedPayloadSchema,
   ThreadRuntimeModeSetPayload as ContractsThreadRuntimeModeSetPayloadSchema,
   ThreadWorkflowStepCyclesSetPayload as ContractsThreadWorkflowStepCyclesSetPayloadSchema,
+  ThreadWorkflowStepReviewPartsSetPayload as ContractsThreadWorkflowStepReviewPartsSetPayloadSchema,
   ThreadWorkflowStepModelSetPayload as ContractsThreadWorkflowStepModelSetPayloadSchema,
   ThreadInteractionModeSetPayload as ContractsThreadInteractionModeSetPayloadSchema,
   ThreadComposerModeSetPayload as ContractsThreadComposerModeSetPayloadSchema,
@@ -67,6 +68,8 @@ export const ThreadMetaUpdatedPayload = ContractsThreadMetaUpdatedPayloadSchema;
 export const ThreadRuntimeModeSetPayload = ContractsThreadRuntimeModeSetPayloadSchema;
 export const ThreadWorkflowStepModelSetPayload = ContractsThreadWorkflowStepModelSetPayloadSchema;
 export const ThreadWorkflowStepCyclesSetPayload = ContractsThreadWorkflowStepCyclesSetPayloadSchema;
+export const ThreadWorkflowStepReviewPartsSetPayload =
+  ContractsThreadWorkflowStepReviewPartsSetPayloadSchema;
 export const ThreadInteractionModeSetPayload = ContractsThreadInteractionModeSetPayloadSchema;
 export const ThreadComposerModeSetPayload = ContractsThreadComposerModeSetPayloadSchema;
 export const ThreadPlanningStageStartedPayload = ContractsThreadPlanningStageStartedPayloadSchema;

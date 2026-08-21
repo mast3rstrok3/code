@@ -52,6 +52,7 @@ import {
 } from "./workflowDirectives.ts";
 import { isWorkflowThreadPaused } from "./workflowPause.ts";
 import { buildPlanImplementationThreadTitle } from "@t3tools/shared/orchestrationPlanning";
+import { APP_REVIEW_PARTS_TARGETS } from "@t3tools/shared/appReviewParts";
 import { resolveImplementationValidationCommands } from "@t3tools/shared/t3ProjectFile";
 import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 import { isProductWorkflowPreset, isProductWorkflowRoot } from "@t3tools/shared/workflowPresets";
@@ -1700,6 +1701,46 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
       return events;
+    }
+
+    case "thread.workflow.step-review-parts.set": {
+      const thread = yield* requireThreadNotArchived({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      // Review parts live on the workflow root, like the step model pins.
+      const rootThreadId = thread.workflowContext?.rootThreadId ?? thread.id;
+      const rootThread =
+        readModel.threads.find((candidate) => candidate.id === rootThreadId) ?? thread;
+      const key = {
+        workflowPromptId: command.workflowPromptId,
+        ...(command.stepWorkflowPromptId === undefined
+          ? {}
+          : { stepWorkflowPromptId: command.stepWorkflowPromptId }),
+      };
+      if (!APP_REVIEW_PARTS_TARGETS.some((target) => workflowStepCycleKeysEqual(target.key, key))) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Workflow step '${command.workflowPromptId}' is not an App Review, so it has no review parts.`,
+        });
+      }
+      const occurredAt = yield* nowIso;
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: rootThread.id,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.workflow-step-review-parts-set",
+        payload: {
+          threadId: rootThread.id,
+          ...key,
+          parts: command.parts,
+          updatedAt: occurredAt,
+        },
+      };
     }
 
     case "thread.unsettle": {

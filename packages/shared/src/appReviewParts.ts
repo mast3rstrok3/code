@@ -44,6 +44,22 @@ export const APP_REVIEW_PARTS_TARGETS: ReadonlyArray<AppReviewPartsTarget> = [
   },
 ];
 
+function partsFromOverrides(
+  overrides: ReadonlyArray<WorkflowStepReviewPartsOverride> | undefined,
+  key: WorkflowStepCycleKey,
+): AppReviewParts | undefined {
+  const entries = overrides ?? [];
+  const exact = entries.find((entry) => workflowStepCycleKeysEqual(entry, key));
+  if (exact !== undefined) return { e2e: exact.e2e, browser: exact.browser };
+  if (key.stepWorkflowPromptId !== undefined) {
+    const stepLevel = entries.find((entry) =>
+      workflowStepCycleKeysEqual(entry, { workflowPromptId: key.workflowPromptId }),
+    );
+    if (stepLevel !== undefined) return { e2e: stepLevel.e2e, browser: stepLevel.browser };
+  }
+  return undefined;
+}
+
 /**
  * The parts Settings allow for one step. A ticket key without its own entry
  * follows the step-level entry, and a step without any entry runs both parts.
@@ -52,16 +68,25 @@ export function resolveAppReviewStepParts(input: {
   readonly overrides: ReadonlyArray<WorkflowStepReviewPartsOverride> | undefined;
   readonly key: WorkflowStepCycleKey;
 }): AppReviewParts {
-  const overrides = input.overrides ?? [];
-  const exact = overrides.find((entry) => workflowStepCycleKeysEqual(entry, input.key));
-  if (exact !== undefined) return { e2e: exact.e2e, browser: exact.browser };
-  if (input.key.stepWorkflowPromptId !== undefined) {
-    const stepLevel = overrides.find((entry) =>
-      workflowStepCycleKeysEqual(entry, { workflowPromptId: input.key.workflowPromptId }),
-    );
-    if (stepLevel !== undefined) return { e2e: stepLevel.e2e, browser: stepLevel.browser };
-  }
-  return ALL_APP_REVIEW_PARTS;
+  return partsFromOverrides(input.overrides, input.key) ?? ALL_APP_REVIEW_PARTS;
+}
+
+/**
+ * The parts one step runs, with the run's own overrides outranking the
+ * standing Settings entirely: a run-level entry — exact or step-level — wins
+ * before any Settings entry is consulted, so what the user set on the run they
+ * are looking at is what that run does.
+ */
+export function resolveLayeredAppReviewStepParts(input: {
+  readonly threadOverrides: ReadonlyArray<WorkflowStepReviewPartsOverride> | undefined;
+  readonly settingsOverrides: ReadonlyArray<WorkflowStepReviewPartsOverride> | undefined;
+  readonly key: WorkflowStepCycleKey;
+}): AppReviewParts {
+  return (
+    partsFromOverrides(input.threadOverrides, input.key) ??
+    partsFromOverrides(input.settingsOverrides, input.key) ??
+    ALL_APP_REVIEW_PARTS
+  );
 }
 
 export function appReviewPartsForScope(scope: AppReviewScope): AppReviewParts {

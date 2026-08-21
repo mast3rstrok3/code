@@ -27,7 +27,7 @@ import {
   appReviewScopeForParts,
   describeAppReviewParts,
   intersectAppReviewParts,
-  resolveAppReviewStepParts,
+  resolveLayeredAppReviewStepParts,
   type AppReviewParts,
 } from "@t3tools/shared/appReviewParts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
@@ -61,6 +61,7 @@ import { isAwaitingWorkflowNudge, type WorkflowNudgeThread } from "../workflowNu
 import { isWorkflowThreadPaused } from "../workflowPause.ts";
 import {
   findWorkflowStepModels,
+  findWorkflowStepReviewParts,
   resolveWorkflowStepModelSelection,
   resolveWorkflowSubagentSpawnDefinition,
 } from "../workflowSubagents.ts";
@@ -684,8 +685,16 @@ const make = Effect.gen(function* () {
     const settings = yield* serverSettingsService.getSettings.pipe(
       Effect.orElseSucceed(() => undefined),
     );
-    const settingsParts = resolveAppReviewStepParts({
-      overrides: settings?.workflowStepReviewParts,
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    const controller = readModel.threads.find(
+      (candidate) => candidate.id === run.controllerThreadId,
+    );
+    const settingsParts = resolveLayeredAppReviewStepParts({
+      threadOverrides:
+        controller === undefined
+          ? undefined
+          : findWorkflowStepReviewParts(controller, readModel.threads),
+      settingsOverrides: settings?.workflowStepReviewParts,
       key:
         run.caller.type === "implementation" && run.caller.ticketId !== undefined
           ? {

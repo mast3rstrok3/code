@@ -1428,6 +1428,12 @@ export const OrchestrationThread = Schema.Struct({
    * model pins, only workflow root threads carry entries.
    */
   workflowStepCycles: Schema.optionalKey(Schema.Array(WorkflowStepCycleOverride)),
+  /**
+   * Per-step App Review parts for the workflow rooted at this thread. Like the
+   * model pins, only workflow root threads carry entries; they outrank the
+   * standing Settings parts for this run alone.
+   */
+  workflowStepReviewParts: Schema.optionalKey(Schema.Array(WorkflowStepReviewPartsOverride)),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -1536,6 +1542,12 @@ export const OrchestrationThreadShell = Schema.Struct({
    * model pins, only workflow root threads carry entries.
    */
   workflowStepCycles: Schema.optionalKey(Schema.Array(WorkflowStepCycleOverride)),
+  /**
+   * Per-step App Review parts for the workflow rooted at this thread. Like the
+   * model pins, only workflow root threads carry entries; they outrank the
+   * standing Settings parts for this run alone.
+   */
+  workflowStepReviewParts: Schema.optionalKey(Schema.Array(WorkflowStepReviewPartsOverride)),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -1886,6 +1898,21 @@ const ThreadWorkflowStepCyclesSetCommand = Schema.Struct({
   /** Set when the budget targets one sub-step of a step rather than the step. */
   stepWorkflowPromptId: Schema.optionalKey(TrimmedNonEmptyString),
   maxCycles: Schema.NullOr(PositiveInt),
+  createdAt: IsoDateTime,
+});
+
+/**
+ * Set which parts one App Review step runs for this workflow, or clear the
+ * override (`parts: null`) so the step follows the standing Settings parts.
+ */
+const ThreadWorkflowStepReviewPartsSetCommand = Schema.Struct({
+  type: Schema.Literal("thread.workflow.step-review-parts.set"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  workflowPromptId: TrimmedNonEmptyString,
+  /** Set when the override targets one sub-step of a step rather than the step. */
+  stepWorkflowPromptId: Schema.optionalKey(TrimmedNonEmptyString),
+  parts: Schema.NullOr(Schema.Struct({ e2e: Schema.Boolean, browser: Schema.Boolean })),
   createdAt: IsoDateTime,
 });
 
@@ -2646,6 +2673,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadWorkflowResumeCommand,
   ThreadWorkflowStepModelSetCommand,
   ThreadWorkflowStepCyclesSetCommand,
+  ThreadWorkflowStepReviewPartsSetCommand,
   ThreadUnsettleCommand,
   ThreadSnoozeCommand,
   ThreadUnsnoozeCommand,
@@ -2697,6 +2725,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadWorkflowResumeCommand,
   ThreadWorkflowStepModelSetCommand,
   ThreadWorkflowStepCyclesSetCommand,
+  ThreadWorkflowStepReviewPartsSetCommand,
   ThreadUnsettleCommand,
   ThreadSnoozeCommand,
   ThreadUnsnoozeCommand,
@@ -2896,6 +2925,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.planning-workflow-stage-set",
   "thread.workflow-step-model-set",
   "thread.workflow-step-cycles-set",
+  "thread.workflow-step-review-parts-set",
   "thread.workflow-paused",
   "thread.workflow-resumed",
   "thread.implementation-run-launched",
@@ -3114,6 +3144,16 @@ export const ThreadWorkflowStepCyclesSetPayload = Schema.Struct({
   stepWorkflowPromptId: Schema.optionalKey(TrimmedNonEmptyString),
   /** Null clears the budget and returns the step to the standing default. */
   maxCycles: Schema.NullOr(PositiveInt),
+  updatedAt: IsoDateTime,
+});
+
+export const ThreadWorkflowStepReviewPartsSetPayload = Schema.Struct({
+  threadId: ThreadId,
+  workflowPromptId: TrimmedNonEmptyString,
+  /** Set when the override targets one sub-step of a step rather than the step. */
+  stepWorkflowPromptId: Schema.optionalKey(TrimmedNonEmptyString),
+  /** Null clears the override and returns the step to the standing Settings. */
+  parts: Schema.NullOr(Schema.Struct({ e2e: Schema.Boolean, browser: Schema.Boolean })),
   updatedAt: IsoDateTime,
 });
 
@@ -3559,6 +3599,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.workflow-step-cycles-set"),
     payload: ThreadWorkflowStepCyclesSetPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.workflow-step-review-parts-set"),
+    payload: ThreadWorkflowStepReviewPartsSetPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

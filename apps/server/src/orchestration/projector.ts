@@ -50,6 +50,7 @@ import {
   ThreadRuntimeModeSetPayload,
   ThreadWorkflowStepCyclesSetPayload,
   ThreadWorkflowStepModelSetPayload,
+  ThreadWorkflowStepReviewPartsSetPayload,
   ThreadSettledPayload,
   ThreadPinnedPayload,
   ThreadPinReorderedPayload,
@@ -658,6 +659,46 @@ export function projectEvent(
                           ? {}
                           : { stepWorkflowPromptId: payload.stepWorkflowPromptId }),
                         maxCycles: payload.maxCycles,
+                      },
+                    ],
+              // Configuration, not activity: see the step-model case.
+              updatedAt: thread.updatedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.workflow-step-review-parts-set":
+      return decodeForEvent(
+        ThreadWorkflowStepReviewPartsSetPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((candidate) => candidate.id === payload.threadId);
+          if (thread === undefined) return nextBase;
+          // Keyed by step and sub-step together, like a model pin.
+          const others = (thread.workflowStepReviewParts ?? []).filter(
+            (entry) =>
+              entry.workflowPromptId !== payload.workflowPromptId ||
+              entry.stepWorkflowPromptId !== payload.stepWorkflowPromptId,
+          );
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              workflowStepReviewParts:
+                payload.parts === null
+                  ? others
+                  : [
+                      ...others,
+                      {
+                        workflowPromptId: payload.workflowPromptId,
+                        ...(payload.stepWorkflowPromptId === undefined
+                          ? {}
+                          : { stepWorkflowPromptId: payload.stepWorkflowPromptId }),
+                        e2e: payload.parts.e2e,
+                        browser: payload.parts.browser,
                       },
                     ],
               // Configuration, not activity: see the step-model case.

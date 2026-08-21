@@ -2,7 +2,7 @@ import type { WorkflowStepReviewPartsOverride } from "@t3tools/contracts";
 import {
   APP_REVIEW_PARTS_TARGETS,
   describeAppReviewParts,
-  resolveAppReviewStepParts,
+  resolveLayeredAppReviewStepParts,
   type AppReviewParts,
 } from "@t3tools/shared/appReviewParts";
 import {
@@ -31,6 +31,8 @@ export function WorkflowStepReviewPartPins(props: {
   readonly workflowPromptId: string;
   readonly subStepWorkflowPromptIds: ReadonlyArray<string>;
   readonly overrides: ReadonlyArray<WorkflowStepReviewPartsOverride>;
+  /** The standing Settings layer behind `overrides`, when editing a run. */
+  readonly defaults?: ReadonlyArray<WorkflowStepReviewPartsOverride> | undefined;
   readonly className?: string | undefined;
   readonly onSetStepReviewParts: SetWorkflowStepReviewParts;
 }) {
@@ -52,7 +54,11 @@ export function WorkflowStepReviewPartPins(props: {
         Review parts
       </div>
       {targets.map((target) => {
-        const parts = resolveAppReviewStepParts({ overrides: props.overrides, key: target.key });
+        const parts = resolveLayeredAppReviewStepParts({
+          threadOverrides: props.overrides,
+          settingsOverrides: props.defaults,
+          key: target.key,
+        });
         const hasOverride = props.overrides.some((entry) =>
           workflowStepCycleKeysEqual(entry, target.key),
         );

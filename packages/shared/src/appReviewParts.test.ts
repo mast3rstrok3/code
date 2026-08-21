@@ -7,6 +7,7 @@ import {
   describeAppReviewParts,
   intersectAppReviewParts,
   resolveAppReviewStepParts,
+  resolveLayeredAppReviewStepParts,
   setWorkflowStepReviewPartsOverride,
 } from "./appReviewParts.ts";
 import { APP_REVIEW_WORKFLOW_PROMPT_ID } from "./workflowStepCycles.ts";
@@ -46,6 +47,40 @@ it("maps scopes to parts and back, with none as null", () => {
       intersectAppReviewParts(appReviewPartsForScope("e2e"), { e2e: false, browser: true }),
     ),
   ).toBeNull();
+});
+
+it("lets run-level overrides outrank the standing Settings entirely", () => {
+  const settings = [{ ...stepKey, e2e: true, browser: false }];
+  const thread = [{ ...ticketKey, e2e: false, browser: true }];
+  expect(
+    resolveLayeredAppReviewStepParts({
+      threadOverrides: thread,
+      settingsOverrides: settings,
+      key: ticketKey,
+    }),
+  ).toEqual({ e2e: false, browser: true });
+  // A run-level step entry covers the ticket key before any Settings entry.
+  expect(
+    resolveLayeredAppReviewStepParts({
+      threadOverrides: [{ ...stepKey, e2e: false, browser: true }],
+      settingsOverrides: [{ ...ticketKey, e2e: true, browser: false }],
+      key: ticketKey,
+    }),
+  ).toEqual({ e2e: false, browser: true });
+  expect(
+    resolveLayeredAppReviewStepParts({
+      threadOverrides: undefined,
+      settingsOverrides: settings,
+      key: ticketKey,
+    }),
+  ).toEqual({ e2e: true, browser: false });
+  expect(
+    resolveLayeredAppReviewStepParts({
+      threadOverrides: undefined,
+      settingsOverrides: undefined,
+      key: stepKey,
+    }),
+  ).toEqual(ALL_APP_REVIEW_PARTS);
 });
 
 it("states the parts as the insert line", () => {

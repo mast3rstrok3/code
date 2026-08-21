@@ -41,6 +41,8 @@ export type PauseThreadWorkflowInput = CommandInput<"thread.workflow.pause">;
 export type ResumeThreadWorkflowInput = CommandInput<"thread.workflow.resume">;
 export type SetThreadWorkflowStepModelInput = CommandInput<"thread.workflow.step-model.set">;
 export type SetThreadWorkflowStepCyclesInput = CommandInput<"thread.workflow.step-cycles.set">;
+export type SetThreadWorkflowStepReviewPartsInput =
+  CommandInput<"thread.workflow.step-review-parts.set">;
 export type SnoozeThreadInput = CommandInput<"thread.snooze">;
 export type UnsnoozeThreadInput = CommandInput<"thread.unsnooze">;
 export type PinThreadInput = CommandInput<"thread.pin">;
@@ -237,6 +239,20 @@ export const setThreadWorkflowStepCycles: (
     return yield* dispatch({
       ...input,
       type: "thread.workflow.step-cycles.set",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    });
+  },
+);
+
+export const setThreadWorkflowStepReviewParts: (
+  input: SetThreadWorkflowStepReviewPartsInput,
+) => CommandEffect = Effect.fn("EnvironmentCommands.setThreadWorkflowStepReviewParts")(
+  function* (input) {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return yield* dispatch({
+      ...input,
+      type: "thread.workflow.step-review-parts.set",
       commandId: metadata.commandId,
       createdAt: metadata.createdAt,
     });

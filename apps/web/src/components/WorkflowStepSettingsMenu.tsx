@@ -3,6 +3,7 @@ import type {
   ModelSelection,
   ThreadId,
   WorkflowStepCycleOverride,
+  WorkflowStepReviewPartsOverride,
 } from "@t3tools/contracts";
 import type { WorkflowPresetSubStep } from "@t3tools/shared/workflowPresets";
 import { Eraser, Pause, Play, RotateCcw, Settings2, SkipForward } from "lucide-react";
@@ -10,6 +11,10 @@ import { useState } from "react";
 
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { WorkflowStepCyclePins, type SetWorkflowStepCycles } from "./WorkflowStepCycles";
+import {
+  WorkflowStepReviewPartPins,
+  type SetWorkflowStepReviewParts,
+} from "./WorkflowStepReviewParts";
 import {
   useWorkflowModelChoices,
   WorkflowStepModelPins,
@@ -88,6 +93,10 @@ export function WorkflowStepSettingsMenu(props: {
   readonly stepCycles?: ReadonlyArray<WorkflowStepCycleOverride> | undefined;
   readonly defaultStepCycles?: ReadonlyArray<WorkflowStepCycleOverride> | undefined;
   readonly onSetStepCycles?: SetWorkflowStepCycles | undefined;
+  /** The workflow root's App Review parts overrides, and the standing defaults behind them. */
+  readonly stepReviewParts?: ReadonlyArray<WorkflowStepReviewPartsOverride> | undefined;
+  readonly defaultStepReviewParts?: ReadonlyArray<WorkflowStepReviewPartsOverride> | undefined;
+  readonly onSetStepReviewParts?: SetWorkflowStepReviewParts | undefined;
   readonly onRestart: (() => void) | undefined;
   readonly onStop: ((threadIds: readonly ThreadId[]) => void) | undefined;
   /**
@@ -176,6 +185,17 @@ export function WorkflowStepSettingsMenu(props: {
             overrides={props.stepCycles ?? []}
             defaults={props.defaultStepCycles}
             onSetStepCycles={props.onSetStepCycles}
+            className="space-y-2 border-t border-border/70 px-3 py-2"
+          />
+        ) : null}
+
+        {workflowPromptId !== null && props.onSetStepReviewParts !== undefined ? (
+          <WorkflowStepReviewPartPins
+            workflowPromptId={workflowPromptId}
+            subStepWorkflowPromptIds={props.subSteps.map((subStep) => subStep.workflowPromptId)}
+            overrides={props.stepReviewParts ?? []}
+            defaults={props.defaultStepReviewParts}
+            onSetStepReviewParts={props.onSetStepReviewParts}
             className="space-y-2 border-t border-border/70 px-3 py-2"
           />
         ) : null}

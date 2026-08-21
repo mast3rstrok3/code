@@ -33,6 +33,7 @@ import {
   type PauseThreadWorkflowInput,
   type ResumeThreadWorkflowInput,
   type SetThreadWorkflowStepCyclesInput,
+  type SetThreadWorkflowStepReviewPartsInput,
   type SetThreadWorkflowStepModelInput,
   type ReorderPinnedThreadInput,
   type SettleThreadInput,
@@ -75,6 +76,7 @@ import {
   resumeThreadWorkflow,
   setThreadWorkflowStepCycles,
   setThreadWorkflowStepModel,
+  setThreadWorkflowStepReviewParts,
   reorderPinnedThread,
   settleThread,
   snoozeThread,
@@ -119,6 +121,7 @@ export type {
   PauseThreadWorkflowInput,
   ResumeThreadWorkflowInput,
   SetThreadWorkflowStepCyclesInput,
+  SetThreadWorkflowStepReviewPartsInput,
   SetThreadWorkflowStepModelInput,
   ReorderPinnedThreadInput,
   SettleThreadInput,
@@ -193,6 +196,13 @@ export function createThreadEnvironmentAtoms<R, E>(
     setWorkflowStepCycles: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:workflow:step-cycles:set",
       execute: (input: SetThreadWorkflowStepCyclesInput) => setThreadWorkflowStepCycles(input),
+      scheduler,
+      concurrency,
+    }),
+    setWorkflowStepReviewParts: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:workflow:step-review-parts:set",
+      execute: (input: SetThreadWorkflowStepReviewPartsInput) =>
+        setThreadWorkflowStepReviewParts(input),
       scheduler,
       concurrency,
     }),

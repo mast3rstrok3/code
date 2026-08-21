@@ -32,7 +32,7 @@ import {
   appReviewScopeForParts,
   describeAppReviewParts,
   intersectAppReviewParts,
-  resolveAppReviewStepParts,
+  resolveLayeredAppReviewStepParts,
 } from "@t3tools/shared/appReviewParts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { proposedPlanTitle } from "@t3tools/shared/orchestrationPlanning";
@@ -61,6 +61,7 @@ import {
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import {
+  findWorkflowStepReviewParts,
   findWorkflowStepModels,
   resolveWorkflowStepModelSelection,
   resolveWorkflowSubagentSpawnDefinition,
@@ -2224,8 +2225,9 @@ const make = Effect.gen(function* () {
         Effect.orElseSucceed(() => undefined),
       );
       const allowedParts = intersectAppReviewParts(
-        resolveAppReviewStepParts({
-          overrides: settings?.workflowStepReviewParts,
+        resolveLayeredAppReviewStepParts({
+          threadOverrides: findWorkflowStepReviewParts(orchestratorThread, readModel.threads),
+          settingsOverrides: settings?.workflowStepReviewParts,
           key: {
             workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
             stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
@@ -2886,8 +2888,9 @@ const make = Effect.gen(function* () {
         const combinedSettings = yield* serverSettingsService.getSettings.pipe(
           Effect.orElseSucceed(() => undefined),
         );
-        const combinedParts = resolveAppReviewStepParts({
-          overrides: combinedSettings?.workflowStepReviewParts,
+        const combinedParts = resolveLayeredAppReviewStepParts({
+          threadOverrides: findWorkflowStepReviewParts(orchestratorThread, readModel.threads),
+          settingsOverrides: combinedSettings?.workflowStepReviewParts,
           key: { workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex },
         });
         if (appReviewScopeForParts(combinedParts) === null) {
