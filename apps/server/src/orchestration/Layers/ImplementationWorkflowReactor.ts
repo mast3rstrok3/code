@@ -530,17 +530,23 @@ export function failImplementationTickets(
 }
 
 function terminalLineageTicketIds(run: OrchestrationImplementationRun): ReadonlyArray<string> {
-  if (run.terminalLineageTicketIds.length > 0) {
-    const succeeded = new Set(
-      run.ticketStates
-        .filter((state) => state.status === "succeeded")
-        .map((state) => state.ticketId),
-    );
-    return run.terminalLineageTicketIds.filter((ticketId) => succeeded.has(ticketId));
-  }
-  const dependencyIds = new Set(run.ticketStates.flatMap((state) => state.dependencyTicketIds));
+  const succeeded = new Set(
+    run.ticketStates.filter((state) => state.status === "succeeded").map((state) => state.ticketId),
+  );
+  const recorded = run.terminalLineageTicketIds.filter((ticketId) => succeeded.has(ticketId));
+  if (recorded.length > 0) return recorded;
+  // Every recorded tip failed, so the lineage has to be re-read from what
+  // survived. Only edges a surviving ticket owns count: a failed tip still
+  // lists the tickets it was going to build on, and counting those edges makes
+  // every survivor look superseded. That empties the set, and integration then
+  // merges nothing while reporting that it integrated the terminal branches.
+  const dependencyIds = new Set(
+    run.ticketStates
+      .filter((state) => succeeded.has(state.ticketId))
+      .flatMap((state) => state.dependencyTicketIds),
+  );
   return run.ticketStates
-    .filter((state) => state.status === "succeeded" && !dependencyIds.has(state.ticketId))
+    .filter((state) => succeeded.has(state.ticketId) && !dependencyIds.has(state.ticketId))
     .map((state) => state.ticketId);
 }
 
@@ -2463,9 +2469,30 @@ const make = Effect.gen(function* () {
       });
 
       const terminalIds = terminalLineageTicketIds(integratingRun);
-      const terminalBranches = yield* Effect.forEach(terminalIds, (ticketId) =>
+      // Both git checks around the merge fail the same way and need the same
+      // landing: a branch that moved under the run is not something a second
+      // integration attempt can fix, and an unhandled failure here aborts the
+      // reactor's event, which parks the run in `integrating` with nothing on
+      // screen, no Retry, and no sweep that re-drives it.
+      const blockIntegration = (detail: string) =>
+        blockRun({
+          sourceThreadId: input.sourceThreadId,
+          run: integratingRun,
+          retryableStage: "integration" as const,
+          humanBlocked: true,
+          reasonMarkdown: detail,
+          updatedAt: input.createdAt,
+        });
+      const terminalBranchesResult = yield* Effect.forEach(terminalIds, (ticketId) =>
         verifiedDependency({ run: integratingRun, ticketId }),
-      );
+      ).pipe(Effect.result);
+      if (terminalBranchesResult._tag === "Failure") {
+        yield* blockIntegration(
+          `Terminal branch resolution failed: ${errorDetail(terminalBranchesResult.failure)}`,
+        );
+        return;
+      }
+      const terminalBranches = terminalBranchesResult.success;
       const integrationResult = yield* integrateRefs({
         cwd: integratingRun.orchestratorWorktreePath,
         baseTicketId: null,
@@ -2530,10 +2557,17 @@ const make = Effect.gen(function* () {
         createdAt: input.createdAt,
       });
 
-      const integrationHeadSha =
+      const verified =
         integration.conflictedTicketId === null
-          ? yield* verifyIntegratedWorkerCommits(integratingRun)
+          ? yield* verifyIntegratedWorkerCommits(integratingRun).pipe(Effect.result)
           : null;
+      if (verified !== null && verified._tag === "Failure") {
+        yield* blockIntegration(
+          `Integration verification failed: ${errorDetail(verified.failure)}`,
+        );
+        return;
+      }
+      const integrationHeadSha = verified === null ? null : verified.success;
       const integratedRun: OrchestrationImplementationRun = {
         ...integratingRun,
         integrationHeadSha,
@@ -6598,6 +6632,18 @@ const make = Effect.gen(function* () {
         }
         if (thread.session === null && thread.latestTurn === null) {
           return nowMs - Date.parse(thread.createdAt) >= UNREPORTED_STAGE_THREAD_GRACE_MS;
+        }
+        // A live session resting between turns reads as `ready` with no active
+        // turn, which is also how a thread looks when it stopped without
+        // reporting. Reviewers rest there for a minute or two mid-review, and
+        // recovering on the first idle sweep put a second reviewer on the same
+        // ticket branch: whichever one reported first froze the ticket's
+        // recorded commit, the other kept committing, and every later step that
+        // compared the branch against that commit refused. `stopped`, `error`
+        // and `interrupted` say the session is actually over and are recovered
+        // at once; only `ready` has to prove it by staying quiet.
+        if (thread.session?.status === "ready") {
+          return nowMs - Date.parse(thread.session.updatedAt) >= UNREPORTED_STAGE_THREAD_GRACE_MS;
         }
         return true;
       };

@@ -272,6 +272,7 @@ function makeTestLayer(
   backendProbeStatus = frontendProbeStatus,
   backendProbeStatuses: ReadonlyArray<number> = [backendProbeStatus],
   inheritedStackMissing = false,
+  nonAncestorCommitSha?: string,
 ) {
   const coreLayer = Layer.mergeAll(
     OrchestrationEngineLive.pipe(
@@ -403,7 +404,7 @@ function makeTestLayer(
               })),
             ),
           listChangedFiles: () => Effect.succeed([]),
-          isAncestor: () => Effect.succeed(true),
+          isAncestor: (input) => Effect.succeed(input.ancestorRef !== nonAncestorCommitSha),
           mergeRef: (input) =>
             Ref.update(calls.mergeRefInputs, (inputs) => [...inputs, input]).pipe(
               Effect.flatMap(() =>
@@ -587,6 +588,8 @@ function withSystem<A, E>(
     /** Successive backend health statuses, held at the final value after exhaustion. */
     readonly backendProbeStatuses?: ReadonlyArray<number>;
     readonly inheritedStackMissing?: boolean;
+    /** Commit `git merge-base --is-ancestor` reports as missing from every descendant. */
+    readonly nonAncestorCommitSha?: string;
   },
 ) {
   return Effect.gen(function* () {
@@ -660,6 +663,7 @@ function withSystem<A, E>(
           options?.backendProbeStatus,
           options?.backendProbeStatuses,
           options?.inheritedStackMissing,
+          options?.nonAncestorCommitSha,
         ),
       ),
     );
@@ -3344,6 +3348,149 @@ describe("ImplementationWorkflowReactor", () => {
             refName: `${run.launchSummary.plannedWorkers[0]?.branch}@commit`,
           },
         ]);
+      }),
+    ),
+  );
+
+  it.effect("integrates the surviving branches when the only terminal ticket fails", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, tickets } = yield* launchRun(system, {
+          tickets: [
+            planningTicket("TICKET-1"),
+            planningTicket("TICKET-2", ["TICKET-1"]),
+            planningTicket("TICKET-3", ["TICKET-1"]),
+            planningTicket("TICKET-4", ["TICKET-2", "TICKET-3"]),
+          ],
+        });
+        const ticketIds = new Map(tickets.map((ticket) => [ticket.key, ticket.id] as const));
+        expect(run.terminalLineageTicketIds).toEqual([ticketIds.get("TICKET-4")]);
+
+        for (const key of ["TICKET-1", "TICKET-2", "TICKET-3"]) {
+          yield* appendWorkerResult(system, {
+            run,
+            status: "succeeded",
+            ticketId: ticketIds.get(key),
+          });
+        }
+        yield* appendWorkerResult(system, {
+          run,
+          status: "failed",
+          ticketId: ticketIds.get("TICKET-4"),
+        });
+
+        // TICKET-4 was the only recorded tip, and its dependency edges died with
+        // it. Reading the lineage off the full graph leaves every survivor
+        // looking superseded, and the run then merges nothing onto the
+        // orchestrator branch while reporting that it integrated.
+        const merges = yield* Ref.get(system.mergeRefInputs);
+        expect(merges.filter((merge) => merge.cwd === run.orchestratorWorktreePath)).toEqual([
+          {
+            cwd: run.orchestratorWorktreePath,
+            refName: `${run.launchSummary.plannedWorkers[1]?.branch}@commit`,
+          },
+          {
+            cwd: run.orchestratorWorktreePath,
+            refName: `${run.launchSummary.plannedWorkers[2]?.branch}@commit`,
+          },
+        ]);
+      }),
+    ),
+  );
+
+  it.effect("parks the run for a human when integration leaves a ticket out of the tree", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          yield* appendWorkerResult(system, { run, status: "succeeded" });
+
+          // The merge reported success but the tree does not contain the
+          // ticket. Left unhandled this aborts the reactor's event, which parks
+          // the run in `integrating` with nothing on screen, no Retry, and no
+          // sweep that re-drives it.
+          const snapshot = yield* system.query.getSnapshot();
+          const blocked = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+          expect(blocked?.status).toBe("needs-human-attention");
+          expect(blocked?.retryableFailure).toMatchObject({
+            stage: "integration",
+            humanBlocked: true,
+          });
+          expect(blocked?.retryableFailure?.detail).toContain("does not contain ticket");
+          expect(blocked?.integrationHeadSha).toBeNull();
+          expect(
+            snapshot.threads.filter((thread) => thread.workflowRole === "implementation-validator"),
+          ).toHaveLength(0);
+        }),
+      { nonAncestorCommitSha: "implementation/checkout-ticket-1@commit" },
+    ),
+  );
+
+  it.effect("leaves a stage thread resting between turns alone until it goes quiet", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        // A reviewer that finished a turn and has not started the next one is
+        // `ready` with no active turn, which is indistinguishable from one that
+        // stopped without reporting. Recovering on the first idle sweep put a
+        // second reviewer on the ticket branch, and the two then raced: one
+        // reported and froze the ticket's commit, the other kept committing.
+        const { run } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
+        yield* appendWorkerResult(system, {
+          run,
+          status: "succeeded",
+          completeTicketReview: false,
+        });
+
+        const codeReviewers = (snapshot: {
+          readonly threads: ReadonlyArray<{
+            readonly id: ThreadId;
+            readonly workflowRole: string | null;
+          }>;
+        }) =>
+          snapshot.threads.filter(
+            (thread) => thread.workflowRole === "implementation-code-reviewer",
+          );
+
+        let snapshot = yield* system.query.getSnapshot();
+        const reviewer = codeReviewers(snapshot)[0];
+        if (!reviewer) throw new Error("Code reviewer missing.");
+        const nowIso = DateTime.formatIso(yield* DateTime.now);
+        const restReviewer = (updatedAt: string, tag: string) =>
+          system.engine.dispatch({
+            type: "thread.session.set",
+            commandId: commandId(`reviewer-ready-${tag}`),
+            threadId: reviewer.id,
+            session: {
+              threadId: reviewer.id,
+              status: "ready",
+              providerName: "codex",
+              runtimeMode: "full-access",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt,
+            },
+            createdAt: nowIso,
+          });
+
+        yield* restReviewer(nowIso, "just-now");
+        yield* system.reactor.drain;
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        expect(codeReviewers(snapshot)).toHaveLength(1);
+
+        // Quiet long enough, and the stage really is interrupted: exactly one
+        // replacement starts.
+        const longAgo = DateTime.formatIso(DateTime.subtract(yield* DateTime.now, { minutes: 11 }));
+        yield* restReviewer(longAgo, "long-ago");
+        yield* system.reactor.drain;
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        expect(codeReviewers(snapshot)).toHaveLength(2);
       }),
     ),
   );
