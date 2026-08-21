@@ -13,6 +13,7 @@ import {
   ModelSelection,
   WorkflowStepCycleOverride,
   WorkflowStepModelOverride,
+  WorkflowStepReviewPartsOverride,
 } from "./orchestration.ts";
 import { ProviderInstanceConfig, ProviderInstanceId } from "./providerInstance.ts";
 import {
@@ -621,6 +622,15 @@ export const ServerSettings = Schema.Struct({
   workflowStepCycles: Schema.Array(WorkflowStepCycleOverride).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
+  /**
+   * Which parts each App Review step runs, keyed like `workflowStepCycles`.
+   * The step-level entry is the standing default for every review; the ticket
+   * sub-step entry overrides it for per-ticket reviews. No entry means both
+   * parts run.
+   */
+  workflowStepReviewParts: Schema.Array(WorkflowStepReviewPartsOverride).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
 
   // Legacy single-instance-per-driver settings. Continues to be the source
   // of truth until `providerInstances` (below) lands per-driver migration
@@ -785,6 +795,7 @@ export const ServerSettingsPatch = Schema.Struct({
   // the client always sends the complete set of default step pins.
   workflowStepModels: Schema.optionalKey(Schema.Array(WorkflowStepModelOverride)),
   workflowStepCycles: Schema.optionalKey(Schema.Array(WorkflowStepCycleOverride)),
+  workflowStepReviewParts: Schema.optionalKey(Schema.Array(WorkflowStepReviewPartsOverride)),
   observability: Schema.optionalKey(
     Schema.Struct({
       otlpTracesUrl: Schema.optionalKey(TrimmedString),

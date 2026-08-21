@@ -1,0 +1,66 @@
+import { expect, it } from "vite-plus/test";
+
+import {
+  ALL_APP_REVIEW_PARTS,
+  appReviewPartsForScope,
+  appReviewScopeForParts,
+  describeAppReviewParts,
+  intersectAppReviewParts,
+  resolveAppReviewStepParts,
+  setWorkflowStepReviewPartsOverride,
+} from "./appReviewParts.ts";
+import { APP_REVIEW_WORKFLOW_PROMPT_ID } from "./workflowStepCycles.ts";
+
+const stepKey = { workflowPromptId: APP_REVIEW_WORKFLOW_PROMPT_ID };
+const ticketKey = {
+  workflowPromptId: APP_REVIEW_WORKFLOW_PROMPT_ID,
+  stepWorkflowPromptId: "implementation.tdd.codex",
+};
+
+it("defaults to both parts and lets a ticket key fall back to the step entry", () => {
+  expect(resolveAppReviewStepParts({ overrides: undefined, key: stepKey })).toEqual(
+    ALL_APP_REVIEW_PARTS,
+  );
+  const stepOnly = [{ ...stepKey, e2e: true, browser: false }];
+  expect(resolveAppReviewStepParts({ overrides: stepOnly, key: ticketKey })).toEqual({
+    e2e: true,
+    browser: false,
+  });
+  const both = [
+    { ...stepKey, e2e: true, browser: false },
+    { ...ticketKey, e2e: false, browser: true },
+  ];
+  expect(resolveAppReviewStepParts({ overrides: both, key: ticketKey })).toEqual({
+    e2e: false,
+    browser: true,
+  });
+});
+
+it("maps scopes to parts and back, with none as null", () => {
+  expect(appReviewPartsForScope("both")).toEqual({ e2e: true, browser: true });
+  expect(appReviewScopeForParts(appReviewPartsForScope("e2e"))).toBe("e2e");
+  expect(appReviewScopeForParts(appReviewPartsForScope("browser"))).toBe("browser");
+  expect(appReviewScopeForParts({ e2e: false, browser: false })).toBeNull();
+  expect(
+    appReviewScopeForParts(
+      intersectAppReviewParts(appReviewPartsForScope("e2e"), { e2e: false, browser: true }),
+    ),
+  ).toBeNull();
+});
+
+it("states the parts as the insert line", () => {
+  expect(describeAppReviewParts({ e2e: true, browser: false })).toBe(
+    "E2E tests: yes · Browser review: no",
+  );
+});
+
+it("sets, replaces, and clears one step's override", () => {
+  const set = setWorkflowStepReviewPartsOverride([], stepKey, { e2e: true, browser: false });
+  expect(set).toEqual([
+    { workflowPromptId: APP_REVIEW_WORKFLOW_PROMPT_ID, e2e: true, browser: false },
+  ]);
+  const replaced = setWorkflowStepReviewPartsOverride(set, stepKey, { e2e: false, browser: true });
+  expect(replaced).toHaveLength(1);
+  expect(replaced[0]).toMatchObject({ e2e: false, browser: true });
+  expect(setWorkflowStepReviewPartsOverride(replaced, stepKey, null)).toEqual([]);
+});

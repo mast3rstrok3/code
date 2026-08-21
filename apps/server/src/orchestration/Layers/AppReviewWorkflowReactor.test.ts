@@ -17,6 +17,7 @@ import {
   cycleFailureAction,
   e2eCheckIdsForCommands,
   effectiveAppReviewScope,
+  resolveEffectiveAppReviewScope,
   priorCycleChecks,
   findAppReviewParentTicket,
   nextAppReviewWorkflowAction,
@@ -612,6 +613,54 @@ it("derives stable e2e check ids from command order", () => {
     "e2e-1",
     "e2e-2",
   ]);
+});
+
+it("turns review parts off as a prohibition, degrading only for missing commands", () => {
+  const on = { e2e: true, browser: true };
+  // Settings turn a part off: it stays off whatever the ticket asked for.
+  expect(
+    resolveEffectiveAppReviewScope({
+      run: {},
+      settingsParts: { e2e: true, browser: false },
+      e2eCommandCount: 1,
+    }),
+  ).toBe("e2e");
+  expect(
+    resolveEffectiveAppReviewScope({
+      run: {},
+      settingsParts: { e2e: false, browser: true },
+      e2eCommandCount: 1,
+    }),
+  ).toBe("browser");
+  expect(
+    resolveEffectiveAppReviewScope({
+      run: { appReviewScope: "e2e" },
+      settingsParts: { e2e: false, browser: true },
+      e2eCommandCount: 1,
+    }),
+  ).toBeNull();
+  expect(
+    resolveEffectiveAppReviewScope({
+      run: {},
+      settingsParts: { e2e: false, browser: false },
+      e2eCommandCount: 1,
+    }),
+  ).toBeNull();
+  // A missing suite degrades an e2e request to browser when Settings allow it.
+  expect(
+    resolveEffectiveAppReviewScope({
+      run: { appReviewScope: "e2e" },
+      settingsParts: on,
+      e2eCommandCount: 0,
+    }),
+  ).toBe("browser");
+  expect(
+    resolveEffectiveAppReviewScope({
+      run: { appReviewScope: "e2e" },
+      settingsParts: { e2e: true, browser: false },
+      e2eCommandCount: 0,
+    }),
+  ).toBeNull();
 });
 
 it("degrades every scope to browser when the project declares no e2e commands", () => {

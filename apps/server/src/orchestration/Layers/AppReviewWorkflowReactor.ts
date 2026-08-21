@@ -21,6 +21,15 @@ import {
   type OrchestrationThread,
   WORKFLOW_AUTOMATION_RUNTIME_MODE,
 } from "@t3tools/contracts";
+import {
+  ALL_APP_REVIEW_PARTS,
+  appReviewPartsForScope,
+  appReviewScopeForParts,
+  describeAppReviewParts,
+  intersectAppReviewParts,
+  resolveAppReviewStepParts,
+  type AppReviewParts,
+} from "@t3tools/shared/appReviewParts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { extractPreviewUrls } from "@t3tools/shared/preview";
 import { resolveAppReviewE2eCommands } from "@t3tools/shared/t3ProjectFile";
@@ -405,17 +414,42 @@ export function e2eCheckIdsForCommands(commands: ReadonlyArray<string>): Readonl
 }
 
 /**
- * The parts this run actually verifies with. The ticket's declared scope is an
- * intent; a project that declares no `e2eCommands` has no e2e part to run, so
- * every scope degrades to browser there rather than launching a review with
- * nothing to do.
+ * The parts this run actually verifies with, or null when Settings leave it
+ * nothing to run.
+ *
+ * Three layers intersect: what Settings allow for the step, what the run
+ * requested (the ticket's scope), and what the project makes available. A
+ * missing e2e suite degrades an e2e request to browser when Settings allow the
+ * browser at all — an intent should not strand a review — but a part Settings
+ * turned off stays off, which is what makes the toggle a prohibition rather
+ * than a preference.
  */
+export function resolveEffectiveAppReviewScope(input: {
+  readonly run: Pick<AppReviewWorkflowRun, "appReviewScope">;
+  readonly settingsParts: AppReviewParts;
+  readonly e2eCommandCount: number;
+}): AppReviewScope | null {
+  const allowed = intersectAppReviewParts(
+    input.settingsParts,
+    appReviewPartsForScope(input.run.appReviewScope ?? "both"),
+  );
+  if (appReviewScopeForParts(allowed) === null) return null;
+  const available = { e2e: allowed.e2e && input.e2eCommandCount > 0, browser: allowed.browser };
+  return appReviewScopeForParts(available) ?? (input.settingsParts.browser ? "browser" : null);
+}
+
+/** {@link resolveEffectiveAppReviewScope} with nothing turned off in Settings. */
 export function effectiveAppReviewScope(
   run: Pick<AppReviewWorkflowRun, "appReviewScope">,
   e2eCommandCount: number,
 ): AppReviewScope {
-  if (e2eCommandCount === 0) return "browser";
-  return run.appReviewScope ?? "both";
+  return (
+    resolveEffectiveAppReviewScope({
+      run,
+      settingsParts: ALL_APP_REVIEW_PARTS,
+      e2eCommandCount,
+    }) ?? "browser"
+  );
 }
 
 export function terminalReviewPassFailure(input: {
@@ -531,6 +565,8 @@ export function buildReviewPrompt(input: {
       "Preview targets (try in order):",
       ...run.previewTargets.map((target) => `- ${target}`),
       "These preview targets are authoritative for this App Review cycle. Do not substitute deployment URLs from repository documentation, supporting source context, browser history, or environment conventions. If every listed target is unavailable, report the review failed with concrete details.",
+      "",
+      `Review parts for this run — ${describeAppReviewParts(appReviewPartsForScope(scope))}. A part marked no is off for this review and must not be run.`,
       ...(e2eCommands.length === 0
         ? []
         : [
@@ -633,6 +669,32 @@ const make = Effect.gen(function* () {
   ) {
     if (cwd === null) return [] as ReadonlyArray<string>;
     return resolveAppReviewE2eCommands(Option.getOrUndefined(yield* projectFileLoader.load(cwd)));
+  });
+
+  /**
+   * The scope this run's next cycle actually reviews with, or null when
+   * Settings leave it nothing to run. Ticket-scoped runs resolve the ticket
+   * sub-step entry (falling back to the step entry); everything else resolves
+   * the step entry directly.
+   */
+  const reviewScopeForRun = Effect.fn("AppReviewWorkflowReactor.reviewScopeForRun")(function* (
+    run: AppReviewWorkflowRun,
+    e2eCommandCount: number,
+  ) {
+    const settings = yield* serverSettingsService.getSettings.pipe(
+      Effect.orElseSucceed(() => undefined),
+    );
+    const settingsParts = resolveAppReviewStepParts({
+      overrides: settings?.workflowStepReviewParts,
+      key:
+        run.caller.type === "implementation" && run.caller.ticketId !== undefined
+          ? {
+              workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+              stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+            }
+          : { workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex },
+    });
+    return resolveEffectiveAppReviewScope({ run, settingsParts, e2eCommandCount });
   });
 
   const updateRun = Effect.fn("AppReviewWorkflowReactor.updateRun")(function* (
@@ -824,7 +886,17 @@ const make = Effect.gen(function* () {
     });
     const target = yield* resolveTarget(run.targetThreadId);
     const e2eCommands = yield* e2eCommandsForCwd(target?.cwd ?? null);
-    const reviewScope = effectiveAppReviewScope(run, e2eCommands.length);
+    const reviewScope = yield* reviewScopeForRun(run, e2eCommands.length);
+    if (reviewScope === null) {
+      yield* failRun({
+        run,
+        reason: "automation-unavailable",
+        detailMarkdown:
+          "App Review is turned off for this step in Settings → Workflows (E2E tests: no · Browser review: no), so no cycle can verify anything.",
+        occurredAt: run.updatedAt,
+      });
+      return;
+    }
     yield* orchestrationEngine.dispatch({
       type: "thread.app-review.launch",
       commandId: yield* serverCommandId("app-review-workflow-review-launch"),
@@ -1256,12 +1328,15 @@ const make = Effect.gen(function* () {
     if (stableRun === null) return;
     const action = terminalReviewAction(review);
     const e2eCommands = yield* e2eCommandsForCwd(target.cwd);
-    const reviewScope = effectiveAppReviewScope(stableRun, e2eCommands.length);
+    // Null here means Settings turned the parts off after the cycle launched;
+    // judge the finished review leniently rather than retroactively.
+    const reviewScope = yield* reviewScopeForRun(stableRun, e2eCommands.length);
     const passFailure = terminalReviewPassFailure({
       run: stableRun,
       review,
       priorReviews: controller?.appReviews ?? [],
-      e2eCheckIds: reviewScope === "browser" ? [] : e2eCheckIdsForCommands(e2eCommands),
+      e2eCheckIds:
+        reviewScope === "e2e" || reviewScope === "both" ? e2eCheckIdsForCommands(e2eCommands) : [],
     });
     if (passFailure !== null) {
       yield* startPlanning({
@@ -1275,7 +1350,9 @@ const make = Effect.gen(function* () {
     // An e2e-only review has no browser part, so recordings and screenshots
     // are not part of its contract.
     const evidenceFailure =
-      reviewScope === "e2e" ? null : terminalReviewEvidenceFailure(action, review);
+      reviewScope === "e2e" || reviewScope === null
+        ? null
+        : terminalReviewEvidenceFailure(action, review);
     if (evidenceFailure !== null) {
       yield* startPlanning({
         run: stableRun,
@@ -1377,12 +1454,10 @@ const make = Effect.gen(function* () {
     const declaredE2eCommands = yield* e2eCommandsForCwd(
       (yield* resolveTarget(run.targetThreadId))?.cwd ?? null,
     );
-    // A browser-only review never gates on the e2e suite, so its fixer is not
-    // asked to run it either.
-    const e2eCommands =
-      effectiveAppReviewScope(run, declaredE2eCommands.length) === "browser"
-        ? []
-        : declaredE2eCommands;
+    // A review that never gates on the e2e suite does not ask its fixer to
+    // run it either.
+    const fixerScope = yield* reviewScopeForRun(run, declaredE2eCommands.length);
+    const e2eCommands = fixerScope === "e2e" || fixerScope === "both" ? declaredE2eCommands : [];
     yield* orchestrationEngine.dispatch({
       type: "thread.create",
       commandId: yield* serverCommandId("app-review-workflow-fixer-create"),

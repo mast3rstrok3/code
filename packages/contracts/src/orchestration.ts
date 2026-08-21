@@ -387,6 +387,20 @@ export const WorkflowStepCycleOverride = Schema.Struct({
 });
 export type WorkflowStepCycleOverride = typeof WorkflowStepCycleOverride.Type;
 
+/**
+ * Which parts an App Review step runs: the project's e2e commands and the
+ * browser pass. Keyed like a cycle budget — the step-level entry is the
+ * standing default, and the ticket sub-step entry overrides it for the App
+ * Review each ticket runs. Both parts default to on when no entry exists.
+ */
+export const WorkflowStepReviewPartsOverride = Schema.Struct({
+  workflowPromptId: TrimmedNonEmptyString,
+  stepWorkflowPromptId: Schema.optionalKey(TrimmedNonEmptyString),
+  e2e: Schema.Boolean,
+  browser: Schema.Boolean,
+});
+export type WorkflowStepReviewPartsOverride = typeof WorkflowStepReviewPartsOverride.Type;
+
 export const OrchestrationPlanningSpec = Schema.Struct({
   id: OrchestrationPlanningSpecId,
   title: TrimmedNonEmptyString,

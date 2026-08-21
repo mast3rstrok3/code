@@ -27,6 +27,13 @@ import {
   WORKFLOW_AUTOMATION_RUNTIME_MODE,
   type WorkspaceUserId,
 } from "@t3tools/contracts";
+import {
+  appReviewPartsForScope,
+  appReviewScopeForParts,
+  describeAppReviewParts,
+  intersectAppReviewParts,
+  resolveAppReviewStepParts,
+} from "@t3tools/shared/appReviewParts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { proposedPlanTitle } from "@t3tools/shared/orchestrationPlanning";
 import * as Cause from "effect/Cause";
@@ -2210,6 +2217,32 @@ const make = Effect.gen(function* () {
         });
         return;
       }
+      // Settings can turn a review part off outright. When the intersection
+      // with the ticket's own scope leaves nothing, the review is skipped and
+      // says so, rather than launching a run with nothing to verify.
+      const settings = yield* serverSettingsService.getSettings.pipe(
+        Effect.orElseSucceed(() => undefined),
+      );
+      const allowedParts = intersectAppReviewParts(
+        resolveAppReviewStepParts({
+          overrides: settings?.workflowStepReviewParts,
+          key: {
+            workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+            stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+          },
+        }),
+        appReviewPartsForScope(ticket.appReviewScope ?? "both"),
+      );
+      if (appReviewScopeForParts(allowedParts) === null) {
+        yield* startTicketCodeReview({
+          sourceThreadId: input.sourceThreadId,
+          run: input.run,
+          ticketId: input.ticketId,
+          warningMarkdown: `Ticket App Review skipped: turned off in Settings → Workflows (${describeAppReviewParts(allowedParts)}).`,
+          createdAt: input.createdAt,
+        });
+        return;
+      }
       const stackResult = yield* appDevStackManager
         .autoCreate({
           worktreePath: state.worktreePath,
@@ -2844,6 +2877,25 @@ const make = Effect.gen(function* () {
             previewTargets: [frontendUrl],
             workspaceRevision: activeNestedAppReview.workspaceRevision,
             createdAt: input.createdAt,
+          });
+          return;
+        }
+        // The combined review is also switchable in Settings → Workflows.
+        // With both parts off it skips like an explicit stage skip: the
+        // integrated change goes straight to the Code Review that follows.
+        const combinedSettings = yield* serverSettingsService.getSettings.pipe(
+          Effect.orElseSucceed(() => undefined),
+        );
+        const combinedParts = resolveAppReviewStepParts({
+          overrides: combinedSettings?.workflowStepReviewParts,
+          key: { workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex },
+        });
+        if (appReviewScopeForParts(combinedParts) === null) {
+          yield* startCodeReview({
+            sourceThreadId: input.sourceThreadId,
+            run: readyRun,
+            createdAt: input.createdAt,
+            skipAppReviewRequirement: true,
           });
           return;
         }

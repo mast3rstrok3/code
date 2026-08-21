@@ -141,6 +141,14 @@
       "import": "./src/workflowPresets.ts",
       "default": "./src/workflowPresets.ts"
     },
+    "./appReviewParts": {
+      "types": "./src/appReviewParts.ts",
+      "module": "./src/appReviewParts.ts",
+      "browser": "./src/appReviewParts.ts",
+      "development": "./src/appReviewParts.ts",
+      "import": "./src/appReviewParts.ts",
+      "default": "./src/appReviewParts.ts"
+    },
     "./workflowStepCycles": {
       "types": "./src/workflowStepCycles.ts",
       "module": "./src/workflowStepCycles.ts",

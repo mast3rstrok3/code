@@ -16,6 +16,7 @@ import { useEffect, useRef } from "react";
 
 import { type WorkflowCatalogState, useWorkflowCatalog } from "../../workflowCatalogState";
 import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
+import { setWorkflowStepReviewPartsOverride } from "@t3tools/shared/appReviewParts";
 import { resolveDefaultAgentModelSelectionState } from "../../modelSelection";
 import { primaryServerProvidersAtom } from "../../state/server";
 import { usePrimaryEnvironmentId } from "../../state/environments";
@@ -26,6 +27,10 @@ import {
   type WorkflowModelPinKey,
 } from "../WorkflowModelPins";
 import { WorkflowStepCyclePins, type SetWorkflowStepCycles } from "../WorkflowStepCycles";
+import {
+  WorkflowStepReviewPartPins,
+  type SetWorkflowStepReviewParts,
+} from "../WorkflowStepReviewParts";
 import { Badge } from "../ui/badge";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { WorkflowCatalogContent } from "./WorkflowCatalogContent";
@@ -117,6 +122,7 @@ function WorkflowStepModelDefaults() {
       defaults={settings.workflowStepModels}
       seedSelection={resolveDefaultAgentModelSelectionState(settings, providers)}
       cycleDefaults={settings.workflowStepCycles}
+      reviewPartsDefaults={settings.workflowStepReviewParts}
       onSetStepModel={(key, selection) => {
         updateSettings({
           workflowStepModels: [
@@ -131,6 +137,13 @@ function WorkflowStepModelDefaults() {
           ],
         });
       }}
+      onSetStepReviewParts={(key, parts) => {
+        updateSettings({
+          workflowStepReviewParts: [
+            ...setWorkflowStepReviewPartsOverride(settings.workflowStepReviewParts, key, parts),
+          ],
+        });
+      }}
     />
   );
 }
@@ -139,9 +152,11 @@ function WorkflowStepModelDefaultsBody(props: {
   readonly environmentId: EnvironmentId;
   readonly defaults: ServerSettings["workflowStepModels"];
   readonly cycleDefaults: ServerSettings["workflowStepCycles"];
+  readonly reviewPartsDefaults: ServerSettings["workflowStepReviewParts"];
   readonly seedSelection: ModelSelection;
   readonly onSetStepModel: SetWorkflowStepModel;
   readonly onSetStepCycles: SetWorkflowStepCycles;
+  readonly onSetStepReviewParts: SetWorkflowStepReviewParts;
 }) {
   const choices = useWorkflowModelChoices(props.environmentId);
   const pinFor = (key: WorkflowModelPinKey): ModelSelection | null =>
@@ -187,6 +202,15 @@ function WorkflowStepModelDefaultsBody(props: {
                 overrides={props.cycleDefaults}
                 inheritedLabel="Runs the built-in number of cycles"
                 onSetStepCycles={props.onSetStepCycles}
+                className="mt-3 space-y-2 border-t border-border/60 pt-3"
+              />
+              <WorkflowStepReviewPartPins
+                workflowPromptId={target.workflowPromptId}
+                subStepWorkflowPromptIds={target.subSteps.map(
+                  (subStep) => subStep.workflowPromptId,
+                )}
+                overrides={props.reviewPartsDefaults}
+                onSetStepReviewParts={props.onSetStepReviewParts}
                 className="mt-3 space-y-2 border-t border-border/60 pt-3"
               />
             </div>
