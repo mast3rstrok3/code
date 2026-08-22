@@ -189,6 +189,29 @@ export function workflowStepMatchesImplementationFailure<TThread extends Workflo
 }
 
 /**
+ * Whether the step can use the run's narrow retry command.
+ *
+ * The server ignores that command once a failure has moved past its retry
+ * budget. Returning false then lets the panel use the stage re-run command
+ * instead of showing an enabled button that does nothing.
+ */
+export function workflowStepCanRetryImplementationFailure<TThread extends WorkflowModelThread>(
+  step: WorkflowTimelineStep<TThread>,
+  run: {
+    readonly status: OrchestrationImplementationRunStatus;
+    readonly retryableFailure?: OrchestrationImplementationRetryableFailure | null | undefined;
+  },
+): boolean {
+  const failure = run.retryableFailure;
+  return (
+    run.status === "needs-human-attention" &&
+    failure != null &&
+    failure.attemptCount <= failure.maxAttempts &&
+    workflowStepMatchesImplementationFailure(step, failure.stage)
+  );
+}
+
+/**
  * What each stage of one ticket should report in the Workflows panel.
  *
  * A stage records an outcome only once it has one, so reading the outcome

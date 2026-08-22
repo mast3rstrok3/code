@@ -24,6 +24,7 @@ import {
   implementationTicketStageDetails,
   type WorkflowModelImplementationRun,
   workflowStepMatchesImplementationFailure,
+  workflowStepCanRetryImplementationFailure,
   type WorkflowModelThread,
   type WorkflowTimelineStep,
 } from "./workflowModel";
@@ -847,6 +848,39 @@ describe("buildWorkflowViewModel", () => {
     expect(matched("change-request")).toBe(
       "Implementation phase · Final Code Review, pull request, and green checks",
     );
+  });
+
+  it("stops offering a narrow retry after the server retry budget is exhausted", () => {
+    const step = {
+      id: "final-review",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      label: "Implementation phase · Final Code Review, pull request, and green checks",
+      skillId: null,
+      repeatsAsCycles: false,
+      usesRootThread: false,
+      entries: [],
+    } satisfies WorkflowTimelineStep<ReturnType<typeof thread>>;
+    const failure = {
+      stage: "change-request" as const,
+      detail: "Publication failed",
+      failedAt: "2026-01-01T00:00:00.000Z",
+      attemptCount: 3,
+      maxAttempts: 3,
+      humanBlocked: false,
+    };
+
+    expect(
+      workflowStepCanRetryImplementationFailure(step, {
+        status: "needs-human-attention",
+        retryableFailure: failure,
+      }),
+    ).toBe(true);
+    expect(
+      workflowStepCanRetryImplementationFailure(step, {
+        status: "needs-human-attention",
+        retryableFailure: { ...failure, attemptCount: 4 },
+      }),
+    ).toBe(false);
   });
 
   it("reports a ticket stage that is running rather than calling it not started", () => {

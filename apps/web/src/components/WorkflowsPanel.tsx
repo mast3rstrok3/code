@@ -67,6 +67,7 @@ import {
   resolveWorkflowThreadStatus,
   resolveWorkflowTicketStatus,
   workflowStatusIsActive,
+  workflowStepCanRetryImplementationFailure,
   workflowStepMatchesImplementationFailure,
   workflowThreadKey,
   type WorkflowGroup,
@@ -2097,14 +2098,12 @@ function WorkflowGroupCard(props: {
                           const threadCount = step.entries.filter(
                             (entry) => entry.kind === "thread",
                           ).length;
-                          const retryableFailure =
-                            linkedImplementationRun?.retryableFailure ?? null;
                           const canRetryStep =
-                            linkedImplementationRun?.status === "needs-human-attention" &&
-                            retryableFailure !== null &&
-                            workflowStepMatchesImplementationFailure(
+                            linkedImplementationRun !== null &&
+                            linkedImplementationRun !== undefined &&
+                            workflowStepCanRetryImplementationFailure(
                               step,
-                              retryableFailure.stage,
+                              linkedImplementationRun,
                             ) &&
                             props.onRetryImplementationRun !== undefined;
                           const planningRestartStage =
