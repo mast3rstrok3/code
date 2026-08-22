@@ -659,6 +659,7 @@ function buildMergeGatePrompt(input: {
         : [
             `Programmatic integration stopped while merging ${input.integration.conflictedTicketId} (${input.integration.conflictedRefName}).`,
             `Conflicted files: ${input.integration.conflictedFiles.join(", ") || "unknown"}.`,
+            "Load and apply the bundled Matt Pocock Resolving Merge Conflicts skill before touching the conflict hunks.",
             `After resolving and committing that merge, merge these remaining terminal branches in order: ${input.integration.remainingRefNames.join(", ") || "none"}.`,
             "Then validate the resulting integrated HEAD for this gate.",
           ];

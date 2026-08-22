@@ -9,7 +9,10 @@
  * @module DrainableWorker
  */
 import * as Scope from "effect/Scope";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Queue from "effect/Queue";
+import * as Stream from "effect/Stream";
 import * as TxQueue from "effect/TxQueue";
 import * as TxRef from "effect/TxRef";
 
@@ -27,6 +30,8 @@ export interface DrainableWorker<A> {
    */
   readonly drain: Effect.Effect<void>;
 }
+
+export interface KeyedDrainableWorker<A> extends DrainableWorker<A> {}
 
 /**
  * Create a drainable worker that processes items from an unbounded queue.
@@ -67,4 +72,51 @@ export const makeDrainableWorker = <A, E, R>(
       );
 
     return { enqueue, drain } satisfies DrainableWorker<A>;
+  });
+
+/**
+ * Processes each key in order while allowing different keys to run concurrently.
+ * Idle key groups expire so a long-lived worker does not retain every key it has seen.
+ */
+export const makeKeyedDrainableWorker = <A, K, E, R>(options: {
+  readonly key: (item: A) => K;
+  readonly process: (item: A) => Effect.Effect<void, E, R>;
+  readonly idleTimeToLive?: Duration.Input;
+}): Effect.Effect<KeyedDrainableWorker<A>, never, Scope.Scope | R> =>
+  Effect.gen(function* () {
+    const queue = yield* Effect.acquireRelease(Queue.unbounded<A>(), Queue.shutdown);
+    const outstanding = yield* TxRef.make(0);
+
+    const process = (item: A) =>
+      Effect.ensuring(
+        options.process(item),
+        TxRef.update(outstanding, (count) => count - 1).pipe(Effect.tx),
+      );
+
+    yield* Stream.fromQueue(queue).pipe(
+      Stream.groupByKey(options.key, {
+        bufferSize: Number.POSITIVE_INFINITY,
+        idleTimeToLive: options.idleTimeToLive ?? Duration.minutes(5),
+      }),
+      Stream.mapEffect(([, keyedStream]) => Stream.runForEach(keyedStream, process), {
+        concurrency: "unbounded",
+      }),
+      Stream.runDrain,
+      Effect.forkScoped,
+    );
+
+    const enqueue: KeyedDrainableWorker<A>["enqueue"] = (item) =>
+      TxRef.update(outstanding, (count) => count + 1).pipe(
+        Effect.tx,
+        Effect.andThen(Queue.offer(queue, item)),
+        Effect.asVoid,
+      );
+
+    const drain: KeyedDrainableWorker<A>["drain"] = TxRef.get(outstanding).pipe(
+      Effect.tap((count) => (count > 0 ? Effect.txRetry : Effect.void)),
+      Effect.asVoid,
+      Effect.tx,
+    );
+
+    return { enqueue, drain } satisfies KeyedDrainableWorker<A>;
   });

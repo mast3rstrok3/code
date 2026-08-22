@@ -30,7 +30,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
-import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import { makeKeyedDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import {
   expectedIntentKindForWorkflowPreset,
   isProductWorkflowRoot,
@@ -4216,7 +4216,11 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  const worker = yield* makeDrainableWorker(processInputSafely);
+  const worker = yield* makeKeyedDrainableWorker({
+    key: (input: RuntimeIngestionInput) =>
+      String(input.source === "runtime" ? input.event.threadId : input.event.aggregateId),
+    process: processInputSafely,
+  });
 
   const start: ProviderRuntimeIngestionShape["start"] = () =>
     Effect.gen(function* () {

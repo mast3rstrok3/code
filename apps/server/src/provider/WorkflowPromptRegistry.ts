@@ -1406,9 +1406,11 @@ test("calculateTotal sums line items", () => {
 });
 \`\`\``;
 
-const IMPLEMENTATION_TDD_LOGGING_ASSOCIATED_DOC_CONTENT = `# Logging for TDD Implementation
+const IMPLEMENTATION_TDD_LOGGING_ASSOCIATED_DOC_CONTENT = `# Logging for TDD implementation
 
-## Mental Model
+Adapted for T3 Code from Boris Tane's MIT-licensed [Logging Best Practices skill](https://github.com/boristane/agent-skills/tree/main/skills/logging-best-practices), version 1.0.0.
+
+## Mental model
 
 Logs should answer "what happened to this operation?" They should not narrate every line of code. Scattered string logs are optimized for being easy to write, not for answering production questions later.
 
@@ -1416,9 +1418,9 @@ Structured logging is necessary but not sufficient. Key-value logs are the start
 
 OpenTelemetry, Effect tracing, and logger plumbing do not decide what context matters. The implementation agent still has to choose the useful business and operational context.
 
-## Wide Events
+## Wide events
 
-Prefer one wide event at a meaningful boundary over many isolated strings. Build or enrich the event through the lifecycle and emit it once at completion when possible.
+Prefer one wide event per meaningful service hop or operation boundary over many isolated strings. Build or enrich the event through the lifecycle and emit it once at completion, including failure paths. Middleware, an Effect layer, or another shared boundary should own timing, outcome capture, environment context, and final emission. Handlers and reactors should enrich that event with domain context.
 
 Useful fields include:
 
@@ -1427,13 +1429,22 @@ Useful fields include:
 - outcome
 - duration
 - request, trace, thread, turn, provider, and provider instance IDs
-- service, version, deployment, or environment context when available
+- user-visible and domain identifiers needed to answer who or what was affected
+- business or product context that explains impact
+- feature flags or runtime choices that changed behavior
+- service, version, commit, deployment, region, instance, or environment context when available
 - external dependency latency and retry state
 - structured error type, code, message, and retriable status
 
-High-cardinality fields such as IDs, paths, request IDs, and trace IDs are valuable for debugging. Keep them on spans or log events where they are queryable. Do not put high-cardinality values on metric labels.
+Propagate the request or trace ID across service boundaries so one query can reconstruct the operation. High-cardinality fields such as IDs, paths, request IDs, and trace IDs are valuable for debugging. Keep them on spans or log events where they are queryable. Do not put high-cardinality values on metric labels.
 
-## T3 Code Effect Pattern
+## Structure
+
+Use the codebase's configured logger instead of creating a logger in each module or bypassing it with console output. Preserve one consistent schema and field name for each concept across services. Emit structured objects instead of burying queryable values in message strings.
+
+Use existing middleware, layers, and request context before creating new logging infrastructure. A new abstraction earns its place only when the codebase lacks a boundary that can initialize, enrich, and emit the event reliably.
+
+## T3 Code Effect pattern
 
 In Effect code, use \`Effect.annotateCurrentSpan\` for queryable context and emit logs inside active spans with \`Effect.logInfo\`, \`Effect.logWarning\`, or \`Effect.logError\`. Logs inside an active span become trace events in the server observability pipeline.
 
@@ -1462,6 +1473,9 @@ If sampling is introduced, prefer tail sampling rules:
 - Can one query answer what failed, for which thread or user-visible operation, where, and how long it took?
 - Is the event structured and consistently named?
 - Are important IDs present as fields instead of buried in message strings?
+- Does the request or trace ID survive every service hop?
+- Does a shared logger and lifecycle boundary own final emission?
+- Does the event include the domain and deployment context needed to explain impact?
 - Are high-cardinality debugging fields on spans or log events, not metric labels?
 - Are secrets and full prompts excluded?
 - Does the logging complement tests instead of replacing behavior-focused tests?`;
@@ -1507,7 +1521,7 @@ Ask: "What's the public interface, and which seams should we test?"
 
 ## Logging
 
-Do not add scattered string logs as a debugging diary. Add logging when the new behavior creates an operational question that tests cannot answer — failure cause, retry outcome, external boundary latency, fallback selection, state transition. See [logging.md](logging.md) for the target shape and the checklist.
+When a ticket adds or reviews logging, logger calls, or logging infrastructure, load [logging.md](logging.md) with workflow_doc_get before editing. Add logging when the new behavior creates an operational question that tests cannot answer: failure cause, retry outcome, external boundary latency, fallback selection, or state transition. Apply the document's wide-event shape and completion checklist.
 
 ## Orchestrated Worker Result
 
@@ -1564,9 +1578,27 @@ When the launch message identifies an AppDevStack or Browser App Review failure,
 \`\`\`
 </collaboration_mode>`;
 
+const mattPocockResolvingMergeConflictsSkill = mattPocockEngineeringSkills.skills.find(
+  (skill) => skill.id === "matt-pocock.resolving-merge-conflicts",
+);
+if (mattPocockResolvingMergeConflictsSkill === undefined) {
+  throw new Error(
+    "The Matt Pocock engineering skill snapshot is missing resolving-merge-conflicts",
+  );
+}
+
+const RESOLVING_MERGE_CONFLICTS_ASSOCIATED_DOC = {
+  id: "resolving-merge-conflicts",
+  title: mattPocockResolvingMergeConflictsSkill.title,
+  path: "resolving-merge-conflicts.md",
+  content: mattPocockResolvingMergeConflictsSkill.promptText,
+} as const;
+
 const IMPLEMENTATION_MERGE_GATE_PROMPT = `<collaboration_mode># Implementation Workflow: Merge Gate
 
 Routine implementation branches are merged programmatically before this stage. The launch message names this as either an integration gate or the final gate. The integration gate always runs for the integrated HEAD, including conflict-free integration, and uses focused or documented sub-minute fast checks. The final gate runs only after Code Review and runs each configured complete command exactly once before publication. Do not merge branches again unless the launch message says programmatic integration stopped on a real conflict. Never repeat a successful complete gate on an unchanged commit.
+
+When programmatic integration stops on a real conflict, load \`resolving-merge-conflicts.md\` with \`workflow_doc_get\` before touching any conflict hunk. Apply that skill to the in-progress merge, using the launch message and durable tickets as the merge's goal and primary sources. Finish the current merge, integrate the remaining branches in the stated order, and apply the skill again if a later merge conflicts. Run the gate's focused validation only after every branch is integrated. A conflict-free integration gate and every final gate skip this document and perform validation only.
 
 Do not ask the user questions. If you cannot merge or validate, report a failed merge-gate result with the blocker.
 
@@ -2185,7 +2217,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     title: "3. Merge Gate",
     description: "Merges implementation work and fixes validation failures until green.",
     promptText: IMPLEMENTATION_MERGE_GATE_PROMPT,
-    associatedDocs: [APP_DEV_STACK_ASSOCIATED_DOC],
+    associatedDocs: [APP_DEV_STACK_ASSOCIATED_DOC, RESOLVING_MERGE_CONFLICTS_ASSOCIATED_DOC],
   },
   {
     id: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,

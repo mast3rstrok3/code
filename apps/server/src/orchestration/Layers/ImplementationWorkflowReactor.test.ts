@@ -7,7 +7,6 @@ import {
   AppReviewId,
   EventId,
   GitCommandError,
-  IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS,
   IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
   IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES,
   MessageId,
@@ -3510,6 +3509,9 @@ describe("ImplementationWorkflowReactor", () => {
           expect(validators[0]?.messages.at(-1)?.text).toContain("conflicted.ts");
           expect(validators[0]?.messages.at(-1)?.text).toContain(
             "Programmatic integration stopped",
+          );
+          expect(validators[0]?.messages.at(-1)?.text).toContain(
+            "Matt Pocock Resolving Merge Conflicts skill",
           );
           expect(validators[0]?.messages.at(-1)?.text).toContain(
             "integration gate before App Review and Code Review",

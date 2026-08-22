@@ -40,7 +40,7 @@ For fresh Codex Product Grill and interactive Engineering Grill sessions, `Codex
 
 This presentation follows Matt Pocock's separation of options, recommendation, and rationale, but deliberately keeps T3's dependency-frontier batching instead of adopting an exactly-one-question-at-a-time interview rule.
 
-Supporting documents (`context-format`, `adr-format`, `domain-docs`, `agent-brief`, `prototype-logic`, `prototype-ui`, `tdd-mocking`, `tdd-tests`, `tdd-logging`, `preview-browser-qa`) are deduplicated by global ID and back-linked to the skills that carry them.
+Supporting documents (`context-format`, `adr-format`, `domain-docs`, `agent-brief`, `prototype-logic`, `prototype-ui`, `tdd-mocking`, `tdd-tests`, `tdd-logging`, `preview-browser-qa`) are deduplicated by global ID and back-linked to the skills that carry them. The `tdd-logging` document adapts Boris Tane's MIT-licensed `logging-best-practices` skill to T3 Code's Effect spans and logging pipeline.
 
 Planning tickets extend the upstream To Tickets shape with two T3-native fields. `appReviewEligible` is the programmatic routing tag for tickets that can be verified through a human-style UI review. Eligible tickets also require `appReviewPlanMarkdown`, the durable attachment that names the App Dev Stack surface, UI entry point, actions, visible assertions, and evidence. Both fields live in T3's ticket artifact and never require an external tracker label.
 
@@ -96,7 +96,7 @@ Loads reviewed Planning tickets when present. A prompt-originated run instead in
 
 1. Starts every unblocked ticket concurrently. Each worker has its own thread, branch, and worktree; dependencies branch from the reviewed commit of their blockers.
 2. For an App Review–eligible ticket, creates a worktree-owned AppDevStack and launches the attached review plan for its step cycle budget, ten by default. Ineligible tickets record a skipped review. App Review terminates as passed, failed, or exhausted; every result continues to exactly one ticket Code Review.
-3. Treats worker failures and dependent tickets they block as terminal warnings instead of pausing the workflow. Once all tickets are terminal, merges every usable reviewed ticket branch in one integration thread on the workflow's starting branch and worktree.
+3. Treats worker failures and dependent tickets they block as terminal warnings instead of pausing the workflow. Once all tickets are terminal, merges every usable reviewed ticket branch in one integration thread on the workflow's starting branch and worktree. A real programmatic merge conflict routes the merge-gate agent through the generated `matt-pocock.resolving-merge-conflicts` snapshot before validation. Conflict-free and final gates remain validation-only.
 4. Runs one combined Code Review, then a combined App Review of its step cycle budget, ten by default. Its brief includes cross-ticket flows and every ticket-level failure or warning. App Review exhaustion, blockage, or cancellation continues to the final Code Review.
 5. Runs one final Code Review and one complete validation gate, then publishes the change request. Validation or review problems never reopen the fixed review sequence; publication continues as work in progress, with ticket and combined-review warnings in the PR body and workflow panel.
 

@@ -180,6 +180,23 @@ describe("WorkflowPromptRegistry", () => {
           step.skillId === WORKFLOW_PROMPT_IDS.implementationMergeGateCodex,
       ),
     );
+    const mergeGate = listWorkflowPromptContracts().find(
+      (contract) => contract.id === WORKFLOW_PROMPT_IDS.implementationMergeGateCodex,
+    );
+    NodeAssert.deepEqual(
+      mergeGate?.associatedDocs?.map((doc) => doc.id),
+      ["app-dev-stack", "resolving-merge-conflicts"],
+    );
+    NodeAssert.match(
+      resolveWorkflowPromptText(WORKFLOW_PROMPT_IDS.implementationMergeGateCodex),
+      /load [`]resolving-merge-conflicts\.md[`] with [`]workflow_doc_get[`]/,
+    );
+    const resolvingMergeConflictsDoc = mergeGate?.associatedDocs?.find(
+      (doc) => doc.id === "resolving-merge-conflicts",
+    );
+    NodeAssert.match(resolvingMergeConflictsDoc?.content ?? "", /Find the primary sources/);
+    NodeAssert.match(resolvingMergeConflictsDoc?.content ?? "", /Resolve each hunk/);
+    NodeAssert.match(resolvingMergeConflictsDoc?.content ?? "", /never [`]--abort[`]/);
     for (const workflow of catalog.workflows) {
       for (const step of workflow.steps) {
         if (step.skillId !== undefined) {
@@ -428,7 +445,7 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.doesNotMatch(rendered, /refactoring\.md/);
     NodeAssert.match(rendered, /mocking\.md/);
     NodeAssert.match(rendered, /tests\.md/);
-    NodeAssert.match(rendered, /See \[logging\.md\]\(logging\.md\)/);
+    NodeAssert.match(rendered, /load \[logging\.md\]\(logging\.md\) with workflow_doc_get/);
     NodeAssert.match(rendered, /Logging for TDD/);
     NodeAssert.match(rendered, /workflow_doc_get/);
     NodeAssert.match(rendered, /Orchestrated QA Repair Result/);
@@ -467,10 +484,15 @@ describe("WorkflowPromptRegistry", () => {
     const loggingDoc = tdd.associatedDocs?.find((doc) => doc.id === "tdd-logging");
     NodeAssert.ok(loggingDoc);
     NodeAssert.equal(loggingDoc.path, "logging.md");
-    NodeAssert.match(loggingDoc.content, /# Logging for TDD Implementation/);
+    NodeAssert.match(loggingDoc.content, /# Logging for TDD implementation/);
+    NodeAssert.match(loggingDoc.content, /Boris Tane's MIT-licensed/);
     NodeAssert.match(loggingDoc.content, /Structured logging/);
     NodeAssert.match(loggingDoc.content, /wide event/);
     NodeAssert.match(loggingDoc.content, /canonical log line/);
+    NodeAssert.match(loggingDoc.content, /configured logger/);
+    NodeAssert.match(loggingDoc.content, /Middleware, an Effect layer/);
+    NodeAssert.match(loggingDoc.content, /Propagate the request or trace ID/);
+    NodeAssert.match(loggingDoc.content, /consistent schema and field name/);
     NodeAssert.match(loggingDoc.content, /Effect\.annotateCurrentSpan/);
     NodeAssert.match(loggingDoc.content, /Always keep errors/);
   });
