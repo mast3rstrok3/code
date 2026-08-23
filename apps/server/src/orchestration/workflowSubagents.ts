@@ -315,6 +315,7 @@ function findWorkflowStepPin(
   pins: ReadonlyArray<WorkflowStepModelOverride>,
   workflowPromptId: string,
   stepWorkflowPromptId: string | undefined,
+  inheritStepPin: boolean,
 ): WorkflowStepModelOverride | undefined {
   if (stepWorkflowPromptId === undefined) {
     return pins.find(
@@ -322,16 +323,15 @@ function findWorkflowStepPin(
         entry.workflowPromptId === workflowPromptId && entry.stepWorkflowPromptId === undefined,
     );
   }
-  return (
-    pins.find(
-      (entry) =>
-        entry.workflowPromptId === workflowPromptId &&
-        entry.stepWorkflowPromptId === stepWorkflowPromptId,
-    ) ??
-    pins.find(
-      (entry) =>
-        entry.workflowPromptId === stepWorkflowPromptId && entry.stepWorkflowPromptId === undefined,
-    )
+  const exact = pins.find(
+    (entry) =>
+      entry.workflowPromptId === workflowPromptId &&
+      entry.stepWorkflowPromptId === stepWorkflowPromptId,
+  );
+  if (exact !== undefined || !inheritStepPin) return exact;
+  return pins.find(
+    (entry) =>
+      entry.workflowPromptId === stepWorkflowPromptId && entry.stepWorkflowPromptId === undefined,
   );
 }
 
@@ -354,6 +354,12 @@ export function resolveWorkflowStepModelSelection(input: {
    * ticket waves". Leave unset when the spawn *is* the step.
    */
   readonly stepWorkflowPromptId?: string | undefined;
+  /**
+   * Whether an unset sub-step inherits the pin on its containing step.
+   * Nested App Review phases disable this because their immediate parent
+   * thread already carries the right model for the ticket or combined review.
+   */
+  readonly inheritStepPin?: boolean | undefined;
   readonly definition: WorkflowSubagentSpawnDefinition | undefined;
   readonly stepModels: ReadonlyArray<WorkflowStepModelOverride> | undefined;
   readonly parentModelSelection: ModelSelection;
@@ -364,9 +370,15 @@ export function resolveWorkflowStepModelSelection(input: {
   readonly fallbackDetail: string | null;
 } {
   const step = input.stepWorkflowPromptId;
+  const inheritStepPin = input.inheritStepPin !== false;
   const pin =
-    findWorkflowStepPin(input.stepModels ?? [], input.workflowPromptId, step) ??
-    findWorkflowStepPin(input.settings?.workflowStepModels ?? [], input.workflowPromptId, step);
+    findWorkflowStepPin(input.stepModels ?? [], input.workflowPromptId, step, inheritStepPin) ??
+    findWorkflowStepPin(
+      input.settings?.workflowStepModels ?? [],
+      input.workflowPromptId,
+      step,
+      inheritStepPin,
+    );
   if (pin === undefined) {
     return resolveWorkflowSubagentModelSelection({
       definition: input.definition,

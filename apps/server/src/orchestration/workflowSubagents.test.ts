@@ -349,6 +349,45 @@ describe("resolveWorkflowStepModelSelection", () => {
     expect(resolved.overrideApplied).toBe(true);
   });
 
+  it("lets a nested ticket App Review phase inherit its parent thread instead of the ticket wave", () => {
+    const resolved = resolveWorkflowStepModelSelection({
+      workflowPromptId: "matt-pocock.to-tickets",
+      stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+      inheritStepPin: false,
+      definition: resolveWorkflowSubagentSpawnDefinition("matt-pocock.to-tickets"),
+      stepModels: [
+        {
+          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+          modelSelection: pinnedSelection,
+        },
+      ],
+      parentModelSelection: claudeParentSelection,
+      settings: enabledClaudeSettings,
+    });
+    expect(resolved.modelSelection).toEqual(claudeParentSelection);
+    expect(resolved.overrideApplied).toBe(false);
+  });
+
+  it("uses a phase-specific ticket App Review pin", () => {
+    const resolved = resolveWorkflowStepModelSelection({
+      workflowPromptId: "matt-pocock.to-tickets",
+      stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+      inheritStepPin: false,
+      definition: resolveWorkflowSubagentSpawnDefinition("matt-pocock.to-tickets"),
+      stepModels: [
+        {
+          workflowPromptId: "matt-pocock.to-tickets",
+          stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+          modelSelection: pinnedSelection,
+        },
+      ],
+      parentModelSelection: claudeParentSelection,
+      settings: enabledClaudeSettings,
+    });
+    expect(resolved.modelSelection).toEqual(pinnedSelection);
+    expect(resolved.overrideApplied).toBe(true);
+  });
+
   it("prefers a sub-step's own pin over the pin of the step that starts it", () => {
     const ownSelection: ModelSelection = {
       instanceId: ProviderInstanceId.make("claudeAgent"),

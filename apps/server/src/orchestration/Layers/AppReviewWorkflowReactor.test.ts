@@ -12,6 +12,7 @@ import {
 
 import { WORKFLOW_NUDGE_EXHAUSTED_MESSAGE, type WorkflowNudgeThread } from "../workflowNudge.ts";
 import {
+  appReviewPhaseModelStepWorkflowPromptId,
   appReviewPhaseThreadState,
   buildReviewPrompt,
   cycleFailureAction,
@@ -106,6 +107,32 @@ function review(verdict: "passed" | "failed", withFinding = verdict === "failed"
     updatedAt: now,
   };
 }
+
+it("uses separate model scopes for ticket and combined App Review phases", () => {
+  expect(
+    appReviewPhaseModelStepWorkflowPromptId(
+      run({
+        caller: {
+          type: "implementation",
+          implementationRunId: "implementation-run-1",
+          orchestratorThreadId: ThreadId.make("thread-orchestrator"),
+          ticketId: "ticket-1",
+        },
+      }),
+    ),
+  ).toBe("implementation.tdd.codex");
+  expect(
+    appReviewPhaseModelStepWorkflowPromptId(
+      run({
+        caller: {
+          type: "implementation",
+          implementationRunId: "implementation-run-1",
+          orchestratorThreadId: ThreadId.make("thread-orchestrator"),
+        },
+      }),
+    ),
+  ).toBe("implementation.browser-app-review.codex");
+});
 
 it("always begins a nonterminal run with Browser App Review", () => {
   expect(nextAppReviewWorkflowAction(run())).toBe("review");

@@ -3,6 +3,7 @@ import type {
   ModelSelection,
   WorkflowPreset,
   WorkflowStepCycleOverride,
+  WorkflowStepModelOverride,
   WorkflowStepReviewPartsOverride,
 } from "@t3tools/contracts";
 import {
@@ -15,6 +16,7 @@ import { useState } from "react";
 
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { ScrollArea } from "~/components/ui/scroll-area";
+import { EngineeringWorkflowSettings } from "./EngineeringWorkflowSettings";
 import { WorkflowStepCyclePins, type SetWorkflowStepCycles } from "./WorkflowStepCycles";
 import {
   WorkflowStepReviewPartPins,
@@ -22,6 +24,7 @@ import {
 } from "./WorkflowStepReviewParts";
 import {
   useWorkflowModelChoices,
+  workflowModelPinKey,
   WorkflowStepModelPins,
   type SetWorkflowStepModel,
   type WorkflowModelPinKey,
@@ -49,6 +52,7 @@ export function WorkflowSettingsBody(props: {
   readonly description?: string | undefined;
   readonly onSetStepModel: SetWorkflowStepModel;
   readonly onSetStepModels?: SetWorkflowStepModels | undefined;
+  readonly defaultStepModels?: ReadonlyArray<WorkflowStepModelOverride> | undefined;
   readonly stepCycles?: ReadonlyArray<WorkflowStepCycleOverride> | undefined;
   readonly defaultStepCycles?: ReadonlyArray<WorkflowStepCycleOverride> | undefined;
   readonly onSetStepCycles?: SetWorkflowStepCycles | undefined;
@@ -58,12 +62,50 @@ export function WorkflowSettingsBody(props: {
 }) {
   const choices = useWorkflowModelChoices(props.environmentId);
   const steps = pinnableSteps(props.preset);
+  const defaultPinFor = (key: WorkflowModelPinKey): ModelSelection | null =>
+    props.defaultStepModels?.find(
+      (entry) => workflowModelPinKey(entry) === workflowModelPinKey(key),
+    )?.modelSelection ?? null;
 
   if (steps.length === 0) {
     return (
       <p className="px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
         This workflow has no steps with agents of their own, so there is nothing to set.
       </p>
+    );
+  }
+
+  if (
+    props.preset === "planning" &&
+    props.onSetStepCycles !== undefined &&
+    props.onSetStepReviewParts !== undefined
+  ) {
+    return (
+      <ScrollArea className="max-h-[min(42rem,75vh)]">
+        <div className="space-y-4 px-3 py-2">
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            {props.description ??
+              "Set models, cycle budgets, and App Review parts in the order this workflow runs. Changes apply to the next agent each step starts."}
+          </p>
+          <EngineeringWorkflowSettings
+            pinFor={props.pinFor}
+            defaultPinFor={defaultPinFor}
+            rootModelSelection={props.rootModelSelection}
+            rootLabel={props.rootLabel ?? "The workflow model"}
+            choices={choices}
+            onSetStepModel={props.onSetStepModel}
+            onSetStepModels={
+              props.onSetStepModels ?? setWorkflowStepModelsOneAtATime(props.onSetStepModel)
+            }
+            stepCycles={props.stepCycles ?? []}
+            defaultStepCycles={props.defaultStepCycles}
+            onSetStepCycles={props.onSetStepCycles}
+            stepReviewParts={props.stepReviewParts ?? []}
+            defaultStepReviewParts={props.defaultStepReviewParts}
+            onSetStepReviewParts={props.onSetStepReviewParts}
+          />
+        </div>
+      </ScrollArea>
     );
   }
 
@@ -147,6 +189,7 @@ export function WorkflowSettingsMenu(props: {
   readonly description?: string | undefined;
   readonly heading?: string | undefined;
   readonly onSetStepModel: SetWorkflowStepModel | undefined;
+  readonly defaultStepModels?: ReadonlyArray<WorkflowStepModelOverride> | undefined;
   /** The run's own cycle budgets, and the standing defaults behind them. */
   readonly stepCycles?: ReadonlyArray<WorkflowStepCycleOverride> | undefined;
   readonly defaultStepCycles?: ReadonlyArray<WorkflowStepCycleOverride> | undefined;
@@ -168,7 +211,11 @@ export function WorkflowSettingsMenu(props: {
       >
         <SlidersHorizontal className="size-3" aria-hidden /> Settings
       </PopoverTrigger>
-      <PopoverPopup side="bottom" align="end" className="w-80 p-0">
+      <PopoverPopup
+        side="bottom"
+        align="end"
+        className={props.preset === "planning" ? "w-[min(42rem,calc(100vw-2rem))] p-0" : "w-80 p-0"}
+      >
         <div className="border-b border-border/70 px-3 py-2">
           <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
             {props.heading ?? "Workflow settings"}
@@ -188,6 +235,7 @@ export function WorkflowSettingsMenu(props: {
             rootLabel={props.rootLabel}
             description={props.description}
             onSetStepModel={onSetStepModel}
+            defaultStepModels={props.defaultStepModels}
             stepCycles={props.stepCycles}
             defaultStepCycles={props.defaultStepCycles}
             onSetStepCycles={props.onSetStepCycles}

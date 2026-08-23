@@ -7455,6 +7455,7 @@ function ChatViewContent(props: ChatViewProps) {
         onPauseWorkflow={handlePauseWorkflow}
         onResumeWorkflow={handleResumeWorkflow}
         onSetStepModel={handleSetWorkflowStepModel}
+        defaultStepModels={settings.workflowStepModels}
         defaultStepCycles={settings.workflowStepCycles}
         onSetStepCycles={handleSetWorkflowStepCycles}
         defaultStepReviewParts={settings.workflowStepReviewParts}

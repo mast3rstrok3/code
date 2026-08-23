@@ -26,6 +26,10 @@ describe("workflowModelQuickActions", () => {
     expect(e2eBrowserReview?.pinKeys).toEqual([
       {
         workflowPromptId: "implementation.browser-app-review.codex",
+        stepWorkflowPromptId: "implementation.tdd.codex",
+      },
+      {
+        workflowPromptId: "implementation.browser-app-review.codex",
         stepWorkflowPromptId: "implementation.browser-app-review.codex",
       },
     ]);
@@ -67,5 +71,21 @@ describe("workflowModelQuickActions", () => {
       selection: null,
       mixed: false,
     });
+  });
+
+  it("reports mixed when ticket and combined browser review models differ", () => {
+    const keys = workflowModelQuickActions("planning").find(
+      (action) => action.id === "e2e-browser-review",
+    )!.pinKeys;
+    const otherSelection: ModelSelection = {
+      instanceId: ProviderInstanceId.make("claudeAgent"),
+      model: "claude-opus-5",
+    };
+
+    expect(
+      resolveWorkflowModelQuickActionSelection(keys, (key) =>
+        key.stepWorkflowPromptId === "implementation.tdd.codex" ? selection : otherSelection,
+      ),
+    ).toEqual({ selection: null, mixed: true });
   });
 });

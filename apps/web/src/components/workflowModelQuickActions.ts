@@ -9,6 +9,7 @@ import type { WorkflowModelPinKey } from "./WorkflowModelPins";
 
 const APP_REVIEW_PROMPT_ID = "implementation.browser-app-review.codex";
 const CODE_REVIEW_PROMPT_ID = "implementation.code-review.codex";
+const TICKET_WAVE_PROMPT_ID = "implementation.tdd.codex";
 
 export interface WorkflowModelQuickAction {
   readonly id: "e2e-browser-review" | "ticket-code-review" | "final-code-review";
@@ -21,10 +22,11 @@ const QUICK_ACTION_DEFINITIONS = [
   {
     id: "e2e-browser-review",
     label: "E2E tests and browser review",
-    description:
-      "Set the model for the expensive review thread that runs E2E tests and drives the browser.",
+    description: "Set the expensive review thread for ticket and combined App Reviews.",
     workflowPromptId: APP_REVIEW_PROMPT_ID,
-    matches: (key: WorkflowModelPinKey) => key.stepWorkflowPromptId === APP_REVIEW_PROMPT_ID,
+    matches: (key: WorkflowModelPinKey) =>
+      key.stepWorkflowPromptId === TICKET_WAVE_PROMPT_ID ||
+      key.stepWorkflowPromptId === APP_REVIEW_PROMPT_ID,
   },
   {
     id: "ticket-code-review",

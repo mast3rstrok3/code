@@ -20,6 +20,8 @@ export function WorkflowModelQuickPins(props: {
   /** Undefined shows standing defaults for every selectable workflow. */
   readonly preset: WorkflowPreset | null | undefined;
   readonly pinFor: (key: WorkflowModelPinKey) => ModelSelection | null;
+  /** Effective models after standing defaults and parent-step inheritance. */
+  readonly selectionFor?: ((key: WorkflowModelPinKey) => ModelSelection | null) | undefined;
   readonly rootModelSelection: ModelSelection;
   readonly rootLabel: string;
   readonly choices: WorkflowModelChoices;
@@ -39,17 +41,21 @@ export function WorkflowModelQuickPins(props: {
         </p>
       </div>
       {actions.map((action) => {
-        const state = resolveWorkflowModelQuickActionSelection(action.pinKeys, props.pinFor);
+        const pinnedState = resolveWorkflowModelQuickActionSelection(action.pinKeys, props.pinFor);
+        const effectiveState = resolveWorkflowModelQuickActionSelection(
+          action.pinKeys,
+          props.selectionFor ?? props.pinFor,
+        );
         return (
           <WorkflowModelPinControls
             key={action.id}
             pinKey={action.pinKeys[0]!}
             label={action.label}
             note={action.description}
-            pinnedSelection={state.selection}
-            inheritedSelection={props.rootModelSelection}
+            pinnedSelection={pinnedState.mixed ? null : pinnedState.selection}
+            inheritedSelection={effectiveState.selection ?? props.rootModelSelection}
             inheritedLabel={props.rootLabel}
-            mixed={state.mixed}
+            mixed={effectiveState.mixed}
             choices={props.choices}
             onSetStepModel={(_key, selection) => props.onSetStepModels(action.pinKeys, selection)}
           />

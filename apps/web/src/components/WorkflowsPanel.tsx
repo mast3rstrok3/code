@@ -22,6 +22,7 @@ import type {
   OrchestrationPlanningWorkflowStage,
   WorkflowPreset,
   WorkflowStepCycleOverride,
+  WorkflowStepModelOverride,
   WorkflowStepReviewPartsOverride,
 } from "@t3tools/contracts";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
@@ -2557,6 +2558,7 @@ export function WorkflowsPanel(props: {
   readonly onResumeWorkflow?: (() => void) | undefined;
   readonly onPauseWorkflow?: (() => void) | undefined;
   readonly onSetStepModel?: SetWorkflowStepModel | undefined;
+  readonly defaultStepModels?: ReadonlyArray<WorkflowStepModelOverride> | undefined;
   readonly defaultStepCycles?: ReadonlyArray<WorkflowStepCycleOverride> | undefined;
   readonly onSetStepCycles?: SetWorkflowStepCycles | undefined;
   readonly defaultStepReviewParts?: ReadonlyArray<WorkflowStepReviewPartsOverride> | undefined;
@@ -2696,6 +2698,7 @@ export function WorkflowsPanel(props: {
             }
             rootModelSelection={workflow.root.modelSelection}
             onSetStepModel={props.onSetStepModel}
+            defaultStepModels={props.defaultStepModels}
             stepCycles={workflow.root.workflowStepCycles}
             defaultStepCycles={props.defaultStepCycles}
             onSetStepCycles={props.onSetStepCycles}

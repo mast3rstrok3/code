@@ -86,6 +86,14 @@ const terminalStatuses = new Set(["passed", "failed", "exhausted"]);
 const APP_REVIEW_IMPLEMENT_SKILL_ID = "matt-pocock.implement";
 const APP_REVIEW_TO_TICKETS_SKILL_ID = "matt-pocock.to-tickets";
 
+export function appReviewPhaseModelStepWorkflowPromptId(
+  run: Pick<AppReviewWorkflowRun, "caller">,
+): string {
+  return run.caller.type === "implementation" && run.caller.ticketId !== undefined
+    ? WORKFLOW_PROMPT_IDS.implementationTddCodex
+    : WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex;
+}
+
 interface AppDevStackPreviewLookup {
   readonly stack: {
     readonly id: string;
@@ -847,14 +855,14 @@ const make = Effect.gen(function* () {
   /**
    * The model for one agent of a cycle.
    *
-   * All three agents run under the parent workflow's App Review step, so they
-   * resolve as its sub-steps: the browser review, the gap analysis, and the
-   * repair each take their own pin, and anything left unset follows the App
-   * Review step pin and then the workflow's own model.
+   * Ticket and combined App Reviews carry separate phase pins. Ticket phases
+   * inherit their controller's model when unset. Combined phases inherit the
+   * App Review step pin and then the workflow model.
    */
   const modelForPrompt = Effect.fn("AppReviewWorkflowReactor.modelForPrompt")(function* (
     workflowPromptId: string,
     parent: OrchestrationThread,
+    run: AppReviewWorkflowRun,
   ) {
     const settings = yield* serverSettingsService.getSettings.pipe(
       Effect.orElseSucceed(() => undefined),
@@ -862,9 +870,11 @@ const make = Effect.gen(function* () {
     // The controller carries the run's root thread id, so a pin the user set on
     // the parent workflow reaches review threads spawned several levels down.
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    const stepWorkflowPromptId = appReviewPhaseModelStepWorkflowPromptId(run);
     return resolveWorkflowStepModelSelection({
       workflowPromptId,
-      stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+      stepWorkflowPromptId,
+      inheritStepPin: stepWorkflowPromptId !== WORKFLOW_PROMPT_IDS.implementationTddCodex,
       definition: resolveWorkflowSubagentSpawnDefinition(workflowPromptId),
       stepModels: findWorkflowStepModels(parent, readModel.threads),
       parentModelSelection: parent.modelSelection,
@@ -929,6 +939,7 @@ const make = Effect.gen(function* () {
       modelSelection: yield* modelForPrompt(
         WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
         controller,
+        run,
       ),
       runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
       workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
@@ -1232,7 +1243,7 @@ const make = Effect.gen(function* () {
       workflowRole: "app-review-planner",
       workflowContext: reviewer.workflowContext ?? null,
       title: `App Review gap analysis ${cycle.cycleNumber}`,
-      modelSelection: yield* modelForPrompt(APP_REVIEW_TO_TICKETS_SKILL_ID, reviewer),
+      modelSelection: yield* modelForPrompt(APP_REVIEW_TO_TICKETS_SKILL_ID, reviewer, input.run),
       runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
       interactionMode: "default",
       workflowPreset: "app-review",
@@ -1477,7 +1488,7 @@ const make = Effect.gen(function* () {
       workflowRole: "app-review-fixer",
       workflowContext: reviewer.workflowContext ?? null,
       title: `App Review implementation ${cycle.cycleNumber}`,
-      modelSelection: yield* modelForPrompt(APP_REVIEW_IMPLEMENT_SKILL_ID, reviewer),
+      modelSelection: yield* modelForPrompt(APP_REVIEW_IMPLEMENT_SKILL_ID, reviewer, run),
       runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
       interactionMode: "default",
       workflowPreset: "app-review",
