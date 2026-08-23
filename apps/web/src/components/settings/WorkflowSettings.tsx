@@ -177,7 +177,7 @@ function WorkflowStepModelDefaultsBody(props: {
     null;
   return (
     <SettingsSection
-      title="Default step models and cycles"
+      title="Default models for isolated steps and cycle budgets"
       icon={<SlidersHorizontalIcon className="size-3.5" />}
       headerAction={
         props.defaults.length + props.cycleDefaults.length === 0 ? null : (
@@ -188,8 +188,8 @@ function WorkflowStepModelDefaultsBody(props: {
       }
     >
       <SettingsRow
-        title="Model per step and sub-step, and how often a step repeats"
-        description="Every step runs on the workflow's own model unless you set one here, and repeats its built-in number of times unless you set a cycle budget. A running workflow's step settings override these for that run, and changes apply to agents started from now on."
+        title="Model per isolated step and sub-step, and how often a step repeats"
+        description="Steps that start separate threads use the workflow's model unless you set one here. Work that stays in the workflow thread uses that thread's composer model. A running workflow's settings override these defaults for agents started from then on."
       >
         <div className="mt-1 space-y-3 pb-3">
           <div className="max-w-md">

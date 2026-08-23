@@ -55,7 +55,12 @@ import { buildPlanImplementationThreadTitle } from "@t3tools/shared/orchestratio
 import { APP_REVIEW_PARTS_TARGETS } from "@t3tools/shared/appReviewParts";
 import { resolveImplementationValidationCommands } from "@t3tools/shared/t3ProjectFile";
 import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
-import { isProductWorkflowPreset, isProductWorkflowRoot } from "@t3tools/shared/workflowPresets";
+import {
+  isProductWorkflowPreset,
+  isProductWorkflowRoot,
+  WORKFLOW_PRESET_DEFINITION_BY_ID,
+  workflowPresetStepUsesRootThread,
+} from "@t3tools/shared/workflowPresets";
 import {
   findWorkflowStepCycleTarget,
   resolveWorkflowStepCycleBudget,
@@ -1619,6 +1624,25 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const rootThreadId = thread.workflowContext?.rootThreadId ?? thread.id;
       const rootThread =
         readModel.threads.find((candidate) => candidate.id === rootThreadId) ?? thread;
+      const preset = rootThread.workflowPreset;
+      if (
+        command.modelSelection !== null &&
+        command.stepWorkflowPromptId === undefined &&
+        preset != null
+      ) {
+        const matchingSteps = WORKFLOW_PRESET_DEFINITION_BY_ID[preset].helpSteps.filter(
+          (step) => step.skillId === command.workflowPromptId,
+        );
+        if (
+          matchingSteps.length > 0 &&
+          matchingSteps.every((step) => workflowPresetStepUsesRootThread(preset, step))
+        ) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Workflow step '${command.workflowPromptId}' shares the workflow's main thread and cannot have a separate model pin.`,
+          });
+        }
+      }
       const occurredAt = yield* nowIso;
       return {
         ...(yield* withEventBase({
@@ -3592,6 +3616,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: `Implementation Run '${command.runId}' was canceled.`,
+        });
+      }
+      if (
+        isWorkflowThreadPaused(readModel.threads, command.threadId) ||
+        isWorkflowThreadPaused(readModel.threads, existingRun.orchestratorThreadId)
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Implementation Run '${command.runId}' is paused. Resume the workflow before starting a stage again.`,
         });
       }
       const target = command.target;

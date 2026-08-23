@@ -137,7 +137,7 @@ export function ComposerModeCatalogDialog(props: {
               }
               rootModelSelection={props.workflowDefaults.rootModelSelection}
               rootLabel="The model selected in the composer"
-              description="Every step follows the composer model and standing cycle defaults unless you set an override. You can change the same controls after the workflow starts."
+              description="Shared-thread steps use the composer model. Steps that start separate threads also use it unless you set an override. You can change the same controls after the workflow starts."
               onSetStepModel={(key, selection) =>
                 setStepModels((current) => setWorkflowStepModelDefault(current, key, selection))
               }

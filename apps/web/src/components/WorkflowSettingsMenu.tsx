@@ -8,6 +8,7 @@ import type {
 import {
   WORKFLOW_PRESET_DEFINITION_BY_ID,
   type WorkflowPresetHelpStep,
+  workflowPresetStepCanPinModel,
 } from "@t3tools/shared/workflowPresets";
 import { SlidersHorizontal } from "lucide-react";
 import { useState } from "react";
@@ -34,8 +35,8 @@ import {
 /** Steps that start an agent of their own — the rest have nothing to set. */
 function pinnableSteps(preset: WorkflowPreset | null): ReadonlyArray<WorkflowPresetHelpStep> {
   if (preset === null) return [];
-  return (WORKFLOW_PRESET_DEFINITION_BY_ID[preset]?.helpSteps ?? []).filter(
-    (step) => step.skillId !== undefined,
+  return (WORKFLOW_PRESET_DEFINITION_BY_ID[preset]?.helpSteps ?? []).filter((step) =>
+    workflowPresetStepCanPinModel(preset, step),
   );
 }
 
@@ -71,7 +72,7 @@ export function WorkflowSettingsBody(props: {
       <div className="space-y-3 px-3 py-2">
         <p className="text-[11px] leading-relaxed text-muted-foreground">
           {props.description ??
-            "Everything this run does per step: which model it uses, how many cycles it repeats, and which parts an App Review verifies. Settings apply to the next agent a step starts — stop and start a step to reach work already running."}
+            "Set models for steps that start separate threads, cycle budgets, and the parts an App Review verifies. Shared-thread steps use the workflow composer model. Changes apply to the next agent a step starts."}
         </p>
         <WorkflowModelQuickPins
           preset={props.preset}

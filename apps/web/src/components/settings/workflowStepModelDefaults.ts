@@ -3,6 +3,7 @@ import type { WorkflowStepModelOverride } from "@t3tools/contracts";
 import {
   WORKFLOW_PRESET_DEFINITIONS,
   type WorkflowPresetSubStep,
+  workflowPresetStepCanPinModel,
 } from "@t3tools/shared/workflowPresets";
 
 import type { WorkflowModelPinKey } from "../WorkflowModelPins";
@@ -33,7 +34,7 @@ export function workflowStepModelDefaultTargets(): ReadonlyArray<WorkflowStepMod
   >();
   for (const definition of WORKFLOW_PRESET_DEFINITIONS) {
     for (const step of definition.helpSteps) {
-      if (step.skillId === undefined) continue;
+      if (!workflowPresetStepCanPinModel(definition.id, step)) continue;
       const entry = byPromptId.get(step.skillId) ?? {
         label: withoutPhasePrefix(step.label),
         subSteps: new Map<string, WorkflowPresetSubStep>(),

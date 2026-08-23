@@ -645,11 +645,14 @@ describe("buildWorkflowViewModel", () => {
       : [];
     const byLabel = (needle: string) => steps.find((step) => step.label?.includes(needle));
 
-    // The Grill is a conversation in the main thread, while ticket review and
-    // the ticket waves get threads of their own.
+    // Planning authors one body of work in the main thread, then starts fresh
+    // threads for review and implementation.
     expect(byLabel("Grill with Docs")?.usesRootThread).toBe(true);
+    expect(byLabel("Spec authoring")?.usesRootThread).toBe(true);
+    expect(byLabel("Ticket authoring")?.usesRootThread).toBe(true);
     expect(byLabel("Ticket review")?.usesRootThread).toBe(false);
     expect(byLabel("Execute ticket waves")?.usesRootThread).toBe(false);
+    expect(byLabel("Final Code Review")?.usesRootThread).toBe(false);
   });
 
   it("renders one bounded post-ticket sequence without internal fallback steps", () => {
@@ -725,7 +728,6 @@ describe("buildWorkflowViewModel", () => {
       "env:repair",
     ]);
     expect(steps[8]?.entries.map((entry) => entry.id)).toEqual([
-      "env:root",
       "env:code-review",
       "env:final-validation",
       "env:pr-babysitter",
@@ -774,7 +776,7 @@ describe("buildWorkflowViewModel", () => {
       "env:orchestrator",
       "env:worker",
     ]);
-    expect(byLabel("Final Code Review")?.entries.map((entry) => entry.id)).toEqual(["env:root"]);
+    expect(byLabel("Final Code Review")?.entries.map((entry) => entry.id)).toEqual([]);
     expect(steps).toHaveLength(9);
 
     // The panel reads a step's status from the threads it owns other than the

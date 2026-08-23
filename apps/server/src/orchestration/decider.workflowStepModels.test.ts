@@ -8,6 +8,7 @@ import {
   type ModelSelection,
   type OrchestrationReadModel,
   type OrchestrationThread,
+  type WorkflowPreset,
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
@@ -28,6 +29,7 @@ const PINNED_MODEL: ModelSelection = {
 function makeThread(input: {
   readonly id: string;
   readonly rootThreadId?: string;
+  readonly workflowPreset?: WorkflowPreset;
 }): OrchestrationThread {
   return {
     id: ThreadId.make(input.id),
@@ -48,6 +50,7 @@ function makeThread(input: {
     modelSelection: ROOT_MODEL,
     runtimeMode: "full-access",
     interactionMode: "planning-workflow",
+    ...(input.workflowPreset === undefined ? {} : { workflowPreset: input.workflowPreset }),
     branch: null,
     worktreePath: null,
     latestTurn: null,
@@ -143,6 +146,46 @@ it.layer(NodeServices.layer)("workflow step model decider", (it) => {
         readModel: makeReadModel([makeThread({ id: "root-1" })]),
       });
       const events = Array.isArray(decided) ? decided : [decided];
+      expect(events[0]?.payload).toMatchObject({ modelSelection: null });
+    }),
+  );
+
+  it.effect("rejects a separate model pin for a step that shares the workflow thread", () =>
+    Effect.gen(function* () {
+      const error = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.workflow.step-model.set",
+          commandId: CommandId.make("cmd-pin-shared-step"),
+          threadId: ThreadId.make("root-1"),
+          workflowPromptId: "planning.spec.codex",
+          modelSelection: PINNED_MODEL,
+          createdAt: NOW,
+        },
+        readModel: makeReadModel([makeThread({ id: "root-1", workflowPreset: "planning" })]),
+      }).pipe(Effect.flip);
+
+      expect(error._tag).toBe("OrchestrationCommandInvariantError");
+      if (error._tag === "OrchestrationCommandInvariantError") {
+        expect(error.detail).toContain("shares the workflow's main thread");
+      }
+    }),
+  );
+
+  it.effect("still clears a stale pin for a step that shares the workflow thread", () =>
+    Effect.gen(function* () {
+      const decided = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.workflow.step-model.set",
+          commandId: CommandId.make("cmd-clear-shared-step"),
+          threadId: ThreadId.make("root-1"),
+          workflowPromptId: "planning.spec.codex",
+          modelSelection: null,
+          createdAt: NOW,
+        },
+        readModel: makeReadModel([makeThread({ id: "root-1", workflowPreset: "planning" })]),
+      });
+      const events = Array.isArray(decided) ? decided : [decided];
+
       expect(events[0]?.payload).toMatchObject({ modelSelection: null });
     }),
   );

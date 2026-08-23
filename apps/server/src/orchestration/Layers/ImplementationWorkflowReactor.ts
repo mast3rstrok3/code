@@ -478,6 +478,17 @@ export function implementationTicketStateIsTerminal(status: string): boolean {
   return status === "succeeded" || status === "failed";
 }
 
+export function implementationRunRerunIsPaused(input: {
+  readonly threads: OrchestrationReadModel["threads"];
+  readonly sourceThreadId: ThreadId;
+  readonly orchestratorThreadId: ThreadId;
+}): boolean {
+  return (
+    isWorkflowThreadPaused(input.threads, input.sourceThreadId) ||
+    isWorkflowThreadPaused(input.threads, input.orchestratorThreadId)
+  );
+}
+
 export function implementationTicketReviewWarningLines(
   run: Pick<OrchestrationImplementationRun, "ticketStates">,
 ): ReadonlyArray<string> {
@@ -2684,15 +2695,39 @@ const make = Effect.gen(function* () {
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
       const orchestratorThread = findThread(readModel, cycleRun.orchestratorThreadId);
       if (orchestratorThread === null) return;
-      // The combined App Review is a stage of the run, so skipping it hands the
-      // integrated change to the Code Review that would have followed it.
-      if (isRunStageSkipped(cycleRun.skips, "app-review")) {
+      const continueWithoutBrowserReview = Effect.fn(
+        "ImplementationWorkflowReactor.continueWithoutBrowserReview",
+      )(function* (run: OrchestrationImplementationRun) {
+        if (run.integrationHeadSha !== null && run.codeReviewedHeadSha === run.integrationHeadSha) {
+          yield* startMergeGate({
+            sourceThreadId: input.sourceThreadId,
+            run,
+            integration: {
+              baseTicketId: null,
+              baseRefName: run.orchestratorBranch,
+              mergedTicketIds: [],
+              conflictedTicketId: null,
+              conflictedRefName: null,
+              conflictedFiles: [],
+              remainingTicketIds: [],
+              remainingRefNames: [],
+            },
+            kind: "final",
+            createdAt: input.createdAt,
+          });
+          return;
+        }
         yield* startCodeReview({
           sourceThreadId: input.sourceThreadId,
-          run: cycleRun,
+          run,
           createdAt: input.createdAt,
           skipAppReviewRequirement: true,
         });
+      });
+      // A skipped App Review still preserves the gate order. Unreviewed work goes to Code Review,
+      // while a HEAD that Code Review already accepted goes to final validation.
+      if (isRunStageSkipped(cycleRun.skips, "app-review")) {
+        yield* continueWithoutBrowserReview(cycleRun);
         return;
       }
       const artifactSourceThread = findThread(readModel, input.sourceThreadId);
@@ -3012,12 +3047,7 @@ const make = Effect.gen(function* () {
           key: { workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex },
         });
         if (appReviewScopeForParts(combinedParts) === null) {
-          yield* startCodeReview({
-            sourceThreadId: input.sourceThreadId,
-            run: readyRun,
-            createdAt: input.createdAt,
-            skipAppReviewRequirement: true,
-          });
+          yield* continueWithoutBrowserReview(readyRun);
           return;
         }
         yield* updateRun({
@@ -4517,10 +4547,7 @@ const make = Effect.gen(function* () {
       }
       yield* startBrowserReview({
         sourceThreadId,
-        run:
-          validatedRun.appReviewedHeadSha === null
-            ? { ...validatedRun, codeReviewedHeadSha: null }
-            : validatedRun,
+        run: validatedRun,
         createdAt: updatedAt,
       });
     },
@@ -5138,7 +5165,7 @@ const make = Effect.gen(function* () {
         ) {
           yield* startBrowserReview({
             sourceThreadId,
-            run: { ...reviewedRun, codeReviewedHeadSha: null, status: "qa-reviewing" },
+            run: { ...reviewedRun, status: "qa-reviewing" },
             createdAt: updatedAt,
           });
           return;
@@ -5766,6 +5793,27 @@ const make = Effect.gen(function* () {
     if (sourceThreadId === null) return;
     const target = event.payload.target;
     const createdAt = event.occurredAt;
+
+    // A pause can land after the decider accepted this request but before the
+    // reactor handles it. Leave the run untouched so worker setup cannot turn
+    // the pause into a failed ticket and dependency cascade.
+    if (
+      implementationRunRerunIsPaused({
+        threads: readModel.threads,
+        sourceThreadId,
+        orchestratorThreadId: run.orchestratorThreadId,
+      })
+    ) {
+      yield* appendActivity({
+        threadId: run.orchestratorThreadId,
+        tone: "info",
+        kind: "implementation-rerun-skipped",
+        summary: "Stage re-run skipped while the workflow is paused",
+        payload: { runId: run.id, target },
+        createdAt,
+      });
+      return;
+    }
 
     yield* appendActivity({
       threadId: run.orchestratorThreadId,

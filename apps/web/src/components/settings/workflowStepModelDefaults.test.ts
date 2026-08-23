@@ -32,6 +32,15 @@ it("drops the phase prefix a guided workflow adds to its step labels", () => {
   expect(targets.every((target) => !target.label.includes(" · "))).toBe(true);
 });
 
+it("does not offer separate defaults for work that stays in the workflow thread", () => {
+  const promptIds = workflowStepModelDefaultTargets().map((target) => target.workflowPromptId);
+
+  expect(promptIds).not.toContain("planning.grill-stage.codex");
+  expect(promptIds).not.toContain("planning.spec.codex");
+  expect(promptIds).not.toContain("planning.tickets.codex");
+  expect(promptIds).toContain("planning.ticket-reviewer.codex");
+});
+
 it("replaces a default in place and clears it without leaving an empty key", () => {
   const withStep = setWorkflowStepModelDefault(
     [],

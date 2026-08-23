@@ -34,7 +34,6 @@ function WorkflowStepModelSection(props: {
   readonly workflowPromptId: string;
   readonly subSteps: ReadonlyArray<WorkflowPresetSubStep>;
   readonly pinFor: (key: WorkflowModelPinKey) => ModelSelection | null;
-  readonly usesRootThread: boolean;
   readonly rootModelSelection: ModelSelection;
   readonly onSetStepModel: SetWorkflowStepModel;
 }) {
@@ -50,12 +49,6 @@ function WorkflowStepModelSection(props: {
         choices={choices}
         onSetStepModel={props.onSetStepModel}
       />
-      {props.usesRootThread ? (
-        <p className="text-[11px] leading-relaxed text-muted-foreground">
-          This step also runs in the workflow&apos;s main thread. A pin covers the agents this step
-          starts; the main thread follows its own composer.
-        </p>
-      ) : null}
     </>
   );
 }
@@ -160,14 +153,19 @@ export function WorkflowStepSettingsMenu(props: {
           <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
             Model
           </div>
-          {open && workflowPromptId !== null && onSetStepModel !== undefined ? (
+          {props.usesRootThread ? (
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
+              This step shares the workflow&apos;s main thread, so it uses the model selected in
+              that thread&apos;s composer. Per-step models are available only for steps that start a
+              separate thread.
+            </p>
+          ) : open && workflowPromptId !== null && onSetStepModel !== undefined ? (
             <WorkflowStepModelSection
               environmentId={props.environmentId}
               stepLabel={props.stepLabel}
               workflowPromptId={workflowPromptId}
               subSteps={props.subSteps}
               pinFor={props.pinFor}
-              usesRootThread={props.usesRootThread}
               rootModelSelection={props.rootModelSelection}
               onSetStepModel={onSetStepModel}
             />

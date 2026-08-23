@@ -133,40 +133,57 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
       {
         label: "Product Grill",
         skillId: "product.full-feature.codex",
+        threadBoundary: "same thread",
         note: "human-guided",
       },
       {
         label: "Engineering Grill",
         skillId: "planning.engineering-grill-automatic.codex",
+        threadBoundary: "same thread",
         note: "automatic",
       },
-      { label: "Spec authoring", skillId: "planning.spec.codex", note: "automatic" },
-      { label: "Planning tickets", skillId: "planning.tickets.codex", note: "automatic" },
+      {
+        label: "Spec authoring",
+        skillId: "planning.spec.codex",
+        threadBoundary: "same thread",
+        note: "automatic",
+      },
+      {
+        label: "Planning tickets",
+        skillId: "planning.tickets.codex",
+        threadBoundary: "same thread",
+        note: "automatic",
+      },
       {
         label: "Ticket review and revision cycles",
         skillId: "planning.ticket-reviewer.codex",
+        threadBoundary: "new review thread",
         note: "automatic; five cycles by default",
       },
       {
         label: "TDD implementation workers",
         skillId: "implementation.tdd.codex",
+        threadBoundary: "new child thread",
         note: "automatic",
       },
       {
         label: "Merge gate and required validation",
         skillId: "implementation.merge-gate.codex",
+        threadBoundary: "new child thread",
         note: "automatic",
       },
       { label: "Start and probe AppDevStack from the integrated worktree", note: "automatic" },
       {
         label: "Nested App Review against the shared AppDevStack",
         skillId: "implementation.browser-app-review.codex",
+        threadBoundary: "new review thread",
         note: "automatic; App Review has its own cycle budget",
         subSteps: APP_REVIEW_SUB_STEPS,
       },
       {
         label: "Code Review",
         skillId: "implementation.code-review.codex",
+        threadBoundary: "new review thread",
         note: "automatic; single pass, applies fixes and commits",
       },
       { label: "Change request publication", note: "automatic" },
@@ -185,6 +202,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
       {
         label: "App Review cycles",
         skillId: "implementation.browser-app-review.codex",
+        threadBoundary: "new review thread",
         note: "ten review, repair-ticket, and fix cycles by default; a passing review ends the run early",
         subSteps: APP_REVIEW_SUB_STEPS,
       },
@@ -199,13 +217,41 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
     interactionMode: "planning-workflow",
     workflowPromptId: "planning.wayfinder.codex",
     helpSteps: [
-      { label: "Name the destination", skillId: "planning.wayfinder.codex" },
-      { label: "Engineering Grill", skillId: "planning.grill-stage.codex" },
-      { label: "Create the Wayfinder Map", skillId: "planning.wayfinder.codex" },
-      { label: "Resolve research tickets", skillId: "planning.research.codex" },
-      { label: "Resolve prototype tickets", skillId: "planning.prototype.codex" },
-      { label: "Advance the decision frontier", skillId: "planning.wayfinder.codex" },
-      { label: "Hand off the resolved map to Spec authoring", skillId: "planning.spec.codex" },
+      {
+        label: "Name the destination",
+        skillId: "planning.wayfinder.codex",
+        threadBoundary: "same thread",
+      },
+      {
+        label: "Engineering Grill",
+        skillId: "planning.grill-stage.codex",
+        threadBoundary: "same thread",
+      },
+      {
+        label: "Create the Wayfinder Map",
+        skillId: "planning.wayfinder.codex",
+        threadBoundary: "same thread",
+      },
+      {
+        label: "Resolve research tickets",
+        skillId: "planning.research.codex",
+        threadBoundary: "new child thread",
+      },
+      {
+        label: "Resolve prototype tickets",
+        skillId: "planning.prototype.codex",
+        threadBoundary: "new child thread",
+      },
+      {
+        label: "Advance the decision frontier",
+        skillId: "planning.wayfinder.codex",
+        threadBoundary: "same thread",
+      },
+      {
+        label: "Hand off the resolved map to Spec authoring",
+        skillId: "planning.spec.codex",
+        threadBoundary: "same thread",
+      },
     ],
   },
   {
@@ -219,10 +265,12 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
       {
         label: "Load Planning tickets or create tickets from the prompt",
         skillId: "implementation.orchestrator-planning.codex",
+        threadBoundary: "same thread",
       },
       {
         label: "Execute ticket waves",
         skillId: "implementation.tdd.codex",
+        threadBoundary: "new child thread",
         note: "workers, ten App Review cycles by default, and one Code Review per ticket",
         subSteps: [
           { label: "TDD implementation worker", workflowPromptId: "implementation.tdd.codex" },
@@ -237,16 +285,19 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
       {
         label: "Merge ticket branches into the starting worktree",
         skillId: "implementation.merge-gate.codex",
+        threadBoundary: "new child thread",
       },
       {
         label: "Run App Review",
         skillId: "implementation.browser-app-review.codex",
+        threadBoundary: "new review thread",
         note: "ten review, repair-plan, and fix cycles by default",
         subSteps: APP_REVIEW_SUB_STEPS,
       },
       {
         label: "Final Code Review, pull request, and green checks",
         skillId: "implementation.code-review.codex",
+        threadBoundary: "new review thread",
         note: "includes final validation, PR creation, and fixing CI or review failures until the latest commit is green",
       },
     ],
@@ -267,26 +318,31 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
       {
         label: "Planning phase · Grill with Docs",
         skillId: "planning.grill-stage.codex",
+        threadBoundary: "same thread",
         note: "human-guided",
       },
       {
         label: "Planning phase · Spec authoring",
         skillId: "planning.spec.codex",
+        threadBoundary: "same thread",
         note: "automatic",
       },
       {
         label: "Planning phase · Ticket authoring",
         skillId: "planning.tickets.codex",
+        threadBoundary: "same thread",
         note: "automatic",
       },
       {
         label: "Planning phase · Ticket review and revision cycles",
         skillId: "planning.ticket-reviewer.codex",
+        threadBoundary: "new review thread",
         note: "automatic; five cycles by default",
       },
       {
         label: "Implementation phase · Execute ticket waves",
         skillId: "implementation.tdd.codex",
+        threadBoundary: "new child thread",
         note: "automatic; parallel workers, eligible App Reviews, and one Code Review per ticket",
         subSteps: [
           { label: "TDD implementation worker", workflowPromptId: "implementation.tdd.codex" },
@@ -301,17 +357,20 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
       {
         label: "Implementation phase · Merge ticket branches",
         skillId: "implementation.merge-gate.codex",
+        threadBoundary: "new child thread",
         note: "automatic",
       },
       {
         label: "Implementation phase · App Review",
         skillId: "implementation.browser-app-review.codex",
+        threadBoundary: "new review thread",
         note: "automatic; ten review, repair-plan, and fix cycles by default",
         subSteps: APP_REVIEW_SUB_STEPS,
       },
       {
         label: "Implementation phase · Final Code Review, pull request, and green checks",
         skillId: "implementation.code-review.codex",
+        threadBoundary: "new review thread",
         note: "automatic; includes final validation, PR creation, and fixing CI or review failures until the latest commit is green",
       },
     ],
@@ -330,6 +389,26 @@ export const WORKFLOW_PRESET_DEFINITION_BY_ID = Object.fromEntries(
     (definition) => [definition.id, definition],
   ),
 ) as Readonly<Record<WorkflowPreset, WorkflowPresetDefinition>>;
+
+/** Whether a workflow step runs turns in the workflow root instead of starting a thread. */
+export function workflowPresetStepUsesRootThread(
+  preset: WorkflowPreset,
+  step: WorkflowPresetHelpStep,
+): boolean {
+  if (step.threadBoundary !== undefined) return step.threadBoundary === "same thread";
+  const definition = WORKFLOW_PRESET_DEFINITION_BY_ID[preset];
+  if (step.skillId !== undefined && step.skillId === definition.workflowPromptId) return true;
+  if (step.label.toLowerCase().includes("create shared worktree")) return true;
+  return false;
+}
+
+/** Model pins only apply when the step starts an agent in a separate thread. */
+export function workflowPresetStepCanPinModel(
+  preset: WorkflowPreset,
+  step: WorkflowPresetHelpStep,
+): step is WorkflowPresetHelpStep & { readonly skillId: string } {
+  return step.skillId !== undefined && !workflowPresetStepUsesRootThread(preset, step);
+}
 
 export function interactionModeForWorkflowPreset(preset: WorkflowPreset): ProviderInteractionMode {
   return WORKFLOW_PRESET_DEFINITION_BY_ID[preset].interactionMode;

@@ -16,6 +16,7 @@ import {
   TurnId,
   type ModelSelection,
   type OrchestrationImplementationRun,
+  type OrchestrationReadModel,
   type ServerSettings,
   type VcsCreateWorktreeInput,
 } from "@t3tools/contracts";
@@ -47,6 +48,7 @@ import {
   fastFeatureBuildContractProblems,
   implementationTicketReviewWarningLines,
   implementationTicketStateIsTerminal,
+  implementationRunRerunIsPaused,
   failImplementationTickets,
   ImplementationWorkflowReactorLive,
   nestedAppReviewAwaitsPreviewRefresh,
@@ -79,6 +81,23 @@ it("treats reviewed successes and best-effort failures as terminal tickets", () 
   expect(implementationTicketStateIsTerminal("failed")).toBe(true);
   expect(implementationTicketStateIsTerminal("app-reviewing")).toBe(false);
   expect(implementationTicketStateIsTerminal("code-reviewing")).toBe(false);
+});
+
+it("detects a paused ancestor before handling an implementation re-run", () => {
+  const rootId = ThreadId.make("thread-paused-root");
+  const orchestratorThreadId = ThreadId.make("thread-paused-orchestrator");
+  const threads = [
+    { id: rootId, parentThreadId: null, workflowPausedAt: now },
+    { id: orchestratorThreadId, parentThreadId: rootId, workflowPausedAt: null },
+  ] as unknown as OrchestrationReadModel["threads"];
+
+  expect(
+    implementationRunRerunIsPaused({
+      threads,
+      sourceThreadId: rootId,
+      orchestratorThreadId,
+    }),
+  ).toBe(true);
 });
 
 it("knows when an embedded App Review is parked awaiting a preview refresh", () => {
@@ -4791,6 +4810,65 @@ describe("ImplementationWorkflowReactor", () => {
         },
       );
     }),
+  );
+
+  it.effect("continues to final validation when App Review is disabled", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system, {
+            appReviewStrategy: "nested-workflow",
+          });
+          yield* appendWorkerResult(system, { run, status: "succeeded" });
+          yield* passMergeGate(system, run);
+
+          let snapshot = yield* system.query.getSnapshot();
+          const reviewingRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+          const reviewer = snapshot.threads.find(
+            (thread) => thread.id === reviewingRun?.activeCodeReviewThreadId,
+          );
+          if (reviewer === undefined) throw new Error("Code reviewer missing.");
+          const reviewerCount = snapshot.threads.filter(
+            (thread) => thread.workflowRole === "implementation-code-reviewer",
+          ).length;
+          yield* appendCodeReviewResult(system, {
+            run,
+            threadId: reviewer.id,
+            status: "clean",
+            tag: "app-review-disabled",
+          });
+
+          snapshot = yield* system.query.getSnapshot();
+          const validatingRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+          expect(validatingRun?.status).toBe("validating");
+          expect(validatingRun?.activeValidationKind).toBe("final");
+          expect(validatingRun?.codeReviewedHeadSha).toBe("def456");
+          expect(validatingRun?.codeReviewAttemptCount).toBe(1);
+          expect(validatingRun?.qaAttemptCount).toBe(0);
+          expect(
+            snapshot.threads.filter(
+              (thread) => thread.workflowRole === "implementation-code-reviewer",
+            ),
+          ).toHaveLength(reviewerCount);
+
+          yield* passFinalGate(system, run);
+          snapshot = yield* system.query.getSnapshot();
+          const completedRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+          expect(completedRun?.status).toBe("completed");
+          expect(yield* Ref.get(system.createOrOpenChangeRequestCount)).toBe(1);
+        }),
+      {
+        serverSettings: {
+          workflowStepReviewParts: [
+            {
+              workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+              e2e: false,
+              browser: false,
+            },
+          ],
+        },
+      },
+    ),
   );
 
   it.effect("normalizes legacy runs with 24 QA fixers and advances without creating a 25th", () =>

@@ -9,6 +9,7 @@ import type {
 import {
   WORKFLOW_PRESET_DEFINITION_BY_ID,
   type WorkflowPresetHelpStep,
+  workflowPresetStepUsesRootThread,
 } from "@t3tools/shared/workflowPresets";
 
 export interface WorkflowModelThread {
@@ -470,23 +471,6 @@ function definedStepRepeatsAsCycles(step: WorkflowPresetHelpStep): boolean {
   );
 }
 
-function definedStepUsesRootThread(preset: WorkflowPreset, step: WorkflowPresetHelpStep): boolean {
-  if (step.threadBoundary === "same thread") return true;
-  const definition = WORKFLOW_PRESET_DEFINITION_BY_ID[preset];
-  if (step.skillId !== undefined && step.skillId === definition.workflowPromptId) return true;
-  const label = step.label.toLowerCase();
-  if (label.includes("create shared worktree")) return true;
-  if (preset === "planning") {
-    const label = step.label.toLowerCase();
-    if (label.startsWith("planning phase")) {
-      return step.skillId !== "planning.ticket-reviewer.codex";
-    }
-    return label.includes("final code review");
-  }
-  if (preset === "wayfinder") return true;
-  return false;
-}
-
 function fallbackStepRepeatsAsCycles<TThread extends WorkflowModelThread>(
   entries: readonly WorkflowTimelineEntry<TThread>[],
 ): boolean {
@@ -593,7 +577,7 @@ export function buildWorkflowSteps<TThread extends WorkflowModelThread>(
       );
       for (const entry of matchedEntries) matchedEntryIds.add(entry.id);
       const usesRootThread =
-        group.preset !== null && definedStepUsesRootThread(group.preset, definition);
+        group.preset !== null && workflowPresetStepUsesRootThread(group.preset, definition);
       const entries =
         rootThread !== undefined && usesRootThread
           ? [

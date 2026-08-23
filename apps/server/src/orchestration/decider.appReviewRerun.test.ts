@@ -58,6 +58,15 @@ function thread(input: { readonly id: ThreadId; readonly session?: "running" | "
   } as unknown as OrchestrationReadModel["threads"][number];
 }
 
+function pauseRoot(readModel: OrchestrationReadModel): OrchestrationReadModel {
+  return {
+    ...readModel,
+    threads: readModel.threads.map((candidate) =>
+      candidate.id === ROOT ? { ...candidate, workflowPausedAt: NOW } : candidate,
+    ),
+  };
+}
+
 function cycle(overrides: Partial<AppReviewWorkflowCycle>): AppReviewWorkflowCycle {
   return {
     cycleNumber: 1,
@@ -356,6 +365,24 @@ it.layer(NodeServices.layer)("App Review phase re-run decider", (it) => {
       expect(events.map((entry) => entry.type)).toEqual([
         "thread.implementation-run-rerun-requested",
       ]);
+    }),
+  );
+
+  it.effect("refuses to re-run an implementation stage while the workflow is paused", () =>
+    Effect.gen(function* () {
+      const error = yield* decideOrchestrationCommand({
+        command: rerunTicketAppReview(),
+        readModel: pauseRoot(
+          makeReadModel({
+            cycles: [cycle({})],
+            activeThreadId: PLANNER,
+            activeSession: "ready",
+          }),
+        ),
+      }).pipe(Effect.flip);
+
+      expect(error._tag).toBe("OrchestrationCommandInvariantError");
+      expect(String(error)).toContain("Resume the workflow");
     }),
   );
 
