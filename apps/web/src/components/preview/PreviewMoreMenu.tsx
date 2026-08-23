@@ -182,6 +182,7 @@ export function PreviewMoreMenu({
               onClick={onResetZoom}
               aria-label="Reset zoom"
               disabled={tabDisabled || !onResetZoom}
+              className="[:hover,[data-pressed]]:bg-foreground/10"
             >
               <RotateCcw />
             </Button>

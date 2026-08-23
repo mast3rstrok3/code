@@ -8,9 +8,11 @@ import {
 } from "@t3tools/contracts";
 import type { Thread } from "../types";
 import {
+  browseInputEndPaddingClass,
   buildBrowseGroups,
   buildThreadActionItems,
   enumerateCommandPaletteItems,
+  filterPinnedBrowseEntries,
   filterCommandPaletteGroups,
   reduceCommandPaletteUiState,
   resolveBrowseDirectoryQuery,
@@ -21,6 +23,35 @@ describe("resolveBrowseDirectoryQuery", () => {
   it("enters selected Unix and Windows directories", () => {
     expect(resolveBrowseDirectoryQuery("/home/nils/repos/nils")).toBe("/home/nils/repos/nils/");
     expect(resolveBrowseDirectoryQuery("C:\\Users\\nils\\repos")).toBe("C:\\Users\\nils\\repos\\");
+  });
+});
+
+describe("browseInputEndPaddingClass", () => {
+  it("reserves the widest space for the create action", () => {
+    expect(
+      browseInputEndPaddingClass({
+        willCreateProjectPath: true,
+        hasHighlightedBrowseItem: false,
+      }),
+    ).toContain("pe-38");
+  });
+
+  it("reserves space for the wider highlighted-item shortcut", () => {
+    expect(
+      browseInputEndPaddingClass({
+        willCreateProjectPath: false,
+        hasHighlightedBrowseItem: true,
+      }),
+    ).toContain("pe-30");
+  });
+
+  it("keeps the compact reserve for the normal add action", () => {
+    expect(
+      browseInputEndPaddingClass({
+        willCreateProjectPath: false,
+        hasHighlightedBrowseItem: false,
+      }),
+    ).toContain("pe-24");
   });
 });
 
@@ -42,7 +73,7 @@ describe("reduceCommandPaletteUiState", () => {
 
     expect(
       reduceCommandPaletteUiState(contentOpen, { _tag: "ToggleMode", mode: "content" }),
-    ).toEqual({ open: false, mode: "command", openIntent: null });
+    ).toEqual({ open: false, mode: "content", openIntent: null });
   });
 
   it("switches between open modes without closing", () => {
@@ -76,7 +107,7 @@ describe("reduceCommandPaletteUiState", () => {
     });
   });
 
-  it("resets to command mode for dialog-driven opens and closes", () => {
+  it("preserves the mode on close and resets it on open", () => {
     const filesOpen = reduceCommandPaletteUiState(closedState, {
       _tag: "ToggleMode",
       mode: "files",
@@ -84,7 +115,7 @@ describe("reduceCommandPaletteUiState", () => {
 
     expect(reduceCommandPaletteUiState(filesOpen, { _tag: "SetOpen", open: false })).toEqual({
       open: false,
-      mode: "command",
+      mode: "files",
       openIntent: null,
     });
     expect(reduceCommandPaletteUiState(filesOpen, { _tag: "SetOpen", open: true })).toEqual({
@@ -302,6 +333,20 @@ describe("buildThreadActionItems", () => {
     expect(item?.description).toBe("T3 Code · #feat/search");
   });
 
+  it("prefers renderDescription when provided", () => {
+    const [item] = buildThreadActionItems({
+      threads: [makeThread({ branch: "feat/search", worktreePath: "/tmp/wt" })],
+      projectTitleById: new Map([[PROJECT_ID, "T3 Code"]]),
+      sortOrder: "updated_at",
+      icon: null,
+      renderDescription: (thread, { projectTitle }) =>
+        `${projectTitle}:${thread.branch}:${thread.worktreePath ? "wt" : "local"}`,
+      runThread: async (_thread) => undefined,
+    });
+
+    expect(item?.description).toBe("T3 Code:feat/search:wt");
+  });
+
   it("filters archived threads out of thread search items", () => {
     const items = buildThreadActionItems({
       threads: [
@@ -329,7 +374,7 @@ describe("buildThreadActionItems", () => {
 });
 
 describe("buildBrowseGroups", () => {
-  it("passes the selected absolute browse entry to navigation", async () => {
+  it("passes the selected browse entry name to navigation", async () => {
     const browseTo = vi.fn();
     const groups = buildBrowseGroups({
       browseEntries: [{ name: "repos", fullPath: "/home/nils/repos" }],
@@ -348,7 +393,7 @@ describe("buildBrowseGroups", () => {
 
     await item.run();
 
-    expect(browseTo).toHaveBeenCalledWith({ name: "repos", fullPath: "/home/nils/repos" });
+    expect(browseTo).toHaveBeenCalledWith("repos");
   });
 
   it("waits for asynchronous browse navigation actions", async () => {
@@ -379,14 +424,47 @@ describe("buildBrowseGroups", () => {
     });
     await Promise.resolve();
 
-    expect(browseTo).toHaveBeenCalledWith({
-      name: "Downloads",
-      fullPath: "/Users/test/Downloads",
-    });
+    expect(browseTo).toHaveBeenCalledWith("Downloads");
     expect(actionSettled).toBe(false);
 
     finishNavigation?.();
     await action;
     expect(actionSettled).toBe(true);
+  });
+});
+
+describe("filterPinnedBrowseEntries", () => {
+  const entries = [
+    { name: "repo", fullPath: "/projects/repo" },
+    { name: "work", fullPath: "/projects/work" },
+  ];
+
+  it("shows sibling folders without losing an existing pinned destination", () => {
+    expect(
+      filterPinnedBrowseEntries({
+        browseEntries: entries,
+        filterQuery: "repo",
+        pinnedDirectoryName: "repo",
+        caseSensitive: true,
+      }),
+    ).toEqual({ visibleEntries: entries, exactEntry: entries[0] });
+  });
+
+  it("matches an existing pinned destination without Windows casing", () => {
+    const windowsEntries = [
+      { name: "Repo", fullPath: "C:\\projects\\Repo" },
+      { name: "work", fullPath: "C:\\projects\\work" },
+    ];
+    expect(
+      filterPinnedBrowseEntries({
+        browseEntries: windowsEntries,
+        filterQuery: "repo",
+        pinnedDirectoryName: "repo",
+        caseSensitive: false,
+      }),
+    ).toEqual({
+      visibleEntries: windowsEntries,
+      exactEntry: windowsEntries[0],
+    });
   });
 });

@@ -65,6 +65,7 @@ import {
   isInteractiveStructuredInputWorkflowPromptId,
   isRegisteredWorkflowPromptId,
 } from "../WorkflowPromptRegistry.ts";
+import * as ServerSettings from "../../serverSettings.ts";
 const isModelSelection = Schema.is(ModelSelection);
 const WORKFLOW_PROVIDERS: ReadonlySet<ProviderDriverKind> = new Set([
   ProviderDriverKind.make("codex"),
@@ -78,6 +79,15 @@ const WORKFLOW_PROVIDERS: ReadonlySet<ProviderDriverKind> = new Set([
  */
 export interface ProviderServiceLiveOptions {
   readonly canonicalEventLogger?: EventNdjsonLogger;
+  /**
+   * Overrides MCP credential issuance. The real issuer reads a module-global
+   * registry that only a running MCP server installs, which makes the
+   * agent-browser-access gate unobservable from a unit test; this seam lets a
+   * test see whether a credential was requested at all.
+   */
+  readonly issueMcpCredential?: typeof McpSessionRegistry.issueActiveMcpCredential;
+  /** Same seam as `issueMcpCredential`, for observing the deny path's revoke. */
+  readonly revokeMcpCredential?: typeof McpSessionRegistry.revokeActiveMcpThread;
 }
 
 type ProviderServiceMethod<Name extends keyof ProviderService.ProviderService["Service"]> =
@@ -247,10 +257,15 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const registry = yield* ProviderAdapterRegistry.ProviderAdapterRegistry;
   const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
   const workflowUserInputBroker = yield* WorkflowUserInputBroker.WorkflowUserInputBroker;
+  const serverSettings = yield* ServerSettings.ServerSettingsService;
+  const issueMcpCredential =
+    options?.issueMcpCredential ?? McpSessionRegistry.issueActiveMcpCredential;
+  const revokeMcpCredential =
+    options?.revokeMcpCredential ?? McpSessionRegistry.revokeActiveMcpThread;
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   const clearMcpSession = (threadId: ThreadId) =>
-    McpSessionRegistry.revokeActiveMcpThread(threadId).pipe(
+    revokeMcpCredential(threadId).pipe(
       Effect.tap(() => Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId))),
       // A question whose asker is gone can never be answered; leaving it
       // parked would hold the tool call open until the process exits.
@@ -261,26 +276,40 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         }),
       ),
     );
+
+  const agentBrowserAccessEnabled = serverSettings.getSettings.pipe(
+    Effect.map((settings) => settings.enableAgentBrowserAccess),
+    Effect.catch((cause) =>
+      Effect.logWarning(
+        "Could not read server settings; withholding agent browser access for this session.",
+        { cause },
+      ).pipe(Effect.as(false)),
+    ),
+  );
+
   const prepareMcpSession = (input: {
     readonly threadId: ThreadId;
     readonly providerInstanceId: ProviderInstanceId;
     readonly workflowPromptId?: string;
   }) => {
     const capabilities = mcpCapabilitiesForWorkflowPromptId(input.workflowPromptId);
-    if (capabilities === undefined) {
-      return clearMcpSession(input.threadId);
-    }
-    return McpSessionRegistry.issueActiveMcpCredential({
-      threadId: input.threadId,
-      providerInstanceId: input.providerInstanceId,
-      capabilities,
-    }).pipe(
-      Effect.tap((credential) =>
-        credential
-          ? Effect.sync(() => McpProviderSession.setMcpProviderSession(credential.config))
-          : Effect.void,
-      ),
-    );
+    return Effect.gen(function* () {
+      const browserEnabled = yield* agentBrowserAccessEnabled;
+      const needsBrowser = capabilities === undefined || capabilities.has("preview");
+      if (!browserEnabled && needsBrowser) {
+        yield* clearMcpSession(input.threadId);
+        return undefined;
+      }
+      const credential = yield* issueMcpCredential({
+        threadId: input.threadId,
+        providerInstanceId: input.providerInstanceId,
+        ...(capabilities === undefined ? {} : { capabilities }),
+      });
+      if (credential) {
+        yield* Effect.sync(() => McpProviderSession.setMcpProviderSession(credential.config));
+      }
+      return credential;
+    });
   };
 
   const publishRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>

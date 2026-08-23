@@ -26,6 +26,11 @@ function makeReadModel(
   activities: OrchestrationThread["activities"] = [],
   messages: OrchestrationThread["messages"] = [],
   workflowPausedAt: string | null = null,
+  lifecycle: {
+    readonly pinnedAt?: string | null;
+    readonly snoozedUntil?: string | null;
+    readonly snoozedAt?: string | null;
+  } = {},
 ): OrchestrationReadModel {
   return {
     snapshotSequence: 0,
@@ -51,6 +56,9 @@ function makeReadModel(
         settledOverride,
         settledAt: settledOverride === "settled" ? SETTLED_AT : null,
         workflowPausedAt,
+        snoozedUntil: lifecycle.snoozedUntil ?? null,
+        snoozedAt: lifecycle.snoozedAt ?? (lifecycle.snoozedUntil != null ? SETTLED_AT : null),
+        pinnedAt: lifecycle.pinnedAt ?? null,
         deletedAt: null,
         messages,
         proposedPlans: [],
@@ -78,7 +86,7 @@ function makeSession(status: OrchestrationSession["status"]): OrchestrationSessi
 }
 
 it.layer(NodeServices.layer)("settled thread decider", (it) => {
-  it.effect("settles active threads and re-emits idempotently for settled ones", () =>
+  it.effect("settles awake threads without a redundant wake and re-emits idempotently", () =>
     Effect.gen(function* () {
       const event = yield* decideOrchestrationCommand({
         command: {
@@ -174,6 +182,29 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
     }),
   );
 
+  it.effect("settling a snoozed thread also wakes it", () =>
+    Effect.gen(function* () {
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.settle",
+          commandId: CommandId.make("cmd-settle-snoozed"),
+          threadId: ThreadId.make("thread-1"),
+        },
+        readModel: makeReadModel(null, null, null, [], [], null, {
+          snoozedUntil: "1970-01-02T09:00:00.000Z",
+        }),
+      });
+      const events = Array.isArray(result) ? result : [result];
+      expect(events.map((entry) => entry.type)).toEqual(["thread.settled", "thread.unsnoozed"]);
+      const settled = events.find((entry) => entry.type === "thread.settled");
+      const unsnoozed = events.find((entry) => entry.type === "thread.unsnoozed");
+      if (settled?.type === "thread.settled" && unsnoozed?.type === "thread.unsnoozed") {
+        expect(unsnoozed.payload.reason).toBe("user");
+        expect(unsnoozed.payload.updatedAt).toBe(settled.payload.updatedAt);
+      }
+    }),
+  );
+
   it.effect("rejects settling a workflow root while a descendant session is live", () =>
     Effect.gen(function* () {
       const base = makeReadModel("settled");
@@ -201,6 +232,52 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
       if (error._tag === "OrchestrationCommandInvariantError") {
         expect(error.detail).toContain(child.id);
       }
+    }),
+  );
+
+  it.effect("repeated settle repairs legacy settled and snoozed state", () =>
+    Effect.gen(function* () {
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.settle",
+          commandId: CommandId.make("cmd-settle-snoozed-again"),
+          threadId: ThreadId.make("thread-1"),
+        },
+        readModel: makeReadModel("settled", null, null, [], [], null, {
+          snoozedUntil: "1970-01-02T09:00:00.000Z",
+        }),
+      });
+      const events = Array.isArray(result) ? result : [result];
+      expect(events.map((entry) => entry.type)).toEqual(["thread.settled", "thread.unsnoozed"]);
+      const settled = events.find((entry) => entry.type === "thread.settled");
+      const unsnoozed = events.find((entry) => entry.type === "thread.unsnoozed");
+      if (settled?.type === "thread.settled" && unsnoozed?.type === "thread.unsnoozed") {
+        expect(settled.payload.settledAt).toBe(SETTLED_AT);
+        expect(settled.payload.updatedAt).toBe(NOW);
+        expect(unsnoozed.payload.updatedAt).not.toBe(NOW);
+      }
+    }),
+  );
+
+  it.effect("settling a pinned and snoozed thread clears the pin and snooze", () =>
+    Effect.gen(function* () {
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.settle",
+          commandId: CommandId.make("cmd-settle-pinned-snoozed"),
+          threadId: ThreadId.make("thread-1"),
+        },
+        readModel: makeReadModel(null, null, null, [], [], null, {
+          pinnedAt: SETTLED_AT,
+          snoozedUntil: "1970-01-02T09:00:00.000Z",
+        }),
+      });
+      const events = Array.isArray(result) ? result : [result];
+      expect(events.map((entry) => entry.type)).toEqual([
+        "thread.settled",
+        "thread.unpinned",
+        "thread.unsnoozed",
+      ]);
     }),
   );
 

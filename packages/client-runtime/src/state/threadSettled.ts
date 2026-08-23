@@ -3,9 +3,77 @@ import type { OrchestrationThreadShell } from "@t3tools/contracts";
 
 export type ChangeRequestStateLike = "open" | "closed" | "merged";
 
+/**
+ * The slice of a change request the settle rules need. `updatedAt` is the
+ * provider's last-activity timestamp; for a merged/closed request it bounds
+ * when the terminal state landed.
+ */
+export interface ChangeRequestSettleSource {
+  readonly state: ChangeRequestStateLike;
+  readonly updatedAt?: string | null | undefined;
+}
+
+/** What the settle rules need to know about the thread's own timeline. */
+export type ThreadActivitySource = Pick<
+  OrchestrationThreadShell,
+  "createdAt" | "latestUserMessageAt" | "latestTurn"
+>;
+
+/**
+ * Latest USER-initiated activity: messages and the turn requests they start,
+ * deliberately not the agent-side started/completed stamps. The settle-on-
+ * merge anchor uses this so a merge landing mid-turn still settles the
+ * thread when that turn finishes, while a user re-engaging after the merge
+ * blocks it for good. Falls back to creation time for untouched threads.
+ */
+function threadUserActivityAnchorAt(thread: ThreadActivitySource): string {
+  const messageAt = thread.latestUserMessageAt;
+  const requestedAt = thread.latestTurn?.requestedAt;
+  let anchor = thread.createdAt;
+  for (const candidate of [messageAt, requestedAt]) {
+    if (candidate != null && Date.parse(candidate) > Date.parse(anchor)) {
+      anchor = candidate;
+    }
+  }
+  return anchor;
+}
+
+/**
+ * Returns whether the change request settles the thread immediately. A
+ * terminal request settles the thread only while it postdates every user-
+ * initiated event in it: settling on a merge happens ONCE. A request last
+ * touched before the thread was created is inherited branch history (a new
+ * thread started at a worktree root whose PR already merged), and one older
+ * than the user's latest engagement was already adjudicated — re-engaging a
+ * thread whose PR merged is the user saying the conversation outlived the
+ * PR. Unknown timestamps keep the old always-settle behavior.
+ */
+export function changeRequestAutoSettles(
+  changeRequest: ChangeRequestSettleSource | null | undefined,
+  options: {
+    readonly autoSettleOnMerge?: boolean | undefined;
+    readonly thread?: ThreadActivitySource | null | undefined;
+  } = {},
+): boolean {
+  if (changeRequest == null) return false;
+  const terminal =
+    changeRequest.state === "closed" ||
+    (changeRequest.state === "merged" && options.autoSettleOnMerge !== false);
+  if (!terminal) return false;
+  if (changeRequest.updatedAt == null || options.thread == null) return true;
+  const updatedAtMs = Date.parse(changeRequest.updatedAt);
+  const anchorAtMs = Date.parse(threadUserActivityAnchorAt(options.thread));
+  // Malformed timestamps fall back to settling, matching servers that never
+  // report updatedAt.
+  if (Number.isNaN(updatedAtMs) || Number.isNaN(anchorAtMs)) return true;
+  return updatedAtMs >= anchorAtMs;
+}
+
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
-export function threadLastActivityAt(shell: OrchestrationThreadShell): string | null {
+export function threadLastActivityAt(
+  shell: Pick<OrchestrationThreadShell, "latestUserMessageAt" | "latestTurn">,
+): string | null {
   const candidates = [
     shell.latestUserMessageAt,
     shell.latestTurn?.requestedAt,
@@ -223,7 +291,9 @@ export function threadWokeAt(
  * thread.unsettle commands, projected into settledOverride + settledAt)
  * wins in both directions; without one, a non-actionable thread auto-settles
  * on inactivity past the window. Failed and plan-ready threads stay visible
- * until the user reviews and settles them. The server
+ * until the user reviews and settles them. A thread can also auto-settle on a
+ * merged or closed change request when that state is its latest event. An open
+ * change request blocks inactivity-based settling. The server
  * un-settles on real activity (user message, session start, approval/
  * user-input request), so an override never goes stale silently.
  */
@@ -232,7 +302,8 @@ export function effectiveSettled(
   options: {
     readonly now: string;
     readonly autoSettleAfterDays: number | null;
-    readonly changeRequestState?: ChangeRequestStateLike | null;
+    readonly autoSettleOnMerge?: boolean;
+    readonly changeRequest?: ChangeRequestSettleSource | null;
   },
 ): boolean {
   // Blocked work must remain visible even when a user explicitly settled it.
@@ -263,13 +334,22 @@ export function effectiveSettled(
   // "active" is the explicit keep-active pin: it suppresses auto-settle
   // until real activity clears it server-side.
   if (shell.settledOverride === "active") return false;
-  if (options.changeRequestState === "merged" || options.changeRequestState === "closed") {
+  if (
+    changeRequestAutoSettles(options.changeRequest, {
+      autoSettleOnMerge: options.autoSettleOnMerge,
+      thread: shell,
+    })
+  ) {
     return true;
   }
-  if (options.changeRequestState === "open") return false;
   // These resting states still need a human decision. They may be settled
   // explicitly, but age alone must not move them out of the inbox.
   if (shell.session?.status === "error" || shell.hasActionableProposedPlan) return false;
+  // An open PR is unfinished business regardless of how long the thread has
+  // been quiet: review can take days, and hiding the thread would bury the
+  // work waiting on it. A configured merge, a close, or an explicit user
+  // settle resolves it.
+  if (options.changeRequest?.state === "open") return false;
   if (options.autoSettleAfterDays === null) return false;
 
   const lastActivityAt = threadLastActivityAt(shell);
@@ -288,7 +368,7 @@ const HOUR_MS = 60 * 60 * 1_000;
 const EVENING_HOUR = 18;
 const MORNING_HOUR = 9;
 
-export type SnoozePresetId = "hour" | "evening" | "tomorrow" | "next-week";
+export type SnoozePresetId = "hour" | "three-hours" | "evening" | "tomorrow" | "next-week";
 
 export interface SnoozePreset {
   readonly id: SnoozePresetId;
@@ -321,17 +401,24 @@ function addSnoozeDays(base: Date, days: number): Date {
 
 /**
  * Shared "snooze until" choices for every client. "This evening" only
- * appears while it is meaningfully before evening; after that the list
- * starts at "Tomorrow".
+ * appears while it is meaningfully before evening; after that the calendar
+ * choices start at "Tomorrow".
  */
 export function resolveSnoozePresets(now: Date): ReadonlyArray<SnoozePreset> {
   const inAnHour = new Date(now.getTime() + HOUR_MS);
+  const inThreeHours = new Date(now.getTime() + 3 * HOUR_MS);
   const presets: SnoozePreset[] = [
     {
       id: "hour",
       label: "In 1 hour",
       whenLabel: snoozeTimeOfDayLabel(inAnHour),
       snoozedUntil: inAnHour.toISOString(),
+    },
+    {
+      id: "three-hours",
+      label: "In 3 hours",
+      whenLabel: snoozeTimeOfDayLabel(inThreeHours),
+      snoozedUntil: inThreeHours.toISOString(),
     },
   ];
 

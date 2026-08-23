@@ -52,6 +52,7 @@ const failingSessionLookupRepositoryLayer = Layer.succeed(AuthSessions.AuthSessi
   revoke: () => Effect.fail(repositoryFailure),
   revokeAllExcept: () => Effect.fail(repositoryFailure),
   setLastConnectedAt: () => Effect.void,
+  setClientConnection: () => Effect.void,
 });
 
 const sessionValidationFailureEnvironmentAuthLayer = Layer.effect(

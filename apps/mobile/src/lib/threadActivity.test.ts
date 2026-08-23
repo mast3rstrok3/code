@@ -8,112 +8,138 @@ import {
   ProviderInstanceId,
   ThreadId,
   TurnId,
-  type UserInputQuestion,
   type OrchestrationThread,
   type OrchestrationThreadActivity,
 } from "@t3tools/contracts";
 
 import {
+  buildPendingUserInputAnswers,
   buildThreadFeed,
-  derivePendingUserInputs,
   deriveThreadFeedPresentation,
+  isPendingUserInputOptionSelected,
   selectPendingUserInputOption,
+  setPendingUserInputCustomAnswer,
+  togglePendingUserInputOptionSelection,
   type ThreadFeedActivity,
   type ThreadFeedEntry,
 } from "./threadActivity";
 
-const singleSelectQuestions = [
-  {
-    id: "audience",
-    header: "Audience",
-    question: "Who is this for?",
-    options: [
-      { label: "Teams", description: "Optimize for collaboration." },
-      { label: "Individuals", description: "Optimize for a solo workflow." },
-    ],
-    multiSelect: false,
-  },
-  {
-    id: "scope",
-    header: "Scope",
-    question: "How broad should it be?",
-    options: [
-      { label: "Focused", description: "Ship the narrow path." },
-      { label: "Broad", description: "Cover every path." },
-    ],
-    multiSelect: false,
-  },
-] satisfies UserInputQuestion[];
+const singleSelectQuestion = {
+  id: "runtime",
+  header: "Runtime",
+  question: "Which runtime should be used?",
+  options: [
+    { label: "Go", description: "One binary" },
+    { label: "Node.js", description: "Reuse TypeScript" },
+  ],
+  multiSelect: false,
+} as const;
 
-describe("selectPendingUserInputOption", () => {
-  it("returns immediate answers for a one-question single-select request", () => {
+const multiSelectQuestion = {
+  id: "scope",
+  header: "Scope",
+  question: "Which data should be collected?",
+  options: [
+    { label: "Orders", description: "Receipts" },
+    { label: "Listings", description: "Inventory" },
+  ],
+  multiSelect: true,
+} as const;
+
+describe("pending user input answers", () => {
+  it("submits when the final single-select answer is chosen", () => {
+    const otherQuestion = {
+      ...singleSelectQuestion,
+      id: "database",
+      header: "Database",
+      question: "Which database should be used?",
+    } as const;
     const selection = selectPendingUserInputOption(
-      singleSelectQuestions.slice(0, 1),
+      [singleSelectQuestion, otherQuestion],
+      { runtime: { selectedOptionLabels: ["Go"] } },
+      otherQuestion,
+      "Node.js",
+    );
+
+    expect(selection.immediateAnswers).toEqual({ runtime: "Go", database: "Node.js" });
+  });
+
+  it("waits for explicit submission when any question allows multiple answers", () => {
+    const selection = selectPendingUserInputOption(
+      [multiSelectQuestion],
       {},
-      "audience",
-      "Teams",
+      multiSelectQuestion,
+      "Orders",
     );
-
-    expect(selection.immediateAnswers).toEqual({ audience: "Teams" });
-  });
-
-  it("returns immediate answers when the last single-select question is answered", () => {
-    const selection = selectPendingUserInputOption(
-      singleSelectQuestions,
-      { audience: { selectedOptionLabel: "Individuals" } },
-      "scope",
-      "Focused",
-    );
-
-    expect(selection.immediateAnswers).toEqual({
-      audience: "Individuals",
-      scope: "Focused",
-    });
-  });
-
-  it("does not submit while another single-select question is unanswered", () => {
-    const selection = selectPendingUserInputOption(singleSelectQuestions, {}, "audience", "Teams");
 
     expect(selection.immediateAnswers).toBeNull();
-    expect(selection.drafts).toEqual({ audience: { selectedOptionLabel: "Teams" } });
   });
 
-  it("does not submit immediately for multi-select or custom-answer flows", () => {
-    const multiSelectQuestions = [
-      {
-        ...singleSelectQuestions[0],
-        multiSelect: true,
-      },
-    ] satisfies UserInputQuestion[];
+  it("replaces single-select options and toggles multi-select options", () => {
     expect(
-      selectPendingUserInputOption(multiSelectQuestions, {}, "audience", "Teams").immediateAnswers,
-    ).toBeNull();
+      togglePendingUserInputOptionSelection(
+        singleSelectQuestion,
+        { selectedOptionLabels: ["Go"] },
+        "Node.js",
+      ),
+    ).toEqual({ customAnswer: "", selectedOptionLabels: ["Node.js"] });
 
-    const customSelection = selectPendingUserInputOption(
-      singleSelectQuestions,
-      { audience: { customAnswer: "Design partners" } },
-      "scope",
-      "Focused",
+    const orders = togglePendingUserInputOptionSelection(multiSelectQuestion, undefined, "Orders");
+    const ordersAndListings = togglePendingUserInputOptionSelection(
+      multiSelectQuestion,
+      orders,
+      "Listings",
     );
-    expect(customSelection.immediateAnswers).toBeNull();
-    expect(customSelection.drafts.audience).toEqual({ customAnswer: "Design partners" });
+    expect(ordersAndListings).toEqual({
+      customAnswer: "",
+      selectedOptionLabels: ["Orders", "Listings"],
+    });
+    expect(
+      togglePendingUserInputOptionSelection(multiSelectQuestion, ordersAndListings, "Orders"),
+    ).toEqual({ customAnswer: "", selectedOptionLabels: ["Listings"] });
+
+    const paddedOrders = togglePendingUserInputOptionSelection(
+      multiSelectQuestion,
+      undefined,
+      "  Orders  ",
+    );
+    expect(paddedOrders).toEqual({ customAnswer: "", selectedOptionLabels: ["Orders"] });
+    expect(
+      togglePendingUserInputOptionSelection(multiSelectQuestion, paddedOrders, "  Orders  "),
+    ).toEqual({ customAnswer: "" });
   });
 
-  it("preserves completed drafts so a failed submission can be retried", () => {
-    const originalDrafts = { audience: { selectedOptionLabel: "Teams" } };
-    const selection = selectPendingUserInputOption(
-      singleSelectQuestions,
-      originalDrafts,
-      "scope",
-      "Broad",
-    );
-
-    expect(originalDrafts).toEqual({ audience: { selectedOptionLabel: "Teams" } });
-    expect(selection.drafts).toEqual({
-      audience: { selectedOptionLabel: "Teams" },
-      scope: { selectedOptionLabel: "Broad" },
+  it("builds array answers for multi-select questions", () => {
+    expect(
+      buildPendingUserInputAnswers([singleSelectQuestion, multiSelectQuestion], {
+        runtime: { selectedOptionLabels: ["Go"] },
+        scope: { selectedOptionLabels: ["Orders", "Listings"] },
+      }),
+    ).toEqual({
+      runtime: "Go",
+      scope: ["Orders", "Listings"],
     });
-    expect(selection.immediateAnswers).toEqual({ audience: "Teams", scope: "Broad" });
+  });
+
+  it("clears selected options while a custom answer is active", () => {
+    expect(
+      setPendingUserInputCustomAnswer(
+        { selectedOptionLabels: ["Orders", "Listings"] },
+        "Orders first",
+      ),
+    ).toEqual({ customAnswer: "Orders first" });
+  });
+
+  it("matches selected chips against normalized option labels", () => {
+    expect(
+      isPendingUserInputOptionSelected({ selectedOptionLabels: ["Orders"] }, "  Orders  "),
+    ).toBe(true);
+    expect(
+      isPendingUserInputOptionSelected(
+        { selectedOptionLabels: ["Orders"], customAnswer: "Orders first" },
+        "  Orders  ",
+      ),
+    ).toBe(false);
   });
 });
 
@@ -133,7 +159,6 @@ function makeThread(
   input: Partial<OrchestrationThread> & Pick<OrchestrationThread, "id" | "projectId" | "title">,
 ): OrchestrationThread {
   return {
-    ownerUserId: DEFAULT_WORKSPACE_USER_ID,
     modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
     runtimeMode: "full-access",
     interactionMode: "default",
@@ -150,6 +175,7 @@ function makeThread(
     checkpoints: [],
     session: null,
     ...input,
+    ownerUserId: input.ownerUserId ?? DEFAULT_WORKSPACE_USER_ID,
     parentThreadId: input.parentThreadId ?? null,
     workflowRole: input.workflowRole ?? null,
     planningWorkflow: input.planningWorkflow ?? null,
@@ -158,47 +184,6 @@ function makeThread(
     settledAt: input.settledAt ?? null,
   };
 }
-
-describe("derivePendingUserInputs", () => {
-  it("preserves recommendation metadata and option order for a seven-question workflow round", () => {
-    const questions = Array.from({ length: 7 }, (_, index) => ({
-      id: `question_${index + 1}`,
-      header: `Question ${index + 1}`,
-      question: `Which direction should question ${index + 1} take?`,
-      options: [
-        { label: "Complete", description: "Ship every path together." },
-        { label: "Incremental", description: "Ship the core path first." },
-      ],
-      recommendation: {
-        optionLabel: "Incremental",
-        rationale: "It creates the fastest useful feedback loop.",
-      },
-      multiSelect: false,
-    }));
-    const pending = derivePendingUserInputs([
-      makeActivity({
-        id: EventId.make("activity-user-input"),
-        kind: "user-input.requested",
-        summary: "User input requested",
-        createdAt: "2026-04-01T00:00:00.000Z",
-        payload: {
-          requestId: "request-1",
-          questions,
-        },
-      }),
-    ]);
-
-    expect(pending[0]?.questions).toHaveLength(7);
-    expect(pending[0]?.questions[6]?.options).toEqual([
-      { label: "Complete", description: "Ship every path together." },
-      { label: "Incremental", description: "Ship the core path first." },
-    ]);
-    expect(pending[0]?.questions[6]?.recommendation).toEqual({
-      optionLabel: "Incremental",
-      rationale: "It creates the fastest useful feedback loop.",
-    });
-  });
-});
 
 describe("buildThreadFeed", () => {
   it("keeps historic work entries attributed to their turns", () => {
@@ -421,7 +406,7 @@ describe("buildThreadFeed", () => {
     expect(serializedToolOutputs).toBe(1);
   });
 
-  it("folds settled turn work while leaving the terminal answer visible", () => {
+  it("keeps the first and terminal assistant messages visible around settled work", () => {
     const turnId = TurnId.make("turn-1");
     const thread = makeThread({
       id: ThreadId.make("thread-3"),
@@ -437,9 +422,9 @@ describe("buildThreadFeed", () => {
       },
       messages: [
         {
-          id: MessageId.make("assistant-commentary"),
+          id: MessageId.make("assistant-first"),
           role: "assistant",
-          text: "I am checking.",
+          text: "Synthetic deployment checklist\n1. Confirm the deployment is ready.",
           turnId,
           streaming: false,
           createdAt: "2026-04-01T00:00:02.000Z",
@@ -474,8 +459,12 @@ describe("buildThreadFeed", () => {
 
     const feed = buildThreadFeed(thread);
     const collapsed = deriveThreadFeedPresentation(feed, thread.latestTurn, new Set());
-    expect(collapsed.map((entry) => entry.id)).toEqual(["turn-fold:turn-1", "assistant-final"]);
-    expect(collapsed[0]).toMatchObject({
+    expect(collapsed.map((entry) => entry.id)).toEqual([
+      "assistant-first",
+      "turn-fold:turn-1",
+      "assistant-final",
+    ]);
+    expect(collapsed[1]).toMatchObject({
       type: "turn-fold",
       label: "Worked for 17s",
       expanded: false,
@@ -483,9 +472,64 @@ describe("buildThreadFeed", () => {
 
     const expanded = deriveThreadFeedPresentation(feed, thread.latestTurn, new Set([turnId]));
     expect(expanded.map((entry) => entry.id)).toEqual([
+      "assistant-first",
       "turn-fold:turn-1",
-      "assistant-commentary",
       "tool-completed",
+      "assistant-final",
+    ]);
+  });
+
+  it("folds assistant messages between the first and terminal messages", () => {
+    const turnId = TurnId.make("turn-1");
+    const thread = makeThread({
+      id: ThreadId.make("thread-middle-message"),
+      projectId: ProjectId.make("project-1"),
+      title: "Bounded narration",
+      latestTurn: {
+        turnId,
+        state: "completed",
+        requestedAt: "2026-04-01T00:00:00.000Z",
+        startedAt: "2026-04-01T00:00:01.000Z",
+        completedAt: "2026-04-01T00:00:06.000Z",
+        assistantMessageId: MessageId.make("assistant-final"),
+      },
+      messages: [
+        {
+          id: MessageId.make("assistant-first"),
+          role: "assistant",
+          text: "The main result is ready.",
+          turnId,
+          streaming: false,
+          createdAt: "2026-04-01T00:00:01.000Z",
+          updatedAt: "2026-04-01T00:00:02.000Z",
+        },
+        {
+          id: MessageId.make("assistant-middle"),
+          role: "assistant",
+          text: "I am checking one more detail.",
+          turnId,
+          streaming: false,
+          createdAt: "2026-04-01T00:00:03.000Z",
+          updatedAt: "2026-04-01T00:00:04.000Z",
+        },
+        {
+          id: MessageId.make("assistant-final"),
+          role: "assistant",
+          text: "Verification finished.",
+          turnId,
+          streaming: false,
+          createdAt: "2026-04-01T00:00:05.000Z",
+          updatedAt: "2026-04-01T00:00:06.000Z",
+        },
+      ],
+    });
+
+    const feed = buildThreadFeed(thread);
+    const rows = deriveThreadFeedPresentation(feed, thread.latestTurn, new Set());
+
+    expect(rows.map((entry) => entry.id)).toEqual([
+      "assistant-first",
+      "turn-fold:turn-1",
       "assistant-final",
     ]);
   });

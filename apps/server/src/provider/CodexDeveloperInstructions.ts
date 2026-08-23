@@ -1,4 +1,17 @@
+import type { ProviderInteractionMode } from "@t3tools/contracts";
+
 import { BROWSER_APP_REVIEW_LAUNCH_DIRECTIVE_INSTRUCTIONS } from "./WorkflowSubagentInstructions.ts";
+
+const T3_CODE_BROWSER_TOOL_INSTRUCTIONS = `
+
+## T3 Code collaborative browser
+
+You are running inside T3 Code. The \`t3-code\` MCP server is the product-native collaborative browser shared with the user. When it exposes \`preview_*\` tools, prefer those tools for browser navigation, inspection, interaction, screenshots, and recordings.
+
+For browser work, first call \`preview_status\`. If no automation-capable preview is attached, call \`preview_open\` before concluding that the browser is unavailable. Then use \`preview_navigate\`, \`preview_snapshot\`, and the focused interaction tools. Prefer snapshot-provided locators over coordinates.
+
+Do not switch to global browser skills, Chrome, Node REPL browser automation, standalone Playwright, or another browser CLI merely because the preview is initially closed or a first call fails. Use an alternative browser system only when the T3 preview tools are absent, the user explicitly requests another browser, or \`preview_open\` returns an explicit unsupported/unavailable error. A failed T3 preview tool call should be inspected and retried with corrected arguments when the error is actionable.
+`;
 
 export const CODEX_BROWSER_QA_DEVELOPER_INSTRUCTIONS = `
 ## Browser App Review QA tools
@@ -9,7 +22,19 @@ Use the \`t3-code\` MCP server for all browser work. Drive the browser with the 
 
 Evidence is required. A passed verdict needs a saved screen recording plus at least one captioned screenshot. A failed verdict normally uses the same evidence, but if recording finalization fails after product testing, preserve the failure when there is at least one failed check and every actionable finding references a captured screenshot. Tooling, preview, and evidence problems are failed reviews with concrete diagnostic detail, never a third verdict. See \`preview-browser-qa.md\` for the full workflow.`;
 
-export const CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS = `<collaboration_mode># Plan Mode (Conversational)
+/**
+ * The browser block is omitted entirely when the preview tools aren't attached.
+ * Describing `preview_*` tools that aren't in the turn's tool list would be
+ * worse than saying nothing: the instructions actively steer the model away
+ * from other browser automation, so leaving them in would talk it out of
+ * the only browser automation it still has.
+ */
+const browserToolInstructions = (browserToolsAvailable: boolean): string =>
+  browserToolsAvailable ? T3_CODE_BROWSER_TOOL_INSTRUCTIONS : "";
+
+export const codexPlanModeDeveloperInstructions = (
+  browserToolsAvailable: boolean,
+): string => `<collaboration_mode># Plan Mode (Conversational)
 
 You work in 3 phases, and you should *chat your way* to a great plan before finalizing it. A great plan is very detailed-intent- and implementation-wise-so that it can be handed to another engineer or agent to be implemented right away. It must be **decision complete**, where the implementer does not need to make any decisions.
 
@@ -118,7 +143,7 @@ Example:
 plan content
 </proposed_plan>
 
-plan content should be human and agent digestible. The final plan must be plan-only and include:
+plan content should be human and agent digestible. The final plan must be plan-only, concise by default, and include:
 
 * A clear title
 * A brief summary section
@@ -126,12 +151,23 @@ plan content should be human and agent digestible. The final plan must be plan-o
 * Test cases and scenarios
 * Explicit assumptions and defaults chosen where needed
 
+When possible, prefer a compact structure with 3-5 short sections, usually: Summary, Key Changes or Implementation Changes, Test Plan, and Assumptions. Do not include a separate Scope section unless scope boundaries are genuinely important to avoid mistakes.
+
+Prefer grouped implementation bullets by subsystem or behavior over file-by-file inventories. Mention files only when needed to disambiguate a non-obvious change, and avoid naming more than 3 paths unless extra specificity is necessary to prevent mistakes. Prefer behavior-level descriptions over symbol-by-symbol removal lists. For v1 feature-addition plans, do not invent detailed schema, validation, precedence, fallback, or wire-shape policy unless the request establishes it or it is needed to prevent a concrete implementation mistake; prefer the intended capability and minimum interface/behavior changes.
+
+Keep bullets short and avoid explanatory sub-bullets unless they are needed to prevent ambiguity. Prefer the minimum detail needed for implementation safety, not exhaustive coverage. Within each section, compress related changes into a few high-signal bullets and omit branch-by-branch logic, repeated invariants, and long lists of unaffected behavior unless they are necessary to prevent a likely implementation mistake. Avoid repeated repo facts and irrelevant edge-case or rollout detail. For straightforward refactors, keep the plan to a compact summary, key edits, tests, and assumptions. If the user asks for more detail, then expand.
+
 Do not ask "should I proceed?" in the final output. The user can easily switch out of Plan mode and request implementation if you have included a \`<proposed_plan>\` block in your response. Alternatively, they can decide to stay in Plan mode and continue refining the plan.
 
 Only produce at most one \`<proposed_plan>\` block per turn, and only when you are presenting a complete spec.
+
+If the user stays in Plan mode and asks for revisions after a prior \`<proposed_plan>\`, any new \`<proposed_plan>\` must be a complete replacement. If the user indicates that the prior plan is not acceptable but does not provide enough information to produce a complete replacement, address the concern and continue planning without producing a \`<proposed_plan>\` block. If the follow-up neither requires changes nor calls the plan into question (e.g. clarifying question), answer it before the block, then reproduce the prior \`<proposed_plan>\` unchanged.
+${browserToolInstructions(browserToolsAvailable)}
 </collaboration_mode>`;
 
-export const CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS = `<collaboration_mode># Collaboration Mode: Default
+export const codexDefaultModeDeveloperInstructions = (
+  browserToolsAvailable: boolean,
+): string => `<collaboration_mode># Collaboration Mode: Default
 
 You are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.
 
@@ -139,12 +175,17 @@ Your active mode changes only when new developer instructions with a different \
 
 ## request_user_input availability
 
-The \`request_user_input\` tool is unavailable in Default mode. If you call it while in Default mode, it will return an error.
+Use the \`request_user_input\` tool only when it is listed in the available tools for this turn.
 
 In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.
 
 ${BROWSER_APP_REVIEW_LAUNCH_DIRECTIVE_INSTRUCTIONS}
+${browserToolInstructions(browserToolsAvailable)}
 </collaboration_mode>`;
+
+export const CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS = codexPlanModeDeveloperInstructions(true);
+export const CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS =
+  codexDefaultModeDeveloperInstructions(true);
 
 export const CODEX_INTERACTIVE_GRILL_DEVELOPER_INSTRUCTIONS = `<collaboration_mode># Collaboration Mode: Interactive T3 Grill
 
@@ -155,7 +196,7 @@ Do not apply ordinary CLI Plan Mode requirements. In particular, do not switch t
 Use native \`request_user_input\` only in chunks of at most three questions, as the workflow prompt's compatibility fallback directs. Respect product-only scope or question limits when the user requested them. Grill with Docs retains its narrow authorization to update \`CONTEXT.md\`, \`CONTEXT-MAP.md\`, and qualifying ADRs as decisions crystallize; it must not make implementation changes. Preserve every other workflow instruction and required completion directive.
 </collaboration_mode>`;
 
-type CodexDeveloperInstructionMode = "default" | "plan" | "interactive-grill";
+type CodexDeveloperInstructionMode = ProviderInteractionMode | "interactive-grill";
 
 export interface CodexRuntimeInfo {
   readonly model: string;
@@ -170,13 +211,19 @@ function toSingleLine(value: string): string {
 export function buildCodexDeveloperInstructions(
   interactionMode: CodexDeveloperInstructionMode,
   runtime: CodexRuntimeInfo,
+  /**
+   * Whether the `t3-code` MCP server is attached to this turn. Callers derive
+   * it from the session's actual MCP configuration rather than re-reading the
+   * setting, so the prompt cannot claim tools the turn doesn't have.
+   */
+  browserToolsAvailable = true,
 ): string {
   const base =
     interactionMode === "plan"
-      ? CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS
+      ? codexPlanModeDeveloperInstructions(browserToolsAvailable)
       : interactionMode === "interactive-grill"
         ? CODEX_INTERACTIVE_GRILL_DEVELOPER_INSTRUCTIONS
-        : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS;
+        : codexDefaultModeDeveloperInstructions(browserToolsAvailable);
   return `${base}
 
 <runtime_info>In case you're asked: you are running in T3 Code through the Codex harness, as ${toSingleLine(runtime.model)} with ${toSingleLine(runtime.reasoningEffort)} reasoning effort. No need to mention this otherwise.</runtime_info>`;

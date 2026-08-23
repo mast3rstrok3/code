@@ -17,10 +17,12 @@ import {
   type AuthAccessStreamEvent,
   type AuthEnvironmentScope,
   AuthSessionId,
+  ClientSurface,
   CommandId,
   DEFAULT_WORKSPACE_USER_VIEW,
   type DiscoveredLocalServerList,
   EventId,
+  type OrchestrationClientOrigin,
   type OrchestrationCommand,
   type GitActionProgressEvent,
   type GitRunStackedActionInput,
@@ -120,12 +122,14 @@ import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as ReviewService from "./review/ReviewService.ts";
 import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
+import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { requiredScopeForRpcMethod } from "./auth/RpcAuthorization.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
+import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
@@ -519,8 +523,37 @@ function toAuthAccessStreamEvent(
   }
 }
 
+const isClientSurface = Schema.is(ClientSurface);
+const MAX_CLIENT_APP_VERSION_LENGTH = 64;
+
+// Optional client identity announced on the /ws upgrade URL next to wsTicket.
+// Lenient by design: absent or malformed values degrade to {} so a connection
+// never fails over attribution metadata.
+function readClientConnectionOrigin(
+  request: HttpServerRequest.HttpServerRequest,
+): OrchestrationClientOrigin {
+  const url = HttpServerRequest.toURL(request);
+  if (Option.isNone(url)) {
+    return {};
+  }
+  const surface = url.value.searchParams.get("clientSurface");
+  const appVersion = url.value.searchParams.get("clientAppVersion")?.trim() ?? "";
+  return {
+    ...(isClientSurface(surface) ? { surface } : {}),
+    ...(appVersion !== "" && appVersion.length <= MAX_CLIENT_APP_VERSION_LENGTH
+      ? { appVersion }
+      : {}),
+  };
+}
+
+const clientOriginAnalyticsProps = (origin: OrchestrationClientOrigin) => ({
+  ...(origin.surface !== undefined ? { surface: origin.surface } : {}),
+  ...(origin.appVersion !== undefined ? { appVersion: origin.appVersion } : {}),
+});
+
 const makeWsRpcLayer = (
   currentSession: EnvironmentAuth.AuthenticatedSession,
+  clientOrigin: OrchestrationClientOrigin,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
 ) =>
   WsRpcGroup.toLayer(
@@ -529,9 +562,39 @@ const makeWsRpcLayer = (
       const crypto = yield* Crypto.Crypto;
       const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
       const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
+      const analytics = yield* AnalyticsService.AnalyticsService;
+      // Every command dispatched on this connection carries the connecting
+      // client's origin, including server-generated bootstrap sub-commands:
+      // the client's request caused them.
+      const hasClientOrigin =
+        clientOrigin.surface !== undefined || clientOrigin.appVersion !== undefined;
+      const dispatchFromClient: OrchestrationEngine.OrchestrationEngineShape["dispatch"] = (
+        command,
+      ) =>
+        orchestrationEngine.dispatch(
+          command,
+          hasClientOrigin ? { origin: clientOrigin } : undefined,
+        );
+      const originProps = clientOriginAnalyticsProps(clientOrigin);
+      const recordClientCommandAnalytics = (command: OrchestrationCommand) => {
+        switch (command.type) {
+          case "thread.create":
+            return analytics.record("client.thread.started", originProps);
+          case "thread.turn.start":
+            return command.bootstrap?.createThread
+              ? Effect.andThen(
+                  analytics.record("client.thread.started", originProps),
+                  analytics.record("client.turn.requested", originProps),
+                )
+              : analytics.record("client.turn.requested", originProps);
+          default:
+            return Effect.void;
+        }
+      };
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
       const keybindings = yield* Keybindings.Keybindings;
       const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
+      const remoteOpenTargets = yield* RemoteOpenTargets.RemoteOpenTargets;
       const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
       const review = yield* ReviewService.ReviewService;
       const vcsProvisioning = yield* VcsProvisioningService.VcsProvisioningService;
@@ -689,7 +752,7 @@ const makeWsRpcLayer = (
           activityId: serverEventId,
         }).pipe(
           Effect.flatMap(({ commandId, activityId }) =>
-            orchestrationEngine.dispatch({
+            dispatchFromClient({
               type: "thread.activity.append",
               commandId,
               threadId: input.threadId,
@@ -1086,6 +1149,21 @@ const makeWsRpcLayer = (
           let targetProjectCwd = bootstrap?.prepareWorktree?.projectCwd;
           let targetWorktreePath = bootstrap?.createThread?.worktreePath ?? null;
           let targetBranch = bootstrap?.createThread?.branch ?? null;
+          let createdThread = false;
+
+          const cleanupCreatedThread = () =>
+            createdThread
+              ? serverCommandId("bootstrap-thread-delete").pipe(
+                  Effect.flatMap((commandId) =>
+                    dispatchFromClient({
+                      type: "thread.delete",
+                      commandId,
+                      threadId,
+                    }),
+                  ),
+                  Effect.as(true),
+                )
+              : Effect.succeed(false);
 
           const recordSetupScriptFailure = (input: {
             readonly error: ProjectSetupScriptRunner.ProjectSetupScriptRunnerError;
@@ -1238,7 +1316,7 @@ const makeWsRpcLayer = (
 
           const bootstrapProgram = Effect.gen(function* () {
             if (bootstrap?.createThread) {
-              yield* orchestrationEngine.dispatch({
+              yield* dispatchFromClient({
                 type: "thread.create",
                 commandId: yield* serverCommandId("bootstrap-thread-create"),
                 threadId,
@@ -1260,6 +1338,7 @@ const makeWsRpcLayer = (
                 worktreePath: bootstrap.createThread.worktreePath,
                 createdAt: bootstrap.createThread.createdAt,
               });
+              createdThread = true;
             }
 
             if (bootstrap?.prepareWorktree) {
@@ -1294,7 +1373,7 @@ const makeWsRpcLayer = (
               });
               targetWorktreePath = worktree.worktree.path;
               targetBranch = worktree.worktree.refName;
-              yield* orchestrationEngine.dispatch({
+              yield* dispatchFromClient({
                 type: "thread.meta.update",
                 commandId: yield* serverCommandId("bootstrap-thread-meta-update"),
                 threadId,
@@ -1481,7 +1560,33 @@ const makeWsRpcLayer = (
           });
 
           return yield* bootstrapProgram.pipe(
-            Effect.catchCause((cause) => Effect.fail(toBootstrapDispatchCommandCauseError(cause))),
+            Effect.catchCause((cause) => {
+              const dispatchError = toBootstrapDispatchCommandCauseError(cause);
+              if (Cause.hasInterruptsOnly(cause)) {
+                return Effect.fail(dispatchError);
+              }
+              return Effect.uninterruptible(cleanupCreatedThread()).pipe(
+                Effect.matchCauseEffect({
+                  onFailure: (cleanupCause) =>
+                    Effect.logWarning("bootstrap thread cleanup failed", {
+                      threadId,
+                      detail: Cause.pretty(cleanupCause),
+                    }).pipe(Effect.flatMap(() => Effect.fail(dispatchError))),
+                  onSuccess: (threadDeleted) =>
+                    Effect.fail(
+                      threadDeleted
+                        ? new OrchestrationDispatchCommandError({
+                            message: dispatchError.message,
+                            ...(dispatchError.cause !== undefined
+                              ? { cause: dispatchError.cause }
+                              : {}),
+                            bootstrapThreadDisposition: "deleted",
+                          })
+                        : dispatchError,
+                    ),
+                }),
+              );
+            }),
           );
         });
 
@@ -1493,13 +1598,11 @@ const makeWsRpcLayer = (
             normalizedCommand.type === "thread.app-review-workflow.launch") &&
           normalizedCommand.bootstrap
             ? dispatchBootstrapTurnStart(normalizedCommand)
-            : orchestrationEngine
-                .dispatch(normalizedCommand)
-                .pipe(
-                  Effect.mapError((cause) =>
-                    toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
-                  ),
-                );
+            : dispatchFromClient(normalizedCommand).pipe(
+                Effect.mapError((cause) =>
+                  toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+                ),
+              );
 
         return startup
           .enqueueCommand(dispatchEffect)
@@ -1637,6 +1740,11 @@ const makeWsRpcLayer = (
           availableEditors: yield* resolveAvailableEditorsForConfig(
             externalLauncher.resolveAvailableEditors(),
           ),
+          // Same discovery-with-timeout treatment as editors: a slow probe
+          // must not stall server.getConfig, so it degrades to no targets.
+          remoteOpenTargets: yield* resolveAvailableEditorsForConfig(
+            remoteOpenTargets.resolveTargets(),
+          ),
           observability: {
             logsDirectoryPath: config.logsDir,
             localTracingEnabled: true,
@@ -1713,6 +1821,7 @@ const makeWsRpcLayer = (
                 ? yield* resolveSettleCleanupTargets(parkingCommand)
                 : [];
               const result = yield* dispatchNormalizedCommand(normalizedCommand);
+              yield* recordClientCommandAnalytics(normalizedCommand);
               if (parkingCommand) {
                 yield* Effect.forEach(
                   settleCleanupTargets,
@@ -2310,6 +2419,14 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.pullRequestsActivity, pullRequests.activity(input), {
             "rpc.aggregate": "pull-requests",
           }),
+        [WS_METHODS.pullRequestsThreadComments]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.pullRequestsThreadComments,
+            pullRequests.threadComments(input),
+            {
+              "rpc.aggregate": "pull-requests",
+            },
+          ),
         [WS_METHODS.pullRequestsDiffFileContents]: (input) =>
           observeRpcEffect(
             WS_METHODS.pullRequestsDiffFileContents,
@@ -2320,10 +2437,22 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.pullRequestsRunAction, pullRequests.runAction(input), {
             "rpc.aggregate": "pull-requests",
           }),
+        [WS_METHODS.pullRequestsUpdate]: (input) =>
+          observeRpcEffect(WS_METHODS.pullRequestsUpdate, pullRequests.update(input), {
+            "rpc.aggregate": "pull-requests",
+          }),
         [WS_METHODS.pullRequestsComment]: (input) =>
           observeRpcEffect(WS_METHODS.pullRequestsComment, pullRequests.comment(input), {
             "rpc.aggregate": "pull-requests",
           }),
+        [WS_METHODS.pullRequestsUpdateComment]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.pullRequestsUpdateComment,
+            pullRequests.updateComment(input),
+            {
+              "rpc.aggregate": "pull-requests",
+            },
+          ),
         [WS_METHODS.pullRequestsSubmitReview]: (input) =>
           observeRpcEffect(WS_METHODS.pullRequestsSubmitReview, pullRequests.submitReview(input), {
             "rpc.aggregate": "pull-requests",
@@ -2340,6 +2469,10 @@ const makeWsRpcLayer = (
             pullRequests.setThreadResolution(input),
             { "rpc.aggregate": "pull-requests" },
           ),
+        [WS_METHODS.pullRequestsSetReaction]: (input) =>
+          observeRpcEffect(WS_METHODS.pullRequestsSetReaction, pullRequests.setReaction(input), {
+            "rpc.aggregate": "pull-requests",
+          }),
         [WS_METHODS.pullRequestsInvalidate]: (input) =>
           observeRpcEffect(WS_METHODS.pullRequestsInvalidate, pullRequests.invalidate(input), {
             "rpc.aggregate": "pull-requests",
@@ -2902,23 +3035,31 @@ const makeWsRpcLayer = (
           observeRpcStream(WS_METHODS.subscribePreviewEvents, previewManager.events, {
             "rpc.aggregate": "preview",
           }),
-        [WS_METHODS.subscribeDiscoveredLocalServers]: (_input) =>
+        [WS_METHODS.subscribeDiscoveredLocalServers]: (input) =>
           observeRpcStream(
             WS_METHODS.subscribeDiscoveredLocalServers,
             Stream.callback<DiscoveredLocalServerList>((queue) =>
               Effect.gen(function* () {
+                const configuredUrls = input.configuredUrls ?? [];
                 yield* portDiscovery.retain;
-                const initial = yield* portDiscovery.scan();
+                const initial = yield* portDiscovery.scan(configuredUrls);
                 const initialScannedAt = DateTime.formatIso(yield* DateTime.now);
                 yield* Queue.offer(queue, {
                   servers: initial,
                   scannedAt: initialScannedAt,
+                  configuredUrlProbing: true,
                 });
-                yield* portDiscovery.subscribe((servers) =>
-                  Effect.gen(function* () {
-                    const scannedAt = DateTime.formatIso(yield* DateTime.now);
-                    yield* Queue.offer(queue, { servers, scannedAt });
-                  }),
+                yield* portDiscovery.subscribe(
+                  { configuredUrls, initialSnapshot: initial },
+                  (servers) =>
+                    Effect.gen(function* () {
+                      const scannedAt = DateTime.formatIso(yield* DateTime.now);
+                      yield* Queue.offer(queue, {
+                        servers,
+                        scannedAt,
+                        configuredUrlProbing: true,
+                      });
+                    }),
                 );
               }),
             ),
@@ -3060,6 +3201,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
         const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
         const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
         const sessions = yield* SessionStore.SessionStore;
+        const analytics = yield* AnalyticsService.AnalyticsService;
         const session = yield* serverAuth.authenticateWebSocketUpgrade(request).pipe(
           Effect.catchIf(EnvironmentAuth.isServerAuthCredentialError, (error) =>
             failEnvironmentAuthInvalid(EnvironmentAuth.serverAuthCredentialReason(error)),
@@ -3075,11 +3217,14 @@ export const websocketRpcRouteLayer = Layer.unwrap(
           request,
           session,
         });
+        const clientOrigin = readClientConnectionOrigin(request);
+        yield* sessions.recordClientConnection(session.sessionId, clientOrigin);
+        yield* analytics.record("client.connected", clientOriginAnalyticsProps(clientOrigin));
         const rpcWebSocketHttpEffect = yield* RpcServer.toHttpEffectWebsocket(WsRpcGroup, {
           disableTracing: true,
         }).pipe(
           Effect.provide(
-            makeWsRpcLayer(session, previewAutomationBroker).pipe(
+            makeWsRpcLayer(session, clientOrigin, previewAutomationBroker).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(ProviderMaintenanceRunner.layer),
               Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),

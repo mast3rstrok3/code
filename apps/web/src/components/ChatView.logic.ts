@@ -26,6 +26,7 @@ import {
   type TerminalContextDraft,
 } from "../lib/terminalContext";
 import type { DraftThreadEnvMode } from "../composerDraftStore";
+import type { ComposerSubmissionIntent } from "../composer-logic";
 
 export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "t3code:last-invoked-script-by-project";
 export const MAX_HIDDEN_MOUNTED_TERMINAL_THREADS = 10;
@@ -89,6 +90,47 @@ export function buildAppReviewLaunchTargets(input: {
 }
 
 export const LastInvokedScriptByProjectSchema = Schema.Record(ProjectId, Schema.String);
+
+export function shouldDockDraftHeroForSubmission(input: {
+  isDraftHeroState: boolean;
+  activeThreadKey: string | null;
+  submissionIntent: ComposerSubmissionIntent;
+}): boolean {
+  return (
+    input.submissionIntent === "foreground" &&
+    input.isDraftHeroState &&
+    input.activeThreadKey !== null
+  );
+}
+
+export function resolveDraftHeroState(input: {
+  isLocalDraftThread: boolean;
+  hasTimelineEntries: boolean;
+  isWorking: boolean;
+  draftHeroDockRequested: boolean;
+  backgroundSubmissionPending: boolean;
+}): boolean {
+  if (input.backgroundSubmissionPending) {
+    return true;
+  }
+  return (
+    input.isLocalDraftThread &&
+    !input.hasTimelineEntries &&
+    !input.isWorking &&
+    !input.draftHeroDockRequested
+  );
+}
+
+export function resolveDraftPromotionNavigationTarget(input: {
+  serverThreadRef: ScopedThreadRef | null;
+  serverThreadStarted: boolean;
+  backgroundSubmissionPending: boolean;
+}): ScopedThreadRef | null {
+  if (input.backgroundSubmissionPending) {
+    return null;
+  }
+  return input.serverThreadStarted ? input.serverThreadRef : null;
+}
 
 export function scheduleEnvironmentReconnectWarning(showWarning: () => void): () => void {
   const timeoutId = globalThis.setTimeout(showWarning, ENVIRONMENT_RECONNECT_WARNING_GRACE_MS);
@@ -433,6 +475,24 @@ export function resolveSendEnvMode(input: {
   return input.isGitRepo ? input.requestedEnvMode : "local";
 }
 
+export function resolveBackgroundDraftWorkspaceOptions(input: {
+  envMode: DraftThreadEnvMode;
+  branch: string | null;
+  startFromOrigin: boolean;
+}): {
+  envMode: DraftThreadEnvMode;
+  branch: string | null;
+  worktreePath: null;
+  startFromOrigin: boolean;
+} {
+  return {
+    envMode: input.envMode,
+    branch: input.branch,
+    worktreePath: null,
+    startFromOrigin: input.envMode === "worktree" && input.startFromOrigin,
+  };
+}
+
 export function cloneComposerImageForRetry(
   image: ComposerImageAttachment,
 ): ComposerImageAttachment {
@@ -667,6 +727,7 @@ export async function waitForStartedServerThread(
 export interface LocalDispatchSnapshot {
   startedAt: string;
   preparingWorktree: boolean;
+  submissionIntent: ComposerSubmissionIntent;
   latestUserMessageId: ChatMessage["id"] | null;
   latestTurnTurnId: TurnId | null;
   latestTurnRequestedAt: string | null;
@@ -678,7 +739,10 @@ export interface LocalDispatchSnapshot {
 
 export function createLocalDispatchSnapshot(
   activeThread: Thread | undefined,
-  options?: { preparingWorktree?: boolean },
+  options?: {
+    preparingWorktree?: boolean;
+    submissionIntent?: ComposerSubmissionIntent;
+  },
 ): LocalDispatchSnapshot {
   const latestTurn = activeThread?.latestTurn ?? null;
   const session = activeThread?.session ?? null;
@@ -686,6 +750,7 @@ export function createLocalDispatchSnapshot(
   return {
     startedAt: new Date().toISOString(),
     preparingWorktree: Boolean(options?.preparingWorktree),
+    submissionIntent: options?.submissionIntent ?? "foreground",
     latestUserMessageId: latestUserMessage?.id ?? null,
     latestTurnTurnId: latestTurn?.turnId ?? null,
     latestTurnRequestedAt: latestTurn?.requestedAt ?? null,
@@ -711,6 +776,9 @@ export function hasServerAcknowledgedLocalDispatch(input: {
   }
   if (input.hasPendingApproval || input.hasPendingUserInput || Boolean(input.threadError)) {
     return true;
+  }
+  if (input.phase === "connecting") {
+    return false;
   }
 
   const latestTurn = input.latestTurn ?? null;

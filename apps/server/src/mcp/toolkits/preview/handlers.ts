@@ -20,14 +20,21 @@ import { PreviewSnapshotToolkit, PreviewStandardToolkit, PreviewToolkit } from "
 // so leave enough room for it to return either a loaded page or a real error.
 const PREVIEW_OPEN_TIMEOUT_MS = 75_000;
 
+/**
+ * Collapses the `show` alias onto `open` and defaults tab reuse.
+ *
+ * Deliberately leaves an unstated `open` unstated. Whether a preview the agent
+ * said nothing about surfaces is the user's `browserAutoShowFloatingPreview`
+ * preference, which is desktop-local and unreadable from here — filling in
+ * `true` would silently override it for every `preview_open`.
+ */
 export function normalizePreviewOpenInput(
   input: PreviewAutomationOpenInput,
 ): PreviewAutomationOpenInput {
-  const open = input.open ?? input.show ?? true;
+  const open = input.open ?? input.show;
   return {
     ...input,
-    open,
-    show: open,
+    ...(open === undefined ? {} : { open, show: open }),
     reuseExistingTab: input.reuseExistingTab ?? true,
   };
 }
@@ -81,15 +88,14 @@ const handlers = {
     invokeTargeted<PreviewAutomationSetColorSchemeResult>("setColorScheme", input),
   preview_snapshot: (input) => invokeTargeted<PreviewAutomationSnapshot>("snapshot", input ?? {}),
   preview_click: (input) =>
-    invokeTargeted<void>("click", input, input.timeoutMs).pipe(Effect.as(null)),
-  preview_type: (input) =>
-    invokeTargeted<void>("type", input, input.timeoutMs).pipe(Effect.as(null)),
-  preview_press: (input) => invokeTargeted<void>("press", input).pipe(Effect.as(null)),
-  preview_scroll: (input) => invokeTargeted<void>("scroll", input).pipe(Effect.as(null)),
+    invokeTargeted<void>("click", input, input.timeoutMs).pipe(Effect.as({})),
+  preview_type: (input) => invokeTargeted<void>("type", input, input.timeoutMs).pipe(Effect.as({})),
+  preview_press: (input) => invokeTargeted<void>("press", input).pipe(Effect.as({})),
+  preview_scroll: (input) => invokeTargeted<void>("scroll", input).pipe(Effect.as({})),
   preview_evaluate: (input) =>
     invokeTargeted<unknown>("evaluate", input).pipe(Effect.map((result) => result ?? null)),
   preview_wait_for: (input) =>
-    invokeTargeted<void>("waitFor", input, input.timeoutMs).pipe(Effect.as(null)),
+    invokeTargeted<void>("waitFor", input, input.timeoutMs).pipe(Effect.as({})),
   preview_recording_start: (input) =>
     invokeTargeted<PreviewAutomationRecordingStatus>("recordingStart", input ?? {}),
   preview_recording_stop: (input) =>

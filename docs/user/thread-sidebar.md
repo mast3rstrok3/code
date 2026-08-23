@@ -22,3 +22,14 @@ In the web app on a touch device, swipe a thread left to reveal its lifecycle ac
 runs it immediately: **Settle** for active or pinned threads, **Un-settle** for settled threads, and
 **Wake** for snoozed threads. Long-press any thread to open the full action menu. Choose **Delete**
 there to permanently remove the thread after confirmation.
+
+## Environment artwork
+
+Dev and Nightly environments can identify themselves with artwork at the top of the sidebar and in
+the send button. Choose **Artwork**, **Version pill**, or **None** in Settings under environment
+identification. Artwork is recolored to match each built-in theme. Custom themes use the **Version
+pill** fallback because their colors are not controlled by T3 Code.
+
+To generate a fresh title from the conversation, open a thread's context menu and choose
+**Regenerate title**. While T3 Code is generating it, the action reads **Regenerating…** and cannot
+be selected again. The option is hidden when the connected environment needs a server update.

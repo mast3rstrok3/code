@@ -26,13 +26,13 @@ export interface PendingUserInput {
 }
 
 export interface PendingUserInputDraftAnswer {
-  readonly selectedOptionLabel?: string;
+  readonly selectedOptionLabels?: ReadonlyArray<string>;
   readonly customAnswer?: string;
 }
 
 export interface PendingUserInputOptionSelection {
   readonly drafts: Record<string, PendingUserInputDraftAnswer>;
-  readonly immediateAnswers: Record<string, string> | null;
+  readonly immediateAnswers: Record<string, string | ReadonlyArray<string>> | null;
 }
 
 export interface ThreadFeedActivity {
@@ -246,14 +246,32 @@ function normalizeDraftAnswer(value: string | undefined): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function normalizeSelectedOptionLabels(
+  value: ReadonlyArray<string> | undefined,
+): ReadonlyArray<string> {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return Array.from(
+    new Set(value.map((entry) => entry.trim()).filter((entry) => entry.length > 0)),
+  );
+}
+
 function resolvePendingUserInputAnswer(
+  question: UserInputQuestion,
   draft: PendingUserInputDraftAnswer | undefined,
-): string | null {
+): string | ReadonlyArray<string> | null {
   const customAnswer = normalizeDraftAnswer(draft?.customAnswer);
   if (customAnswer) {
     return customAnswer;
   }
-  return normalizeDraftAnswer(draft?.selectedOptionLabel);
+
+  const selectedOptionLabels = normalizeSelectedOptionLabels(draft?.selectedOptionLabels);
+  if (question.multiSelect) {
+    return selectedOptionLabels.length > 0 ? selectedOptionLabels : null;
+  }
+  return selectedOptionLabels[0] ?? null;
 }
 
 /** Codex children settle via task.updated (idle/failed/interrupted), never
@@ -1145,9 +1163,13 @@ function deriveThreadFeedTurnFolds(
   feed: ReadonlyArray<ThreadFeedEntry>,
   latestTurn: ThreadFeedLatestTurn | null,
 ): ReadonlyMap<string, ThreadFeedTurnFold> {
+  const firstAssistantMessageIdByTurn = new Map<TurnId, string>();
   const terminalAssistantMessageIdByTurn = new Map<TurnId, string>();
   for (const entry of feed) {
     if (entry.type === "message" && entry.message.role === "assistant" && entry.message.turnId) {
+      if (!firstAssistantMessageIdByTurn.has(entry.message.turnId)) {
+        firstAssistantMessageIdByTurn.set(entry.message.turnId, entry.id);
+      }
       terminalAssistantMessageIdByTurn.set(entry.message.turnId, entry.id);
     }
   }
@@ -1195,17 +1217,24 @@ function deriveThreadFeedTurnFolds(
       continue;
     }
 
+    const firstAssistantMessageId = firstAssistantMessageIdByTurn.get(turnId);
     const terminalAssistantMessageId = terminalAssistantMessageIdByTurn.get(turnId);
     const hiddenEntryIds = new Set(
-      entries.filter((entry) => entry.id !== terminalAssistantMessageId).map((entry) => entry.id),
+      entries
+        .filter(
+          (entry) =>
+            entry.id !== firstAssistantMessageId && entry.id !== terminalAssistantMessageId,
+        )
+        .map((entry) => entry.id),
     );
     if (hiddenEntryIds.size === 0) {
       continue;
     }
 
     const firstEntry = entries[0];
+    const firstHiddenEntry = entries.find((entry) => hiddenEntryIds.has(entry.id));
     const lastEntry = entries.at(-1);
-    if (!firstEntry || !lastEntry) {
+    if (!firstEntry || !firstHiddenEntry || !lastEntry) {
       continue;
     }
     const terminalEntry = terminalAssistantMessageId
@@ -1234,9 +1263,9 @@ function deriveThreadFeedTurnFolds(
         ? `Worked for ${duration}`
         : "Worked";
 
-    foldsByAnchorId.set(firstEntry.id, {
+    foldsByAnchorId.set(firstHiddenEntry.id, {
       turnId,
-      createdAt: firstEntry.createdAt,
+      createdAt: firstHiddenEntry.createdAt,
       hiddenEntryIds,
       label,
     });
@@ -1447,22 +1476,62 @@ export function setPendingUserInputCustomAnswer(
   draft: PendingUserInputDraftAnswer | undefined,
   customAnswer: string,
 ): PendingUserInputDraftAnswer {
-  const selectedOptionLabel =
-    customAnswer.trim().length > 0 ? undefined : draft?.selectedOptionLabel;
+  const selectedOptionLabels =
+    customAnswer.trim().length > 0
+      ? undefined
+      : normalizeSelectedOptionLabels(draft?.selectedOptionLabels);
   return {
     customAnswer,
-    ...(selectedOptionLabel ? { selectedOptionLabel } : {}),
+    ...(selectedOptionLabels && selectedOptionLabels.length > 0 ? { selectedOptionLabels } : {}),
+  };
+}
+
+export function isPendingUserInputOptionSelected(
+  draft: PendingUserInputDraftAnswer | undefined,
+  optionLabel: string,
+): boolean {
+  if (normalizeDraftAnswer(draft?.customAnswer)) {
+    return false;
+  }
+
+  return normalizeSelectedOptionLabels(draft?.selectedOptionLabels).includes(optionLabel.trim());
+}
+
+export function togglePendingUserInputOptionSelection(
+  question: UserInputQuestion,
+  draft: PendingUserInputDraftAnswer | undefined,
+  optionLabel: string,
+): PendingUserInputDraftAnswer {
+  const normalizedOptionLabel = optionLabel.trim();
+
+  if (question.multiSelect) {
+    const selectedOptionLabels = normalizeSelectedOptionLabels(draft?.selectedOptionLabels);
+    const nextSelectedOptionLabels = selectedOptionLabels.includes(normalizedOptionLabel)
+      ? selectedOptionLabels.filter((label) => label !== normalizedOptionLabel)
+      : [...selectedOptionLabels, normalizedOptionLabel];
+
+    return {
+      customAnswer: "",
+      ...(nextSelectedOptionLabels.length > 0
+        ? { selectedOptionLabels: nextSelectedOptionLabels }
+        : {}),
+    };
+  }
+
+  return {
+    customAnswer: "",
+    selectedOptionLabels: [normalizedOptionLabel],
   };
 }
 
 export function buildPendingUserInputAnswers(
   questions: ReadonlyArray<UserInputQuestion>,
   draftAnswers: Record<string, PendingUserInputDraftAnswer>,
-): Record<string, string> | null {
-  const answers: Record<string, string> = {};
+): Record<string, string | ReadonlyArray<string>> | null {
+  const answers: Record<string, string | ReadonlyArray<string>> = {};
 
   for (const question of questions) {
-    const answer = resolvePendingUserInputAnswer(draftAnswers[question.id]);
+    const answer = resolvePendingUserInputAnswer(question, draftAnswers[question.id]);
     if (!answer) {
       return null;
     }
@@ -1475,14 +1544,16 @@ export function buildPendingUserInputAnswers(
 export function selectPendingUserInputOption(
   questions: ReadonlyArray<UserInputQuestion>,
   draftAnswers: Record<string, PendingUserInputDraftAnswer>,
-  questionId: string,
+  question: UserInputQuestion,
   optionLabel: string,
 ): PendingUserInputOptionSelection {
   const drafts: Record<string, PendingUserInputDraftAnswer> = {
     ...draftAnswers,
-    [questionId]: {
-      selectedOptionLabel: optionLabel,
-    },
+    [question.id]: togglePendingUserInputOptionSelection(
+      question,
+      draftAnswers[question.id],
+      optionLabel,
+    ),
   };
   const canSubmitImmediately =
     questions.every((question) => !question.multiSelect) &&

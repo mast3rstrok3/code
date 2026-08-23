@@ -24,8 +24,8 @@ export class ClipboardWriteError extends Schema.TaggedErrorClass<ClipboardWriteE
   }
 }
 
-export class ClipboardReadApiUnavailableError extends Schema.TaggedErrorClass<ClipboardReadApiUnavailableError>()(
-  "ClipboardReadApiUnavailableError",
+export class ClipboardReadUnavailableError extends Schema.TaggedErrorClass<ClipboardReadUnavailableError>()(
+  "ClipboardReadUnavailableError",
   {
     target: Schema.String,
   },
@@ -34,6 +34,8 @@ export class ClipboardReadApiUnavailableError extends Schema.TaggedErrorClass<Cl
     return `Clipboard API is unavailable while reading ${this.target}.`;
   }
 }
+
+export const ClipboardReadApiUnavailableError = ClipboardReadUnavailableError;
 
 export class ClipboardReadError extends Schema.TaggedErrorClass<ClipboardReadError>()(
   "ClipboardReadError",
@@ -44,27 +46,6 @@ export class ClipboardReadError extends Schema.TaggedErrorClass<ClipboardReadErr
 ) {
   override get message(): string {
     return `Failed to read ${this.target} from the clipboard.`;
-  }
-}
-
-export async function readTextFromClipboard(target = "text"): Promise<string> {
-  if (
-    typeof window === "undefined" ||
-    typeof navigator === "undefined" ||
-    !navigator.clipboard?.readText
-  ) {
-    throw new ClipboardReadApiUnavailableError({
-      target,
-    });
-  }
-
-  try {
-    return await navigator.clipboard.readText();
-  } catch (cause) {
-    throw new ClipboardReadError({
-      target,
-      cause,
-    });
   }
 }
 
@@ -86,6 +67,27 @@ export async function writeTextToClipboard(value: string, target = "text") {
     return true;
   } catch (cause) {
     throw new ClipboardWriteError({
+      target,
+      cause,
+    });
+  }
+}
+
+export async function readTextFromClipboard(target = "text"): Promise<string> {
+  if (
+    typeof window === "undefined" ||
+    typeof navigator === "undefined" ||
+    !navigator.clipboard?.readText
+  ) {
+    throw new ClipboardReadUnavailableError({
+      target,
+    });
+  }
+
+  try {
+    return await navigator.clipboard.readText();
+  } catch (cause) {
+    throw new ClipboardReadError({
       target,
       cause,
     });

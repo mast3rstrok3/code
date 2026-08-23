@@ -1,75 +1,90 @@
-import { ApprovalRequestId, type UserInputQuestion } from "@t3tools/contracts";
+import { ApprovalRequestId } from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
-import type { PendingUserInput } from "../../session-logic";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
+import type { PendingUserInput } from "../../session-logic";
 
-function makeQuestion(index: number): UserInputQuestion {
-  return {
-    id: `question_${index}`,
-    header: `Question ${index}`,
-    question: `Which direction should question ${index} take?`,
-    options: [
-      { label: "Complete", description: "Ship every path together." },
-      { label: "Incremental", description: "Ship the core path first." },
-    ],
-    recommendation: {
-      optionLabel: "Incremental",
-      rationale: "It creates the fastest useful feedback loop.",
+const prompt: PendingUserInput = {
+  requestId: ApprovalRequestId.make("request-1"),
+  createdAt: "2026-08-15T00:00:00.000Z",
+  questions: [
+    {
+      id: "question-1",
+      header: "Approach",
+      question: "Which approach should the migration take?",
+      options: [
+        { label: "Incremental", description: "Move one module at a time" },
+        { label: "Big bang", description: "Move everything in one release" },
+      ],
+      multiSelect: false,
     },
-    multiSelect: false,
-  };
-}
+  ],
+};
 
-function renderPanel(questions: ReadonlyArray<UserInputQuestion>, questionIndex: number) {
-  const pendingUserInput: PendingUserInput = {
-    requestId: ApprovalRequestId.make("request-1"),
-    createdAt: "2026-08-09T00:00:00.000Z",
-    questions,
-  };
+function renderPanel() {
   return renderToStaticMarkup(
     <ComposerPendingUserInputPanel
-      pendingUserInputs={[pendingUserInput]}
+      pendingUserInputs={[prompt]}
       respondingRequestIds={[]}
       answers={{}}
-      questionIndex={questionIndex}
-      onToggleOption={() => undefined}
-      onAdvance={() => undefined}
+      questionIndex={0}
+      onToggleOption={() => {}}
+      onAdvance={() => {}}
     />,
   );
 }
 
 describe("ComposerPendingUserInputPanel", () => {
-  it("renders unchanged option descriptions and a separate recommendation through 7/7", () => {
-    const markup = renderPanel(
-      Array.from({ length: 7 }, (_, index) => makeQuestion(index + 1)),
-      6,
+  it("renders the header as a disclosure control for the question body", () => {
+    const markup = renderPanel();
+
+    const toggle = markup.match(/<button[^>]*data-pending-user-input-toggle="[^"]*"[^>]*>/)?.[0];
+    expect(toggle).toBeDefined();
+    expect(toggle).toContain('data-pending-user-input-toggle="expanded"');
+    expect(toggle).toContain('aria-expanded="true"');
+    expect(toggle).toContain('type="button"');
+
+    const controlledId = toggle?.match(/aria-controls="([^"]+)"/)?.[1];
+    expect(controlledId).toBeDefined();
+    expect(markup).toMatch(new RegExp(`<div[^>]*\\sid="${controlledId}"`));
+  });
+
+  it("starts expanded so the question and its options are visible", () => {
+    const markup = renderPanel();
+
+    expect(markup).toContain("Approach");
+    expect(markup).toContain("Which approach should the migration take?");
+    expect(markup).toContain("Incremental");
+    expect(markup).toContain("Big bang");
+  });
+
+  it("renders recommendation metadata separately from the option label", () => {
+    const recommendedPrompt: PendingUserInput = {
+      ...prompt,
+      questions: [
+        {
+          ...prompt.questions[0]!,
+          recommendation: {
+            optionLabel: "Incremental",
+            rationale: "It creates a faster feedback loop.",
+          },
+        },
+      ],
+    };
+    const markup = renderToStaticMarkup(
+      <ComposerPendingUserInputPanel
+        pendingUserInputs={[recommendedPrompt]}
+        respondingRequestIds={[]}
+        answers={{}}
+        questionIndex={0}
+        onToggleOption={() => {}}
+        onAdvance={() => {}}
+      />,
     );
 
-    expect(markup).toContain("7/7");
-    expect(markup).toContain("Complete");
-    expect(markup).toContain("Ship every path together.");
-    expect(markup).toContain("Incremental");
-    expect(markup).toContain("Ship the core path first.");
     expect(markup).toContain("Recommended: Incremental");
-    expect(markup).toContain("It creates the fastest useful feedback loop.");
+    expect(markup).toContain("It creates a faster feedback loop.");
     expect(markup).not.toContain("Incremental (Recommended)");
-    expect(markup).not.toContain("Why that?");
-  });
-
-  it("offers a minimize control so a long question can be folded away from the thread", () => {
-    const markup = renderPanel([makeQuestion(1)], 0);
-
-    expect(markup).toContain('aria-label="Minimize the question"');
-    expect(markup).toContain('aria-expanded="true"');
-  });
-
-  it("keeps historic questions unchanged when recommendation metadata is absent", () => {
-    const { recommendation: _recommendation, ...historicQuestion } = makeQuestion(1);
-    const markup = renderPanel([historicQuestion], 0);
-
-    expect(markup).toContain("Incremental");
-    expect(markup).not.toContain("Recommended:");
   });
 });

@@ -12,6 +12,7 @@ import {
   IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES,
   ModelSelection,
   OrchestrationCommand,
+  OrchestrationDispatchCommandError,
   OrchestrationEvent,
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetTurnDiffInput,
@@ -34,6 +35,7 @@ import {
   ThreadCreatedPayload,
   ThreadTurnDiff,
   ThreadTurnStartRequestedPayload,
+  isProviderSendTurnSupportedImageMimeType,
 } from "./orchestration.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
@@ -69,6 +71,7 @@ const decodePlanningWorkflowStage = Schema.decodeUnknownEffect(OrchestrationPlan
 const decodeOrchestrationThreadWorkflowRole = Schema.decodeUnknownEffect(
   OrchestrationThreadWorkflowRole,
 );
+const decodeDispatchCommandError = Schema.decodeUnknownEffect(OrchestrationDispatchCommandError);
 
 it("exports the QA repair cap with deprecated compatibility aliases", () => {
   assert.strictEqual(IMPLEMENTATION_RUN_MAX_QA_REPAIRS, 10);
@@ -337,6 +340,18 @@ it.effect("decodes planning workflow launch commands", () =>
     if (parsed.type !== "thread.planning-workflow.launch") return;
     assert.strictEqual(parsed.intentTitle, "Checkout");
     assert.strictEqual(parsed.intentSummaryMarkdown, "Build checkout.");
+  }),
+);
+
+it.effect("decodes a dispatch error after its bootstrap thread was deleted", () =>
+  Effect.gen(function* () {
+    const error = yield* decodeDispatchCommandError({
+      _tag: "OrchestrationDispatchCommandError",
+      message: "Failed to create worktree.",
+      bootstrapThreadDisposition: "deleted",
+    });
+
+    assert.strictEqual(error.bootstrapThreadDisposition, "deleted");
   }),
 );
 
@@ -1476,3 +1491,9 @@ it.effect("decodes workflow step model pins and their removal", () =>
     assert.strictEqual(missingStep._tag, "Failure");
   }),
 );
+
+it("isProviderSendTurnSupportedImageMimeType accepts raster formats and rejects svg", () => {
+  assert.strictEqual(isProviderSendTurnSupportedImageMimeType("image/png"), true);
+  assert.strictEqual(isProviderSendTurnSupportedImageMimeType("IMAGE/JPEG"), true);
+  assert.strictEqual(isProviderSendTurnSupportedImageMimeType("image/svg+xml"), false);
+});

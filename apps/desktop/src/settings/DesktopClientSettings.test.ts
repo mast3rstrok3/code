@@ -18,6 +18,12 @@ import * as DesktopClientSettings from "./DesktopClientSettings.ts";
 
 const clientSettings: ClientSettings = {
   activeWorkspaceUserView: DEFAULT_WORKSPACE_USER_VIEW,
+  appearanceContrast: 100,
+  browserDefaultViewport: { _tag: "preset", width: 1024, height: 600, presetId: "nest-hub" },
+  browserDefaultZoomFactor: 1.25,
+  browserDefaultAppearance: "dark",
+  browserAutoShowFloatingPreview: false,
+  confirmQuit: true,
   confirmThreadArchive: true,
   confirmThreadDelete: false,
   dismissedProviderUpdateNotificationKeys: [],
@@ -37,6 +43,7 @@ const clientSettings: ClientSettings = {
   planModeEnabled: false,
   providerModelPreferences: {},
   sidebarAutoSettleAfterDays: 3,
+  sidebarAutoSettleOnMerge: true,
   sidebarProjectGroupingMode: "repository_path",
   sidebarProjectGroupingOverrides: {
     "environment-1:/tmp/project-a": "separate",

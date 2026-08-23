@@ -10,6 +10,7 @@ import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { ServerConfig } from "@t3tools/contracts";
 import {
   type DesktopPreviewColorScheme,
+  type DesktopPreviewFavicon,
   type PreviewEvent,
   type PreviewListResult,
   type PreviewSessionSnapshot,
@@ -28,7 +29,10 @@ export interface DesktopPreviewOverlay {
   zoomFactor: number;
   pictureInPicture: boolean;
   colorScheme: DesktopPreviewColorScheme;
+  audioMuted: boolean;
+  audible: boolean;
   controller: "human" | "agent" | "none";
+  favicon: DesktopPreviewFavicon | null;
 }
 
 export interface ThreadPreviewState {

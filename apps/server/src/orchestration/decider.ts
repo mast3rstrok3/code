@@ -1444,24 +1444,37 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             updatedAt: alreadySettled ? thread.updatedAt : occurredAt,
           },
         });
-        // Settling is "I'm done with this": it clears a pin the same way it
-        // parks the thread. Without this, settling a pinned thread would only
-        // stamp invisible state — the pin would hold the card in place until
-        // a separate unpin.
-        if (thread.pinnedAt == null) continue;
-        events.push({
-          ...(yield* withEventBase({
-            aggregateKind: "thread",
-            aggregateId: thread.id,
-            occurredAt,
-            commandId: command.commandId,
-          })),
-          type: "thread.unpinned",
-          payload: {
-            threadId: thread.id,
-            updatedAt: occurredAt,
-          },
-        });
+        if (thread.pinnedAt != null) {
+          events.push({
+            ...(yield* withEventBase({
+              aggregateKind: "thread",
+              aggregateId: thread.id,
+              occurredAt,
+              commandId: command.commandId,
+            })),
+            type: "thread.unpinned",
+            payload: {
+              threadId: thread.id,
+              updatedAt: occurredAt,
+            },
+          });
+        }
+        if (thread.snoozedUntil != null) {
+          events.push({
+            ...(yield* withEventBase({
+              aggregateKind: "thread",
+              aggregateId: thread.id,
+              occurredAt,
+              commandId: command.commandId,
+            })),
+            type: "thread.unsnoozed",
+            payload: {
+              threadId: thread.id,
+              reason: "user",
+              updatedAt: occurredAt,
+            },
+          });
+        }
       }
       return events;
     }

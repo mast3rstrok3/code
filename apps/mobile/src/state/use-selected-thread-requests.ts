@@ -1,7 +1,11 @@
 import { useAtomValue } from "@effect/atom-react";
 import { useCallback, useMemo, useRef, useState } from "react";
 
-import { ApprovalRequestId, type ProviderApprovalDecision } from "@t3tools/contracts";
+import {
+  ApprovalRequestId,
+  type ProviderApprovalDecision,
+  type UserInputQuestion,
+} from "@t3tools/contracts";
 import { Atom } from "effect/unstable/reactivity";
 
 import { threadEnvironment } from "../state/threads";
@@ -119,7 +123,10 @@ export function useSelectedThreadRequests() {
   );
 
   const submitUserInput = useCallback(
-    async (requestId: ApprovalRequestId, answers: Record<string, string>) => {
+    async (
+      requestId: ApprovalRequestId,
+      answers: Record<string, string | ReadonlyArray<string>>,
+    ) => {
       if (!selectedThreadShell) {
         return;
       }
@@ -148,7 +155,7 @@ export function useSelectedThreadRequests() {
   );
 
   const onSelectUserInputOption = useCallback(
-    (requestId: ApprovalRequestId, questionId: string, label: string) => {
+    (requestId: ApprovalRequestId, question: UserInputQuestion, label: string) => {
       if (!selectedThreadShell || activePendingUserInput?.requestId !== requestId) {
         return;
       }
@@ -161,7 +168,7 @@ export function useSelectedThreadRequests() {
       const selection = selectPendingUserInputOption(
         activePendingUserInput.questions,
         current[requestKey] ?? {},
-        questionId,
+        question,
         label,
       );
       appAtomRegistry.set(userInputDraftsByRequestKeyAtom, {

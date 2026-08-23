@@ -28,6 +28,7 @@ export type ComposerProviderStateInput = {
   models: ReadonlyArray<ServerProviderModel>;
   promptInjectionState?: ComposerPromptInjectionState;
   modelOptions: ReadonlyArray<ProviderOptionSelection> | null | undefined;
+  planModeEnabled?: boolean;
 };
 
 export type ComposerPromptInjectionState = "none" | "ultrathink";
@@ -56,6 +57,7 @@ type TraitsRenderInput = {
    * it must survive providers whose model advertises no traits at all.
    */
   modeControls?: ComposerModeControls;
+  planModeEnabled?: boolean;
 };
 
 export function getComposerPromptInjectionState(prompt: string): ComposerPromptInjectionState {
@@ -63,8 +65,15 @@ export function getComposerPromptInjectionState(prompt: string): ComposerPromptI
 }
 
 export function getComposerProviderState(input: ComposerProviderStateInput): ComposerProviderState {
-  const { provider, model, models, modelOptions, promptInjectionState = "none" } = input;
-  const caps = getProviderModelCapabilities(models, model, provider);
+  const {
+    provider,
+    model,
+    models,
+    modelOptions,
+    promptInjectionState = "none",
+    planModeEnabled = false,
+  } = input;
+  const caps = getProviderModelCapabilities(models, model, provider, planModeEnabled);
   const descriptors = getProviderOptionDescriptors({ caps, selections: modelOptions });
   const primarySelectDescriptor = descriptors.find(
     (descriptor): descriptor is Extract<(typeof descriptors)[number], { type: "select" }> =>
@@ -91,7 +100,17 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
 }
 
 function traitsControlProps(input: TraitsRenderInput) {
-  const { provider, instanceId, threadRef, draftId, model, models, modelOptions, prompt } = input;
+  const {
+    provider,
+    instanceId,
+    threadRef,
+    draftId,
+    model,
+    models,
+    modelOptions,
+    prompt,
+    planModeEnabled = false,
+  } = input;
   const hasTarget = threadRef !== undefined || draftId !== undefined;
   if (!hasTarget) {
     return null;
@@ -106,7 +125,15 @@ function traitsControlProps(input: TraitsRenderInput) {
     modelOptions,
     prompt,
     onPromptChange: input.onPromptChange,
-    hasTraits: shouldRenderTraitsControls({ provider, models, model, modelOptions, prompt }),
+    planModeEnabled,
+    hasTraits: shouldRenderTraitsControls({
+      provider,
+      models,
+      model,
+      modelOptions,
+      prompt,
+      planModeEnabled,
+    }),
   };
 }
 

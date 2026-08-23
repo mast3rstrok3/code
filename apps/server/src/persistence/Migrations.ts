@@ -70,6 +70,7 @@ import Migration0037 from "./Migrations/037_ProjectionTurnsKeysetIndex.ts";
 import Migration0038 from "./Migrations/038_ProjectionThreadsPinOrderKey.ts";
 import Migration0039 from "./Migrations/039_ProjectionProjectsDefaultThreadEnvMode.ts";
 import Migration0040 from "./Migrations/040_ProjectionProjectFaviconPath.ts";
+import Migration0041 from "./Migrations/041_AuthSessionClientConnection.ts";
 import Migration0069 from "./Migrations/069_ProjectionDevReviewWorkflowRuns.ts";
 import Migration0070 from "./Migrations/070_WorkflowParentIdentity.ts";
 import Migration0071 from "./Migrations/071_AppReviewRename.ts";
@@ -134,6 +135,7 @@ export const migrationEntries = [
   [38, "ProjectionThreadsPinOrderKey", Migration0038],
   [39, "ProjectionProjectsDefaultThreadEnvMode", Migration0039],
   [40, "ProjectionProjectFaviconPath", Migration0040],
+  [41, "AuthSessionClientConnection", Migration0041],
   [44, "BackfillProjectionThreadOwnerUserId", Migration0044],
   [45, "ProjectionThreadDevReviews", Migration0045],
   [46, "ProjectionThreadsWorkflowColumns", Migration0046],
@@ -175,6 +177,7 @@ export const migrationEntries = [
   [78, "ProjectionThreadWorkflowStepCycles", Migration0078],
   [79, "PlanningTicketAppReviewScope", Migration0079],
   [80, "ProjectionThreadWorkflowStepReviewParts", Migration0080],
+  [81, "AuthSessionClientConnectionCompatibility", Migration0041],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
