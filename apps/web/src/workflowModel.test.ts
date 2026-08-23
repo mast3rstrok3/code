@@ -686,9 +686,11 @@ describe("buildWorkflowViewModel", () => {
       root,
       scoped("worker", "implementation-worker"),
       scoped("ticket-app-review", "app-review-reviewer"),
+      scoped("ticket-gap-analysis", "app-review-planner"),
       scoped("ticket-code-review", "implementation-code-reviewer"),
       global("merge", "implementation-validator", "Implementation merge gate"),
       global("app-review", "app-review-reviewer"),
+      global("gap-analysis", "app-review-planner"),
       global("repair", "app-review-fixer"),
       global("code-review", "implementation-code-reviewer"),
       global("final-validation", "implementation-validator", "Implementation final validation"),
@@ -711,7 +713,17 @@ describe("buildWorkflowViewModel", () => {
       "Implementation phase · App Review",
       "Implementation phase · Final Code Review, pull request, and green checks",
     ]);
-    expect(steps[7]?.entries.map((entry) => entry.id)).toEqual(["env:app-review", "env:repair"]);
+    expect(steps[5]?.entries.map((entry) => entry.id)).toEqual([
+      "env:ticket-app-review",
+      "env:ticket-code-review",
+      "env:ticket-gap-analysis",
+      "env:worker",
+    ]);
+    expect(steps[7]?.entries.map((entry) => entry.id)).toEqual([
+      "env:app-review",
+      "env:gap-analysis",
+      "env:repair",
+    ]);
     expect(steps[8]?.entries.map((entry) => entry.id)).toEqual([
       "env:root",
       "env:code-review",

@@ -1,7 +1,13 @@
+import type { AppReviewWorkflowRun } from "@t3tools/contracts";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import { describe, expect, it } from "vite-plus/test";
 
-import { runningThreadIdsOf, workflowPauseOf } from "./WorkflowsPanel";
+import {
+  appReviewRunActiveThreadIsBusy,
+  restartablePlanningStage,
+  runningThreadIdsOf,
+  workflowPauseOf,
+} from "./WorkflowsPanel";
 
 const PAUSED_AT = "2026-08-19T20:07:42.541Z";
 
@@ -90,5 +96,42 @@ describe("runningThreadIdsOf", () => {
     ];
 
     expect(runningThreadIdsOf(all, [all[1]!, all[2]!])).toEqual(["other-worker"]);
+  });
+});
+
+describe("workflow step restart", () => {
+  const appReviewRun = {
+    status: "running",
+    activeThreadId: "planner",
+  } as unknown as AppReviewWorkflowRun;
+
+  it("lets an orphaned App Review start again", () => {
+    const orphanedPlanner = thread("planner", "controller");
+
+    expect(appReviewRunActiveThreadIsBusy(appReviewRun, [orphanedPlanner])).toBe(false);
+  });
+
+  it("keeps App Review restart blocked while its phase agent is live", () => {
+    const runningPlanner = {
+      ...thread("planner", "controller"),
+      session: { status: "running" },
+    } as unknown as EnvironmentThreadShell;
+
+    expect(appReviewRunActiveThreadIsBusy(appReviewRun, [runningPlanner])).toBe(true);
+  });
+
+  it("maps Spec authoring back to the planning Spec stage", () => {
+    const specStep = {
+      id: "spec",
+      createdAt: "2026-08-19T20:07:42.541Z",
+      label: "Planning phase · Spec authoring",
+      skillId: "planning.spec.codex",
+      repeatsAsCycles: false,
+      usesRootThread: true,
+      entries: [],
+    } satisfies Parameters<typeof restartablePlanningStage>[0];
+
+    expect(restartablePlanningStage(specStep, "spec-authoring")).toBe("spec");
+    expect(restartablePlanningStage(specStep, "completed")).toBe("spec");
   });
 });

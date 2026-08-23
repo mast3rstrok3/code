@@ -732,7 +732,10 @@ function liveRerunTargetThreadId(input: {
       (candidate) => candidate.id === runId,
     );
     if (reviewRun === undefined || reviewRun.status !== "running") return null;
-    return reviewRun.activeThreadId ?? reviewRun.controllerThreadId;
+    // A durable run can outlive the provider session for its active phase. In
+    // that state the run needs replacing, not a permanent "still running"
+    // rejection. The App Review phase rerun guard uses the same session check.
+    return liveThread(reviewRun.activeThreadId);
   };
   if (input.target.kind === "ticket") {
     const ticketId = input.target.ticketId;
@@ -756,13 +759,15 @@ function liveRerunTargetThreadId(input: {
     case "app-review":
       return (
         liveThread(input.run.activeAppReviewThreadId) ??
-        (input.readModel.appReviewWorkflowRuns ?? []).find(
-          (candidate) =>
-            candidate.caller.type === "implementation" &&
-            candidate.caller.implementationRunId === input.run.id &&
-            candidate.status === "running",
-        )?.activeThreadId ??
-        null
+        liveAppReviewWorkflow(
+          (input.readModel.appReviewWorkflowRuns ?? []).find(
+            (candidate) =>
+              candidate.caller.type === "implementation" &&
+              candidate.caller.implementationRunId === input.run.id &&
+              candidate.caller.ticketId === undefined &&
+              candidate.status === "running",
+          )?.id,
+        )
       );
     case "code-review":
       return liveThread(input.run.activeCodeReviewThreadId);

@@ -417,6 +417,7 @@ function entryMatchesDefinedStep<TThread extends WorkflowModelThread>(
         role === "implementation-code-reviewer" ||
         role === "app-review-orchestrator" ||
         role === "app-review-reviewer" ||
+        role === "app-review-planner" ||
         role === "app-review-fixer")
     );
   }
@@ -430,6 +431,7 @@ function entryMatchesDefinedStep<TThread extends WorkflowModelThread>(
     return (
       (role === "app-review-orchestrator" ||
         role === "app-review-reviewer" ||
+        role === "app-review-planner" ||
         role === "app-review-fixer" ||
         role === "implementation-qa-reviewer" ||
         role === "implementation-fixer") &&

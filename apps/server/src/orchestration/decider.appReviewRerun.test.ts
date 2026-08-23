@@ -140,6 +140,7 @@ function makeReadModel(input: {
             ticketId: "planning-ticket-1",
             status: "app-reviewing",
             workerThreadId: WORKER,
+            appReviewWorkflowRunId: RUN_ID,
             codeReviewThreadId: null,
           },
         ],
@@ -178,6 +179,32 @@ function rerun(
             model: modelSelection.model,
           },
         }),
+    createdAt: NOW,
+  };
+}
+
+function rerunTicketAppReview() {
+  return {
+    type: "thread.implementation-run.rerun" as const,
+    commandId: CommandId.make("cmd-rerun-ticket-app-review"),
+    threadId: ROOT,
+    runId: "implementation-run-1",
+    target: {
+      kind: "ticket" as const,
+      ticketId: "planning-ticket-1",
+      stage: "app-review" as const,
+    },
+    createdAt: NOW,
+  };
+}
+
+function rerunRunAppReview() {
+  return {
+    type: "thread.implementation-run.rerun" as const,
+    commandId: CommandId.make("cmd-rerun-run-app-review"),
+    threadId: ROOT,
+    runId: "implementation-run-1",
+    target: { kind: "run" as const, stage: "app-review" as const },
     createdAt: NOW,
   };
 }
@@ -312,6 +339,69 @@ it.layer(NodeServices.layer)("App Review phase re-run decider", (it) => {
       }).pipe(Effect.flip);
       expect(error._tag).toBe("OrchestrationCommandInvariantError");
       expect(String(error)).toContain("all 10");
+    }),
+  );
+
+  it.effect("lets a ticket replace an orphaned App Review run", () =>
+    Effect.gen(function* () {
+      const event = yield* decideOrchestrationCommand({
+        command: rerunTicketAppReview(),
+        readModel: makeReadModel({
+          cycles: [cycle({})],
+          activeThreadId: PLANNER,
+          activeSession: "ready",
+        }),
+      });
+      const events = Array.isArray(event) ? event : [event];
+      expect(events.map((entry) => entry.type)).toEqual([
+        "thread.implementation-run-rerun-requested",
+      ]);
+    }),
+  );
+
+  it.effect("refuses to replace a ticket App Review while its phase agent is live", () =>
+    Effect.gen(function* () {
+      const error = yield* decideOrchestrationCommand({
+        command: rerunTicketAppReview(),
+        readModel: makeReadModel({
+          cycles: [cycle({})],
+          activeThreadId: PLANNER,
+          activeSession: "running",
+        }),
+      }).pipe(Effect.flip);
+      expect(error._tag).toBe("OrchestrationCommandInvariantError");
+      expect(String(error)).toContain(PLANNER);
+    }),
+  );
+
+  it.effect("lets an implementation run replace its orphaned App Review", () =>
+    Effect.gen(function* () {
+      const readModel = makeReadModel({
+        cycles: [cycle({})],
+        activeThreadId: PLANNER,
+        activeSession: "ready",
+      });
+      const reviewRun = (readModel.appReviewWorkflowRuns ?? [])[0]!;
+      const event = yield* decideOrchestrationCommand({
+        command: rerunRunAppReview(),
+        readModel: {
+          ...readModel,
+          appReviewWorkflowRuns: [
+            {
+              ...reviewRun,
+              caller: {
+                type: "implementation",
+                implementationRunId: "implementation-run-1",
+                orchestratorThreadId: TARGET,
+              },
+            },
+          ],
+        },
+      });
+      const events = Array.isArray(event) ? event : [event];
+      expect(events.map((entry) => entry.type)).toEqual([
+        "thread.implementation-run-rerun-requested",
+      ]);
     }),
   );
 });

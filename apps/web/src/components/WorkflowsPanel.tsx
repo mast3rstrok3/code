@@ -502,9 +502,9 @@ function planningStepTimeRange(
   return threadRange;
 }
 
-type RestartablePlanningStage = "grill" | "spec" | "tickets";
+export type RestartablePlanningStage = "grill" | "spec" | "tickets";
 
-function restartablePlanningStage(
+export function restartablePlanningStage(
   step: WorkflowTimelineStep<EnvironmentThreadShell>,
   currentStage: OrchestrationPlanningWorkflowStage,
 ): RestartablePlanningStage | null {
@@ -1154,8 +1154,10 @@ function ticketStageRerunDisabledReason(input: {
   readonly threads: readonly EnvironmentThreadShell[];
   readonly appReviewRun: AppReviewWorkflowRun | null | undefined;
 }): string | null {
-  if (input.stageLabel === "App Review" && input.appReviewRun?.status === "running") {
-    return "This App Review is still running. Stop it before starting it again.";
+  if (input.stageLabel === "App Review") {
+    return appReviewRunActiveThreadIsBusy(input.appReviewRun, input.threads)
+      ? "This App Review is still running. Stop it before starting it again."
+      : null;
   }
   const busy = input.threads.find(
     (thread) => thread.session?.status === "starting" || thread.session?.status === "running",
@@ -1163,6 +1165,18 @@ function ticketStageRerunDisabledReason(input: {
   return busy === undefined
     ? null
     : `${input.stageLabel} is still running. Stop it before starting it again.`;
+}
+
+/** Whether the App Review's current phase still has a live provider session. */
+export function appReviewRunActiveThreadIsBusy(
+  run: AppReviewWorkflowRun | null | undefined,
+  threads: readonly EnvironmentThreadShell[],
+): boolean {
+  if (run?.status !== "running" || run.activeThreadId === null) return false;
+  const activeThread = threads.find((thread) => thread.id === run.activeThreadId);
+  return (
+    activeThread?.session?.status === "starting" || activeThread?.session?.status === "running"
+  );
 }
 
 /** The re-run pin and command target for one row of a ticket's stage list. */
@@ -1379,6 +1393,7 @@ function TicketPhases(props: {
                           thread.workflowRole === "implementation-code-reviewer" ||
                           thread.workflowRole === "app-review-orchestrator" ||
                           thread.workflowRole === "app-review-reviewer" ||
+                          thread.workflowRole === "app-review-planner" ||
                           thread.workflowRole === "app-review-fixer"),
                     )
                     .map((thread) => thread.id),
