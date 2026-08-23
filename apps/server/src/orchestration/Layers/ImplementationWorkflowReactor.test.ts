@@ -16,6 +16,7 @@ import {
   TurnId,
   type ModelSelection,
   type OrchestrationImplementationRun,
+  type OrchestrationImplementationSkipTarget,
   type OrchestrationReadModel,
   type ServerSettings,
   type VcsCreateWorktreeInput,
@@ -844,6 +845,7 @@ function launchRun(
   system: ImplementationSystem,
   options?: Parameters<typeof seedPlanning>[1] & {
     readonly appReviewStrategy?: "legacy-inline" | "nested-workflow";
+    readonly skips?: ReadonlyArray<OrchestrationImplementationSkipTarget>;
   },
 ) {
   return Effect.gen(function* () {
@@ -858,6 +860,7 @@ function launchRun(
       orchestratorBranch: "implementation/checkout",
       orchestratorWorktreePath: "/tmp/implementation-reactor.worktrees/checkout",
       validationCommands: ["vp check", "vp run typecheck"],
+      skips: options?.skips ? [...options.skips] : [],
       createdAt: now,
     });
     yield* system.reactor.drain;
@@ -1487,7 +1490,9 @@ describe("ImplementationWorkflowReactor", () => {
   it.effect("requires browser review when Code Review advances a previously reviewed HEAD", () =>
     withSystem((system) =>
       Effect.gen(function* () {
-        const { run } = yield* launchRun(system);
+        const { run } = yield* launchRun(system, {
+          skips: [{ kind: "run", stage: "change-request" }],
+        });
         const reviewedRun: OrchestrationImplementationRun = {
           ...run,
           appReviewedHeadSha: "reviewed-head",
@@ -5487,6 +5492,78 @@ describe("ImplementationWorkflowReactor", () => {
         ).toHaveLength(1);
         expect(
           snapshot.threads.filter((thread) => thread.workflowRole === "implementation-fixer"),
+        ).toHaveLength(0);
+      }),
+    ),
+  );
+
+  it.effect("completes without publishing when pull-request creation is skipped", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+        yield* passMergeGate(system, run);
+        yield* passAppReview(system, run);
+
+        const reviewer = yield* nextThreadForRole(
+          system,
+          "implementation-code-reviewer",
+          new Set<string>(),
+        );
+        yield* appendCodeReviewResult(system, {
+          run,
+          threadId: reviewer.id,
+          status: "clean",
+          tag: "skip-pull-request",
+        });
+        yield* passFinalGate(system, run);
+
+        const snapshot = yield* system.query.getSnapshot();
+        expect(snapshot.implementationRuns.find((entry) => entry.id === run.id)?.status).toBe(
+          "completed",
+        );
+        expect(yield* Ref.get(system.createOrOpenChangeRequestCount)).toBe(0);
+        expect(
+          snapshot.threads.filter(
+            (thread) => thread.workflowRole === "implementation-change-request-babysitter",
+          ),
+        ).toHaveLength(0);
+      }),
+    ),
+  );
+
+  it.effect("publishes without starting a babysitter when that step is skipped", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system, {
+          skips: [{ kind: "run", stage: "change-request-babysit" }],
+        });
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+        yield* passMergeGate(system, run);
+        yield* passAppReview(system, run);
+
+        const reviewer = yield* nextThreadForRole(
+          system,
+          "implementation-code-reviewer",
+          new Set<string>(),
+        );
+        yield* appendCodeReviewResult(system, {
+          run,
+          threadId: reviewer.id,
+          status: "clean",
+          tag: "skip-pull-request-babysitter",
+        });
+        yield* passFinalGate(system, run);
+
+        const snapshot = yield* system.query.getSnapshot();
+        const completed = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(completed?.status).toBe("completed");
+        expect(completed?.changeRequest?.number).toBe(1);
+        expect(yield* Ref.get(system.createOrOpenChangeRequestCount)).toBe(1);
+        expect(
+          snapshot.threads.filter(
+            (thread) => thread.workflowRole === "implementation-change-request-babysitter",
+          ),
         ).toHaveLength(0);
       }),
     ),

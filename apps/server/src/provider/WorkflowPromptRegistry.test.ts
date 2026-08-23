@@ -547,6 +547,11 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /create one integration thread/);
     NodeAssert.match(rendered, /Run exactly one Code Review on the combined changes/);
     NodeAssert.match(rendered, /Run one final Code Review/);
+    NodeAssert.match(
+      rendered,
+      /Pull-request creation and pull-request babysitting are separate workflow stages/,
+    );
+    NodeAssert.match(rendered, /Settings can skip the combined App Review, final Code Review/);
   });
 
   it("renders Planning Tickets with to-tickets vertical-slice drafting instructions", () => {
@@ -653,12 +658,31 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /## Orchestrated Code Review Result/);
     NodeAssert.match(rendered, /"type": "implementation-code-review-result"/);
     NodeAssert.match(rendered, /Use status "clean" when neither axis has findings/);
-    // Code Review is the last automated pass: it must land its own fixes and name the commit.
+    // Final Code Review must land its own fixes and name the commit before publication.
     NodeAssert.match(rendered, /launch message defines the complete review scope/);
     NodeAssert.match(rendered, /do not reopen unchanged code/);
     NodeAssert.match(rendered, /"commitSha"/);
     NodeAssert.match(rendered, /"validations"/);
     NodeAssert.match(rendered, /do not use it to hand unfixed findings back/);
+  });
+
+  it("registers pull-request babysitting as its own implementation step", () => {
+    const contracts = listWorkflowPromptContracts();
+    const babysitter = contracts.find(
+      (contract) => contract.id === WORKFLOW_PROMPT_IDS.implementationChangeRequestBabysitterCodex,
+    );
+
+    NodeAssert.ok(babysitter);
+    NodeAssert.equal(babysitter.workflow, "implementation");
+    NodeAssert.equal(babysitter.stage, "change-request-babysit");
+    NodeAssert.equal(babysitter.role, "implementation-change-request-babysitter");
+    NodeAssert.equal(babysitter.title, "7. Pull Request Babysitter");
+
+    const rendered = resolveWorkflowPromptText(
+      WORKFLOW_PROMPT_IDS.implementationChangeRequestBabysitterCodex,
+    );
+    NodeAssert.match(rendered, /latest pushed commit/);
+    NodeAssert.match(rendered, /Never merge the pull request/);
   });
 
   it("registers only the authoritative preset Product grills", () => {

@@ -1,5 +1,6 @@
 import type {
   EnvironmentId,
+  ImplementationWorkflowSettings,
   ModelSelection,
   ProviderInteractionMode,
   WorkflowPreset,
@@ -42,10 +43,12 @@ export interface ComposerWorkflowDefaults {
   readonly stepModels: ReadonlyArray<WorkflowStepModelOverride>;
   readonly stepCycles: ReadonlyArray<WorkflowStepCycleOverride>;
   readonly stepReviewParts: ReadonlyArray<WorkflowStepReviewPartsOverride>;
+  readonly implementationSettings: ImplementationWorkflowSettings;
   readonly onChange: (defaults: {
     readonly stepModels: ReadonlyArray<WorkflowStepModelOverride>;
     readonly stepCycles: ReadonlyArray<WorkflowStepCycleOverride>;
     readonly stepReviewParts: ReadonlyArray<WorkflowStepReviewPartsOverride>;
+    readonly implementationSettings: ImplementationWorkflowSettings;
   }) => void;
 }
 

@@ -40,6 +40,12 @@ const MODE_CONTROLS: ComposerModeControls = {
     stepModels: [],
     stepCycles: [],
     stepReviewParts: [],
+    implementationSettings: {
+      appReviewEnabled: true,
+      finalCodeReviewEnabled: true,
+      pullRequestCreationEnabled: true,
+      pullRequestBabysittingEnabled: true,
+    },
     onChange: () => {},
   },
   onOpenCatalog: () => {},

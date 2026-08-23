@@ -120,6 +120,7 @@ function WorkflowStepModelDefaults() {
       seedSelection={resolveDefaultAgentModelSelectionState(settings, providers)}
       cycleDefaults={settings.workflowStepCycles}
       reviewPartsDefaults={settings.workflowStepReviewParts}
+      implementationSettings={settings.implementation}
       onSetStepModel={(key, selection) => {
         updateSettings({
           workflowStepModels: [
@@ -148,6 +149,9 @@ function WorkflowStepModelDefaults() {
           ],
         });
       }}
+      onSetImplementationSettings={(implementation) => {
+        updateSettings({ implementation });
+      }}
     />
   );
 }
@@ -157,6 +161,7 @@ function WorkflowStepModelDefaultsBody(props: {
   readonly defaults: ServerSettings["workflowStepModels"];
   readonly cycleDefaults: ServerSettings["workflowStepCycles"];
   readonly reviewPartsDefaults: ServerSettings["workflowStepReviewParts"];
+  readonly implementationSettings: ServerSettings["implementation"];
   readonly seedSelection: ModelSelection;
   readonly onSetStepModel: SetWorkflowStepModel;
   readonly onSetStepModels: (
@@ -165,8 +170,14 @@ function WorkflowStepModelDefaultsBody(props: {
   ) => void;
   readonly onSetStepCycles: SetWorkflowStepCycles;
   readonly onSetStepReviewParts: SetWorkflowStepReviewParts;
+  readonly onSetImplementationSettings: (settings: ServerSettings["implementation"]) => void;
 }) {
   const choices = useWorkflowModelChoices(props.environmentId);
+  const configuredDefaultCount =
+    props.defaults.length +
+    props.cycleDefaults.length +
+    props.reviewPartsDefaults.length +
+    Object.values(props.implementationSettings).filter((enabled) => !enabled).length;
   const pinFor = (key: WorkflowModelPinKey): ModelSelection | null =>
     props.defaults.find((entry) => workflowStepModelPinKeysEqual(entry, key))?.modelSelection ??
     null;
@@ -175,16 +186,16 @@ function WorkflowStepModelDefaultsBody(props: {
       title="Engineering Workflow defaults"
       icon={<SlidersHorizontalIcon className="size-3.5" />}
       headerAction={
-        props.defaults.length + props.cycleDefaults.length === 0 ? null : (
+        configuredDefaultCount === 0 ? null : (
           <Badge variant="secondary" size="sm">
-            {props.defaults.length + props.cycleDefaults.length} set
+            {configuredDefaultCount} set
           </Badge>
         )
       }
     >
       <SettingsRow
-        title="Models and cycle budgets for all nine steps"
-        description="The order below matches the Engineering Workflow. Same-thread work uses the model selected when the workflow starts. Steps that start separate threads can use their own model."
+        title="Models and defaults for all eleven steps"
+        description="The order below matches the Engineering Workflow. Same-thread work uses the model selected when the workflow starts. Steps that start separate threads can use their own model. Review and publication steps can be skipped by default."
       >
         <div className="mt-1 pb-3">
           <EngineeringWorkflowSettings
@@ -198,6 +209,8 @@ function WorkflowStepModelDefaultsBody(props: {
             onSetStepCycles={props.onSetStepCycles}
             stepReviewParts={props.reviewPartsDefaults}
             onSetStepReviewParts={props.onSetStepReviewParts}
+            implementationSettings={props.implementationSettings}
+            onSetImplementationSettings={props.onSetImplementationSettings}
           />
         </div>
       </SettingsRow>

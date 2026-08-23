@@ -609,7 +609,7 @@ function buildImplementationRun(input: {
   return {
     id: input.runId,
     artifactSource: "planning-spec",
-    skips: [],
+    skips: input.command.skips ?? [],
     specId: input.command.specId,
     sourceProposedPlan: null,
     planningTicketIds: ticketIds,
@@ -3250,7 +3250,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       });
       const run: OrchestrationImplementationRun = {
         id: `implementation-run-${runUuid}`,
-        skips: [],
+        skips: command.skips ?? [],
         artifactSource: "proposed-plan",
         specId: null,
         sourceProposedPlan: { threadId: sourceThread.id, planId: plan.id },

@@ -24,6 +24,7 @@ import {
 import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { resolveWorkflowStepCycleBudget } from "@t3tools/shared/workflowStepCycles";
+import { implementationWorkflowDefaultSkips } from "@t3tools/shared/workflowStepSkips";
 import {
   expectedIntentKindForWorkflowPreset,
   isProductWorkflowRoot,
@@ -439,6 +440,10 @@ const make = Effect.gen(function* () {
       );
     }
 
+    const settings = yield* serverSettingsService.getSettings.pipe(
+      Effect.orElseSucceed(() => undefined),
+    );
+
     yield* orchestrationEngine.dispatch({
       type: "thread.implementation-run.launch",
       commandId: yield* serverCommandId("product-implementation-launch"),
@@ -449,6 +454,7 @@ const make = Effect.gen(function* () {
       orchestratorBranch: identity.orchestratorBranch,
       orchestratorWorktreePath: identity.orchestratorWorktreePath,
       validationCommands: [...resolveImplementationValidationCommands({ projectFile })],
+      skips: [...implementationWorkflowDefaultSkips(settings?.implementation)],
       createdAt: input.occurredAt,
     });
   });

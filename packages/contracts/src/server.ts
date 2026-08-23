@@ -52,6 +52,7 @@ export const WorkflowPromptContract = Schema.Struct({
     "implementation-qa-reviewer",
     "implementation-fixer",
     "implementation-code-reviewer",
+    "implementation-change-request-babysitter",
     "app-review-orchestrator",
     "app-review-reviewer",
     "app-review-fixer",

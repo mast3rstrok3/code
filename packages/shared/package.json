@@ -165,6 +165,14 @@
       "import": "./src/workflowStepCycles.ts",
       "default": "./src/workflowStepCycles.ts"
     },
+    "./workflowStepSkips": {
+      "types": "./src/workflowStepSkips.ts",
+      "module": "./src/workflowStepSkips.ts",
+      "browser": "./src/workflowStepSkips.ts",
+      "development": "./src/workflowStepSkips.ts",
+      "import": "./src/workflowStepSkips.ts",
+      "default": "./src/workflowStepSkips.ts"
+    },
     "./remote": {
       "types": "./src/remote.ts",
       "import": "./src/remote.ts"

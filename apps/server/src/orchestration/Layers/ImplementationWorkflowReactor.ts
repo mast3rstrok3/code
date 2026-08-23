@@ -36,6 +36,7 @@ import {
 } from "@t3tools/shared/appReviewParts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { proposedPlanTitle } from "@t3tools/shared/orchestrationPlanning";
+import { implementationWorkflowDefaultSkips } from "@t3tools/shared/workflowStepSkips";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -1425,7 +1426,8 @@ const make = Effect.gen(function* () {
       | "code-review"
       | "fixer"
       | "build"
-      | "change-request";
+      | "change-request"
+      | "change-request-babysit";
     readonly automaticRecovery?: boolean;
     readonly automaticRecoveryWaiting?: boolean;
     /**
@@ -3466,6 +3468,41 @@ const make = Effect.gen(function* () {
       return next;
     });
 
+  const completeWithoutChangeRequestStage = Effect.fn(
+    "ImplementationWorkflowReactor.completeWithoutChangeRequestStage",
+  )(function* (input: {
+    readonly sourceThreadId: ThreadId;
+    readonly run: OrchestrationImplementationRun;
+    readonly skippedStage: "change-request" | "change-request-babysit";
+    readonly createdAt: string;
+  }) {
+    const completedRun: OrchestrationImplementationRun = {
+      ...input.run,
+      status: "completed",
+      activeChangeRequestBabysitterThreadId: null,
+      retryableFailure: null,
+      updatedAt: input.createdAt,
+    };
+    yield* updateRun({
+      sourceThreadId: input.sourceThreadId,
+      run: completedRun,
+      createdAt: input.createdAt,
+    });
+    yield* appendActivity({
+      threadId: input.run.orchestratorThreadId,
+      tone: "info",
+      kind: "implementation-run-completed",
+      summary:
+        input.skippedStage === "change-request"
+          ? "Implementation run completed without creating a pull request"
+          : "Implementation run completed without babysitting the pull request",
+      payload: { runId: input.run.id, skippedStage: input.skippedStage },
+      createdAt: input.createdAt,
+    });
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    yield* teardownWorkflowStacks({ readModel, run: completedRun, createdAt: input.createdAt });
+  });
+
   const startChangeRequestBabysitter = Effect.fn(
     "ImplementationWorkflowReactor.startChangeRequestBabysitter",
   )(function* (input: {
@@ -3483,6 +3520,15 @@ const make = Effect.gen(function* () {
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
     const orchestratorThread = findThread(readModel, input.run.orchestratorThreadId);
     if (orchestratorThread === null) return;
+    if (isRunStageSkipped(input.run.skips, "change-request-babysit")) {
+      yield* completeWithoutChangeRequestStage({
+        sourceThreadId: input.sourceThreadId,
+        run: input.run,
+        skippedStage: "change-request-babysit",
+        createdAt: input.createdAt,
+      });
+      return;
+    }
     const babysitterThreadId = yield* serverThreadId("implementation-change-request-babysitter");
     const babysittingRun: OrchestrationImplementationRun = {
       ...input.run,
@@ -3510,7 +3556,7 @@ const make = Effect.gen(function* () {
       workflowRole: "implementation-change-request-babysitter",
       title: `Babysit PR #${input.run.changeRequest.number}`,
       modelSelection: yield* modelForStep({
-        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationChangeRequestBabysitterCodex,
         orchestratorThread,
         createdAt: input.createdAt,
       }),
@@ -3527,32 +3573,36 @@ const make = Effect.gen(function* () {
       message: {
         messageId: yield* serverMessageId("implementation-change-request-babysitter"),
         role: "user",
-        text: [
-          `Babysit GitHub pull request #${input.run.changeRequest.number} (${input.run.changeRequest.url}) for implementation run ${input.run.id}.`,
-          "",
-          "Watch the checks and review feedback on the latest pushed commit. Use gh to inspect GitHub Actions failures and unresolved actionable review threads. Verify every finding against the source. Fix real failures in this worktree, run the smallest relevant local checks, commit, and push the branch. After every push, restart monitoring against the new latest commit.",
-          "",
-          "Stay active until all required GitHub checks on the latest commit pass and no actionable review feedback remains. Do not merge the pull request. Do not report success for an older commit. If access, infrastructure, or a required external decision makes progress impossible, report blocked with the concrete reason.",
-          "",
-          "Finish with exactly one fenced JSON block:",
-          "```json",
-          // @effect-diagnostics-next-line preferSchemaOverJson:off - fixed directive example for the agent prompt.
-          JSON.stringify(
-            {
-              type: "implementation-change-request-babysit-result",
-              runId: input.run.id,
-              status: "passed",
-              headSha: "latest-pushed-HEAD-sha",
-              summaryMarkdown:
-                "All required checks pass and no actionable review feedback remains.",
-            },
-            null,
-            2,
-          ),
-          "```",
-        ].join("\n"),
+        text: appendWorkflowSkillCommandSection(
+          [
+            `Babysit GitHub pull request #${input.run.changeRequest.number} (${input.run.changeRequest.url}) for implementation run ${input.run.id}.`,
+            "",
+            "Watch the checks and review feedback on the latest pushed commit. Use gh to inspect GitHub Actions failures and unresolved actionable review threads. Verify every finding against the source. Fix real failures in this worktree, run the smallest relevant local checks, commit, and push the branch. After every push, restart monitoring against the new latest commit.",
+            "",
+            "Stay active until all required GitHub checks on the latest commit pass and no actionable review feedback remains. Do not merge the pull request. Do not report success for an older commit. If access, infrastructure, or a required external decision makes progress impossible, report blocked with the concrete reason.",
+            "",
+            "Finish with exactly one fenced JSON block:",
+            "```json",
+            // @effect-diagnostics-next-line preferSchemaOverJson:off - fixed directive example for the agent prompt.
+            JSON.stringify(
+              {
+                type: "implementation-change-request-babysit-result",
+                runId: input.run.id,
+                status: "passed",
+                headSha: "latest-pushed-HEAD-sha",
+                summaryMarkdown:
+                  "All required checks pass and no actionable review feedback remains.",
+              },
+              null,
+              2,
+            ),
+            "```",
+          ].join("\n"),
+          WORKFLOW_PROMPT_IDS.implementationChangeRequestBabysitterCodex,
+        ),
         attachments: [],
       },
+      workflowPromptId: WORKFLOW_PROMPT_IDS.implementationChangeRequestBabysitterCodex,
       runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
       interactionMode: "implementation-workflow",
       createdAt: input.createdAt,
@@ -3582,6 +3632,15 @@ const make = Effect.gen(function* () {
       currentRun.status === "completed" ||
       currentRun.status === "babysitting-change-request"
     ) {
+      return;
+    }
+    if (isRunStageSkipped(currentRun.skips, "change-request")) {
+      yield* completeWithoutChangeRequestStage({
+        sourceThreadId: input.sourceThreadId,
+        run: currentRun,
+        skippedStage: "change-request",
+        createdAt: input.createdAt,
+      });
       return;
     }
     if (
@@ -4020,6 +4079,9 @@ const make = Effect.gen(function* () {
     }
     if (readModel.implementationRuns.some((run) => run.specId === event.payload.specId)) return;
     const head = yield* gitWorkflow.resolveCommit({ cwd: thread.worktreePath, ref: "HEAD" });
+    const settings = yield* serverSettingsService.getSettings.pipe(
+      Effect.orElseSucceed(() => undefined),
+    );
     yield* orchestrationEngine.dispatch({
       type: "thread.implementation-run.launch",
       commandId: yield* serverCommandId("implementation-prompt-tickets-launch"),
@@ -4030,6 +4092,7 @@ const make = Effect.gen(function* () {
       orchestratorBranch: thread.branch,
       orchestratorWorktreePath: thread.worktreePath,
       validationCommands: [],
+      skips: [...implementationWorkflowDefaultSkips(settings?.implementation)],
       createdAt: event.occurredAt,
     });
   });
@@ -5565,6 +5628,18 @@ const make = Effect.gen(function* () {
         });
         return;
       }
+      if (failure.stage === "change-request-babysit") {
+        yield* startChangeRequestBabysitter({
+          sourceThreadId: input.sourceThreadId,
+          run: {
+            ...input.run,
+            status: "babysitting-change-request",
+            retryableFailure: null,
+          },
+          createdAt: input.createdAt,
+        });
+        return;
+      }
       if (failure.stage === "integration") {
         yield* integrateCompletedRun({
           sourceThreadId: input.sourceThreadId,
@@ -6554,7 +6629,7 @@ const make = Effect.gen(function* () {
           status: "needs-human-attention",
           activeChangeRequestBabysitterThreadId: null,
           retryableFailure: {
-            stage: "change-request",
+            stage: "change-request-babysit",
             detail,
             failedAt: updatedAt,
             attemptCount: 1,

@@ -184,8 +184,10 @@ export function workflowStepMatchesImplementationFailure<TThread extends Workflo
       return (
         label.includes("change request") ||
         label.includes("publish") ||
-        label.includes("pull request")
+        label.includes("create pull request")
       );
+    case "change-request-babysit":
+      return label.includes("babysit pull request") || label.includes("green checks");
   }
 }
 
@@ -285,12 +287,33 @@ export function implementationRunCurrentStage(run: {
     case "code-review-fixing":
       return "code-review";
     case "publishing-change-request":
-    case "babysitting-change-request":
       return "change-request";
+    case "babysitting-change-request":
+      return "change-request-babysit";
     case "completed":
     case "canceled":
       return null;
   }
+}
+
+/** Progress for publication steps that cannot rely on an owned agent thread. */
+export function implementationRunPublicationStageProgress(
+  run: {
+    readonly status: OrchestrationImplementationRunStatus;
+    readonly changeRequest: unknown | null;
+    readonly retryableFailure?: OrchestrationImplementationRetryableFailure | null | undefined;
+  },
+  stage: "change-request" | "change-request-babysit",
+): "completed" | "current" | "upcoming" {
+  if (stage === "change-request" && run.changeRequest !== null) return "completed";
+  if (
+    stage === "change-request-babysit" &&
+    run.status === "completed" &&
+    run.changeRequest !== null
+  ) {
+    return "completed";
+  }
+  return implementationRunCurrentStage(run) === stage ? "current" : "upcoming";
 }
 
 export interface WorkflowViewModel<TThread extends WorkflowModelThread> {
@@ -391,8 +414,9 @@ function entrySkillIds<TThread extends WorkflowModelThread>(
     case "app-review-orchestrator":
       return new Set(["implementation.browser-app-review.codex"]);
     case "implementation-code-reviewer":
-    case "implementation-change-request-babysitter":
       return new Set(["implementation.code-review.codex"]);
+    case "implementation-change-request-babysitter":
+      return new Set(["implementation.change-request-babysitter.codex"]);
     case null:
       return new Set();
   }
@@ -444,7 +468,6 @@ function entryMatchesDefinedStep<TThread extends WorkflowModelThread>(
     // wave onward and reads as settled whenever it is idle, which called the
     // final review done before it had started.
     return (
-      role === "implementation-change-request-babysitter" ||
       (role === "implementation-code-reviewer" &&
         entry.row.thread.workflowContext?.ticketScope?.length !== 1) ||
       (role === "implementation-validator" &&

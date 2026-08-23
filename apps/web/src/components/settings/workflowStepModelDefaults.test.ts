@@ -12,15 +12,17 @@ const selection: ModelSelection = {
   model: "gpt-5.6-sol",
 };
 
-it("lists the nine Engineering Workflow steps in phase order", () => {
+it("lists the eleven Engineering Workflow steps in phase order", () => {
   const targets = engineeringWorkflowDefaultSteps();
-  expect(targets.map((target) => target.number)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  expect(targets.map((target) => target.number)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
   expect(targets.map((target) => target.phase)).toEqual([
     "planning",
     "planning",
     "planning",
     "planning",
     "ticket-review",
+    "implementation",
+    "implementation",
     "implementation",
     "implementation",
     "implementation",
@@ -35,7 +37,9 @@ it("lists the nine Engineering Workflow steps in phase order", () => {
     "Execute ticket waves",
     "Merge ticket branches",
     "App Review",
-    "Final Code Review, pull request, and green checks",
+    "Final Code Review",
+    "Create pull request",
+    "Babysit pull request",
   ]);
 });
 
@@ -57,8 +61,10 @@ it("marks automatic, same-thread, and separately configurable steps", () => {
     "configurable",
     "configurable",
     "configurable",
+    "none",
+    "configurable",
   ]);
-  expect(targets.filter((target) => target.modelMode === "configurable")).toHaveLength(5);
+  expect(targets.filter((target) => target.modelMode === "configurable")).toHaveLength(6);
 });
 
 it("keeps nested worker and review agents under their workflow step", () => {

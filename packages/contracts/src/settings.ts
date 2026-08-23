@@ -548,7 +548,14 @@ export const ObservabilitySettings = Schema.Struct({
 });
 export type ObservabilitySettings = typeof ObservabilitySettings.Type;
 
-export const ImplementationWorkflowSettings = Schema.Struct({});
+export const ImplementationWorkflowSettings = Schema.Struct({
+  appReviewEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  finalCodeReviewEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  pullRequestCreationEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  pullRequestBabysittingEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(true)),
+  ),
+});
 export type ImplementationWorkflowSettings = typeof ImplementationWorkflowSettings.Type;
 
 export const SourceControlWritingStyleMode = Schema.Literals([
@@ -909,6 +916,14 @@ export const ServerSettingsPatch = Schema.Struct({
   workflowStepModels: Schema.optionalKey(Schema.Array(WorkflowStepModelOverride)),
   workflowStepCycles: Schema.optionalKey(Schema.Array(WorkflowStepCycleOverride)),
   workflowStepReviewParts: Schema.optionalKey(Schema.Array(WorkflowStepReviewPartsOverride)),
+  implementation: Schema.optionalKey(
+    Schema.Struct({
+      appReviewEnabled: Schema.optionalKey(Schema.Boolean),
+      finalCodeReviewEnabled: Schema.optionalKey(Schema.Boolean),
+      pullRequestCreationEnabled: Schema.optionalKey(Schema.Boolean),
+      pullRequestBabysittingEnabled: Schema.optionalKey(Schema.Boolean),
+    }),
+  ),
   observability: Schema.optionalKey(
     Schema.Struct({
       otlpTracesUrl: Schema.optionalKey(TrimmedString),

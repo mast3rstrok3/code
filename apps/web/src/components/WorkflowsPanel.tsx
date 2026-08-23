@@ -14,6 +14,7 @@ import type {
   OrchestrationImplementationRerunRunStage,
   OrchestrationImplementationRerunTarget,
   OrchestrationImplementationRerunTicketStage,
+  OrchestrationImplementationSkipRunStage,
   OrchestrationImplementationSkipTarget,
   ThreadId,
   OrchestrationImplementationRun,
@@ -56,6 +57,7 @@ import {
   buildWorkflowSteps,
   buildTicketWaves,
   implementationRunCurrentStage,
+  implementationRunPublicationStageProgress,
   implementationTicketStageDetails,
   resolveGroupImplementationRun,
   resolveWorkflowGroupTimeRange,
@@ -622,6 +624,16 @@ function rerunRunStageForStep(
   return null;
 }
 
+/** The skip controlled by a workflow row, including publication stages that cannot restart. */
+function skipRunStageForStep(
+  step: WorkflowTimelineStep<EnvironmentThreadShell>,
+): SkipRunStage | null {
+  const label = workflowStepLabel(step).toLowerCase();
+  if (label.includes("create pull request")) return "change-request";
+  if (label.includes("babysit pull request")) return "change-request-babysit";
+  return rerunRunStageForStep(step);
+}
+
 /** Threads of a step that are still live, excluding the workflow root. */
 function collectRunningStepThreadIds(
   allThreads: readonly EnvironmentThreadShell[],
@@ -1142,6 +1154,7 @@ const TICKET_WAVE_PROMPT_ID = "implementation.tdd.codex";
 
 type RerunTicketStage = OrchestrationImplementationRerunTicketStage;
 type RerunRunStage = OrchestrationImplementationRerunRunStage;
+type SkipRunStage = OrchestrationImplementationSkipRunStage;
 
 /**
  * Why a ticket stage cannot start again yet, if it cannot.
@@ -1893,14 +1906,21 @@ function WorkflowGroupCard(props: {
         workflowStepPhase(step) === "Planning" && planningStage !== null
           ? planningStepProgress(step, planningStage)
           : null;
+      const runStage = skipRunStageForStep(step);
+      const publicationProgress =
+        linkedImplementationRun !== null &&
+        (runStage === "change-request" || runStage === "change-request-babysit")
+          ? implementationRunPublicationStageProgress(linkedImplementationRun, runStage)
+          : null;
       const progress =
         planningProgress !== null
           ? (planningProgress.toLowerCase() as "completed" | "current" | "upcoming")
-          : currentImplementationStage !== null &&
-              workflowStepMatchesImplementationFailure(step, currentImplementationStage)
-            ? ("current" as const)
-            : null;
-      const runStage = rerunRunStageForStep(step);
+          : publicationProgress !== null
+            ? publicationProgress
+            : currentImplementationStage !== null &&
+                workflowStepMatchesImplementationFailure(step, currentImplementationStage)
+              ? ("current" as const)
+              : null;
       const stepThreads = collectStepThreads(step, props.workflowRoot.id);
       return [
         step.id,
@@ -1909,7 +1929,9 @@ function WorkflowGroupCard(props: {
           skipped:
             runStage !== null &&
             linkedImplementationRun !== null &&
-            isRunStageSkipped(linkedImplementationRun.skips, runStage),
+            (isRunStageSkipped(linkedImplementationRun.skips, runStage) ||
+              (runStage === "change-request-babysit" &&
+                isRunStageSkipped(linkedImplementationRun.skips, "change-request"))),
           blocked:
             linkedImplementationRun?.status === "needs-human-attention" &&
             retryableFailure !== null &&
@@ -2152,6 +2174,7 @@ function WorkflowGroupCard(props: {
                           // Only a step that owns a run-wide stage has something
                           // to clear; the rest are phases of a thread's own work.
                           const stepClearStage = rerunRunStageForStep(step);
+                          const stepSkipStage = skipRunStageForStep(step);
                           const stepClearRunId = linkedImplementationRun?.id ?? null;
                           const onClearStep =
                             stepClearStage === null ||
@@ -2295,23 +2318,23 @@ function WorkflowGroupCard(props: {
                                     onClear={onClearStep}
                                     confirmClearMessage={`Clears this step's recorded work for the whole run. Branches and commits stay.`}
                                     skipped={
-                                      stepClearStage !== null &&
+                                      stepSkipStage !== null &&
                                       linkedImplementationRun !== undefined &&
                                       linkedImplementationRun !== null &&
                                       isRunStageSkipped(
                                         linkedImplementationRun.skips,
-                                        stepClearStage,
+                                        stepSkipStage,
                                       )
                                     }
                                     onSetSkipped={
-                                      stepClearStage === null ||
+                                      stepSkipStage === null ||
                                       stepClearRunId === null ||
                                       props.onSetImplementationSkip === undefined
                                         ? undefined
                                         : (skipped) =>
                                             props.onSetImplementationSkip?.({
                                               runId: stepClearRunId,
-                                              target: { kind: "run", stage: stepClearStage },
+                                              target: { kind: "run", stage: stepSkipStage },
                                               skipped,
                                             })
                                     }

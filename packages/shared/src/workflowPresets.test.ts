@@ -33,25 +33,27 @@ describe("workflow presets", () => {
     ]);
   });
 
-  it("ends with final Code Review and pull-request publication", () => {
+  it("separates final Code Review, pull-request creation, and babysitting", () => {
     const engineeringWorkflow = WORKFLOW_PRESET_DEFINITIONS.find(
       (definition) => definition.id === "planning",
     );
-    expect(engineeringWorkflow?.helpSteps.at(-1)?.label).toContain(
-      "Final Code Review, pull request, and green checks",
-    );
+    expect(engineeringWorkflow?.helpSteps.slice(-3).map((step) => step.label)).toEqual([
+      "Implementation phase · Final Code Review",
+      "Implementation phase · Create pull request",
+      "Implementation phase · Babysit pull request",
+    ]);
   });
 
   it("uses one bounded App Review between merge gate and final review", () => {
     const engineeringWorkflow = WORKFLOW_PRESET_DEFINITIONS.find(
       (definition) => definition.id === "planning",
     );
-    expect(engineeringWorkflow?.helpSteps.slice(-3).map((step) => step.label)).toEqual([
+    expect(engineeringWorkflow?.helpSteps.slice(-5, -2).map((step) => step.label)).toEqual([
       "Implementation phase · Merge ticket branches",
       "Implementation phase · App Review",
-      "Implementation phase · Final Code Review, pull request, and green checks",
+      "Implementation phase · Final Code Review",
     ]);
-    expect(engineeringWorkflow?.helpSteps.at(-2)?.note).toContain("ten review");
+    expect(engineeringWorkflow?.helpSteps.at(-4)?.note).toContain("ten review");
   });
 
   it("maps presets to provider modes and intent kinds", () => {
@@ -70,7 +72,7 @@ describe("workflow presets", () => {
     expect(planning?.helpSteps.some((step) => step.label.startsWith("Implementation phase"))).toBe(
       true,
     );
-    expect(planning?.helpSteps.at(-1)?.label).toContain("pull request");
+    expect(planning?.helpSteps.at(-2)?.label).toContain("pull request");
   });
 
   it("keeps the standalone Planning grill choice interactive", () => {

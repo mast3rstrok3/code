@@ -678,6 +678,7 @@ export const OrchestrationImplementationRetryableFailure = Schema.Struct({
     "fixer",
     "build",
     "change-request",
+    "change-request-babysit",
   ]),
   detail: TrimmedNonEmptyString,
   failedAt: IsoDateTime,
@@ -1033,6 +1034,18 @@ export const OrchestrationImplementationRerunRunStage = Schema.Literals([
 export type OrchestrationImplementationRerunRunStage =
   typeof OrchestrationImplementationRerunRunStage.Type;
 
+/** Run-wide stages a user can tell the workflow to pass over. */
+export const OrchestrationImplementationSkipRunStage = Schema.Literals([
+  "integration",
+  "merge-gate",
+  "app-review",
+  "code-review",
+  "change-request",
+  "change-request-babysit",
+]);
+export type OrchestrationImplementationSkipRunStage =
+  typeof OrchestrationImplementationSkipRunStage.Type;
+
 /**
  * What the run is told not to do.
  *
@@ -1049,7 +1062,7 @@ export const OrchestrationImplementationSkipTarget = Schema.Union([
   }),
   Schema.Struct({
     kind: Schema.Literal("run"),
-    stage: OrchestrationImplementationRerunRunStage,
+    stage: OrchestrationImplementationSkipRunStage,
   }),
 ]);
 export type OrchestrationImplementationSkipTarget =
@@ -2205,6 +2218,7 @@ const ThreadImplementationRunLaunchCommand = Schema.Struct({
   orchestratorBranch: TrimmedNonEmptyString,
   orchestratorWorktreePath: TrimmedNonEmptyString,
   validationCommands: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  skips: Schema.optional(Schema.Array(OrchestrationImplementationSkipTarget)),
   createdAt: IsoDateTime,
 });
 
@@ -2247,6 +2261,7 @@ const ThreadFastFeatureRunLaunchCommand = Schema.Struct({
   orchestratorBranch: Schema.optional(TrimmedNonEmptyString),
   orchestratorWorktreePath: Schema.optional(TrimmedNonEmptyString),
   validationCommands: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  skips: Schema.optional(Schema.Array(OrchestrationImplementationSkipTarget)),
   createdAt: IsoDateTime,
 });
 
@@ -2366,7 +2381,7 @@ export function isTicketSkipped(
 /** Whether the run has been told to pass over one of its own stages. */
 export function isRunStageSkipped(
   skips: ReadonlyArray<OrchestrationImplementationSkipTarget>,
-  stage: OrchestrationImplementationRerunRunStage,
+  stage: OrchestrationImplementationSkipRunStage,
 ): boolean {
   return skips.some((skip) => skip.kind === "run" && skip.stage === stage);
 }

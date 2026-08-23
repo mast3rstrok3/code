@@ -1,5 +1,6 @@
 import type {
   EnvironmentId,
+  ImplementationWorkflowSettings,
   ModelSelection,
   WorkflowPreset,
   WorkflowStepCycleOverride,
@@ -59,6 +60,10 @@ export function WorkflowSettingsBody(props: {
   readonly stepReviewParts?: ReadonlyArray<WorkflowStepReviewPartsOverride> | undefined;
   readonly defaultStepReviewParts?: ReadonlyArray<WorkflowStepReviewPartsOverride> | undefined;
   readonly onSetStepReviewParts?: SetWorkflowStepReviewParts | undefined;
+  readonly implementationSettings?: ImplementationWorkflowSettings | undefined;
+  readonly onSetImplementationSettings?:
+    | ((settings: ImplementationWorkflowSettings) => void)
+    | undefined;
 }) {
   const choices = useWorkflowModelChoices(props.environmentId);
   const steps = pinnableSteps(props.preset);
@@ -103,6 +108,8 @@ export function WorkflowSettingsBody(props: {
             stepReviewParts={props.stepReviewParts ?? []}
             defaultStepReviewParts={props.defaultStepReviewParts}
             onSetStepReviewParts={props.onSetStepReviewParts}
+            implementationSettings={props.implementationSettings}
+            onSetImplementationSettings={props.onSetImplementationSettings}
           />
         </div>
       </ScrollArea>

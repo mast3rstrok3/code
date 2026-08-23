@@ -1,4 +1,5 @@
 import type {
+  ImplementationWorkflowSettings,
   ModelSelection,
   WorkflowStepCycleOverride,
   WorkflowStepReviewPartsOverride,
@@ -20,6 +21,7 @@ import {
   WorkflowStepReviewPartPins,
   type SetWorkflowStepReviewParts,
 } from "./WorkflowStepReviewParts";
+import { Switch } from "./ui/switch";
 
 const TDD_STEP_KEY = { workflowPromptId: "implementation.tdd.codex" } as const;
 const TICKET_APP_REVIEW_KEY = {
@@ -97,6 +99,66 @@ export interface EngineeringWorkflowSettingsProps {
   readonly stepReviewParts: ReadonlyArray<WorkflowStepReviewPartsOverride>;
   readonly defaultStepReviewParts?: ReadonlyArray<WorkflowStepReviewPartsOverride> | undefined;
   readonly onSetStepReviewParts: SetWorkflowStepReviewParts;
+  readonly implementationSettings?: ImplementationWorkflowSettings | undefined;
+  readonly onSetImplementationSettings?:
+    | ((settings: ImplementationWorkflowSettings) => void)
+    | undefined;
+}
+
+type SkippableImplementationSetting = keyof Pick<
+  ImplementationWorkflowSettings,
+  | "appReviewEnabled"
+  | "finalCodeReviewEnabled"
+  | "pullRequestCreationEnabled"
+  | "pullRequestBabysittingEnabled"
+>;
+
+function skippableSettingForStep(
+  step: EngineeringWorkflowDefaultStep,
+): SkippableImplementationSetting | null {
+  switch (step.label) {
+    case "App Review":
+      return "appReviewEnabled";
+    case "Final Code Review":
+      return "finalCodeReviewEnabled";
+    case "Create pull request":
+      return "pullRequestCreationEnabled";
+    case "Babysit pull request":
+      return "pullRequestBabysittingEnabled";
+    default:
+      return null;
+  }
+}
+
+function EngineeringWorkflowStepEnabledControl(
+  props: EngineeringWorkflowSettingsProps & { readonly target: EngineeringWorkflowDefaultStep },
+) {
+  const setting = skippableSettingForStep(props.target);
+  const implementationSettings = props.implementationSettings;
+  const onSetImplementationSettings = props.onSetImplementationSettings;
+  if (
+    setting === null ||
+    implementationSettings === undefined ||
+    onSetImplementationSettings === undefined
+  ) {
+    return null;
+  }
+  const enabled = implementationSettings[setting];
+  return (
+    <label className="mt-3 flex items-center justify-between gap-3 border-t border-border/60 pt-3 text-xs text-muted-foreground">
+      <span>{enabled ? "Runs in new workflows" : "Skipped in new workflows"}</span>
+      <Switch
+        checked={enabled}
+        onCheckedChange={(checked) =>
+          onSetImplementationSettings({
+            ...implementationSettings,
+            [setting]: checked === true,
+          })
+        }
+        aria-label={`Run ${props.target.label} in new workflows`}
+      />
+    </label>
+  );
 }
 
 function StepModelControl(props: {
@@ -375,23 +437,26 @@ export function EngineeringWorkflowSettings(props: EngineeringWorkflowSettingsPr
                   <span className="flex size-7 items-center justify-center rounded-full bg-muted text-xs font-semibold text-muted-foreground">
                     {target.number}
                   </span>
-                  {target.modelMode === "configurable" && target.workflowPromptId ? (
-                    <EngineeringWorkflowStepControls
-                      {...props}
-                      target={target}
-                      workflowPromptId={target.workflowPromptId}
-                    />
-                  ) : (
-                    <div className="min-w-0">
-                      <div className="text-xs font-medium text-foreground">{target.label}</div>
-                      <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-                        {target.modelMode === "workflow"
-                          ? "Uses the model selected when the workflow starts."
-                          : "This automatic setup step does not run a model."}
-                        {target.note === undefined ? "" : ` ${target.note}.`}
-                      </p>
-                    </div>
-                  )}
+                  <div className="min-w-0">
+                    {target.modelMode === "configurable" && target.workflowPromptId ? (
+                      <EngineeringWorkflowStepControls
+                        {...props}
+                        target={target}
+                        workflowPromptId={target.workflowPromptId}
+                      />
+                    ) : (
+                      <div>
+                        <div className="text-xs font-medium text-foreground">{target.label}</div>
+                        <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                          {target.modelMode === "workflow"
+                            ? "Uses the model selected when the workflow starts."
+                            : "This automatic setup step does not run a model."}
+                          {target.note === undefined ? "" : ` ${target.note}.`}
+                        </p>
+                      </div>
+                    )}
+                    <EngineeringWorkflowStepEnabledControl {...props} target={target} />
+                  </div>
                 </div>
               ))}
           </div>

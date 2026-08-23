@@ -21,6 +21,7 @@ import {
   selectWorkflowRootForThread,
   workflowNavigationIsAvailable,
   implementationRunCurrentStage,
+  implementationRunPublicationStageProgress,
   implementationTicketStageDetails,
   type WorkflowModelImplementationRun,
   workflowStepMatchesImplementationFailure,
@@ -714,7 +715,9 @@ describe("buildWorkflowViewModel", () => {
       "Implementation phase · Execute ticket waves",
       "Implementation phase · Merge ticket branches",
       "Implementation phase · App Review",
-      "Implementation phase · Final Code Review, pull request, and green checks",
+      "Implementation phase · Final Code Review",
+      "Implementation phase · Create pull request",
+      "Implementation phase · Babysit pull request",
     ]);
     expect(steps[5]?.entries.map((entry) => entry.id)).toEqual([
       "env:ticket-app-review",
@@ -730,8 +733,9 @@ describe("buildWorkflowViewModel", () => {
     expect(steps[8]?.entries.map((entry) => entry.id)).toEqual([
       "env:code-review",
       "env:final-validation",
-      "env:pr-babysitter",
     ]);
+    expect(steps[9]?.entries).toEqual([]);
+    expect(steps[10]?.entries.map((entry) => entry.id)).toEqual(["env:pr-babysitter"]);
   });
 
   it("keeps the run coordinator off the final code review step", () => {
@@ -777,7 +781,7 @@ describe("buildWorkflowViewModel", () => {
       "env:worker",
     ]);
     expect(byLabel("Final Code Review")?.entries.map((entry) => entry.id)).toEqual([]);
-    expect(steps).toHaveLength(9);
+    expect(steps).toHaveLength(11);
 
     // The panel reads a step's status from the threads it owns other than the
     // workflow root, and the final step owns none until the review starts.
@@ -842,7 +846,9 @@ describe("buildWorkflowViewModel", () => {
       "Implementation phase · Execute ticket waves",
       "Implementation phase · Merge ticket branches",
       "Implementation phase · App Review",
-      "Implementation phase · Final Code Review, pull request, and green checks",
+      "Implementation phase · Final Code Review",
+      "Implementation phase · Create pull request",
+      "Implementation phase · Babysit pull request",
     ].map(step);
 
     const matched = (stage: Parameters<typeof workflowStepMatchesImplementationFailure>[1]) =>
@@ -856,19 +862,16 @@ describe("buildWorkflowViewModel", () => {
     expect(matched("merge-gate")).toBe("Implementation phase · Merge ticket branches");
     expect(matched("integration")).toBe("Implementation phase · Merge ticket branches");
     expect(matched("app-review")).toBe("Implementation phase · App Review");
-    expect(matched("code-review")).toBe(
-      "Implementation phase · Final Code Review, pull request, and green checks",
-    );
-    expect(matched("change-request")).toBe(
-      "Implementation phase · Final Code Review, pull request, and green checks",
-    );
+    expect(matched("code-review")).toBe("Implementation phase · Final Code Review");
+    expect(matched("change-request")).toBe("Implementation phase · Create pull request");
+    expect(matched("change-request-babysit")).toBe("Implementation phase · Babysit pull request");
   });
 
   it("stops offering a narrow retry after the server retry budget is exhausted", () => {
     const step = {
-      id: "final-review",
+      id: "create-pull-request",
       createdAt: "2026-01-01T00:00:00.000Z",
-      label: "Implementation phase · Final Code Review, pull request, and green checks",
+      label: "Implementation phase · Create pull request",
       skillId: null,
       repeatsAsCycles: false,
       usesRootThread: false,
@@ -947,8 +950,11 @@ describe("buildWorkflowViewModel", () => {
     expect(implementationRunCurrentStage({ status: "code-reviewing" })).toBe("code-review");
     expect(implementationRunCurrentStage({ status: "code-review-fixing" })).toBe("code-review");
     expect(implementationRunCurrentStage({ status: "validating" })).toBe("merge-gate");
-    expect(implementationRunCurrentStage({ status: "babysitting-change-request" })).toBe(
+    expect(implementationRunCurrentStage({ status: "publishing-change-request" })).toBe(
       "change-request",
+    );
+    expect(implementationRunCurrentStage({ status: "babysitting-change-request" })).toBe(
+      "change-request-babysit",
     );
     // A blocked run still reports the stage it failed at, not its status.
     expect(
@@ -966,6 +972,33 @@ describe("buildWorkflowViewModel", () => {
     ).toBe("app-review");
     expect(implementationRunCurrentStage({ status: "completed" })).toBeNull();
     expect(implementationRunCurrentStage({ status: "canceled" })).toBeNull();
+  });
+
+  it("reports progress for pull-request steps without their own thread", () => {
+    expect(
+      implementationRunPublicationStageProgress(
+        { status: "publishing-change-request", changeRequest: null },
+        "change-request",
+      ),
+    ).toBe("current");
+    expect(
+      implementationRunPublicationStageProgress(
+        { status: "babysitting-change-request", changeRequest: { number: 42 } },
+        "change-request",
+      ),
+    ).toBe("completed");
+    expect(
+      implementationRunPublicationStageProgress(
+        { status: "babysitting-change-request", changeRequest: { number: 42 } },
+        "change-request-babysit",
+      ),
+    ).toBe("current");
+    expect(
+      implementationRunPublicationStageProgress(
+        { status: "completed", changeRequest: { number: 42 } },
+        "change-request-babysit",
+      ),
+    ).toBe("completed");
   });
 
   it("calculates thread, step, and parent workflow timing across nested work", () => {

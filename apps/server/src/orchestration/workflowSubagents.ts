@@ -169,6 +169,15 @@ const WORKFLOW_SUBAGENT_SPAWN_DEFINITIONS: ReadonlyArray<WorkflowSubagentSpawnDe
     expectedResult: "implementation-code-review-result",
     allowedParentWorkflowRoles: [null, "implementation-orchestrator"],
   },
+  {
+    workflowPromptId: WORKFLOW_PROMPT_IDS.implementationChangeRequestBabysitterCodex,
+    interactionMode: "implementation-workflow",
+    workflowRole: "implementation-change-request-babysitter",
+    threadIdTag: "workflow-implementation-change-request-babysitter",
+    defaultTitlePrefix: "Pull Request Babysitter",
+    expectedResult: "implementation-change-request-babysit-result",
+    allowedParentWorkflowRoles: [null, "implementation-orchestrator"],
+  },
 ];
 
 const WORKFLOW_SUBAGENT_SPAWN_DEFINITION_BY_PROMPT_ID = new Map(

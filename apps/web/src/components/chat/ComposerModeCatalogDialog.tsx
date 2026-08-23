@@ -79,6 +79,9 @@ export function ComposerModeCatalogDialog(props: {
   const [stepModels, setStepModels] = useState(props.workflowDefaults.stepModels);
   const [stepCycles, setStepCycles] = useState(props.workflowDefaults.stepCycles);
   const [stepReviewParts, setStepReviewParts] = useState(props.workflowDefaults.stepReviewParts);
+  const [implementationSettings, setImplementationSettings] = useState(
+    props.workflowDefaults.implementationSettings,
+  );
 
   useEffect(() => {
     if (props.catalog === null) return;
@@ -86,11 +89,13 @@ export function ComposerModeCatalogDialog(props: {
     setStepModels(props.workflowDefaults.stepModels);
     setStepCycles(props.workflowDefaults.stepCycles);
     setStepReviewParts(props.workflowDefaults.stepReviewParts);
+    setImplementationSettings(props.workflowDefaults.implementationSettings);
   }, [
     props.catalog,
     props.workflowDefaults.stepCycles,
     props.workflowDefaults.stepModels,
     props.workflowDefaults.stepReviewParts,
+    props.workflowDefaults.implementationSettings,
   ]);
 
   const definition =
@@ -154,6 +159,8 @@ export function ComposerModeCatalogDialog(props: {
                   setWorkflowStepReviewPartsOverride(current, key, parts),
                 )
               }
+              implementationSettings={implementationSettings}
+              onSetImplementationSettings={setImplementationSettings}
             />
           ) : props.catalog === "skills" ? (
             <div className="grid gap-1" data-composer-mode-view="skills" role="menu">
@@ -209,7 +216,12 @@ export function ComposerModeCatalogDialog(props: {
             </Button>
             <Button
               onClick={() => {
-                props.workflowDefaults.onChange({ stepModels, stepCycles, stepReviewParts });
+                props.workflowDefaults.onChange({
+                  stepModels,
+                  stepCycles,
+                  stepReviewParts,
+                  implementationSettings,
+                });
                 props.onSelectPreset(definition.id);
                 props.onOpenChange(false);
               }}

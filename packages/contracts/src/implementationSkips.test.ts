@@ -61,4 +61,19 @@ describe("implementation skips", () => {
     skips = applyImplementationSkip(skips, { kind: "run", stage: "code-review" }, true);
     assert.lengthOf(skips, 1);
   });
+
+  it("tracks pull request creation and babysitting independently", () => {
+    let skips: ReadonlyArray<OrchestrationImplementationSkipTarget> = [];
+    skips = applyImplementationSkip(skips, { kind: "run", stage: "change-request" }, true);
+    assert.isTrue(isRunStageSkipped(skips, "change-request"));
+    assert.isFalse(isRunStageSkipped(skips, "change-request-babysit"));
+
+    skips = applyImplementationSkip(skips, { kind: "run", stage: "change-request-babysit" }, true);
+    assert.isTrue(isRunStageSkipped(skips, "change-request"));
+    assert.isTrue(isRunStageSkipped(skips, "change-request-babysit"));
+
+    skips = applyImplementationSkip(skips, { kind: "run", stage: "change-request" }, false);
+    assert.isFalse(isRunStageSkipped(skips, "change-request"));
+    assert.isTrue(isRunStageSkipped(skips, "change-request-babysit"));
+  });
 });

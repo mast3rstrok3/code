@@ -966,11 +966,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       readonly stepModels: UnifiedSettings["workflowStepModels"];
       readonly stepCycles: UnifiedSettings["workflowStepCycles"];
       readonly stepReviewParts: UnifiedSettings["workflowStepReviewParts"];
+      readonly implementationSettings: UnifiedSettings["implementation"];
     }) => {
       updateEnvironmentSettings({
         workflowStepModels: [...defaults.stepModels],
         workflowStepCycles: [...defaults.stepCycles],
         workflowStepReviewParts: [...defaults.stepReviewParts],
+        implementation: defaults.implementationSettings,
       });
     },
     [updateEnvironmentSettings],
@@ -1000,6 +1002,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         stepModels: settings.workflowStepModels,
         stepCycles: settings.workflowStepCycles,
         stepReviewParts: settings.workflowStepReviewParts,
+        implementationSettings: settings.implementation,
         onChange: handleWorkflowDefaultsChange,
       },
       onOpenCatalog: setModeCatalog,
@@ -1020,6 +1023,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     settings.workflowStepCycles,
     settings.workflowStepModels,
     settings.workflowStepReviewParts,
+    settings.implementation,
     workflowPreset,
   ]);
 

@@ -27,6 +27,7 @@ export const WORKFLOW_PROMPT_IDS = {
   implementationBrowserAppReviewCodex: "implementation.browser-app-review.codex",
   implementationFixCodex: "implementation.fix.codex",
   implementationCodeReviewCodex: "implementation.code-review.codex",
+  implementationChangeRequestBabysitterCodex: "implementation.change-request-babysitter.codex",
   productFixCodex: "product.fix.codex",
   productFastFeatureCodex: "product.fast-feature.codex",
   productFullFeatureCodex: "product.full-feature.codex",
@@ -1261,11 +1262,11 @@ This stage orchestrates the upstream implement loop across sub-threads instead o
 - A ticket runs TDD implementation, then its attached App Review for its configured cycle budget when eligible, then exactly one Code Review. App Review failures, exhaustion, or blockers are recorded on the ticket and in workflow activity but never stop the frontier; Code Review still runs once. Ineligible tickets skip only App Review.
 - After every ticket reaches a terminal best-effort state, create one integration thread in the original workflow worktree and branch. Merge all usable ticket branches there, retaining recorded warnings for branches that could not be integrated.
 - Run exactly one Code Review on the combined changes. Then run the combined App Review for its configured cycle budget, focused on cross-ticket flows plus ticket reviews that failed or exhausted their budgets. Continue after either result.
-- Run one final Code Review after the combined App Review. That final review owns change-request publication and must include all ticket-level and combined App Review warnings in the PR body.
+- Run one final Code Review after the combined App Review, then run complete validation. Pull-request creation and pull-request babysitting are separate workflow stages after review. The PR body must include all ticket-level and combined App Review warnings.
 - Code Review is intentionally bounded: once per ticket, once immediately after integration, and once after the combined App Review. Do not add a review/validation feedback loop between those fixed passes.
 - Ticket workers never run launch-level complete validation commands or full test suites, but may run documented sub-minute fast checks. The final gate runs each launch validation command once on the final reviewed HEAD before publication.
 
-Plan the implementation run from the available tickets or create them from the prompt first. Identify the dependency frontier, worktrees, ticket App Review eligibility and attached plans, integration strategy, combined-review focus, validation commands, and warning reporting. Only PR publication is externally visible; intermediate review problems stay in the workflow panel until summarized in that PR. These rules override only upstream single-thread mechanics; TDD at pre-agreed seams, regular typechecking, review before publication, and committed work remain authoritative.
+Plan the implementation run from the available tickets or create them from the prompt first. Identify the dependency frontier, worktrees, ticket App Review eligibility and attached plans, integration strategy, combined-review focus, validation commands, and warning reporting. Settings can skip the combined App Review, final Code Review, pull-request creation, or pull-request babysitting. Only PR publication is externally visible; intermediate review problems stay in the workflow panel until summarized in that PR. These rules override only upstream single-thread mechanics; TDD at pre-agreed seams, regular typechecking, review before publication, and committed work remain authoritative.
 </collaboration_mode>`;
 
 const IMPLEMENTATION_TDD_MOCKING_ASSOCIATED_DOC_CONTENT = `# When to Mock
@@ -1777,11 +1778,11 @@ Reporting them separately stops one axis from masking the other.
 
 ## Orchestrated Code Review Result
 
-When this prompt is run by an automatic implementation run, do not ask the user questions. The launch message provides the fixed point, the diff command, the worktree, the change request, and the Spec source — use those instead of asking or searching the issue tracker.
+When this prompt is run by an automatic implementation run, do not ask the user questions. The launch message provides the fixed point, the diff command, the worktree, the Spec source, and any existing change request. Use those instead of asking or searching the issue tracker.
 
 Run the two axes as parallel feedback sub-agents by emitting one workflow-subagents-create directive with two children that return workflow-subagent-result, instead of upstream's \`Agent\` tool calls. If child creation is unavailable in this thread, run the two axis briefs sequentially yourself. Aggregation, fixes, validation, the commit, and the final result directive always stay in this thread.
 
-**The launch message defines the complete review scope.** Review only its supplied diff and fixed point. A later bounded pass may intentionally cover only the repair delta, so do not reopen unchanged code before that fixed point. You are the last automated reviewer for the supplied scope: aggregate both axes, then act on their findings yourself:
+**The launch message defines the complete review scope.** Review only its supplied diff and fixed point. A later bounded pass may intentionally cover only the repair delta, so do not reopen unchanged code before that fixed point. You are the last scheduled Code Review for the supplied scope: aggregate both axes, then act on their findings yourself:
 
 1. Run both axes and aggregate the two-axis report.
 2. If either axis produced findings that require code changes, fix them in the orchestrator worktree with the smallest reliable changes. Do not delegate the fixes and do not defer them to a follow-up.
@@ -1847,6 +1848,13 @@ After confirmation, finish with exactly one fenced JSON directive and no other f
 { "type": "product-intent-locked", "intentKind": "${input.intentKind}", "title": "...", "summaryMarkdown": "..." }
 \`\`\`
 
+</collaboration_mode>`;
+
+const IMPLEMENTATION_CHANGE_REQUEST_BABYSITTER_PROMPT = `<collaboration_mode># Implementation Workflow: Pull Request Babysitter
+
+Watch the pull request's required checks and actionable review feedback on the latest pushed commit. Verify each finding against the source. Fix real failures, run focused local checks, commit, push, and restart monitoring against the new commit.
+
+Finish only when every required check passes and no actionable review feedback remains, or when a concrete external blocker prevents progress. Never merge the pull request and never report success for an older commit.
 </collaboration_mode>`;
 
 const PRODUCT_FIX_WORKFLOW_PROMPT = buildPresetProductWorkflowPrompt({
@@ -2256,10 +2264,20 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     role: "implementation-code-reviewer",
     stage: "code-review",
     title: "6. Code Review",
-    description:
-      "Reviews the filed change request along the Standards and Spec axes via parallel sub-agents.",
+    description: "Reviews implementation changes along the Standards and Spec axes.",
     promptText: IMPLEMENTATION_CODE_REVIEW_PROMPT,
     associatedDocs: [APP_DEV_STACK_ASSOCIATED_DOC],
+  },
+  {
+    id: WORKFLOW_PROMPT_IDS.implementationChangeRequestBabysitterCodex,
+    order: 7,
+    workflow: "implementation",
+    role: "implementation-change-request-babysitter",
+    stage: "change-request-babysit",
+    title: "7. Pull Request Babysitter",
+    description: "Fixes CI and review failures until the latest pull request commit is green.",
+    promptText: IMPLEMENTATION_CHANGE_REQUEST_BABYSITTER_PROMPT,
+    associatedDocs: [],
   },
   {
     id: WORKFLOW_PROMPT_IDS.productFixCodex,
@@ -2340,6 +2358,7 @@ const VISIBLE_T3_SKILL_IDS = new Set<string>([
   WORKFLOW_PROMPT_IDS.implementationMergeGateCodex,
   WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
   WORKFLOW_PROMPT_IDS.implementationFixCodex,
+  WORKFLOW_PROMPT_IDS.implementationChangeRequestBabysitterCodex,
 ]);
 
 const MATT_POCOCK_SKILL_IDS = new Set(mattPocockEngineeringSkills.skills.map((skill) => skill.id));

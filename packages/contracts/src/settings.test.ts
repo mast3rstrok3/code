@@ -19,6 +19,24 @@ const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 
+describe("Engineering Workflow settings", () => {
+  it("runs every optional review and publication step by default", () => {
+    expect(decodeServerSettings({}).implementation).toEqual({
+      appReviewEnabled: true,
+      finalCodeReviewEnabled: true,
+      pullRequestCreationEnabled: true,
+      pullRequestBabysittingEnabled: true,
+    });
+  });
+
+  it("accepts partial patches for optional workflow steps", () => {
+    expect(
+      decodeServerSettingsPatch({ implementation: { pullRequestBabysittingEnabled: false } })
+        .implementation,
+    ).toEqual({ pullRequestBabysittingEnabled: false });
+  });
+});
+
 describe("ClientSettings word wrap", () => {
   it("defaults workspace user view to all", () => {
     expect(decodeClientSettings({}).activeWorkspaceUserView).toEqual(DEFAULT_WORKSPACE_USER_VIEW);
