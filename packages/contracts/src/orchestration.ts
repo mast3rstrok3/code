@@ -2213,6 +2213,12 @@ const ThreadImplementationRunUpdateCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   run: OrchestrationImplementationRun,
+  expectedCodeReviewClaim: Schema.optionalKey(
+    Schema.Struct({
+      attemptCount: NonNegativeInt,
+      activeThreadId: Schema.NullOr(ThreadId),
+    }),
+  ),
   createdAt: IsoDateTime,
 });
 

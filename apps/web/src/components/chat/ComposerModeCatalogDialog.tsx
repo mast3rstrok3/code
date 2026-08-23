@@ -6,7 +6,10 @@ import { ArrowLeftIcon, CheckIcon, CircleHelpIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { cn } from "~/lib/utils";
 import { WorkflowSettingsBody } from "../WorkflowSettingsMenu";
-import { setWorkflowStepModelDefault } from "../settings/workflowStepModelDefaults";
+import {
+  setWorkflowStepModelDefault,
+  setWorkflowStepModelDefaults,
+} from "../settings/workflowStepModelDefaults";
 import { WorkflowCatalogContent } from "../settings/WorkflowCatalogContent";
 import { Button } from "../ui/button";
 import {
@@ -137,6 +140,9 @@ export function ComposerModeCatalogDialog(props: {
               description="Every step follows the composer model and standing cycle defaults unless you set an override. You can change the same controls after the workflow starts."
               onSetStepModel={(key, selection) =>
                 setStepModels((current) => setWorkflowStepModelDefault(current, key, selection))
+              }
+              onSetStepModels={(keys, selection) =>
+                setStepModels((current) => setWorkflowStepModelDefaults(current, keys, selection))
               }
               stepCycles={stepCycles}
               onSetStepCycles={(key, maxCycles) =>

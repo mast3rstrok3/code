@@ -3475,6 +3475,28 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
       if (
+        command.expectedCodeReviewClaim !== undefined &&
+        (existingRun.status === "canceled" ||
+          existingRun.codeReviewAttemptCount !== command.expectedCodeReviewClaim.attemptCount ||
+          existingRun.activeCodeReviewThreadId !== command.expectedCodeReviewClaim.activeThreadId)
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Implementation Run '${command.run.id}' Code Review claim is stale.`,
+        });
+      }
+      if (
+        command.expectedCodeReviewClaim !== undefined &&
+        (command.run.status !== "code-reviewing" ||
+          command.run.activeCodeReviewThreadId === null ||
+          command.run.codeReviewAttemptCount !== command.expectedCodeReviewClaim.attemptCount + 1)
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Implementation Run '${command.run.id}' Code Review claim has an invalid transition.`,
+        });
+      }
+      if (
         (command.run.artifactSource === "planning-spec" &&
           (command.run.specId === null || command.run.sourceProposedPlan !== null)) ||
         (command.run.artifactSource === "proposed-plan" &&

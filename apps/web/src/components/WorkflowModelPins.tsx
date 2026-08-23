@@ -93,6 +93,8 @@ export function WorkflowModelPinControls(props: {
   readonly choices: WorkflowModelChoices;
   readonly onSetStepModel: SetWorkflowStepModel;
   readonly indented?: boolean;
+  /** True when a role-level control represents several pins with different values. */
+  readonly mixed?: boolean;
 }) {
   const active = props.pinnedSelection ?? props.inheritedSelection;
   return (
@@ -114,12 +116,12 @@ export function WorkflowModelPinControls(props: {
           }
           className="cursor-pointer shrink-0 text-[10px] font-medium uppercase tracking-wider text-muted-foreground hover:text-foreground"
         >
-          {props.pinnedSelection === null ? "Set" : "Auto"}
+          {props.mixed ? "Set all" : props.pinnedSelection === null ? "Set" : "Auto"}
         </button>
       </div>
       {props.pinnedSelection === null ? (
         <p className="text-[11px] leading-relaxed text-muted-foreground">
-          {props.inheritedLabel}
+          {props.mixed ? "Models differ by step" : props.inheritedLabel}
           {props.note === undefined ? "" : ` · ${props.note}`}
         </p>
       ) : (

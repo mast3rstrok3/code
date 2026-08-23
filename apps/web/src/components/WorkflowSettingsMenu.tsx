@@ -25,6 +25,11 @@ import {
   type SetWorkflowStepModel,
   type WorkflowModelPinKey,
 } from "./WorkflowModelPins";
+import {
+  setWorkflowStepModelsOneAtATime,
+  WorkflowModelQuickPins,
+  type SetWorkflowStepModels,
+} from "./WorkflowModelQuickPins";
 
 /** Steps that start an agent of their own — the rest have nothing to set. */
 function pinnableSteps(preset: WorkflowPreset | null): ReadonlyArray<WorkflowPresetHelpStep> {
@@ -42,6 +47,7 @@ export function WorkflowSettingsBody(props: {
   readonly rootLabel?: string | undefined;
   readonly description?: string | undefined;
   readonly onSetStepModel: SetWorkflowStepModel;
+  readonly onSetStepModels?: SetWorkflowStepModels | undefined;
   readonly stepCycles?: ReadonlyArray<WorkflowStepCycleOverride> | undefined;
   readonly defaultStepCycles?: ReadonlyArray<WorkflowStepCycleOverride> | undefined;
   readonly onSetStepCycles?: SetWorkflowStepCycles | undefined;
@@ -67,6 +73,16 @@ export function WorkflowSettingsBody(props: {
           {props.description ??
             "Everything this run does per step: which model it uses, how many cycles it repeats, and which parts an App Review verifies. Settings apply to the next agent a step starts — stop and start a step to reach work already running."}
         </p>
+        <WorkflowModelQuickPins
+          preset={props.preset}
+          pinFor={props.pinFor}
+          rootModelSelection={props.rootModelSelection}
+          rootLabel={props.rootLabel ?? "The workflow model"}
+          choices={choices}
+          onSetStepModels={
+            props.onSetStepModels ?? setWorkflowStepModelsOneAtATime(props.onSetStepModel)
+          }
+        />
         {steps.map((step) => {
           const subStepWorkflowPromptIds = (step.subSteps ?? []).map(
             (subStep) => subStep.workflowPromptId,

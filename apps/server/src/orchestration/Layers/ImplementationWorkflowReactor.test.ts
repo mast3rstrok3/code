@@ -23,6 +23,7 @@ import { type DeepPartial } from "@t3tools/shared/Struct";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import * as Layer from "effect/Layer";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
@@ -201,13 +202,14 @@ interface ImplementationCalls {
 }
 
 /**
- * Holds `autoCreate` open so a test can observe what the reactor has already done by the time the
- * app dev stack starts provisioning. `entered` resolves as the stack call begins; the reactor then
- * parks on `release`.
+ * Holds `autoCreate` open until the requested number of calls have entered, then parks every call
+ * on `release`.
  */
 interface AutoCreateGate {
   readonly entered: Deferred.Deferred<void>;
   readonly release: Deferred.Deferred<void>;
+  readonly entryCount: Ref.Ref<number>;
+  readonly requiredEntries: number;
 }
 
 interface ImplementationSystem extends ImplementationCalls {
@@ -559,7 +561,12 @@ function makeTestLayer(
               Effect.tap(() =>
                 autoCreateGate === undefined
                   ? Effect.void
-                  : Deferred.succeed(autoCreateGate.entered, undefined).pipe(
+                  : Ref.updateAndGet(autoCreateGate.entryCount, (count) => count + 1).pipe(
+                      Effect.flatMap((count) =>
+                        count >= autoCreateGate.requiredEntries
+                          ? Deferred.succeed(autoCreateGate.entered, undefined)
+                          : Effect.void,
+                      ),
                       Effect.andThen(Deferred.await(autoCreateGate.release)),
                     ),
               ),
@@ -4699,6 +4706,91 @@ describe("ImplementationWorkflowReactor", () => {
         ).toHaveLength(2);
       }),
     ),
+  );
+
+  it.effect("claims one Code Review when recovery sweeps share stale QA state", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const entryCount = yield* Ref.make(0);
+
+      yield* withSystem(
+        (system) =>
+          Effect.gen(function* () {
+            const { run } = yield* launchRun(system, {
+              appReviewStrategy: "nested-workflow",
+            });
+            const recoveringRun: OrchestrationImplementationRun = {
+              ...run,
+              status: "qa-reviewing",
+              orchestratorBranch: "main",
+              orchestratorWorktreePath: "/tmp/implementation-reactor-review",
+              integrationHeadSha: "def456",
+              activeAppReviewHeadSha: null,
+              activeAppReviewThreadId: null,
+              activeCodeReviewHeadSha: null,
+              activeCodeReviewThreadId: null,
+              appDevStack: {
+                status: "ready",
+                stackId: "stack-1",
+                stackStatus: "running",
+                frontendUrl: "http://127.0.0.1:5173",
+                frontendServiceName: "frontend",
+                displayName: "Implementation test",
+                lastErrorMarkdown: null,
+                requestedAt: now,
+                updatedAt: now,
+              },
+              updatedAt: now,
+            };
+            yield* system.engine.dispatch({
+              type: "thread.implementation-run.update",
+              commandId: commandId("stale-qa-recovery-state"),
+              threadId: sourceThreadId,
+              run: recoveringRun,
+              createdAt: now,
+            });
+
+            const recoveries = yield* Effect.forkChild(
+              Effect.all(
+                [
+                  system.reactor.recoverIncompleteStages(),
+                  system.reactor.recoverIncompleteStages(),
+                ],
+                { concurrency: 2, discard: true },
+              ),
+            );
+            yield* Deferred.await(entered);
+            expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(2);
+            yield* Deferred.succeed(release, undefined);
+            yield* Fiber.join(recoveries);
+
+            const snapshot = yield* system.query.getSnapshot();
+            const claimedRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+            expect(claimedRun?.status).toBe("code-reviewing");
+            expect(claimedRun?.codeReviewAttemptCount).toBe(1);
+            expect(claimedRun?.activeCodeReviewThreadId).not.toBeNull();
+            expect(
+              snapshot.threads.filter(
+                (thread) => thread.workflowRole === "implementation-code-reviewer",
+              ),
+            ).toHaveLength(1);
+          }),
+        {
+          startReactor: false,
+          autoCreateGate: { entered, release, entryCount, requiredEntries: 2 },
+          serverSettings: {
+            workflowStepReviewParts: [
+              {
+                workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+                e2e: false,
+                browser: false,
+              },
+            ],
+          },
+        },
+      );
+    }),
   );
 
   it.effect("normalizes legacy runs with 24 QA fixers and advances without creating a 25th", () =>

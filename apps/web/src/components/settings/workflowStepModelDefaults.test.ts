@@ -3,6 +3,7 @@ import { expect, it } from "vite-plus/test";
 
 import {
   setWorkflowStepModelDefault,
+  setWorkflowStepModelDefaults,
   workflowStepModelDefaultTargets,
 } from "./workflowStepModelDefaults.ts";
 
@@ -61,4 +62,19 @@ it("replaces a default in place and clears it without leaving an empty key", () 
     null,
   );
   expect(cleared.map((entry) => entry.workflowPromptId)).toEqual(["matt-pocock.to-tickets"]);
+});
+
+it("sets and clears a model across several review pins", () => {
+  const keys = [
+    { workflowPromptId: "implementation.code-review.codex" },
+    {
+      workflowPromptId: "implementation.code-review.codex",
+      stepWorkflowPromptId: "implementation.tdd.codex",
+    },
+  ];
+  const assigned = setWorkflowStepModelDefaults([], keys, selection);
+
+  expect(assigned).toHaveLength(2);
+  expect(assigned.every((entry) => entry.modelSelection === selection)).toBe(true);
+  expect(setWorkflowStepModelDefaults(assigned, keys, null)).toEqual([]);
 });

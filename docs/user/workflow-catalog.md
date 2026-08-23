@@ -77,6 +77,8 @@ Nothing is nudged while it is working, and nothing is nudged inside a paused run
 
 By default every step runs on the model the workflow was started with. There are three ways to change that. **Settings → Workflows → Default step models** sets the standing choice every new run starts from. The workflow dialog exposes those defaults before a run starts. Inside a run, **Settings** at the top of the Workflows panel lays out the whole run at once, and each step's own settings button tunes one step. Those two edit the same per-run pins, and a per-run pin wins over the default.
 
+The **Quick model assignments** block sits above the detailed step list. **App Reviews and browser tests** applies one model to ticket reviews, final reviews, and their browser passes. **Code Reviews** does the same for ticket and final Code Reviews. If those steps already use different models, the quick assignment shows **Set all**. The detailed controls remain available for exceptions.
+
 A step is a phase of the run, not a single agent. "Execute ticket waves" starts TDD workers, a ticket App Review, and a ticket Code Review; an App Review cycle runs a browser review, a gap analysis that writes the repair tickets, and the repair implementation. Each of those agents can take its own model, and each follows its step unless you give it one:
 
 - Leave an entry unset and it follows the level above — a sub-step follows its step, a step follows the workflow's model. Changing the main thread's model in its composer moves everything still on Auto with it.

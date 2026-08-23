@@ -87,3 +87,14 @@ export function setWorkflowStepModelDefault(
     },
   ];
 }
+
+export function setWorkflowStepModelDefaults(
+  defaults: ReadonlyArray<WorkflowStepModelOverride>,
+  keys: ReadonlyArray<WorkflowModelPinKey>,
+  selection: ModelSelection | null,
+): ReadonlyArray<WorkflowStepModelOverride> {
+  return keys.reduce(
+    (current, key) => setWorkflowStepModelDefault(current, key, selection),
+    defaults,
+  );
+}

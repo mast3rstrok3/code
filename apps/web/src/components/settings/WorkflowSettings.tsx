@@ -26,6 +26,7 @@ import {
   type SetWorkflowStepModel,
   type WorkflowModelPinKey,
 } from "../WorkflowModelPins";
+import { WorkflowModelQuickPins } from "../WorkflowModelQuickPins";
 import { WorkflowStepCyclePins, type SetWorkflowStepCycles } from "../WorkflowStepCycles";
 import {
   WorkflowStepReviewPartPins,
@@ -36,6 +37,7 @@ import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsL
 import { WorkflowCatalogContent } from "./WorkflowCatalogContent";
 import {
   setWorkflowStepModelDefault,
+  setWorkflowStepModelDefaults,
   workflowStepModelDefaultTargets,
   workflowStepModelPinKeysEqual,
 } from "./workflowStepModelDefaults";
@@ -130,6 +132,13 @@ function WorkflowStepModelDefaults() {
           ],
         });
       }}
+      onSetStepModels={(keys, selection) => {
+        updateSettings({
+          workflowStepModels: [
+            ...setWorkflowStepModelDefaults(settings.workflowStepModels, keys, selection),
+          ],
+        });
+      }}
       onSetStepCycles={(key, maxCycles) => {
         updateSettings({
           workflowStepCycles: [
@@ -155,6 +164,10 @@ function WorkflowStepModelDefaultsBody(props: {
   readonly reviewPartsDefaults: ServerSettings["workflowStepReviewParts"];
   readonly seedSelection: ModelSelection;
   readonly onSetStepModel: SetWorkflowStepModel;
+  readonly onSetStepModels: (
+    keys: ReadonlyArray<WorkflowModelPinKey>,
+    selection: ModelSelection | null,
+  ) => void;
   readonly onSetStepCycles: SetWorkflowStepCycles;
   readonly onSetStepReviewParts: SetWorkflowStepReviewParts;
 }) {
@@ -179,6 +192,16 @@ function WorkflowStepModelDefaultsBody(props: {
         description="Every step runs on the workflow's own model unless you set one here, and repeats its built-in number of times unless you set a cycle budget. A running workflow's step settings override these for that run, and changes apply to agents started from now on."
       >
         <div className="mt-1 space-y-3 pb-3">
+          <div className="max-w-md">
+            <WorkflowModelQuickPins
+              preset={undefined}
+              pinFor={pinFor}
+              rootModelSelection={props.seedSelection}
+              rootLabel="The model each workflow runs on"
+              choices={choices}
+              onSetStepModels={props.onSetStepModels}
+            />
+          </div>
           {workflowStepModelDefaultTargets().map((target) => (
             <div
               key={target.workflowPromptId}

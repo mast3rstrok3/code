@@ -1237,6 +1237,10 @@ const make = Effect.gen(function* () {
     readonly sourceThreadId: ThreadId;
     readonly run: OrchestrationImplementationRun;
     readonly createdAt: string;
+    readonly expectedCodeReviewClaim?: {
+      readonly attemptCount: OrchestrationImplementationRun["codeReviewAttemptCount"];
+      readonly activeThreadId: ThreadId | null;
+    };
   }) {
     // `canceled` is terminal. In-flight stage work (a late build directive, a
     // recovery sweep already past its guard) must not resurrect a run the user
@@ -1253,6 +1257,9 @@ const make = Effect.gen(function* () {
       commandId: yield* serverCommandId("implementation-run-update"),
       threadId: input.sourceThreadId,
       run: input.run,
+      ...(input.expectedCodeReviewClaim === undefined
+        ? {}
+        : { expectedCodeReviewClaim: input.expectedCodeReviewClaim }),
       createdAt: input.createdAt,
     });
   });
@@ -2976,12 +2983,12 @@ const make = Effect.gen(function* () {
           retryableFailure: null,
           updatedAt: input.createdAt,
         };
-        yield* updateRun({
-          sourceThreadId: input.sourceThreadId,
-          run: readyRun,
-          createdAt: input.createdAt,
-        });
         if (activeNestedAppReview !== undefined) {
+          yield* updateRun({
+            sourceThreadId: input.sourceThreadId,
+            run: readyRun,
+            createdAt: input.createdAt,
+          });
           yield* orchestrationEngine.dispatch({
             type: "thread.app-review-workflow.resume",
             commandId: yield* serverCommandId("implementation-app-review-preview-refresh"),
@@ -3013,6 +3020,11 @@ const make = Effect.gen(function* () {
           });
           return;
         }
+        yield* updateRun({
+          sourceThreadId: input.sourceThreadId,
+          run: readyRun,
+          createdAt: input.createdAt,
+        });
         const controllerThreadId = yield* serverThreadId("app-review-orchestrator");
         yield* orchestrationEngine.dispatch({
           type: "thread.app-review-workflow.launch",
@@ -3261,6 +3273,10 @@ const make = Effect.gen(function* () {
         sourceThreadId: input.sourceThreadId,
         run: reviewingRun,
         createdAt: input.createdAt,
+        expectedCodeReviewClaim: {
+          attemptCount: input.run.codeReviewAttemptCount,
+          activeThreadId: input.run.activeCodeReviewThreadId,
+        },
       });
 
       yield* orchestrationEngine.dispatch({
@@ -5527,11 +5543,7 @@ const make = Effect.gen(function* () {
       if (failure.stage === "code-review") {
         yield* startCodeReview({
           sourceThreadId: input.sourceThreadId,
-          run: {
-            ...input.run,
-            activeCodeReviewThreadId: null,
-            activeCodeReviewHeadSha: null,
-          },
+          run: input.run,
           createdAt: input.createdAt,
         });
         return;
@@ -7150,7 +7162,7 @@ const make = Effect.gen(function* () {
           "code-review",
           startCodeReview({
             sourceThreadId,
-            run: { ...run, activeCodeReviewThreadId: null, activeCodeReviewHeadSha: null },
+            run,
             createdAt,
           }),
         );
