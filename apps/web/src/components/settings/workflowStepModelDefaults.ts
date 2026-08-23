@@ -1,7 +1,7 @@
 import type { ModelSelection } from "@t3tools/contracts";
 import type { WorkflowStepModelOverride } from "@t3tools/contracts";
 import {
-  WORKFLOW_PRESET_DEFINITIONS,
+  WORKFLOW_PRESET_DEFINITION_BY_ID,
   type WorkflowPresetSubStep,
   workflowPresetStepCanPinModel,
 } from "@t3tools/shared/workflowPresets";
@@ -9,15 +9,15 @@ import {
 import type { WorkflowModelPinKey } from "../WorkflowModelPins";
 
 /**
- * One step a default model can be set for, plus the agents it starts.
- *
- * Defaults are keyed by prompt id alone, so the same step shared by several
- * workflows is one entry here — setting "App Review" once covers every
- * workflow that runs it.
+ * One ordered step in the Engineering Workflow settings view.
  */
-export interface WorkflowStepModelDefaultTarget {
+export interface EngineeringWorkflowDefaultStep {
+  readonly number: number;
+  readonly phase: "planning" | "ticket-review" | "implementation";
   readonly label: string;
-  readonly workflowPromptId: string;
+  readonly note?: string | undefined;
+  readonly modelMode: "none" | "workflow" | "configurable";
+  readonly workflowPromptId?: string | undefined;
   readonly subSteps: ReadonlyArray<WorkflowPresetSubStep>;
 }
 
@@ -27,31 +27,26 @@ function withoutPhasePrefix(label: string): string {
   return separator === -1 ? label : label.slice(separator + 3);
 }
 
-export function workflowStepModelDefaultTargets(): ReadonlyArray<WorkflowStepModelDefaultTarget> {
-  const byPromptId = new Map<
-    string,
-    { label: string; subSteps: Map<string, WorkflowPresetSubStep> }
-  >();
-  for (const definition of WORKFLOW_PRESET_DEFINITIONS) {
-    for (const step of definition.helpSteps) {
-      if (!workflowPresetStepCanPinModel(definition.id, step)) continue;
-      const entry = byPromptId.get(step.skillId) ?? {
-        label: withoutPhasePrefix(step.label),
-        subSteps: new Map<string, WorkflowPresetSubStep>(),
-      };
-      for (const subStep of step.subSteps ?? []) {
-        if (!entry.subSteps.has(subStep.workflowPromptId)) {
-          entry.subSteps.set(subStep.workflowPromptId, subStep);
-        }
-      }
-      byPromptId.set(step.skillId, entry);
-    }
-  }
-  return [...byPromptId.entries()].map(([workflowPromptId, entry]) => ({
-    label: entry.label,
-    workflowPromptId,
-    subSteps: [...entry.subSteps.values()],
-  }));
+export function engineeringWorkflowDefaultSteps(): ReadonlyArray<EngineeringWorkflowDefaultStep> {
+  const definition = WORKFLOW_PRESET_DEFINITION_BY_ID.planning;
+  return definition.helpSteps.map((step, index) => {
+    const label = withoutPhasePrefix(step.label);
+    const phase = step.label.startsWith("Implementation phase · ")
+      ? "implementation"
+      : label === "Ticket review and revision cycles"
+        ? "ticket-review"
+        : "planning";
+    const configurable = workflowPresetStepCanPinModel(definition.id, step);
+    return {
+      number: index + 1,
+      phase,
+      label,
+      ...(step.note === undefined ? {} : { note: step.note }),
+      modelMode: configurable ? "configurable" : step.skillId === undefined ? "none" : "workflow",
+      ...(configurable ? { workflowPromptId: step.skillId } : {}),
+      subSteps: step.subSteps ?? [],
+    };
+  });
 }
 
 export function workflowStepModelPinKeysEqual(

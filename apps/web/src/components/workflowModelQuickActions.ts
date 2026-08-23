@@ -11,7 +11,7 @@ const APP_REVIEW_PROMPT_ID = "implementation.browser-app-review.codex";
 const CODE_REVIEW_PROMPT_ID = "implementation.code-review.codex";
 
 export interface WorkflowModelQuickAction {
-  readonly id: "app-review" | "code-review";
+  readonly id: "app-review" | "ticket-code-review" | "final-code-review";
   readonly label: string;
   readonly description: string;
   readonly pinKeys: ReadonlyArray<WorkflowModelPinKey>;
@@ -20,15 +20,25 @@ export interface WorkflowModelQuickAction {
 const QUICK_ACTION_DEFINITIONS = [
   {
     id: "app-review",
-    label: "App Reviews and browser tests",
-    description: "Use one model for ticket and final App Reviews, including browser test passes.",
+    label: "App Review",
+    description:
+      "Set the default model for E2E and browser review, gap analysis, and repair threads.",
     workflowPromptId: APP_REVIEW_PROMPT_ID,
+    matches: (key: WorkflowModelPinKey) => key.stepWorkflowPromptId === undefined,
   },
   {
-    id: "code-review",
-    label: "Code Reviews",
-    description: "Use one model for ticket and final Code Reviews.",
+    id: "ticket-code-review",
+    label: "Ticket Code Review",
+    description: "Set the model that reviews each ticket after its implementation and App Review.",
     workflowPromptId: CODE_REVIEW_PROMPT_ID,
+    matches: (key: WorkflowModelPinKey) => key.stepWorkflowPromptId === "implementation.tdd.codex",
+  },
+  {
+    id: "final-code-review",
+    label: "Final Code Review",
+    description: "Set the model for final validation, pull request creation, and green checks.",
+    workflowPromptId: CODE_REVIEW_PROMPT_ID,
+    matches: (key: WorkflowModelPinKey) => key.stepWorkflowPromptId === undefined,
   },
 ] as const;
 
@@ -72,7 +82,7 @@ export function workflowModelQuickActions(
         ? []
         : [WORKFLOW_PRESET_DEFINITION_BY_ID[preset]];
   return QUICK_ACTION_DEFINITIONS.flatMap((action) => {
-    const pinKeys = pinKeysForPrompt(definitions, action.workflowPromptId);
+    const pinKeys = pinKeysForPrompt(definitions, action.workflowPromptId).filter(action.matches);
     return pinKeys.length === 0 ? [] : [{ ...action, pinKeys }];
   });
 }

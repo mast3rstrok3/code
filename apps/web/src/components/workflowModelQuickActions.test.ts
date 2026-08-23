@@ -12,27 +12,27 @@ const selection: ModelSelection = {
 };
 
 describe("workflowModelQuickActions", () => {
-  it("groups ticket and final review pins for the Engineering Workflow", () => {
+  it("offers concrete review roles for the Engineering Workflow", () => {
     const actions = workflowModelQuickActions("planning");
+    expect(actions.map((action) => [action.id, action.label])).toEqual([
+      ["app-review", "App Review"],
+      ["ticket-code-review", "Ticket Code Review"],
+      ["final-code-review", "Final Code Review"],
+    ]);
     const appReview = actions.find((action) => action.id === "app-review");
-    const codeReview = actions.find((action) => action.id === "code-review");
+    const ticketCodeReview = actions.find((action) => action.id === "ticket-code-review");
+    const finalCodeReview = actions.find((action) => action.id === "final-code-review");
 
     expect(appReview?.pinKeys).toEqual([
-      {
-        workflowPromptId: "implementation.browser-app-review.codex",
-        stepWorkflowPromptId: "implementation.tdd.codex",
-      },
       { workflowPromptId: "implementation.browser-app-review.codex" },
-      {
-        workflowPromptId: "implementation.browser-app-review.codex",
-        stepWorkflowPromptId: "implementation.browser-app-review.codex",
-      },
     ]);
-    expect(codeReview?.pinKeys).toEqual([
+    expect(ticketCodeReview?.pinKeys).toEqual([
       {
         workflowPromptId: "implementation.code-review.codex",
         stepWorkflowPromptId: "implementation.tdd.codex",
       },
+    ]);
+    expect(finalCodeReview?.pinKeys).toEqual([
       { workflowPromptId: "implementation.code-review.codex" },
     ]);
   });
@@ -44,7 +44,13 @@ describe("workflowModelQuickActions", () => {
   });
 
   it("reports one shared selection and detects partial assignments", () => {
-    const keys = workflowModelQuickActions("planning")[1]!.pinKeys;
+    const keys = [
+      { workflowPromptId: "implementation.code-review.codex" },
+      {
+        workflowPromptId: "implementation.code-review.codex",
+        stepWorkflowPromptId: "implementation.tdd.codex",
+      },
+    ];
     expect(resolveWorkflowModelQuickActionSelection(keys, () => selection)).toEqual({
       selection,
       mixed: false,

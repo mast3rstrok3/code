@@ -35,8 +35,7 @@ export function WorkflowModelQuickPins(props: {
           Quick model assignments
         </div>
         <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-          Set one model across every matching ticket and final review. Detailed step settings below
-          can still override it.
+          Set common review roles here, or tune them in their chronological steps below.
         </p>
       </div>
       {actions.map((action) => {

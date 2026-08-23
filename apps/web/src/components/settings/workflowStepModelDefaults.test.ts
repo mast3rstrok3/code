@@ -4,7 +4,7 @@ import { expect, it } from "vite-plus/test";
 import {
   setWorkflowStepModelDefault,
   setWorkflowStepModelDefaults,
-  workflowStepModelDefaultTargets,
+  engineeringWorkflowDefaultSteps,
 } from "./workflowStepModelDefaults.ts";
 
 const selection: ModelSelection = {
@@ -12,33 +12,70 @@ const selection: ModelSelection = {
   model: "gpt-5.6-sol",
 };
 
-it("lists each pinnable step once, with the agents it starts", () => {
-  const targets = workflowStepModelDefaultTargets();
-  const promptIds = targets.map((target) => target.workflowPromptId);
-
-  expect(new Set(promptIds).size).toBe(promptIds.length);
-  const appReview = targets.find(
-    (target) => target.workflowPromptId === "implementation.browser-app-review.codex",
-  );
-  expect(appReview?.subSteps.map((subStep) => subStep.workflowPromptId)).toEqual([
-    "implementation.browser-app-review.codex",
-    "matt-pocock.to-tickets",
-    "matt-pocock.implement",
+it("lists the nine Engineering Workflow steps in phase order", () => {
+  const targets = engineeringWorkflowDefaultSteps();
+  expect(targets.map((target) => target.number)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  expect(targets.map((target) => target.phase)).toEqual([
+    "planning",
+    "planning",
+    "planning",
+    "planning",
+    "ticket-review",
+    "implementation",
+    "implementation",
+    "implementation",
+    "implementation",
+  ]);
+  expect(targets.map((target) => target.label)).toEqual([
+    "Prepare shared worktree and App Dev Stack",
+    "Grill with Docs",
+    "Spec authoring",
+    "Ticket authoring",
+    "Ticket review and revision cycles",
+    "Execute ticket waves",
+    "Merge ticket branches",
+    "App Review",
+    "Final Code Review, pull request, and green checks",
   ]);
 });
 
 it("drops the phase prefix a guided workflow adds to its step labels", () => {
-  const targets = workflowStepModelDefaultTargets();
+  const targets = engineeringWorkflowDefaultSteps();
   expect(targets.every((target) => !target.label.includes(" · "))).toBe(true);
 });
 
-it("does not offer separate defaults for work that stays in the workflow thread", () => {
-  const promptIds = workflowStepModelDefaultTargets().map((target) => target.workflowPromptId);
+it("marks automatic, same-thread, and separately configurable steps", () => {
+  const targets = engineeringWorkflowDefaultSteps();
 
-  expect(promptIds).not.toContain("planning.grill-stage.codex");
-  expect(promptIds).not.toContain("planning.spec.codex");
-  expect(promptIds).not.toContain("planning.tickets.codex");
-  expect(promptIds).toContain("planning.ticket-reviewer.codex");
+  expect(targets.map((target) => target.modelMode)).toEqual([
+    "none",
+    "workflow",
+    "workflow",
+    "workflow",
+    "configurable",
+    "configurable",
+    "configurable",
+    "configurable",
+    "configurable",
+  ]);
+  expect(targets.filter((target) => target.modelMode === "configurable")).toHaveLength(5);
+});
+
+it("keeps nested worker and review agents under their workflow step", () => {
+  const targets = engineeringWorkflowDefaultSteps();
+  const ticketWaves = targets.find((target) => target.label === "Execute ticket waves");
+  const appReview = targets.find((target) => target.label === "App Review");
+
+  expect(ticketWaves?.subSteps.map((subStep) => subStep.label)).toEqual([
+    "TDD implementation worker",
+    "Ticket App Review",
+    "Ticket Code Review",
+  ]);
+  expect(appReview?.subSteps.map((subStep) => subStep.label)).toEqual([
+    "E2E tests & browser review",
+    "Gap analysis & repair tickets",
+    "Repair implementation",
+  ]);
 });
 
 it("replaces a default in place and clears it without leaving an empty key", () => {

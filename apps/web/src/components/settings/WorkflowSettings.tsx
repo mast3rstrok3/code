@@ -22,8 +22,9 @@ import { primaryServerProvidersAtom } from "../../state/server";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import {
   useWorkflowModelChoices,
-  WorkflowStepModelPins,
+  WorkflowModelPinControls,
   type SetWorkflowStepModel,
+  type WorkflowModelChoices,
   type WorkflowModelPinKey,
 } from "../WorkflowModelPins";
 import { WorkflowModelQuickPins } from "../WorkflowModelQuickPins";
@@ -36,9 +37,10 @@ import { Badge } from "../ui/badge";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { WorkflowCatalogContent } from "./WorkflowCatalogContent";
 import {
+  type EngineeringWorkflowDefaultStep,
+  engineeringWorkflowDefaultSteps,
   setWorkflowStepModelDefault,
   setWorkflowStepModelDefaults,
-  workflowStepModelDefaultTargets,
   workflowStepModelPinKeysEqual,
 } from "./workflowStepModelDefaults";
 import { setWorkflowStepCycleOverride } from "@t3tools/shared/workflowStepCycles";
@@ -157,6 +159,223 @@ function WorkflowStepModelDefaults() {
   );
 }
 
+const TDD_STEP_KEY = { workflowPromptId: "implementation.tdd.codex" } as const;
+const TICKET_APP_REVIEW_KEY = {
+  workflowPromptId: "implementation.browser-app-review.codex",
+  stepWorkflowPromptId: "implementation.tdd.codex",
+} as const;
+const TICKET_CODE_REVIEW_KEY = {
+  workflowPromptId: "implementation.code-review.codex",
+  stepWorkflowPromptId: "implementation.tdd.codex",
+} as const;
+const APP_REVIEW_KEY = {
+  workflowPromptId: "implementation.browser-app-review.codex",
+} as const;
+const APP_REVIEW_PHASES = [
+  {
+    label: "E2E tests and browser review",
+    key: {
+      workflowPromptId: "implementation.browser-app-review.codex",
+      stepWorkflowPromptId: "implementation.browser-app-review.codex",
+    },
+    note: "one review thread runs the project's E2E commands, then drives the browser",
+  },
+  {
+    label: "Gap analysis and repair tickets",
+    key: {
+      workflowPromptId: "matt-pocock.to-tickets",
+      stepWorkflowPromptId: "implementation.browser-app-review.codex",
+    },
+    note: "turns each actionable finding into a repair ticket",
+  },
+  {
+    label: "Repair implementation",
+    key: {
+      workflowPromptId: "matt-pocock.implement",
+      stepWorkflowPromptId: "implementation.browser-app-review.codex",
+    },
+    note: "implements the repair tickets before the next review cycle",
+  },
+] as const;
+
+function StepModelControl(props: {
+  readonly label: string;
+  readonly note?: string | undefined;
+  readonly pinKey: WorkflowModelPinKey;
+  readonly pinFor: (key: WorkflowModelPinKey) => ModelSelection | null;
+  readonly inheritedSelection: ModelSelection;
+  readonly inheritedLabel: string;
+  readonly choices: WorkflowModelChoices;
+  readonly onSetStepModel: SetWorkflowStepModel;
+  readonly indented?: boolean | undefined;
+}) {
+  return (
+    <WorkflowModelPinControls
+      pinKey={props.pinKey}
+      label={props.label}
+      note={props.note}
+      pinnedSelection={props.pinFor(props.pinKey)}
+      inheritedSelection={props.inheritedSelection}
+      inheritedLabel={props.inheritedLabel}
+      choices={props.choices}
+      onSetStepModel={props.onSetStepModel}
+      {...(props.indented === undefined ? {} : { indented: props.indented })}
+    />
+  );
+}
+
+function EngineeringWorkflowStepControls(props: {
+  readonly target: EngineeringWorkflowDefaultStep;
+  readonly workflowPromptId: string;
+  readonly pinFor: (key: WorkflowModelPinKey) => ModelSelection | null;
+  readonly rootModelSelection: ModelSelection;
+  readonly choices: WorkflowModelChoices;
+  readonly cycleDefaults: ServerSettings["workflowStepCycles"];
+  readonly reviewPartsDefaults: ServerSettings["workflowStepReviewParts"];
+  readonly onSetStepModel: SetWorkflowStepModel;
+  readonly onSetStepCycles: SetWorkflowStepCycles;
+  readonly onSetStepReviewParts: SetWorkflowStepReviewParts;
+}) {
+  const rootLabel = "The model the workflow runs on";
+  if (props.workflowPromptId === TDD_STEP_KEY.workflowPromptId) {
+    const implementationSelection = props.pinFor(TDD_STEP_KEY) ?? props.rootModelSelection;
+    return (
+      <div className="space-y-3">
+        <div className="text-xs font-semibold text-foreground">{props.target.label}</div>
+        <div className="divide-y divide-border/60 overflow-hidden rounded-md border border-border/60">
+          <div className="p-3">
+            <StepModelControl
+              label="Implementation worker"
+              note="implements one ticket in its own child thread"
+              pinKey={TDD_STEP_KEY}
+              pinFor={props.pinFor}
+              inheritedSelection={props.rootModelSelection}
+              inheritedLabel={rootLabel}
+              choices={props.choices}
+              onSetStepModel={props.onSetStepModel}
+            />
+          </div>
+          <div className="space-y-3 p-3">
+            <StepModelControl
+              label="Ticket App Review"
+              note="runs before the ticket's Code Review; its three agent roles follow the App Review defaults in step 8"
+              pinKey={TICKET_APP_REVIEW_KEY}
+              pinFor={props.pinFor}
+              inheritedSelection={implementationSelection}
+              inheritedLabel={`Follows the implementation step (${props.choices.describeSelection(implementationSelection)})`}
+              choices={props.choices}
+              onSetStepModel={props.onSetStepModel}
+            />
+            <WorkflowStepCyclePins
+              workflowPromptId={TDD_STEP_KEY.workflowPromptId}
+              subStepWorkflowPromptIds={[TICKET_APP_REVIEW_KEY.workflowPromptId]}
+              overrides={props.cycleDefaults}
+              inheritedLabel="Runs the built-in number of cycles"
+              onSetStepCycles={props.onSetStepCycles}
+              className="space-y-2 border-t border-border/60 pt-3"
+            />
+            <WorkflowStepReviewPartPins
+              workflowPromptId={TDD_STEP_KEY.workflowPromptId}
+              subStepWorkflowPromptIds={[TICKET_APP_REVIEW_KEY.workflowPromptId]}
+              overrides={props.reviewPartsDefaults}
+              onSetStepReviewParts={props.onSetStepReviewParts}
+              className="space-y-2 border-t border-border/60 pt-3"
+            />
+          </div>
+          <div className="p-3">
+            <StepModelControl
+              label="Ticket Code Review"
+              note="reviews the ticket after implementation and App Review"
+              pinKey={TICKET_CODE_REVIEW_KEY}
+              pinFor={props.pinFor}
+              inheritedSelection={implementationSelection}
+              inheritedLabel={`Follows the implementation step (${props.choices.describeSelection(implementationSelection)})`}
+              choices={props.choices}
+              onSetStepModel={props.onSetStepModel}
+            />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (props.workflowPromptId === APP_REVIEW_KEY.workflowPromptId) {
+    const appReviewSelection = props.pinFor(APP_REVIEW_KEY) ?? props.rootModelSelection;
+    return (
+      <div className="space-y-3">
+        <div className="text-xs font-semibold text-foreground">{props.target.label}</div>
+        <div className="space-y-3 rounded-md border border-border/60 p-3">
+          <StepModelControl
+            label="App Review default"
+            note="the quick assignment at the top sets this same default"
+            pinKey={APP_REVIEW_KEY}
+            pinFor={props.pinFor}
+            inheritedSelection={props.rootModelSelection}
+            inheritedLabel={rootLabel}
+            choices={props.choices}
+            onSetStepModel={props.onSetStepModel}
+          />
+          <div className="space-y-3 border-t border-border/60 pt-3">
+            {APP_REVIEW_PHASES.map((phase) => (
+              <StepModelControl
+                key={phase.label}
+                label={phase.label}
+                note={phase.note}
+                pinKey={phase.key}
+                pinFor={props.pinFor}
+                inheritedSelection={appReviewSelection}
+                inheritedLabel={`Follows the App Review default (${props.choices.describeSelection(appReviewSelection)})`}
+                choices={props.choices}
+                onSetStepModel={props.onSetStepModel}
+                indented
+              />
+            ))}
+          </div>
+          <WorkflowStepCyclePins
+            workflowPromptId={APP_REVIEW_KEY.workflowPromptId}
+            subStepWorkflowPromptIds={APP_REVIEW_PHASES.map((phase) => phase.key.workflowPromptId)}
+            overrides={props.cycleDefaults}
+            inheritedLabel="Runs the built-in number of cycles"
+            onSetStepCycles={props.onSetStepCycles}
+            className="space-y-2 border-t border-border/60 pt-3"
+          />
+          <WorkflowStepReviewPartPins
+            workflowPromptId={APP_REVIEW_KEY.workflowPromptId}
+            subStepWorkflowPromptIds={APP_REVIEW_PHASES.map((phase) => phase.key.workflowPromptId)}
+            overrides={props.reviewPartsDefaults}
+            onSetStepReviewParts={props.onSetStepReviewParts}
+            className="space-y-2 border-t border-border/60 pt-3"
+          />
+        </div>
+      </div>
+    );
+  }
+
+  const pinKey = { workflowPromptId: props.workflowPromptId };
+  return (
+    <div className="space-y-3">
+      <StepModelControl
+        label={props.target.label}
+        note={props.target.note}
+        pinKey={pinKey}
+        pinFor={props.pinFor}
+        inheritedSelection={props.rootModelSelection}
+        inheritedLabel={rootLabel}
+        choices={props.choices}
+        onSetStepModel={props.onSetStepModel}
+      />
+      <WorkflowStepCyclePins
+        workflowPromptId={props.workflowPromptId}
+        subStepWorkflowPromptIds={[]}
+        overrides={props.cycleDefaults}
+        inheritedLabel="Runs the built-in number of cycles"
+        onSetStepCycles={props.onSetStepCycles}
+        className="space-y-2 border-t border-border/60 pt-3"
+      />
+    </div>
+  );
+}
+
 function WorkflowStepModelDefaultsBody(props: {
   readonly environmentId: EnvironmentId;
   readonly defaults: ServerSettings["workflowStepModels"];
@@ -172,12 +391,13 @@ function WorkflowStepModelDefaultsBody(props: {
   readonly onSetStepReviewParts: SetWorkflowStepReviewParts;
 }) {
   const choices = useWorkflowModelChoices(props.environmentId);
+  const targets = engineeringWorkflowDefaultSteps();
   const pinFor = (key: WorkflowModelPinKey): ModelSelection | null =>
     props.defaults.find((entry) => workflowStepModelPinKeysEqual(entry, key))?.modelSelection ??
     null;
   return (
     <SettingsSection
-      title="Default models for isolated steps and cycle budgets"
+      title="Engineering Workflow defaults"
       icon={<SlidersHorizontalIcon className="size-3.5" />}
       headerAction={
         props.defaults.length + props.cycleDefaults.length === 0 ? null : (
@@ -188,55 +408,69 @@ function WorkflowStepModelDefaultsBody(props: {
       }
     >
       <SettingsRow
-        title="Model per isolated step and sub-step, and how often a step repeats"
-        description="Steps that start separate threads use the workflow's model unless you set one here. Work that stays in the workflow thread uses that thread's composer model. A running workflow's settings override these defaults for agents started from then on."
+        title="Models and cycle budgets for all nine steps"
+        description="The order below matches the Engineering Workflow. Same-thread work uses the model selected when the workflow starts. Steps that start separate threads can use their own model."
       >
-        <div className="mt-1 space-y-3 pb-3">
-          <div className="max-w-md">
+        <div className="mt-1 space-y-5 pb-3">
+          <div className="max-w-lg">
             <WorkflowModelQuickPins
-              preset={undefined}
+              preset="planning"
               pinFor={pinFor}
               rootModelSelection={props.seedSelection}
-              rootLabel="The model each workflow runs on"
+              rootLabel="The model the Engineering Workflow runs on"
               choices={choices}
               onSetStepModels={props.onSetStepModels}
             />
           </div>
-          {workflowStepModelDefaultTargets().map((target) => (
-            <div
-              key={target.workflowPromptId}
-              className="max-w-md border-t border-border/60 pt-3 first:border-t-0 first:pt-1"
-            >
-              <WorkflowStepModelPins
-                stepLabel={target.label}
-                workflowPromptId={target.workflowPromptId}
-                subSteps={target.subSteps}
-                pinFor={pinFor}
-                rootModelSelection={props.seedSelection}
-                rootLabel="The model the workflow runs on"
-                choices={choices}
-                onSetStepModel={props.onSetStepModel}
-              />
-              <WorkflowStepCyclePins
-                workflowPromptId={target.workflowPromptId}
-                subStepWorkflowPromptIds={target.subSteps.map(
-                  (subStep) => subStep.workflowPromptId,
-                )}
-                overrides={props.cycleDefaults}
-                inheritedLabel="Runs the built-in number of cycles"
-                onSetStepCycles={props.onSetStepCycles}
-                className="mt-3 space-y-2 border-t border-border/60 pt-3"
-              />
-              <WorkflowStepReviewPartPins
-                workflowPromptId={target.workflowPromptId}
-                subStepWorkflowPromptIds={target.subSteps.map(
-                  (subStep) => subStep.workflowPromptId,
-                )}
-                overrides={props.reviewPartsDefaults}
-                onSetStepReviewParts={props.onSetStepReviewParts}
-                className="mt-3 space-y-2 border-t border-border/60 pt-3"
-              />
-            </div>
+          {(
+            [
+              { id: "planning", label: "Planning" },
+              { id: "ticket-review", label: "Ticket review" },
+              { id: "implementation", label: "Implementation" },
+            ] as const
+          ).map((phase) => (
+            <section key={phase.id} className="max-w-lg space-y-2">
+              <h3 className="text-xs font-semibold text-foreground">{phase.label}</h3>
+              <div className="overflow-hidden rounded-lg border border-border/70">
+                {targets
+                  .filter((target) => target.phase === phase.id)
+                  .map((target) => (
+                    <div
+                      key={target.number}
+                      data-engineering-workflow-step={target.number}
+                      className="grid grid-cols-[1.75rem_minmax(0,1fr)] gap-2 border-t border-border/60 p-3 first:border-t-0"
+                    >
+                      <span className="flex size-7 items-center justify-center rounded-full bg-muted text-xs font-semibold text-muted-foreground">
+                        {target.number}
+                      </span>
+                      {target.modelMode === "configurable" && target.workflowPromptId ? (
+                        <EngineeringWorkflowStepControls
+                          target={target}
+                          workflowPromptId={target.workflowPromptId}
+                          pinFor={pinFor}
+                          rootModelSelection={props.seedSelection}
+                          choices={choices}
+                          cycleDefaults={props.cycleDefaults}
+                          reviewPartsDefaults={props.reviewPartsDefaults}
+                          onSetStepModel={props.onSetStepModel}
+                          onSetStepCycles={props.onSetStepCycles}
+                          onSetStepReviewParts={props.onSetStepReviewParts}
+                        />
+                      ) : (
+                        <div className="min-w-0">
+                          <div className="text-xs font-medium text-foreground">{target.label}</div>
+                          <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                            {target.modelMode === "workflow"
+                              ? "Uses the model selected when the workflow starts."
+                              : "This automatic setup step does not run a model."}
+                            {target.note === undefined ? "" : ` ${target.note}.`}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+              </div>
+            </section>
           ))}
         </div>
       </SettingsRow>
