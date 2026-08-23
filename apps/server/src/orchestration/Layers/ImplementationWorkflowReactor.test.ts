@@ -231,6 +231,11 @@ interface AutoCreateGate {
   readonly requiredEntries: number;
 }
 
+interface ChangeRequestGate {
+  readonly entered: Deferred.Deferred<void>;
+  readonly release: Deferred.Deferred<void>;
+}
+
 interface ImplementationSystem extends ImplementationCalls {
   readonly engine: OrchestrationEngineShape;
   readonly query: ProjectionSnapshotQueryShape;
@@ -297,6 +302,7 @@ function makeTestLayer(
   backendProbeStatuses: ReadonlyArray<number> = [backendProbeStatus],
   inheritedStackMissing = false,
   nonAncestorCommitSha?: string,
+  changeRequestGate?: ChangeRequestGate,
 ) {
   const coreLayer = Layer.mergeAll(
     OrchestrationEngineLive.pipe(
@@ -461,6 +467,13 @@ function makeTestLayer(
             Ref.update(calls.createOrOpenChangeRequestInputs, (inputs) => [...inputs, input]).pipe(
               Effect.andThen(
                 Ref.update(calls.createOrOpenChangeRequestCount, (count) => count + 1),
+              ),
+              Effect.tap(() =>
+                changeRequestGate === undefined
+                  ? Effect.void
+                  : Deferred.succeed(changeRequestGate.entered, undefined).pipe(
+                      Effect.andThen(Deferred.await(changeRequestGate.release)),
+                    ),
               ),
               Effect.as({
                 provider: "github" as const,
@@ -660,6 +673,7 @@ function withSystem<A, E>(
     readonly inheritedStackMissing?: boolean;
     /** Commit `git merge-base --is-ancestor` reports as missing from every descendant. */
     readonly nonAncestorCommitSha?: string;
+    readonly changeRequestGate?: ChangeRequestGate;
   },
 ) {
   return Effect.gen(function* () {
@@ -740,6 +754,7 @@ function withSystem<A, E>(
           options?.backendProbeStatuses,
           options?.inheritedStackMissing,
           options?.nonAncestorCommitSha,
+          options?.changeRequestGate,
         ),
       ),
     );
@@ -2598,6 +2613,18 @@ describe("ImplementationWorkflowReactor", () => {
           expect(settled?.status).toBe("canceled");
           expect(settled?.appDevStack.status).toBe("not-requested");
           expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(0);
+
+          const rerun = yield* Effect.result(
+            system.engine.dispatch({
+              type: "thread.implementation-run.rerun",
+              commandId: commandId("implementation-rerun-canceled-before-review"),
+              threadId: sourceThreadId,
+              runId: run.id,
+              target: { kind: "run", stage: "code-review" },
+              createdAt: "2026-01-01T00:00:02.000Z",
+            }),
+          );
+          expect(rerun._tag).toBe("Failure");
         }),
       ),
   );
@@ -4812,6 +4839,134 @@ describe("ImplementationWorkflowReactor", () => {
     }),
   );
 
+  it.effect("publishes once when recovery sweeps share stale change request state", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+
+      yield* withSystem(
+        (system) =>
+          Effect.gen(function* () {
+            const { run } = yield* launchRun(system);
+            yield* appendWorkerResult(system, { run, status: "succeeded" });
+            yield* passMergeGate(system, run);
+            yield* passAppReview(system, run);
+            const reviewer = yield* nextThreadForRole(
+              system,
+              "implementation-code-reviewer",
+              new Set<string>(),
+            );
+            yield* appendCodeReviewResult(system, {
+              run,
+              threadId: reviewer.id,
+              status: "clean",
+              tag: "before-concurrent-publication-recovery",
+            });
+
+            let snapshot = yield* system.query.getSnapshot();
+            const validatingRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+            const validator = snapshot.threads.find(
+              (thread) => thread.id === validatingRun?.activeValidatorThreadId,
+            );
+            if (validator === undefined) throw new Error("Final validator missing.");
+            yield* system.engine.dispatch({
+              type: "thread.activity.append",
+              commandId: commandId("concurrent-publication-final-gate"),
+              threadId: validator.id,
+              activity: {
+                id: eventId("concurrent-publication-final-gate"),
+                tone: "error",
+                kind: "implementation-merge-gate-result",
+                summary: "Final gate failed",
+                payload: {
+                  type: "implementation-merge-gate-result",
+                  runId: run.id,
+                  status: "failed",
+                  validations: [],
+                  summaryMarkdown: "Final validation failed.",
+                },
+                turnId: null,
+                createdAt: "2026-01-01T00:00:06.000Z",
+              },
+              createdAt: "2026-01-01T00:00:06.000Z",
+            });
+
+            const eventDrain = yield* Effect.forkChild(system.reactor.drain);
+            yield* Deferred.await(entered);
+            const recovery = yield* Effect.forkChild(system.reactor.recoverIncompleteStages());
+            yield* Effect.yieldNow;
+            yield* Deferred.succeed(release, undefined);
+            yield* Fiber.join(eventDrain);
+            yield* Fiber.join(recovery);
+
+            snapshot = yield* system.query.getSnapshot();
+            const published = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+            expect(published?.status).toBe("babysitting-change-request");
+            expect(published?.changeRequest?.number).toBe(1);
+            expect(yield* Ref.get(system.createOrOpenChangeRequestCount)).toBe(1);
+            expect(
+              snapshot.threads.filter(
+                (thread) => thread.workflowRole === "implementation-change-request-babysitter",
+              ),
+            ).toHaveLength(1);
+          }),
+        { changeRequestGate: { entered, release } },
+      );
+    }),
+  );
+
+  it.effect("recovers a filed change request without publishing it again", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          const publishingRun: OrchestrationImplementationRun = {
+            ...run,
+            status: "publishing-change-request",
+            orchestratorBranch: "main",
+            integrationHeadSha: "def456",
+            codeReviewedHeadSha: "def456",
+            activeCodeReviewHeadSha: null,
+            activeCodeReviewThreadId: null,
+            changeRequest: {
+              provider: "github",
+              number: 70,
+              title: "Implementation PR",
+              url: "https://example.test/pr/70",
+              baseRefName: "main",
+              headRefName: "implementation/checkout",
+              state: "open",
+              updatedAt: Option.none(),
+            },
+            reviewGateExhaustedAt: now,
+            reviewGateExhaustionReason: "Final validation did not pass.",
+            updatedAt: now,
+          };
+          yield* system.engine.dispatch({
+            type: "thread.implementation-run.update",
+            commandId: commandId("filed-change-request-recovery-state"),
+            threadId: sourceThreadId,
+            run: publishingRun,
+            createdAt: now,
+          });
+
+          yield* system.reactor.recoverIncompleteStages();
+
+          const snapshot = yield* system.query.getSnapshot();
+          const recovered = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+          expect(recovered?.status).toBe("babysitting-change-request");
+          expect(recovered?.changeRequest?.number).toBe(70);
+          expect(yield* Ref.get(system.createOrOpenChangeRequestCount)).toBe(0);
+          expect(
+            snapshot.threads.filter(
+              (thread) => thread.workflowRole === "implementation-change-request-babysitter",
+            ),
+          ).toHaveLength(1);
+        }),
+      { startReactor: false },
+    ),
+  );
+
   it.effect("continues to final validation when App Review is disabled", () =>
     withSystem(
       (system) =>
@@ -5872,6 +6027,84 @@ describe("ImplementationWorkflowReactor", () => {
           ).length,
         ).toBe(2);
       }),
+    ),
+  );
+
+  it.effect("restarts a canceled final code review from its preserved integrated HEAD", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system, {
+            appReviewStrategy: "nested-workflow",
+          });
+          yield* appendWorkerResult(system, { run, status: "succeeded" });
+          yield* passMergeGate(system, run);
+
+          let snapshot = yield* system.query.getSnapshot();
+          const beforeCancel = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+          const firstReviewerId = beforeCancel?.activeCodeReviewThreadId;
+          if (firstReviewerId === null || firstReviewerId === undefined) {
+            throw new Error("Code reviewer missing before cancellation.");
+          }
+          const workerCount = snapshot.threads.filter(
+            (thread) => thread.workflowRole === "implementation-worker",
+          ).length;
+          const reviewerCount = snapshot.threads.filter(
+            (thread) => thread.workflowRole === "implementation-code-reviewer",
+          ).length;
+
+          yield* system.engine.dispatch({
+            type: "thread.implementation-run.cancel",
+            commandId: commandId("cancel-during-final-code-review"),
+            threadId: sourceThreadId,
+            runId: run.id,
+            reason: "Stop a looping final review.",
+            createdAt: "2026-01-01T00:04:00.000Z",
+          });
+          yield* system.reactor.drain;
+          expect(
+            (yield* system.query.getSnapshot()).implementationRuns.find(
+              (entry) => entry.id === run.id,
+            )?.status,
+          ).toBe("canceled");
+
+          yield* system.engine.dispatch({
+            type: "thread.implementation-run.rerun",
+            commandId: commandId("rerun-canceled-final-code-review"),
+            threadId: sourceThreadId,
+            runId: run.id,
+            target: { kind: "run", stage: "code-review" },
+            createdAt: "2026-01-01T00:05:00.000Z",
+          });
+          yield* system.reactor.drain;
+
+          snapshot = yield* system.query.getSnapshot();
+          const restarted = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+          expect(restarted?.status).toBe("code-reviewing");
+          expect(restarted?.activeCodeReviewThreadId).not.toBe(firstReviewerId);
+          expect(restarted?.activeCodeReviewHeadSha).toBe(restarted?.integrationHeadSha);
+          expect(restarted?.codeReviewAttemptCount).toBe(2);
+          expect(restarted?.ticketStates.every((state) => state.status === "succeeded")).toBe(true);
+          expect(
+            snapshot.threads.filter((thread) => thread.workflowRole === "implementation-worker"),
+          ).toHaveLength(workerCount);
+          expect(
+            snapshot.threads.filter(
+              (thread) => thread.workflowRole === "implementation-code-reviewer",
+            ),
+          ).toHaveLength(reviewerCount + 1);
+        }),
+      {
+        serverSettings: {
+          workflowStepReviewParts: [
+            {
+              workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+              e2e: false,
+              browser: false,
+            },
+          ],
+        },
+      },
     ),
   );
 

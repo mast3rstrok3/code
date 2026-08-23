@@ -45,7 +45,9 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import * as SynchronizedRef from "effect/SynchronizedRef";
 
 import { AppDevStackManager } from "../../appDevStack/AppDevStackManager.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
@@ -1142,6 +1144,9 @@ const make = Effect.gen(function* () {
   const appDevStackManager = yield* AppDevStackManager;
   const serverSettingsService = yield* ServerSettingsService;
   const httpClient = yield* HttpClient.HttpClient;
+  const changeRequestLocks = yield* SynchronizedRef.make(
+    new Map<string, { readonly semaphore: Semaphore.Semaphore; readonly users: number }>(),
+  );
 
   /**
    * Asks the frontend URL itself whether a reviewer could load it. Deliberately cheap and
@@ -1248,18 +1253,28 @@ const make = Effect.gen(function* () {
     readonly sourceThreadId: ThreadId;
     readonly run: OrchestrationImplementationRun;
     readonly createdAt: string;
+    readonly allowCanceledFinalCodeReviewRerun?: boolean;
     readonly expectedCodeReviewClaim?: {
       readonly attemptCount: OrchestrationImplementationRun["codeReviewAttemptCount"];
       readonly activeThreadId: ThreadId | null;
+    };
+    readonly expectedChangeRequestClaim?: {
+      readonly status: "publishing-change-request" | "babysitting-change-request";
+      readonly changeRequestNumber: number | null;
+      readonly activeBabysitterThreadId: ThreadId | null;
     };
   }) {
     // `canceled` is terminal. In-flight stage work (a late build directive, a
     // recovery sweep already past its guard) must not resurrect a run the user
     // stopped, so drop any write that would move it out of `canceled`.
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    const currentRun = findRunById(readModel, input.run.id);
+    const resumesCanceledFinalCodeReview =
+      input.allowCanceledFinalCodeReviewRerun === true && input.run.status === "code-reviewing";
     if (
-      findRunById(readModel, input.run.id)?.status === "canceled" &&
-      input.run.status !== "canceled"
+      currentRun?.status === "canceled" &&
+      input.run.status !== "canceled" &&
+      !resumesCanceledFinalCodeReview
     ) {
       return;
     }
@@ -1271,6 +1286,9 @@ const make = Effect.gen(function* () {
       ...(input.expectedCodeReviewClaim === undefined
         ? {}
         : { expectedCodeReviewClaim: input.expectedCodeReviewClaim }),
+      ...(input.expectedChangeRequestClaim === undefined
+        ? {}
+        : { expectedChangeRequestClaim: input.expectedChangeRequestClaim }),
       createdAt: input.createdAt,
     });
   });
@@ -3228,10 +3246,7 @@ const make = Effect.gen(function* () {
         cwd: input.run.orchestratorWorktreePath,
         ref: "HEAD",
       });
-      if (
-        input.skipAppReviewRequirement !== true &&
-        input.run.integrationHeadSha !== reviewHead.commitSha
-      ) {
+      if (input.run.integrationHeadSha !== reviewHead.commitSha) {
         yield* blockRun({
           sourceThreadId: input.sourceThreadId,
           run: input.run,
@@ -3424,6 +3439,33 @@ const make = Effect.gen(function* () {
     yield* startCodeReview(input);
   });
 
+  const getChangeRequestSemaphore = (runId: string) =>
+    SynchronizedRef.modifyEffect(changeRequestLocks, (current) => {
+      const existing = current.get(runId);
+      if (existing !== undefined) {
+        const next = new Map(current);
+        next.set(runId, { ...existing, users: existing.users + 1 });
+        return Effect.succeed([existing.semaphore, next] as const);
+      }
+      return Semaphore.make(1).pipe(
+        Effect.map((semaphore) => {
+          const next = new Map(current);
+          next.set(runId, { semaphore, users: 1 });
+          return [semaphore, next] as const;
+        }),
+      );
+    });
+
+  const releaseChangeRequestSemaphore = (runId: string) =>
+    SynchronizedRef.update(changeRequestLocks, (current) => {
+      const existing = current.get(runId);
+      if (existing === undefined) return current;
+      const next = new Map(current);
+      if (existing.users === 1) next.delete(runId);
+      else next.set(runId, { ...existing, users: existing.users - 1 });
+      return next;
+    });
+
   const startChangeRequestBabysitter = Effect.fn(
     "ImplementationWorkflowReactor.startChangeRequestBabysitter",
   )(function* (input: {
@@ -3431,7 +3473,13 @@ const make = Effect.gen(function* () {
     readonly run: OrchestrationImplementationRun;
     readonly createdAt: string;
   }) {
-    if (input.run.changeRequest === null) return;
+    if (
+      input.run.changeRequest === null ||
+      (input.run.status !== "publishing-change-request" &&
+        input.run.status !== "babysitting-change-request")
+    ) {
+      return;
+    }
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
     const orchestratorThread = findThread(readModel, input.run.orchestratorThreadId);
     if (orchestratorThread === null) return;
@@ -3446,6 +3494,11 @@ const make = Effect.gen(function* () {
       sourceThreadId: input.sourceThreadId,
       run: babysittingRun,
       createdAt: input.createdAt,
+      expectedChangeRequestClaim: {
+        status: input.run.status,
+        changeRequestNumber: input.run.changeRequest.number,
+        activeBabysitterThreadId: input.run.activeChangeRequestBabysitterThreadId,
+      },
     });
     yield* orchestrationEngine.dispatch({
       type: "thread.create",
@@ -3514,164 +3567,238 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const fileChangeRequestUnlocked = Effect.fn(
+    "ImplementationWorkflowReactor.fileChangeRequestUnlocked",
+  )(function* (input: {
+    readonly sourceThreadId: ThreadId;
+    readonly run: OrchestrationImplementationRun;
+    readonly createdAt: string;
+  }) {
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    const currentRun = findRunById(readModel, input.run.id);
+    if (
+      currentRun === null ||
+      currentRun.status === "canceled" ||
+      currentRun.status === "completed" ||
+      currentRun.status === "babysitting-change-request"
+    ) {
+      return;
+    }
+    if (
+      (input.run.status === "needs-human-attention" &&
+        currentRun.status !== "needs-human-attention") ||
+      (input.run.status === "publishing-change-request" &&
+        currentRun.status !== "publishing-change-request" &&
+        currentRun.status !== "validating" &&
+        currentRun.status !== "code-reviewing" &&
+        currentRun.status !== "code-review-fixing") ||
+      (input.run.status !== "needs-human-attention" &&
+        input.run.status !== "publishing-change-request")
+    ) {
+      return;
+    }
+    if (currentRun.status === "publishing-change-request" && currentRun.changeRequest !== null) {
+      yield* startChangeRequestBabysitter({
+        sourceThreadId: input.sourceThreadId,
+        run: currentRun,
+        createdAt: input.createdAt,
+      });
+      return;
+    }
+    const sourceThread = findThread(readModel, input.sourceThreadId);
+    const sourcePlan = sourceThread?.proposedPlans.find(
+      (plan) => plan.id === input.run.sourceProposedPlan?.planId,
+    );
+    const commitTitle =
+      input.run.artifactSource === "proposed-plan"
+        ? (proposedPlanTitle(sourcePlan?.planMarkdown ?? "") ?? "Fast feature")
+        : `Implement ${input.run.specId}`;
+    const workInProgress = input.run.reviewGateExhaustedAt !== null;
+    const currentHead = workInProgress
+      ? yield* gitWorkflow.resolveCommit({
+          cwd: input.run.orchestratorWorktreePath,
+          ref: "HEAD",
+        })
+      : null;
+    const expectedHeadSha = currentHead?.commitSha ?? input.run.codeReviewedHeadSha;
+    if (expectedHeadSha === null) {
+      yield* blockRun({
+        sourceThreadId: input.sourceThreadId,
+        run: input.run,
+        retryableStage: "code-review",
+        reasonMarkdown: workInProgress
+          ? "Cannot publish the work-in-progress change request because HEAD could not be resolved."
+          : "Cannot publish a change request before Code Review accepts an exact HEAD.",
+        updatedAt: input.createdAt,
+      });
+      return;
+    }
+    if (!workInProgress && input.run.validatedHeadSha !== expectedHeadSha) {
+      yield* blockRun({
+        sourceThreadId: input.sourceThreadId,
+        run: input.run,
+        retryableStage: "merge-gate",
+        reasonMarkdown: `Cannot publish HEAD '${expectedHeadSha}' because complete passing validation belongs to '${input.run.validatedHeadSha ?? "missing"}'.`,
+        updatedAt: input.createdAt,
+      });
+      return;
+    }
+    if (!workInProgress) {
+      const changedFiles = yield* gitWorkflow.listChangedFiles({
+        cwd: input.run.orchestratorWorktreePath,
+        baseRef: input.run.pinnedCommit,
+        headRef: expectedHeadSha,
+      });
+      if (
+        !completeValidationsPassedExactlyOnce({
+          requiredCommands: completeValidationCommandsForFiles(input.run, changedFiles),
+          validations: input.run.finalValidationResults,
+        })
+      ) {
+        yield* blockRun({
+          sourceThreadId: input.sourceThreadId,
+          run: input.run,
+          retryableStage: "merge-gate",
+          reasonMarkdown: `Cannot publish HEAD '${expectedHeadSha}' without exactly one passing result for every complete validation command.`,
+          updatedAt: input.createdAt,
+        });
+        return;
+      }
+    }
+    const reviewOutcomeNote = changeRequestReviewNote(input.run);
+    const publishingRun: OrchestrationImplementationRun = {
+      ...input.run,
+      status: "publishing-change-request",
+      updatedAt: input.createdAt,
+    };
+    yield* updateRun({
+      sourceThreadId: input.sourceThreadId,
+      run: publishingRun,
+      createdAt: input.createdAt,
+    });
+    const claimedReadModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    const claimedRun = findRunById(claimedReadModel, input.run.id);
+    if (
+      claimedRun === null ||
+      claimedRun.status !== "publishing-change-request" ||
+      claimedRun.activeChangeRequestBabysitterThreadId !== null
+    ) {
+      return;
+    }
+    if (claimedRun.changeRequest !== null) {
+      yield* startChangeRequestBabysitter({
+        sourceThreadId: input.sourceThreadId,
+        run: claimedRun,
+        createdAt: input.createdAt,
+      });
+      return;
+    }
+    const result = yield* gitWorkflow
+      .createOrOpenChangeRequest({
+        cwd: claimedRun.orchestratorWorktreePath,
+        actionId: claimedRun.id,
+        baseRefName: claimedRun.baseBranch,
+        headRefName: claimedRun.orchestratorBranch,
+        expectedHeadSha,
+        threadId: claimedRun.orchestratorThreadId,
+        commitMessage: `${commitTitle}\n\n${reviewOutcomeNote}`,
+        pullRequestBodyNote: reviewOutcomeNote,
+      })
+      .pipe(Effect.result);
+
+    if (result._tag === "Failure") {
+      yield* updateRun({
+        sourceThreadId: input.sourceThreadId,
+        run: {
+          ...claimedRun,
+          status: "needs-human-attention",
+          changeRequestFailure: changeRequestFailure({
+            detail: errorDetail(result.failure),
+            failedAt: input.createdAt,
+          }),
+          retryableFailure: {
+            stage: "change-request",
+            detail: errorDetail(result.failure),
+            failedAt: input.createdAt,
+            attemptCount:
+              claimedRun.retryableFailure?.stage === "change-request"
+                ? claimedRun.retryableFailure.attemptCount + 1
+                : 1,
+            maxAttempts: 3,
+            humanBlocked: false,
+          },
+          updatedAt: input.createdAt,
+        },
+        createdAt: input.createdAt,
+        expectedChangeRequestClaim: {
+          status: "publishing-change-request",
+          changeRequestNumber: null,
+          activeBabysitterThreadId: null,
+        },
+      });
+      yield* appendActivity({
+        threadId: claimedRun.orchestratorThreadId,
+        tone: "error",
+        kind: "implementation-change-request-filed",
+        summary: "Change request publication failed",
+        payload: {
+          runId: claimedRun.id,
+          status: "failed",
+          detail: errorDetail(result.failure),
+        },
+        createdAt: input.createdAt,
+      });
+      return;
+    }
+
+    const filedRun: OrchestrationImplementationRun = {
+      ...claimedRun,
+      changeRequest: result.success,
+      changeRequestFailure: null,
+      retryableFailure: null,
+      updatedAt: input.createdAt,
+    };
+    yield* updateRun({
+      sourceThreadId: input.sourceThreadId,
+      run: filedRun,
+      createdAt: input.createdAt,
+      expectedChangeRequestClaim: {
+        status: "publishing-change-request",
+        changeRequestNumber: null,
+        activeBabysitterThreadId: null,
+      },
+    });
+    yield* appendActivity({
+      threadId: claimedRun.orchestratorThreadId,
+      tone: workInProgress ? "error" : "info",
+      kind: "implementation-change-request-filed",
+      summary: `${workInProgress ? "Work-in-progress change request" : "Change request"} filed (#${result.success.number})`,
+      payload: {
+        runId: claimedRun.id,
+        status: "filed",
+        workInProgress,
+        url: result.success.url,
+        number: result.success.number,
+      },
+      createdAt: input.createdAt,
+    });
+    yield* startChangeRequestBabysitter({
+      sourceThreadId: input.sourceThreadId,
+      run: filedRun,
+      createdAt: input.createdAt,
+    });
+  });
+
   const fileChangeRequest = Effect.fn("ImplementationWorkflowReactor.fileChangeRequest")(
     function* (input: {
       readonly sourceThreadId: ThreadId;
       readonly run: OrchestrationImplementationRun;
       readonly createdAt: string;
     }) {
-      const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
-      const sourceThread = findThread(readModel, input.sourceThreadId);
-      const sourcePlan = sourceThread?.proposedPlans.find(
-        (plan) => plan.id === input.run.sourceProposedPlan?.planId,
-      );
-      const commitTitle =
-        input.run.artifactSource === "proposed-plan"
-          ? (proposedPlanTitle(sourcePlan?.planMarkdown ?? "") ?? "Fast feature")
-          : `Implement ${input.run.specId}`;
-      const workInProgress = input.run.reviewGateExhaustedAt !== null;
-      const currentHead = workInProgress
-        ? yield* gitWorkflow.resolveCommit({
-            cwd: input.run.orchestratorWorktreePath,
-            ref: "HEAD",
-          })
-        : null;
-      const expectedHeadSha = currentHead?.commitSha ?? input.run.codeReviewedHeadSha;
-      if (expectedHeadSha === null) {
-        yield* blockRun({
-          sourceThreadId: input.sourceThreadId,
-          run: input.run,
-          retryableStage: "code-review",
-          reasonMarkdown: workInProgress
-            ? "Cannot publish the work-in-progress change request because HEAD could not be resolved."
-            : "Cannot publish a change request before Code Review accepts an exact HEAD.",
-          updatedAt: input.createdAt,
-        });
-        return;
-      }
-      if (!workInProgress && input.run.validatedHeadSha !== expectedHeadSha) {
-        yield* blockRun({
-          sourceThreadId: input.sourceThreadId,
-          run: input.run,
-          retryableStage: "merge-gate",
-          reasonMarkdown: `Cannot publish HEAD '${expectedHeadSha}' because complete passing validation belongs to '${input.run.validatedHeadSha ?? "missing"}'.`,
-          updatedAt: input.createdAt,
-        });
-        return;
-      }
-      if (!workInProgress) {
-        const changedFiles = yield* gitWorkflow.listChangedFiles({
-          cwd: input.run.orchestratorWorktreePath,
-          baseRef: input.run.pinnedCommit,
-          headRef: expectedHeadSha,
-        });
-        if (
-          !completeValidationsPassedExactlyOnce({
-            requiredCommands: completeValidationCommandsForFiles(input.run, changedFiles),
-            validations: input.run.finalValidationResults,
-          })
-        ) {
-          yield* blockRun({
-            sourceThreadId: input.sourceThreadId,
-            run: input.run,
-            retryableStage: "merge-gate",
-            reasonMarkdown: `Cannot publish HEAD '${expectedHeadSha}' without exactly one passing result for every complete validation command.`,
-            updatedAt: input.createdAt,
-          });
-          return;
-        }
-      }
-      const reviewOutcomeNote = changeRequestReviewNote(input.run);
-      const publishingRun: OrchestrationImplementationRun = {
-        ...input.run,
-        status: "publishing-change-request",
-        updatedAt: input.createdAt,
-      };
-      yield* updateRun({
-        sourceThreadId: input.sourceThreadId,
-        run: publishingRun,
-        createdAt: input.createdAt,
-      });
-      const result = yield* gitWorkflow
-        .createOrOpenChangeRequest({
-          cwd: publishingRun.orchestratorWorktreePath,
-          actionId: publishingRun.id,
-          baseRefName: publishingRun.baseBranch,
-          headRefName: publishingRun.orchestratorBranch,
-          expectedHeadSha,
-          threadId: publishingRun.orchestratorThreadId,
-          commitMessage: `${commitTitle}\n\n${reviewOutcomeNote}`,
-          pullRequestBodyNote: reviewOutcomeNote,
-        })
-        .pipe(Effect.result);
-
-      if (result._tag === "Failure") {
-        yield* updateRun({
-          sourceThreadId: input.sourceThreadId,
-          run: {
-            ...publishingRun,
-            status: "needs-human-attention",
-            changeRequestFailure: changeRequestFailure({
-              detail: errorDetail(result.failure),
-              failedAt: input.createdAt,
-            }),
-            retryableFailure: {
-              stage: "change-request",
-              detail: errorDetail(result.failure),
-              failedAt: input.createdAt,
-              attemptCount:
-                publishingRun.retryableFailure?.stage === "change-request"
-                  ? publishingRun.retryableFailure.attemptCount + 1
-                  : 1,
-              maxAttempts: 3,
-              humanBlocked: false,
-            },
-            updatedAt: input.createdAt,
-          },
-          createdAt: input.createdAt,
-        });
-        yield* appendActivity({
-          threadId: publishingRun.orchestratorThreadId,
-          tone: "error",
-          kind: "implementation-change-request-filed",
-          summary: "Change request publication failed",
-          payload: {
-            runId: publishingRun.id,
-            status: "failed",
-            detail: errorDetail(result.failure),
-          },
-          createdAt: input.createdAt,
-        });
-        return;
-      }
-
-      yield* appendActivity({
-        threadId: publishingRun.orchestratorThreadId,
-        tone: workInProgress ? "error" : "info",
-        kind: "implementation-change-request-filed",
-        summary: `${workInProgress ? "Work-in-progress change request" : "Change request"} filed (#${result.success.number})`,
-        payload: {
-          runId: publishingRun.id,
-          status: "filed",
-          workInProgress,
-          url: result.success.url,
-          number: result.success.number,
-        },
-        createdAt: input.createdAt,
-      });
-
-      const filedRun: OrchestrationImplementationRun = {
-        ...publishingRun,
-        changeRequest: result.success,
-        changeRequestFailure: null,
-        retryableFailure: null,
-        updatedAt: input.createdAt,
-      };
-      yield* startChangeRequestBabysitter({
-        sourceThreadId: input.sourceThreadId,
-        run: filedRun,
-        createdAt: input.createdAt,
-      });
+      const semaphore = yield* getChangeRequestSemaphore(input.run.id);
+      return yield* semaphore
+        .withPermit(fileChangeRequestUnlocked(input))
+        .pipe(Effect.ensuring(releaseChangeRequestSemaphore(input.run.id)));
     },
   );
 
@@ -5793,6 +5920,8 @@ const make = Effect.gen(function* () {
     if (sourceThreadId === null) return;
     const target = event.payload.target;
     const createdAt = event.occurredAt;
+    const resumesCanceledFinalCodeReview =
+      run.status === "canceled" && target.kind === "run" && target.stage === "code-review";
 
     // A pause can land after the decider accepted this request but before the
     // reactor handles it. Leave the run untouched so worker setup cannot turn
@@ -5829,7 +5958,12 @@ const make = Effect.gen(function* () {
 
     if (target.kind === "run") {
       const rerunRun = clearRunStageForRerun({ run, stage: target.stage, updatedAt: createdAt });
-      yield* updateRun({ sourceThreadId, run: rerunRun, createdAt });
+      yield* updateRun({
+        sourceThreadId,
+        run: rerunRun,
+        createdAt,
+        ...(resumesCanceledFinalCodeReview ? { allowCanceledFinalCodeReviewRerun: true } : {}),
+      });
       switch (target.stage) {
         case "integration":
           yield* integrateCompletedRun({ sourceThreadId, run: rerunRun, createdAt });
@@ -5858,7 +5992,12 @@ const make = Effect.gen(function* () {
           yield* startBrowserReview({ sourceThreadId, run: rerunRun, createdAt });
           return;
         case "code-review":
-          yield* startCodeReview({ sourceThreadId, run: rerunRun, createdAt });
+          yield* startCodeReview({
+            sourceThreadId,
+            run: rerunRun,
+            createdAt,
+            ...(resumesCanceledFinalCodeReview ? { skipAppReviewRequirement: true } : {}),
+          });
           return;
       }
     }

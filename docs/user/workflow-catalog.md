@@ -110,6 +110,8 @@ Starting a phase again accepts the worktree as it stands, including anything the
 
 The **Re-run** popover carries the same model pin as the Models list, so choosing a model there both moves this attempt and sticks for later agents of that step. A stage that is still running cannot start again: stop it first. Two agents on one branch is the situation the guard exists to prevent.
 
+A canceled implementation run normally stays terminal. Its final Code Review can start again when every ticket had already finished and the run preserved that review's exact integrated commit. This resumes review on the existing branch and worktree without reopening ticket work.
+
 Every workflow run has a durable workflow ID. Children that belong to the run inherit that ID; a nested App Review receives its own ID and records the parent workflow ID. Use **Copy workflow link** in the Workflows panel to copy a URL that opens the top-level conversation, opens the workflow panel, and focuses that exact run.
 
 ## Stopping a workflow

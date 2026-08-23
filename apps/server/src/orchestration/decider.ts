@@ -780,6 +780,27 @@ function liveRerunTargetThreadId(input: {
   }
 }
 
+function canRerunCanceledFinalCodeReview(input: {
+  readonly run: OrchestrationImplementationRun;
+  readonly target: OrchestrationImplementationRerunTarget;
+}): boolean {
+  const { run, target } = input;
+  if (
+    run.artifactSource !== "planning-spec" ||
+    target.kind !== "run" ||
+    target.stage !== "code-review" ||
+    run.integrationHeadSha === null ||
+    run.codeReviewAttemptCount === 0 ||
+    !run.ticketStates.every((state) => state.status === "succeeded" || state.status === "failed")
+  ) {
+    return false;
+  }
+  return (
+    run.activeCodeReviewHeadSha === run.integrationHeadSha ||
+    run.codeReviewedHeadSha === run.integrationHeadSha
+  );
+}
+
 /**
  * The thread still working an App Review run's current phase, when there is one.
  *
@@ -3521,6 +3542,19 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
       if (
+        command.expectedChangeRequestClaim !== undefined &&
+        (existingRun.status !== command.expectedChangeRequestClaim.status ||
+          existingRun.changeRequest?.number !==
+            (command.expectedChangeRequestClaim.changeRequestNumber ?? undefined) ||
+          existingRun.activeChangeRequestBabysitterThreadId !==
+            command.expectedChangeRequestClaim.activeBabysitterThreadId)
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Implementation Run '${command.run.id}' change request claim is stale.`,
+        });
+      }
+      if (
         (command.run.artifactSource === "planning-spec" &&
           (command.run.specId === null || command.run.sourceProposedPlan !== null)) ||
         (command.run.artifactSource === "proposed-plan" &&
@@ -3612,10 +3646,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Implementation Run '${command.runId}' does not exist.`,
         });
       }
-      if (existingRun.status === "canceled") {
+      const target = command.target;
+      if (
+        existingRun.status === "canceled" &&
+        !canRerunCanceledFinalCodeReview({ run: existingRun, target })
+      ) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Implementation Run '${command.runId}' was canceled.`,
+          detail: `Implementation Run '${command.runId}' was canceled before it preserved an integrated final Code Review state.`,
         });
       }
       if (
@@ -3627,7 +3665,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Implementation Run '${command.runId}' is paused. Resume the workflow before starting a stage again.`,
         });
       }
-      const target = command.target;
       if (
         target.kind === "ticket" &&
         !existingRun.ticketStates.some((state) => state.ticketId === target.ticketId)

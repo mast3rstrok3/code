@@ -2219,6 +2219,13 @@ const ThreadImplementationRunUpdateCommand = Schema.Struct({
       activeThreadId: Schema.NullOr(ThreadId),
     }),
   ),
+  expectedChangeRequestClaim: Schema.optionalKey(
+    Schema.Struct({
+      status: Schema.Literals(["publishing-change-request", "babysitting-change-request"]),
+      changeRequestNumber: Schema.NullOr(PositiveInt),
+      activeBabysitterThreadId: Schema.NullOr(ThreadId),
+    }),
+  ),
   createdAt: IsoDateTime,
 });
 
