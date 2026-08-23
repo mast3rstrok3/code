@@ -6878,23 +6878,25 @@ const make = Effect.gen(function* () {
       if (
         run.status === "canceled" ||
         run.artifactSource !== "planning-spec" ||
-        (run.status !== "running" && run.status !== "integrating" && run.status !== "validating") ||
+        (run.status !== "running" && run.status !== "integrating") ||
         !run.ticketStates.every(
           (state) => state.status === "succeeded" || state.status === "failed",
         )
       ) {
         continue;
       }
-      const hasValidator = readModel.threads.some(
-        (thread) =>
-          thread.parentThreadId === run.orchestratorThreadId &&
-          thread.workflowRole === "implementation-validator" &&
-          thread.deletedAt === null,
-      );
-      if (hasValidator) continue;
       const sourceThreadId = findRunSourceThreadId({ readModel, run });
       if (sourceThreadId === null) continue;
-      yield* integrateCompletedRun({ sourceThreadId, run, createdAt }).pipe(
+      yield* integrateCompletedRun({
+        sourceThreadId,
+        run: {
+          ...run,
+          activeValidatorThreadId: null,
+          activeValidationHeadSha: null,
+          activeValidationKind: null,
+        },
+        createdAt,
+      }).pipe(
         Effect.catchCause((cause) => {
           if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause);
           return blockRun({

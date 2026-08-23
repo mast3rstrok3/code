@@ -3522,6 +3522,77 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
+  it.effect("replaces a stale validator while recovering interrupted integration", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+
+        let snapshot = yield* system.query.getSnapshot();
+        const validatingRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        const originalValidatorThreadId = validatingRun?.activeValidatorThreadId;
+        if (validatingRun === undefined || originalValidatorThreadId == null) {
+          throw new Error("Validator missing.");
+        }
+        yield* system.engine.dispatch({
+          type: "thread.delete",
+          commandId: commandId("delete-original-validator"),
+          threadId: originalValidatorThreadId,
+        });
+
+        const staleValidatorThreadId = ThreadId.make("thread-stale-validator");
+        yield* system.engine.dispatch({
+          type: "thread.create",
+          commandId: commandId("create-stale-validator"),
+          threadId: staleValidatorThreadId,
+          projectId,
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+          parentThreadId: run.orchestratorThreadId,
+          workflowRole: "implementation-validator",
+          title: "Interrupted implementation merge gate",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          runtimeMode: "full-access",
+          interactionMode: "implementation-workflow",
+          branch: run.orchestratorBranch,
+          worktreePath: run.orchestratorWorktreePath,
+          createdAt: now,
+        });
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("interrupt-integration-with-stale-validator"),
+          threadId: sourceThreadId,
+          run: {
+            ...validatingRun,
+            status: "integrating",
+            activeValidatorThreadId: staleValidatorThreadId,
+          },
+          createdAt: now,
+        });
+
+        yield* system.reactor.start();
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        const recovered = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(recovered?.status).toBe("validating");
+        expect(recovered?.activeValidationKind).toBe("integration");
+        expect(recovered?.activeValidatorThreadId).not.toBe(staleValidatorThreadId);
+        expect(
+          snapshot.threads.find((thread) => thread.id === staleValidatorThreadId),
+        ).toMatchObject({ session: null, latestTurn: null });
+        expect(
+          snapshot.threads
+            .find((thread) => thread.id === recovered?.activeValidatorThreadId)
+            ?.messages.at(-1)?.text,
+        ).toContain("integration gate before App Review and Code Review");
+        expect(yield* Ref.get(system.mergeRefInputs)).toHaveLength(2);
+      }),
+    ),
+  );
+
   it.effect("parks the run for a human when integration leaves a ticket out of the tree", () =>
     withSystem(
       (system) =>
