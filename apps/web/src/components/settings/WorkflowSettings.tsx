@@ -305,16 +305,26 @@ function EngineeringWorkflowStepControls(props: {
       <div className="space-y-3">
         <div className="text-xs font-semibold text-foreground">{props.target.label}</div>
         <div className="space-y-3 rounded-md border border-border/60 p-3">
-          <StepModelControl
-            label="App Review default"
-            note="the fallback for App Review phases that do not have their own model"
-            pinKey={APP_REVIEW_KEY}
-            pinFor={props.pinFor}
-            inheritedSelection={props.rootModelSelection}
-            inheritedLabel={rootLabel}
-            choices={props.choices}
-            onSetStepModel={props.onSetStepModel}
-          />
+          <div className="grid gap-4 sm:grid-cols-2">
+            <StepModelControl
+              label="App Review default"
+              note="the fallback for App Review phases that do not have their own model"
+              pinKey={APP_REVIEW_KEY}
+              pinFor={props.pinFor}
+              inheritedSelection={props.rootModelSelection}
+              inheritedLabel={rootLabel}
+              choices={props.choices}
+              onSetStepModel={props.onSetStepModel}
+            />
+            <WorkflowStepCyclePins
+              workflowPromptId={APP_REVIEW_KEY.workflowPromptId}
+              subStepWorkflowPromptIds={[]}
+              overrides={props.cycleDefaults}
+              inheritedLabel="Runs the built-in number of cycles"
+              onSetStepCycles={props.onSetStepCycles}
+              showHeading={false}
+            />
+          </div>
           <div className="space-y-3 border-t border-border/60 pt-3">
             {APP_REVIEW_PHASES.map((phase) => (
               <StepModelControl
@@ -331,14 +341,6 @@ function EngineeringWorkflowStepControls(props: {
               />
             ))}
           </div>
-          <WorkflowStepCyclePins
-            workflowPromptId={APP_REVIEW_KEY.workflowPromptId}
-            subStepWorkflowPromptIds={APP_REVIEW_PHASES.map((phase) => phase.key.workflowPromptId)}
-            overrides={props.cycleDefaults}
-            inheritedLabel="Runs the built-in number of cycles"
-            onSetStepCycles={props.onSetStepCycles}
-            className="space-y-2 border-t border-border/60 pt-3"
-          />
           <WorkflowStepReviewPartPins
             workflowPromptId={APP_REVIEW_KEY.workflowPromptId}
             subStepWorkflowPromptIds={APP_REVIEW_PHASES.map((phase) => phase.key.workflowPromptId)}

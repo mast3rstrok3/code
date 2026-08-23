@@ -109,6 +109,8 @@ export function WorkflowStepCyclePins(props: {
   readonly inheritedLabel?: string | undefined;
   /** Replaces the default spacing when the section needs its own frame. */
   readonly className?: string | undefined;
+  /** Hides the section label when a single cycle control sits beside its step. */
+  readonly showHeading?: boolean | undefined;
   readonly onSetStepCycles: SetWorkflowStepCycles;
 }) {
   const targets = [
@@ -124,9 +126,11 @@ export function WorkflowStepCyclePins(props: {
 
   return (
     <div className={props.className ?? "space-y-2"}>
-      <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-        Cycles
-      </div>
+      {props.showHeading === false ? null : (
+        <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+          Cycles
+        </div>
+      )}
       {targets.map((target) => {
         const setCycles =
           props.overrides.find(
