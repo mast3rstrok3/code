@@ -5,6 +5,7 @@ import { createModelSelection } from "@t3tools/shared/model";
 import { deriveProviderInstanceEntries } from "./providerInstances";
 import {
   getAppModelOptionsForInstance,
+  getProviderModelPickerChoices,
   resolveAppModelSelectionForInstance,
   resolveAppModelSelectionState,
   resolveDefaultAgentModelSelectionState,
@@ -59,6 +60,30 @@ function settingsWithProviderInstances(): UnifiedSettings {
 }
 
 describe("instance-scoped model selection", () => {
+  it("exposes OpenRouter instances and models to every shared model picker", () => {
+    const providers = [
+      provider({
+        instanceId: "claudeAgent",
+        models: ["claude-sonnet-4-6"],
+      }),
+      provider({
+        instanceId: "claude_openrouter",
+        models: ["anthropic/claude-sonnet-4.6"],
+      }),
+    ];
+
+    const choices = getProviderModelPickerChoices(settingsWithProviderInstances(), providers);
+
+    expect(choices.instanceEntries.map((entry) => entry.instanceId)).toContain(
+      ProviderInstanceId.make("claude_openrouter"),
+    );
+    expect(
+      choices.modelOptionsByInstance
+        .get(ProviderInstanceId.make("claude_openrouter"))
+        ?.map((model) => model.slug),
+    ).toEqual(["anthropic/claude-sonnet-4.6", "openai/gpt-5.5"]);
+  });
+
   it("preserves server-provided legacy model metadata", () => {
     const baseProvider = provider({
       instanceId: "claudeAgent",

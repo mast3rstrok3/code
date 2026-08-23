@@ -5,12 +5,7 @@ import { createModelSelection } from "@t3tools/shared/model";
 import { useMemo } from "react";
 
 import { cn } from "~/lib/utils";
-import {
-  applyProviderInstanceSettings,
-  deriveProviderInstanceEntries,
-  sortProviderInstanceEntries,
-} from "../providerInstances";
-import { getCustomModelOptionsByInstance } from "../modelSelection";
+import { getProviderModelPickerChoices } from "../modelSelection";
 import { primaryServerProvidersAtom, serverEnvironment } from "../state/server";
 import { useEnvironmentSettings } from "../hooks/useSettings";
 import { ProviderModelPicker } from "./chat/ProviderModelPicker";
@@ -49,15 +44,8 @@ export function useWorkflowModelChoices(environmentId: EnvironmentId) {
   const providers = environmentConfig?.providers ?? primaryProviders;
   const settings = useEnvironmentSettings(environmentId);
 
-  const instanceEntries = useMemo(
-    () =>
-      sortProviderInstanceEntries(
-        applyProviderInstanceSettings(deriveProviderInstanceEntries(providers), settings),
-      ),
-    [providers, settings],
-  );
-  const modelOptionsByInstance = useMemo(
-    () => getCustomModelOptionsByInstance(settings, providers),
+  const { instanceEntries, modelOptionsByInstance } = useMemo(
+    () => getProviderModelPickerChoices(settings, providers),
     [providers, settings],
   );
 

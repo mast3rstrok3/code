@@ -284,6 +284,28 @@ export function getCustomModelOptionsByInstance(
 }
 
 /**
+ * Build the provider instances and model lists consumed by the shared model
+ * picker. Composer and workflow callers use this projection so a provider or
+ * model discovered by the server appears in both places at the same time.
+ */
+export function getProviderModelPickerChoices(
+  settings: UnifiedSettings,
+  providers: ReadonlyArray<ServerProvider>,
+): {
+  readonly instanceEntries: ReadonlyArray<ProviderInstanceEntry>;
+  readonly modelOptionsByInstance: ReadonlyMap<ProviderInstanceId, ReadonlyArray<AppModelOption>>;
+} {
+  const instanceEntries = sortProviderInstanceEntries(
+    applyProviderInstanceSettings(deriveProviderInstanceEntries(providers), settings),
+  );
+  const modelOptionsByInstance = new Map<ProviderInstanceId, ReadonlyArray<AppModelOption>>();
+  for (const entry of instanceEntries) {
+    modelOptionsByInstance.set(entry.instanceId, getAppModelOptionsForInstance(settings, entry));
+  }
+  return { instanceEntries, modelOptionsByInstance };
+}
+
+/**
  * Drop the opencode "plan" agent option from a stored model selection.
  * Used when legacy plan mode is turned off so server-side text-generation
  * tasks (title, branch, PR) cannot keep dispatching the plan agent.
