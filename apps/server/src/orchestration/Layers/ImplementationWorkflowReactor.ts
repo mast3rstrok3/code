@@ -386,7 +386,12 @@ function reopenTicketForRerun(input: {
       updatedAt: input.updatedAt,
     };
     if (input.stage === "code-review") return { ...cleared, status: "code-reviewing" as const };
-    const withoutAppReview = { ...cleared, appReviewWorkflowRunId: null, appReviewOutcome: null };
+    const withoutAppReview = {
+      ...cleared,
+      appDevStackTierDownAt: null,
+      appReviewWorkflowRunId: null,
+      appReviewOutcome: null,
+    };
     if (input.stage === "app-review") {
       return { ...withoutAppReview, status: "app-reviewing" as const };
     }
@@ -1736,6 +1741,7 @@ const make = Effect.gen(function* () {
                 workerResult: null,
                 branch: plannedWorker.branch,
                 worktreePath: plannedWorker.worktreePath,
+                appDevStackTierDownAt: input.createdAt,
                 warningMarkdown:
                   "Skipped. The branch carries its dependencies and no work of its own.",
                 updatedAt: input.createdAt,
@@ -1976,6 +1982,74 @@ const make = Effect.gen(function* () {
     },
   );
 
+  /**
+   * Applies the tier-down stamp carried by a successful ticket.
+   *
+   * `stop` records the scale-down request and returns without waiting for pods
+   * to terminate. Keeping the stamp on the ticket lets the recovery sweep send
+   * the request again after a server restart or a transient controller error.
+   */
+  const tierDownTicketStacks = Effect.fn("ImplementationWorkflowReactor.tierDownTicketStacks")(
+    function* (input: {
+      readonly run: OrchestrationImplementationRun;
+      readonly createdAt: string;
+    }) {
+      yield* Effect.forEach(
+        input.run.ticketStates,
+        (state) =>
+          Effect.gen(function* () {
+            if (
+              state.status !== "succeeded" ||
+              state.appDevStackTierDownAt === null ||
+              state.worktreePath === null ||
+              state.worktreePath === input.run.orchestratorWorktreePath
+            ) {
+              return;
+            }
+            const lookup = yield* appDevStackManager
+              .getByWorktree({ worktreePath: state.worktreePath })
+              .pipe(Effect.result);
+            if (lookup._tag === "Failure") {
+              yield* Effect.logWarning("ticket App Dev Stack lookup failed during tier-down", {
+                runId: input.run.id,
+                ticketId: state.ticketId,
+                cause: errorDetail(lookup.failure),
+              });
+              return;
+            }
+            const stack = lookup.success.stack;
+            if (stack === null || stack.status === "stopped" || stack.status === "stopping") return;
+            const stopped = yield* appDevStackManager
+              .stop({ stackId: stack.id })
+              .pipe(Effect.result);
+            if (stopped._tag === "Failure") {
+              yield* Effect.logWarning("ticket App Dev Stack tier-down failed", {
+                runId: input.run.id,
+                ticketId: state.ticketId,
+                stackId: stack.id,
+                cause: errorDetail(stopped.failure),
+              });
+              return;
+            }
+            yield* appendActivity({
+              threadId: input.run.orchestratorThreadId,
+              tone: "info",
+              kind: "implementation-ticket-stack-tiered-down",
+              summary: `Ticket ${state.ticketId} App Dev Stack tiered down`,
+              payload: {
+                runId: input.run.id,
+                ticketId: state.ticketId,
+                stackId: stack.id,
+                tierDownAt: state.appDevStackTierDownAt,
+              },
+              createdAt: input.createdAt,
+            });
+          }),
+        { concurrency: 4, discard: true },
+      );
+    },
+  );
+
   const finishTicketReviewChain = Effect.fn(
     "ImplementationWorkflowReactor.finishTicketReviewChain",
   )(function* (input: {
@@ -1996,6 +2070,7 @@ const make = Effect.gen(function* () {
           ? {
               ...state,
               status: usableBranch ? ("succeeded" as const) : ("failed" as const),
+              appDevStackTierDownAt: usableBranch ? input.createdAt : null,
               codeReviewOutcome: input.codeReviewOutcome,
               codeReviewThreadId: null,
               warningMarkdown: input.warningMarkdown,
@@ -2053,6 +2128,7 @@ const make = Effect.gen(function* () {
       run: completed,
       createdAt: input.createdAt,
     });
+    yield* tierDownTicketStacks({ run: completed, createdAt: input.createdAt });
     const terminal = completed.ticketStates.every(
       (state) => state.status === "succeeded" || state.status === "failed",
     );
@@ -4078,21 +4154,37 @@ const make = Effect.gen(function* () {
           },
           directive.reportedAt,
         );
-        yield* updateRun({ sourceThreadId, run: reviewedRun, createdAt: directive.reportedAt });
+        const tierDownStampedRun: OrchestrationImplementationRun = {
+          ...reviewedRun,
+          ticketStates: reviewedRun.ticketStates.map((state) =>
+            state.workerThreadId === event.payload.threadId
+              ? { ...state, appDevStackTierDownAt: directive.reportedAt }
+              : state,
+          ),
+        };
+        yield* updateRun({
+          sourceThreadId,
+          run: tierDownStampedRun,
+          createdAt: directive.reportedAt,
+        });
+        yield* tierDownTicketStacks({
+          run: tierDownStampedRun,
+          createdAt: directive.reportedAt,
+        });
         if (
-          reviewedRun.ticketStates.every((state) =>
+          tierDownStampedRun.ticketStates.every((state) =>
             implementationTicketStateIsTerminal(state.status),
           )
         ) {
           yield* integrateCompletedRun({
             sourceThreadId,
-            run: reviewedRun,
+            run: tierDownStampedRun,
             createdAt: directive.reportedAt,
           });
         } else {
           yield* startReadyWorkers({
             sourceThreadId,
-            run: reviewedRun,
+            run: tierDownStampedRun,
             createdAt: directive.reportedAt,
           });
         }
@@ -6115,13 +6207,12 @@ const make = Effect.gen(function* () {
   });
 
   /**
-   * Releases the stacks a finished run owns.
+   * Keeps the successful run's shared stack and releases every ticket stack.
    *
-   * A completed run has nothing left to preview, so its ticket stacks and its
-   * shared stack are stopped to give the host its memory back. Protected
-   * stacks are left running and reported, so a stack somebody is still using
-   * survives the run that created it. Teardown never fails the run: the work
-   * is done either way.
+   * Protecting the shared stack happens before the workflow sweep, so the
+   * controller cannot stop the preview users keep after success. Ticket stack
+   * protection does not outlive a successful run. Teardown never fails work
+   * that has already completed.
    */
   const teardownWorkflowStacks = Effect.fn("ImplementationWorkflowReactor.teardownWorkflowStacks")(
     function* (input: {
@@ -6131,6 +6222,37 @@ const make = Effect.gen(function* () {
     }) {
       const workflowId = workflowIdForRun(input.readModel, input.run);
       if (workflowId === undefined) return;
+      const mainLookup = yield* appDevStackManager
+        .getByWorktree({ worktreePath: input.run.orchestratorWorktreePath })
+        .pipe(Effect.result);
+      if (mainLookup._tag === "Failure") {
+        yield* appendActivity({
+          threadId: input.run.orchestratorThreadId,
+          tone: "error",
+          kind: "implementation-run-stack-teardown-failed",
+          summary: `Main App Dev Stack lookup failed: ${errorDetail(mainLookup.failure)}`,
+          payload: { runId: input.run.id, workflowId },
+          createdAt: input.createdAt,
+        });
+        return;
+      }
+      const mainStackId = mainLookup.success.stack?.id ?? null;
+      if (mainStackId !== null) {
+        const protectedMain = yield* appDevStackManager
+          .setProtected({ stackId: mainStackId, protected: true })
+          .pipe(Effect.result);
+        if (protectedMain._tag === "Failure") {
+          yield* appendActivity({
+            threadId: input.run.orchestratorThreadId,
+            tone: "error",
+            kind: "implementation-run-stack-teardown-failed",
+            summary: `Main App Dev Stack protection failed: ${errorDetail(protectedMain.failure)}`,
+            payload: { runId: input.run.id, workflowId, mainStackId },
+            createdAt: input.createdAt,
+          });
+          return;
+        }
+      }
       const result = yield* appDevStackManager.workflowTeardown({ workflowId }).pipe(Effect.result);
       if (result._tag === "Failure") {
         yield* appendActivity({
@@ -6143,7 +6265,33 @@ const make = Effect.gen(function* () {
         });
         return;
       }
-      const { stoppedStackIds, skippedProtectedStackIds, failedStackIds } = result.success;
+      const stoppedStackIds = [...result.success.stoppedStackIds];
+      const skippedProtectedStackIds = result.success.skippedProtectedStackIds.filter(
+        (stackId) => stackId === mainStackId,
+      );
+      const failedStackIds = [...result.success.failedStackIds];
+      const protectedTicketStackIds = result.success.skippedProtectedStackIds.filter(
+        (stackId) => stackId !== mainStackId,
+      );
+      const forcedStops = yield* Effect.forEach(
+        protectedTicketStackIds,
+        (stackId) =>
+          Effect.gen(function* () {
+            const unprotected = yield* appDevStackManager
+              .setProtected({ stackId, protected: false })
+              .pipe(Effect.result);
+            const stopped = yield* appDevStackManager.stop({ stackId }).pipe(Effect.result);
+            return { stackId, unprotected, stopped };
+          }),
+        { concurrency: 4 },
+      );
+      for (const { stackId, unprotected, stopped } of forcedStops) {
+        if (stopped._tag === "Success") stoppedStackIds.push(stackId);
+        else failedStackIds.push(stackId);
+        if (unprotected._tag === "Failure" && !failedStackIds.includes(stackId)) {
+          failedStackIds.push(stackId);
+        }
+      }
       if (
         stoppedStackIds.length === 0 &&
         skippedProtectedStackIds.length === 0 &&
@@ -6151,17 +6299,22 @@ const make = Effect.gen(function* () {
       ) {
         return;
       }
-      const parts = [`Stopped ${stoppedStackIds.length} App Dev Stack(s) after the run completed`];
-      if (skippedProtectedStackIds.length > 0) {
-        parts.push(`kept ${skippedProtectedStackIds.length} protected`);
-      }
+      const parts = [`Tiered down ${stoppedStackIds.length} App Dev Stack(s) after success`];
+      if (mainStackId !== null) parts.push("kept the main stack protected");
       if (failedStackIds.length > 0) parts.push(`${failedStackIds.length} failed to stop`);
       yield* appendActivity({
         threadId: input.run.orchestratorThreadId,
         tone: failedStackIds.length > 0 ? "error" : "info",
         kind: "implementation-run-stacks-torn-down",
         summary: parts.join("; "),
-        payload: { runId: input.run.id, workflowId, ...result.success },
+        payload: {
+          runId: input.run.id,
+          workflowId,
+          mainStackId,
+          stoppedStackIds,
+          skippedProtectedStackIds,
+          failedStackIds,
+        },
         createdAt: input.createdAt,
       });
     },
@@ -6565,6 +6718,9 @@ const make = Effect.gen(function* () {
     const nowMs = Date.parse(createdAt);
     for (const run of readModel.implementationRuns) {
       if (run.status === "canceled") continue;
+      if (run.status !== "completed") {
+        yield* tierDownTicketStacks({ run, createdAt });
+      }
       // A paused run is waiting for the user, not for recovery. Re-entering its
       // stage would create the stage's thread and then fail to start the turn
       // on the paused-ancestor invariant, leaving an orphan thread behind every

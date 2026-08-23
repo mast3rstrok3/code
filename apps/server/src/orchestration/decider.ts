@@ -581,6 +581,7 @@ function buildImplementationRun(input: {
       branch: null,
       worktreePath: null,
       workerResult: null,
+      appDevStackTierDownAt: null,
       attemptCount: 0,
       updatedAt: input.command.createdAt,
     };

@@ -179,6 +179,10 @@ interface ImplementationCalls {
     }>
   >;
   readonly workflowTeardownInputs: Ref.Ref<ReadonlyArray<{ readonly workflowId: string }>>;
+  readonly stopStackIds: Ref.Ref<ReadonlyArray<string>>;
+  readonly protectionInputs: Ref.Ref<
+    ReadonlyArray<{ readonly stackId: string; readonly protected: boolean }>
+  >;
   readonly createOrOpenChangeRequestCount: Ref.Ref<number>;
   readonly createOrOpenChangeRequestInputs: Ref.Ref<
     ReadonlyArray<{
@@ -457,8 +461,10 @@ function makeTestLayer(
               stack: inheritedStackMissing
                 ? null
                 : {
-                    id: "stack-1",
-                    uuid: "stack-uuid-1",
+                    id: input.worktreePath.includes("-ticket-") ? "stack-ticket" : "stack-1",
+                    uuid: input.worktreePath.includes("-ticket-")
+                      ? "stack-ticket-uuid"
+                      : "stack-uuid-1",
                     userId: "user-1",
                     worktreePath: input.worktreePath,
                     composePath: "/tmp/compose.yml",
@@ -504,9 +510,48 @@ function makeTestLayer(
           workflowTeardown: (input) =>
             Ref.update(calls.workflowTeardownInputs, (inputs) => [...inputs, input]).pipe(
               Effect.as({
-                stoppedStackIds: ["stack-1"],
-                skippedProtectedStackIds: ["stack-protected"],
+                stoppedStackIds: ["stack-ticket-finished"],
+                skippedProtectedStackIds: ["stack-1", "stack-protected"],
                 failedStackIds: [],
+              }),
+            ),
+          stop: (input) =>
+            Ref.update(calls.stopStackIds, (stackIds) => [...stackIds, input.stackId]).pipe(
+              Effect.as({
+                id: input.stackId,
+                uuid: `${input.stackId}-uuid`,
+                userId: "user-1",
+                worktreePath: "/tmp/implementation-reactor-ticket-1",
+                composePath: "/tmp/compose.yml",
+                displayName: "Implementation ticket",
+                description: null,
+                status: "stopped" as const,
+                services: null,
+                serviceCount: 0,
+                lastError: null,
+                errorCount: 0,
+                createdAt: now,
+                updatedAt: now,
+              }),
+            ),
+          setProtected: (input) =>
+            Ref.update(calls.protectionInputs, (inputs) => [...inputs, input]).pipe(
+              Effect.as({
+                id: input.stackId,
+                uuid: `${input.stackId}-uuid`,
+                userId: "user-1",
+                worktreePath: "/tmp/implementation-reactor",
+                composePath: "/tmp/compose.yml",
+                displayName: "Implementation test",
+                description: null,
+                status: "running" as const,
+                services: null,
+                serviceCount: 0,
+                lastError: null,
+                errorCount: 0,
+                createdAt: now,
+                updatedAt: now,
+                protected: input.protected,
               }),
             ),
           autoCreate: (input) =>
@@ -602,6 +647,10 @@ function withSystem<A, E>(
     const workflowTeardownInputs = yield* Ref.make<ReadonlyArray<{ readonly workflowId: string }>>(
       [],
     );
+    const stopStackIds = yield* Ref.make<ReadonlyArray<string>>([]);
+    const protectionInputs = yield* Ref.make<
+      ReadonlyArray<{ readonly stackId: string; readonly protected: boolean }>
+    >([]);
     const createOrOpenChangeRequestCount = yield* Ref.make(0);
     const createOrOpenChangeRequestInputs = yield* Ref.make<
       ReadonlyArray<{
@@ -620,6 +669,8 @@ function withSystem<A, E>(
     const calls = {
       autoCreateInputs,
       workflowTeardownInputs,
+      stopStackIds,
+      protectionInputs,
       createOrOpenChangeRequestCount,
       createOrOpenChangeRequestInputs,
       createWorktreeInputs,
@@ -3225,6 +3276,27 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
+  it.effect("stamps a successful ticket for tier-down and re-applies it during recovery", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, ticket } = yield* launchRun(system);
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+
+        const snapshot = yield* system.query.getSnapshot();
+        const state = snapshot.implementationRuns
+          .find((entry) => entry.id === run.id)
+          ?.ticketStates.find((entry) => entry.ticketId === ticket.id);
+        expect(state?.status).toBe("succeeded");
+        expect(state?.appDevStackTierDownAt).toBe("2026-01-01T00:00:01.000Z");
+        expect(yield* Ref.get(system.stopStackIds)).toEqual(["stack-ticket"]);
+
+        yield* Ref.set(system.stopStackIds, []);
+        yield* system.reactor.recoverIncompleteStages();
+        expect(yield* Ref.get(system.stopStackIds)).toEqual(["stack-ticket"]);
+      }),
+    ),
+  );
+
   it.effect(
     "hands fan-in conflicts and remaining dependency branches to the dependent worker",
     () =>
@@ -4179,11 +4251,20 @@ describe("ImplementationWorkflowReactor", () => {
         expect(yield* Ref.get(system.workflowTeardownInputs)).toEqual([
           { workflowId: orchestratorWorkflowId },
         ]);
+        expect(yield* Ref.get(system.protectionInputs)).toContainEqual({
+          stackId: "stack-1",
+          protected: true,
+        });
+        expect(yield* Ref.get(system.protectionInputs)).toContainEqual({
+          stackId: "stack-protected",
+          protected: false,
+        });
+        expect(yield* Ref.get(system.stopStackIds)).toContain("stack-protected");
         const teardownActivity = snapshot.threads
           .find((thread) => thread.id === run.orchestratorThreadId)
           ?.activities.find((entry) => entry.kind === "implementation-run-stacks-torn-down");
         expect(teardownActivity?.summary).toBe(
-          "Stopped 1 App Dev Stack(s) after the run completed; kept 1 protected",
+          "Tiered down 2 App Dev Stack(s) after success; kept the main stack protected",
         );
         expect(completedRun?.mergeGateAttemptCount).toBe(2);
         expect(completedRun?.validatedHeadSha).toBe("def456");

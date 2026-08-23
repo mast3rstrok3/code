@@ -992,6 +992,13 @@ export const OrchestrationImplementationTicketState = Schema.Struct({
   workerResult: Schema.NullOr(OrchestrationImplementationWorkerResult).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  /**
+   * Desired-state stamp written when the ticket no longer needs its App Dev Stack.
+   * The implementation reactor re-applies the tier-down after a restart.
+   */
+  appDevStackTierDownAt: Schema.NullOr(IsoDateTime).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   appReviewWorkflowRunId: Schema.optionalKey(Schema.NullOr(AppReviewWorkflowRunId)),
   appReviewOutcome: Schema.optionalKey(
     Schema.NullOr(Schema.Literals(["passed", "failed", "exhausted", "skipped"])),
