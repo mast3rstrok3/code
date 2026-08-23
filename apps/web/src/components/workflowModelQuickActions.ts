@@ -11,7 +11,7 @@ const APP_REVIEW_PROMPT_ID = "implementation.browser-app-review.codex";
 const CODE_REVIEW_PROMPT_ID = "implementation.code-review.codex";
 
 export interface WorkflowModelQuickAction {
-  readonly id: "app-review" | "ticket-code-review" | "final-code-review";
+  readonly id: "e2e-browser-review" | "ticket-code-review" | "final-code-review";
   readonly label: string;
   readonly description: string;
   readonly pinKeys: ReadonlyArray<WorkflowModelPinKey>;
@@ -19,12 +19,12 @@ export interface WorkflowModelQuickAction {
 
 const QUICK_ACTION_DEFINITIONS = [
   {
-    id: "app-review",
-    label: "App Review",
+    id: "e2e-browser-review",
+    label: "E2E tests and browser review",
     description:
-      "Set the default model for E2E and browser review, gap analysis, and repair threads.",
+      "Set the model for the expensive review thread that runs E2E tests and drives the browser.",
     workflowPromptId: APP_REVIEW_PROMPT_ID,
-    matches: (key: WorkflowModelPinKey) => key.stepWorkflowPromptId === undefined,
+    matches: (key: WorkflowModelPinKey) => key.stepWorkflowPromptId === APP_REVIEW_PROMPT_ID,
   },
   {
     id: "ticket-code-review",

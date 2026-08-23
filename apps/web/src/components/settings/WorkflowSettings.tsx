@@ -178,7 +178,7 @@ const APP_REVIEW_PHASES = [
       workflowPromptId: "implementation.browser-app-review.codex",
       stepWorkflowPromptId: "implementation.browser-app-review.codex",
     },
-    note: "one review thread runs the project's E2E commands, then drives the browser",
+    note: "the quick assignment at the top sets this expensive review thread",
   },
   {
     label: "Gap analysis and repair tickets",
@@ -307,7 +307,7 @@ function EngineeringWorkflowStepControls(props: {
         <div className="space-y-3 rounded-md border border-border/60 p-3">
           <StepModelControl
             label="App Review default"
-            note="the quick assignment at the top sets this same default"
+            note="the fallback for App Review phases that do not have their own model"
             pinKey={APP_REVIEW_KEY}
             pinFor={props.pinFor}
             inheritedSelection={props.rootModelSelection}
