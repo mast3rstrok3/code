@@ -22,6 +22,7 @@
  * share, so a stage owner can never wait for a nudge that will not come.
  */
 import type { OrchestrationThreadWorkflowRole } from "@t3tools/contracts";
+import * as Predicate from "effect/Predicate";
 
 import { isWorkflowThreadPaused, type WorkflowPauseThread } from "./workflowPause.ts";
 
@@ -38,6 +39,11 @@ export const WORKFLOW_NUDGE_EXHAUSTED_MESSAGE =
 
 export const WORKFLOW_INTERRUPTION_ERROR_MESSAGE =
   "Provider session lost while a turn was running; settled by the stale-turn reconciler.";
+
+export const ORPHANED_PROVIDER_SESSION_ERROR =
+  "Provider session did not survive a server restart. Send a new message to continue.";
+
+export const STALE_TURN_RESUME_ACTIVITY_KIND = "stale-turn-resumed";
 
 /** First retry after a failed turn — fast, because most failures are transient. */
 export const WORKFLOW_NUDGE_FIRST_DELAY_MS = 60 * 1000;
@@ -123,7 +129,59 @@ export interface WorkflowNudgeThread extends WorkflowPauseThread {
     readonly lastError: string | null;
     readonly updatedAt: string;
   } | null;
-  readonly latestTurn: { readonly state: string } | null;
+  readonly latestTurn: { readonly turnId?: string; readonly state: string } | null;
+  readonly activities?: ReadonlyArray<{
+    readonly kind: string;
+    readonly payload: unknown;
+    readonly createdAt: string;
+  }>;
+}
+
+/**
+ * True while the reconciler owns an orphaned turn or is handing it to its replacement.
+ *
+ * Startup marks orphaned sessions errored before the reconciler can claim them.
+ * The reconciler then records the resume before it settles the old session and
+ * starts the replacement turn. Stage owners can observe either gap. The resume
+ * activity ties the second gap to the interrupted turn so a later human stop
+ * does not inherit this deferral.
+ */
+export function isAwaitingStaleTurnResume(input: {
+  readonly thread: WorkflowNudgeThread;
+  readonly nowMs: number;
+}): boolean {
+  const { thread } = input;
+  if (thread.session?.status !== "error" || thread.latestTurn?.turnId === undefined) {
+    return false;
+  }
+  if (
+    thread.session.lastError === ORPHANED_PROVIDER_SESSION_ERROR &&
+    thread.latestTurn.state === "running"
+  ) {
+    const orphanedAtMs = Date.parse(thread.session.updatedAt);
+    return (
+      !Number.isNaN(orphanedAtMs) && input.nowMs - orphanedAtMs < WORKFLOW_NUDGE_DEFERRAL_WINDOW_MS
+    );
+  }
+  if (thread.session.lastError !== WORKFLOW_INTERRUPTION_ERROR_MESSAGE) return false;
+  let resume: NonNullable<WorkflowNudgeThread["activities"]>[number] | undefined;
+  const activities = thread.activities ?? [];
+  for (let index = activities.length - 1; index >= 0; index -= 1) {
+    const activity = activities[index];
+    if (activity?.kind !== STALE_TURN_RESUME_ACTIVITY_KIND) continue;
+    resume = activity;
+    break;
+  }
+  if (
+    resume === undefined ||
+    !Predicate.isObject(resume.payload) ||
+    resume.payload["interruptedTurnId"] !== thread.latestTurn.turnId
+  ) {
+    return false;
+  }
+  const resumedAtMs = Date.parse(resume.createdAt);
+  if (Number.isNaN(resumedAtMs)) return false;
+  return input.nowMs - resumedAtMs < WORKFLOW_NUDGE_DEFERRAL_WINDOW_MS;
 }
 
 /**

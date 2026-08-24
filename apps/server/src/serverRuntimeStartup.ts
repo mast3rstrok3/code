@@ -30,6 +30,7 @@ import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as OrchestrationReactor from "./orchestration/Services/OrchestrationReactor.ts";
+import { ORPHANED_PROVIDER_SESSION_ERROR } from "./orchestration/workflowNudge.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
@@ -295,9 +296,6 @@ const runStartupPhase = <A, E, R>(phase: string, effect: Effect.Effect<A, E, R>)
     Effect.annotateSpans({ "startup.phase": phase }),
     Effect.withSpan(`server.startup.${phase}`),
   );
-
-const ORPHANED_PROVIDER_SESSION_ERROR =
-  "Provider session did not survive a server restart. Send a new message to continue.";
 
 export const reconcileProviderSessions = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;

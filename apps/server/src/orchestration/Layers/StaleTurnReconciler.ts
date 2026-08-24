@@ -35,6 +35,7 @@ import {
 import {
   isAwaitingWorkflowNudge,
   isWorkflowNudgeCandidate,
+  STALE_TURN_RESUME_ACTIVITY_KIND,
   workflowAutomaticRetryLimit,
   workflowNudgeDelayMs,
   WORKFLOW_INTERRUPTION_ERROR_MESSAGE,
@@ -54,7 +55,7 @@ const DEFAULT_MAX_RESUME_ATTEMPTS = 2;
 const APP_REVIEW_TO_TICKETS_SKILL_ID = "matt-pocock.to-tickets";
 const APP_REVIEW_IMPLEMENT_SKILL_ID = "matt-pocock.implement";
 
-export const STALE_TURN_RESUME_ACTIVITY_KIND = "stale-turn-resumed";
+export { STALE_TURN_RESUME_ACTIVITY_KIND } from "../workflowNudge.ts";
 
 const STALE_TURN_RESUME_MESSAGE =
   "Your previous turn was interrupted by a server restart. The provider session has been resumed with your prior context. Continue where you left off and finish by emitting your required directive.";

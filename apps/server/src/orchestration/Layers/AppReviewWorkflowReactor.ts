@@ -57,7 +57,11 @@ import {
 } from "../Services/AppReviewWorkflowReactor.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
-import { isAwaitingWorkflowNudge, type WorkflowNudgeThread } from "../workflowNudge.ts";
+import {
+  isAwaitingStaleTurnResume,
+  isAwaitingWorkflowNudge,
+  type WorkflowNudgeThread,
+} from "../workflowNudge.ts";
 import { isWorkflowThreadPaused } from "../workflowPause.ts";
 import {
   findWorkflowStepModels,
@@ -270,13 +274,13 @@ export function threadTurnFailed(thread: {
 }
 
 /**
- * What a phase thread's state means for the run: still working, blocked on a
- * provider failure the nudge path is retrying in place, or failed for good.
+ * What a phase thread's state means for the run: still working, waiting on
+ * automatic recovery, or failed for good. The `nudging` state covers both the
+ * stale-turn resume handoff and provider-failure nudges.
  *
  * Waiting matters because a single API error or plan usage limit used to end
- * the whole App Review run — and with it a repair cycle the user paid for. It
- * is deliberately not "wait forever": a thread the nudge path has given up on,
- * or one nobody is nudging, fails here exactly as it always did.
+ * the whole App Review run and spend its repair cycle. The wait stays bounded.
+ * A thread fails here once the recovery window expires or no retry path owns it.
  */
 export function appReviewPhaseThreadState(input: {
   readonly threads: ReadonlyArray<WorkflowNudgeThread>;
@@ -284,7 +288,7 @@ export function appReviewPhaseThreadState(input: {
   readonly nowMs: number;
 }): "working" | "nudging" | "failed" {
   if (!threadTurnFailed(input.thread)) return "working";
-  return isAwaitingWorkflowNudge(input) ? "nudging" : "failed";
+  return isAwaitingStaleTurnResume(input) || isAwaitingWorkflowNudge(input) ? "nudging" : "failed";
 }
 
 export function terminalReviewAction(review: AppReviewRecord): "passed" | "planning" {

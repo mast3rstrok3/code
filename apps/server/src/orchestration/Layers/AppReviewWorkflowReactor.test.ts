@@ -10,7 +10,13 @@ import {
   type AppReviewWorkflowRun,
 } from "@t3tools/contracts";
 
-import { WORKFLOW_NUDGE_EXHAUSTED_MESSAGE, type WorkflowNudgeThread } from "../workflowNudge.ts";
+import {
+  ORPHANED_PROVIDER_SESSION_ERROR,
+  STALE_TURN_RESUME_ACTIVITY_KIND,
+  WORKFLOW_INTERRUPTION_ERROR_MESSAGE,
+  WORKFLOW_NUDGE_EXHAUSTED_MESSAGE,
+  type WorkflowNudgeThread,
+} from "../workflowNudge.ts";
 import {
   appReviewPhaseModelStepWorkflowPromptId,
   appReviewPhaseThreadState,
@@ -1135,6 +1141,45 @@ it("waits out a provider failure on the phase thread instead of failing the run"
   expect(phaseState(phaseThread())).toBe("nudging");
 });
 
+it("keeps the current phase while stale-turn recovery starts its replacement turn", () => {
+  const interruptedTurnId = "turn-interrupted";
+  const fixer = phaseThread({
+    workflowRole: "app-review-fixer",
+    session: {
+      status: "error",
+      activeTurnId: null,
+      lastError: WORKFLOW_INTERRUPTION_ERROR_MESSAGE,
+      updatedAt: blockedAt,
+    },
+    latestTurn: { turnId: interruptedTurnId, state: "interrupted" },
+    activities: [
+      {
+        kind: STALE_TURN_RESUME_ACTIVITY_KIND,
+        payload: { interruptedTurnId },
+        createdAt: blockedAt,
+      },
+    ],
+  });
+
+  expect(phaseState(fixer)).toBe("nudging");
+});
+
+it("keeps the current phase before stale-turn recovery records its claim", () => {
+  const fixer = phaseThread({
+    workflowRole: "app-review-fixer",
+    session: {
+      status: "error",
+      activeTurnId: null,
+      lastError: ORPHANED_PROVIDER_SESSION_ERROR,
+      updatedAt: blockedAt,
+    },
+    latestTurn: { turnId: "turn-orphaned", state: "running" },
+    activities: [],
+  });
+
+  expect(phaseState(fixer)).toBe("nudging");
+});
+
 it("fails the run once nudging gives up or nobody is nudging", () => {
   const exhausted = phaseThread({
     session: {
@@ -1148,6 +1193,27 @@ it("fails the run once nudging gives up or nobody is nudging", () => {
   const interrupted = phaseThread({ latestTurn: { state: "interrupted" } });
 
   expect(phaseState(exhausted)).toBe("failed");
+  expect(phaseState(interrupted)).toBe("failed");
+});
+
+it("does not apply an old stale-turn recovery marker to a later human stop", () => {
+  const interrupted = phaseThread({
+    session: {
+      status: "error",
+      activeTurnId: null,
+      lastError: WORKFLOW_INTERRUPTION_ERROR_MESSAGE,
+      updatedAt: blockedAt,
+    },
+    latestTurn: { turnId: "turn-human-stopped", state: "interrupted" },
+    activities: [
+      {
+        kind: STALE_TURN_RESUME_ACTIVITY_KIND,
+        payload: { interruptedTurnId: "turn-recovered-earlier" },
+        createdAt: blockedAt,
+      },
+    ],
+  });
+
   expect(phaseState(interrupted)).toBe("failed");
 });
 

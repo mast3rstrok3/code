@@ -1,9 +1,11 @@
 import { expect, it } from "@effect/vitest";
 
 import {
+  isAwaitingStaleTurnResume,
   isAwaitingWorkflowNudge,
   isBlockedAfterFailedTurn,
   isWorkflowNudgeCandidate,
+  ORPHANED_PROVIDER_SESSION_ERROR,
   workflowAutomaticRetryLimit,
   workflowNudgeDelayMs,
   WORKFLOW_NUDGE_DEFERRAL_WINDOW_MS,
@@ -148,6 +150,27 @@ it("hands a thread back to its stage owner once nudging stops refreshing it", ()
   expect(
     isAwaitingWorkflowNudge({
       ...withThread(worker),
+      nowMs: Date.parse(blockedAt) + WORKFLOW_NUDGE_DEFERRAL_WINDOW_MS,
+    }),
+  ).toBe(false);
+});
+
+it("defers an orphaned running turn until stale-turn recovery claims it", () => {
+  const orphaned = thread({
+    workflowRole: "app-review-fixer",
+    session: {
+      status: "error",
+      activeTurnId: null,
+      lastError: ORPHANED_PROVIDER_SESSION_ERROR,
+      updatedAt: blockedAt,
+    },
+    latestTurn: { turnId: "turn-orphaned", state: "running" },
+  });
+
+  expect(isAwaitingStaleTurnResume({ thread: orphaned, nowMs })).toBe(true);
+  expect(
+    isAwaitingStaleTurnResume({
+      thread: orphaned,
       nowMs: Date.parse(blockedAt) + WORKFLOW_NUDGE_DEFERRAL_WINDOW_MS,
     }),
   ).toBe(false);
