@@ -47,7 +47,12 @@ describe("OrchestrationReactor", () => {
               started.push("provider-command-reactor");
               return Effect.void;
             },
-            drain: Effect.void,
+            replayPendingWorkflowTurnStarts: Effect.sync(() => {
+              started.push("provider-command-replay");
+            }),
+            drain: Effect.sync(() => {
+              started.push("provider-command-drain");
+            }),
           }),
         ),
         Layer.provideMerge(
@@ -133,6 +138,8 @@ describe("OrchestrationReactor", () => {
       "preview-lifecycle-reactor",
       "thread-deletion-reactor",
       "agent-awareness-relay",
+      "provider-command-replay",
+      "provider-command-drain",
     ]);
 
     await Effect.runPromise(Scope.close(scope, Exit.void));

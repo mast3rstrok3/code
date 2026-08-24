@@ -25,6 +25,9 @@ export interface ProviderCommandReactorShape {
    */
   readonly start: () => Effect.Effect<void, never, Scope.Scope>;
 
+  /** Replays durable workflow turn starts that have not reached a provider yet. */
+  readonly replayPendingWorkflowTurnStarts: Effect.Effect<void, never, Scope.Scope>;
+
   /**
    * Resolves when the internal processing queue is empty and idle.
    * Intended for test use to replace timing-sensitive sleeps.

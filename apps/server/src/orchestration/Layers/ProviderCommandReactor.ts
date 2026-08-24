@@ -1645,6 +1645,14 @@ const make = Effect.gen(function* () {
     }
   });
 
+  const replayPendingWorkflowTurnStartsSafely = replayPendingWorkflowTurnStarts().pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning("provider command reactor failed to replay pending workflow turns", {
+        cause: Cause.pretty(cause),
+      }),
+    ),
+  );
+
   const start: ProviderCommandReactorShape["start"] = Effect.fn("start")(function* () {
     const interruptedTitleRegenerations = yield* findInterruptedThreadTitleRegenerations().pipe(
       Effect.catchCause((cause) => {
@@ -1676,13 +1684,7 @@ const make = Effect.gen(function* () {
     // The intent projection is durable, but the provider event stream is hot.
     // Replay workflow starts committed before a crash after the subscriber is
     // attached, so a concurrent live event is safely deduplicated.
-    yield* replayPendingWorkflowTurnStarts().pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("provider command reactor failed to replay pending workflow turns", {
-          cause: Cause.pretty(cause),
-        }),
-      ),
-    );
+    yield* replayPendingWorkflowTurnStartsSafely;
 
     // Correlated completions only clear the title request captured here,
     // leaving any newer request untouched.
@@ -1711,6 +1713,7 @@ const make = Effect.gen(function* () {
 
   return {
     start,
+    replayPendingWorkflowTurnStarts: replayPendingWorkflowTurnStartsSafely,
     drain: Effect.gen(function* () {
       yield* worker.drain;
       yield* threadTitleRegenerationWorker.drain;
