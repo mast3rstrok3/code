@@ -8472,6 +8472,9 @@ const make = Effect.gen(function* () {
                     status: "ready" as const,
                     workerThreadId: null,
                     workerResult: null,
+                    implementationGeneration: state.implementationGeneration + 1,
+                    attemptCount: 0,
+                    warningMarkdown: null,
                     updatedAt: createdAt,
                   }
                 : state,

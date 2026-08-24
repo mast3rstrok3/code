@@ -27,6 +27,12 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
   const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
 
   const reconcilePendingProviderCommands = Effect.gen(function* () {
+    // Restart recovery can enqueue workflow events that create continuation
+    // turns. Materialize those turns before replaying provider starts so the
+    // server does not report ready with recovered work still unlaunched.
+    yield* productWorkflowReactor.drain;
+    yield* implementationWorkflowReactor.drain;
+    yield* appReviewWorkflowReactor.drain;
     yield* providerCommandReactor.replayPendingWorkflowTurnStarts;
     yield* providerCommandReactor.drain;
   });

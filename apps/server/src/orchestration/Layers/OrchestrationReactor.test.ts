@@ -70,7 +70,9 @@ describe("OrchestrationReactor", () => {
               started.push("product-workflow-reactor");
               return Effect.void;
             },
-            drain: Effect.void,
+            drain: Effect.sync(() => {
+              started.push("product-workflow-drain");
+            }),
           }),
         ),
         Layer.provideMerge(
@@ -79,7 +81,9 @@ describe("OrchestrationReactor", () => {
               started.push("implementation-workflow-reactor");
               return Effect.void;
             },
-            drain: Effect.void,
+            drain: Effect.sync(() => {
+              started.push("implementation-workflow-drain");
+            }),
             recoverRetryableRuns: () => Effect.void,
             recoverIncompleteStages: () => Effect.void,
           }),
@@ -90,7 +94,9 @@ describe("OrchestrationReactor", () => {
               started.push("app-review-workflow-reactor");
               return Effect.void;
             },
-            drain: Effect.void,
+            drain: Effect.sync(() => {
+              started.push("app-review-workflow-drain");
+            }),
             reconcile: () => Effect.void,
           }),
         ),
@@ -138,6 +144,9 @@ describe("OrchestrationReactor", () => {
       "preview-lifecycle-reactor",
       "thread-deletion-reactor",
       "agent-awareness-relay",
+      "product-workflow-drain",
+      "implementation-workflow-drain",
+      "app-review-workflow-drain",
       "provider-command-replay",
       "provider-command-drain",
     ]);

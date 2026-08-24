@@ -4057,6 +4057,64 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
+  it.effect("renews the worker generation when startup finds an interrupted worker", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        const initialState = run.ticketStates[0];
+        if (initialState?.workerThreadId === null || initialState?.workerThreadId === undefined) {
+          throw new Error("Implementation worker missing.");
+        }
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("persist-exhausted-interrupted-worker"),
+          threadId: sourceThreadId,
+          run: {
+            ...run,
+            ticketStates: run.ticketStates.map((state) => ({
+              ...state,
+              attemptCount: IMPLEMENTATION_STAGE_MAX_LAUNCHES,
+            })),
+            updatedAt: "2026-01-01T00:00:02.000Z",
+          },
+          createdAt: "2026-01-01T00:00:02.000Z",
+        });
+        yield* system.engine.dispatch({
+          type: "thread.session.set",
+          commandId: commandId("stop-exhausted-interrupted-worker"),
+          threadId: initialState.workerThreadId,
+          session: {
+            threadId: initialState.workerThreadId,
+            status: "stopped",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: "2026-01-01T00:00:02.500Z",
+          },
+          createdAt: "2026-01-01T00:00:02.500Z",
+        });
+        yield* system.reactor.drain;
+
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+
+        const snapshot = yield* system.query.getSnapshot();
+        const recovered = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(recovered?.status).toBe("running");
+        expect(recovered?.automationHalt).toBeNull();
+        expect(recovered?.ticketStates[0]?.status).toBe("running");
+        expect(recovered?.ticketStates[0]?.attemptCount).toBe(1);
+        expect(recovered?.ticketStates[0]?.implementationGeneration).toBe(
+          initialState.implementationGeneration + 1,
+        );
+        expect(
+          snapshot.threads.filter((thread) => thread.workflowRole === "implementation-worker"),
+        ).toHaveLength(2);
+      }),
+    ),
+  );
+
   it.effect("replays a completed worker result after clearing a legacy dirty-worktree halt", () =>
     withSystem((system) =>
       Effect.gen(function* () {
