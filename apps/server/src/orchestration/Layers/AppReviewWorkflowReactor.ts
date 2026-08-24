@@ -977,13 +977,16 @@ const make = Effect.gen(function* () {
     const run = yield* resolveStandalonePreviewTargetsForRun(stableRun, cwd, occurredAt);
     if (run === null) return;
     if (run.caller.type === "implementation") {
-      const status = yield* gitWorkflow.status({ cwd });
-      if (!status.isRepo || status.hasWorkingTreeChanges) {
+      const status = yield* gitWorkflow.localStatus({ cwd });
+      if (
+        !status.isRepo ||
+        status.hasWorkingTreeChanges ||
+        (target.thread.branch !== null && status.refName !== target.thread.branch)
+      ) {
         yield* failRun({
           run,
           reason: "embedded-worktree-dirty",
-          detailMarkdown:
-            "Embedded App Review requires a clean Implementation orchestrator branch.",
+          detailMarkdown: `Embedded App Review requires clean expected branch '${target.thread.branch ?? "unknown"}', but Git reports '${status.refName ?? "detached HEAD"}'${status.hasWorkingTreeChanges ? " with uncommitted changes" : ""}.`,
           occurredAt,
         });
         return;

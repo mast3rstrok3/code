@@ -80,6 +80,7 @@ import {
   type WorkflowThreadStatus,
 } from "~/workflowModel";
 import { ScrollArea } from "~/components/ui/scroll-area";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import {
   Dialog,
   DialogDescription,
@@ -316,26 +317,32 @@ function TimelineTimeRange(props: {
     >
       <span className="whitespace-nowrap">
         <span className="mr-1 uppercase tracking-wide text-muted-foreground/70">Start</span>
-        <time
-          dateTime={props.startedAt}
-          title={formatChatTimestampTooltip(props.startedAt, props.timestampFormat)}
-          className="tabular-nums text-foreground/80"
-        >
-          {start}
-        </time>
+        <Tooltip>
+          <TooltipTrigger
+            render={<time dateTime={props.startedAt} className="tabular-nums text-foreground/80" />}
+          >
+            {start}
+          </TooltipTrigger>
+          <TooltipPopup>
+            {formatChatTimestampTooltip(props.startedAt, props.timestampFormat)}
+          </TooltipPopup>
+        </Tooltip>
       </span>
       <span className="whitespace-nowrap">
         <span className="mr-1 uppercase tracking-wide text-muted-foreground/70">End</span>
         {props.endedAt === null ? (
           <span className="text-foreground/80">{end}</span>
         ) : (
-          <time
-            dateTime={props.endedAt}
-            title={formatChatTimestampTooltip(props.endedAt, props.timestampFormat)}
-            className="tabular-nums text-foreground/80"
-          >
-            {end}
-          </time>
+          <Tooltip>
+            <TooltipTrigger
+              render={<time dateTime={props.endedAt} className="tabular-nums text-foreground/80" />}
+            >
+              {end}
+            </TooltipTrigger>
+            <TooltipPopup>
+              {formatChatTimestampTooltip(props.endedAt, props.timestampFormat)}
+            </TooltipPopup>
+          </Tooltip>
         )}
       </span>
       <span className="whitespace-nowrap">
@@ -1891,7 +1898,7 @@ function WorkflowGroupCard(props: {
     ...props.groups.flatMap((candidate) => candidate.rows.map((row) => row.thread)),
   ];
 
-  const retryableFailure = linkedImplementationRun?.retryableFailure ?? null;
+  const automationHalt = linkedImplementationRun?.automationHalt ?? null;
   const planningStage = props.workflowRoot.planningWorkflowSummary?.stage ?? null;
   // The stage the run is sitting at right now, which is what tells a step that
   // owns no agent of its own whether the run has reached it, passed it, or has
@@ -1934,8 +1941,8 @@ function WorkflowGroupCard(props: {
                 isRunStageSkipped(linkedImplementationRun.skips, "change-request"))),
           blocked:
             linkedImplementationRun?.status === "needs-human-attention" &&
-            retryableFailure !== null &&
-            workflowStepMatchesImplementationFailure(step, retryableFailure.stage),
+            currentImplementationStage !== null &&
+            workflowStepMatchesImplementationFailure(step, currentImplementationStage),
           // A run-wide pause reads as paused only on the step it stopped at.
           // Marking every step paused would bury the one a resume re-enters.
           paused:
@@ -2041,9 +2048,12 @@ function WorkflowGroupCard(props: {
                 ) : null}
                 {group.kind === "workflow" ? (
                   <>
-                    <span className="font-mono" title={group.sourceId}>
-                      ID {group.sourceId.slice(0, 8)}
-                    </span>
+                    <Tooltip>
+                      <TooltipTrigger render={<span className="font-mono" />}>
+                        ID {group.sourceId.slice(0, 8)}
+                      </TooltipTrigger>
+                      <TooltipPopup>{group.sourceId}</TooltipPopup>
+                    </Tooltip>
                     <span aria-hidden>·</span>
                   </>
                 ) : null}
@@ -2059,29 +2069,58 @@ function WorkflowGroupCard(props: {
             </span>
           </button>
           {showsAppReviews ? (
-            <button
-              type="button"
-              aria-label="View App Review results"
-              title="View App Review results"
-              onClick={props.onOpenAppReview}
-              className="cursor-pointer mt-2 flex items-center gap-1 rounded-md px-2 py-1.5 text-[11px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
-            >
-              <Eye className="size-3.5" aria-hidden />
-              App Reviews
-            </button>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    aria-label="View App Review results"
+                    onClick={props.onOpenAppReview}
+                    className="cursor-pointer mt-2 flex items-center gap-1 rounded-md px-2 py-1.5 text-[11px] font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+                  />
+                }
+              >
+                <Eye className="size-3.5" aria-hidden />
+                App Reviews
+              </TooltipTrigger>
+              <TooltipPopup>View App Review results</TooltipPopup>
+            </Tooltip>
           ) : null}
           {group.kind === "workflow" ? (
-            <button
-              type="button"
-              aria-label={`Copy link to ${groupTitle(group)} workflow`}
-              title="Copy workflow link"
-              onClick={() => props.onCopyWorkflowLink(group.sourceId)}
-              className="cursor-pointer m-2 rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-            >
-              <Copy className="size-3.5" aria-hidden />
-            </button>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    aria-label={`Copy link to ${groupTitle(group)} workflow`}
+                    onClick={() => props.onCopyWorkflowLink(group.sourceId)}
+                    className="cursor-pointer m-2 rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                  />
+                }
+              >
+                <Copy className="size-3.5" aria-hidden />
+              </TooltipTrigger>
+              <TooltipPopup>Copy workflow link</TooltipPopup>
+            </Tooltip>
           ) : null}
         </div>
+        {automationHalt !== null ? (
+          <div
+            role="alert"
+            className="mx-3 mb-3 rounded-3xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-xs"
+          >
+            <div className="font-medium text-foreground">Needs human attention</div>
+            <div className="mt-1 text-muted-foreground">
+              {automationHalt.ticketId === undefined
+                ? automationHalt.stage.replaceAll("-", " ")
+                : `${automationHalt.stage.replaceAll("-", " ")} · ${automationHalt.ticketId}`}
+            </div>
+            <div className="mt-2 whitespace-pre-wrap text-foreground">{automationHalt.detail}</div>
+            <div className="mt-2 text-muted-foreground">
+              Automatic retries stopped. Start the affected step again to create a new execution.
+            </div>
+          </div>
+        ) : null}
         {expanded ? (
           <div className="divide-y divide-border/70 border-t border-border/70">
             {phases.map(([phase, availableSteps]) => {
@@ -2730,23 +2769,37 @@ export function WorkflowsPanel(props: {
             onSetStepReviewParts={props.onSetStepReviewParts}
           />
           {workflow.root.workflowPausedAt == null && props.onPauseWorkflow ? (
-            <button
-              type="button"
-              onClick={props.onPauseWorkflow}
-              title="Pause the workflow and stop all active agent sessions"
-              className="cursor-pointer mt-1 inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-border/80 px-2 text-xs font-medium hover:bg-accent"
-            >
-              <Pause className="size-3" aria-hidden /> Pause
-            </button>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    onClick={props.onPauseWorkflow}
+                    className="cursor-pointer mt-1 inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-border/80 px-2 text-xs font-medium hover:bg-accent"
+                  />
+                }
+              >
+                <Pause className="size-3" aria-hidden /> Pause
+              </TooltipTrigger>
+              <TooltipPopup>Pause the workflow and stop all active agent sessions</TooltipPopup>
+            </Tooltip>
           ) : workflow.root.workflowPausedAt != null && props.onResumeWorkflow ? (
-            <button
-              type="button"
-              onClick={props.onResumeWorkflow}
-              title="Resume the workflow from the step it stopped at, keeping its worktrees"
-              className="cursor-pointer mt-1 inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-border/80 px-2 text-xs font-medium hover:bg-accent"
-            >
-              <Play className="size-3" aria-hidden /> Resume
-            </button>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    onClick={props.onResumeWorkflow}
+                    className="cursor-pointer mt-1 inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-border/80 px-2 text-xs font-medium hover:bg-accent"
+                  />
+                }
+              >
+                <Play className="size-3" aria-hidden /> Resume
+              </TooltipTrigger>
+              <TooltipPopup>
+                Resume the workflow from the step it stopped at, keeping its worktrees
+              </TooltipPopup>
+            </Tooltip>
           ) : workflow.root.workflowPausedAt != null ? (
             <span className="mt-1 rounded-md bg-muted px-2 py-1 text-xs font-medium text-muted-foreground">
               Paused

@@ -13,6 +13,7 @@ import {
   AppReviewWorkflowCycleBudget,
   IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
   IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES,
+  IMPLEMENTATION_STAGE_MAX_LAUNCHES,
   MessageId,
   ThreadId,
   type OrchestrationEvent,
@@ -75,11 +76,10 @@ import {
   type WorkflowStepCycleKey,
 } from "@t3tools/shared/workflowStepCycles";
 import { isWorkflowThreadPaused } from "../workflowPause.ts";
-import { isAwaitingWorkflowNudge } from "../workflowNudge.ts";
+import { isAwaitingWorkflowNudge, WORKFLOW_INTERRUPTION_ERROR_MESSAGE } from "../workflowNudge.ts";
 
-// Code Review owns its fixes, while final-validation repairs receive a bounded delta review before
-// the complete gate runs again. Exhaustion publishes the clean branch as work in progress instead
-// of allowing a fresh reviewer to reopen the entire implementation indefinitely.
+// Code Review owns its fixes. Final validation is terminal: a failure stops
+// automation instead of publishing work that the gate did not approve.
 
 type ImplementationWorkflowEvent = Extract<
   OrchestrationEvent,
@@ -308,6 +308,76 @@ function markDependentsReady(
   };
 }
 
+function automationStageForFailure(
+  stage: NonNullable<OrchestrationImplementationRun["retryableFailure"]>["stage"] | undefined,
+): NonNullable<OrchestrationImplementationRun["automationHalt"]>["stage"] {
+  switch (stage) {
+    case "app-review":
+    case "app-dev-stack":
+      return "app-review";
+    case "code-review":
+      return "final-code-review";
+    case "integration":
+    case "merge-gate":
+      return "integration";
+    default:
+      return "implementation";
+  }
+}
+
+function structuralGitFailure(detail: string): boolean {
+  const normalized = detail.toLowerCase();
+  return (
+    normalized.includes("dirty") ||
+    normalized.includes("uncommitted") ||
+    normalized.includes("clean worktree") ||
+    normalized.includes("clean working tree") ||
+    normalized.includes("expected branch") ||
+    normalized.includes("wrong branch") ||
+    normalized.includes("detached head") ||
+    normalized.includes("reported commit") ||
+    normalized.includes("identity does not match") ||
+    normalized.includes("worktree identity") ||
+    normalized.includes("worktree add failed") ||
+    normalized.includes("worktree must")
+  );
+}
+
+function isFinalCodeReviewPass(run: OrchestrationImplementationRun): boolean {
+  return (
+    run.appReviewedHeadSha !== null ||
+    run.qaExhaustedAt !== null ||
+    run.appReviewExhaustedAt !== null ||
+    run.latestAppReviewWorkflowOutcome !== null
+  );
+}
+
+function automationHaltMatchesTicketRerun(input: {
+  readonly halt: NonNullable<OrchestrationImplementationRun["automationHalt"]>;
+  readonly ticketId: string;
+  readonly stage: OrchestrationImplementationRerunTicketStage;
+}): boolean {
+  return input.halt.ticketId === input.ticketId && input.halt.stage === input.stage;
+}
+
+function automationHaltMatchesRunRerun(input: {
+  readonly halt: NonNullable<OrchestrationImplementationRun["automationHalt"]>;
+  readonly stage: OrchestrationImplementationRerunRunStage;
+}): boolean {
+  switch (input.stage) {
+    case "integration":
+    case "merge-gate":
+      return input.halt.ticketId === undefined && input.halt.stage === "integration";
+    case "app-review":
+      return input.halt.ticketId === undefined && input.halt.stage === "app-review";
+    case "code-review":
+      return (
+        input.halt.ticketId === undefined &&
+        (input.halt.stage === "code-review" || input.halt.stage === "final-code-review")
+      );
+  }
+}
+
 /**
  * Whether a nested App Review still speaks for the ticket it was launched for.
  *
@@ -389,7 +459,15 @@ function reopenTicketForRerun(input: {
       warningMarkdown: null,
       updatedAt: input.updatedAt,
     };
-    if (input.stage === "code-review") return { ...cleared, status: "code-reviewing" as const };
+    if (input.stage === "code-review") {
+      return {
+        ...cleared,
+        status: "code-reviewing" as const,
+        codeReviewGeneration: state.codeReviewGeneration + 1,
+        codeReviewLaunchCount: 0,
+        codeReviewPassCount: 0,
+      };
+    }
     const withoutAppReview = {
       ...cleared,
       appDevStackTierDownAt: null,
@@ -397,7 +475,12 @@ function reopenTicketForRerun(input: {
       appReviewOutcome: null,
     };
     if (input.stage === "app-review") {
-      return { ...withoutAppReview, status: "app-reviewing" as const };
+      return {
+        ...withoutAppReview,
+        status: "app-reviewing" as const,
+        appReviewGeneration: state.appReviewGeneration + 1,
+        appReviewLaunchCount: 0,
+      };
     }
     // The worker starts over, so its reported result stops standing for this
     // ticket. The worktree and branch survive; the ticket keeps working there.
@@ -406,7 +489,8 @@ function reopenTicketForRerun(input: {
       status: "ready" as const,
       workerThreadId: null,
       workerResult: null,
-      attemptCount: state.attemptCount + 1,
+      implementationGeneration: state.implementationGeneration + 1,
+      attemptCount: 0,
     };
   });
   return {
@@ -421,6 +505,15 @@ function reopenTicketForRerun(input: {
     // sha from the previous integration must not reach the next merge gate.
     integrationHeadSha: null,
     retryableFailure: null,
+    automationHalt:
+      input.run.automationHalt !== null &&
+      automationHaltMatchesTicketRerun({
+        halt: input.run.automationHalt,
+        ticketId: input.ticketId,
+        stage: input.stage,
+      })
+        ? null
+        : input.run.automationHalt,
     updatedAt: input.updatedAt,
   };
 }
@@ -442,6 +535,11 @@ function clearRunStageForRerun(input: {
     reviewGateExhaustedAt: null,
     reviewGateExhaustionReason: null,
     retryableFailure: null,
+    automationHalt:
+      input.run.automationHalt !== null &&
+      automationHaltMatchesRunRerun({ halt: input.run.automationHalt, stage: input.stage })
+        ? null
+        : input.run.automationHalt,
     updatedAt: input.updatedAt,
   };
   switch (input.stage) {
@@ -474,6 +572,9 @@ function clearRunStageForRerun(input: {
         activeCodeReviewThreadId: null,
         activeCodeReviewHeadSha: null,
         codeReviewedHeadSha: null,
+        finalCodeReviewGeneration: input.run.finalCodeReviewGeneration + 1,
+        finalCodeReviewLaunchCount: 0,
+        finalCodeReviewPassCount: 0,
       };
   }
 }
@@ -802,11 +903,7 @@ function buildCodeReviewPrompt(input: {
       : "Review the complete integrated ticket set along the Standards and Spec axes described in your workflow instructions.",
     "Apply required fixes yourself and commit them. Do not ask the user questions.",
     "",
-    input.run.qaExhaustedAt === null && input.run.appReviewExhaustedAt === null
-      ? "App Review passed at this commit."
-      : input.run.appReviewStrategy === "nested-workflow"
-        ? `Nested App Review '${input.run.appReviewWorkflowRunIds.at(-1) ?? "unknown"}' exhausted after ${input.run.qaAttemptCount} review attempt(s). Latest review: ${input.run.lastQaFailure?.reviewId ?? "unknown"}. Unresolved findings:\n\n${input.run.lastQaFailure?.detailMarkdown ?? "Unavailable"}\n\nTreat unresolved user-visible defects as review findings and fix what you reasonably can.`
-        : `Automated QA did not pass after ${IMPLEMENTATION_RUN_MAX_QA_REPAIRS} fresh repair agents. Last unsatisfied gate: ${input.run.qaExhaustionReason ?? "app-review"}. Treat unresolved stack or user-visible defects as review findings and fix what you reasonably can.`,
+    "App Review passed at this commit.",
     "",
     "Review scope:",
     `- worktree: ${input.run.orchestratorWorktreePath}`,
@@ -1259,7 +1356,16 @@ const make = Effect.gen(function* () {
     readonly expectedCodeReviewClaim?: {
       readonly attemptCount: OrchestrationImplementationRun["codeReviewAttemptCount"];
       readonly activeThreadId: ThreadId | null;
+      readonly generation?: number;
+      readonly launchCount?: number;
     };
+    readonly expectedTicketStageClaims?: ReadonlyArray<{
+      readonly ticketId: OrchestrationImplementationTicketState["ticketId"];
+      readonly stage: "implementation" | "app-review" | "code-review";
+      readonly generation: number;
+      readonly launchCount: number;
+      readonly activeExecutionId: string | null;
+    }>;
     readonly expectedChangeRequestClaim?: {
       readonly status: "publishing-change-request" | "babysitting-change-request";
       readonly changeRequestNumber: number | null;
@@ -1288,6 +1394,9 @@ const make = Effect.gen(function* () {
       ...(input.expectedCodeReviewClaim === undefined
         ? {}
         : { expectedCodeReviewClaim: input.expectedCodeReviewClaim }),
+      ...(input.expectedTicketStageClaims === undefined
+        ? {}
+        : { expectedTicketStageClaims: input.expectedTicketStageClaims }),
       ...(input.expectedChangeRequestClaim === undefined
         ? {}
         : { expectedChangeRequestClaim: input.expectedChangeRequestClaim }),
@@ -1415,6 +1524,7 @@ const make = Effect.gen(function* () {
     readonly run: OrchestrationImplementationRun;
     readonly reasonMarkdown: string;
     readonly updatedAt: string;
+    readonly ticketId?: OrchestrationImplementationTicketState["ticketId"];
     readonly retryableStage?:
       | "source-dirty"
       | "worktree-setup"
@@ -1437,12 +1547,23 @@ const make = Effect.gen(function* () {
      * budget is not spent by the 30s sweep before the user has read the message.
      */
     readonly humanBlocked?: boolean;
+    readonly haltCategory?: NonNullable<
+      OrchestrationImplementationRun["automationHalt"]
+    >["category"];
+    readonly haltStage?: NonNullable<OrchestrationImplementationRun["automationHalt"]>["stage"];
   }) {
     const previousAttempts =
       input.retryableStage !== undefined &&
-      input.run.retryableFailure?.stage === input.retryableStage
+      input.run.retryableFailure?.stage === input.retryableStage &&
+      input.run.retryableFailure.ticketId === input.ticketId
         ? input.run.retryableFailure.attemptCount
         : 0;
+    const nextAttemptCount = previousAttempts + 1;
+    const humanBlocked = input.humanBlocked ?? structuralGitFailure(input.reasonMarkdown);
+    const automationStopped =
+      input.retryableStage === undefined ||
+      humanBlocked ||
+      nextAttemptCount >= IMPLEMENTATION_STAGE_MAX_LAUNCHES;
     const blockedRun: OrchestrationImplementationRun = {
       ...input.run,
       status: "needs-human-attention",
@@ -1450,13 +1571,26 @@ const make = Effect.gen(function* () {
         input.retryableStage === undefined
           ? input.run.retryableFailure
           : {
+              ...(input.ticketId === undefined ? {} : { ticketId: input.ticketId }),
               stage: input.retryableStage,
               detail: input.reasonMarkdown,
               failedAt: input.updatedAt,
-              attemptCount: previousAttempts + 1,
-              maxAttempts: 5,
-              humanBlocked: input.humanBlocked ?? false,
+              attemptCount: nextAttemptCount,
+              maxAttempts: IMPLEMENTATION_STAGE_MAX_LAUNCHES,
+              humanBlocked,
             },
+      automationHalt: automationStopped
+        ? {
+            ...(input.ticketId === undefined ? {} : { ticketId: input.ticketId }),
+            stage: input.haltStage ?? automationStageForFailure(input.retryableStage),
+            category: humanBlocked
+              ? "structural-invariant"
+              : (input.haltCategory ??
+                (input.retryableStage === undefined ? "review-blocked" : "retry-exhausted")),
+            detail: input.reasonMarkdown,
+            haltedAt: input.updatedAt,
+          }
+        : input.run.automationHalt,
       updatedAt: input.updatedAt,
     };
     yield* updateRun({
@@ -1715,13 +1849,35 @@ const make = Effect.gen(function* () {
       .pipe(Effect.option);
     const worktreeExisted = Option.isSome(existingWorktreeHead);
     if (worktreeExisted) {
-      const status = yield* gitWorkflow.localStatus({ cwd: plannedWorker.worktreePath });
+      const [status, expectedWorktreeHead] = yield* Effect.all([
+        gitWorkflow.localStatus({ cwd: plannedWorker.worktreePath }),
+        gitWorkflow.resolveCommit({
+          cwd: plannedWorker.worktreePath,
+          ref: plannedWorker.branch,
+        }),
+      ]);
       if (!status.isRepo || status.refName !== plannedWorker.branch) {
         return yield* new GitCommandError({
           operation: "ImplementationWorkflowReactor.createWorker",
           command: "git status",
           cwd: plannedWorker.worktreePath,
           detail: `Existing worker worktree is not on expected branch '${plannedWorker.branch}'.`,
+        });
+      }
+      if (status.hasWorkingTreeChanges) {
+        return yield* new GitCommandError({
+          operation: "ImplementationWorkflowReactor.createWorker",
+          command: "git status --short --branch",
+          cwd: plannedWorker.worktreePath,
+          detail: `Existing worker worktree on '${plannedWorker.branch}' is dirty before implementation launch.`,
+        });
+      }
+      if (existingWorktreeHead.value.commitSha !== expectedWorktreeHead.commitSha) {
+        return yield* new GitCommandError({
+          operation: "ImplementationWorkflowReactor.createWorker",
+          command: "git rev-parse HEAD",
+          cwd: plannedWorker.worktreePath,
+          detail: `Existing worker worktree HEAD '${existingWorktreeHead.value.commitSha}' does not match expected branch HEAD '${expectedWorktreeHead.commitSha}'.`,
         });
       }
     } else {
@@ -1914,6 +2070,7 @@ const make = Effect.gen(function* () {
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
       const orchestratorThread = findThread(readModel, input.run.orchestratorThreadId);
       if (orchestratorThread === null) return input.run;
+      if (input.run.automationHalt !== null) return input.run;
 
       // Passes rather than one sweep, because a skipped ticket is terminal the
       // moment it takes its branch: what waited on it becomes ready inside this
@@ -1929,6 +2086,22 @@ const make = Effect.gen(function* () {
           .filter((ticketState) => ticketState.status === "ready")
           .map((ticketState) => ticketState.ticketId);
         if (readyTicketIds.length === 0) break;
+        const exhaustedTicket = workingRun.ticketStates.find(
+          (state) =>
+            readyTicketIds.includes(state.ticketId) &&
+            state.attemptCount >= IMPLEMENTATION_STAGE_MAX_LAUNCHES,
+        );
+        if (exhaustedTicket !== undefined) {
+          return yield* blockRun({
+            sourceThreadId: input.sourceThreadId,
+            run: workingRun,
+            ticketId: exhaustedTicket.ticketId,
+            reasonMarkdown: `Ticket '${exhaustedTicket.ticketId}' exhausted its implementation launch budget.`,
+            updatedAt: input.createdAt,
+            haltCategory: "retry-exhausted",
+            haltStage: "implementation",
+          });
+        }
         const allIdentities = workingRun.launchSummary.plannedWorkers;
         const identities = allIdentities.filter((worker) =>
           readyTicketIds.includes(worker.ticketId),
@@ -1979,6 +2152,22 @@ const make = Effect.gen(function* () {
             sourceThreadId: input.sourceThreadId,
             run: claimedRun,
             createdAt: input.createdAt,
+            expectedTicketStageClaims: [...workerThreadIds.keys()].flatMap((ticketId) => {
+              const state = workingRun.ticketStates.find(
+                (candidate) => candidate.ticketId === ticketId,
+              );
+              return state === undefined
+                ? []
+                : [
+                    {
+                      ticketId: state.ticketId,
+                      stage: "implementation" as const,
+                      generation: state.implementationGeneration,
+                      launchCount: state.attemptCount,
+                      activeExecutionId: state.workerThreadId,
+                    },
+                  ];
+            }),
           });
         }
         workingRun = claimedRun;
@@ -2020,7 +2209,6 @@ const make = Effect.gen(function* () {
             ticketStates: workingRun.ticketStates.map(
               (state) => startedStates.get(state.ticketId) ?? state,
             ),
-            retryableFailure: null,
             updatedAt: input.createdAt,
           },
           input.createdAt,
@@ -2037,46 +2225,34 @@ const make = Effect.gen(function* () {
 
       const failedStarts = startResults.filter(({ result }) => result._tag === "Failure");
       if (failedStarts.length > 0) {
-        const continuedRun = failImplementationTickets(
-          nextRun,
-          new Map(
-            failedStarts.map(({ ticketId, result }) => [
-              ticketId,
-              result._tag === "Failure"
-                ? `Ticket worker setup failed: ${errorDetail(result.failure)}`
-                : "Ticket worker setup failed for an unknown reason.",
-            ]),
+        const firstFailure = failedStarts[0];
+        const failureDetail =
+          firstFailure?.result._tag === "Failure"
+            ? `Ticket worker setup failed: ${errorDetail(firstFailure.result.failure)}`
+            : "Ticket worker setup failed for an unknown reason.";
+        const failedRun: OrchestrationImplementationRun = {
+          ...nextRun,
+          ticketStates: nextRun.ticketStates.map((state) =>
+            failedStarts.some(({ ticketId }) => ticketId === state.ticketId)
+              ? {
+                  ...state,
+                  status: "failed" as const,
+                  warningMarkdown: failureDetail,
+                  updatedAt: input.createdAt,
+                }
+              : state,
           ),
-          input.createdAt,
-        );
-        yield* updateRun({
+          updatedAt: input.createdAt,
+        };
+        return yield* blockRun({
           sourceThreadId: input.sourceThreadId,
-          run: continuedRun,
-          createdAt: input.createdAt,
+          run: failedRun,
+          ...(firstFailure === undefined ? {} : { ticketId: firstFailure.ticketId }),
+          retryableStage: "worker-setup",
+          reasonMarkdown: failureDetail,
+          updatedAt: input.createdAt,
+          humanBlocked: structuralGitFailure(failureDetail),
         });
-        yield* appendActivity({
-          threadId: input.run.orchestratorThreadId,
-          tone: "error",
-          kind: "implementation-ticket-setup-failed",
-          summary: "Ticket setup failures recorded; implementation is continuing",
-          payload: {
-            runId: input.run.id,
-            ticketIds: failedStarts.map(({ ticketId }) => ticketId),
-          },
-          createdAt: input.createdAt,
-        });
-        if (
-          continuedRun.ticketStates.every((state) =>
-            implementationTicketStateIsTerminal(state.status),
-          )
-        ) {
-          yield* integrateCompletedRun({
-            sourceThreadId: input.sourceThreadId,
-            run: continuedRun,
-            createdAt: input.createdAt,
-          });
-        }
-        return continuedRun;
       }
       // Every ticket skipped leaves nothing left to run, so the run goes on to
       // integration rather than waiting for work that will never start.
@@ -2177,6 +2353,11 @@ const make = Effect.gen(function* () {
     const usableBranch = input.usableBranch ?? true;
     const reviewedRun: OrchestrationImplementationRun = {
       ...input.run,
+      retryableFailure:
+        input.run.retryableFailure?.stage === "code-review" &&
+        input.run.retryableFailure.ticketId === input.ticketId
+          ? null
+          : input.run.retryableFailure,
       ticketStates: input.run.ticketStates.map((state) =>
         state.ticketId === input.ticketId
           ? {
@@ -2201,6 +2382,15 @@ const make = Effect.gen(function* () {
       ),
       updatedAt: input.createdAt,
     };
+    if (input.run.automationHalt !== null) {
+      yield* updateRun({
+        sourceThreadId: input.sourceThreadId,
+        run: reviewedRun,
+        createdAt: input.createdAt,
+      });
+      yield* tierDownTicketStacks({ run: reviewedRun, createdAt: input.createdAt });
+      return;
+    }
     const failedIds = new Set(usableBranch ? [] : [input.ticketId]);
     if (!usableBranch) {
       let changed = true;
@@ -2267,6 +2457,7 @@ const make = Effect.gen(function* () {
       readonly warningMarkdown?: string;
       readonly createdAt: string;
     }) {
+      if (input.run.automationHalt !== null) return;
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
       const orchestratorThread = findThread(readModel, input.run.orchestratorThreadId);
       const state = input.run.ticketStates.find(
@@ -2281,6 +2472,44 @@ const make = Effect.gen(function* () {
         (state.status !== "app-reviewing" && state.status !== "code-reviewing")
       )
         return;
+      if (
+        state.codeReviewPassCount >= 1 ||
+        state.codeReviewLaunchCount >= IMPLEMENTATION_STAGE_MAX_LAUNCHES
+      ) {
+        yield* blockRun({
+          sourceThreadId: input.sourceThreadId,
+          run: input.run,
+          ticketId: state.ticketId,
+          reasonMarkdown: `Ticket '${state.ticketId}' exhausted its Code Review budget.`,
+          updatedAt: input.createdAt,
+          haltCategory: "retry-exhausted",
+          haltStage: "code-review",
+        });
+        return;
+      }
+      const [preflight, preflightHead] = yield* Effect.all([
+        gitWorkflow.localStatus({ cwd: state.worktreePath }),
+        gitWorkflow.resolveCommit({ cwd: state.worktreePath, ref: "HEAD" }),
+      ]);
+      const expectedHeadSha = state.workerResult?.commitSha ?? null;
+      if (
+        !preflight.isRepo ||
+        preflight.refName !== state.branch ||
+        preflight.hasWorkingTreeChanges ||
+        expectedHeadSha === null ||
+        preflightHead.commitSha !== expectedHeadSha
+      ) {
+        yield* blockRun({
+          sourceThreadId: input.sourceThreadId,
+          run: input.run,
+          ticketId: state.ticketId,
+          retryableStage: "code-review",
+          reasonMarkdown: `Ticket Code Review requires clean expected HEAD '${expectedHeadSha ?? "missing"}' on '${state.branch}', but Git reports '${preflight.refName ?? "detached HEAD"}' at '${preflightHead.commitSha}'${preflight.hasWorkingTreeChanges ? " with uncommitted changes" : ""}.`,
+          updatedAt: input.createdAt,
+          humanBlocked: true,
+        });
+        return;
+      }
       const workerThread = findThread(readModel, state.workerThreadId);
       const workflowContext = workerThread?.workflowContext;
       if (
@@ -2327,6 +2556,7 @@ const make = Effect.gen(function* () {
                   (input.warningMarkdown === undefined ? "skipped" : "failed"),
                 codeReviewThreadId: reviewerThreadId,
                 codeReviewOutcome: null,
+                codeReviewLaunchCount: candidate.codeReviewLaunchCount + 1,
                 warningMarkdown: input.warningMarkdown ?? candidate.warningMarkdown ?? null,
                 updatedAt: input.createdAt,
               }
@@ -2338,6 +2568,15 @@ const make = Effect.gen(function* () {
         sourceThreadId: input.sourceThreadId,
         run: reviewingRun,
         createdAt: input.createdAt,
+        expectedTicketStageClaims: [
+          {
+            ticketId: state.ticketId,
+            stage: "code-review",
+            generation: state.codeReviewGeneration,
+            launchCount: state.codeReviewLaunchCount,
+            activeExecutionId: state.codeReviewThreadId ?? null,
+          },
+        ],
       });
       yield* orchestrationEngine.dispatch({
         type: "thread.create",
@@ -2407,6 +2646,7 @@ const make = Effect.gen(function* () {
       readonly ticketId: string;
       readonly createdAt: string;
     }) {
+      if (input.run.automationHalt !== null) return;
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
       const orchestratorThread = findThread(readModel, input.run.orchestratorThreadId);
       const sourceThread = findThread(readModel, input.sourceThreadId);
@@ -2416,11 +2656,47 @@ const make = Effect.gen(function* () {
       if (
         orchestratorThread === null ||
         state?.worktreePath == null ||
+        state.branch == null ||
         state.workerThreadId == null ||
         state.status !== "app-reviewing" ||
         state.appReviewWorkflowRunId != null
       )
         return;
+      if (state.appReviewLaunchCount >= IMPLEMENTATION_STAGE_MAX_LAUNCHES) {
+        yield* blockRun({
+          sourceThreadId: input.sourceThreadId,
+          run: input.run,
+          ticketId: state.ticketId,
+          reasonMarkdown: `Ticket '${state.ticketId}' exhausted its App Review launch budget.`,
+          updatedAt: input.createdAt,
+          haltCategory: "retry-exhausted",
+          haltStage: "app-review",
+        });
+        return;
+      }
+      const [preflight, preflightHead] = yield* Effect.all([
+        gitWorkflow.localStatus({ cwd: state.worktreePath }),
+        gitWorkflow.resolveCommit({ cwd: state.worktreePath, ref: "HEAD" }),
+      ]);
+      const expectedHeadSha = state.workerResult?.commitSha ?? null;
+      if (
+        !preflight.isRepo ||
+        preflight.refName !== state.branch ||
+        preflight.hasWorkingTreeChanges ||
+        expectedHeadSha === null ||
+        preflightHead.commitSha !== expectedHeadSha
+      ) {
+        yield* blockRun({
+          sourceThreadId: input.sourceThreadId,
+          run: input.run,
+          ticketId: state.ticketId,
+          retryableStage: "app-review",
+          reasonMarkdown: `Ticket App Review requires clean expected HEAD '${expectedHeadSha ?? "missing"}' on '${state.branch}', but Git reports '${preflight.refName ?? "detached HEAD"}' at '${preflightHead.commitSha}'${preflight.hasWorkingTreeChanges ? " with uncommitted changes" : ""}.`,
+          updatedAt: input.createdAt,
+          humanBlocked: true,
+        });
+        return;
+      }
       const ticket = ticketsById(sourceThread ?? orchestratorThread).get(input.ticketId);
       if (ticket === undefined) return;
       // A skip reads the same way as a ticket the plan never made eligible: the
@@ -2496,6 +2772,7 @@ const make = Effect.gen(function* () {
             ? {
                 ...candidate,
                 appReviewWorkflowRunId,
+                appReviewLaunchCount: candidate.appReviewLaunchCount + 1,
                 updatedAt: input.createdAt,
               }
             : candidate,
@@ -2506,6 +2783,15 @@ const make = Effect.gen(function* () {
         sourceThreadId: input.sourceThreadId,
         run: claimedRun,
         createdAt: input.createdAt,
+        expectedTicketStageClaims: [
+          {
+            ticketId: state.ticketId,
+            stage: "app-review",
+            generation: state.appReviewGeneration,
+            launchCount: state.appReviewLaunchCount,
+            activeExecutionId: state.appReviewWorkflowRunId ?? null,
+          },
+        ],
       });
       yield* orchestrationEngine.dispatch({
         type: "thread.app-review-workflow.launch",
@@ -2553,6 +2839,7 @@ const make = Effect.gen(function* () {
       readonly preserveCodeReviewedHead?: boolean;
       readonly createdAt: string;
     }) {
+      if (input.run.automationHalt !== null) return;
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
       const orchestratorThread = findThread(readModel, input.run.orchestratorThreadId);
       if (orchestratorThread === null) return;
@@ -2571,6 +2858,27 @@ const make = Effect.gen(function* () {
         cwd: input.run.orchestratorWorktreePath,
         ref: "HEAD",
       });
+      const validationStatus = yield* gitWorkflow.localStatus({
+        cwd: input.run.orchestratorWorktreePath,
+      });
+      const expectedValidationHead =
+        input.kind === "final" ? input.run.codeReviewedHeadSha : input.run.integrationHeadSha;
+      if (
+        !validationStatus.isRepo ||
+        validationStatus.refName !== input.run.orchestratorBranch ||
+        validationStatus.hasWorkingTreeChanges ||
+        (expectedValidationHead !== null && expectedValidationHead !== validationHead.commitSha)
+      ) {
+        yield* blockRun({
+          sourceThreadId: input.sourceThreadId,
+          run: input.run,
+          retryableStage: "merge-gate",
+          reasonMarkdown: `${input.kind === "final" ? "Final validation" : "Merge Gate"} requires clean expected HEAD '${expectedValidationHead ?? validationHead.commitSha}' on '${input.run.orchestratorBranch}', but Git reports '${validationStatus.refName ?? "detached HEAD"}' at '${validationHead.commitSha}'${validationStatus.hasWorkingTreeChanges ? " with uncommitted changes" : ""}.`,
+          updatedAt: input.createdAt,
+          humanBlocked: true,
+        });
+        return;
+      }
       const validatingRun: OrchestrationImplementationRun = {
         ...input.run,
         status: "validating",
@@ -2692,6 +3000,7 @@ const make = Effect.gen(function* () {
       readonly run: OrchestrationImplementationRun;
       readonly createdAt: string;
     }) {
+      if (input.run.automationHalt !== null) return;
       const integratingRun: OrchestrationImplementationRun = {
         ...input.run,
         status: "integrating",
@@ -2831,6 +3140,7 @@ const make = Effect.gen(function* () {
       readonly run: OrchestrationImplementationRun;
       readonly createdAt: string;
     }) {
+      if (input.run.automationHalt !== null) return;
       const cycleRun = input.run;
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
       const orchestratorThread = findThread(readModel, cycleRun.orchestratorThreadId);
@@ -3123,6 +3433,24 @@ const make = Effect.gen(function* () {
         cwd: cycleRun.orchestratorWorktreePath,
         ref: "HEAD",
       });
+      const reviewStatus = yield* gitWorkflow.localStatus({
+        cwd: input.run.orchestratorWorktreePath,
+      });
+      if (
+        !reviewStatus.isRepo ||
+        reviewStatus.refName !== input.run.orchestratorBranch ||
+        reviewStatus.hasWorkingTreeChanges
+      ) {
+        yield* blockRun({
+          sourceThreadId: input.sourceThreadId,
+          run: input.run,
+          retryableStage: "app-review",
+          reasonMarkdown: `App Review requires a clean worktree on '${input.run.orchestratorBranch}', but Git reports '${reviewStatus.refName ?? "detached HEAD"}'${reviewStatus.hasWorkingTreeChanges ? " with uncommitted changes" : ""}.`,
+          updatedAt: input.createdAt,
+          humanBlocked: true,
+        });
+        return;
+      }
       if (
         cycleRun.integrationHeadSha === null ||
         cycleRun.integrationHeadSha !== reviewHead.commitSha
@@ -3155,7 +3483,7 @@ const make = Effect.gen(function* () {
                   updatedAt: input.createdAt,
                 },
           integrationHeadSha: reviewHead.commitSha,
-          retryableFailure: null,
+          retryableFailure: ensuringRun.retryableFailure,
           updatedAt: input.createdAt,
         };
         if (activeNestedAppReview !== undefined) {
@@ -3260,7 +3588,7 @@ const make = Effect.gen(function* () {
         activeAppReviewThreadId: reviewThreadId,
         qaAttemptCount: ensuringRun.qaAttemptCount + 1,
         lastQaFailure: null,
-        retryableFailure: null,
+        retryableFailure: ensuringRun.retryableFailure,
         updatedAt: input.createdAt,
       };
 
@@ -3327,9 +3655,26 @@ const make = Effect.gen(function* () {
       readonly skipAppReviewRequirement?: boolean;
       readonly reviewBaseSha?: string;
     }) {
+      if (input.run.automationHalt !== null) return;
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
       const orchestratorThread = findThread(readModel, input.run.orchestratorThreadId);
       if (orchestratorThread === null) return;
+      const finalPass = isFinalCodeReviewPass(input.run);
+      if (
+        finalPass &&
+        (input.run.finalCodeReviewPassCount >= IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES ||
+          input.run.finalCodeReviewLaunchCount >= IMPLEMENTATION_STAGE_MAX_LAUNCHES)
+      ) {
+        yield* blockRun({
+          sourceThreadId: input.sourceThreadId,
+          run: input.run,
+          reasonMarkdown: "Final Code Review exhausted its single-pass launch budget.",
+          updatedAt: input.createdAt,
+          haltCategory: "retry-exhausted",
+          haltStage: "final-code-review",
+        });
+        return;
+      }
       // Code Review is the last thing between the integrated change and the
       // final gate, so skipping it goes straight to that gate.
       if (isRunStageSkipped(input.run.skips, "code-review")) {
@@ -3368,6 +3713,24 @@ const make = Effect.gen(function* () {
         cwd: input.run.orchestratorWorktreePath,
         ref: "HEAD",
       });
+      const preflight = yield* gitWorkflow.localStatus({
+        cwd: input.run.orchestratorWorktreePath,
+      });
+      if (
+        !preflight.isRepo ||
+        preflight.refName !== input.run.orchestratorBranch ||
+        preflight.hasWorkingTreeChanges
+      ) {
+        yield* blockRun({
+          sourceThreadId: input.sourceThreadId,
+          run: input.run,
+          retryableStage: "code-review",
+          reasonMarkdown: `Code Review requires a clean worktree on '${input.run.orchestratorBranch}', but Git reports '${preflight.refName ?? "detached HEAD"}'${preflight.hasWorkingTreeChanges ? " with uncommitted changes" : ""}.`,
+          updatedAt: input.createdAt,
+          humanBlocked: true,
+        });
+        return;
+      }
       if (input.run.integrationHeadSha !== reviewHead.commitSha) {
         yield* blockRun({
           sourceThreadId: input.sourceThreadId,
@@ -3434,6 +3797,9 @@ const make = Effect.gen(function* () {
         activeCodeReviewThreadId: reviewerThreadId,
         codeReviewedHeadSha: null,
         codeReviewAttemptCount: input.run.codeReviewAttemptCount + 1,
+        finalCodeReviewLaunchCount: finalPass
+          ? input.run.finalCodeReviewLaunchCount + 1
+          : input.run.finalCodeReviewLaunchCount,
         updatedAt: input.createdAt,
       };
       yield* updateRun({
@@ -3443,6 +3809,12 @@ const make = Effect.gen(function* () {
         expectedCodeReviewClaim: {
           attemptCount: input.run.codeReviewAttemptCount,
           activeThreadId: input.run.activeCodeReviewThreadId,
+          ...(finalPass
+            ? {
+                generation: input.run.finalCodeReviewGeneration,
+                launchCount: input.run.finalCodeReviewLaunchCount,
+              }
+            : {}),
         },
       });
 
@@ -3540,7 +3912,7 @@ const make = Effect.gen(function* () {
           activeValidationHeadSha: null,
           activeValidationKind: null,
           activeValidatorThreadId: null,
-          retryableFailure: null,
+          retryableFailure: input.run.retryableFailure,
           updatedAt: input.createdAt,
         },
         integration: {
@@ -3974,6 +4346,7 @@ const make = Effect.gen(function* () {
       readonly run: OrchestrationImplementationRun;
       readonly createdAt: string;
     }) {
+      if (input.run.automationHalt !== null) return;
       const semaphore = yield* getChangeRequestSemaphore(input.run.id);
       return yield* semaphore
         .withPermit(fileChangeRequestUnlocked(input))
@@ -3987,6 +4360,7 @@ const make = Effect.gen(function* () {
       readonly run: OrchestrationImplementationRun;
       readonly createdAt: string;
     }) {
+      if (input.run.automationHalt !== null) return;
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
       const sourceThread = findThread(readModel, input.sourceThreadId);
       const implementerThread = findThread(readModel, input.run.orchestratorThreadId);
@@ -4024,29 +4398,15 @@ const make = Effect.gen(function* () {
           : input.run;
 
       if (sourceStatus.hasWorkingTreeChanges) {
-        yield* appendActivity({
-          threadId: input.sourceThreadId,
-          tone: "info",
-          kind: reusesSourceWorkspace
-            ? "fast-feature.source-dirty-included"
-            : "fast-feature.source-dirty-ignored",
-          summary: reusesSourceWorkspace
-            ? "Existing workflow workspace changes are included in this run"
-            : "Uncommitted source changes are not included in this run",
-          payload: reusesSourceWorkspace
-            ? {
-                runId: setupRun.id,
-                pinnedCommit: setupRun.pinnedCommit,
-                reasonMarkdown:
-                  "The shared workflow worktree has modified, staged, or untracked files. Build inherits that workspace and must inspect, validate, and commit the intended changes.",
-              }
-            : {
-                runId: setupRun.id,
-                pinnedCommit: setupRun.pinnedCommit,
-                reasonMarkdown: `The source worktree has modified, staged, or untracked files. This Fast feature run was created from commit \`${setupRun.pinnedCommit}\` and does **not** include them. Commit them and relaunch if they should be part of the run.`,
-              },
-          createdAt: input.createdAt,
+        yield* blockRun({
+          sourceThreadId: input.sourceThreadId,
+          run: setupRun,
+          retryableStage: "source-dirty",
+          humanBlocked: true,
+          reasonMarkdown: `Implementation requires a clean source worktree on '${expectedSourceBranch}'. Commit or preserve the current changes before starting this stage.`,
+          updatedAt: input.createdAt,
         });
+        return;
       }
 
       const existingWorktreeHead = yield* gitWorkflow
@@ -4063,6 +4423,17 @@ const make = Effect.gen(function* () {
             retryableStage: "worktree-setup",
             humanBlocked: true,
             reasonMarkdown: `The existing Fast feature worktree is not on the expected branch '${setupRun.orchestratorBranch}'. Resolve or remove the conflicting worktree, then retry.`,
+            updatedAt: input.createdAt,
+          });
+          return;
+        }
+        if (worktreeStatus.hasWorkingTreeChanges) {
+          yield* blockRun({
+            sourceThreadId: input.sourceThreadId,
+            run: setupRun,
+            retryableStage: "worktree-setup",
+            humanBlocked: true,
+            reasonMarkdown: `The existing Fast feature worktree on '${setupRun.orchestratorBranch}' is dirty before Build launch. Preserve or commit its changes before starting this stage.`,
             updatedAt: input.createdAt,
           });
           return;
@@ -4370,9 +4741,11 @@ const make = Effect.gen(function* () {
         yield* blockRun({
           sourceThreadId,
           run,
+          ticketId: currentState.ticketId,
           retryableStage: "worker-execution",
           reasonMarkdown: `Worker result identity does not match the active assignment for thread '${event.payload.threadId}'.`,
           updatedAt: directive.reportedAt,
+          humanBlocked: true,
         });
         return;
       }
@@ -4390,37 +4763,53 @@ const make = Effect.gen(function* () {
         createdAt: directive.reportedAt,
       });
 
-      if (directive.status === "failed") {
-        const failedIds = new Set([directive.ticketId]);
-        let changed = true;
-        while (changed) {
-          changed = false;
-          for (const state of run.ticketStates) {
-            if (
-              !failedIds.has(state.ticketId) &&
-              state.dependencyTicketIds.some((id) => failedIds.has(id))
-            ) {
-              failedIds.add(state.ticketId);
-              changed = true;
-            }
-          }
-        }
-        const failedRun: OrchestrationImplementationRun = {
+      if (
+        directive.status === "failed" &&
+        directive.notesMarkdown === WORKFLOW_INTERRUPTION_ERROR_MESSAGE
+      ) {
+        const interruptedRun: OrchestrationImplementationRun = {
           ...run,
-          status: "running",
           ticketStates: run.ticketStates.map((state) =>
-            failedIds.has(state.ticketId)
+            state.workerThreadId === event.payload.threadId
               ? {
                   ...state,
                   status: "failed" as const,
-                  workerResult:
-                    state.workerThreadId === event.payload.threadId
-                      ? directive
-                      : state.workerResult,
+                  warningMarkdown: directive.notesMarkdown,
+                  updatedAt: directive.reportedAt,
+                }
+              : state,
+          ),
+          updatedAt: directive.reportedAt,
+        };
+        const blocked = yield* blockRun({
+          sourceThreadId,
+          run: interruptedRun,
+          ticketId: directive.ticketId,
+          retryableStage: "worker-execution",
+          reasonMarkdown: directive.notesMarkdown,
+          updatedAt: directive.reportedAt,
+        });
+        if (blocked.automationHalt === null) {
+          yield* requestRunRetry({
+            sourceThreadId,
+            runId: run.id,
+            createdAt: directive.reportedAt,
+          });
+        }
+        return;
+      }
+
+      if (directive.status === "failed") {
+        const failedRun: OrchestrationImplementationRun = {
+          ...run,
+          ticketStates: run.ticketStates.map((state) =>
+            state.workerThreadId === event.payload.threadId
+              ? {
+                  ...state,
+                  status: "failed" as const,
+                  workerResult: directive,
                   warningMarkdown:
-                    state.workerThreadId === event.payload.threadId
-                      ? directive.notesMarkdown || `Worker '${directive.ticketId}' failed.`
-                      : `Blocked by failed dependency '${directive.ticketId}'.`,
+                    directive.notesMarkdown || `Worker '${directive.ticketId}' failed.`,
                   updatedAt: directive.reportedAt,
                 }
               : state,
@@ -4429,24 +4818,20 @@ const make = Effect.gen(function* () {
           retryableFailure: null,
           updatedAt: directive.reportedAt,
         };
-        yield* updateRun({ sourceThreadId, run: failedRun, createdAt: directive.reportedAt });
-        if (
-          failedRun.ticketStates.every(
-            (state) => state.status === "succeeded" || state.status === "failed",
-          )
-        ) {
-          yield* integrateCompletedRun({
-            sourceThreadId,
-            run: failedRun,
-            createdAt: directive.reportedAt,
-          });
-        } else {
-          yield* startReadyWorkers({
-            sourceThreadId,
-            run: failedRun,
-            createdAt: directive.reportedAt,
-          });
+        if (run.automationHalt !== null) {
+          yield* updateRun({ sourceThreadId, run: failedRun, createdAt: directive.reportedAt });
+          return;
         }
+        yield* blockRun({
+          sourceThreadId,
+          run: failedRun,
+          ticketId: directive.ticketId,
+          reasonMarkdown:
+            directive.notesMarkdown || `Ticket '${directive.ticketId}' implementation failed.`,
+          updatedAt: directive.reportedAt,
+          haltCategory: "stage-failed",
+          haltStage: "implementation",
+        });
         return;
       }
 
@@ -4472,8 +4857,10 @@ const make = Effect.gen(function* () {
               ),
             },
             retryableStage: "worker-execution",
+            ticketId: currentState.ticketId,
             reasonMarkdown: errorDetail(error),
             updatedAt: directive.reportedAt,
+            humanBlocked: structuralGitFailure(errorDetail(error)),
           }).pipe(Effect.as(null)),
         ),
       );
@@ -4494,9 +4881,35 @@ const make = Effect.gen(function* () {
             : state,
         ),
         workerResults: [...run.workerResults, acceptedDirective],
-        retryableFailure: null,
+        retryableFailure:
+          run.automationHalt === null &&
+          run.retryableFailure?.stage === "worker-execution" &&
+          run.retryableFailure.ticketId === directive.ticketId
+            ? null
+            : run.retryableFailure,
         updatedAt: directive.reportedAt,
       };
+
+      if (run.automationHalt !== null) {
+        const recordedRun: OrchestrationImplementationRun = {
+          ...succeededRun,
+          ticketStates: succeededRun.ticketStates.map((state) =>
+            state.workerThreadId === event.payload.threadId
+              ? {
+                  ...state,
+                  status: "running" as const,
+                  warningMarkdown: "Implementation result recorded after automation halted.",
+                }
+              : state,
+          ),
+        };
+        yield* updateRun({
+          sourceThreadId,
+          run: recordedRun,
+          createdAt: directive.reportedAt,
+        });
+        return;
+      }
 
       if (run.appReviewStrategy === "legacy-inline") {
         const reviewedRun = markDependentsReady(
@@ -4778,20 +5191,11 @@ const make = Effect.gen(function* () {
         };
         if (gateKind === "final") {
           const exhaustionReason = reviewGateExhaustionReason(failedRun);
-          const exhaustedRun: OrchestrationImplementationRun = {
-            ...failedRun,
-            status: "publishing-change-request",
-            activeValidationKind: null,
-            reviewGateExhaustedAt: updatedAt,
-            reviewGateExhaustionReason: exhaustionReason,
-            retryableFailure: null,
-          };
           yield* appendActivity({
             threadId: run.orchestratorThreadId,
             tone: "error",
             kind: "implementation-review-gate-exhausted",
-            summary:
-              "Final validation failed after the final Code Review; publishing work in progress",
+            summary: "Final validation failed after the final Code Review",
             payload: {
               runId: run.id,
               cycles: run.codeReviewAttemptCount,
@@ -4800,7 +5204,19 @@ const make = Effect.gen(function* () {
             },
             createdAt: updatedAt,
           });
-          yield* fileChangeRequest({ sourceThreadId, run: exhaustedRun, createdAt: updatedAt });
+          yield* blockRun({
+            sourceThreadId,
+            run: {
+              ...failedRun,
+              activeValidationKind: null,
+              reviewGateExhaustedAt: updatedAt,
+              reviewGateExhaustionReason: exhaustionReason,
+            },
+            reasonMarkdown: exhaustionReason,
+            updatedAt,
+            haltCategory: "validation-failed",
+            haltStage: "final-code-review",
+          });
           return;
         }
         yield* startFixer({
@@ -4940,9 +5356,8 @@ const make = Effect.gen(function* () {
 
     if (run.activeValidationKind === "final") {
       const exhaustionReason = reviewGateExhaustionReason(run);
-      const exhaustedRun: OrchestrationImplementationRun = {
+      const stoppedRun: OrchestrationImplementationRun = {
         ...run,
-        status: "publishing-change-request",
         integrationHeadSha: head.commitSha,
         activeValidationHeadSha: null,
         activeValidationKind: null,
@@ -4951,15 +5366,13 @@ const make = Effect.gen(function* () {
         fixOrigin: null,
         reviewGateExhaustedAt: updatedAt,
         reviewGateExhaustionReason: exhaustionReason,
-        retryableFailure: null,
         updatedAt,
       };
       yield* appendActivity({
         threadId: run.orchestratorThreadId,
         tone: "error",
         kind: "implementation-review-gate-exhausted",
-        summary:
-          "Final validation repair completed; publishing work in progress without another Code Review",
+        summary: "Final validation repair completed without another Code Review",
         payload: {
           runId: run.id,
           cycles: run.codeReviewAttemptCount,
@@ -4968,7 +5381,14 @@ const make = Effect.gen(function* () {
         },
         createdAt: updatedAt,
       });
-      yield* fileChangeRequest({ sourceThreadId, run: exhaustedRun, createdAt: updatedAt });
+      yield* blockRun({
+        sourceThreadId,
+        run: stoppedRun,
+        reasonMarkdown: exhaustionReason,
+        updatedAt,
+        haltCategory: "validation-failed",
+        haltStage: "final-code-review",
+      });
       return;
     }
 
@@ -5037,9 +5457,36 @@ const make = Effect.gen(function* () {
     readonly promptText: string;
     readonly createdAt: string;
   }) {
+    if (input.run.automationHalt !== null) return;
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
     const orchestratorThread = findThread(readModel, input.run.orchestratorThreadId);
     if (orchestratorThread === null) return;
+    const [fixerStatus, fixerHead] = yield* Effect.all([
+      gitWorkflow.localStatus({ cwd: input.run.orchestratorWorktreePath }),
+      gitWorkflow.resolveCommit({ cwd: input.run.orchestratorWorktreePath, ref: "HEAD" }),
+    ]);
+    const expectedFixerHead =
+      input.origin === "merge-gate"
+        ? input.run.activeValidationHeadSha
+        : input.origin === "code-review"
+          ? input.run.activeCodeReviewHeadSha
+          : (input.run.lastQaFailure?.headSha ?? input.run.activeAppReviewHeadSha);
+    if (
+      !fixerStatus.isRepo ||
+      fixerStatus.refName !== input.run.orchestratorBranch ||
+      fixerStatus.hasWorkingTreeChanges ||
+      (expectedFixerHead !== null && expectedFixerHead !== fixerHead.commitSha)
+    ) {
+      yield* blockRun({
+        sourceThreadId: input.sourceThreadId,
+        run: input.run,
+        retryableStage: "fixer",
+        reasonMarkdown: `Repair requires clean expected HEAD '${expectedFixerHead ?? fixerHead.commitSha}' on '${input.run.orchestratorBranch}', but Git reports '${fixerStatus.refName ?? "detached HEAD"}' at '${fixerHead.commitSha}'${fixerStatus.hasWorkingTreeChanges ? " with uncommitted changes" : ""}.`,
+        updatedAt: input.createdAt,
+        humanBlocked: true,
+      });
+      return;
+    }
     const fixerThreadId = yield* serverThreadId("implementation-fixer");
     const usesTdd = input.origin === "app-dev-stack" || input.origin === "app-review";
     const preservesReviewedBase =
@@ -5150,7 +5597,7 @@ const make = Effect.gen(function* () {
         threadId: input.run.orchestratorThreadId,
         tone: "error",
         kind: "implementation-qa-exhausted",
-        summary: `Automated QA exhausted ${exhaustedRun.qaCycleCount}/${IMPLEMENTATION_RUN_MAX_QA_REPAIRS} repairs; continuing to Code Review from the integrated HEAD`,
+        summary: `Automated QA exhausted ${exhaustedRun.qaCycleCount}/${IMPLEMENTATION_RUN_MAX_QA_REPAIRS} repairs and stopped automation`,
         payload: {
           runId: input.run.id,
           gate: input.gate,
@@ -5161,10 +5608,15 @@ const make = Effect.gen(function* () {
         createdAt: input.createdAt,
       });
     }
-    yield* continueAfterQaExhaustion({
+    yield* blockRun({
       sourceThreadId: input.sourceThreadId,
       run: exhaustedRun,
-      createdAt: input.createdAt,
+      reasonMarkdown:
+        exhaustedRun.lastQaFailure?.detailMarkdown ??
+        `${input.gate === "app-review" ? "App Review" : "App Dev Stack validation"} exhausted its repair budget.`,
+      updatedAt: input.createdAt,
+      haltCategory: "review-blocked",
+      haltStage: "app-review",
     });
   });
 
@@ -5177,6 +5629,7 @@ const make = Effect.gen(function* () {
     readonly artifactMarkdown?: string;
     readonly failureMarkdown: string;
   }) {
+    if (input.run.automationHalt !== null) return;
     if (input.run.qaCycleCount >= IMPLEMENTATION_RUN_MAX_QA_REPAIRS) {
       yield* exhaustQa({
         sourceThreadId: input.sourceThreadId,
@@ -5190,7 +5643,7 @@ const make = Effect.gen(function* () {
       ...input.run,
       qaCycleCount: input.run.qaCycleCount + 1,
       activeFixerThreadId: null,
-      retryableFailure: null,
+      retryableFailure: input.run.retryableFailure,
       updatedAt: input.createdAt,
     };
     if (input.origin === "app-review" && input.reviewId === undefined) {
@@ -5326,6 +5779,46 @@ const make = Effect.gen(function* () {
         );
         if (sourceThreadId === null || state?.worktreePath == null || state.branch == null) return;
         const updatedAt = event.payload.activity.createdAt;
+        if (
+          directive.status === "blocked" &&
+          directive.reportMarkdown === WORKFLOW_INTERRUPTION_ERROR_MESSAGE
+        ) {
+          const interruptedRun: OrchestrationImplementationRun = {
+            ...run,
+            ticketStates: run.ticketStates.map((candidate) =>
+              candidate.ticketId === state.ticketId
+                ? {
+                    ...candidate,
+                    status: "code-reviewing" as const,
+                    codeReviewThreadId: null,
+                    warningMarkdown: directive.reportMarkdown,
+                    updatedAt,
+                  }
+                : candidate,
+            ),
+            updatedAt,
+          };
+          const blocked = yield* blockRun({
+            sourceThreadId,
+            run: interruptedRun,
+            ticketId: state.ticketId,
+            retryableStage: "code-review",
+            reasonMarkdown: directive.reportMarkdown,
+            updatedAt,
+            haltStage: "code-review",
+          });
+          if (blocked.automationHalt === null) {
+            yield* startTicketCodeReview({
+              sourceThreadId,
+              run: { ...blocked, status: "running" },
+              ticketId: state.ticketId,
+              warningMarkdown: directive.reportMarkdown,
+              createdAt: updatedAt,
+            });
+          }
+          return;
+        }
+        if (state.codeReviewPassCount >= 1) return;
         const [head, status] = yield* Effect.all([
           gitWorkflow.resolveCommit({ cwd: state.worktreePath, ref: "HEAD" }),
           gitWorkflow.localStatus({ cwd: state.worktreePath }),
@@ -5362,13 +5855,50 @@ const make = Effect.gen(function* () {
           payload: { runId: run.id, ticketId: directive.ticketId, status: directive.status },
           createdAt: updatedAt,
         });
+        const completedReviewRun: OrchestrationImplementationRun = {
+          ...run,
+          ticketStates: run.ticketStates.map((candidate) =>
+            candidate.ticketId === directive.ticketId
+              ? {
+                  ...candidate,
+                  codeReviewPassCount: candidate.codeReviewPassCount + 1,
+                  codeReviewOutcome: directive.status,
+                  updatedAt,
+                }
+              : candidate,
+          ),
+          updatedAt,
+        };
+        if (directive.status === "blocked") {
+          yield* blockRun({
+            sourceThreadId,
+            run: completedReviewRun,
+            ticketId: state.ticketId,
+            reasonMarkdown: directive.reportMarkdown,
+            updatedAt,
+            haltStage: "code-review",
+          });
+          return;
+        }
+        if (!identityValid || !findingsCommitValid) {
+          yield* blockRun({
+            sourceThreadId,
+            run: completedReviewRun,
+            ticketId: state.ticketId,
+            retryableStage: "code-review",
+            reasonMarkdown: warningParts.filter(Boolean).join("\n\n"),
+            updatedAt,
+            humanBlocked: true,
+          });
+          return;
+        }
         yield* finishTicketReviewChain({
           sourceThreadId,
-          run,
+          run: completedReviewRun,
           ticketId: directive.ticketId,
           commitSha: head.commitSha,
           codeReviewOutcome: directive.status,
-          usableBranch: identityValid && findingsCommitValid,
+          usableBranch: true,
           warningMarkdown: warningParts.filter(Boolean).join("\n\n") || null,
           createdAt: updatedAt,
         });
@@ -5384,6 +5914,37 @@ const make = Effect.gen(function* () {
       const sourceThreadId = findRunSourceThreadId({ readModel, run });
       if (sourceThreadId === null) return;
       const updatedAt = event.payload.activity.createdAt;
+      const finalPass = isFinalCodeReviewPass(run);
+      if (
+        directive.status === "blocked" &&
+        directive.reportMarkdown === WORKFLOW_INTERRUPTION_ERROR_MESSAGE
+      ) {
+        const interruptedRun: OrchestrationImplementationRun = {
+          ...run,
+          activeCodeReviewHeadSha: null,
+          activeCodeReviewThreadId: null,
+          updatedAt,
+        };
+        const blocked = yield* blockRun({
+          sourceThreadId,
+          run: interruptedRun,
+          retryableStage: "code-review",
+          reasonMarkdown: directive.reportMarkdown,
+          updatedAt,
+          haltStage: finalPass ? "final-code-review" : "code-review",
+        });
+        if (blocked.automationHalt === null) {
+          yield* startCodeReview({
+            sourceThreadId,
+            run: { ...blocked, status: "code-reviewing" },
+            createdAt: updatedAt,
+          });
+        }
+        return;
+      }
+      if (finalPass && run.finalCodeReviewPassCount >= IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES) {
+        return;
+      }
       const [head, status] = yield* Effect.all([
         gitWorkflow.resolveCommit({ cwd: run.orchestratorWorktreePath, ref: "HEAD" }),
         gitWorkflow.localStatus({ cwd: run.orchestratorWorktreePath }),
@@ -5401,28 +5962,23 @@ const make = Effect.gen(function* () {
       if (directive.status === "blocked") {
         const blockedRun: OrchestrationImplementationRun = {
           ...run,
-          status: run.appReviewedHeadSha === null ? "qa-reviewing" : "publishing-change-request",
           activeCodeReviewHeadSha: null,
           activeCodeReviewThreadId: null,
+          finalCodeReviewPassCount: finalPass
+            ? run.finalCodeReviewPassCount + 1
+            : run.finalCodeReviewPassCount,
           latestCodeReviewReportMarkdown: directive.reportMarkdown,
           reviewGateExhaustedAt: updatedAt,
           reviewGateExhaustionReason: directive.reportMarkdown,
-          retryableFailure: null,
           updatedAt,
         };
-        if (
-          run.appReviewedHeadSha === null &&
-          run.qaExhaustedAt === null &&
-          run.appReviewExhaustedAt === null &&
-          !(
-            run.appReviewStrategy === "nested-workflow" &&
-            run.latestAppReviewWorkflowOutcome !== null
-          )
-        ) {
-          yield* startBrowserReview({ sourceThreadId, run: blockedRun, createdAt: updatedAt });
-        } else {
-          yield* fileChangeRequest({ sourceThreadId, run: blockedRun, createdAt: updatedAt });
-        }
+        yield* blockRun({
+          sourceThreadId,
+          run: blockedRun,
+          reasonMarkdown: directive.reportMarkdown,
+          updatedAt,
+          haltStage: "final-code-review",
+        });
         return;
       }
 
@@ -5440,6 +5996,7 @@ const make = Effect.gen(function* () {
           retryableStage: "code-review",
           reasonMarkdown: `Code Review must finish with a committed, clean worktree on branch '${run.orchestratorBranch}', but Git reports '${status.refName ?? "detached HEAD"}'${status.hasWorkingTreeChanges ? " with uncommitted changes" : ""}.`,
           updatedAt,
+          humanBlocked: true,
         });
         return;
       }
@@ -5457,11 +6014,19 @@ const make = Effect.gen(function* () {
         }
         const reviewedRun: OrchestrationImplementationRun = {
           ...run,
+          retryableFailure:
+            run.retryableFailure?.stage === "code-review" &&
+            run.retryableFailure.ticketId === undefined
+              ? null
+              : run.retryableFailure,
           codeReviewedHeadSha: head.commitSha,
           activeCodeReviewHeadSha: null,
           activeCodeReviewThreadId: null,
           latestCodeReviewReportMarkdown: directive.reportMarkdown,
           validatedHeadSha: null,
+          finalCodeReviewPassCount: finalPass
+            ? run.finalCodeReviewPassCount + 1
+            : run.finalCodeReviewPassCount,
           updatedAt,
         };
         if (
@@ -5548,11 +6113,19 @@ const make = Effect.gen(function* () {
 
       const reviewedRun: OrchestrationImplementationRun = {
         ...run,
+        retryableFailure:
+          run.retryableFailure?.stage === "code-review" &&
+          run.retryableFailure.ticketId === undefined
+            ? null
+            : run.retryableFailure,
         codeReviewedHeadSha: head.commitSha,
         activeCodeReviewHeadSha: null,
         activeCodeReviewThreadId: null,
         latestCodeReviewReportMarkdown: directive.reportMarkdown,
         validatedHeadSha: null,
+        finalCodeReviewPassCount: finalPass
+          ? run.finalCodeReviewPassCount + 1
+          : run.finalCodeReviewPassCount,
         updatedAt,
       };
       const needsFreshAppReview =
@@ -5754,7 +6327,7 @@ const make = Effect.gen(function* () {
           run: {
             ...input.run,
             status: "babysitting-change-request",
-            retryableFailure: null,
+            retryableFailure: input.run.retryableFailure,
           },
           createdAt: input.createdAt,
         });
@@ -5804,7 +6377,7 @@ const make = Effect.gen(function* () {
               appReviewUnblockAttemptCount: failure.humanBlocked
                 ? 0
                 : input.run.appReviewUnblockAttemptCount,
-              retryableFailure: null,
+              retryableFailure: input.run.retryableFailure,
               updatedAt: input.createdAt,
             },
             createdAt: input.createdAt,
@@ -5816,7 +6389,7 @@ const make = Effect.gen(function* () {
             sourceThreadId: input.sourceThreadId,
             run: {
               ...input.run,
-              retryableFailure: null,
+              retryableFailure: input.run.retryableFailure,
               updatedAt: input.createdAt,
             },
             createdAt: input.createdAt,
@@ -6134,6 +6707,27 @@ const make = Effect.gen(function* () {
         kind: "implementation-rerun-skipped",
         summary: "Stage re-run skipped while the workflow is paused",
         payload: { runId: run.id, target },
+        createdAt,
+      });
+      return;
+    }
+
+    if (
+      run.automationHalt !== null &&
+      (target.kind === "ticket"
+        ? !automationHaltMatchesTicketRerun({
+            halt: run.automationHalt,
+            ticketId: target.ticketId,
+            stage: target.stage,
+          })
+        : !automationHaltMatchesRunRerun({ halt: run.automationHalt, stage: target.stage }))
+    ) {
+      yield* appendActivity({
+        threadId: run.orchestratorThreadId,
+        tone: "info",
+        kind: "implementation-rerun-skipped",
+        summary: "Stage re-run did not match the halted stage",
+        payload: { runId: run.id, target, automationHalt: run.automationHalt },
         createdAt,
       });
       return;
@@ -6483,6 +7077,26 @@ const make = Effect.gen(function* () {
         ),
         updatedAt: event.occurredAt,
       };
+      if (linkedTicketRun.automationHalt !== null) {
+        yield* updateRun({
+          sourceThreadId,
+          run: reviewedTicketRun,
+          createdAt: event.occurredAt,
+        });
+        return;
+      }
+      if (outcome !== "passed") {
+        yield* blockRun({
+          sourceThreadId,
+          run: reviewedTicketRun,
+          ticketId,
+          reasonMarkdown: warningMarkdown ?? `Ticket App Review ended ${outcome}.`,
+          updatedAt: event.occurredAt,
+          haltCategory: "review-blocked",
+          haltStage: "app-review",
+        });
+        return;
+      }
       yield* startTicketCodeReview({
         sourceThreadId,
         run: reviewedTicketRun,
@@ -6589,12 +7203,13 @@ const make = Effect.gen(function* () {
         retryableFailure: null,
         updatedAt: event.occurredAt,
       };
-      yield* updateRun({ sourceThreadId, run: failedRun, createdAt: event.occurredAt });
-      yield* startCodeReview({
+      yield* blockRun({
         sourceThreadId,
         run: failedRun,
-        createdAt: event.occurredAt,
-        skipAppReviewRequirement: true,
+        reasonMarkdown: failedRun.lastQaFailure?.detailMarkdown ?? "App Review did not pass.",
+        updatedAt: event.occurredAt,
+        haltCategory: "review-blocked",
+        haltStage: "app-review",
       });
       return;
     }
@@ -7024,7 +7639,7 @@ const make = Effect.gen(function* () {
     const createdAt = DateTime.formatIso(yield* DateTime.now);
     const nowMs = Date.parse(createdAt);
     for (const run of readModel.implementationRuns) {
-      if (run.status === "canceled") continue;
+      if (run.status === "canceled" || run.automationHalt !== null) continue;
       const recoverStackFailure =
         run.artifactSource === "planning-spec" &&
         run.status === "needs-human-attention" &&
@@ -7072,6 +7687,7 @@ const make = Effect.gen(function* () {
     for (const run of readModel.implementationRuns) {
       if (
         run.status === "canceled" ||
+        run.automationHalt !== null ||
         run.artifactSource !== "planning-spec" ||
         (run.status !== "running" && run.status !== "integrating") ||
         !run.ticketStates.every(
@@ -7113,7 +7729,7 @@ const make = Effect.gen(function* () {
     const createdAt = DateTime.formatIso(yield* DateTime.now);
     const nowMs = Date.parse(createdAt);
     for (const run of readModel.implementationRuns) {
-      if (run.status === "canceled") continue;
+      if (run.status === "canceled" || run.automationHalt !== null) continue;
       if (run.status !== "completed") {
         yield* tierDownTicketStacks({ run, createdAt });
       }
@@ -7661,6 +8277,7 @@ const make = Effect.gen(function* () {
       for (const run of readModel.implementationRuns) {
         if (
           run.status !== "needs-human-attention" ||
+          run.automationHalt !== null ||
           run.retryableFailure === null ||
           // Only a human can clear this one. Retrying burns the attempt budget in
           // repeated sweeps against a condition that cannot change on its own,

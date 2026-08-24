@@ -62,7 +62,7 @@ describe("selectActiveAppReviewRecord", () => {
 });
 
 describe("App Review workflow panel logic", () => {
-  it("accepts settled launches with a dynamic 1-50 cycle budget before preview resolution", () => {
+  it("accepts settled launches with a dynamic 1-10 cycle budget before preview resolution", () => {
     const valid = {
       brief: "Review checkout",
       cycleBudget: 10,

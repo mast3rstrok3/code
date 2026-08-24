@@ -131,7 +131,7 @@ export function WorkflowSettingsBody(props: {
         <div className="space-y-4 px-3 py-2">
           <p className="text-[11px] leading-relaxed text-muted-foreground">
             {props.description ??
-              "Set models, cycle budgets, and App Review parts in the order this workflow runs. Changes apply to the next agent each step starts."}
+              "Set models, cycle budgets, and App Review parts in the order this workflow runs. App Review stops at 10 cycles, Code Review gets one pass, and an interrupted launch retries once. Changes apply to the next agent each step starts."}
           </p>
           <EngineeringWorkflowSettings
             preset={props.preset}
@@ -164,7 +164,7 @@ export function WorkflowSettingsBody(props: {
       <div className="space-y-3 px-3 py-2">
         <p className="text-[11px] leading-relaxed text-muted-foreground">
           {props.description ??
-            "Set models for steps that start separate threads, cycle budgets, and the parts an App Review verifies. Shared-thread steps use the workflow composer model. Changes apply to the next agent a step starts."}
+            "Set models for steps that start separate threads, cycle budgets, and the parts an App Review verifies. App Review stops at 10 cycles, Code Review gets one pass, and an interrupted launch retries once. Shared-thread steps use the workflow composer model. Changes apply to the next agent a step starts."}
         </p>
         <WorkflowModelQuickPins
           preset={props.preset}

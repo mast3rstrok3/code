@@ -35,7 +35,9 @@ import {
 import {
   isAwaitingWorkflowNudge,
   isWorkflowNudgeCandidate,
+  workflowAutomaticRetryLimit,
   workflowNudgeDelayMs,
+  WORKFLOW_INTERRUPTION_ERROR_MESSAGE,
   WORKFLOW_NUDGE_ACTIVITY_KIND,
   WORKFLOW_NUDGE_EXHAUSTED_MESSAGE,
   WORKFLOW_NUDGE_INTERVAL_MS,
@@ -51,9 +53,6 @@ const DEFAULT_MAX_RESUME_ATTEMPTS = 2;
 /** The two App Review phase skills, mirrored from the App Review reactor. */
 const APP_REVIEW_TO_TICKETS_SKILL_ID = "matt-pocock.to-tickets";
 const APP_REVIEW_IMPLEMENT_SKILL_ID = "matt-pocock.implement";
-
-const STALE_TURN_ERROR_MESSAGE =
-  "Provider session lost while a turn was running; settled by the stale-turn reconciler.";
 
 export const STALE_TURN_RESUME_ACTIVITY_KIND = "stale-turn-resumed";
 
@@ -477,7 +476,7 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
                 runId: run.id,
                 status: "blocked",
                 validations: [],
-                notesMarkdown: STALE_TURN_ERROR_MESSAGE,
+                notesMarkdown: WORKFLOW_INTERRUPTION_ERROR_MESSAGE,
               },
               createdAt,
             });
@@ -506,7 +505,7 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
                 branch: ticketState.branch ?? "unknown",
                 worktreePath: ticketState.worktreePath ?? "unknown",
                 validations: [],
-                notesMarkdown: STALE_TURN_ERROR_MESSAGE,
+                notesMarkdown: WORKFLOW_INTERRUPTION_ERROR_MESSAGE,
                 reportedAt: createdAt,
                 commitSha: null,
               },
@@ -532,7 +531,7 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
                 runId: run.id,
                 status: "failed",
                 validations: [],
-                summaryMarkdown: STALE_TURN_ERROR_MESSAGE,
+                summaryMarkdown: WORKFLOW_INTERRUPTION_ERROR_MESSAGE,
               },
               createdAt,
             });
@@ -556,7 +555,7 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
                 runId: run.id,
                 status: "failed",
                 validations: [],
-                notesMarkdown: STALE_TURN_ERROR_MESSAGE,
+                notesMarkdown: WORKFLOW_INTERRUPTION_ERROR_MESSAGE,
               },
               createdAt,
             });
@@ -580,7 +579,7 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
                 runId: run.id,
                 status: "blocked",
                 validations: [],
-                reportMarkdown: STALE_TURN_ERROR_MESSAGE,
+                reportMarkdown: WORKFLOW_INTERRUPTION_ERROR_MESSAGE,
               },
               createdAt,
             });
@@ -635,7 +634,7 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
               targetPlanningTicketIds: [...activeReview.targetPlanningTicketIds],
               ticketEdits: [],
               runtimeFailure: true,
-              verdictMarkdown: STALE_TURN_ERROR_MESSAGE,
+              verdictMarkdown: WORKFLOW_INTERRUPTION_ERROR_MESSAGE,
               passed: false,
               failingPlanningTicketIds: [...activeReview.targetPlanningTicketIds],
               dependencyFeedback: [],
@@ -700,7 +699,9 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
             runtimeMode: thread.session?.runtimeMode ?? thread.runtimeMode,
             activeTurnId: null,
             lastError:
-              input.status === "stopped" ? null : (input.lastError ?? STALE_TURN_ERROR_MESSAGE),
+              input.status === "stopped"
+                ? null
+                : (input.lastError ?? WORKFLOW_INTERRUPTION_ERROR_MESSAGE),
             updatedAt,
           },
           createdAt: updatedAt,
@@ -796,9 +797,10 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
       readonly blockedTurnId: TurnId;
       readonly target: ResumeTarget;
       readonly attempt: number;
+      readonly maxAttempts: number;
       readonly updatedAt: string;
     }) {
-      const { thread, blockedTurnId, target, attempt, updatedAt } = input;
+      const { thread, blockedTurnId, target, attempt, maxAttempts, updatedAt } = input;
       const nudgeMessageId = MessageId.make(`message-workflow-nudge-${thread.id}-${attempt}`);
       const nudgeCommandId = (tag: string) =>
         CommandId.make(`server:workflow-nudge:${tag}:${thread.id}:${attempt}`);
@@ -811,11 +813,11 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
           id: EventId.make(yield* crypto.randomUUIDv4),
           tone: "info",
           kind: WORKFLOW_NUDGE_ACTIVITY_KIND,
-          summary: `Nudged after a failed turn (attempt ${attempt}/${maxNudgeAttempts})`,
+          summary: `Nudged after a failed turn (attempt ${attempt}/${maxAttempts})`,
           payload: {
             type: WORKFLOW_NUDGE_ACTIVITY_KIND,
             attempt,
-            maxAttempts: maxNudgeAttempts,
+            maxAttempts,
             blockedTurnId,
             nudgeMessageId,
             workflowPromptId: target.workflowPromptId,
@@ -855,7 +857,7 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
         turnId: blockedTurnId,
         workflowRole: thread.workflowRole,
         attempt,
-        maxAttempts: maxNudgeAttempts,
+        maxAttempts,
       });
     });
 
@@ -882,7 +884,11 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
         if (target === null) return false;
 
         const priorAttempts = nudgeActivities(detail).length;
-        if (priorAttempts >= maxNudgeAttempts) {
+        const nudgeAttemptLimit = workflowAutomaticRetryLimit(
+          thread.workflowRole,
+          maxNudgeAttempts,
+        );
+        if (priorAttempts >= nudgeAttemptLimit) {
           yield* propagateWorkflowFailure({
             readModel,
             thread,
@@ -917,6 +923,7 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
           blockedTurnId,
           target,
           attempt: priorAttempts + 1,
+          maxAttempts: nudgeAttemptLimit,
           updatedAt,
         });
         return true;
@@ -985,7 +992,11 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
           Option.getOrNull(yield* projectionSnapshotQuery.getThreadDetailById(thread.id));
         const priorAttempts = detail === null ? 0 : countPriorResumeAttempts(detail, pinnedTurnId);
 
-        if (priorAttempts >= maxResumeAttempts) {
+        const resumeAttemptLimit = workflowAutomaticRetryLimit(
+          thread.workflowRole,
+          maxResumeAttempts,
+        );
+        if (priorAttempts >= resumeAttemptLimit) {
           // Propagate first: if the process dies mid-candidate, the candidate
           // is re-detected on the next boot and receipt dedup keeps the
           // synthesized directive exactly-once.

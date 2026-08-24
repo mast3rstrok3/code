@@ -36,6 +36,9 @@ export const WORKFLOW_NUDGE_ACTIVITY_KIND = "workflow-nudged";
 export const WORKFLOW_NUDGE_EXHAUSTED_MESSAGE =
   "Workflow nudges exhausted; the thread stayed blocked after repeated retries.";
 
+export const WORKFLOW_INTERRUPTION_ERROR_MESSAGE =
+  "Provider session lost while a turn was running; settled by the stale-turn reconciler.";
+
 /** First retry after a failed turn — fast, because most failures are transient. */
 export const WORKFLOW_NUDGE_FIRST_DELAY_MS = 60 * 1000;
 
@@ -53,6 +56,33 @@ export const WORKFLOW_NUDGE_INTERVAL_MS = 10 * 60 * 1000;
  * credentials, a provider that fails every start).
  */
 export const WORKFLOW_NUDGE_MAX_ATTEMPTS = 48;
+
+const STAGE_RETRY_OWNED_WORKFLOW_ROLES: ReadonlySet<OrchestrationThreadWorkflowRole> = new Set([
+  "implementation-worker",
+  "implementation-validator",
+  "implementation-fixer",
+  "implementation-code-reviewer",
+  "implementation-qa-reviewer",
+  "implementation-change-request-babysitter",
+]);
+
+const SINGLE_NUDGE_RETRY_WORKFLOW_ROLES: ReadonlySet<OrchestrationThreadWorkflowRole> = new Set([
+  "app-review-reviewer",
+  "app-review-planner",
+  "app-review-fixer",
+]);
+
+/** Keep recovery mechanisms inside the stage's durable automatic retry budget. */
+export function workflowAutomaticRetryLimit(
+  role: OrchestrationThreadWorkflowRole | null,
+  configuredLimit: number,
+): number {
+  if (role !== null && STAGE_RETRY_OWNED_WORKFLOW_ROLES.has(role)) return 0;
+  if (role !== null && SINGLE_NUDGE_RETRY_WORKFLOW_ROLES.has(role)) {
+    return Math.min(1, configuredLimit);
+  }
+  return configuredLimit;
+}
 
 /**
  * How long a stage owner defers to a pending nudge without seeing progress.

@@ -296,15 +296,15 @@ it.effect("carries the gap analysis thread on new cycles", () =>
   }),
 );
 
-it.effect("rejects App Review cycle budgets outside 1 through 50", () =>
+it.effect("rejects zero and clamps historical App Review budgets to 10", () =>
   Effect.gen(function* () {
-    for (const cycleBudget of [0, 51]) {
-      const exit = yield* Effect.exit(decodeAppReviewWorkflowRun({ ...workflowRun, cycleBudget }));
-      assert.strictEqual(exit._tag, "Failure");
-    }
-    for (const cycleBudget of [1, 50]) {
+    const exit = yield* Effect.exit(decodeAppReviewWorkflowRun({ ...workflowRun, cycleBudget: 0 }));
+    assert.strictEqual(exit._tag, "Failure");
+    for (const cycleBudget of [1, 10]) {
       const run = yield* decodeAppReviewWorkflowRun({ ...workflowRun, cycleBudget });
       assert.strictEqual(run.cycleBudget, cycleBudget);
     }
+    const historical = yield* decodeAppReviewWorkflowRun({ ...workflowRun, cycleBudget: 50 });
+    assert.strictEqual(historical.cycleBudget, 10);
   }),
 );

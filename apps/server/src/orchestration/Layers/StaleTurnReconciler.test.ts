@@ -3,7 +3,6 @@ import { expect, it } from "@effect/vitest";
 import {
   CommandId,
   DEFAULT_WORKSPACE_USER_ID,
-  AppReviewId,
   EventId,
   MessageId,
   ProjectId,
@@ -229,6 +228,23 @@ function makeTestLayer(
               updatedAt: now,
             },
           }),
+        stop: () =>
+          Effect.succeed({
+            id: "stack-1",
+            uuid: "stack-uuid-1",
+            userId: "user-1",
+            worktreePath: "/tmp/stale-turn-reconciler",
+            composePath: "/tmp/compose.yml",
+            displayName: "Stale turn reconciler test",
+            description: null,
+            status: "stopped" as const,
+            services: null,
+            serviceCount: 0,
+            lastError: null,
+            errorCount: 0,
+            createdAt: now,
+            updatedAt: now,
+          }),
       }),
     ),
   );
@@ -405,84 +421,6 @@ function setThreadSession(
       updatedAt: input.updatedAt ?? now,
     },
     createdAt: input.updatedAt ?? now,
-  });
-}
-
-/**
- * Seed a stale-turn-resumed activity as if a prior sweep had appended it. Pass
- * `asReconcilerCommand: true` to reuse the reconciler's deterministic
- * commandId, mimicking a crash between the activity append and the turn start.
- */
-function seedResumeActivity(
-  system: ReconcilerSystem,
-  input: {
-    readonly threadId: ThreadId;
-    readonly interruptedTurnId: TurnId;
-    readonly tag: string;
-    readonly asReconcilerCommand?: boolean;
-  },
-) {
-  return system.engine.dispatch({
-    type: "thread.activity.append",
-    commandId:
-      input.asReconcilerCommand === true
-        ? CommandId.make(`server:stale-turn:resumed:${input.threadId}:${input.interruptedTurnId}`)
-        : commandId(`seed-resume-${input.tag}`),
-    threadId: input.threadId,
-    activity: {
-      id: eventId(`seed-resume-${input.tag}`),
-      tone: "info",
-      kind: STALE_TURN_RESUME_ACTIVITY_KIND,
-      summary: "Resumed after interrupted turn (attempt 1/2)",
-      payload: {
-        type: STALE_TURN_RESUME_ACTIVITY_KIND,
-        attempt: 1,
-        maxAttempts: 2,
-        interruptedTurnId: input.interruptedTurnId,
-        resumeMessageId: `message-stale-turn-resume-${input.threadId}-${input.interruptedTurnId}`,
-        workflowPromptId: null,
-        reason: "provider-session-lost",
-        resumedAt: now,
-      },
-      turnId: null,
-      createdAt: now,
-    },
-    createdAt: now,
-  });
-}
-
-/**
- * Seed a fully completed prior resume: the activity AND the resume turn.start
- * receipt under the reconciler's deterministic commandIds, exactly the state a
- * finished resume leaves behind. Keeps later sweeps' safety-net replays
- * no-ops, as in production.
- */
-function seedCompletedResume(
-  system: ReconcilerSystem,
-  input: {
-    readonly threadId: ThreadId;
-    readonly interruptedTurnId: TurnId;
-    readonly tag: string;
-  },
-) {
-  return Effect.gen(function* () {
-    yield* seedResumeActivity(system, { ...input, asReconcilerCommand: true });
-    yield* system.engine.dispatch({
-      type: "thread.turn.start",
-      commandId: CommandId.make(
-        `server:stale-turn:resume:${input.threadId}:${input.interruptedTurnId}`,
-      ),
-      threadId: input.threadId,
-      message: {
-        messageId: messageId(`seed-resume-turn-${input.tag}`),
-        role: "user",
-        text: "Seeded prior resume turn.",
-        attachments: [],
-      },
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      createdAt: now,
-    });
   });
 }
 
@@ -692,149 +630,6 @@ function appendWorkerSuccess(system: ReconcilerSystem, run: OrchestrationImpleme
   });
 }
 
-function appendCleanCodeReview(
-  system: ReconcilerSystem,
-  run: OrchestrationImplementationRun,
-  threadId: ThreadId,
-  tag: string,
-) {
-  return Effect.gen(function* () {
-    yield* system.engine.dispatch({
-      type: "thread.activity.append",
-      commandId: commandId(`code-review-${tag}`),
-      threadId,
-      activity: {
-        id: eventId(`code-review-${tag}`),
-        tone: "info",
-        kind: "implementation-code-review-result",
-        summary: "Code review clean",
-        payload: {
-          type: "implementation-code-review-result",
-          runId: run.id,
-          status: "clean",
-          validations: [],
-          reportMarkdown: "## Standards\n- clean\n\n## Spec\n- clean",
-        },
-        turnId: null,
-        createdAt: "2026-01-01T00:00:02.500Z",
-      },
-      createdAt: "2026-01-01T00:00:02.500Z",
-    });
-    yield* system.reactor.drain;
-  });
-}
-
-function passMergeGate(system: ReconcilerSystem, run: OrchestrationImplementationRun) {
-  return Effect.gen(function* () {
-    const snapshot = yield* system.query.getSnapshot();
-    // The run names the validator it is waiting on, and the handler ignores a
-    // result from any other thread. A run reaches the gate more than once.
-    const validatorThreadId = snapshot.implementationRuns.find(
-      (candidate) => candidate.id === run.id,
-    )?.activeValidatorThreadId;
-    if (!validatorThreadId) throw new Error("Validator missing.");
-    yield* system.engine.dispatch({
-      type: "thread.activity.append",
-      commandId: commandId(`merge-gate-pass-${validatorThreadId}`),
-      threadId: validatorThreadId,
-      activity: {
-        id: eventId(`merge-gate-pass-${validatorThreadId}`),
-        tone: "info",
-        kind: "implementation-merge-gate-result",
-        summary: "Merge gate passed",
-        payload: {
-          type: "implementation-merge-gate-result",
-          runId: run.id,
-          status: "passed",
-          // The integration gate takes focused validation. Reporting one of the
-          // run's complete commands here is what the final gate is for, and the
-          // gate rejects it.
-          validations: [
-            {
-              command: "vp test run src/ticket-1.test.ts",
-              status: "passed",
-              outputMarkdown: "ok",
-              completedAt: "2026-01-01T00:00:02.000Z",
-            },
-          ],
-          summaryMarkdown: "ok",
-        },
-        turnId: null,
-        createdAt: "2026-01-01T00:00:02.000Z",
-      },
-      createdAt: "2026-01-01T00:00:02.000Z",
-    });
-    yield* system.reactor.drain;
-    // A passing gate hands the integrated change to one Code Review before App
-    // Review, and App Review only starts once that comes back clean.
-    const reviewingSnapshot = yield* system.query.getSnapshot();
-    const reviewingRun = reviewingSnapshot.implementationRuns.find(
-      (candidate) => candidate.id === run.id,
-    );
-    if (reviewingRun?.status === "code-reviewing" && reviewingRun.activeCodeReviewThreadId) {
-      yield* appendCleanCodeReview(
-        system,
-        run,
-        reviewingRun.activeCodeReviewThreadId,
-        "combined-before-app-review",
-      );
-    }
-  });
-}
-
-function passAppReview(system: ReconcilerSystem, run: OrchestrationImplementationRun) {
-  return Effect.gen(function* () {
-    const snapshot = yield* system.query.getSnapshot();
-    const reviewingRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
-    const reviewId = reviewingRun?.appReviewIds[0];
-    if (reviewId === undefined) throw new Error("App review missing.");
-    yield* system.engine.dispatch({
-      type: "thread.app-review.update",
-      commandId: commandId("app-review-pass"),
-      threadId: run.orchestratorThreadId,
-      reviewId: AppReviewId.make(reviewId),
-      status: "passed",
-      updatedAt: "2026-01-01T00:00:03.000Z",
-      createdAt: "2026-01-01T00:00:03.000Z",
-    });
-    yield* system.reactor.drain;
-  });
-}
-
-function failAppReview(system: ReconcilerSystem, run: OrchestrationImplementationRun) {
-  return Effect.gen(function* () {
-    const snapshot = yield* system.query.getSnapshot();
-    const reviewingRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
-    const reviewId = reviewingRun?.appReviewIds.at(-1);
-    if (reviewId === undefined) throw new Error("App review missing.");
-    yield* system.engine.dispatch({
-      type: "thread.app-review.update",
-      commandId: commandId("app-review-fail"),
-      threadId: run.orchestratorThreadId,
-      reviewId: AppReviewId.make(reviewId),
-      status: "failed",
-      updatedAt: "2026-01-01T00:00:03.000Z",
-      createdAt: "2026-01-01T00:00:03.000Z",
-    });
-    yield* system.reactor.drain;
-  });
-}
-
-/**
- * The newest thread holding a role.
- *
- * A run reaches some stages more than once: the integrated change gets one Code
- * Review before App Review and another after it. These tests always mean the
- * stage the run is in now, which is the last thread created for that role.
- */
-function findThreadByRole(system: ReconcilerSystem, role: string) {
-  return system.query
-    .getSnapshot()
-    .pipe(
-      Effect.map((snapshot) => snapshot.threads.findLast((thread) => thread.workflowRole === role)),
-    );
-}
-
 function getRun(system: ReconcilerSystem, runId: string) {
   return system.query
     .getSnapshot()
@@ -1028,7 +823,7 @@ describe("StaleTurnReconciler", () => {
     ),
   );
 
-  it.live("resumes an orphaned worker turn instead of failing the run", () =>
+  it.live("retries an interrupted worker once and halts after the second interruption", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
@@ -1052,10 +847,15 @@ describe("StaleTurnReconciler", () => {
 
           yield* system.reconciler.start();
           yield* waitUntil(
-            resumeActivities(system, workerThreadId).pipe(
-              Effect.map((activities) => activities.length === 1),
+            getThread(system, workerThreadId).pipe(
+              Effect.map(
+                (thread) =>
+                  (thread?.activities ?? []).filter(
+                    (activity) => activity.kind === "implementation-worker-result",
+                  ).length === 1,
+              ),
             ),
-            "worker resume activity",
+            "worker failure handoff",
           );
           yield* system.reactor.drain;
 
@@ -1064,16 +864,10 @@ describe("StaleTurnReconciler", () => {
           expect(workerThread?.session?.activeTurnId).toBeNull();
 
           const resumes = yield* resumeActivities(system, workerThreadId);
-          expect(resumes).toHaveLength(1);
-          expect(resumes[0]?.tone).toBe("info");
-          const payload = resumes[0]?.payload as Record<string, unknown>;
-          expect(payload["attempt"]).toBe(1);
-          expect(payload["maxAttempts"]).toBe(2);
-          expect(payload["interruptedTurnId"]).toBe(turnId);
-          expect(payload["workflowPromptId"]).toBe(WORKFLOW_PROMPT_IDS.implementationTddCodex);
+          expect(resumes).toHaveLength(0);
 
           const messages = yield* resumeMessages(system, workerThreadId);
-          expect(messages).toHaveLength(1);
+          expect(messages).toHaveLength(0);
 
           const binding = Option.getOrUndefined(yield* system.directory.getBinding(workerThreadId));
           expect(binding?.status).toBe("stopped");
@@ -1082,13 +876,42 @@ describe("StaleTurnReconciler", () => {
           const settledRun = yield* getRun(system, run.id);
           expect(settledRun?.status).toBe("running");
           expect(settledRun?.ticketStates[0]?.status).toBe("running");
+          expect(settledRun?.ticketStates[0]?.attemptCount).toBe(2);
+          expect(settledRun?.ticketStates[0]?.workerThreadId).not.toBe(workerThreadId);
+          expect(settledRun?.retryableFailure?.attemptCount).toBe(1);
           expect(settledRun?.workerResults).toHaveLength(0);
           const workerResultActivities = (workerThread?.activities ?? []).filter(
             (activity) => activity.kind === "implementation-worker-result",
           );
-          expect(workerResultActivities).toHaveLength(0);
+          expect(workerResultActivities).toHaveLength(1);
+
+          const retryWorkerThreadId = settledRun?.ticketStates[0]?.workerThreadId;
+          if (!retryWorkerThreadId) throw new Error("Retry worker missing.");
+          yield* setThreadSession(system, {
+            threadId: retryWorkerThreadId,
+            status: "running",
+            activeTurnId: TurnId.make("turn-stale-worker-retry"),
+            tag: "worker-retry-orphan",
+          });
+          yield* waitUntil(
+            getRun(system, run.id).pipe(
+              Effect.map((entry) => entry?.automationHalt?.category === "retry-exhausted"),
+            ),
+            "worker retry budget to halt",
+          );
+          yield* system.reactor.drain;
+
+          const haltedRun = yield* getRun(system, run.id);
+          expect(haltedRun?.status).toBe("needs-human-attention");
+          expect(haltedRun?.retryableFailure?.attemptCount).toBe(2);
+          expect(haltedRun?.automationHalt).toMatchObject({
+            ticketId: run.ticketStates[0]?.ticketId,
+            stage: "implementation",
+            category: "retry-exhausted",
+          });
+          expect(haltedRun?.workerResults).toHaveLength(0);
         }),
-      { reconciler: bootOnlyOptions },
+      { reconciler: { sweepIntervalMs: 100, graceMs: 0, confirmDelayMs: 0 } },
     ),
   );
 
@@ -1146,309 +969,6 @@ describe("StaleTurnReconciler", () => {
 
           const binding = Option.getOrUndefined(yield* system.directory.getBinding(workerThreadId));
           expect(binding?.status).toBe("stopped");
-        }),
-      { reconciler: bootOnlyOptions },
-    ),
-  );
-
-  it.live("fails the ticket when the worker resume budget is exhausted", () =>
-    withSystem(
-      (system) =>
-        Effect.gen(function* () {
-          const { run } = yield* launchRun(system);
-          const workerThreadId = requireWorkerThreadId(run);
-
-          yield* system.reconciler.start();
-
-          yield* setThreadSession(system, {
-            threadId: workerThreadId,
-            status: "running",
-            activeTurnId: TurnId.make("turn-stale-worker-budget-1"),
-            tag: "budget-1",
-          });
-          yield* waitUntil(
-            resumeActivities(system, workerThreadId).pipe(
-              Effect.map((activities) => activities.length === 1),
-            ),
-            "first worker resume",
-          );
-
-          yield* setThreadSession(system, {
-            threadId: workerThreadId,
-            status: "running",
-            activeTurnId: TurnId.make("turn-stale-worker-budget-2"),
-            tag: "budget-2",
-          });
-          yield* waitUntil(
-            resumeActivities(system, workerThreadId).pipe(
-              Effect.map((activities) => activities.length === 2),
-            ),
-            "second worker resume",
-          );
-
-          yield* setThreadSession(system, {
-            threadId: workerThreadId,
-            status: "running",
-            activeTurnId: TurnId.make("turn-stale-worker-budget-3"),
-            tag: "budget-3",
-          });
-          yield* waitUntil(
-            getRun(system, run.id).pipe(
-              Effect.map((entry) => entry?.ticketStates[0]?.status === "failed"),
-            ),
-            "ticket to fail",
-          );
-          yield* system.reactor.drain;
-
-          // A blocked stage no longer stops the run. The ticket carries the
-          // failure and integration goes on with whatever branches are usable.
-          const settledRun = yield* getRun(system, run.id);
-          expect(settledRun?.ticketStates[0]?.status).toBe("failed");
-          expect(settledRun?.status).toBe("validating");
-          expect(settledRun?.workerResults).toHaveLength(1);
-          expect(settledRun?.workerResults[0]?.status).toBe("failed");
-          expect(yield* resumeActivities(system, workerThreadId)).toHaveLength(2);
-          expect(yield* resumeMessages(system, workerThreadId)).toHaveLength(2);
-        }),
-      { reconciler: { sweepIntervalMs: 100, graceMs: 0, confirmDelayMs: 0 } },
-    ),
-  );
-
-  it.live("does not duplicate resume artifacts across repeated sweeps", () =>
-    withSystem(
-      (system) =>
-        Effect.gen(function* () {
-          const { run } = yield* launchRun(system);
-          const workerThreadId = requireWorkerThreadId(run);
-          const turnId = TurnId.make("turn-stale-worker-repeat");
-          yield* setThreadSession(system, {
-            threadId: workerThreadId,
-            status: "running",
-            activeTurnId: turnId,
-            tag: "worker-orphan",
-          });
-
-          yield* system.reconciler.start();
-          yield* waitUntil(
-            resumeActivities(system, workerThreadId).pipe(
-              Effect.map((activities) => activities.length === 1),
-            ),
-            "worker resume activity",
-          );
-
-          // Re-orphan the same turn (as if the settle had been lost) and use a
-          // later plain orphan as the sentinel that another sweep re-processed
-          // the worker thread.
-          yield* setThreadSession(system, {
-            threadId: workerThreadId,
-            status: "running",
-            activeTurnId: turnId,
-            tag: "worker-reorphan",
-          });
-          const sentinelThreadId = ThreadId.make("thread-stale-sentinel");
-          yield* createPlainThread(system, sentinelThreadId, "sentinel");
-          yield* setThreadSession(system, {
-            threadId: sentinelThreadId,
-            status: "running",
-            activeTurnId: TurnId.make("turn-stale-sentinel"),
-            tag: "sentinel",
-          });
-          yield* waitUntil(
-            sessionStatus(system, sentinelThreadId).pipe(
-              Effect.map((status) => status === "error"),
-            ),
-            "sentinel session to settle",
-          );
-          yield* system.reactor.drain;
-
-          expect(yield* resumeActivities(system, workerThreadId)).toHaveLength(1);
-          expect(yield* resumeMessages(system, workerThreadId)).toHaveLength(1);
-          const settledRun = yield* getRun(system, run.id);
-          expect(settledRun?.workerResults).toHaveLength(0);
-        }),
-      { reconciler: { sweepIntervalMs: 100, graceMs: 0, confirmDelayMs: 0 } },
-    ),
-  );
-
-  it.live("resumes an orphaned validator turn", () =>
-    withSystem(
-      (system) =>
-        Effect.gen(function* () {
-          const { run } = yield* launchRun(system);
-          yield* appendWorkerSuccess(system, run);
-          const validator = yield* findThreadByRole(system, "implementation-validator");
-          if (!validator) throw new Error("Validator missing.");
-          const turnId = TurnId.make("turn-stale-validator-resume");
-          yield* setThreadSession(system, {
-            threadId: validator.id,
-            status: "running",
-            activeTurnId: turnId,
-            tag: "validator-orphan",
-          });
-
-          yield* system.reconciler.start();
-          yield* waitUntil(
-            resumeActivities(system, validator.id).pipe(
-              Effect.map((activities) => activities.length === 1),
-            ),
-            "validator resume activity",
-          );
-          yield* system.reactor.drain;
-
-          const resumes = yield* resumeActivities(system, validator.id);
-          const payload = resumes[0]?.payload as Record<string, unknown>;
-          expect(payload["workflowPromptId"]).toBe(
-            WORKFLOW_PROMPT_IDS.implementationMergeGateCodex,
-          );
-          expect(yield* resumeMessages(system, validator.id)).toHaveLength(1);
-          expect(yield* sessionStatus(system, validator.id)).toBe("error");
-
-          const settledRun = yield* getRun(system, run.id);
-          expect(settledRun?.status).toBe("validating");
-          expect(settledRun?.finalValidation ?? null).toBeNull();
-        }),
-      { reconciler: bootOnlyOptions },
-    ),
-  );
-
-  it.live("starts a merge-gate fixer when the validator resume budget is exhausted", () =>
-    withSystem(
-      (system) =>
-        Effect.gen(function* () {
-          const { run } = yield* launchRun(system);
-          yield* appendWorkerSuccess(system, run);
-          const validator = yield* findThreadByRole(system, "implementation-validator");
-          if (!validator) throw new Error("Validator missing.");
-          yield* seedCompletedResume(system, {
-            threadId: validator.id,
-            interruptedTurnId: TurnId.make("turn-stale-validator-prior-1"),
-            tag: "validator-prior-1",
-          });
-          yield* seedCompletedResume(system, {
-            threadId: validator.id,
-            interruptedTurnId: TurnId.make("turn-stale-validator-prior-2"),
-            tag: "validator-prior-2",
-          });
-          yield* setThreadSession(system, {
-            threadId: validator.id,
-            status: "running",
-            activeTurnId: TurnId.make("turn-stale-validator"),
-            tag: "validator-orphan",
-          });
-
-          yield* system.reconciler.start();
-          yield* waitUntil(
-            getRun(system, run.id).pipe(Effect.map((entry) => entry?.status === "fixing")),
-            "run to start merge-gate fixing",
-          );
-
-          const settledRun = yield* getRun(system, run.id);
-          expect(settledRun?.status).toBe("fixing");
-          expect(settledRun?.activeFixerThreadId).not.toBeNull();
-          // The gate a worker's success hands to is the integration one, and
-          // only the final gate records a finalValidation.
-          expect(settledRun?.activeValidationKind).toBe("integration");
-          expect(yield* sessionStatus(system, validator.id)).toBe("error");
-          expect(yield* resumeActivities(system, validator.id)).toHaveLength(2);
-        }),
-      { reconciler: bootOnlyOptions },
-    ),
-  );
-
-  it.live("publishes work in progress when the code reviewer resume budget is exhausted", () =>
-    withSystem(
-      (system) =>
-        Effect.gen(function* () {
-          const { run } = yield* launchRun(system);
-          yield* appendWorkerSuccess(system, run);
-          yield* passMergeGate(system, run);
-          yield* passAppReview(system, run);
-          const reviewer = yield* findThreadByRole(system, "implementation-code-reviewer");
-          if (!reviewer) throw new Error("Code reviewer missing.");
-          const runBefore = yield* getRun(system, run.id);
-          expect(runBefore?.status).toBe("code-reviewing");
-          yield* seedCompletedResume(system, {
-            threadId: reviewer.id,
-            interruptedTurnId: TurnId.make("turn-stale-reviewer-prior-1"),
-            tag: "reviewer-prior-1",
-          });
-          yield* seedCompletedResume(system, {
-            threadId: reviewer.id,
-            interruptedTurnId: TurnId.make("turn-stale-reviewer-prior-2"),
-            tag: "reviewer-prior-2",
-          });
-          yield* setThreadSession(system, {
-            threadId: reviewer.id,
-            status: "running",
-            activeTurnId: TurnId.make("turn-stale-code-reviewer"),
-            tag: "code-reviewer-orphan",
-          });
-
-          yield* system.reconciler.start();
-          // Review problems do not interrupt the pipeline: the run files what it
-          // has and hands the pull request to the check babysitter.
-          yield* waitUntil(
-            getRun(system, run.id).pipe(
-              Effect.map((entry) => entry?.status === "babysitting-change-request"),
-            ),
-            "run to publish its change request",
-          );
-
-          expect(yield* sessionStatus(system, reviewer.id)).toBe("error");
-        }),
-      { reconciler: bootOnlyOptions },
-    ),
-  );
-
-  it.live("replaces a fixer whose resume budget is exhausted", () =>
-    withSystem(
-      (system) =>
-        Effect.gen(function* () {
-          const { run } = yield* launchRun(system);
-          yield* appendWorkerSuccess(system, run);
-          yield* passMergeGate(system, run);
-          // A failing App Review is what spawns a fixer for spec-driven runs; Code Review no longer
-          // does, because it lands its own fixes in a single pass.
-          yield* failAppReview(system, run);
-          const fixer = yield* findThreadByRole(system, "implementation-fixer");
-          if (!fixer) throw new Error("Fixer missing.");
-          const runBefore = yield* getRun(system, run.id);
-          expect(runBefore?.status).toBe("fixing");
-          yield* seedCompletedResume(system, {
-            threadId: fixer.id,
-            interruptedTurnId: TurnId.make("turn-stale-fixer-prior-1"),
-            tag: "fixer-prior-1",
-          });
-          yield* seedCompletedResume(system, {
-            threadId: fixer.id,
-            interruptedTurnId: TurnId.make("turn-stale-fixer-prior-2"),
-            tag: "fixer-prior-2",
-          });
-          yield* setThreadSession(system, {
-            threadId: fixer.id,
-            status: "running",
-            activeTurnId: TurnId.make("turn-stale-fixer"),
-            tag: "fixer-orphan",
-          });
-
-          yield* system.reconciler.start();
-          // Settling the exhausted fixer leaves the stage incomplete, and stage
-          // recovery starts a fresh one rather than stopping the run.
-          yield* waitUntil(
-            system.query
-              .getSnapshot()
-              .pipe(
-                Effect.map(
-                  (snapshot) =>
-                    snapshot.threads.filter(
-                      (thread) => thread.workflowRole === "implementation-fixer",
-                    ).length === 2,
-                ),
-              ),
-            "a replacement fixer",
-          );
-
-          expect(yield* sessionStatus(system, fixer.id)).toBe("error");
         }),
       { reconciler: bootOnlyOptions },
     ),
@@ -1544,94 +1064,6 @@ describe("StaleTurnReconciler", () => {
     ),
   );
 
-  it.live("re-dispatches the resume turn when a prior resume crashed before starting it", () =>
-    withSystem(
-      (system) =>
-        Effect.gen(function* () {
-          const { run } = yield* launchRun(system);
-          const workerThreadId = requireWorkerThreadId(run);
-          const turnId = TurnId.make("turn-stale-safety-replay");
-          // Mimic a crash between the resume-activity append and the turn
-          // start: the activity exists under the reconciler's own commandId
-          // and the session is already settled, but no resume turn started.
-          yield* seedResumeActivity(system, {
-            threadId: workerThreadId,
-            interruptedTurnId: turnId,
-            tag: "safety-replay",
-            asReconcilerCommand: true,
-          });
-          yield* setThreadSession(system, {
-            threadId: workerThreadId,
-            status: "error",
-            activeTurnId: null,
-            tag: "safety-replay-settled",
-          });
-
-          yield* system.reconciler.start();
-          yield* waitUntil(
-            resumeMessages(system, workerThreadId).pipe(
-              Effect.map((messages) => messages.length === 1),
-            ),
-            "resume turn to dispatch",
-          );
-          // Let several more sweeps run to prove the dispatch is idempotent.
-          yield* Effect.sleep(Duration.millis(500));
-          yield* system.reactor.drain;
-
-          expect(yield* resumeMessages(system, workerThreadId)).toHaveLength(1);
-          expect(yield* resumeActivities(system, workerThreadId)).toHaveLength(1);
-          const settledRun = yield* getRun(system, run.id);
-          expect(settledRun?.status).toBe("running");
-          expect(settledRun?.ticketStates[0]?.status).toBe("running");
-        }),
-      { reconciler: { sweepIntervalMs: 100, graceMs: 0, confirmDelayMs: 0 } },
-    ),
-  );
-
-  it.live("propagates the failure when the safety-net resume budget is exhausted", () =>
-    withSystem(
-      (system) =>
-        Effect.gen(function* () {
-          const { run } = yield* launchRun(system);
-          const workerThreadId = requireWorkerThreadId(run);
-          yield* seedCompletedResume(system, {
-            threadId: workerThreadId,
-            interruptedTurnId: TurnId.make("turn-stale-safety-prior-1"),
-            tag: "safety-prior-1",
-          });
-          yield* seedCompletedResume(system, {
-            threadId: workerThreadId,
-            interruptedTurnId: TurnId.make("turn-stale-safety-prior-2"),
-            tag: "safety-prior-2",
-          });
-          yield* setThreadSession(system, {
-            threadId: workerThreadId,
-            status: "error",
-            activeTurnId: null,
-            tag: "safety-budget-settled",
-          });
-
-          yield* system.reconciler.start();
-          yield* waitUntil(
-            getRun(system, run.id).pipe(
-              Effect.map((entry) => entry?.ticketStates[0]?.status === "failed"),
-            ),
-            "ticket to fail",
-          );
-          yield* system.reactor.drain;
-
-          const settledRun = yield* getRun(system, run.id);
-          expect(settledRun?.ticketStates[0]?.status).toBe("failed");
-          expect(settledRun?.status).toBe("validating");
-          expect(settledRun?.workerResults).toHaveLength(1);
-          expect(settledRun?.workerResults[0]?.status).toBe("failed");
-          expect(yield* resumeActivities(system, workerThreadId)).toHaveLength(2);
-          expect(yield* resumeMessages(system, workerThreadId)).toHaveLength(0);
-        }),
-      { reconciler: { ...bootOnlyOptions, maxResumeAttempts: 1 } },
-    ),
-  );
-
   it.live("leaves errored workflow sessions alone when the reconciler never resumed them", () =>
     withSystem(
       (system) =>
@@ -1670,44 +1102,6 @@ describe("StaleTurnReconciler", () => {
           const settledRun = yield* getRun(system, run.id);
           expect(settledRun?.status).toBe("running");
           expect(settledRun?.ticketStates[0]?.status).toBe("running");
-        }),
-      { reconciler: bootOnlyOptions },
-    ),
-  );
-
-  it.live("nudges a worker blocked by a failed turn instead of replacing it", () =>
-    withSystem(
-      (system) =>
-        Effect.gen(function* () {
-          const { run } = yield* launchRun(system);
-          const workerThreadId = requireWorkerThreadId(run);
-          yield* blockThreadOnFailedTurn(system, {
-            threadId: workerThreadId,
-            turnId: TurnId.make("turn-nudge-worker"),
-            tag: "nudge-worker",
-          });
-
-          yield* system.reconciler.start();
-          yield* waitUntil(
-            nudgeActivities(system, workerThreadId).pipe(
-              Effect.map((activities) => activities.length === 1),
-            ),
-            "worker nudge activity",
-          );
-          yield* system.reactor.drain;
-
-          const nudges = yield* nudgeActivities(system, workerThreadId);
-          const payload = nudges[0]?.payload as Record<string, unknown>;
-          expect(payload["attempt"]).toBe(1);
-          expect(payload["workflowPromptId"]).toBe(WORKFLOW_PROMPT_IDS.implementationTddCodex);
-          expect(yield* nudgeMessages(system, workerThreadId)).toHaveLength(1);
-          // A nudge is not a settle: the provider's own failure state stands.
-          expect(yield* resumeActivities(system, workerThreadId)).toHaveLength(0);
-
-          const nudgedRun = yield* getRun(system, run.id);
-          expect(nudgedRun?.status).toBe("running");
-          expect(nudgedRun?.ticketStates[0]?.status).toBe("running");
-          expect(nudgedRun?.ticketStates[0]?.workerThreadId).toBe(workerThreadId);
         }),
       { reconciler: bootOnlyOptions },
     ),
@@ -1763,7 +1157,7 @@ describe("StaleTurnReconciler", () => {
     ),
   );
 
-  it.live("gives up after the nudge budget and hands the thread back to its stage", () =>
+  it.live("cannot use a nudge to bypass the stage launch budget", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
@@ -1792,7 +1186,7 @@ describe("StaleTurnReconciler", () => {
           );
           yield* system.reactor.drain;
 
-          expect(yield* nudgeActivities(system, workerThreadId)).toHaveLength(1);
+          expect(yield* nudgeActivities(system, workerThreadId)).toHaveLength(0);
           const thread = yield* getThread(system, workerThreadId);
           const reported = (thread?.activities ?? []).filter(
             (activity) => activity.kind === "implementation-worker-result",

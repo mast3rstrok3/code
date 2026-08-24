@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as SchemaTransformation from "effect/SchemaTransformation";
 import {
   IsoDateTime,
   NonNegativeInt,
@@ -33,15 +34,24 @@ export type AppReviewScope = typeof AppReviewScope.Type;
 
 /** Default and hard limit for complete review, gap-analysis, and implementation cycles. */
 export const APP_REVIEW_WORKFLOW_DEFAULT_CYCLES = 10;
-export const APP_REVIEW_WORKFLOW_MAX_CYCLES = 50;
+export const APP_REVIEW_WORKFLOW_MAX_CYCLES = 10;
 
 export const AppReviewWorkflowRunId = TrimmedNonEmptyString.pipe(
   Schema.brand("AppReviewWorkflowRunId"),
 );
 export type AppReviewWorkflowRunId = typeof AppReviewWorkflowRunId.Type;
 
-export const AppReviewWorkflowCycleBudget = PositiveInt.check(
+const BoundedAppReviewWorkflowCycleBudget = PositiveInt.check(
   Schema.isLessThanOrEqualTo(APP_REVIEW_WORKFLOW_MAX_CYCLES),
+);
+export const AppReviewWorkflowCycleBudget = PositiveInt.pipe(
+  Schema.decodeTo(
+    BoundedAppReviewWorkflowCycleBudget,
+    SchemaTransformation.transform({
+      decode: (value) => Math.min(value, APP_REVIEW_WORKFLOW_MAX_CYCLES),
+      encode: (value) => value,
+    }),
+  ),
 );
 export type AppReviewWorkflowCycleBudget = typeof AppReviewWorkflowCycleBudget.Type;
 

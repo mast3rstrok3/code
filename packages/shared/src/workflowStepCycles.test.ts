@@ -35,7 +35,7 @@ it("prefers the run's own budget over the standing default", () => {
       key: APP_REVIEW,
       settingsOverrides: [{ ...APP_REVIEW, maxCycles: 20 }],
     }),
-  ).toBe(20);
+  ).toBe(10);
 });
 
 it("keeps a ticket App Review budget separate from the run's own App Review", () => {
@@ -54,7 +54,7 @@ it("clamps a budget written outside the step's bounds", () => {
       key: APP_REVIEW,
       threadOverrides: [{ ...APP_REVIEW, maxCycles: 500 }],
     }),
-  ).toBe(50);
+  ).toBe(10);
   expect(resolveWorkflowStepCycleBudget({ key: APP_REVIEW, fallbackCycles: 0 })).toBe(1);
 });
 

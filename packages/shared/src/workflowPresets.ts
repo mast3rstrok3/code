@@ -356,7 +356,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         label: "Execute ticket waves",
         skillId: "implementation.tdd.codex",
         threadBoundary: "new child thread",
-        note: "all ready tickets concurrently; one active step thread per ticket",
+        note: "all ready tickets concurrently; one logical implementation per ticket with one interrupted-launch retry",
         subSteps: [
           { label: "TDD implementation worker", workflowPromptId: "implementation.tdd.codex" },
           {
@@ -376,14 +376,14 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         label: "Run App Review",
         skillId: "implementation.browser-app-review.codex",
         threadBoundary: "new review thread",
-        note: "one active thread per ordered review phase; ten cycles by default",
+        note: "one active thread per ordered review phase; ten cycles maximum and one interrupted-phase retry",
         subSteps: APP_REVIEW_SUB_STEPS,
       },
       {
         label: "Final Code Review",
         skillId: "implementation.code-review.codex",
         threadBoundary: "new review thread",
-        note: "one Code Review thread, followed by final validation",
+        note: "one logical Code Review pass, one interrupted-launch retry, then final validation",
       },
       {
         label: "Create pull request",

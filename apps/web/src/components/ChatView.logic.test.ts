@@ -238,7 +238,7 @@ describe("normalizeAppReviewCycleBudget", () => {
     expect(normalizeAppReviewCycleBudget(10)).toBe(10);
     expect(normalizeAppReviewCycleBudget(2.6)).toBe(3);
     expect(normalizeAppReviewCycleBudget(0)).toBe(1);
-    expect(normalizeAppReviewCycleBudget(51)).toBe(50);
+    expect(normalizeAppReviewCycleBudget(51)).toBe(10);
     expect(normalizeAppReviewCycleBudget(Number.NaN)).toBe(10);
   });
 });

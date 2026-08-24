@@ -6,6 +6,7 @@ import {
   EMPTY_APP_REVIEW_EVIDENCE,
   EventId,
   IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
+  IMPLEMENTATION_STAGE_MAX_LAUNCHES,
   MessageId,
   type OrchestrationImplementationRerunTarget,
   type OrchestrationImplementationRun,
@@ -588,6 +589,12 @@ function buildImplementationRun(input: {
       workerResult: null,
       appDevStackTierDownAt: null,
       attemptCount: 0,
+      implementationGeneration: 0,
+      appReviewGeneration: 0,
+      appReviewLaunchCount: 0,
+      codeReviewGeneration: 0,
+      codeReviewLaunchCount: 0,
+      codeReviewPassCount: 0,
       updatedAt: input.command.createdAt,
     };
   });
@@ -695,6 +702,9 @@ function buildImplementationRun(input: {
     activeCodeReviewThreadId: null,
     activeChangeRequestBabysitterThreadId: null,
     codeReviewAttemptCount: 0,
+    finalCodeReviewGeneration: 0,
+    finalCodeReviewLaunchCount: 0,
+    finalCodeReviewPassCount: 0,
     reviewGateExhaustedAt: null,
     reviewGateExhaustionReason: null,
     activeFixerThreadId: null,
@@ -707,6 +717,7 @@ function buildImplementationRun(input: {
     changeRequestPublisherUserId: input.publisherUserId,
     fastBuildResult: null,
     retryableFailure: null,
+    automationHalt: null,
     createdAt: input.command.createdAt,
     updatedAt: input.command.createdAt,
   };
@@ -1711,12 +1722,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Workflow step '${command.workflowPromptId}' does not run in cycles, so it has no cycle budget.`,
         });
       }
-      if (command.maxCycles !== null && command.maxCycles > target.maxCycles) {
-        return yield* new OrchestrationCommandInvariantError({
-          commandType: command.type,
-          detail: `${target.label} accepts at most ${String(target.maxCycles)} cycles.`,
-        });
-      }
+      const boundedMaxCycles =
+        command.maxCycles === null ? null : Math.min(command.maxCycles, target.maxCycles);
       const occurredAt = yield* nowIso;
       const events: PlannedOrchestrationEvent[] = [
         {
@@ -1730,7 +1737,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           payload: {
             threadId: rootThread.id,
             ...key,
-            maxCycles: command.maxCycles,
+            maxCycles: boundedMaxCycles,
             updatedAt: occurredAt,
           },
         },
@@ -1740,8 +1747,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       // cycles can never be given more.
       const budget = resolveWorkflowStepCycleBudget({
         key,
-        threadOverrides:
-          command.maxCycles === null ? [] : [{ ...key, maxCycles: command.maxCycles }],
+        threadOverrides: boundedMaxCycles === null ? [] : [{ ...key, maxCycles: boundedMaxCycles }],
       });
       for (const run of readModel.appReviewWorkflowRuns ?? []) {
         if (run.status !== "running" || run.cycleBudget === budget) continue;
@@ -3340,6 +3346,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         activeCodeReviewThreadId: null,
         activeChangeRequestBabysitterThreadId: null,
         codeReviewAttemptCount: 0,
+        finalCodeReviewGeneration: 0,
+        finalCodeReviewLaunchCount: 0,
+        finalCodeReviewPassCount: 0,
         reviewGateExhaustedAt: null,
         reviewGateExhaustionReason: null,
         activeFixerThreadId: null,
@@ -3352,6 +3361,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         changeRequestPublisherUserId: sourceThread.ownerUserId,
         fastBuildResult: null,
         retryableFailure: null,
+        automationHalt: null,
         createdAt: command.createdAt,
         updatedAt: command.createdAt,
       };
@@ -3547,11 +3557,98 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           }
         }
       }
+      const claimedTicketStages = new Set<string>();
+      for (const claim of command.expectedTicketStageClaims ?? []) {
+        const claimKey = `${claim.ticketId}\0${claim.stage}`;
+        if (claimedTicketStages.has(claimKey)) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Ticket '${claim.ticketId}' ${claim.stage} claim is duplicated.`,
+          });
+        }
+        claimedTicketStages.add(claimKey);
+        const existingState = existingRun.ticketStates.find(
+          (state) => state.ticketId === claim.ticketId,
+        );
+        const nextState = command.run.ticketStates.find(
+          (state) => state.ticketId === claim.ticketId,
+        );
+        if (existingState === undefined || nextState === undefined) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Ticket '${claim.ticketId}' stage claim references a missing ticket.`,
+          });
+        }
+        const existingGeneration =
+          claim.stage === "implementation"
+            ? existingState.implementationGeneration
+            : claim.stage === "app-review"
+              ? existingState.appReviewGeneration
+              : existingState.codeReviewGeneration;
+        const nextGeneration =
+          claim.stage === "implementation"
+            ? nextState.implementationGeneration
+            : claim.stage === "app-review"
+              ? nextState.appReviewGeneration
+              : nextState.codeReviewGeneration;
+        const existingLaunchCount =
+          claim.stage === "implementation"
+            ? existingState.attemptCount
+            : claim.stage === "app-review"
+              ? existingState.appReviewLaunchCount
+              : existingState.codeReviewLaunchCount;
+        const nextLaunchCount =
+          claim.stage === "implementation"
+            ? nextState.attemptCount
+            : claim.stage === "app-review"
+              ? nextState.appReviewLaunchCount
+              : nextState.codeReviewLaunchCount;
+        const existingExecutionId =
+          claim.stage === "implementation"
+            ? existingState.workerThreadId
+            : claim.stage === "app-review"
+              ? existingState.appReviewWorkflowRunId
+              : existingState.codeReviewThreadId;
+        const nextExecutionId =
+          claim.stage === "implementation"
+            ? nextState.workerThreadId
+            : claim.stage === "app-review"
+              ? nextState.appReviewWorkflowRunId
+              : nextState.codeReviewThreadId;
+        if (
+          existingRun.status === "canceled" ||
+          existingRun.automationHalt !== null ||
+          existingGeneration !== claim.generation ||
+          existingLaunchCount !== claim.launchCount ||
+          (existingExecutionId ?? null) !== claim.activeExecutionId
+        ) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Ticket '${claim.ticketId}' ${claim.stage} claim is stale.`,
+          });
+        }
+        if (
+          nextGeneration !== claim.generation ||
+          nextLaunchCount !== claim.launchCount + 1 ||
+          nextLaunchCount > IMPLEMENTATION_STAGE_MAX_LAUNCHES ||
+          nextExecutionId == null
+        ) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Ticket '${claim.ticketId}' ${claim.stage} claim has an invalid transition.`,
+          });
+        }
+      }
       if (
         command.expectedCodeReviewClaim !== undefined &&
         (existingRun.status === "canceled" ||
+          existingRun.automationHalt !== null ||
           existingRun.codeReviewAttemptCount !== command.expectedCodeReviewClaim.attemptCount ||
-          existingRun.activeCodeReviewThreadId !== command.expectedCodeReviewClaim.activeThreadId)
+          existingRun.activeCodeReviewThreadId !== command.expectedCodeReviewClaim.activeThreadId ||
+          (command.expectedCodeReviewClaim.generation !== undefined &&
+            existingRun.finalCodeReviewGeneration !== command.expectedCodeReviewClaim.generation) ||
+          (command.expectedCodeReviewClaim.launchCount !== undefined &&
+            existingRun.finalCodeReviewLaunchCount !== command.expectedCodeReviewClaim.launchCount))
       ) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -3562,7 +3659,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command.expectedCodeReviewClaim !== undefined &&
         (command.run.status !== "code-reviewing" ||
           command.run.activeCodeReviewThreadId === null ||
-          command.run.codeReviewAttemptCount !== command.expectedCodeReviewClaim.attemptCount + 1)
+          command.run.codeReviewAttemptCount !== command.expectedCodeReviewClaim.attemptCount + 1 ||
+          (command.expectedCodeReviewClaim.generation !== undefined &&
+            command.run.finalCodeReviewGeneration !== command.expectedCodeReviewClaim.generation) ||
+          (command.expectedCodeReviewClaim.launchCount !== undefined &&
+            (command.run.finalCodeReviewLaunchCount !==
+              command.expectedCodeReviewClaim.launchCount + 1 ||
+              command.run.finalCodeReviewLaunchCount > IMPLEMENTATION_STAGE_MAX_LAUNCHES)))
       ) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,

@@ -1,4 +1,5 @@
 import type {
+  OrchestrationImplementationAutomationHalt,
   OrchestrationImplementationRetryableFailure,
   OrchestrationImplementationRunStatus,
   OrchestrationPlanningTicket,
@@ -209,7 +210,7 @@ export function workflowStepCanRetryImplementationFailure<TThread extends Workfl
   return (
     run.status === "needs-human-attention" &&
     failure != null &&
-    failure.attemptCount <= failure.maxAttempts &&
+    failure.attemptCount < failure.maxAttempts &&
     workflowStepMatchesImplementationFailure(step, failure.stage)
   );
 }
@@ -267,10 +268,24 @@ export function implementationTicketStageDetails(
 export function implementationRunCurrentStage(run: {
   readonly status: OrchestrationImplementationRunStatus;
   readonly retryableFailure?: OrchestrationImplementationRetryableFailure | null | undefined;
+  readonly automationHalt?: OrchestrationImplementationAutomationHalt | null | undefined;
 }): OrchestrationImplementationRetryableFailure["stage"] | null {
   switch (run.status) {
     case "needs-human-attention":
-      return run.retryableFailure?.stage ?? null;
+      if (run.retryableFailure?.stage !== undefined) return run.retryableFailure.stage;
+      switch (run.automationHalt?.stage) {
+        case "app-review":
+          return "app-review";
+        case "code-review":
+        case "final-code-review":
+          return "code-review";
+        case "integration":
+          return "integration";
+        case "implementation":
+          return "worker-execution";
+        default:
+          return null;
+      }
     case "launch-pending":
       return "worktree-setup";
     case "running":

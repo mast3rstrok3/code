@@ -4,6 +4,7 @@ import {
   isAwaitingWorkflowNudge,
   isBlockedAfterFailedTurn,
   isWorkflowNudgeCandidate,
+  workflowAutomaticRetryLimit,
   workflowNudgeDelayMs,
   WORKFLOW_NUDGE_DEFERRAL_WINDOW_MS,
   WORKFLOW_NUDGE_EXHAUSTED_MESSAGE,
@@ -11,6 +12,13 @@ import {
   WORKFLOW_NUDGE_INTERVAL_MS,
   type WorkflowNudgeThread,
 } from "./workflowNudge.ts";
+
+it("keeps stage recovery and App Review phase retries inside one automatic allowance", () => {
+  expect(workflowAutomaticRetryLimit("implementation-worker", 48)).toBe(0);
+  expect(workflowAutomaticRetryLimit("implementation-code-reviewer", 48)).toBe(0);
+  expect(workflowAutomaticRetryLimit("app-review-reviewer", 48)).toBe(1);
+  expect(workflowAutomaticRetryLimit("planning-reviewer", 48)).toBe(48);
+});
 
 const blockedAt = "2026-01-01T00:00:00.000Z";
 const nowMs = Date.parse(blockedAt) + 60_000;

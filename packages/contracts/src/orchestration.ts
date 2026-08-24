@@ -614,8 +614,10 @@ export type OrchestrationPlanningSpecBundle = typeof OrchestrationPlanningSpecBu
 export const IMPLEMENTATION_RUN_MAX_QA_REPAIRS = 10;
 /** Maximum number of fresh nested App Review runs launched after consecutive blocked outcomes. */
 export const IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS = 3;
-/** Maximum number of complete Code Review and final-validation cycles before WIP publication. */
-export const IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES = 3;
+/** One logical Code Review pass. Findings may be repaired, but never reviewed again automatically. */
+export const IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES = 1;
+/** One initial launch plus one automatic retry before a valid stage result. */
+export const IMPLEMENTATION_STAGE_MAX_LAUNCHES = 2;
 /** @deprecated Use IMPLEMENTATION_RUN_MAX_QA_REPAIRS. */
 export const IMPLEMENTATION_RUN_MAX_QA_CYCLES = IMPLEMENTATION_RUN_MAX_QA_REPAIRS;
 /** @deprecated Use IMPLEMENTATION_RUN_MAX_QA_REPAIRS. */
@@ -679,6 +681,7 @@ export type OrchestrationImplementationArtifactSource =
   typeof OrchestrationImplementationArtifactSource.Type;
 
 export const OrchestrationImplementationRetryableFailure = Schema.Struct({
+  ticketId: Schema.optionalKey(OrchestrationPlanningTicketId),
   stage: Schema.Literals([
     "source-dirty",
     "worktree-setup",
@@ -706,6 +709,28 @@ export const OrchestrationImplementationRetryableFailure = Schema.Struct({
 });
 export type OrchestrationImplementationRetryableFailure =
   typeof OrchestrationImplementationRetryableFailure.Type;
+
+export const OrchestrationImplementationAutomationHalt = Schema.Struct({
+  ticketId: Schema.optionalKey(OrchestrationPlanningTicketId),
+  stage: Schema.Literals([
+    "implementation",
+    "app-review",
+    "code-review",
+    "final-code-review",
+    "integration",
+  ]),
+  category: Schema.Literals([
+    "retry-exhausted",
+    "structural-invariant",
+    "stage-failed",
+    "review-blocked",
+    "validation-failed",
+  ]),
+  detail: TrimmedNonEmptyString,
+  haltedAt: IsoDateTime,
+});
+export type OrchestrationImplementationAutomationHalt =
+  typeof OrchestrationImplementationAutomationHalt.Type;
 
 export const OrchestrationImplementationDependencyEdge = Schema.Struct({
   blockingTicketId: OrchestrationPlanningTicketId,
@@ -1024,6 +1049,12 @@ export const OrchestrationImplementationTicketState = Schema.Struct({
   ),
   warningMarkdown: Schema.optionalKey(Schema.NullOr(Schema.String)),
   attemptCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+  implementationGeneration: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+  appReviewGeneration: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+  appReviewLaunchCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+  codeReviewGeneration: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+  codeReviewLaunchCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+  codeReviewPassCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
   updatedAt: IsoDateTime,
 });
 export type OrchestrationImplementationTicketState =
@@ -1217,8 +1248,7 @@ export const OrchestrationImplementationRun = Schema.Struct({
   lastQaFailure: Schema.NullOr(OrchestrationImplementationQaFailure).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
-  // Set when automated QA used every allowed repair without passing. The run still continues to
-  // Code Review and change-request publication; the unpassed review is surfaced instead of blocking.
+  // Set when automated QA used every allowed repair without passing. Automation halts at that point.
   appReviewExhaustedAt: Schema.NullOr(IsoDateTime).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
@@ -1235,6 +1265,9 @@ export const OrchestrationImplementationRun = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   codeReviewAttemptCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+  finalCodeReviewGeneration: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+  finalCodeReviewLaunchCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+  finalCodeReviewPassCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
   reviewGateExhaustedAt: Schema.NullOr(IsoDateTime).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
@@ -1269,6 +1302,9 @@ export const OrchestrationImplementationRun = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   retryableFailure: Schema.NullOr(OrchestrationImplementationRetryableFailure).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  automationHalt: Schema.NullOr(OrchestrationImplementationAutomationHalt).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   createdAt: IsoDateTime,
@@ -2250,7 +2286,20 @@ const ThreadImplementationRunUpdateCommand = Schema.Struct({
     Schema.Struct({
       attemptCount: NonNegativeInt,
       activeThreadId: Schema.NullOr(ThreadId),
+      generation: Schema.optionalKey(NonNegativeInt),
+      launchCount: Schema.optionalKey(NonNegativeInt),
     }),
+  ),
+  expectedTicketStageClaims: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        ticketId: OrchestrationPlanningTicketId,
+        stage: Schema.Literals(["implementation", "app-review", "code-review"]),
+        generation: NonNegativeInt,
+        launchCount: NonNegativeInt,
+        activeExecutionId: Schema.NullOr(TrimmedNonEmptyString),
+      }),
+    ),
   ),
   expectedChangeRequestClaim: Schema.optionalKey(
     Schema.Struct({

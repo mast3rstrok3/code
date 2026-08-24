@@ -891,13 +891,13 @@ describe("buildWorkflowViewModel", () => {
         status: "needs-human-attention",
         retryableFailure: failure,
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       workflowStepCanRetryImplementationFailure(step, {
         status: "needs-human-attention",
-        retryableFailure: { ...failure, attemptCount: 4 },
+        retryableFailure: { ...failure, attemptCount: 2 },
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("reports a ticket stage that is running rather than calling it not started", () => {
@@ -970,6 +970,18 @@ describe("buildWorkflowViewModel", () => {
         },
       }),
     ).toBe("app-review");
+    expect(
+      implementationRunCurrentStage({
+        status: "needs-human-attention",
+        automationHalt: {
+          ticketId: "ticket-1",
+          stage: "code-review",
+          category: "retry-exhausted",
+          detail: "No valid directive after two launches.",
+          haltedAt: "2026-01-01T00:00:00.000Z",
+        },
+      }),
+    ).toBe("code-review");
     expect(implementationRunCurrentStage({ status: "completed" })).toBeNull();
     expect(implementationRunCurrentStage({ status: "canceled" })).toBeNull();
   });
