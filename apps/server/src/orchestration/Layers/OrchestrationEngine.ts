@@ -18,9 +18,11 @@ import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
-import * as Queue from "effect/Queue";
+import * as Order from "effect/Order";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as TxPriorityQueue from "effect/TxPriorityQueue";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import {
@@ -56,9 +58,19 @@ const isOrchestrationCommandInvariantError = Schema.is(OrchestrationCommandInvar
 interface CommandEnvelope {
   command: OrchestrationCommand;
   origin: OrchestrationClientOrigin | undefined;
+  priority: "interactive" | "background";
+  queueSequence: number;
   result: Deferred.Deferred<{ sequence: number }, OrchestrationDispatchError>;
   startedAtMs: number;
 }
+
+const commandEnvelopeOrder = Order.make<CommandEnvelope>((self, that) => {
+  const priorityOrder = Order.Number(
+    self.priority === "interactive" ? 0 : 1,
+    that.priority === "interactive" ? 0 : 1,
+  );
+  return priorityOrder === 0 ? Order.Number(self.queueSequence, that.queueSequence) : priorityOrder;
+});
 
 function commandToAggregateRef(command: OrchestrationCommand): {
   readonly aggregateKind: "project" | "thread";
@@ -101,7 +113,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   let commandReadModel = createEmptyReadModel(yield* nowIso);
 
-  const commandQueue = yield* Queue.unbounded<CommandEnvelope>();
+  const commandQueue = yield* TxPriorityQueue.empty(commandEnvelopeOrder);
+  const nextQueueSequence = yield* Ref.make(0);
   const eventPubSub = yield* PubSub.unbounded<OrchestrationEvent>();
 
   const projectEventsOntoReadModel = (
@@ -341,7 +354,9 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   yield* projectionPipeline.bootstrap;
   commandReadModel = yield* projectionSnapshotQuery.getCommandReadModel();
 
-  const worker = Effect.forever(Queue.take(commandQueue).pipe(Effect.flatMap(processEnvelope)));
+  const worker = Effect.forever(
+    TxPriorityQueue.take(commandQueue).pipe(Effect.flatMap(processEnvelope)),
+  );
   yield* Effect.forkScoped(worker);
   yield* Effect.logDebug("orchestration engine started").pipe(
     Effect.annotateLogs({ sequence: commandReadModel.snapshotSequence }),
@@ -353,12 +368,16 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const dispatch: OrchestrationEngineShape["dispatch"] = (command, options) =>
     Effect.gen(function* () {
       const result = yield* Deferred.make<{ sequence: number }, OrchestrationDispatchError>();
-      yield* Queue.offer(commandQueue, {
+      const queueSequence = yield* Ref.getAndUpdate(nextQueueSequence, (current) => current + 1);
+      const envelope: CommandEnvelope = {
         command,
         origin: options?.origin,
+        priority: options?.priority ?? "background",
+        queueSequence,
         result,
         startedAtMs: yield* Clock.currentTimeMillis,
-      });
+      };
+      yield* TxPriorityQueue.offer(commandQueue, envelope);
       return yield* Deferred.await(result);
     });
 

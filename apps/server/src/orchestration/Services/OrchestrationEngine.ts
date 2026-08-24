@@ -45,8 +45,9 @@ export interface OrchestrationEngineShape {
    * Dispatch a validated orchestration command.
    *
    * @param command - Valid orchestration command.
-   * @param options - Optional client origin (surface/app version) stamped into
-   *   the metadata of every event the command produces.
+   * @param options - Optional client origin stamped into event metadata. Mark
+   *   direct client actions as interactive so background agent traffic cannot
+   *   leave them waiting behind the normal command backlog.
    * @returns Effect containing the sequence of the persisted event.
    *
    * Dispatch is serialized through an internal queue and deduplicated via
@@ -54,7 +55,10 @@ export interface OrchestrationEngineShape {
    */
   readonly dispatch: (
     command: OrchestrationCommand,
-    options?: { readonly origin?: OrchestrationClientOrigin },
+    options?: {
+      readonly origin?: OrchestrationClientOrigin;
+      readonly priority?: "interactive";
+    },
   ) => Effect.Effect<{ sequence: number }, OrchestrationDispatchError, never>;
 
   /**

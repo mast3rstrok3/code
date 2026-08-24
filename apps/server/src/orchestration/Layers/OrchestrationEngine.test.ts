@@ -13,7 +13,10 @@ import {
   ProviderInstanceId,
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { it as effectIt } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Metric from "effect/Metric";
@@ -1283,6 +1286,100 @@ describe("OrchestrationEngine", () => {
     ]);
     await system.dispose();
   });
+
+  effectIt.effect("processes interactive commands before queued background commands", () =>
+    Effect.gen(function* () {
+      type StoredEvent =
+        ReturnType<OrchestrationEventStoreShape["append"]> extends Effect.Effect<infer A, any, any>
+          ? A
+          : never;
+      const appendStarted = yield* Deferred.make<void>();
+      const releaseAppend = yield* Deferred.make<void>();
+      const events: StoredEvent[] = [];
+      const appendedCommandIds: string[] = [];
+      let nextSequence = 1;
+
+      const gatedStore: OrchestrationEventStoreShape = {
+        append: (event) =>
+          Effect.gen(function* () {
+            if (event.commandId === CommandId.make("cmd-priority-blocking")) {
+              yield* Deferred.succeed(appendStarted, undefined);
+              yield* Deferred.await(releaseAppend);
+            }
+            const savedEvent = {
+              ...event,
+              sequence: nextSequence,
+            } as StoredEvent;
+            nextSequence += 1;
+            events.push(savedEvent);
+            appendedCommandIds.push(event.commandId ?? "");
+            return savedEvent;
+          }),
+        readFromSequence: (sequenceExclusive) =>
+          Stream.fromIterable(events.filter((event) => event.sequence > sequenceExclusive)),
+        readAll: () => Stream.fromIterable(events),
+      };
+      const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
+        prefix: "t3-orchestration-engine-priority-test-",
+      });
+      const layer = OrchestrationEngineLive.pipe(
+        Layer.provide(OrchestrationProjectionSnapshotQueryLive),
+        Layer.provide(ThreadBackgroundLiveness.layer),
+        Layer.provide(ThreadPlanProgress.layer),
+        Layer.provide(OrchestrationProjectionPipelineLive),
+        Layer.provide(Layer.succeed(OrchestrationEventStore, gatedStore)),
+        Layer.provide(OrchestrationCommandReceiptRepositoryLive),
+        Layer.provide(RepositoryIdentityResolver.layer),
+        Layer.provide(SqlitePersistenceMemory),
+        Layer.provideMerge(ServerConfigLayer),
+        Layer.provideMerge(NodeServices.layer),
+      );
+      const projectCommand = (suffix: string) => ({
+        type: "project.create" as const,
+        commandId: CommandId.make(`cmd-priority-${suffix}`),
+        projectId: asProjectId(`project-priority-${suffix}`),
+        title: `Priority ${suffix}`,
+        workspaceRoot: `/tmp/project-priority-${suffix}`,
+        defaultModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        createdAt: now(),
+      });
+
+      yield* Effect.gen(function* () {
+        const engine = yield* OrchestrationEngineService;
+        const blocking = yield* engine
+          .dispatch(projectCommand("blocking"))
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.await(appendStarted);
+
+        const backgroundOne = yield* engine
+          .dispatch(projectCommand("background-one"))
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        const backgroundTwo = yield* engine
+          .dispatch(projectCommand("background-two"))
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        const interactive = yield* engine
+          .dispatch(projectCommand("interactive"), { priority: "interactive" })
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Effect.yieldNow;
+
+        yield* Deferred.succeed(releaseAppend, undefined);
+        yield* Fiber.join(blocking);
+        yield* Fiber.join(interactive);
+        yield* Fiber.join(backgroundOne);
+        yield* Fiber.join(backgroundTwo);
+      }).pipe(Effect.provide(layer));
+
+      expect(appendedCommandIds).toEqual([
+        "cmd-priority-blocking",
+        "cmd-priority-interactive",
+        "cmd-priority-background-one",
+        "cmd-priority-background-two",
+      ]);
+    }),
+  );
 
   it("keeps processing queued commands after a storage failure", async () => {
     type StoredEvent =

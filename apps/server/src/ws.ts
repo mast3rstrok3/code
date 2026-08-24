@@ -573,7 +573,9 @@ const makeWsRpcLayer = (
       ) =>
         orchestrationEngine.dispatch(
           command,
-          hasClientOrigin ? { origin: clientOrigin } : undefined,
+          hasClientOrigin
+            ? { origin: clientOrigin, priority: "interactive" }
+            : { priority: "interactive" },
         );
       const originProps = clientOriginAnalyticsProps(clientOrigin);
       const recordClientCommandAnalytics = (command: OrchestrationCommand) => {
