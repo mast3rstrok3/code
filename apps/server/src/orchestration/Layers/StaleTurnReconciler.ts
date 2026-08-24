@@ -35,6 +35,7 @@ import {
 import {
   isAwaitingWorkflowNudge,
   isWorkflowNudgeCandidate,
+  NUDGEABLE_WORKFLOW_ROLES,
   ORPHANED_PROVIDER_SESSION_ERROR,
   STALE_TURN_RESUME_ACTIVITY_KIND,
   workflowAutomaticRetryLimit,
@@ -74,17 +75,8 @@ const WORKFLOW_NUDGE_MESSAGE =
  * failed outright. The remaining roles (implementation-orchestrator and
  * interactive/null threads) settle only.
  */
-const AUTONOMOUS_RESUME_ROLES: ReadonlySet<OrchestrationThreadWorkflowRole> = new Set([
-  "implementation-worker",
-  "implementation-validator",
-  "implementation-fixer",
-  "implementation-code-reviewer",
-  "implementation-qa-reviewer",
-  "planning-orchestrator",
-  "planning-reviewer",
-  "product-fix-implementer",
-  "fast-feature-implementer",
-]);
+const AUTONOMOUS_RESUME_ROLES: ReadonlySet<OrchestrationThreadWorkflowRole> =
+  NUDGEABLE_WORKFLOW_ROLES;
 
 export interface StaleTurnReconcilerLiveOptions {
   readonly sweepIntervalMs?: number;
@@ -1219,7 +1211,16 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
             // resumed. Any other blocked thread belongs to the nudge path,
             // which is patient where this one converges.
             if (countResumeActivities(detail) === 0) {
-              if (yield* nudgeBlockedThread(thread, detail)) settledCount += 1;
+              if (
+                yield* nudgeBlockedThread(
+                  detail.latestTurn === null
+                    ? thread
+                    : { ...thread, latestTurn: detail.latestTurn },
+                  detail,
+                )
+              ) {
+                settledCount += 1;
+              }
               continue;
             }
             // The settle nulls the snapshot's latestTurn join, so a crashed

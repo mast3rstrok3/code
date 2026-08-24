@@ -22,6 +22,7 @@ import {
   ProjectId,
   ThreadId,
   TurnId,
+  type OrchestrationThreadWorkflowRole,
   type WorkflowPreset,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -156,6 +157,8 @@ describe("ProviderCommandReactor", () => {
     readonly titleRegenerationCompletionDispatchFailures?: number;
     readonly titleRegenerationBeforeStart?: "one" | "two";
     readonly threadWorkflowPreset?: WorkflowPreset;
+    readonly threadWorkflowRole?: OrchestrationThreadWorkflowRole;
+    readonly pendingWorkflowTurnBeforeStart?: "active" | "paused";
     readonly appDevStackByWorktreeResult?: AppDevStackByWorktreeResult;
     readonly startSessionEffect?: (
       session: ProviderSession,
@@ -436,6 +439,7 @@ describe("ProviderCommandReactor", () => {
       ),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
       Layer.provideMerge(NodeServices.layer),
+      Layer.provide(SqlitePersistenceMemory),
     );
     runtime = ManagedRuntime.make(layer);
 
@@ -466,6 +470,9 @@ describe("ProviderCommandReactor", () => {
         modelSelection: modelSelection,
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
+        ...(input?.threadWorkflowRole !== undefined
+          ? { workflowRole: input.threadWorkflowRole }
+          : {}),
         workflowPreset: input?.threadWorkflowPreset ?? null,
         branch: null,
         worktreePath: null,
@@ -507,6 +514,35 @@ describe("ProviderCommandReactor", () => {
           regenerateTitle: true,
         }),
       );
+    }
+    if (input?.pendingWorkflowTurnBeforeStart !== undefined) {
+      await Effect.runPromise(
+        engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-pending-workflow-turn-before-reactor"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("user-message-pending-workflow-turn"),
+            role: "user",
+            text: "resume this workflow after restart",
+            attachments: [],
+          },
+          interactionMode: "implementation-workflow",
+          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+          runtimeMode: "full-access",
+          createdAt: now,
+        }),
+      );
+      if (input.pendingWorkflowTurnBeforeStart === "paused") {
+        await Effect.runPromise(
+          engine.dispatch({
+            type: "thread.workflow.pause",
+            commandId: CommandId.make("cmd-pause-pending-workflow-turn"),
+            threadId: ThreadId.make("thread-1"),
+            createdAt: now,
+          }),
+        );
+      }
     }
 
     scope = await Effect.runPromise(Scope.make("sequential"));
@@ -575,6 +611,33 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.status).toBe("starting");
     expect(thread?.session?.runtimeMode).toBe("approval-required");
+  });
+
+  it("replays a pending workflow turn committed before reactor startup", async () => {
+    const harness = await createHarness({
+      threadWorkflowRole: "implementation-worker",
+      pendingWorkflowTurnBeforeStart: "active",
+    });
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId: ThreadId.make("thread-1"),
+      input: "resume this workflow after restart",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      workflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+    });
+  });
+
+  it("does not replay a pending workflow turn while a human pause is active", async () => {
+    const harness = await createHarness({
+      threadWorkflowRole: "implementation-worker",
+      pendingWorkflowTurnBeforeStart: "paused",
+    });
+
+    await harness.drain();
+    expect(harness.startSession).not.toHaveBeenCalled();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
   });
 
   effectIt.effect(

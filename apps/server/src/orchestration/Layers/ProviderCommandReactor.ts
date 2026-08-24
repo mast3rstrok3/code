@@ -52,6 +52,9 @@ import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import { AppDevStackManager } from "../../appDevStack/AppDevStackManager.ts";
 import { isAppReviewMcpWorkflowPromptId } from "../../provider/WorkflowPromptRegistry.ts";
 import { buildWorktreeRuntimeContext } from "../worktreeRuntimeContext.ts";
+import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
+import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
+import { isWorkflowThreadPaused } from "../workflowPause.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 
@@ -67,6 +70,11 @@ type ProviderIntentEvent = Extract<
       | "thread.user-input-response-requested"
       | "thread.session-stop-requested";
   }
+>;
+
+type TurnStartRequestedEvent = Extract<
+  ProviderIntentEvent,
+  { type: "thread.turn-start-requested" }
 >;
 
 function toNonEmptyProviderInput(value: string | undefined): string | undefined {
@@ -92,8 +100,8 @@ function mapProviderSessionStatusToOrchestrationStatus(
   }
 }
 
-const turnStartKeyForEvent = (event: ProviderIntentEvent): string =>
-  event.commandId !== null ? `command:${event.commandId}` : `event:${event.eventId}`;
+const turnStartKey = (payload: TurnStartRequestedEvent["payload"]): string =>
+  `${payload.threadId}:${payload.messageId}`;
 
 const HANDLED_TURN_START_KEY_MAX = 10_000;
 const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
@@ -319,6 +327,7 @@ const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+  const projectionTurnRepository = yield* ProjectionTurnRepository;
   const providerService = yield* ProviderService;
   const providerRegistry = yield* ProviderRegistry;
   const gitWorkflow = yield* GitWorkflowService;
@@ -1158,9 +1167,9 @@ const make = Effect.gen(function* () {
   );
 
   const processTurnStartRequested = Effect.fn("processTurnStartRequested")(function* (
-    event: Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>,
+    event: Pick<TurnStartRequestedEvent, "type" | "payload">,
   ) {
-    const key = turnStartKeyForEvent(event);
+    const key = turnStartKey(event.payload);
     if (yield* hasHandledTurnStartRecently(key)) {
       return;
     }
@@ -1537,6 +1546,54 @@ const make = Effect.gen(function* () {
 
   const worker = yield* makeDrainableWorker(processDomainEventSafely);
 
+  const replayPendingWorkflowTurnStarts = Effect.fn(
+    "ProviderCommandReactor.replayPendingWorkflowTurnStarts",
+  )(function* () {
+    const [readModel, pendingStarts] = yield* Effect.all([
+      projectionSnapshotQuery.getCommandReadModel(),
+      projectionTurnRepository.listPendingTurnStarts(),
+    ]);
+
+    for (const pending of pendingStarts) {
+      const thread = readModel.threads.find((candidate) => candidate.id === pending.threadId);
+      if (
+        thread === undefined ||
+        thread.deletedAt !== null ||
+        thread.workflowRole === null ||
+        isWorkflowThreadPaused(readModel.threads, thread.id)
+      ) {
+        continue;
+      }
+      const detail = Option.getOrUndefined(
+        yield* projectionSnapshotQuery.getThreadDetailById(thread.id),
+      );
+      if (detail === undefined) continue;
+      const message = detail.messages.find((candidate) => candidate.id === pending.messageId);
+      if (message?.role !== "user") continue;
+
+      yield* processTurnStartRequested({
+        type: "thread.turn-start-requested",
+        payload: {
+          threadId: pending.threadId,
+          messageId: pending.messageId,
+          modelSelection: detail.modelSelection,
+          runtimeMode: detail.runtimeMode,
+          interactionMode: detail.interactionMode,
+          ...(message.workflowPromptId ? { workflowPromptId: message.workflowPromptId } : {}),
+          ...(pending.sourceProposedPlanThreadId !== null && pending.sourceProposedPlanId !== null
+            ? {
+                sourceProposedPlan: {
+                  threadId: pending.sourceProposedPlanThreadId,
+                  planId: pending.sourceProposedPlanId,
+                },
+              }
+            : {}),
+          createdAt: pending.requestedAt,
+        },
+      });
+    }
+  });
+
   const start: ProviderCommandReactorShape["start"] = Effect.fn("start")(function* () {
     const interruptedTitleRegenerations = yield* findInterruptedThreadTitleRegenerations().pipe(
       Effect.catchCause((cause) => {
@@ -1565,9 +1622,19 @@ const make = Effect.gen(function* () {
 
     yield* forkParked(Stream.runForEach(orchestrationEngine.streamDomainEvents, processEvent));
 
-    // The domain event stream is hot, so work pending before this reactor
-    // starts cannot be resumed. Correlated completions only clear the request
-    // captured here, leaving any newer request untouched.
+    // The intent projection is durable, but the provider event stream is hot.
+    // Replay workflow starts committed before a crash after the subscriber is
+    // attached, so a concurrent live event is safely deduplicated.
+    yield* replayPendingWorkflowTurnStarts().pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("provider command reactor failed to replay pending workflow turns", {
+          cause: Cause.pretty(cause),
+        }),
+      ),
+    );
+
+    // Correlated completions only clear the title request captured here,
+    // leaving any newer request untouched.
     const clearInterrupted = clearInterruptedThreadTitleRegenerations(
       interruptedTitleRegenerations,
     ).pipe(
@@ -1600,4 +1667,6 @@ const make = Effect.gen(function* () {
   } satisfies ProviderCommandReactorShape;
 });
 
-export const ProviderCommandReactorLive = Layer.effect(ProviderCommandReactor, make);
+export const ProviderCommandReactorLive = Layer.effect(ProviderCommandReactor, make).pipe(
+  Layer.provide(ProjectionTurnRepositoryLive),
+);
