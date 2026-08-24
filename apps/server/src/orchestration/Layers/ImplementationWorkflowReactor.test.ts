@@ -9,6 +9,7 @@ import {
   GitCommandError,
   IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
   IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES,
+  IMPLEMENTATION_STAGE_MAX_LAUNCHES,
   MessageId,
   ProviderInstanceId,
   ProjectId,
@@ -4141,6 +4142,58 @@ describe("ImplementationWorkflowReactor", () => {
             ),
           ),
         ).toBe(true);
+      }),
+    ),
+  );
+
+  it.effect("gives persisted launch-budget fallout a fresh recovery generation", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        const ticketId = run.ticketStates[0]?.ticketId;
+        if (!ticketId) throw new Error("Ticket missing.");
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("persist-recovery-launch-budget-fallout"),
+          threadId: sourceThreadId,
+          run: {
+            ...run,
+            status: "needs-human-attention",
+            automationHalt: {
+              ticketId,
+              stage: "implementation",
+              category: "retry-exhausted",
+              detail: `Ticket '${ticketId}' exhausted its implementation launch budget.`,
+              haltedAt: "2026-01-01T00:00:02.000Z",
+            },
+            ticketStates: run.ticketStates.map((state) =>
+              state.ticketId === ticketId
+                ? {
+                    ...state,
+                    status: "ready" as const,
+                    workerThreadId: null,
+                    attemptCount: IMPLEMENTATION_STAGE_MAX_LAUNCHES,
+                  }
+                : state,
+            ),
+            updatedAt: "2026-01-01T00:00:02.000Z",
+          },
+          createdAt: "2026-01-01T00:00:02.000Z",
+        });
+        yield* system.reactor.drain;
+
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+
+        const snapshot = yield* system.query.getSnapshot();
+        const recovered = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(recovered?.automationHalt).toBeNull();
+        expect(recovered?.status).toBe("running");
+        expect(recovered?.ticketStates[0]?.status).toBe("running");
+        expect(recovered?.ticketStates[0]?.attemptCount).toBe(1);
+        expect(recovered?.ticketStates[0]?.implementationGeneration).toBe(
+          (run.ticketStates[0]?.implementationGeneration ?? 0) + 1,
+        );
       }),
     ),
   );

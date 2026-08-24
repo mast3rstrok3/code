@@ -7910,26 +7910,24 @@ const make = Effect.gen(function* () {
 
   const recoverInterruptedWorktreeHalts = Effect.fn(
     "ImplementationWorkflowReactor.recoverInterruptedWorktreeHalts",
-  )(function* (input: { readonly readModel: OrchestrationReadModel; readonly createdAt: string }) {
+  )(function* (input: {
+    readonly readModel: OrchestrationReadModel;
+    readonly createdAt: string;
+    readonly recoverPersistedLaunchFallout: boolean;
+  }) {
     const { readModel, createdAt } = input;
     let recovered = false;
     for (const run of readModel.implementationRuns) {
       const halt = run.automationHalt;
-      const automaticRecoveryFallout =
+      const persistedLaunchFallout =
+        input.recoverPersistedLaunchFallout &&
         halt !== null &&
         halt.ticketId !== undefined &&
-        findThread(readModel, run.orchestratorThreadId)?.activities.some(
-          (activity) =>
-            activity.kind === "implementation-rerun-requested" &&
-            activity.createdAt === halt.haltedAt &&
-            typeof activity.payload === "object" &&
-            activity.payload !== null &&
-            "automatic" in activity.payload &&
-            activity.payload.automatic === true,
-        ) === true;
+        ((halt.category === "retry-exhausted" && halt.stage === "implementation") ||
+          halt.detail.includes("moved from reported commit"));
       if (
         halt === null ||
-        (!isRecoverableInterruptedWorktreeHalt(halt) && !automaticRecoveryFallout) ||
+        (!isRecoverableInterruptedWorktreeHalt(halt) && !persistedLaunchFallout) ||
         isWorkflowThreadPaused(readModel.threads, run.orchestratorThreadId)
       ) {
         continue;
@@ -8086,10 +8084,16 @@ const make = Effect.gen(function* () {
 
   const recoverIncompleteStages = Effect.fn(
     "ImplementationWorkflowReactor.recoverIncompleteStages",
-  )(function* () {
+  )(function* (recoverPersistedLaunchFallout = false) {
     let readModel = yield* projectionSnapshotQuery.getCommandReadModel();
     let createdAt = DateTime.formatIso(yield* DateTime.now);
-    if (yield* recoverInterruptedWorktreeHalts({ readModel, createdAt })) {
+    if (
+      yield* recoverInterruptedWorktreeHalts({
+        readModel,
+        createdAt,
+        recoverPersistedLaunchFallout,
+      })
+    ) {
       readModel = yield* projectionSnapshotQuery.getCommandReadModel();
       createdAt = DateTime.formatIso(yield* DateTime.now);
     }
@@ -8758,7 +8762,7 @@ const make = Effect.gen(function* () {
         }),
       ),
     );
-    yield* recoverIncompleteStages().pipe(
+    yield* recoverIncompleteStages(true).pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning("implementation workflow stage recovery failed", {
           cause: Cause.pretty(cause),
@@ -8796,7 +8800,7 @@ const make = Effect.gen(function* () {
     start,
     drain: worker.drain,
     recoverRetryableRuns: () => recoverRetryableRuns().pipe(Effect.orDie),
-    recoverIncompleteStages: () => recoverIncompleteStages().pipe(Effect.orDie),
+    recoverIncompleteStages: () => recoverIncompleteStages(true).pipe(Effect.orDie),
   } satisfies ImplementationWorkflowReactorShape;
 });
 
