@@ -4,7 +4,8 @@ import type * as Scope from "effect/Scope";
 
 export interface StaleTurnReconcilerShape {
   /**
-   * Start the background stale-turn reconciler within the provided scope.
+   * Reconcile orphaned turns once, then start the periodic reconciler within
+   * the provided scope. The startup pass finishes before this effect returns.
    */
   readonly start: () => Effect.Effect<void, never, Scope.Scope>;
 }

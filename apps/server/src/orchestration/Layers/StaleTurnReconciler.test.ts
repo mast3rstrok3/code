@@ -643,6 +643,30 @@ const bootOnlyOptions: StaleTurnReconcilerLiveOptions = {
 };
 
 describe("StaleTurnReconciler", () => {
+  it.live("finishes the boot reconciliation before start returns", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const threadId = ThreadId.make("thread-stale-awaited-boot");
+          yield* seedProject(system);
+          yield* createPlainThread(system, threadId, "awaited boot");
+          yield* setThreadSession(system, {
+            threadId,
+            status: "running",
+            activeTurnId: TurnId.make("turn-stale-awaited-boot"),
+            tag: "awaited-boot",
+          });
+
+          yield* system.reconciler.start();
+
+          const thread = yield* getThread(system, threadId);
+          expect(thread?.session?.status).toBe("error");
+          expect(thread?.session?.activeTurnId).toBeNull();
+        }),
+      { reconciler: bootOnlyOptions },
+    ),
+  );
+
   it.live("settles orphaned running turns at boot without touching non-workflow threads", () =>
     withSystem(
       (system) =>

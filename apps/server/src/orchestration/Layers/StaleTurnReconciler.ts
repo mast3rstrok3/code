@@ -1234,26 +1234,25 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
 
     const start: StaleTurnReconcilerShape["start"] = () =>
       Effect.gen(function* () {
+        // Finish the boot pass before startup continues. Provider-session
+        // reconciliation has already marked every orphan, so this pass sees a
+        // stable snapshot and either resumes the workflow or honors its human
+        // pause. Running this in the background used to race that marking and
+        // could leave a workflow waiting for the slower periodic sweep.
+        yield* safeSweep({
+          graceMs: 0,
+          confirmDelayMs: 0,
+          nudgeIntervalMs: 0,
+          nudgeLongBlocked: true,
+        });
+
         yield* Effect.forkScoped(
-          Effect.gen(function* () {
-            // Boot pass: nothing is rehydrated at startup, so every running
-            // session in the read model is an orphan — no grace, no confirm.
-            // The same pass retries threads a usage limit stopped before the
-            // restart: a fresh server is the best moment to find out whether
-            // the limit has lifted, so nudge spacing does not apply here.
-            yield* safeSweep({
-              graceMs: 0,
-              confirmDelayMs: 0,
-              nudgeIntervalMs: 0,
-              nudgeLongBlocked: true,
-            });
-            yield* safeSweep({
-              graceMs,
-              confirmDelayMs,
-              nudgeIntervalMs,
-              nudgeLongBlocked: false,
-            }).pipe(Effect.repeat(Schedule.spaced(Duration.millis(sweepIntervalMs))));
-          }),
+          safeSweep({
+            graceMs,
+            confirmDelayMs,
+            nudgeIntervalMs,
+            nudgeLongBlocked: false,
+          }).pipe(Effect.repeat(Schedule.spaced(Duration.millis(sweepIntervalMs)))),
         );
 
         yield* Effect.logInfo("stale-turn.reconciler.started", {

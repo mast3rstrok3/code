@@ -439,13 +439,18 @@ export const make = (options?: StartupOptions) =>
         Effect.gen(function* () {
           yield* orchestrationReactor.start().pipe(Scope.provide(reactorScope));
           yield* providerSessionReaper.start().pipe(Scope.provide(reactorScope));
-          // Start after orchestration reactors so workflow subscribers are
-          // attached before reconciliation dispatches boot-pass activities.
-          yield* staleTurnReconciler.start().pipe(Scope.provide(reactorScope));
         }),
       );
 
       yield* runStartupPhase("provider-sessions.reconcile", reconcileProviderSessions);
+      // Provider reconciliation first marks sessions that did not survive the
+      // restart. The awaited boot sweep can then recover every unpaused
+      // workflow from one stable snapshot. Workflow subscribers are already
+      // attached, so resumed turns and failure handoffs cannot be missed.
+      yield* runStartupPhase(
+        "stale-turns.start",
+        staleTurnReconciler.start().pipe(Scope.provide(reactorScope)),
+      );
 
       const welcomeBase = yield* resolveWelcomeBase;
       const environment = yield* serverEnvironment.getDescriptor;
