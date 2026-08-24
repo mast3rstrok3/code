@@ -1767,6 +1767,9 @@ const make = Effect.gen(function* () {
     // Server startup replays pending workflow starts after stale sessions and
     // workflow stages have been reconciled. Replaying here would launch the
     // pre-recovery thread and then launch its continuation as well.
+    // Once activation opens the hot subscriber, sweep again in the background
+    // for starts committed after the pre-readiness replay took its snapshot.
+    yield* forkParked(replayPendingWorkflowTurnStartsSafely);
 
     // Correlated completions only clear the title request captured here,
     // leaving any newer request untouched.

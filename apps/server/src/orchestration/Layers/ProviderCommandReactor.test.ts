@@ -575,9 +575,6 @@ describe("ProviderCommandReactor", () => {
 
     scope = await Effect.runPromise(Scope.make("sequential"));
     await Effect.runPromise(reactor.start().pipe(Scope.provide(scope)));
-    if (input?.pendingWorkflowTurnBeforeStart !== undefined) {
-      await Effect.runPromise(reactor.replayPendingWorkflowTurnStarts.pipe(Scope.provide(scope)));
-    }
     const drain = () => Effect.runPromise(reactor.drain);
 
     return {
