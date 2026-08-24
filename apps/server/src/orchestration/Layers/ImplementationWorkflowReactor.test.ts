@@ -46,6 +46,7 @@ import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
 import {
   appDevStackBackendHealthUrl,
+  automationHaltMatchesTicketRerun,
   codeReviewNeedsFreshAppReview,
   fastFeatureBuildContractProblems,
   implementationTicketReviewWarningLines,
@@ -104,6 +105,31 @@ it("detects a paused ancestor before handling an implementation re-run", () => {
       orchestratorThreadId,
     }),
   ).toBe(true);
+});
+
+it("matches legacy ticket final Code Review halts to the Code Review stage", () => {
+  const halt = {
+    ticketId: "ticket-1",
+    stage: "final-code-review",
+    category: "structural-invariant",
+    detail: "Ticket Code Review worktree is dirty.",
+    haltedAt: now,
+  } as const;
+
+  expect(
+    automationHaltMatchesTicketRerun({
+      halt,
+      ticketId: "ticket-1",
+      stage: "code-review",
+    }),
+  ).toBe(true);
+  expect(
+    automationHaltMatchesTicketRerun({
+      halt,
+      ticketId: "ticket-2",
+      stage: "code-review",
+    }),
+  ).toBe(false);
 });
 
 it("knows when an embedded App Review is parked awaiting a preview refresh", () => {

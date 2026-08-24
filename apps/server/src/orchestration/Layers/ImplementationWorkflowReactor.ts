@@ -352,12 +352,16 @@ function isFinalCodeReviewPass(run: OrchestrationImplementationRun): boolean {
   );
 }
 
-function automationHaltMatchesTicketRerun(input: {
+export function automationHaltMatchesTicketRerun(input: {
   readonly halt: NonNullable<OrchestrationImplementationRun["automationHalt"]>;
   readonly ticketId: string;
   readonly stage: OrchestrationImplementationRerunTicketStage;
 }): boolean {
-  return input.halt.ticketId === input.ticketId && input.halt.stage === input.stage;
+  if (input.halt.ticketId !== input.ticketId) return false;
+  return (
+    input.halt.stage === input.stage ||
+    (input.stage === "code-review" && input.halt.stage === "final-code-review")
+  );
 }
 
 function automationHaltMatchesRunRerun(input: {
@@ -2504,6 +2508,7 @@ const make = Effect.gen(function* () {
           run: input.run,
           ticketId: state.ticketId,
           retryableStage: "code-review",
+          haltStage: "code-review",
           reasonMarkdown: `Ticket Code Review requires clean expected HEAD '${expectedHeadSha ?? "missing"}' on '${state.branch}', but Git reports '${preflight.refName ?? "detached HEAD"}' at '${preflightHead.commitSha}'${preflight.hasWorkingTreeChanges ? " with uncommitted changes" : ""}.`,
           updatedAt: input.createdAt,
           humanBlocked: true,
