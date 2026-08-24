@@ -6502,6 +6502,89 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
+  it.effect(
+    "stage recovery applies a terminal ticket App Review whose update was interrupted",
+    () =>
+      withSystem((system) =>
+        Effect.gen(function* () {
+          const { run, ticket, nestedRun } = yield* launchTicketAppReview(system);
+          const completedAt = "2026-01-01T00:05:00.000Z";
+          const reviewedHead = (yield* system.query.getSnapshot()).implementationRuns
+            .find((entry) => entry.id === run.id)
+            ?.ticketStates.find((state) => state.ticketId === ticket.id)?.workerResult?.commitSha;
+          if (reviewedHead === null || reviewedHead === undefined) {
+            throw new Error("Reviewed ticket HEAD missing.");
+          }
+          yield* system.engine.dispatch({
+            type: "thread.app-review-workflow.update",
+            commandId: commandId("pass-ticket-app-review-before-interruption"),
+            threadId: nestedRun.controllerThreadId,
+            run: {
+              ...nestedRun,
+              status: "passed",
+              cyclesUsed: 1,
+              activePhase: null,
+              activeThreadId: null,
+              outcome: "passed",
+              finalHeadSha: reviewedHead,
+              updatedAt: completedAt,
+              completedAt,
+            },
+            createdAt: completedAt,
+          });
+          yield* system.reactor.drain;
+
+          const afterNormalContinuation = yield* system.query.getSnapshot();
+          const continuedRun = afterNormalContinuation.implementationRuns.find(
+            (entry) => entry.id === run.id,
+          )!;
+          const reviewersBeforeRecovery = afterNormalContinuation.threads.filter(
+            (thread) => thread.workflowRole === "implementation-code-reviewer",
+          ).length;
+          yield* system.engine.dispatch({
+            type: "thread.implementation-run.update",
+            commandId: commandId("restore-interrupted-ticket-app-review-result"),
+            threadId: sourceThreadId,
+            run: {
+              ...continuedRun,
+              ticketStates: continuedRun.ticketStates.map((state) =>
+                state.ticketId === ticket.id
+                  ? {
+                      ...state,
+                      status: "app-reviewing" as const,
+                      appReviewWorkflowRunId: nestedRun.id,
+                      appReviewOutcome: null,
+                      codeReviewThreadId: null,
+                      codeReviewOutcome: null,
+                    }
+                  : state,
+              ),
+              updatedAt: "2026-01-01T00:05:01.000Z",
+            },
+            createdAt: "2026-01-01T00:05:01.000Z",
+          });
+          yield* system.reactor.drain;
+
+          yield* system.reactor.recoverIncompleteStages();
+          yield* system.reactor.drain;
+
+          const snapshot = yield* system.query.getSnapshot();
+          const recovered = snapshot.implementationRuns
+            .find((entry) => entry.id === run.id)
+            ?.ticketStates.find((state) => state.ticketId === ticket.id);
+          expect(recovered?.status).toBe("code-reviewing");
+          expect(recovered?.appReviewOutcome).toBe("passed");
+          expect(recovered?.workerResult?.commitSha).toBe(reviewedHead);
+          expect(recovered?.codeReviewThreadId).not.toBeNull();
+          expect(
+            snapshot.threads.filter(
+              (thread) => thread.workflowRole === "implementation-code-reviewer",
+            ),
+          ).toHaveLength(reviewersBeforeRecovery + 1);
+        }),
+      ),
+  );
+
   it.effect("re-running a ticket merges a dependency that moved under it", () =>
     withSystem((system) =>
       Effect.gen(function* () {

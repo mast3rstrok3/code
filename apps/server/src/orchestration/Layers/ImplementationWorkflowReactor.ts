@@ -7165,6 +7165,103 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const settleTicketAppReview = Effect.fn("ImplementationWorkflowReactor.settleTicketAppReview")(
+    function* (input: {
+      readonly sourceThreadId: ThreadId;
+      readonly run: OrchestrationImplementationRun;
+      readonly ticketState: OrchestrationImplementationTicketState;
+      readonly nestedRun: AppReviewWorkflowRun;
+      readonly updatedAt: string;
+    }) {
+      if (input.nestedRun.status === "running") return;
+      const ticketId = input.ticketState.ticketId;
+      const outcome = input.nestedRun.outcome ?? input.nestedRun.status;
+      const warningMarkdown =
+        outcome === "passed"
+          ? undefined
+          : (input.nestedRun.failure?.detailMarkdown ??
+            input.nestedRun.cycles.at(-1)?.actionableFindingsMarkdown ??
+            `Ticket App Review ended ${outcome}.`);
+      const reviewedTicketRun: OrchestrationImplementationRun = {
+        ...input.run,
+        ticketStates: input.run.ticketStates.map((state) =>
+          state.ticketId === ticketId
+            ? {
+                ...state,
+                appReviewOutcome: outcome,
+                warningMarkdown: warningMarkdown ?? null,
+                workerResult:
+                  state.workerResult?.status === "succeeded" &&
+                  input.nestedRun.finalHeadSha !== null
+                    ? { ...state.workerResult, commitSha: input.nestedRun.finalHeadSha }
+                    : state.workerResult,
+                updatedAt: input.updatedAt,
+              }
+            : state,
+        ),
+        workerResults: input.run.workerResults.map((result) =>
+          result.ticketId === ticketId &&
+          result.status === "succeeded" &&
+          input.nestedRun.finalHeadSha !== null
+            ? { ...result, commitSha: input.nestedRun.finalHeadSha }
+            : result,
+        ),
+        updatedAt: input.updatedAt,
+      };
+      if (input.run.automationHalt !== null) {
+        yield* updateRun({
+          sourceThreadId: input.sourceThreadId,
+          run: reviewedTicketRun,
+          createdAt: input.updatedAt,
+        });
+        return;
+      }
+      if (outcome !== "passed") {
+        if (
+          (input.nestedRun.failure?.reason === "embedded-worktree-dirty" ||
+            input.nestedRun.failure?.reason === "workspace-stale") &&
+          input.ticketState.worktreePath !== null &&
+          input.ticketState.branch !== null
+        ) {
+          const status = yield* gitWorkflow
+            .localStatus({ cwd: input.ticketState.worktreePath })
+            .pipe(Effect.result);
+          if (
+            status._tag === "Success" &&
+            status.success.isRepo &&
+            status.success.refName === input.ticketState.branch
+          ) {
+            yield* resumeTicketWithInheritedWork({
+              sourceThreadId: input.sourceThreadId,
+              run: reviewedTicketRun,
+              ticketId,
+              reasonMarkdown: warningMarkdown ?? "The ticket worktree changed during App Review.",
+              createdAt: input.updatedAt,
+            });
+            return;
+          }
+        }
+        yield* blockRun({
+          sourceThreadId: input.sourceThreadId,
+          run: reviewedTicketRun,
+          ticketId,
+          reasonMarkdown: warningMarkdown ?? `Ticket App Review ended ${outcome}.`,
+          updatedAt: input.updatedAt,
+          haltCategory: "review-blocked",
+          haltStage: "app-review",
+        });
+        return;
+      }
+      yield* startTicketCodeReview({
+        sourceThreadId: input.sourceThreadId,
+        run: reviewedTicketRun,
+        ticketId,
+        ...(warningMarkdown === undefined ? {} : { warningMarkdown }),
+        createdAt: input.updatedAt,
+      });
+    },
+  );
+
   const handleNestedAppReviewWorkflow = Effect.fn(
     "ImplementationWorkflowReactor.handleNestedAppReviewWorkflow",
   )(function* (
@@ -7217,88 +7314,12 @@ const make = Effect.gen(function* () {
         }
         return;
       }
-      const outcome = nestedRun.outcome ?? nestedRun.status;
-      const warningMarkdown =
-        outcome === "passed"
-          ? undefined
-          : (nestedRun.failure?.detailMarkdown ??
-            nestedRun.cycles.at(-1)?.actionableFindingsMarkdown ??
-            `Ticket App Review ended ${outcome}.`);
-      const reviewedTicketRun: OrchestrationImplementationRun = {
-        ...linkedTicketRun,
-        ticketStates: linkedTicketRun.ticketStates.map((state) =>
-          state.ticketId === ticketId
-            ? {
-                ...state,
-                appReviewOutcome: outcome,
-                warningMarkdown: warningMarkdown ?? null,
-                workerResult:
-                  state.workerResult?.status === "succeeded" && nestedRun.finalHeadSha !== null
-                    ? { ...state.workerResult, commitSha: nestedRun.finalHeadSha }
-                    : state.workerResult,
-                updatedAt: event.occurredAt,
-              }
-            : state,
-        ),
-        workerResults: linkedTicketRun.workerResults.map((result) =>
-          result.ticketId === ticketId &&
-          result.status === "succeeded" &&
-          nestedRun.finalHeadSha !== null
-            ? { ...result, commitSha: nestedRun.finalHeadSha }
-            : result,
-        ),
-        updatedAt: event.occurredAt,
-      };
-      if (linkedTicketRun.automationHalt !== null) {
-        yield* updateRun({
-          sourceThreadId,
-          run: reviewedTicketRun,
-          createdAt: event.occurredAt,
-        });
-        return;
-      }
-      if (outcome !== "passed") {
-        if (
-          (nestedRun.failure?.reason === "embedded-worktree-dirty" ||
-            nestedRun.failure?.reason === "workspace-stale") &&
-          ticketState.worktreePath !== null &&
-          ticketState.branch !== null
-        ) {
-          const status = yield* gitWorkflow
-            .localStatus({ cwd: ticketState.worktreePath })
-            .pipe(Effect.result);
-          if (
-            status._tag === "Success" &&
-            status.success.isRepo &&
-            status.success.refName === ticketState.branch
-          ) {
-            yield* resumeTicketWithInheritedWork({
-              sourceThreadId,
-              run: reviewedTicketRun,
-              ticketId,
-              reasonMarkdown: warningMarkdown ?? "The ticket worktree changed during App Review.",
-              createdAt: event.occurredAt,
-            });
-            return;
-          }
-        }
-        yield* blockRun({
-          sourceThreadId,
-          run: reviewedTicketRun,
-          ticketId,
-          reasonMarkdown: warningMarkdown ?? `Ticket App Review ended ${outcome}.`,
-          updatedAt: event.occurredAt,
-          haltCategory: "review-blocked",
-          haltStage: "app-review",
-        });
-        return;
-      }
-      yield* startTicketCodeReview({
+      yield* settleTicketAppReview({
         sourceThreadId,
-        run: reviewedTicketRun,
-        ticketId,
-        ...(warningMarkdown === undefined ? {} : { warningMarkdown }),
-        createdAt: event.occurredAt,
+        run: linkedTicketRun,
+        ticketState,
+        nestedRun,
+        updatedAt: event.occurredAt,
       });
       return;
     }
@@ -8375,9 +8396,39 @@ const make = Effect.gen(function* () {
         const ticketStagePaused = (state: { readonly workerThreadId: ThreadId | null }) =>
           state.workerThreadId !== null &&
           isWorkflowThreadPaused(readModel.threads, state.workerThreadId);
-        const appReviewRunsById = new Set(
-          (readModel.appReviewWorkflowRuns ?? []).map((candidate) => candidate.id),
+        const appReviewRunsById = new Map(
+          (readModel.appReviewWorkflowRuns ?? []).map((candidate) => [candidate.id, candidate]),
         );
+        const completedTicketReview = run.ticketStates
+          .map((state) => ({
+            state,
+            nestedRun:
+              state.appReviewWorkflowRunId == null
+                ? undefined
+                : appReviewRunsById.get(state.appReviewWorkflowRunId),
+          }))
+          .find(
+            ({ state, nestedRun }) =>
+              state.status === "app-reviewing" &&
+              nestedRun !== undefined &&
+              nestedRun.status !== "running" &&
+              !ticketStagePaused(state),
+          );
+        const completedNestedRun = completedTicketReview?.nestedRun;
+        if (completedTicketReview !== undefined && completedNestedRun !== undefined) {
+          yield* recoverRunStage(
+            run.id,
+            "ticket-app-review-result",
+            settleTicketAppReview({
+              sourceThreadId,
+              run,
+              ticketState: completedTicketReview.state,
+              nestedRun: completedNestedRun,
+              updatedAt: createdAt,
+            }),
+          );
+          continue;
+        }
         const pendingTicketReview = run.ticketStates.find(
           (state) =>
             state.status === "app-reviewing" &&
