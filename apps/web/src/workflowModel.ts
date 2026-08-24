@@ -532,7 +532,21 @@ export interface WorkflowModelImplementationRun {
   readonly sourceProposedPlan?: { readonly threadId: string } | null | undefined;
   readonly orchestratorThreadId: string;
   readonly appReviewWorkflowRunIds: readonly string[];
+  readonly createdAt: string;
   readonly updatedAt: string;
+}
+
+function newestImplementationRun<TRun extends WorkflowModelImplementationRun>(
+  runs: readonly TRun[],
+): TRun | null {
+  return (
+    runs.toSorted(
+      (left, right) =>
+        right.createdAt.localeCompare(left.createdAt) ||
+        right.updatedAt.localeCompare(left.updatedAt) ||
+        right.id.localeCompare(left.id),
+    )[0] ?? null
+  );
 }
 
 /**
@@ -559,26 +573,24 @@ export function resolveGroupImplementationRun<
 ): TRun | null {
   const linkedGroups =
     group.parentGroupId === null ? [group, ...descendantGroups(group, groups)] : [group];
-  const directlyLinked =
-    runs.find((run) =>
-      linkedGroups.some(
-        (candidate) =>
-          run.id === candidate.sourceId ||
-          run.appReviewWorkflowRunIds.some((runId) => runId === candidate.sourceId) ||
-          candidate.rows.some((row) => row.thread.id === run.orchestratorThreadId),
-      ),
-    ) ?? null;
-  if (directlyLinked !== null) return directlyLinked;
-  if (group.preset !== "planning" && group.preset !== "fast-engineering") return null;
-  return (
-    runs
-      .filter(
-        (run) =>
-          (scope.specId !== null && run.specId === scope.specId) ||
-          run.sourceProposedPlan?.threadId === scope.rootThreadId,
-      )
-      .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0] ?? null
+  const directlyLinked = runs.filter((run) =>
+    linkedGroups.some(
+      (candidate) =>
+        run.id === candidate.sourceId ||
+        run.appReviewWorkflowRunIds.some((runId) => runId === candidate.sourceId) ||
+        candidate.rows.some((row) => row.thread.id === run.orchestratorThreadId),
+    ),
   );
+  if (group.preset !== "planning" && group.preset !== "fast-engineering") {
+    return newestImplementationRun(directlyLinked);
+  }
+  const scopedRuns = runs.filter(
+    (run) =>
+      (scope.specId !== null && run.specId === scope.specId) ||
+      run.sourceProposedPlan?.threadId === scope.rootThreadId,
+  );
+  if (group.parentGroupId !== null) return newestImplementationRun(directlyLinked);
+  return newestImplementationRun([...new Set([...directlyLinked, ...scopedRuns])]);
 }
 
 function descendantGroups<TThread extends WorkflowModelThread>(

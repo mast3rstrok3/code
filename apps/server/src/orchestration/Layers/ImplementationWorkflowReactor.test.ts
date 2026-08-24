@@ -249,6 +249,7 @@ interface ImplementationCalls {
   readonly createWorktreeInputs: Ref.Ref<ReadonlyArray<VcsCreateWorktreeInput>>;
   readonly mergeRefInputs: Ref.Ref<ReadonlyArray<GitMergeRefInput>>;
   readonly localStatusCount: Ref.Ref<number>;
+  readonly dirtyWorkerWorktrees: Ref.Ref<boolean>;
   readonly frontendProbeUrls: Ref.Ref<ReadonlyArray<string>>;
 }
 
@@ -335,7 +336,6 @@ function makeTestLayer(
   inheritedStackMissing = false,
   nonAncestorCommitSha?: string,
   changeRequestGate?: ChangeRequestGate,
-  dirtyWorkerWorktrees = false,
 ) {
   const coreLayer = Layer.mergeAll(
     OrchestrationEngineLive.pipe(
@@ -452,8 +452,9 @@ function makeTestLayer(
             Effect.all([
               Ref.get(calls.createWorktreeInputs),
               Ref.updateAndGet(calls.localStatusCount, (count) => count + 1),
+              Ref.get(calls.dirtyWorkerWorktrees),
             ]).pipe(
-              Effect.map(([created, statusCheck]) => ({
+              Effect.map(([created, statusCheck, dirtyWorkerWorktrees]) => ({
                 isRepo: true,
                 hasPrimaryRemote: true,
                 isDefaultRef: input.cwd === "/tmp/implementation-reactor",
@@ -740,6 +741,7 @@ function withSystem<A, E>(
     const createWorktreeInputs = yield* Ref.make<ReadonlyArray<VcsCreateWorktreeInput>>([]);
     const mergeRefInputs = yield* Ref.make<ReadonlyArray<GitMergeRefInput>>([]);
     const localStatusCount = yield* Ref.make(0);
+    const dirtyWorkerWorktrees = yield* Ref.make(options?.dirtyWorkerWorktrees ?? false);
     const frontendProbeUrls = yield* Ref.make<ReadonlyArray<string>>([]);
     const calls = {
       autoCreateInputs,
@@ -751,6 +753,7 @@ function withSystem<A, E>(
       createWorktreeInputs,
       mergeRefInputs,
       localStatusCount,
+      dirtyWorkerWorktrees,
       frontendProbeUrls,
     } satisfies ImplementationCalls;
 
@@ -790,7 +793,6 @@ function withSystem<A, E>(
           options?.inheritedStackMissing,
           options?.nonAncestorCommitSha,
           options?.changeRequestGate,
-          options?.dirtyWorkerWorktrees,
         ),
       ),
     );
@@ -3908,7 +3910,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("does not create a retry worker when the ticket worktree is dirty", () =>
+  it.effect("restarts an interrupted worker with its dirty ticket worktree", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
@@ -3920,15 +3922,43 @@ describe("ImplementationWorkflowReactor", () => {
           });
 
           const snapshot = yield* system.query.getSnapshot();
+          const restarted = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+          const workers = snapshot.threads.filter(
+            (thread) => thread.workflowRole === "implementation-worker",
+          );
+          expect(restarted?.status).toBe("running");
+          expect(restarted?.automationHalt).toBeNull();
+          expect(restarted?.ticketStates[0]?.status).toBe("running");
+          expect(workers).toHaveLength(2);
+          expect(workers[1]?.messages[0]?.text).toContain(
+            "This ticket worktree contains tracked or untracked changes from an interrupted worker.",
+          );
+          expect(workers[1]?.messages[0]?.text).toContain(
+            "Keep the useful parts, and rewrite or delete anything that does not meet the ticket.",
+          );
+          expect(workers[1]?.messages[0]?.text).toContain(
+            "Commit the completed ticket work on the assigned branch and leave the worktree clean.",
+          );
+        }),
+      { dirtyWorkerWorktrees: true },
+    ),
+  );
+
+  it.effect("rejects worker success while the ticket worktree remains dirty", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          yield* appendWorkerResult(system, { run, status: "succeeded" });
+
+          const snapshot = yield* system.query.getSnapshot();
           const halted = snapshot.implementationRuns.find((entry) => entry.id === run.id);
           expect(halted?.status).toBe("needs-human-attention");
-          expect(halted?.automationHalt).toMatchObject({
-            stage: "implementation",
-            category: "structural-invariant",
-          });
+          expect(halted?.retryableFailure?.detail).toContain("must finish");
+          expect(halted?.retryableFailure?.detail).toContain("clean worktree");
           expect(
-            snapshot.threads.filter((thread) => thread.workflowRole === "implementation-worker"),
-          ).toHaveLength(1);
+            snapshot.threads.filter((thread) => thread.workflowRole === "implementation-validator"),
+          ).toHaveLength(0);
         }),
       { dirtyWorkerWorktrees: true },
     ),
@@ -6168,6 +6198,71 @@ describe("ImplementationWorkflowReactor", () => {
           cwd: dependentState?.worktreePath,
           refName: baseState?.workerResult?.commitSha,
         });
+      }),
+    ),
+  );
+
+  it.effect("defers dependency merges to a restarted worker with inherited changes", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { tickets, run } = yield* launchRun(system, {
+          tickets: [
+            {
+              key: "TICKET-1",
+              title: "Base",
+              bodyMarkdown: "Base work.",
+              plannedFileChanges: [{ path: "src/base.ts", action: "create" }],
+              dependencyKeys: [],
+            },
+            {
+              key: "TICKET-2",
+              title: "Dependent",
+              bodyMarkdown: "Dependent work.",
+              plannedFileChanges: [{ path: "src/dependent.ts", action: "create" }],
+              dependencyKeys: ["TICKET-1"],
+            },
+          ],
+        });
+        const base = tickets.find((ticket) => ticket.key === "TICKET-1")!;
+        const dependent = tickets.find((ticket) => ticket.key === "TICKET-2")!;
+        yield* appendWorkerResult(system, { run, status: "succeeded", ticketId: base.id });
+        yield* appendWorkerResult(system, { run, status: "succeeded", ticketId: dependent.id });
+
+        const beforeRestart = yield* system.query.getSnapshot();
+        const baseState = beforeRestart.implementationRuns
+          .find((entry) => entry.id === run.id)
+          ?.ticketStates.find((state) => state.ticketId === base.id);
+        const mergesBefore = yield* Ref.get(system.mergeRefInputs);
+        yield* Ref.set(system.dirtyWorkerWorktrees, true);
+
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.rerun",
+          commandId: commandId("rerun-dirty-dependent-implementation"),
+          threadId: sourceThreadId,
+          runId: run.id,
+          target: { kind: "ticket", ticketId: dependent.id, stage: "implementation" },
+          createdAt: "2026-01-01T00:05:00.000Z",
+        });
+        yield* system.reactor.drain;
+
+        const snapshot = yield* system.query.getSnapshot();
+        const restarted = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        const dependentWorkers = snapshot.threads.filter(
+          (thread) =>
+            thread.workflowRole === "implementation-worker" &&
+            thread.workflowContext?.ticketScope.includes(dependent.id),
+        );
+        const latestWorker = dependentWorkers.at(-1);
+        expect(
+          restarted?.ticketStates.find((state) => state.ticketId === dependent.id)?.status,
+        ).toBe("running");
+        expect((yield* Ref.get(system.mergeRefInputs)).slice(mergesBefore.length)).toEqual([]);
+        expect(latestWorker?.messages[0]?.text).toContain(
+          `dependency merges deferred until inherited changes are reconciled: ${baseState?.workerResult?.commitSha}`,
+        );
+        expect(latestWorker?.messages[0]?.text).toContain(
+          "merge each deferred dependency ref in order before completing the ticket",
+        );
       }),
     ),
   );

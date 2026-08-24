@@ -99,6 +99,7 @@ describe("resolveGroupImplementationRun", () => {
     sourceProposedPlan: null,
     orchestratorThreadId: `orchestrator-${id}`,
     appReviewWorkflowRunIds: [],
+    createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     ...overrides,
   });
@@ -122,7 +123,12 @@ describe("resolveGroupImplementationRun", () => {
     });
     const groups =
       buildWorkflowViewModel([root, orchestrator]).rootsByThreadKey.get("env:root")?.groups ?? [];
-    return { groups, card: groups.find((group) => group.parentGroupId === null)! };
+    return {
+      root,
+      orchestrator,
+      groups,
+      card: groups.find((group) => group.parentGroupId === null)!,
+    };
   };
 
   it("links the run that owns a flattened nested group", () => {
@@ -160,6 +166,60 @@ describe("resolveGroupImplementationRun", () => {
         [otherWorkflowRun, run("run-pending", { orchestratorThreadId: "not-created-yet" })],
         { specId: "spec-1", rootThreadId: "root" },
       )?.id,
+    ).toBe("run-pending");
+  });
+
+  it("links the newest run when the planning workflow contains historical runs", () => {
+    const { root, orchestrator } = planningWorkflow();
+    const newerOrchestrator = thread("orchestrator-run-b", {
+      parentThreadId: "root",
+      workflowRole: "implementation-orchestrator",
+      createdAt: "2026-01-03T00:00:00.000Z",
+      workflowContext: {
+        workflowId: "run-b",
+        parentWorkflowId: "workflow-root",
+        rootThreadId: "root",
+      },
+    });
+    const groupsWithNewerRun =
+      buildWorkflowViewModel([root, orchestrator, newerOrchestrator]).rootsByThreadKey.get(
+        "env:root",
+      )?.groups ?? [];
+    const cardWithNewerRun = groupsWithNewerRun.find((group) => group.parentGroupId === null)!;
+    const oldRun = run("run-a", {
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-04T00:00:00.000Z",
+    });
+    const newRun = run("run-b", {
+      createdAt: "2026-01-03T00:00:00.000Z",
+      updatedAt: "2026-01-03T00:00:00.000Z",
+    });
+
+    expect(
+      resolveGroupImplementationRun(cardWithNewerRun, groupsWithNewerRun, [oldRun, newRun], {
+        specId: "spec-1",
+        rootThreadId: "root",
+      })?.id,
+    ).toBe("run-b");
+  });
+
+  it("falls back to the newest run before its orchestrator thread exists", () => {
+    const { groups, card } = planningWorkflow();
+    const oldRun = run("run-a", {
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-04T00:00:00.000Z",
+    });
+    const newRun = run("run-pending", {
+      orchestratorThreadId: "not-created-yet",
+      createdAt: "2026-01-03T00:00:00.000Z",
+      updatedAt: "2026-01-03T00:00:00.000Z",
+    });
+
+    expect(
+      resolveGroupImplementationRun(card, groups, [oldRun, newRun], {
+        specId: "spec-1",
+        rootThreadId: "root",
+      })?.id,
     ).toBe("run-pending");
   });
 });

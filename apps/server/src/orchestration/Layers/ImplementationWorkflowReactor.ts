@@ -731,6 +731,7 @@ function buildWorkerPrompt(input: {
   readonly branch: string;
   readonly worktreePath: string;
   readonly integration: BranchIntegration;
+  readonly inheritsPartialChanges: boolean;
 }): string {
   const integrationLines = [
     `- base ref: ${input.integration.baseRefName}`,
@@ -744,7 +745,20 @@ function buildWorkerPrompt(input: {
       `- remaining dependency branches: ${input.integration.remainingRefNames.join(", ") || "none"}`,
       "Resolve and commit the current dependency merge, merge any remaining dependency branches in order, then implement the planning ticket.",
     );
+  } else if (input.integration.remainingRefNames.length > 0) {
+    integrationLines.push(
+      `- dependency merges deferred until inherited changes are reconciled: ${input.integration.remainingRefNames.join(", ")}`,
+      "Reconcile the inherited partial changes, then merge each deferred dependency ref in order before completing the ticket.",
+    );
   }
+  const continuationLines = input.inheritsPartialChanges
+    ? [
+        "",
+        "Continuation state:",
+        "- This ticket worktree contains tracked or untracked changes from an interrupted worker.",
+        "- Inspect the current status and diff before editing. Treat the inherited changes as partial ticket work. Keep the useful parts, and rewrite or delete anything that does not meet the ticket.",
+      ]
+    : [];
   return [
     `Implement planning ticket ${input.ticketId} for implementation run ${input.run.id}.`,
     "",
@@ -755,9 +769,11 @@ function buildWorkerPrompt(input: {
     `- branch: ${input.branch}`,
     `- worktree: ${input.worktreePath}`,
     ...integrationLines,
+    ...continuationLines,
     "",
     `Retrieve ticket ${input.ticketId} with workflow_ticket_get before implementing it. Use workflow_spec_get when the Spec is needed; artifact bodies are intentionally not embedded in this prompt.`,
     "Treat the ticket's plannedFileChanges as the expected file scope. Make any additional supporting changes required for correctness, and explain material deviations from the planned paths or actions in notesMarkdown.",
+    "Commit the completed ticket work on the assigned branch and leave the worktree clean. Include inherited partial changes that remain part of the solution in that commit.",
     "",
     "Finish with exactly one fenced JSON directive of type implementation-worker-result. Use these fixed identifiers:",
     `- ticketId: ${input.ticketId}`,
@@ -1852,6 +1868,7 @@ const make = Effect.gen(function* () {
       .resolveCommit({ cwd: plannedWorker.worktreePath, ref: "HEAD" })
       .pipe(Effect.option);
     const worktreeExisted = Option.isSome(existingWorktreeHead);
+    let inheritsPartialChanges = false;
     if (worktreeExisted) {
       const [status, expectedWorktreeHead] = yield* Effect.all([
         gitWorkflow.localStatus({ cwd: plannedWorker.worktreePath }),
@@ -1868,12 +1885,13 @@ const make = Effect.gen(function* () {
           detail: `Existing worker worktree is not on expected branch '${plannedWorker.branch}'.`,
         });
       }
-      if (status.hasWorkingTreeChanges) {
+      inheritsPartialChanges = status.hasWorkingTreeChanges;
+      if (skipped && inheritsPartialChanges) {
         return yield* new GitCommandError({
           operation: "ImplementationWorkflowReactor.createWorker",
           command: "git status --short --branch",
           cwd: plannedWorker.worktreePath,
-          detail: `Existing worker worktree on '${plannedWorker.branch}' is dirty before implementation launch.`,
+          detail: `Cannot skip ticket '${input.ticketId}' while its worker worktree has uncommitted changes.`,
         });
       }
       if (existingWorktreeHead.value.commitSha !== expectedWorktreeHead.commitSha) {
@@ -1894,30 +1912,49 @@ const make = Effect.gen(function* () {
       });
     }
 
-    const integration = yield* integrateRefs({
-      cwd: plannedWorker.worktreePath,
-      baseTicketId: baseDependency?.ticketId ?? null,
-      baseRefName,
-      // A new worktree starts at the first dependency's commit, so only the rest
-      // are merged. A worktree that already exists was branched from that
-      // dependency as it stood then, and a ticket only comes back here because
-      // someone started it again: if that dependency has since been repaired,
-      // its new commits have to be merged like any other, or the ticket goes on
-      // building on a base that moved without it.
-      refs: (worktreeExisted ? dependencies : dependencies.slice(1)).map((dependency) => ({
-        ticketId: dependency.ticketId,
-        refName: dependency.commitSha,
-      })),
-    });
+    let integration: BranchIntegration;
+    if (worktreeExisted && inheritsPartialChanges) {
+      integration = {
+        baseTicketId: baseDependency?.ticketId ?? null,
+        baseRefName,
+        mergedTicketIds: [],
+        conflictedTicketId: null,
+        conflictedRefName: null,
+        conflictedFiles: [],
+        remainingTicketIds: dependencies.map((dependency) => dependency.ticketId),
+        remainingRefNames: dependencies.map((dependency) => dependency.commitSha),
+      };
+    } else {
+      integration = yield* integrateRefs({
+        cwd: plannedWorker.worktreePath,
+        baseTicketId: baseDependency?.ticketId ?? null,
+        baseRefName,
+        // A new worktree starts at the first dependency's commit, so only the rest
+        // are merged. A worktree that already exists was branched from that
+        // dependency as it stood then, and a ticket only comes back here because
+        // someone started it again: if that dependency has since been repaired,
+        // its new commits have to be merged like any other, or the ticket goes on
+        // building on a base that moved without it.
+        refs: (worktreeExisted ? dependencies : dependencies.slice(1)).map((dependency) => ({
+          ticketId: dependency.ticketId,
+          refName: dependency.commitSha,
+        })),
+      });
+    }
+
+    const dependencyIntegrationDeferred =
+      integration.conflictedTicketId === null && integration.remainingRefNames.length > 0;
 
     yield* appendActivity({
       threadId: input.run.orchestratorThreadId,
       tone: integration.conflictedTicketId === null ? "info" : "error",
       kind: "implementation-ticket-branches-integrated",
       summary:
-        integration.conflictedTicketId === null
-          ? `Dependencies integrated for ${input.ticketId}`
-          : `Dependency merge needs resolution for ${input.ticketId}`,
+        integration.conflictedTicketId !== null
+          ? `Dependency merge needs resolution for ${input.ticketId}`
+          : dependencyIntegrationDeferred
+            ? `Dependency integration deferred for ${input.ticketId}`
+            : `Dependencies integrated for ${input.ticketId}`,
       payload: { runId: input.run.id, ticketId: input.ticketId, ...integration },
       createdAt: input.createdAt,
     });
@@ -2021,6 +2058,7 @@ const make = Effect.gen(function* () {
             branch: plannedWorker.branch,
             worktreePath: plannedWorker.worktreePath,
             integration,
+            inheritsPartialChanges,
           }),
           WORKFLOW_PROMPT_IDS.implementationTddCodex,
         ),

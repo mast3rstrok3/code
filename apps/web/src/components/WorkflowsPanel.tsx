@@ -1308,8 +1308,12 @@ function TicketPhases(props: {
 }) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const states = new Map(props.run.ticketStates.map((state) => [state.ticketId, state] as const));
+  const runWorkflowIds = new Set([props.run.id, ...props.run.appReviewWorkflowRunIds]);
+  const runThreads = props.threads.filter((thread) =>
+    runWorkflowIds.has(thread.workflowContext?.workflowId ?? ""),
+  );
   const threadsByTicketId = new Map<string, EnvironmentThreadShell[]>();
-  for (const thread of props.threads) {
+  for (const thread of runThreads) {
     for (const ticketId of thread.workflowContext?.ticketScope ?? []) {
       const scoped = threadsByTicketId.get(ticketId);
       if (scoped) scoped.push(thread);
@@ -1322,11 +1326,11 @@ function TicketPhases(props: {
         const waveTicketIds = new Set(wave.map((ticket) => ticket.id));
         // A wave is derived from the dependency graph rather than stored, so
         // every action names the ticket ids this row is rendering right now.
-        const waveThreads = props.threads.filter((thread) =>
+        const waveThreads = runThreads.filter((thread) =>
           thread.workflowContext?.ticketScope.some((ticketId) => waveTicketIds.has(ticketId)),
         );
-        const waveBusy = runningThreadIdsOf(props.threads, waveThreads).length > 0;
-        const wavePause = workflowPauseOf(props.threads, waveThreads);
+        const waveBusy = runningThreadIdsOf(runThreads, waveThreads).length > 0;
+        const wavePause = workflowPauseOf(runThreads, waveThreads);
         // A wave is only done once its last ticket is, so it shows the most
         // demanding of them rather than an average nobody can act on.
         const waveStatus = resolveWorkflowStepRollup(
@@ -1382,7 +1386,7 @@ function TicketPhases(props: {
                 restartDisabledReason={
                   waveBusy ? "This wave is still running. Stop it before starting it again." : null
                 }
-                runningThreadIds={runningThreadIdsOf(props.threads, waveThreads)}
+                runningThreadIds={runningThreadIdsOf(runThreads, waveThreads)}
                 pausedScopeThreadIds={wavePause.scopeThreadIds}
                 onSetStepModel={undefined}
                 onStop={props.onStopThreads}
@@ -1406,7 +1410,7 @@ function TicketPhases(props: {
                   state?.workerThreadId,
                   state?.codeReviewThreadId,
                   appReviewRun?.controllerThreadId,
-                  ...props.threads
+                  ...runThreads
                     .filter(
                       (thread) =>
                         thread.workflowContext?.ticketScope.includes(ticket.id) === true &&
@@ -1421,7 +1425,7 @@ function TicketPhases(props: {
                 ].flatMap((threadId) => (threadId == null ? [] : [threadId])),
               );
               const linkedThreads = [...linkedThreadIds]
-                .map((threadId) => props.threads.find((thread) => thread.id === threadId))
+                .map((threadId) => runThreads.find((thread) => thread.id === threadId))
                 .filter((thread): thread is EnvironmentThreadShell => thread !== undefined)
                 .toSorted(
                   (left, right) =>
@@ -1476,7 +1480,7 @@ function TicketPhases(props: {
                 },
               ] as const;
               const ticketLabel = ticket.key ?? `Ticket ${ticket.ordinal + 1}`;
-              const ticketPause = workflowPauseOf(props.threads, linkedThreads);
+              const ticketPause = workflowPauseOf(runThreads, linkedThreads);
               const ticketStatus = resolveWorkflowTicketStatus({
                 ticketState: state?.status ?? null,
                 threadStatuses: linkedThreads.map(resolveWorkflowThreadStatus),
@@ -1536,7 +1540,7 @@ function TicketPhases(props: {
                         threads: implementationThreads,
                         appReviewRun,
                       })}
-                      runningThreadIds={runningThreadIdsOf(props.threads, linkedThreads)}
+                      runningThreadIds={runningThreadIdsOf(runThreads, linkedThreads)}
                       pausedScopeThreadIds={ticketPause.scopeThreadIds}
                       onSetStepModel={undefined}
                       onStop={props.onStopThreads}
@@ -1589,7 +1593,7 @@ function TicketPhases(props: {
                             ticket.id,
                             TICKET_STAGE_RERUN[stage.label].stage,
                           );
-                          const stagePaused = workflowPauseOf(props.threads, stage.threads).paused;
+                          const stagePaused = workflowPauseOf(runThreads, stage.threads).paused;
                           const stageStatus = stageSkipped
                             ? "skipped"
                             : stagePaused
@@ -1653,12 +1657,9 @@ function TicketPhases(props: {
                                     threads: stage.threads,
                                     appReviewRun,
                                   })}
-                                  runningThreadIds={runningThreadIdsOf(
-                                    props.threads,
-                                    stage.threads,
-                                  )}
+                                  runningThreadIds={runningThreadIdsOf(runThreads, stage.threads)}
                                   pausedScopeThreadIds={
-                                    workflowPauseOf(props.threads, stage.threads).scopeThreadIds
+                                    workflowPauseOf(runThreads, stage.threads).scopeThreadIds
                                   }
                                   onSetStepModel={props.onSetStepModel}
                                   onStop={props.onStopThreads}
@@ -1730,7 +1731,7 @@ function TicketPhases(props: {
                                             phase,
                                           })
                                   }
-                                  threads={props.threads}
+                                  threads={runThreads}
                                   onOpenThread={props.onOpenThread}
                                   activeThreadKey={props.activeThreadKey}
                                   timestampFormat={props.timestampFormat}

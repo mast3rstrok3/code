@@ -115,11 +115,13 @@ Work that failed does not have to sink the run. In the Workflows panel, a step's
 
 A logical pass is one valid result from Implementation or Code Review. Each such stage may retry one interrupted launch or invalid response before it has a valid result. Findings and failed validation are results, so they do not start another review pass. Code Review findings may use the existing repair step and one final validation.
 
-An App Review repair cycle is different. It contains review, gap analysis, and repair, and the workflow may run up to ten complete cycles. Each phase gets one retry if its launch is interrupted. A dirty worktree, wrong branch, stale worktree, or mismatched commit stops automation immediately because another agent launch cannot safely repair that state.
+An App Review repair cycle is different. It contains review, gap analysis, and repair, and the workflow may run up to ten complete cycles. Each phase gets one retry if its launch is interrupted. A wrong branch, stale worktree, mismatched commit, or dirty review worktree stops automation immediately.
 
 When automation stops, the panel shows **Needs human attention** with the ticket, stage, and reason. No later ticket, dependent wave, integration, review, or pull-request step starts automatically. Already-running sibling stages may finish and record results, but those results do not advance the run. **Start step again** is the only way to create a new generation. It resets only the selected stage and leaves all other stages closed.
 
 Re-running a ticket's implementation also reopens the tickets that failed only because that one did. Those carried no work of their own, so they go back to waiting and run in dependency order once the re-run lands. Tickets that already succeeded are left alone, which is why a wave has no single re-run of its own.
+
+An interrupted Implementation worker leaves its ticket branch and worktree in place. Its replacement starts with any tracked and untracked changes the earlier worker left behind. The replacement inspects that partial implementation, keeps or changes useful work, removes work that does not meet the ticket, and commits a clean result. If a dependency moved, the replacement merges that dependency after it reconciles the inherited changes. The ticket cannot advance to review while the worktree remains dirty.
 
 An App Review cycle is three phases: the browser review, the gap analysis that writes the repair tickets, and the repair itself. Each phase row in the newest cycle carries its own **Re-run**. Redoing the gap analysis drops the repair it planned, since that repair no longer stands once its analysis is being redone. Redoing the browser review runs a new cycle instead: the cycle that disappointed you keeps its findings and its verdict, and the retry spends one of the budget. Earlier cycles are history and cannot be started again.
 
