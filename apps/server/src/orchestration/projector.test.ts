@@ -7,6 +7,7 @@ import {
   ThreadId,
   type OrchestrationEvent,
 } from "@t3tools/contracts";
+import { it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -63,6 +64,14 @@ describe("orchestration projector", () => {
               model: "gpt-5-codex",
             },
             runtimeMode: "full-access",
+            workflowPreset: "quick-plan",
+            workflowImplementationSettings: {
+              ticketAppReviewEnabled: true,
+              appReviewEnabled: false,
+              finalCodeReviewEnabled: false,
+              pullRequestCreationEnabled: false,
+              pullRequestBabysittingEnabled: false,
+            },
             branch: null,
             worktreePath: null,
             createdAt: now,
@@ -88,7 +97,14 @@ describe("orchestration projector", () => {
         },
         runtimeMode: "full-access",
         interactionMode: "default",
-        workflowPreset: null,
+        workflowPreset: "quick-plan",
+        workflowImplementationSettings: {
+          ticketAppReviewEnabled: true,
+          appReviewEnabled: false,
+          finalCodeReviewEnabled: false,
+          pullRequestCreationEnabled: false,
+          pullRequestBabysittingEnabled: false,
+        },
         branch: null,
         worktreePath: null,
         latestTurn: null,
@@ -111,6 +127,72 @@ describe("orchestration projector", () => {
       },
     ]);
   });
+
+  effectIt.effect("keeps historical multi-child workflow batches readable", () =>
+    Effect.gen(function* () {
+      const now = "2026-01-01T00:00:00.000Z";
+      const created = yield* projectEvent(
+        createEmptyReadModel(now),
+        makeEvent({
+          sequence: 1,
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: "thread-parent",
+          occurredAt: now,
+          commandId: "cmd-thread-create",
+          payload: {
+            threadId: "thread-parent",
+            projectId: "project-1",
+            title: "Historical workflow parent",
+            modelSelection: {
+              provider: ProviderDriverKind.make("codex"),
+              model: "gpt-5-codex",
+            },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+            createdAt: now,
+            updatedAt: now,
+          },
+        }),
+      );
+      const projected = yield* projectEvent(
+        created,
+        makeEvent({
+          sequence: 2,
+          type: "thread.workflow-subagent-batch-created",
+          aggregateKind: "thread",
+          aggregateId: "thread-parent",
+          occurredAt: now,
+          commandId: "cmd-historical-batch",
+          payload: {
+            threadId: "thread-parent",
+            batch: {
+              id: "batch-historical",
+              parentThreadId: "thread-parent",
+              sourceAssistantMessageId: "message-historical",
+              status: "running",
+              children: ["Standards", "Spec"].map((title, index) => ({
+                index,
+                workflowPromptId: "implementation.code-review.codex",
+                title,
+                expectedResult: `${title} review result`,
+                status: "running",
+                createdAt: now,
+              })),
+              createdAt: now,
+            },
+          },
+        }),
+      );
+
+      const batch = projected.threads[0]?.workflowSubagentBatches?.[0];
+      expect(batch?.children).toHaveLength(2);
+      expect(batch?.children.map((child) => child.title)).toEqual(["Standards", "Spec"]);
+      expect(batch?.children.every((child) => child.childThreadId === null)).toBe(true);
+    }),
+  );
 
   it("fails when event payload cannot be decoded by runtime schema", async () => {
     const now = "2026-01-01T00:00:00.000Z";

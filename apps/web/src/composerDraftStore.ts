@@ -19,6 +19,7 @@ import {
   ThreadId,
   WorkspaceUserId,
   WorkflowPreset,
+  ImplementationWorkflowSettings,
   type WorkspaceUserId as WorkspaceUserIdType,
 } from "@t3tools/contracts";
 import {
@@ -59,6 +60,7 @@ import { UnifiedSettings } from "@t3tools/contracts/settings";
 import { ReviewCommentContextSchema, type ReviewCommentContext } from "./reviewCommentContext";
 const isProviderInteractionMode = Schema.is(ProviderInteractionMode);
 const isWorkflowPreset = Schema.is(WorkflowPreset);
+const isImplementationWorkflowSettings = Schema.is(ImplementationWorkflowSettings);
 const isRuntimeMode = Schema.is(RuntimeMode);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 const isReviewCommentContext = Schema.is(ReviewCommentContextSchema);
@@ -155,6 +157,7 @@ const PersistedComposerThreadDraftState = Schema.Struct({
   runtimeMode: Schema.optionalKey(RuntimeMode),
   interactionMode: Schema.optionalKey(ProviderInteractionMode),
   workflowPreset: Schema.optionalKey(Schema.NullOr(WorkflowPreset)),
+  workflowImplementationSettings: Schema.optionalKey(ImplementationWorkflowSettings),
   lastWorkflowPreset: Schema.optionalKey(WorkflowPreset),
 });
 type PersistedComposerThreadDraftState = typeof PersistedComposerThreadDraftState.Type;
@@ -289,6 +292,7 @@ export interface ComposerThreadDraftState {
   runtimeMode: RuntimeMode | null;
   interactionMode: ProviderInteractionMode | null;
   workflowPreset: WorkflowPreset | null;
+  workflowImplementationSettings: ImplementationWorkflowSettings | null;
   lastWorkflowPreset: WorkflowPreset | null;
 }
 
@@ -496,6 +500,7 @@ interface ComposerDraftStoreState {
     threadRef: ComposerThreadTarget,
     interactionMode: ProviderInteractionMode,
     workflowPreset: WorkflowPreset | null,
+    workflowImplementationSettings?: ImplementationWorkflowSettings | null,
   ) => void;
   addImage: (threadRef: ComposerThreadTarget, image: ComposerImageAttachment) => void;
   addImages: (threadRef: ComposerThreadTarget, images: ComposerImageAttachment[]) => void;
@@ -664,6 +669,7 @@ const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   runtimeMode: null,
   interactionMode: null,
   workflowPreset: null,
+  workflowImplementationSettings: null,
   lastWorkflowPreset: null,
 });
 
@@ -688,6 +694,7 @@ export function createEmptyThreadDraft(): ComposerThreadDraftState {
     runtimeMode: null,
     interactionMode: null,
     workflowPreset: null,
+    workflowImplementationSettings: null,
     lastWorkflowPreset: null,
   };
 }
@@ -2027,6 +2034,9 @@ function partializeComposerDraftStoreState(
       ...(draft.runtimeMode ? { runtimeMode: draft.runtimeMode } : {}),
       ...(draft.interactionMode ? { interactionMode: draft.interactionMode } : {}),
       ...(draft.workflowPreset !== null ? { workflowPreset: draft.workflowPreset } : {}),
+      ...(draft.workflowImplementationSettings !== null
+        ? { workflowImplementationSettings: draft.workflowImplementationSettings }
+        : {}),
       ...(draft.lastWorkflowPreset !== null
         ? { lastWorkflowPreset: draft.lastWorkflowPreset }
         : {}),
@@ -2277,6 +2287,7 @@ function toHydratedThreadDraft(
     runtimeMode: persistedDraft.runtimeMode ?? null,
     interactionMode: persistedDraft.interactionMode ?? null,
     workflowPreset: persistedDraft.workflowPreset ?? null,
+    workflowImplementationSettings: persistedDraft.workflowImplementationSettings ?? null,
     lastWorkflowPreset: persistedDraft.lastWorkflowPreset ?? null,
   };
 }
@@ -3027,10 +3038,20 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             return { draftsByThreadKey: nextDraftsByThreadKey };
           });
         },
-        setComposerMode: (threadRef, interactionMode, workflowPreset) => {
+        setComposerMode: (
+          threadRef,
+          interactionMode,
+          workflowPreset,
+          workflowImplementationSettings = null,
+        ) => {
           const threadKey = resolveComposerDraftKey(get(), threadRef) ?? "";
           if (threadKey.length === 0 || !isProviderInteractionMode(interactionMode)) return;
           const nextWorkflowPreset = isWorkflowPreset(workflowPreset) ? workflowPreset : null;
+          const nextWorkflowImplementationSettings = isImplementationWorkflowSettings(
+            workflowImplementationSettings,
+          )
+            ? workflowImplementationSettings
+            : null;
           set((state) => {
             const existing = state.draftsByThreadKey[threadKey];
             const base = existing ?? createEmptyThreadDraft();
@@ -3038,6 +3059,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             if (
               base.interactionMode === interactionMode &&
               base.workflowPreset === nextWorkflowPreset &&
+              base.workflowImplementationSettings === nextWorkflowImplementationSettings &&
               base.lastWorkflowPreset === lastWorkflowPreset
             ) {
               return state;
@@ -3046,6 +3068,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               ...base,
               interactionMode,
               workflowPreset: nextWorkflowPreset,
+              workflowImplementationSettings: nextWorkflowImplementationSettings,
               lastWorkflowPreset,
             };
             return {

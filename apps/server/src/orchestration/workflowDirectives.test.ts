@@ -607,7 +607,7 @@ ${JSON.stringify({
     NodeAssert.equal(result.directive.expectedResult, "planning-reviewer-verdict");
   });
 
-  it("parses an unbounded workflow sub-agent batch without truncating invalid siblings", () => {
+  it("keeps historical multi-child workflow batches parseable", () => {
     const children = Array.from({ length: 50 }, (_, index) =>
       index === 17
         ? { title: "Invalid child", promptMarkdown: "Missing a workflow prompt." }

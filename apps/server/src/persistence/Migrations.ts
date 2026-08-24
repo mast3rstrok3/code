@@ -83,6 +83,7 @@ import Migration0077 from "./Migrations/077_ProjectionProjectsPreviewRecordingMo
 import Migration0078 from "./Migrations/078_ProjectionThreadWorkflowStepCycles.ts";
 import Migration0079 from "./Migrations/079_PlanningTicketAppReviewScope.ts";
 import Migration0080 from "./Migrations/080_ProjectionThreadWorkflowStepReviewParts.ts";
+import Migration0082 from "./Migrations/082_ProjectionThreadWorkflowImplementationSettings.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -178,6 +179,7 @@ export const migrationEntries = [
   [79, "PlanningTicketAppReviewScope", Migration0079],
   [80, "ProjectionThreadWorkflowStepReviewParts", Migration0080],
   [81, "AuthSessionClientConnectionCompatibility", Migration0041],
+  [82, "ProjectionThreadWorkflowImplementationSettings", Migration0082],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

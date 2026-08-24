@@ -101,6 +101,9 @@ export function applyThreadDetailEvent(
           runtimeMode: event.payload.runtimeMode,
           interactionMode: event.payload.interactionMode,
           workflowPreset: event.payload.workflowPreset ?? null,
+          ...(event.payload.workflowImplementationSettings === undefined
+            ? {}
+            : { workflowImplementationSettings: event.payload.workflowImplementationSettings }),
           branch: event.payload.branch,
           worktreePath: event.payload.worktreePath,
           latestTurn: null,
@@ -285,16 +288,23 @@ export function applyThreadDetailEvent(
         },
       };
 
-    case "thread.composer-mode-set":
+    case "thread.composer-mode-set": {
+      const { workflowImplementationSettings: _settings, ...threadWithoutSettings } = thread;
+      const baseThread =
+        event.payload.workflowImplementationSettings === null ? threadWithoutSettings : thread;
       return {
         kind: "updated",
         thread: {
-          ...thread,
+          ...baseThread,
           interactionMode: event.payload.interactionMode,
           workflowPreset: event.payload.workflowPreset,
+          ...(event.payload.workflowImplementationSettings == null
+            ? {}
+            : { workflowImplementationSettings: event.payload.workflowImplementationSettings }),
           updatedAt: event.payload.updatedAt,
         },
       };
+    }
 
     // ── Planning workflow ──────────────────────────────────────────
     case "thread.planning-stage-started": {

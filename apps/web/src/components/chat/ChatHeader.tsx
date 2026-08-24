@@ -67,14 +67,20 @@ export function workflowProgressLabel(input: {
   readonly planningWorkflow: OrchestrationPlanningWorkflow | null;
   readonly implementationRuns: ReadonlyArray<OrchestrationImplementationRun>;
 }): string | null {
+  const planLabel =
+    input.workflowPreset === "quick-plan"
+      ? "Quick Plan"
+      : input.workflowPreset === "fast-plan"
+        ? "Fast Plan"
+        : "Fast feature";
   if (input.workflowContext === null) return null;
   const run = [...input.implementationRuns].sort((left, right) =>
     right.updatedAt.localeCompare(left.updatedAt),
   )[0];
   if (run !== undefined) {
     if (run.artifactSource === "proposed-plan") {
-      if (run.status === "launch-pending") return "Fast feature · Setup";
-      if (run.status === "running") return "Fast feature · Build";
+      if (run.status === "launch-pending") return `${planLabel} · Setup`;
+      if (run.status === "running") return `${planLabel} · Build`;
     }
     switch (run.status) {
       case "launch-pending":
@@ -88,7 +94,7 @@ export function workflowProgressLabel(input: {
         return "Implementation · Browser App Review";
       case "fixing":
         if (run.fixOrigin === "app-dev-stack" || run.fixOrigin === "app-review") {
-          return `${run.artifactSource === "proposed-plan" ? "Fast feature" : "Implementation"} · TDD repair · ${run.qaCycleCount}/${IMPLEMENTATION_RUN_MAX_QA_REPAIRS}`;
+          return `${run.artifactSource === "proposed-plan" ? planLabel : "Implementation"} · TDD repair · ${run.qaCycleCount}/${IMPLEMENTATION_RUN_MAX_QA_REPAIRS}`;
         }
         return "Implementation · Fix";
       case "code-review-fixing":
@@ -150,8 +156,9 @@ export function workflowProgressLabel(input: {
     case "implementation-code-reviewer":
       return "Implementation · Code review";
     case "implementation-orchestrator":
+      return "Implementation · Build";
     case "fast-feature-implementer":
-      return "Fast feature · Build";
+      return `${planLabel} · Build`;
     case "planning-orchestrator":
     case "planning-reviewer":
       return "Planning · Spec";

@@ -1262,6 +1262,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.workflowPreset !== undefined
             ? { workflowPreset: command.workflowPreset }
             : {}),
+          ...(command.workflowImplementationSettings !== undefined
+            ? { workflowImplementationSettings: command.workflowImplementationSettings }
+            : {}),
           branch: command.branch,
           worktreePath: command.worktreePath,
           createdAt: command.createdAt,
@@ -2194,6 +2197,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           interactionMode: command.interactionMode,
           workflowPreset: command.workflowPreset,
+          ...(command.workflowImplementationSettings !== undefined
+            ? { workflowImplementationSettings: command.workflowImplementationSettings }
+            : {}),
           updatedAt: occurredAt,
         },
       };
@@ -3195,7 +3201,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
 
     case "thread.fast-feature-run.launch": {
       const sourceThread = yield* requireThread({ readModel, command, threadId: command.threadId });
-      if (sourceThread.workflowPreset !== "fast-feature") {
+      if (
+        sourceThread.workflowPreset !== "fast-feature" &&
+        sourceThread.workflowPreset !== "quick-plan" &&
+        sourceThread.workflowPreset !== "fast-plan"
+      ) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: `Thread '${sourceThread.id}' does not have the fast-feature workflow preset.`,
@@ -3359,7 +3369,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ownerUserId: sourceThread.ownerUserId,
           parentThreadId: sourceThread.id,
           workflowRole: "fast-feature-implementer",
-          workflowPreset: "fast-feature",
+          workflowPreset: sourceThread.workflowPreset,
           workflowContext: sourceThread.workflowContext ?? null,
           title: buildPlanImplementationThreadTitle(plan.planMarkdown),
           modelSelection: sourceThread.modelSelection,
@@ -3518,6 +3528,24 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           commandType: command.type,
           detail: `Implementation Run '${command.run.id}' does not exist.`,
         });
+      }
+      for (const nextState of command.run.ticketStates) {
+        const existingState = existingRun.ticketStates.find(
+          (state) => state.ticketId === nextState.ticketId,
+        );
+        if (existingState === undefined) continue;
+        for (const [claimName, existingClaim, nextClaim] of [
+          ["Implementation", existingState.workerThreadId, nextState.workerThreadId],
+          ["App Review", existingState.appReviewWorkflowRunId, nextState.appReviewWorkflowRunId],
+          ["Code Review", existingState.codeReviewThreadId, nextState.codeReviewThreadId],
+        ] as const) {
+          if (nextClaim != null && existingClaim != null && nextClaim !== existingClaim) {
+            return yield* new OrchestrationCommandInvariantError({
+              commandType: command.type,
+              detail: `Ticket '${nextState.ticketId}' ${claimName} claim is stale.`,
+            });
+          }
+        }
       }
       if (
         command.expectedCodeReviewClaim !== undefined &&
@@ -3904,7 +3932,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           caller.ticketId !== undefined &&
           implementationRun?.ticketStates.some(
             (state) =>
-              state.ticketId === caller.ticketId && state.workerThreadId === command.targetThreadId,
+              state.ticketId === caller.ticketId &&
+              state.workerThreadId === command.targetThreadId &&
+              state.appReviewWorkflowRunId ===
+                AppReviewWorkflowRunId.make(`app-review-workflow-${command.controllerThreadId}`),
           );
         if (
           implementationRun === undefined ||
@@ -4469,10 +4500,19 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: "Workflow sub-agent batch parent does not match the target thread.",
         });
       }
-      if (command.batch.children.length === 0) {
+      if (command.batch.children.length !== 1) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: "Workflow sub-agent batch must contain at least one child.",
+          detail: "A workflow sub-agent handoff must contain exactly one child.",
+        });
+      }
+      const unfinishedBatch = thread.workflowSubagentBatches?.find(
+        (batch) => batch.status !== "completed",
+      );
+      if (unfinishedBatch !== undefined) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Workflow sub-agent batch '${unfinishedBatch.id}' is still unfinished.`,
         });
       }
       if (thread.workflowSubagentBatches?.some((batch) => batch.id === command.batch.id)) {

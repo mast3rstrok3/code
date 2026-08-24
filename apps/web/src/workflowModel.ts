@@ -554,7 +554,7 @@ export function resolveGroupImplementationRun<
       ),
     ) ?? null;
   if (directlyLinked !== null) return directlyLinked;
-  if (group.preset !== "planning") return null;
+  if (group.preset !== "planning" && group.preset !== "fast-engineering") return null;
   return (
     runs
       .filter(

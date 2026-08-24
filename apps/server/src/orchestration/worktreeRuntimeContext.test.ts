@@ -7,7 +7,7 @@ describe("buildWorktreeRuntimeContext", () => {
     const context = buildWorktreeRuntimeContext({
       worktreePath: "/worktrees/rudi/worktree-deadbeef",
       branch: "verify-email-capabilities",
-      workflowPreset: "fast-feature",
+      workflowPreset: "quick-plan",
       stackLookup: { stack: null, frontendUrl: null, frontendServiceName: null },
     });
 

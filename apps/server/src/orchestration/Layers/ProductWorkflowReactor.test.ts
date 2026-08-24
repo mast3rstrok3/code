@@ -32,7 +32,10 @@ import { WORKFLOW_PROMPT_IDS } from "../../provider/WorkflowPromptRegistry.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
-import { ProductWorkflowReactorLive } from "./ProductWorkflowReactor.ts";
+import {
+  ProductWorkflowReactorLive,
+  resolvePlanQuestionAnswers,
+} from "./ProductWorkflowReactor.ts";
 import { layerTest as serverSettingsLayerTest } from "../../serverSettings.ts";
 import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
 import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
@@ -53,6 +56,47 @@ const now = "2026-01-01T00:00:00.000Z";
 const projectId = ProjectId.make("project-product-reactor");
 const productThreadId = ThreadId.make("thread-product-reactor");
 const planningThreadId = ThreadId.make("thread-planning-reactor");
+
+describe("resolvePlanQuestionAnswers", () => {
+  it("uses a valid recommendation, then the first option, then the free-form fallback", () => {
+    expect(
+      resolvePlanQuestionAnswers({
+        questions: [
+          {
+            id: "approach",
+            options: [{ label: "Small" }, { label: "Complete" }],
+            recommendation: { optionLabel: "Complete" },
+          },
+          {
+            id: "tests",
+            options: [{ label: "Focused" }, { label: "Broad" }],
+          },
+          { id: "unknown", options: [] },
+        ],
+      }),
+    ).toEqual({
+      approach: "Complete",
+      tests: "Focused",
+      unknown: "Use your best judgment and continue.",
+    });
+  });
+
+  it("ignores malformed questions and invalid recommendations", () => {
+    expect(
+      resolvePlanQuestionAnswers({
+        questions: [
+          null,
+          { options: [{ label: "Missing id" }] },
+          {
+            id: "approach",
+            options: [{ label: "Safe" }],
+            recommendation: { optionLabel: "Unavailable" },
+          },
+        ],
+      }),
+    ).toEqual({ approach: "Safe" });
+  });
+});
 
 interface ProductSystem {
   readonly engine: OrchestrationEngineShape;

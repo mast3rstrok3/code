@@ -30,6 +30,7 @@ import {
   WORKFLOW_AUTOMATION_RUNTIME_MODE,
   TerminalOpenInput,
   type WorkflowPreset,
+  type ImplementationWorkflowSettings,
   WorkflowId,
 } from "@t3tools/contracts";
 import {
@@ -1466,6 +1467,9 @@ function ChatViewContent(props: ChatViewProps) {
   const composerWorkflowPreset = useComposerDraftStore(
     (store) => store.getComposerDraft(composerDraftTarget)?.workflowPreset ?? null,
   );
+  const composerWorkflowImplementationSettings = useComposerDraftStore(
+    (store) => store.getComposerDraft(composerDraftTarget)?.workflowImplementationSettings ?? null,
+  );
   const composerLastWorkflowPreset = useComposerDraftStore(
     (store) => store.getComposerDraft(composerDraftTarget)?.lastWorkflowPreset ?? null,
   );
@@ -1757,6 +1761,10 @@ function ChatViewContent(props: ChatViewProps) {
     composerInteractionMode !== null
       ? composerWorkflowPreset
       : (activeThread?.workflowPreset ?? null);
+  const workflowImplementationSettings =
+    composerInteractionMode !== null
+      ? composerWorkflowImplementationSettings
+      : (activeThread?.workflowImplementationSettings ?? null);
   const selectedInteractionMode =
     composerInteractionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE;
   const interactionMode =
@@ -3999,9 +4007,18 @@ function ChatViewContent(props: ChatViewProps) {
   );
 
   const handleComposerModeChange = useCallback(
-    (mode: ProviderInteractionMode, preset: WorkflowPreset | null) => {
-      if (mode === interactionMode && preset === workflowPreset) return;
-      setComposerDraftComposerMode(composerDraftTarget, mode, preset);
+    (
+      mode: ProviderInteractionMode,
+      preset: WorkflowPreset | null,
+      implementationSettings: ImplementationWorkflowSettings | null = null,
+    ) => {
+      if (
+        mode === interactionMode &&
+        preset === workflowPreset &&
+        implementationSettings === workflowImplementationSettings
+      )
+        return;
+      setComposerDraftComposerMode(composerDraftTarget, mode, preset, implementationSettings);
       if (isLocalDraftThread) {
         setDraftThreadContext(composerDraftTarget, {
           interactionMode: mode,
@@ -4018,6 +4035,7 @@ function ChatViewContent(props: ChatViewProps) {
       setComposerDraftComposerMode,
       setDraftThreadContext,
       workflowPreset,
+      workflowImplementationSettings,
     ],
   );
   const toggleInteractionMode = useCallback(() => {
@@ -4565,6 +4583,7 @@ function ChatViewContent(props: ChatViewProps) {
       runtimeMode: RuntimeMode;
       interactionMode: ProviderInteractionMode;
       workflowPreset: WorkflowPreset | null;
+      workflowImplementationSettings: ImplementationWorkflowSettings | null;
     }): Promise<AtomCommandResult<void, unknown>> => {
       if (!serverThread) {
         return AsyncResult.success(undefined);
@@ -4612,7 +4631,9 @@ function ChatViewContent(props: ChatViewProps) {
 
       if (
         input.interactionMode !== serverThread.interactionMode ||
-        input.workflowPreset !== (serverThread.workflowPreset ?? null)
+        input.workflowPreset !== (serverThread.workflowPreset ?? null) ||
+        JSON.stringify(input.workflowImplementationSettings) !==
+          JSON.stringify(serverThread.workflowImplementationSettings ?? null)
       ) {
         result = mapAtomCommandResult(
           await setThreadComposerMode({
@@ -4621,6 +4642,7 @@ function ChatViewContent(props: ChatViewProps) {
               threadId: input.threadId,
               interactionMode: input.interactionMode,
               workflowPreset: input.workflowPreset,
+              workflowImplementationSettings: input.workflowImplementationSettings,
               createdAt: input.createdAt,
             },
           }),
@@ -6331,6 +6353,7 @@ function ChatViewContent(props: ChatViewProps) {
         runtimeMode,
         interactionMode,
         workflowPreset,
+        workflowImplementationSettings,
       });
       if (settingsResult._tag === "Failure") {
         failure = settingsResult;
@@ -6363,6 +6386,9 @@ function ChatViewContent(props: ChatViewProps) {
                       workflowPreset: isAppReviewWorkflowSend
                         ? ("app-review" as const)
                         : workflowPreset,
+                      ...(workflowImplementationSettings === null
+                        ? {}
+                        : { workflowImplementationSettings }),
                       ...(isAppReviewWorkflowSend
                         ? {
                             workflowRole: "app-review-orchestrator" as const,
@@ -6850,6 +6876,7 @@ function ChatViewContent(props: ChatViewProps) {
         runtimeMode,
         interactionMode: nextInteractionMode,
         workflowPreset,
+        workflowImplementationSettings,
       });
       let failure: AtomCommandResult<unknown, unknown> | null =
         settingsResult._tag === "Failure" ? settingsResult : null;

@@ -11,6 +11,7 @@ import type {
   ServerProvider,
   ThreadId,
   WorkflowPreset,
+  ImplementationWorkflowSettings,
   TurnId,
 } from "@t3tools/contracts";
 import {
@@ -613,6 +614,7 @@ export interface ChatComposerProps {
   handleInteractionModeChange: (
     mode: ProviderInteractionMode,
     preset: WorkflowPreset | null,
+    implementationSettings?: ImplementationWorkflowSettings | null,
   ) => void;
   onAppReviewCycleBudgetChange: (budget: number) => void;
   onAppReviewReviewUrlChange: (reviewUrl: string) => void;
@@ -966,13 +968,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       readonly stepModels: UnifiedSettings["workflowStepModels"];
       readonly stepCycles: UnifiedSettings["workflowStepCycles"];
       readonly stepReviewParts: UnifiedSettings["workflowStepReviewParts"];
-      readonly implementationSettings: UnifiedSettings["implementation"];
     }) => {
       updateEnvironmentSettings({
         workflowStepModels: [...defaults.stepModels],
         workflowStepCycles: [...defaults.stepCycles],
         workflowStepReviewParts: [...defaults.stepReviewParts],
-        implementation: defaults.implementationSettings,
       });
     },
     [updateEnvironmentSettings],
@@ -3544,11 +3544,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           onOpenChange={(open) => {
             if (!open) setModeCatalog(null);
           }}
-          onSelectPreset={(preset) => {
+          onSelectPreset={(preset, implementationSettings) => {
             composerModeControls.onBuildSkillChange(null);
             composerModeControls.onInteractionModeChange(
               interactionModeForWorkflowPreset(preset),
               preset,
+              implementationSettings,
             );
           }}
           onSelectSkill={(skillId) => {

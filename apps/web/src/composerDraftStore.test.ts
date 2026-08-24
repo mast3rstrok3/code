@@ -1809,6 +1809,25 @@ describe("composerDraftStore runtime and interaction settings", () => {
     expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.interactionMode).toBe("plan");
   });
 
+  it("stores run-local workflow stage choices with the selected preset", () => {
+    const store = useComposerDraftStore.getState();
+    const settings = {
+      ticketAppReviewEnabled: true,
+      appReviewEnabled: false,
+      finalCodeReviewEnabled: false,
+      pullRequestCreationEnabled: false,
+      pullRequestBabysittingEnabled: false,
+    };
+
+    store.setComposerMode(threadRef, "plan", "quick-plan", settings);
+
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)).toMatchObject({
+      interactionMode: "plan",
+      workflowPreset: "quick-plan",
+      workflowImplementationSettings: settings,
+    });
+  });
+
   it("remembers the last workflow preset after Build or Plan clears the active preset", () => {
     const store = useComposerDraftStore.getState();
 

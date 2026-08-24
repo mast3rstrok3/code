@@ -1,6 +1,9 @@
-import type { WorkflowPreset } from "@t3tools/contracts";
+import type { ImplementationWorkflowSettings, WorkflowPreset } from "@t3tools/contracts";
 import { setWorkflowStepReviewPartsOverride } from "@t3tools/shared/appReviewParts";
-import { WORKFLOW_PRESET_DEFINITION_BY_ID } from "@t3tools/shared/workflowPresets";
+import {
+  implementationDefaultsForWorkflowPreset,
+  WORKFLOW_PRESET_DEFINITION_BY_ID,
+} from "@t3tools/shared/workflowPresets";
 import { setWorkflowStepCycleOverride } from "@t3tools/shared/workflowStepCycles";
 import { ArrowLeftIcon, CheckIcon, CircleHelpIcon } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -72,7 +75,10 @@ export function ComposerModeCatalogDialog(props: {
   readonly selectedBuildSkillId: string | null;
   readonly workflowDefaults: ComposerWorkflowDefaults;
   readonly onOpenChange: (open: boolean) => void;
-  readonly onSelectPreset: (preset: WorkflowPreset) => void;
+  readonly onSelectPreset: (
+    preset: WorkflowPreset,
+    implementationSettings: ImplementationWorkflowSettings,
+  ) => void;
   readonly onSelectSkill: (skillId: string) => void;
 }) {
   const [configuringPreset, setConfiguringPreset] = useState<WorkflowPreset | null>(null);
@@ -89,14 +95,20 @@ export function ComposerModeCatalogDialog(props: {
     setStepModels(props.workflowDefaults.stepModels);
     setStepCycles(props.workflowDefaults.stepCycles);
     setStepReviewParts(props.workflowDefaults.stepReviewParts);
-    setImplementationSettings(props.workflowDefaults.implementationSettings);
   }, [
     props.catalog,
     props.workflowDefaults.stepCycles,
     props.workflowDefaults.stepModels,
     props.workflowDefaults.stepReviewParts,
-    props.workflowDefaults.implementationSettings,
   ]);
+
+  const configurePreset = (preset: WorkflowPreset) => {
+    setImplementationSettings(
+      implementationDefaultsForWorkflowPreset(preset) ??
+        props.workflowDefaults.implementationSettings,
+    );
+    setConfiguringPreset(preset);
+  };
 
   const definition =
     configuringPreset === null ? null : WORKFLOW_PRESET_DEFINITION_BY_ID[configuringPreset];
@@ -107,7 +119,7 @@ export function ComposerModeCatalogDialog(props: {
       ? props.catalog === "skills"
         ? "Choose a skill for the next Build turn. Open the help button to read its full instructions."
         : "Choose a workflow, review how it runs, then confirm its settings before it starts."
-      : "Review the standing defaults, change any that should apply to this and future runs, then use the workflow.";
+      : "Review the preset defaults and change what this run should do.";
 
   return (
     <Dialog open={props.catalog !== null} onOpenChange={props.onOpenChange}>
@@ -161,6 +173,7 @@ export function ComposerModeCatalogDialog(props: {
               }
               implementationSettings={implementationSettings}
               onSetImplementationSettings={setImplementationSettings}
+              implementationSettingsScope="run"
             />
           ) : props.catalog === "skills" ? (
             <div className="grid gap-1" data-composer-mode-view="skills" role="menu">
@@ -204,7 +217,7 @@ export function ComposerModeCatalogDialog(props: {
           ) : (
             <WorkflowPresetRows
               activePreset={props.activePreset}
-              onSelect={setConfiguringPreset}
+              onSelect={configurePreset}
               workflowAvailable={props.workflowAvailable}
             />
           )}
@@ -220,9 +233,8 @@ export function ComposerModeCatalogDialog(props: {
                   stepModels,
                   stepCycles,
                   stepReviewParts,
-                  implementationSettings,
                 });
-                props.onSelectPreset(definition.id);
+                props.onSelectPreset(definition.id, implementationSettings);
                 props.onOpenChange(false);
               }}
             >

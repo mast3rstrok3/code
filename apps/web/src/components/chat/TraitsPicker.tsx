@@ -7,6 +7,7 @@ import {
   type ScopedThreadRef,
   type ServerProviderModel,
   type WorkflowPreset,
+  type ImplementationWorkflowSettings,
 } from "@t3tools/contracts";
 import {
   applyClaudePromptEffortPrefix,
@@ -63,6 +64,7 @@ export type ComposerModeControls = {
   readonly onInteractionModeChange: (
     mode: ProviderInteractionMode,
     preset: WorkflowPreset | null,
+    implementationSettings?: ImplementationWorkflowSettings | null,
   ) => void;
   readonly onBuildSkillChange: (skillId: string | null) => void;
 };

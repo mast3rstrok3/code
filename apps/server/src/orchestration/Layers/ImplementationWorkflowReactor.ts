@@ -2,6 +2,7 @@ import {
   type AppDevStackAutoCreateResult,
   applyImplementationSkip,
   type AppReviewWorkflowRun,
+  AppReviewWorkflowRunId,
   CommandId,
   AppReviewId,
   isRunStageSkipped,
@@ -1027,7 +1028,7 @@ function buildFastFeaturePrompt(input: {
   return [
     `Implement Fast feature run ${input.run.id}.`,
     "",
-    "Do not ask the user questions. Implement the canonical plan in the exact branch and worktree below, validate it, and commit all completed changes. Treat its `## Build topology` as the execution contract: launch each same-group, dependency-free workstream in parallel, preserve the stated ownership boundaries, and wait for dependencies before starting downstream work. The named integration owner must combine the results, resolve overlap, run the listed focused checks, and commit. If a planned boundary is unsafe in the actual worktree, serialize only that boundary and record why; do not silently repartition the plan.",
+    "Do not ask the user questions. Implement the canonical plan in the exact branch and worktree below, validate it, and commit all completed changes. Treat its `## Build topology` as the execution contract. Execute every workstream in the listed order in this Build thread, preserve the stated ownership boundaries, wait for dependencies before starting downstream work, resolve overlap, run the listed focused checks, and commit. Do not start provider-native agents or T3 workflow children for Build workstreams.",
     ...(input.rejectionMarkdown === undefined
       ? []
       : [
@@ -1693,7 +1694,14 @@ const make = Effect.gen(function* () {
     if (plannedWorker === undefined) return input.run;
 
     const existing = input.run.ticketStates.find((state) => state.ticketId === input.ticketId);
-    if (existing === undefined || existing.status !== "ready") return input.run;
+    if (existing === undefined) return input.run;
+    const skipped = isTicketSkipped(input.run.skips, input.ticketId);
+    if (
+      (skipped && existing.status !== "ready") ||
+      (!skipped && (existing.status !== "running" || existing.workerThreadId === null))
+    ) {
+      return input.run;
+    }
 
     const dependencies = yield* Effect.forEach(existing.dependencyTicketIds, (ticketId) =>
       verifiedDependency({ run: input.run, ticketId }),
@@ -1754,7 +1762,7 @@ const make = Effect.gen(function* () {
       createdAt: input.createdAt,
     });
 
-    if (isTicketSkipped(input.run.skips, input.ticketId)) {
+    if (skipped) {
       yield* appendActivity({
         threadId: input.run.orchestratorThreadId,
         tone: "info",
@@ -1790,10 +1798,24 @@ const make = Effect.gen(function* () {
       } satisfies OrchestrationImplementationRun;
     }
 
-    const workerThreadId = yield* serverThreadId("implementation-worker");
+    const workerThreadId = existing.workerThreadId;
+    if (workerThreadId === null) return input.run;
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
     const sourceThread = findThread(readModel, input.sourceThreadId);
     const ticket = ticketsById(sourceThread ?? input.orchestratorThread).get(input.ticketId);
+    const workflowContext = input.orchestratorThread.workflowContext;
+    if (
+      workflowContext == null ||
+      workflowContext.workflowId === undefined ||
+      workflowContext.rootThreadId === undefined
+    ) {
+      return yield* new GitCommandError({
+        operation: "ImplementationWorkflowReactor.createWorker",
+        command: "claim ticket workflow context",
+        cwd: input.run.orchestratorWorktreePath,
+        detail: `Ticket '${input.ticketId}' cannot start without workflow identity.`,
+      });
+    }
 
     yield* orchestrationEngine.dispatch({
       type: "thread.create",
@@ -1803,14 +1825,14 @@ const make = Effect.gen(function* () {
       ownerUserId: input.ownerUserId,
       parentThreadId: input.run.orchestratorThreadId,
       workflowRole: "implementation-worker",
-      ...(input.orchestratorThread.workflowContext == null
-        ? {}
-        : {
-            workflowContext: {
-              ...input.orchestratorThread.workflowContext,
-              ticketScope: [input.ticketId],
-            },
-          }),
+      workflowContext: {
+        workflowId: workflowContext.workflowId,
+        rootThreadId: workflowContext.rootThreadId,
+        ...(workflowContext.parentWorkflowId === undefined
+          ? {}
+          : { parentWorkflowId: workflowContext.parentWorkflowId }),
+        ticketScope: [input.ticketId],
+      },
       title: `Implement ${ticket?.title ?? input.ticketId}`,
       modelSelection: yield* modelForStep({
         workflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
@@ -1875,7 +1897,6 @@ const make = Effect.gen(function* () {
               workerThreadId,
               branch: plannedWorker.branch,
               worktreePath: plannedWorker.worktreePath,
-              attemptCount: state.attemptCount + 1,
               updatedAt: input.createdAt,
             }
           : state,
@@ -1908,6 +1929,59 @@ const make = Effect.gen(function* () {
           .filter((ticketState) => ticketState.status === "ready")
           .map((ticketState) => ticketState.ticketId);
         if (readyTicketIds.length === 0) break;
+        const allIdentities = workingRun.launchSummary.plannedWorkers;
+        const identities = allIdentities.filter((worker) =>
+          readyTicketIds.includes(worker.ticketId),
+        );
+        if (
+          identities.length !== readyTicketIds.length ||
+          new Set(allIdentities.map((worker) => worker.ticketId)).size !== allIdentities.length ||
+          new Set(allIdentities.map((worker) => worker.branch)).size !== allIdentities.length ||
+          new Set(allIdentities.map((worker) => worker.worktreePath)).size !== allIdentities.length
+        ) {
+          return yield* new GitCommandError({
+            operation: "ImplementationWorkflowReactor.startReadyWorkers",
+            command: "claim ticket worker identities",
+            cwd: workingRun.orchestratorWorktreePath,
+            detail: "Ready tickets must have unique ticket, branch, and worktree identities.",
+          });
+        }
+        const workerThreadIds = new Map(
+          yield* Effect.forEach(
+            readyTicketIds.filter((ticketId) => !isTicketSkipped(workingRun.skips, ticketId)),
+            (ticketId) =>
+              serverThreadId("implementation-worker").pipe(
+                Effect.map((threadId) => [ticketId, threadId] as const),
+              ),
+          ),
+        );
+        const claimedRun: OrchestrationImplementationRun = {
+          ...workingRun,
+          ticketStates: workingRun.ticketStates.map((state) => {
+            const workerThreadId = workerThreadIds.get(state.ticketId);
+            if (workerThreadId === undefined) return state;
+            const identity = identities.find((worker) => worker.ticketId === state.ticketId);
+            if (identity === undefined) return state;
+            return {
+              ...state,
+              status: "running" as const,
+              workerThreadId,
+              branch: identity.branch,
+              worktreePath: identity.worktreePath,
+              attemptCount: state.attemptCount + 1,
+              updatedAt: input.createdAt,
+            };
+          }),
+          updatedAt: input.createdAt,
+        };
+        if (workerThreadIds.size > 0) {
+          yield* updateRun({
+            sourceThreadId: input.sourceThreadId,
+            run: claimedRun,
+            createdAt: input.createdAt,
+          });
+        }
+        workingRun = claimedRun;
         const passResults = yield* Effect.forEach(
           readyTicketIds,
           (ticketId) =>
@@ -1921,7 +1995,7 @@ const make = Effect.gen(function* () {
                 createdAt: input.createdAt,
               }),
             ).pipe(Effect.map((result) => ({ ticketId, result }))),
-          { concurrency: 4 },
+          { concurrency: "unbounded" },
         );
         startResults.push(...passResults);
         const startedRuns = passResults.flatMap(({ result }) =>
@@ -2198,8 +2272,30 @@ const make = Effect.gen(function* () {
       const state = input.run.ticketStates.find(
         (candidate) => candidate.ticketId === input.ticketId,
       );
-      if (orchestratorThread === null || state?.worktreePath == null || state.branch == null)
+      if (
+        orchestratorThread === null ||
+        state?.worktreePath == null ||
+        state.branch == null ||
+        state.workerThreadId === null ||
+        state.codeReviewThreadId != null ||
+        (state.status !== "app-reviewing" && state.status !== "code-reviewing")
+      )
         return;
+      const workerThread = findThread(readModel, state.workerThreadId);
+      const workflowContext = workerThread?.workflowContext;
+      if (
+        workflowContext === null ||
+        workflowContext === undefined ||
+        workflowContext.ticketScope.length !== 1 ||
+        workflowContext.ticketScope[0] !== input.ticketId
+      ) {
+        return yield* new GitCommandError({
+          operation: "ImplementationWorkflowReactor.startTicketCodeReview",
+          command: "claim ticket workflow context",
+          cwd: state.worktreePath,
+          detail: `Ticket '${input.ticketId}' Code Review requires singleton ticket scope.`,
+        });
+      }
       // A skipped Code Review is the last stage a ticket has, so skipping it
       // ends the ticket on whatever its branch already holds.
       if (isTicketStageSkipped(input.run.skips, input.ticketId, "code-review")) {
@@ -2251,6 +2347,7 @@ const make = Effect.gen(function* () {
         ownerUserId: orchestratorThread.ownerUserId,
         parentThreadId: state.workerThreadId ?? input.run.orchestratorThreadId,
         workflowRole: "implementation-code-reviewer",
+        workflowContext,
         title: `Code review ${ticket?.title ?? input.ticketId}`,
         modelSelection: yield* modelForStep({
           workflowPromptId: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
@@ -2319,7 +2416,9 @@ const make = Effect.gen(function* () {
       if (
         orchestratorThread === null ||
         state?.worktreePath == null ||
-        state.workerThreadId == null
+        state.workerThreadId == null ||
+        state.status !== "app-reviewing" ||
+        state.appReviewWorkflowRunId != null
       )
         return;
       const ticket = ticketsById(sourceThread ?? orchestratorThread).get(input.ticketId);
@@ -2387,6 +2486,27 @@ const make = Effect.gen(function* () {
         return;
       }
       const controllerThreadId = yield* serverThreadId("app-review-orchestrator");
+      const appReviewWorkflowRunId = AppReviewWorkflowRunId.make(
+        `app-review-workflow-${controllerThreadId}`,
+      );
+      const claimedRun: OrchestrationImplementationRun = {
+        ...input.run,
+        ticketStates: input.run.ticketStates.map((candidate) =>
+          candidate.ticketId === input.ticketId
+            ? {
+                ...candidate,
+                appReviewWorkflowRunId,
+                updatedAt: input.createdAt,
+              }
+            : candidate,
+        ),
+        updatedAt: input.createdAt,
+      };
+      yield* updateRun({
+        sourceThreadId: input.sourceThreadId,
+        run: claimedRun,
+        createdAt: input.createdAt,
+      });
       yield* orchestrationEngine.dispatch({
         type: "thread.app-review-workflow.launch",
         commandId: yield* serverCommandId("implementation-ticket-app-review-launch"),
@@ -7259,22 +7379,39 @@ const make = Effect.gen(function* () {
         const ticketStagePaused = (state: { readonly workerThreadId: ThreadId | null }) =>
           state.workerThreadId !== null &&
           isWorkflowThreadPaused(readModel.threads, state.workerThreadId);
+        const appReviewRunsById = new Set(
+          (readModel.appReviewWorkflowRuns ?? []).map((candidate) => candidate.id),
+        );
         const pendingTicketReview = run.ticketStates.find(
           (state) =>
             state.status === "app-reviewing" &&
-            state.appReviewWorkflowRunId == null &&
+            (state.appReviewWorkflowRunId == null ||
+              !appReviewRunsById.has(state.appReviewWorkflowRunId)) &&
             !ticketStagePaused(state),
         );
         if (pendingTicketReview !== undefined) {
+          const releasedRun: OrchestrationImplementationRun = {
+            ...run,
+            ticketStates: run.ticketStates.map((state) =>
+              state.ticketId === pendingTicketReview.ticketId
+                ? { ...state, appReviewWorkflowRunId: null, updatedAt: createdAt }
+                : state,
+            ),
+            updatedAt: createdAt,
+          };
           yield* recoverRunStage(
             run.id,
             "ticket-app-review",
-            startTicketAppReview({
-              sourceThreadId,
-              run,
-              ticketId: pendingTicketReview.ticketId,
-              createdAt,
-            }),
+            updateRun({ sourceThreadId, run: releasedRun, createdAt }).pipe(
+              Effect.andThen(
+                startTicketAppReview({
+                  sourceThreadId,
+                  run: releasedRun,
+                  ticketId: pendingTicketReview.ticketId,
+                  createdAt,
+                }),
+              ),
+            ),
           );
           continue;
         }
@@ -7287,18 +7424,31 @@ const make = Effect.gen(function* () {
           return stageThreadIsFinished(thread);
         });
         if (interruptedTicketCodeReview !== undefined) {
+          const releasedRun: OrchestrationImplementationRun = {
+            ...run,
+            ticketStates: run.ticketStates.map((state) =>
+              state.ticketId === interruptedTicketCodeReview.ticketId
+                ? { ...state, codeReviewThreadId: null, updatedAt: createdAt }
+                : state,
+            ),
+            updatedAt: createdAt,
+          };
           yield* recoverRunStage(
             run.id,
             "ticket-code-review",
-            startTicketCodeReview({
-              sourceThreadId,
-              run,
-              ticketId: interruptedTicketCodeReview.ticketId,
-              ...(interruptedTicketCodeReview.warningMarkdown == null
-                ? {}
-                : { warningMarkdown: interruptedTicketCodeReview.warningMarkdown }),
-              createdAt,
-            }),
+            updateRun({ sourceThreadId, run: releasedRun, createdAt }).pipe(
+              Effect.andThen(
+                startTicketCodeReview({
+                  sourceThreadId,
+                  run: releasedRun,
+                  ticketId: interruptedTicketCodeReview.ticketId,
+                  ...(interruptedTicketCodeReview.warningMarkdown == null
+                    ? {}
+                    : { warningMarkdown: interruptedTicketCodeReview.warningMarkdown }),
+                  createdAt,
+                }),
+              ),
+            ),
           );
           continue;
         }

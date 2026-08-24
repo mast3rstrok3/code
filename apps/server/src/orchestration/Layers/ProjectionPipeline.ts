@@ -665,6 +665,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             runtimeMode: event.payload.runtimeMode,
             interactionMode: event.payload.interactionMode,
             workflowPreset: event.payload.workflowPreset ?? null,
+            workflowImplementationSettings: event.payload.workflowImplementationSettings ?? null,
             branch: event.payload.branch,
             worktreePath: event.payload.worktreePath,
             latestTurnId: null,
@@ -1036,6 +1037,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...existingRow.value,
             interactionMode: event.payload.interactionMode,
             workflowPreset: event.payload.workflowPreset,
+            ...(event.payload.workflowImplementationSettings === undefined
+              ? {}
+              : { workflowImplementationSettings: event.payload.workflowImplementationSettings }),
             updatedAt: event.payload.updatedAt,
           });
           return;

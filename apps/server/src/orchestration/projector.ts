@@ -389,6 +389,9 @@ export function projectEvent(
             runtimeMode: payload.runtimeMode,
             interactionMode: payload.interactionMode,
             workflowPreset: payload.workflowPreset ?? null,
+            ...(payload.workflowImplementationSettings === undefined
+              ? {}
+              : { workflowImplementationSettings: payload.workflowImplementationSettings }),
             branch: payload.branch,
             worktreePath: payload.worktreePath,
             latestTurn: null,
@@ -744,10 +747,20 @@ export function projectEvent(
       ).pipe(
         Effect.map((payload) => ({
           ...nextBase,
-          threads: updateThread(nextBase.threads, payload.threadId, {
-            interactionMode: payload.interactionMode,
-            workflowPreset: payload.workflowPreset,
-            updatedAt: payload.updatedAt,
+          threads: nextBase.threads.map((thread) => {
+            if (thread.id !== payload.threadId) return thread;
+            const { workflowImplementationSettings: _settings, ...threadWithoutSettings } = thread;
+            const baseThread =
+              payload.workflowImplementationSettings === null ? threadWithoutSettings : thread;
+            return {
+              ...baseThread,
+              interactionMode: payload.interactionMode,
+              workflowPreset: payload.workflowPreset,
+              ...(payload.workflowImplementationSettings == null
+                ? {}
+                : { workflowImplementationSettings: payload.workflowImplementationSettings }),
+              updatedAt: payload.updatedAt,
+            };
           }),
         })),
       );

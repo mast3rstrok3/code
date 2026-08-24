@@ -2199,7 +2199,7 @@ function WorkflowGroupCard(props: {
                           );
                           const stepOpen = expandedSteps[step.id] ?? false;
                           const isTicketExecutionStep =
-                            group.preset === "planning" &&
+                            (group.preset === "planning" || group.preset === "fast-engineering") &&
                             workflowStepLabel(step).toLowerCase().includes("execute ticket waves");
                           const isCombinedAppReviewStep =
                             workflowStepLabel(step).toLowerCase().includes("app review") &&

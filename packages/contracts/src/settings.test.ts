@@ -22,6 +22,7 @@ const encodeServerSettings = Schema.encodeSync(ServerSettings);
 describe("Engineering Workflow settings", () => {
   it("runs every optional review and publication step by default", () => {
     expect(decodeServerSettings({}).implementation).toEqual({
+      ticketAppReviewEnabled: true,
       appReviewEnabled: true,
       finalCodeReviewEnabled: true,
       pullRequestCreationEnabled: true,

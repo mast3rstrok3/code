@@ -11,6 +11,7 @@ import {
 } from "./model.ts";
 import {
   ModelSelection,
+  ImplementationWorkflowSettings,
   WorkflowStepCycleOverride,
   WorkflowStepModelOverride,
   WorkflowStepReviewPartsOverride,
@@ -547,16 +548,6 @@ export const ObservabilitySettings = Schema.Struct({
   otlpMetricsUrl: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
 });
 export type ObservabilitySettings = typeof ObservabilitySettings.Type;
-
-export const ImplementationWorkflowSettings = Schema.Struct({
-  appReviewEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
-  finalCodeReviewEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
-  pullRequestCreationEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
-  pullRequestBabysittingEnabled: Schema.Boolean.pipe(
-    Schema.withDecodingDefault(Effect.succeed(true)),
-  ),
-});
-export type ImplementationWorkflowSettings = typeof ImplementationWorkflowSettings.Type;
 
 export const SourceControlWritingStyleMode = Schema.Literals([
   "repo_conventions",

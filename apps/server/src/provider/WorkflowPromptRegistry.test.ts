@@ -35,12 +35,42 @@ const GRILLING_BLUEPRINT = [
   "",
   "Each round the user answers reshapes the tree — settled decisions push the frontier outward and unblock questions that depended on them. Recompute the frontier and ask the next round. A question whose answer depends on another question still open in this round belongs to a _later_ round, not this one.",
   "",
-  "Finding _facts_ is your job, never the user's. When a frontier question needs a fact from the environment (filesystem, tools, etc.), dispatch a sub-agent to find it — don't ask the user for anything you could look up yourself. Don't block on it: a running exploration is an unsettled prerequisite, so only the questions downstream of it wait for the sub-agent to report — ask the rest of the frontier now. The _decisions_ are the user's — put each to them and wait.",
+  "Finding _facts_ is your job, never the user's. When a frontier question needs a fact from the environment, inspect the filesystem and available tools in this thread. Resolve that fact before asking questions that depend on it. The _decisions_ are the user's. Put each decision to them and wait.",
   "",
   "The session is done when the frontier is empty: every branch of the design tree visited, nothing left silently assumed. Do not act on it until the user confirms you have reached a shared understanding.",
 ].join("\n");
 
 describe("WorkflowPromptRegistry", () => {
+  it("keeps workflow-stage prompts on one active thread", () => {
+    const promptIds = [
+      WORKFLOW_PROMPT_IDS.productFixCodex,
+      WORKFLOW_PROMPT_IDS.productFastFeatureCodex,
+      WORKFLOW_PROMPT_IDS.productFullFeatureCodex,
+      WORKFLOW_PROMPT_IDS.planningFastFeatureCodex,
+      WORKFLOW_PROMPT_IDS.planningGrillStageCodex,
+      WORKFLOW_PROMPT_IDS.planningAutomaticEngineeringGrillCodex,
+      WORKFLOW_PROMPT_IDS.planningWayfinderCodex,
+      WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+      WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
+    ];
+    const parallelChildInstruction =
+      /workflow-subagents-create|parallel sub-agents|dispatch a sub-agent|Spin up a \*\*background agent\*\*|launch every independent browser lane/iu;
+
+    for (const promptId of promptIds) {
+      NodeAssert.doesNotMatch(resolveWorkflowPromptText(promptId), parallelChildInstruction);
+    }
+
+    const implementationPrompt = resolveWorkflowPromptText(
+      WORKFLOW_PROMPT_IDS.implementationOrchestratorPlanningCodex,
+    );
+    NodeAssert.match(implementationPrompt, /Run every currently unblocked ticket in parallel/);
+    NodeAssert.match(
+      implementationPrompt,
+      /exactly one active ticket-scoped step thread at a time/,
+    );
+    NodeAssert.match(implementationPrompt, /exactly one root-scoped final Code Review thread/);
+  });
+
   it("builds a validated, deduplicated workflow catalog", () => {
     const catalog = listWorkflowCatalog();
     NodeAssert.deepEqual(
@@ -49,7 +79,7 @@ describe("WorkflowPromptRegistry", () => {
     );
     NodeAssert.deepEqual(
       catalog.workflows.map((workflow) => workflow.id),
-      ["fast-feature", "planning", "wayfinder", "app-review"],
+      ["quick-plan", "fast-plan", "fast-engineering", "planning", "wayfinder"],
     );
     NodeAssert.equal(
       catalog.skills.filter((skill) => skill.id.startsWith("matt-pocock.")).length,
@@ -92,7 +122,7 @@ describe("WorkflowPromptRegistry", () => {
       (skill) => skill.id === "matt-pocock.grill-with-docs",
     );
     NodeAssert.equal(grillWithDocs?.title, "Grill with Docs");
-    NodeAssert.deepEqual(grillWithDocs?.workflowIds, ["planning", "wayfinder"]);
+    NodeAssert.deepEqual(grillWithDocs?.workflowIds, ["fast-engineering", "planning", "wayfinder"]);
     const directGrillWithDocs = resolveWorkflowPromptText("matt-pocock.grill-with-docs");
     NodeAssert.match(directGrillWithDocs, /T3 direct Build adapter/);
     NodeAssert.match(directGrillWithDocs, /Map this as a \*\*design tree\*\*/);
@@ -101,7 +131,7 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(directGrillWithDocs, /# CONTEXT\.md Format/);
     NodeAssert.deepEqual(
       catalog.skills.find((skill) => skill.id === "matt-pocock.domain-modeling")?.workflowIds,
-      ["planning", "wayfinder"],
+      ["fast-engineering", "planning", "wayfinder"],
     );
     NodeAssert.match(resolveWorkflowPromptText("matt-pocock.tdd"), /supporting-skill-docs/);
     NodeAssert.match(resolveWorkflowPromptText("matt-pocock.tdd"), /# When to Mock/);
@@ -152,18 +182,16 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.deepEqual(
       catalog.skills.find((skill) => skill.id === WORKFLOW_PROMPT_IDS.implementationFixCodex)
         ?.workflowIds,
-      ["fast-feature"],
+      ["quick-plan", "fast-plan", "fast-engineering", "planning", "wayfinder"],
     );
     const fastFeaturePlanning = catalog.skills.find(
       (skill) => skill.id === WORKFLOW_PROMPT_IDS.planningFastFeatureCodex,
     );
     NodeAssert.match(fastFeaturePlanning?.promptText ?? "", /## Build topology/);
     NodeAssert.match(fastFeaturePlanning?.promptText ?? "", /## App Review topology/);
-    NodeAssert.match(
-      fastFeaturePlanning?.promptText ?? "",
-      /parallel browser threads against the shared AppDevStack Feature URL/,
-    );
-    NodeAssert.match(fastFeaturePlanning?.promptText ?? "", /parallel group/);
+    NodeAssert.match(fastFeaturePlanning?.promptText ?? "", /lanes in the order/);
+    NodeAssert.match(fastFeaturePlanning?.promptText ?? "", /one Build thread/);
+    NodeAssert.match(fastFeaturePlanning?.promptText ?? "", /planning turn is unattended/i);
     const engineeringWorkflow = catalog.workflows.find((workflow) => workflow.id === "planning");
     NodeAssert.equal(engineeringWorkflow?.title, "Engineering Workflow");
     NodeAssert.ok(
@@ -244,7 +272,7 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /Ask the whole frontier in one round/);
     NodeAssert.match(rendered, /❓ \*\*Q1\*\* - \*\*<question title>\*\*/);
     NodeAssert.match(rendered, /➡️ <your recommended answer>/);
-    NodeAssert.match(rendered, /dispatch a sub-agent to find it/);
+    NodeAssert.match(rendered, /inspect the filesystem and available tools in this thread/);
     NodeAssert.match(rendered, /frontier is empty/);
     NodeAssert.doesNotMatch(rendered, /one question at a time/);
     NodeAssert.match(rendered, /It is a glossary and nothing else/);
@@ -401,6 +429,9 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /app_review_recording_stop/);
     NodeAssert.match(rendered, /app_review_capture_screenshot/);
     NodeAssert.match(rendered, /status passed or failed/);
+    NodeAssert.match(rendered, /every browser lane in the listed order/);
+    NodeAssert.match(rendered, /T3 workflow children do not run acceptance lanes/);
+    NodeAssert.doesNotMatch(rendered, /workflow-subagents-create/);
     NodeAssert.doesNotMatch(rendered, /agent-browser/i);
     NodeAssert.doesNotMatch(rendered, /rrweb/i);
     NodeAssert.doesNotMatch(rendered, /Chrome DevTools MCP/);
@@ -545,8 +576,8 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /its configured cycle budget when eligible/);
     NodeAssert.match(rendered, /exactly one Code Review/);
     NodeAssert.match(rendered, /create one integration thread/);
-    NodeAssert.match(rendered, /Run exactly one Code Review on the combined changes/);
-    NodeAssert.match(rendered, /Run one final Code Review/);
+    NodeAssert.match(rendered, /exactly one root-scoped Code Review thread/);
+    NodeAssert.match(rendered, /exactly one root-scoped final Code Review thread/);
     NodeAssert.match(
       rendered,
       /Pull-request creation and pull-request babysitting are separate workflow stages/,
@@ -623,7 +654,7 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.doesNotMatch(rendered, /<ticket-template>/);
   });
 
-  it("renders Implementation Code Review with the two-axis parallel sub-agent process", () => {
+  it("renders Implementation Code Review with sequential two-axis passes", () => {
     const contracts = listWorkflowPromptContracts();
     const codeReview = contracts.find(
       (contract) => contract.id === WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
@@ -642,7 +673,7 @@ describe("WorkflowPromptRegistry", () => {
     const rendered = resolveWorkflowPromptText(WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex);
     NodeAssert.match(rendered, /name: code-review/);
     NodeAssert.match(rendered, /Two-axis review of the diff/);
-    NodeAssert.match(rendered, /parallel sub-agents/);
+    NodeAssert.match(rendered, /Run the Standards pass first/);
     NodeAssert.match(rendered, /### 1\. Pin the fixed point/);
     NodeAssert.match(rendered, /git diff <fixed-point>\.\.\.HEAD/);
     NodeAssert.match(rendered, /### 2\. Identify the spec source/);
@@ -651,8 +682,8 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /The repo overrides\./);
     NodeAssert.match(rendered, /Mysterious Name/);
     NodeAssert.match(rendered, /Refused Bequest/);
-    NodeAssert.match(rendered, /Standards sub-agent prompt/);
-    NodeAssert.match(rendered, /Spec sub-agent prompt/);
+    NodeAssert.match(rendered, /Then run the Spec pass/);
+    NodeAssert.doesNotMatch(rendered, /workflow-subagents-create/);
     NodeAssert.match(rendered, /Do \*\*not\*\* merge or rerank findings/);
     NodeAssert.match(rendered, /## Why two axes/);
     NodeAssert.match(rendered, /## Orchestrated Code Review Result/);
@@ -724,7 +755,10 @@ describe("WorkflowPromptRegistry", () => {
       NodeAssert.match(preset.promptText, /Ask the whole frontier in one round/);
       NodeAssert.match(preset.promptText, /❓ \*\*Q1\*\* - \*\*<question title>\*\*/);
       NodeAssert.match(preset.promptText, /➡️ <your recommended answer>/);
-      NodeAssert.match(preset.promptText, /dispatch a sub-agent to find it/);
+      NodeAssert.match(
+        preset.promptText,
+        /inspect the filesystem and available tools in this thread/,
+      );
       NodeAssert.match(preset.promptText, /frontier is empty/);
       NodeAssert.doesNotMatch(preset.promptText, /one question at a time/);
       NodeAssert.match(preset.promptText, /Cover product direction only/);

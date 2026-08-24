@@ -41,21 +41,23 @@ export const WORKFLOW_PROMPT_IDS = {
 
 const WORKFLOW_AGENT_COMMUNICATIONS_PROMPT = WORKFLOW_SUBAGENT_INSTRUCTIONS_PROMPT;
 
-const FAST_FEATURE_PLANNING_PROMPT = `<collaboration_mode># Fast Feature Planning
+const FAST_FEATURE_PLANNING_PROMPT = `<collaboration_mode># Plan workflow
 
-Use native CLI Plan mode to produce the implementation plan for this Fast Feature. Optimize for a short handoff and safe parallel execution. You may use parallel read-only sub-agents to investigate independent repository questions while planning.
+Use native CLI Plan mode to produce the implementation plan. Keep the handoff short. Investigate every repository fact in this planning thread and keep the downstream work ordered.
+
+This planning turn is unattended. Resolve every planning choice yourself. Do not ask the user questions or wait for confirmation. If the CLI requires a question-tool answer, choose the explicit recommendation when one exists, otherwise choose the first option, and continue.
 
 The final proposed plan must contain these exact sections:
 
 ## Build topology
 
-List the implementation workstreams that Build should run. For each workstream include a stable id, owned scope or files, dependencies, and focused validation. Put independent workstreams in the same parallel group. State explicitly when the change is too coupled to parallelize. Include one integration owner responsible for combining work, resolving overlap, running final focused checks, and committing the result.
+List the implementation workstreams in the order one Build thread should execute them. For each workstream include a stable id, owned scope or files, dependencies, and focused validation. Name the final integration work that resolves overlap, runs the listed focused checks, and commits the result.
 
 ## App Review topology
 
-List the independent acceptance lanes that App Review should exercise in parallel browser threads against the shared AppDevStack Feature URL. For each lane include a stable id, covered user flow or acceptance criteria, required setup, test-state or account isolation, and expected observations. Mark dependencies or shared-state conflicts that require serialization. State explicitly when there is only one review lane.
+List the acceptance lanes in the order the durable App Review thread should exercise them against the shared AppDevStack Feature URL. For each lane include a stable id, covered user flow or acceptance criteria, required setup, test-state or account reset needs, and expected observations.
 
-The workflow starts or reuses the AppDevStack for this exact worktree and branch after repository setup succeeds, then injects its status and Feature URL into later stages. Do not plan a competing dev server or a second stack. The durable Browser App Review parent launches the independent lanes as feedback-mode browser reviewers, aggregates their reports, and remains solely responsible for recording, screenshots, durable findings, the final verdict, and repair cycles.
+The workflow starts or reuses the AppDevStack for this exact worktree and branch after repository setup succeeds, then injects its status and Feature URL into later stages. Do not plan a competing dev server or a second stack. The durable Browser App Review thread executes the lanes in order and owns recording, screenshots, durable findings, the final verdict, and repair cycles.
 
 Everything after Planning is unattended. Do not ask for implementation approval in the final response; finish with the native CLI Plan-mode proposed plan handoff.
 </collaboration_mode>`;
@@ -73,7 +75,7 @@ const APP_DEV_STACK_ASSOCIATED_DOC = {
   content: APP_DEV_STACK_ASSOCIATED_DOC_CONTENT,
 } as const;
 
-// Keep this shared block verbatim; workflow-specific behavior belongs in trailing adapters.
+// Keep workflow-specific behavior in trailing adapters so every grill shares this block.
 const GRILLING_BLUEPRINT = `---
 name: grilling
 description: Grill the user relentlessly about a plan, decision, or idea. Use when the user wants to stress-test their thinking, or uses any 'grill' trigger phrases.
@@ -93,7 +95,7 @@ Each question should be formatted like so:
 
 Each round the user answers reshapes the tree — settled decisions push the frontier outward and unblock questions that depended on them. Recompute the frontier and ask the next round. A question whose answer depends on another question still open in this round belongs to a _later_ round, not this one.
 
-Finding _facts_ is your job, never the user's. When a frontier question needs a fact from the environment (filesystem, tools, etc.), dispatch a sub-agent to find it — don't ask the user for anything you could look up yourself. Don't block on it: a running exploration is an unsettled prerequisite, so only the questions downstream of it wait for the sub-agent to report — ask the rest of the frontier now. The _decisions_ are the user's — put each to them and wait.
+Finding _facts_ is your job, never the user's. When a frontier question needs a fact from the environment, inspect the filesystem and available tools in this thread. Resolve that fact before asking questions that depend on it. The _decisions_ are the user's. Put each decision to them and wait.
 
 The session is done when the frontier is empty: every branch of the design tree visited, nothing left silently assumed. Do not act on it until the user confirms you have reached a shared understanding.`;
 
@@ -485,7 +487,7 @@ The answer isn't part of the body — it's recorded on resolution (see [Work thr
 
 Every ticket is either **HITL** — human in the loop, worked *with* a human who speaks for themselves — or **AFK**, driven by the agent alone. A HITL ticket only resolves through that live exchange; the agent never stands in for the human's side of it (a grilling agent that answers its own questions has broken this).
 
-- **Research** (AFK): Reading documentation, third-party APIs, or local resources like knowledge bases to surface a fact a decision waits on. Resolved by a \`/research\` **subagent**. Use when knowledge outside the current working directory is required.
+- **Research** (AFK): Reading documentation, third-party APIs, or local resources like knowledge bases to surface a fact a decision waits on. Store it as a research ticket for the ticket scheduler. Use when knowledge outside the current working directory is required.
 - **Prototype** (HITL): Raise the fidelity of the discussion by making a cheap, rough, concrete artifact to react to — an outline, a rough take, a stub, or UI/logic code via the /prototype skill. Links the prototype as an asset. Use when "how should it look" or "how should it behave" is the key question.
 - **Grilling** (HITL): Conversation via the /grilling and /domain-modeling skills, one question at a time. The default case.
 - **Task** (HITL or AFK): Manual work that must happen before a *decision* can be made — nothing to decide, prototype, or research, but the discussion is blocked until it's done. Signing up for a service so its API can be judged, provisioning access, moving data so its shape can be seen. This is the one type that *does* rather than decides — and it earns its place by unblocking a decision, not by delivering the destination. The agent drives it alone where it can (AFK); otherwise it hands the human a precise checklist (HITL). Resolved when the work is done; the answer records what was done and any resulting facts (credentials location, new URLs, row counts) later tickets depend on.
@@ -520,10 +522,10 @@ Two modes. Either way, **never resolve more than one ticket per session** — wi
 User invokes with a loose idea.
 
 1. **Name the destination.** Run a \`/grilling\` and \`/domain-modeling\` session to pin down what this map is finding its way to — the spec, decision, or change. The destination fixes the scope, so it's settled first.
-2. **Map the frontier.** Grill again, **breadth-first** this time: fan out across the whole space rather than deep on any one thread, surfacing the open decisions and the first steps takeable now. **If this surfaces no fog** — the way to the destination is already clear, the whole journey small enough for one session — you don't need a map. Stop and ask the user how they'd like to proceed.
+2. **Map the frontier.** Grill again, **breadth-first** this time. Survey the whole space before going deep on any one thread, surfacing the open decisions and the first steps takeable now. **If this surfaces no fog**, the way to the destination is already clear and the whole journey is small enough for one session. You don't need a map. Stop and ask the user how they'd like to proceed.
 3. **Create the map** (label \`wayfinder:map\`): Destination and Notes filled in, Decisions-so-far empty, the fog sketched into **Not yet specified**.
 4. **Create the tickets you can specify now** as child issues of the map — then wire blocking edges in a **second pass** (issues need ids before they can reference each other). Wiring sorts them into the frontier and the blocked; everything you can't yet specify stays in the fog — the **Not yet specified** section.
-5. **Fire the research subagents.** For each \`research\` ticket you just created, spin up a \`/research\` subagent to resolve it in parallel, capturing its findings on a throwaway \`research/<name>\` branch with a context pointer from the ticket.
+5. **Leave research on the frontier.** Keep each \`research\` ticket ready for the ticket scheduler. The map thread does not start background agents.
 6. Stop — charting is one session's work; it hand-resolves nothing.
 
 ### Work through the map
@@ -545,13 +547,13 @@ T3 replaces the upstream issue-tracker storage operations while preserving the m
 - The durable Wayfinder Map is stored in the Planning side panel above Spec, not as an issue.
 - Decision tickets use T3 Planning Tickets. The map id is their specId, and native ticket dependencies represent blocking edges.
 - Use the Engineering Grill wherever the upstream text invokes /grilling plus /domain-modeling.
-- Load the canonical map with workflow_wayfinder_map_get. Use only workflow-subagent-create and workflow-subagent-result for focused child handoffs; do not use conversational agent messaging.
+- Load the canonical map with workflow_wayfinder_map_get. Leave research as durable tickets for the ticket scheduler and keep map work in this thread.
 - A map write ends with one wayfinder-map-artifact JSON directive containing title and summaryMarkdown. A decision-ticket write uses planning-tickets-artifact with the map id as specId.
 
 These storage and handoff mappings override only the upstream tracker-specific mechanics; its destination, map, frontier, fog, ticket-type, claiming, one-ticket-per-session, and resolution rules remain authoritative.
 </collaboration_mode>`;
 
-const RESEARCH_PROMPT = `<collaboration_mode>Spin up a **background agent** to do the research, so you keep working while it reads.
+const RESEARCH_PROMPT = `<collaboration_mode>Research the assigned ticket in this thread.
 
 Its job:
 
@@ -561,7 +563,7 @@ Its job:
 
 ## T3 workflow adapter
 
-When this prompt is already running in a focused Research child thread, the current thread is the upstream background agent: do not create another nested researcher. Return the result through the small workflow-subagent-result handoff API. Do not use conversational agent messaging.
+This thread owns the research ticket. Complete the research here and return the result through the small workflow-subagent-result handoff API. Do not create another researcher or use conversational agent messaging.
 </collaboration_mode>`;
 
 const CONTEXT_FORMAT_ASSOCIATED_DOC_CONTENT = `# CONTEXT.md Format
@@ -1259,10 +1261,10 @@ This stage orchestrates the upstream implement loop across sub-threads instead o
 - The run reuses the Planning workflow's dedicated worktree and branch, which were created from the branch the user selected before Planning began. The finished change request is filed back into that original branch.
 - Reuse the AppDevStack created for the Planning worktree as the combined integration stack. Load \`app-dev-stack.md\` before diagnosing it. Ticket App Dev Stacks are separate, worktree-owned runtimes and must never substitute for the combined stack.
 - Run every currently unblocked ticket in parallel. Each ticket owns a child thread, worktree, branch, and—when \`appReviewEligible\`—an App Dev Stack started from that ticket worktree.
-- A ticket runs TDD implementation, then its attached App Review for its configured cycle budget when eligible, then exactly one Code Review. App Review failures, exhaustion, or blockers are recorded on the ticket and in workflow activity but never stop the frontier; Code Review still runs once. Ineligible tickets skip only App Review.
+- Within each ticket, run exactly one active ticket-scoped step thread at a time. A ticket runs TDD implementation, then its attached App Review phases for its configured cycle budget when eligible, then exactly one Code Review. Claim each next step only after the current step finishes. App Review failures, exhaustion, or blockers are recorded on the ticket and in workflow activity but never stop the frontier; Code Review still runs once. Ineligible tickets skip only App Review.
 - After every ticket reaches a terminal best-effort state, create one integration thread in the original workflow worktree and branch. Merge all usable ticket branches there, retaining recorded warnings for branches that could not be integrated.
-- Run exactly one Code Review on the combined changes. Then run the combined App Review for its configured cycle budget, focused on cross-ticket flows plus ticket reviews that failed or exhausted their budgets. Continue after either result.
-- Run one final Code Review after the combined App Review, then run complete validation. Pull-request creation and pull-request babysitting are separate workflow stages after review. The PR body must include all ticket-level and combined App Review warnings.
+- Run exactly one root-scoped Code Review thread on the combined changes. Then run one root-scoped combined App Review workflow for its configured cycle budget, focused on cross-ticket flows plus ticket reviews that failed or exhausted their budgets. Its ordered review phases each have one active thread. Continue after either result.
+- Run exactly one root-scoped final Code Review thread after the combined App Review, then run complete validation. Pull-request creation and pull-request babysitting are separate workflow stages after review. The PR body must include all ticket-level and combined App Review warnings.
 - Code Review is intentionally bounded: once per ticket, once immediately after integration, and once after the combined App Review. Do not add a review/validation feedback loop between those fixed passes.
 - Ticket workers never run launch-level complete validation commands or full test suites, but may run documented sub-minute fast checks. The final gate runs each launch validation command once on the final reviewed HEAD before publication.
 
@@ -1631,9 +1633,9 @@ If the preview is unavailable, stuck on startup recovery, or has dependency/runt
 
 This thread is the durable Browser App Review owner. Use the linked preview_* and app_review_* tools directly for canonical evidence and the final verdict. Never launch another full or durable App Review from this thread.
 
-When the launch brief contains \`## App Review topology\`, treat it as the execution contract. On the first review turn, launch every independent browser lane in one \`workflow-subagents-create\` batch using \`implementation.browser-app-review.codex\` with \`appReviewMode: "feedback"\`. Give each child only its lane, the authoritative Feature URL from the launch context, required setup, state-isolation constraints, and expected observations. Honor dependencies and serialize lanes that can mutate the same account or application state. Do not launch full-mode children, and do not let lane reviewers edit the worktree or run repair cycles.
+When the launch brief contains \`## App Review topology\`, treat it as the execution contract. Exercise every browser lane in the listed order in this durable reviewer thread. Use the authoritative Feature URL, required setup, state reset instructions, and expected observations for each lane. Record any required deviation in the review summary.
 
-Wait for every lane result and aggregate the reports before closing the durable review. Reproduce representative passing states and every actionable failure in this parent browser session so canonical recording, screenshots, checks, findings, and the terminal verdict remain owned by this thread. Do not invent a different partition unless a planned lane is unsafe or impossible, and record any serialization or deviation in the review summary. When there is only one lane, exercise it directly without creating a child batch.
+Keep canonical recording, screenshots, checks, findings, and the terminal verdict in this thread. Provider-native agents and T3 workflow children do not run acceptance lanes for this review.
 
 When the launch message lists end-to-end test commands, they are part one of the review. Run them from the selected worktree in a terminal, one at a time, with the environment variable APP_REVIEW_PREVIEW_URL set to the authoritative preview target, and record each as a check with the exact id the launch message assigns it. A failing command is a failed check whose notes name the failing tests, and each distinct product failure it reveals is an actionable finding. Rerun the commands fresh every cycle; never carry an e2e check forward. Part two is the browser review, scoped to what the tests did not prove — acceptance criteria without e2e coverage, visual and interaction quality, and every failure the run surfaced — rather than re-driving flows a passing test already exercises end-to-end.
 
@@ -1688,7 +1690,7 @@ const IMPLEMENTATION_CODE_REVIEW_PROMPT = `<collaboration_mode># Implementation 
 
 ---
 name: code-review
-description: Review the changes since a fixed point (commit, branch, tag, or merge-base) along two axes — Standards (does the code follow this repo's documented coding standards?) and Spec (does the code match what the originating issue/PRD asked for?). Runs both reviews in parallel sub-agents and reports them side by side. Use when the user wants to review a branch, a PR, work-in-progress changes, or asks to "review since X".
+description: Review the changes since a fixed point (commit, branch, tag, or merge-base) along two axes: Standards (does the code follow this repo's documented coding standards?) and Spec (does the code match what the originating issue or PRD asked for?). Runs both passes sequentially and reports them side by side. Use when the user wants to review a branch, a PR, work-in-progress changes, or asks to "review since X".
 ---
 
 Two-axis review of the diff between \`HEAD\` and a fixed point the user supplies:
@@ -1696,7 +1698,7 @@ Two-axis review of the diff between \`HEAD\` and a fixed point the user supplies
 - **Standards** — does the code conform to this repo's documented coding standards?
 - **Spec** — does the code faithfully implement the originating issue / PRD / spec?
 
-Both axes run as **parallel sub-agents** so they don't pollute each other's context, then this skill aggregates their findings.
+Run the Standards pass first. Then run the Spec pass against the same pinned diff. Keep separate notes for each axis and report them side by side.
 
 The issue tracker should have been provided to you — run \`/setup-matt-pocock-skills\` if \`docs/agents/issue-tracker.md\` is missing.
 
@@ -1708,7 +1710,7 @@ Whatever the user said is the fixed point — a commit SHA, branch name, tag, \`
 
 Capture the diff command once: \`git diff <fixed-point>...HEAD\` (three-dot, so the comparison is against the merge-base). Also note the list of commits via \`git log <fixed-point>..HEAD --oneline\`.
 
-Before going further, confirm the fixed point resolves (\`git rev-parse <fixed-point>\`) and the diff is non-empty. A bad ref or empty diff should fail here — not inside two parallel sub-agents.
+Before going further, confirm the fixed point resolves (\`git rev-parse <fixed-point>\`) and the diff is non-empty. Stop here for a bad ref or empty diff.
 
 ### 2. Identify the spec source
 
@@ -1717,7 +1719,7 @@ Look for the originating spec, in this order:
 1. Issue references in the commit messages (\`#123\`, \`Closes #45\`, GitLab \`!67\`, etc.) — fetch via the workflow in \`docs/agents/issue-tracker.md\`.
 2. A path the user passed as an argument.
 3. A PRD/spec file under \`docs/\`, \`specs/\`, or \`.scratch/\` matching the branch name or feature.
-4. If nothing is found, ask the user where the spec is. If they say there isn't one, the **Spec** sub-agent will skip and report "no spec available".
+4. If nothing is found, ask the user where the spec is. If they say there isn't one, skip the **Spec** pass and report "no spec available".
 
 ### 3. Identify the standards sources
 
@@ -1743,23 +1745,21 @@ Each smell reads *what it is* → *how to fix*; match it against the diff:
 - **Middle Man** — a class or function that mostly just delegates onward. → cut it, call the real target direct.
 - **Refused Bequest** — a subclass or implementer that ignores or overrides most of what it inherits. → drop the inheritance, use composition.
 
-### 4. Spawn both sub-agents in parallel
+### 4. Run both passes in this thread
 
-Send a single message with two \`Agent\` tool calls. Use the \`general-purpose\` subagent for both.
-
-**Standards sub-agent prompt** — include:
+Run the Standards pass first with:
 
 - The full diff command and commit list.
-- The list of standards-source files you found in step 3, **plus the smell baseline from step 3** pasted in full — the sub-agent has no other access to it.
+- The list of standards-source files you found in step 3, plus the smell baseline from step 3.
 - The brief: "Report — per file/hunk where relevant — (a) every place the diff violates a documented standard: cite the standard (file + the rule); and (b) any baseline smell you spot: name it and quote the hunk. Distinguish hard violations from judgement calls — documented-standard breaches can be hard, but baseline smells are always judgement calls, and a documented repo standard overrides the baseline. Skip anything tooling enforces. Under 400 words."
 
-**Spec sub-agent prompt** — include:
+Then run the Spec pass with:
 
 - The diff command and commit list.
 - The path or fetched contents of the spec.
 - The brief: "Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding. Under 400 words."
 
-If the spec is missing, skip the Spec sub-agent and note this in the final report.
+If the spec is missing, skip the Spec pass and note this in the final report.
 
 ### 5. Aggregate
 
@@ -1780,7 +1780,7 @@ Reporting them separately stops one axis from masking the other.
 
 When this prompt is run by an automatic implementation run, do not ask the user questions. The launch message provides the fixed point, the diff command, the worktree, the Spec source, and any existing change request. Use those instead of asking or searching the issue tracker.
 
-Run the two axes as parallel feedback sub-agents by emitting one workflow-subagents-create directive with two children that return workflow-subagent-result, instead of upstream's \`Agent\` tool calls. If child creation is unavailable in this thread, run the two axis briefs sequentially yourself. Aggregation, fixes, validation, the commit, and the final result directive always stay in this thread.
+Run the Standards and Spec passes sequentially in this reviewer thread. Provider-native agents and T3 workflow children do not run either pass. Aggregation, fixes, validation, the commit, and the final result directive stay here too.
 
 **The launch message defines the complete review scope.** Review only its supplied diff and fixed point. A later bounded pass may intentionally cover only the repair delta, so do not reopen unchanged code before that fixed point. You are the last scheduled Code Review for the supplied scope: aggregate both axes, then act on their findings yourself:
 
@@ -1923,7 +1923,7 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     role: "planning-thread",
     stage: "planning",
     title: "Planning",
-    description: "Plans Build workstreams and App Review lanes for safe parallel execution.",
+    description: "Plans ordered Build workstreams and App Review lanes for one stage thread.",
     promptText: FAST_FEATURE_PLANNING_PROMPT,
     associatedDocs: [APP_DEV_STACK_ASSOCIATED_DOC],
   },
@@ -2392,9 +2392,12 @@ function buildWorkflowCatalog(): WorkflowCatalog {
   const promptContracts: ReadonlyArray<WorkflowPromptContract> = WORKFLOW_PROMPT_REGISTRY;
   const promptContractById = new Map(promptContracts.map((contract) => [contract.id, contract]));
   const workflowOrder = [
-    "fast-feature",
+    "quick-plan",
+    "fast-plan",
+    "fast-engineering",
     "planning",
     "wayfinder",
+    "fast-feature",
     "app-review",
     "full-feature",
     "product-planning",
@@ -2435,11 +2438,38 @@ function buildWorkflowCatalog(): WorkflowCatalog {
     }
   }
   const implicitWorkflowIdsBySkill: Readonly<Record<string, readonly string[]>> = {
-    "matt-pocock.grill-with-docs": ["planning"],
-    "matt-pocock.domain-modeling": ["full-feature", "product-planning", "wayfinder", "planning"],
-    "matt-pocock.implement": ["full-feature", "implementation", "app-review"],
-    "matt-pocock.to-tickets": ["app-review"],
+    "matt-pocock.grill-with-docs": ["fast-engineering", "planning"],
+    "matt-pocock.domain-modeling": [
+      "full-feature",
+      "product-planning",
+      "wayfinder",
+      "fast-engineering",
+      "planning",
+    ],
+    "matt-pocock.implement": [
+      "quick-plan",
+      "fast-plan",
+      "fast-engineering",
+      "planning",
+      "wayfinder",
+      "full-feature",
+      "implementation",
+      "app-review",
+    ],
+    "matt-pocock.to-tickets": [
+      "quick-plan",
+      "fast-plan",
+      "fast-engineering",
+      "planning",
+      "wayfinder",
+      "app-review",
+    ],
     [WORKFLOW_PROMPT_IDS.implementationFixCodex]: [
+      "quick-plan",
+      "fast-plan",
+      "fast-engineering",
+      "planning",
+      "wayfinder",
       "fast-feature",
       "full-feature",
       "implementation",

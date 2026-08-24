@@ -7,6 +7,7 @@ import {
 export const PLANNING_WORKFLOW_PROVIDERS: ReadonlySet<ProviderDriverKind> = new Set([
   ProviderDriverKind.make("codex"),
   ProviderDriverKind.make("claudeAgent"),
+  ProviderDriverKind.make("opencode"),
 ]);
 
 export function isPlanningWorkflowAvailableForProvider(

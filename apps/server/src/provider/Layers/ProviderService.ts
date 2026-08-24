@@ -70,6 +70,7 @@ const isModelSelection = Schema.is(ModelSelection);
 const WORKFLOW_PROVIDERS: ReadonlySet<ProviderDriverKind> = new Set([
   ProviderDriverKind.make("codex"),
   ProviderDriverKind.make("claudeAgent"),
+  ProviderDriverKind.make("opencode"),
 ]);
 
 /**
@@ -815,7 +816,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       ) {
         return yield* toValidationError(
           "ProviderService.sendTurn",
-          "Workflow modes are only available for Codex and Claude providers in v1.",
+          "Workflow modes are only available for Codex, Claude, and OpenCode providers in v1.",
         );
       }
       metricProvider = routed.adapter.provider;

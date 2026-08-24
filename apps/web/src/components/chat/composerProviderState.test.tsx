@@ -41,6 +41,7 @@ const MODE_CONTROLS: ComposerModeControls = {
     stepCycles: [],
     stepReviewParts: [],
     implementationSettings: {
+      ticketAppReviewEnabled: true,
       appReviewEnabled: true,
       finalCodeReviewEnabled: true,
       pullRequestCreationEnabled: true,

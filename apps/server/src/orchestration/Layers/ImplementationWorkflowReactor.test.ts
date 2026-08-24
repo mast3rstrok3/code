@@ -3215,6 +3215,35 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
+  it.effect("starts all 30 ready tickets with unique worker identities and singleton scopes", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const plannedTickets = Array.from({ length: 30 }, (_, index) =>
+          planningTicket(`TICKET-${index + 1}`),
+        );
+        const { run, tickets } = yield* launchRun(system, {
+          tickets: plannedTickets,
+        });
+        const snapshot = yield* system.query.getSnapshot();
+        const workers = snapshot.threads.filter(
+          (thread) => thread.workflowRole === "implementation-worker",
+        );
+        const states = snapshot.implementationRuns.find(
+          (entry) => entry.id === run.id,
+        )?.ticketStates;
+
+        expect(workers).toHaveLength(30);
+        expect(new Set(workers.map((thread) => thread.id)).size).toBe(30);
+        expect(new Set(workers.map((thread) => thread.branch)).size).toBe(30);
+        expect(new Set(workers.map((thread) => thread.worktreePath)).size).toBe(30);
+        expect(workers.map((thread) => thread.workflowContext?.ticketScope).toSorted()).toEqual(
+          tickets.map((ticket) => [ticket.id]).toSorted(),
+        );
+        expect(states?.every((state) => state.status === "running")).toBe(true);
+      }),
+    ),
+  );
+
   it.effect("turns prompt-authored tickets into a durable implementation run automatically", () =>
     withSystem((system) =>
       Effect.gen(function* () {
@@ -3861,6 +3890,11 @@ describe("ImplementationWorkflowReactor", () => {
           ),
         ).toHaveLength(1);
         expect(
+          snapshot.threads.find(
+            (thread) => thread.id === reviewing?.ticketStates[0]?.codeReviewThreadId,
+          )?.workflowContext?.ticketScope,
+        ).toEqual([reviewing?.ticketStates[0]?.ticketId]);
+        expect(
           snapshot.threads.filter((thread) => thread.workflowRole === "implementation-validator"),
         ).toHaveLength(0);
 
@@ -3971,7 +4005,10 @@ describe("ImplementationWorkflowReactor", () => {
           createdAt: endedAt,
         });
         yield* system.reactor.drain;
-        yield* system.reactor.recoverIncompleteStages();
+        yield* Effect.all(
+          [system.reactor.recoverIncompleteStages(), system.reactor.recoverIncompleteStages()],
+          { concurrency: "unbounded", discard: true },
+        );
         yield* system.reactor.drain;
 
         snapshot = yield* system.query.getSnapshot();
@@ -5500,7 +5537,9 @@ describe("ImplementationWorkflowReactor", () => {
   it.effect("completes without publishing when pull-request creation is skipped", () =>
     withSystem((system) =>
       Effect.gen(function* () {
-        const { run } = yield* launchRun(system);
+        const { run } = yield* launchRun(system, {
+          skips: [{ kind: "run", stage: "change-request" }],
+        });
         yield* appendWorkerResult(system, { run, status: "succeeded" });
         yield* passMergeGate(system, run);
         yield* passAppReview(system, run);
@@ -5905,6 +5944,29 @@ describe("ImplementationWorkflowReactor", () => {
           ],
         },
       },
+    ),
+  );
+
+  it.effect("keeps ticket scope on every App Review descendant", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { ticket, nestedRun } = yield* launchTicketAppReview(system);
+        const snapshot = yield* system.query.getSnapshot();
+        const scopedThreads = snapshot.threads.filter(
+          (thread) =>
+            thread.id === nestedRun.controllerThreadId ||
+            thread.parentThreadId === nestedRun.controllerThreadId,
+        );
+
+        expect(scopedThreads.length).toBeGreaterThan(0);
+        expect(
+          scopedThreads.every(
+            (thread) =>
+              thread.workflowContext?.ticketScope.length === 1 &&
+              thread.workflowContext.ticketScope[0] === ticket.id,
+          ),
+        ).toBe(true);
+      }),
     ),
   );
 

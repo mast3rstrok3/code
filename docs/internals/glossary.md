@@ -147,7 +147,7 @@ Workflows are the server-orchestrated automation paths that chain planning and i
 
 #### Workflow (preset)
 
-One of the three selectable orchestration paths—Fast Feature, Engineering Workflow, or Wayfinder—defined in [workflowPresets.ts][25]. Engineering Workflow combines Planning and Implementation phases behind one entry point, beginning directly with user-scoped Grill with Docs. Earlier preset identities remain decodable for historical runs; App Review is launched as a nested or panel-owned run.
+One of the composer configurations defined in [workflowPresets.ts][25]. Quick Plan and Fast Plan use native CLI planning followed by Build. Fast Engineering and Engineering Workflow use the Spec-and-tickets planning flow followed by Implementation. Wayfinder is visible but disabled while its alternate planning phase is under development. A preset supplies run-local defaults that the user can change before launch. Earlier preset identities remain decodable for historical runs; App Review is launched as a nested or panel-owned run.
 
 #### Workflow ID
 

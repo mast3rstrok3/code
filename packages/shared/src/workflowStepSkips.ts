@@ -1,22 +1,35 @@
 import type {
   ImplementationWorkflowSettings,
+  OrchestrationPlanningTicketId,
   OrchestrationImplementationSkipTarget,
 } from "@t3tools/contracts";
+import { normalizeImplementationWorkflowSettings } from "./workflowPresets.ts";
 
-/** Convert the standing Engineering Workflow switches into a new run's skip list. */
+/** Convert implementation-stage choices into a new run's skip list. */
 export function implementationWorkflowDefaultSkips(
   settings: ImplementationWorkflowSettings | undefined,
+  ticketIds: ReadonlyArray<OrchestrationPlanningTicketId> = [],
 ): ReadonlyArray<OrchestrationImplementationSkipTarget> {
   if (settings === undefined) return [];
+  const normalized = normalizeImplementationWorkflowSettings(settings);
   return [
-    ...(settings.appReviewEnabled ? [] : [{ kind: "run" as const, stage: "app-review" as const }]),
-    ...(settings.finalCodeReviewEnabled
+    ...(normalized.ticketAppReviewEnabled
+      ? []
+      : ticketIds.map((ticketId) => ({
+          kind: "ticket" as const,
+          ticketId,
+          stage: "app-review" as const,
+        }))),
+    ...(normalized.appReviewEnabled
+      ? []
+      : [{ kind: "run" as const, stage: "app-review" as const }]),
+    ...(normalized.finalCodeReviewEnabled
       ? []
       : [{ kind: "run" as const, stage: "code-review" as const }]),
-    ...(settings.pullRequestCreationEnabled
+    ...(normalized.pullRequestCreationEnabled
       ? []
       : [{ kind: "run" as const, stage: "change-request" as const }]),
-    ...(settings.pullRequestBabysittingEnabled
+    ...(normalized.pullRequestBabysittingEnabled
       ? []
       : [{ kind: "run" as const, stage: "change-request-babysit" as const }]),
   ];

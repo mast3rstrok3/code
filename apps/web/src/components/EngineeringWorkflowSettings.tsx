@@ -86,6 +86,7 @@ const APP_REVIEW_PHASES = [
 ] as const;
 
 export interface EngineeringWorkflowSettingsProps {
+  readonly preset: "planning" | "fast-engineering";
   readonly pinFor: (key: WorkflowModelPinKey) => ModelSelection | null;
   readonly defaultPinFor?: ((key: WorkflowModelPinKey) => ModelSelection | null) | undefined;
   readonly rootModelSelection: ModelSelection;
@@ -103,6 +104,7 @@ export interface EngineeringWorkflowSettingsProps {
   readonly onSetImplementationSettings?:
     | ((settings: ImplementationWorkflowSettings) => void)
     | undefined;
+  readonly implementationSettingsScope?: "defaults" | "run" | undefined;
 }
 
 type SkippableImplementationSetting = keyof Pick<
@@ -144,18 +146,32 @@ function EngineeringWorkflowStepEnabledControl(
     return null;
   }
   const enabled = implementationSettings[setting];
+  const runLocal = props.implementationSettingsScope === "run";
+  const setEnabled = (checked: boolean) => {
+    const next = { ...implementationSettings, [setting]: checked };
+    if (setting === "pullRequestCreationEnabled" && !checked) {
+      next.pullRequestBabysittingEnabled = false;
+    }
+    if (setting === "pullRequestBabysittingEnabled" && checked) {
+      next.pullRequestCreationEnabled = true;
+    }
+    onSetImplementationSettings(next);
+  };
   return (
     <label className="mt-3 flex items-center justify-between gap-3 border-t border-border/60 pt-3 text-xs text-muted-foreground">
-      <span>{enabled ? "Runs in new workflows" : "Skipped in new workflows"}</span>
+      <span>
+        {enabled
+          ? runLocal
+            ? "Runs for this run"
+            : "Runs in new workflows"
+          : runLocal
+            ? "Skipped for this run"
+            : "Skipped in new workflows"}
+      </span>
       <Switch
         checked={enabled}
-        onCheckedChange={(checked) =>
-          onSetImplementationSettings({
-            ...implementationSettings,
-            [setting]: checked === true,
-          })
-        }
-        aria-label={`Run ${props.target.label} in new workflows`}
+        onCheckedChange={(checked) => setEnabled(checked === true)}
+        aria-label={`Run ${props.target.label} ${runLocal ? "for this run" : "in new workflows"}`}
       />
     </label>
   );
@@ -216,6 +232,9 @@ function EngineeringWorkflowStepControls(
   },
 ) {
   const rootLabel = props.rootLabel;
+  const implementationSettings = props.implementationSettings;
+  const onSetImplementationSettings = props.onSetImplementationSettings;
+  const runLocal = props.implementationSettingsScope === "run";
   if (props.workflowPromptId === TDD_STEP_KEY.workflowPromptId) {
     const implementationSelection = effectiveSelection(props, TDD_STEP_KEY);
     const ticketReviewSelection = effectiveSelection(props, TICKET_APP_REVIEW_KEY);
@@ -241,6 +260,27 @@ function EngineeringWorkflowStepControls(
               <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
                 Runs before the ticket's Code Review. Each phase can use its own model.
               </p>
+              {implementationSettings && onSetImplementationSettings ? (
+                <label className="mt-3 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                  <span>
+                    {implementationSettings.ticketAppReviewEnabled
+                      ? "Runs for eligible tickets"
+                      : runLocal
+                        ? "Skipped for this run"
+                        : "Skipped in new workflows"}
+                  </span>
+                  <Switch
+                    checked={implementationSettings.ticketAppReviewEnabled}
+                    onCheckedChange={(checked) =>
+                      onSetImplementationSettings({
+                        ...implementationSettings,
+                        ticketAppReviewEnabled: checked === true,
+                      })
+                    }
+                    aria-label={`Run eligible ticket App Reviews ${runLocal ? "for this run" : "in new workflows"}`}
+                  />
+                </label>
+              ) : null}
             </div>
             <div className="grid gap-4 border-t border-border/60 pt-3 sm:grid-cols-2">
               <StepModelControl
@@ -401,13 +441,13 @@ function EngineeringWorkflowStepControls(
 }
 
 export function EngineeringWorkflowSettings(props: EngineeringWorkflowSettingsProps) {
-  const targets = engineeringWorkflowDefaultSteps();
+  const targets = engineeringWorkflowDefaultSteps(props.preset);
   const effectivePinFor = (key: WorkflowModelPinKey) => effectiveSelection(props, key);
   return (
     <div className="space-y-5">
       <div className="max-w-lg">
         <WorkflowModelQuickPins
-          preset="planning"
+          preset={props.preset}
           pinFor={props.pinFor}
           selectionFor={effectivePinFor}
           rootModelSelection={props.rootModelSelection}

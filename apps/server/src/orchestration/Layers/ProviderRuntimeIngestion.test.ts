@@ -4139,7 +4139,7 @@ describe("ProviderRuntimeIngestion", () => {
     const parent = snapshot.threads.find((thread) => thread.id === parentThreadId);
     const child = parent?.workflowSubagentBatches?.[0]?.children[0];
     expect(child?.status).toBe("rejected");
-    expect(child?.failureDetail).toContain("Fast Feature workflow owns Planning");
+    expect(child?.failureDetail).toContain("Fast Feature workflow owns its planning");
     expect(
       snapshot.threads.some(
         (thread) =>
@@ -4354,14 +4354,86 @@ describe("ProviderRuntimeIngestion", () => {
     ).toBe(false);
   });
 
-  it("launches all 50 focused browser reviewers in one durable batch", async () => {
+  it("rejects multi-child workflow handoffs before any child starts", async () => {
+    for (const childCount of [2, 50]) {
+      const harness = await createHarness();
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const parentThreadId = asThreadId(`thread-${childCount}-reviewers-parent`);
+      await runtime!.runPromise(
+        harness.engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make(`cmd-${childCount}-reviewers-parent-create`),
+          threadId: parentThreadId,
+          projectId: asProjectId("project-1"),
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+          parentThreadId: null,
+          workflowRole: null,
+          title: "Default parent",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          interactionMode: "default",
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+        }),
+      );
+      const children = Array.from({ length: childCount }, (_, index) => ({
+        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+        title: `Focused browser reviewer ${index}`,
+        promptMarkdown: `Review concern ${index}.`,
+      }));
+      harness.emit({
+        type: "item.completed",
+        eventId: asEventId(`evt-${childCount}-reviewers`),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt,
+        threadId: parentThreadId,
+        turnId: asTurnId(`turn-${childCount}-reviewers`),
+        itemId: asItemId(`item-${childCount}-reviewers`),
+        payload: {
+          itemType: "assistant_message",
+          status: "completed",
+          detail: `\`\`\`json\n${JSON.stringify({ type: "workflow-subagents-create", children })}\n\`\`\``,
+        },
+      });
+
+      const snapshot = await waitForReadModel(harness.readModel, (readModel) => {
+        const parent = readModel.threads.find((thread) => thread.id === parentThreadId);
+        return (
+          parent?.activities.some((activity) => activity.kind === "workflow.directive.rejected") ===
+            true &&
+          parent.messages.some((message) =>
+            message.text.includes("complete the remaining work yourself"),
+          )
+        );
+      });
+      const parent = snapshot.threads.find((thread) => thread.id === parentThreadId);
+      const rejection = parent?.activities.find(
+        (activity) => activity.kind === "workflow.directive.rejected",
+      );
+      expect(parent?.workflowSubagentBatches).toHaveLength(0);
+      expect(
+        snapshot.threads.filter((thread) => thread.parentThreadId === parentThreadId),
+      ).toHaveLength(0);
+      expect(rejection?.payload).toMatchObject({
+        directiveType: "workflow-subagents-create",
+        detail: expect.stringContaining(`contained ${childCount} children`),
+      });
+      expect(parent?.messages.at(-1)?.text).toContain("complete the remaining work yourself");
+    }
+  });
+
+  it("rejects a second handoff while the first child is unfinished", async () => {
     const harness = await createHarness();
     const createdAt = "2026-01-01T00:00:00.000Z";
-    const parentThreadId = asThreadId("thread-fifty-reviewers-parent");
+    const parentThreadId = asThreadId("thread-overlapping-handoffs-parent");
     await runtime!.runPromise(
       harness.engine.dispatch({
         type: "thread.create",
-        commandId: CommandId.make("cmd-fifty-reviewers-parent-create"),
+        commandId: CommandId.make("cmd-overlapping-handoffs-parent-create"),
         threadId: parentThreadId,
         projectId: asProjectId("project-1"),
         ownerUserId: DEFAULT_WORKSPACE_USER_ID,
@@ -4379,39 +4451,49 @@ describe("ProviderRuntimeIngestion", () => {
         createdAt,
       }),
     );
-    const children = Array.from({ length: 50 }, (_, index) => ({
-      workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
-      title: `Focused browser reviewer ${index}`,
-      promptMarkdown: `Review concern ${index}.`,
-    }));
-    harness.emit({
-      type: "item.completed",
-      eventId: asEventId("evt-fifty-reviewers"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt,
-      threadId: parentThreadId,
-      turnId: asTurnId("turn-fifty-reviewers"),
-      itemId: asItemId("item-fifty-reviewers"),
-      payload: {
-        itemType: "assistant_message",
-        status: "completed",
-        detail: `\`\`\`json\n${JSON.stringify({ type: "workflow-subagents-create", children })}\n\`\`\``,
-      },
-    });
+    const directive = (title: string) => `\`\`\`json
+{
+  "type": "workflow-subagent-create",
+  "workflowPromptId": "${WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex}",
+  "title": "${title}",
+  "promptMarkdown": "Review checkout in the browser."
+}
+\`\`\``;
+    for (const [index, title] of ["First review", "Second review"].entries()) {
+      harness.emit({
+        type: "item.completed",
+        eventId: asEventId(`evt-overlapping-handoff-${index}`),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt,
+        threadId: parentThreadId,
+        turnId: asTurnId(`turn-overlapping-handoff-${index}`),
+        itemId: asItemId(`item-overlapping-handoff-${index}`),
+        payload: { itemType: "assistant_message", status: "completed", detail: directive(title) },
+      });
+      if (index === 0) {
+        await waitForReadModel(harness.readModel, (readModel) =>
+          readModel.threads.some((thread) => thread.parentThreadId === parentThreadId),
+        );
+      }
+    }
 
-    const snapshot = await waitForReadModel(
-      harness.readModel,
-      (readModel) =>
-        readModel.threads.filter((thread) => thread.parentThreadId === parentThreadId).length ===
-        50,
-      10_000,
-    );
+    const snapshot = await waitForReadModel(harness.readModel, (readModel) => {
+      const parent = readModel.threads.find((thread) => thread.id === parentThreadId);
+      return (
+        parent?.activities.some(
+          (activity) =>
+            activity.kind === "workflow.directive.rejected" &&
+            String((activity.payload as Record<string, unknown>)?.["detail"]).includes(
+              "still unfinished",
+            ),
+        ) === true
+      );
+    });
     const parent = snapshot.threads.find((thread) => thread.id === parentThreadId);
-    const batch = parent?.workflowSubagentBatches?.[0];
-    expect(batch?.children).toHaveLength(50);
-    expect(batch?.children.every((child) => child.status === "running")).toBe(true);
-    expect(new Set(batch?.children.map((child) => child.childThreadId)).size).toBe(50);
-    expect(parent?.appReviews).toHaveLength(0);
+    expect(parent?.workflowSubagentBatches).toHaveLength(1);
+    expect(
+      snapshot.threads.filter((thread) => thread.parentThreadId === parentThreadId),
+    ).toHaveLength(1);
   });
 
   it("ignores unrelated turn completions until the workflow child reports its result", async () => {

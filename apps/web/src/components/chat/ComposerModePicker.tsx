@@ -48,7 +48,6 @@ export interface ComposerWorkflowDefaults {
     readonly stepModels: ReadonlyArray<WorkflowStepModelOverride>;
     readonly stepCycles: ReadonlyArray<WorkflowStepCycleOverride>;
     readonly stepReviewParts: ReadonlyArray<WorkflowStepReviewPartsOverride>;
-    readonly implementationSettings: ImplementationWorkflowSettings;
   }) => void;
 }
 
@@ -111,7 +110,7 @@ export function resolveWorkflowPresetForPicker(input: {
   )
     ? input.lastWorkflowPreset
     : null;
-  return rememberedPreset ?? ("full-feature" as const);
+  return rememberedPreset ?? ("quick-plan" as const);
 }
 
 function focusRelativeOption(container: HTMLElement, direction: 1 | -1) {
@@ -187,43 +186,55 @@ export function WorkflowPresetRows(props: {
   readonly onSelect: (preset: WorkflowPreset) => void;
 }) {
   return (
-    <div className="grid gap-1" data-composer-mode-view="workflow" role="menu">
-      {WORKFLOW_PRESET_DEFINITIONS.map((definition) => {
-        const selected = props.activePreset === definition.id;
-        return (
-          <div
-            className={cn(
-              "grid grid-cols-[minmax(0,1fr)_auto] items-center rounded-md",
-              selected && "bg-accent",
-            )}
-            key={definition.id}
-          >
-            <button
-              aria-checked={selected}
-              className="grid min-h-12 min-w-0 grid-cols-[1rem_minmax(0,1fr)] gap-x-2 rounded-md px-2 py-2 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-              data-composer-mode-option
-              disabled={!props.workflowAvailable}
-              onClick={() => props.onSelect(definition.id)}
-              onKeyDown={composerModeOptionKeyDown}
-              role="menuitemradio"
-              type="button"
-            >
-              <span className="mt-0.5 size-4">
-                {selected ? <CheckIcon aria-hidden="true" className="size-4" /> : null}
-              </span>
-              <span className="grid min-w-0 gap-0.5">
-                <span className="font-medium text-sm">{definition.label}</span>
-                <span className="text-muted-foreground text-xs leading-4">
-                  {props.workflowAvailable
-                    ? definition.description
-                    : "Available for Codex and Claude providers in v1."}
-                </span>
-              </span>
-            </button>
-            <WorkflowHelp definition={definition} />
+    <div className="grid gap-4" data-composer-mode-view="workflow" role="menu">
+      {(["plan", "engineering"] as const).map((group) => (
+        <section className="grid gap-1" key={group}>
+          <div className="px-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            {group === "plan" ? "Plan" : "Engineering"}
           </div>
-        );
-      })}
+          {WORKFLOW_PRESET_DEFINITIONS.filter((definition) => definition.group === group).map(
+            (definition) => {
+              const selected = props.activePreset === definition.id;
+              const unavailable = definition.availability === "under-development";
+              return (
+                <div
+                  className={cn(
+                    "grid grid-cols-[minmax(0,1fr)_auto] items-center rounded-md",
+                    selected && "bg-accent",
+                  )}
+                  key={definition.id}
+                >
+                  <button
+                    aria-checked={selected}
+                    className="grid min-h-12 min-w-0 grid-cols-[1rem_minmax(0,1fr)] gap-x-2 rounded-md px-2 py-2 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+                    data-composer-mode-option
+                    disabled={!props.workflowAvailable || unavailable}
+                    onClick={() => props.onSelect(definition.id)}
+                    onKeyDown={composerModeOptionKeyDown}
+                    role="menuitemradio"
+                    type="button"
+                  >
+                    <span className="mt-0.5 size-4">
+                      {selected ? <CheckIcon aria-hidden="true" className="size-4" /> : null}
+                    </span>
+                    <span className="grid min-w-0 gap-0.5">
+                      <span className="font-medium text-sm">{definition.label}</span>
+                      <span className="text-muted-foreground text-xs leading-4">
+                        {!props.workflowAvailable
+                          ? "Available for Codex, Claude, and OpenCode providers."
+                          : unavailable
+                            ? (definition.unavailableReason ?? "Under development")
+                            : definition.description}
+                      </span>
+                    </span>
+                  </button>
+                  <WorkflowHelp definition={definition} />
+                </div>
+              );
+            },
+          )}
+        </section>
+      ))}
     </div>
   );
 }

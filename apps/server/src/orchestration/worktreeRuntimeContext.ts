@@ -2,8 +2,11 @@ import type { AppDevStackByWorktreeResult, WorkflowPreset } from "@t3tools/contr
 
 const WORKFLOWS_WITH_EARLY_APP_DEV_STACK = new Set<WorkflowPreset>([
   "planning",
+  "fast-engineering",
   "full-feature",
   "fast-feature",
+  "quick-plan",
+  "fast-plan",
 ]);
 
 export function buildWorktreeRuntimeContext(input: {

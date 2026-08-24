@@ -164,6 +164,9 @@ export const DEFAULT_PROVIDER_INTERACTION_MODE: ProviderInteractionMode = "defau
 export const WorkflowPreset = Schema.Literals([
   "fix",
   "fast-feature",
+  "quick-plan",
+  "fast-plan",
+  "fast-engineering",
   "full-feature",
   "product-planning",
   "wayfinder",
@@ -172,6 +175,17 @@ export const WorkflowPreset = Schema.Literals([
   "app-review",
 ]);
 export type WorkflowPreset = typeof WorkflowPreset.Type;
+
+export const ImplementationWorkflowSettings = Schema.Struct({
+  ticketAppReviewEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  appReviewEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  finalCodeReviewEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  pullRequestCreationEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  pullRequestBabysittingEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(true)),
+  ),
+});
+export type ImplementationWorkflowSettings = typeof ImplementationWorkflowSettings.Type;
 export const isPlanningWorkflowInteractionMode = (
   mode: ProviderInteractionMode | null | undefined,
 ): mode is "planning-workflow" | "product-workflow" =>
@@ -1469,6 +1483,8 @@ export const OrchestrationThread = Schema.Struct({
    * standing Settings parts for this run alone.
    */
   workflowStepReviewParts: Schema.optionalKey(Schema.Array(WorkflowStepReviewPartsOverride)),
+  /** Stage choices captured when this workflow preset was selected. */
+  workflowImplementationSettings: Schema.optionalKey(ImplementationWorkflowSettings),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -1583,6 +1599,7 @@ export const OrchestrationThreadShell = Schema.Struct({
    * standing Settings parts for this run alone.
    */
   workflowStepReviewParts: Schema.optionalKey(Schema.Array(WorkflowStepReviewPartsOverride)),
+  workflowImplementationSettings: Schema.optionalKey(ImplementationWorkflowSettings),
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -1858,6 +1875,7 @@ const ThreadCreateCommand = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
   workflowPreset: Schema.optionalKey(Schema.NullOr(WorkflowPreset)),
+  workflowImplementationSettings: Schema.optionalKey(ImplementationWorkflowSettings),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
@@ -2050,6 +2068,7 @@ const ThreadComposerModeSetCommand = Schema.Struct({
   threadId: ThreadId,
   interactionMode: ProviderInteractionMode,
   workflowPreset: Schema.NullOr(WorkflowPreset),
+  workflowImplementationSettings: Schema.optionalKey(Schema.NullOr(ImplementationWorkflowSettings)),
   createdAt: IsoDateTime,
 });
 
@@ -3066,6 +3085,7 @@ export const ThreadCreatedPayload = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
   workflowPreset: Schema.optionalKey(Schema.NullOr(WorkflowPreset)),
+  workflowImplementationSettings: Schema.optionalKey(ImplementationWorkflowSettings),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
@@ -3219,6 +3239,7 @@ export const ThreadComposerModeSetPayload = Schema.Struct({
   threadId: ThreadId,
   interactionMode: ProviderInteractionMode,
   workflowPreset: Schema.NullOr(WorkflowPreset),
+  workflowImplementationSettings: Schema.optionalKey(Schema.NullOr(ImplementationWorkflowSettings)),
   updatedAt: IsoDateTime,
 });
 

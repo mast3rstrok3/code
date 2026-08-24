@@ -1639,6 +1639,62 @@ const make = Effect.gen(function* () {
   }) {
     const batchId = workflowBatchId(input.thread.id, input.sourceMessageId);
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    const parentThread = readModel.threads.find((thread) => thread.id === input.thread.id);
+    const rejectHandoff = Effect.fn("ProviderRuntimeIngestion.rejectWorkflowSubagentHandoff")(
+      function* (detail: string, resumeParent: boolean) {
+        yield* appendWorkflowDirectiveRejectedActivity({
+          event: input.event,
+          threadId: input.thread.id,
+          directiveType:
+            input.children.length === 1 ? "workflow-subagent-create" : "workflow-subagents-create",
+          summary: "Workflow child handoff rejected",
+          detail,
+          createdAt: input.createdAt,
+        });
+        if (!resumeParent) return;
+        const messageText = [
+          `Workflow child handoff rejected: ${detail}`,
+          "Continue this workflow stage in the current thread and complete the remaining work yourself.",
+        ].join("\n\n");
+        yield* orchestrationEngine.dispatch({
+          type: "thread.turn.start",
+          commandId: yield* providerCommandId(
+            input.event,
+            "workflow-subagent-handoff-rejected-resume",
+          ),
+          threadId: input.thread.id,
+          message: {
+            messageId: yield* serverMessageId("workflow-subagent-handoff-rejected"),
+            role: "user",
+            text: messageText,
+            attachments: [],
+          },
+          runtimeMode: input.thread.runtimeMode,
+          interactionMode: input.thread.interactionMode,
+          createdAt: input.createdAt,
+        });
+      },
+    );
+    if (input.children.length !== 1) {
+      yield* rejectHandoff(
+        `A workflow stage may hand off to exactly one child. This request contained ${input.children.length} children.`,
+        true,
+      );
+      return;
+    }
+    if (parentThread?.workflowSubagentBatches?.some((batch) => batch.id === batchId)) {
+      return;
+    }
+    const unfinishedBatch = parentThread?.workflowSubagentBatches?.find(
+      (batch) => batch.status !== "completed",
+    );
+    if (unfinishedBatch !== undefined) {
+      yield* rejectHandoff(
+        `Workflow child handoff '${unfinishedBatch.id}' is still unfinished. Wait for that child to return, then complete the stage in the current thread.`,
+        false,
+      );
+      return;
+    }
     const implementationRun = readModel.implementationRuns
       .filter(
         (run) =>
@@ -1647,7 +1703,7 @@ const make = Effect.gen(function* () {
           run.status !== "canceled",
       )
       .toSorted((left, right) => (left.updatedAt < right.updatedAt ? 1 : -1))[0];
-    const productWorkflowThread = readModel.threads.find((thread) => thread.id === input.thread.id);
+    const productWorkflowThread = parentThread;
     const productWorkflowSpecId = productWorkflowThread?.planningWorkflow?.spec?.id ?? null;
     const productWorkflowRuns = readModel.implementationRuns.filter(
       (run) =>
@@ -1656,6 +1712,8 @@ const make = Effect.gen(function* () {
     );
     const productWorkflowOwnsBrowserReview =
       (input.thread.workflowPreset === "fast-feature" ||
+        input.thread.workflowPreset === "quick-plan" ||
+        input.thread.workflowPreset === "fast-plan" ||
         input.thread.workflowPreset === "full-feature") &&
       (productWorkflowRuns.length === 0 ||
         productWorkflowRuns.some((run) => run.status !== "completed" && run.status !== "canceled"));
@@ -1728,7 +1786,7 @@ const make = Effect.gen(function* () {
             productWorkflowOwnsBrowserReview
           ) {
             yield* reject(
-              `The selected ${input.thread.workflowPreset === "fast-feature" ? "Fast Feature" : "Full Feature"} workflow owns ${input.thread.workflowPreset === "fast-feature" ? "Planning" : "Product Grill and Planning"}, Build, App Review, Code Review, and change-request sequencing. Continue or recover that workflow instead of launching an ad hoc Browser App Review child.`,
+              `The selected ${input.thread.workflowPreset === "quick-plan" ? "Quick Plan" : input.thread.workflowPreset === "fast-plan" ? "Fast Plan" : input.thread.workflowPreset === "fast-feature" ? "Fast Feature" : "Full Feature"} workflow owns its planning, build, review, and publication sequence. Continue or recover that workflow instead of launching an ad hoc Browser App Review child.`,
             );
             return;
           }
@@ -1866,7 +1924,7 @@ const make = Effect.gen(function* () {
             }),
           ),
         ),
-      { concurrency: "unbounded" },
+      { concurrency: 1 },
     );
   });
 

@@ -14,9 +14,7 @@ If the user explicitly asks to run or launch a Browser AppReview for the current
 
 The default \`feedback\` mode creates an ordinary Browser App Review child without a durable App Review record or evidence requirement. Use \`"appReviewMode": "full"\` only when a structured durable review with recording, screenshots, checks, findings, and verdict is explicitly required. Do not perform browser automation in the parent thread.
 
-Do not use this one-shot launch as a substitute for an active Fix, Fast Feature, Full Feature, Implementation, or cycle-based App Review workflow. Those workflows own review sequencing, cycle budgets, worktree selection, and authoritative App Dev Stack preview targets. If one of those workflows is active, continue or recover that workflow instead of spawning an ad hoc Browser App Review child.
-
-Exception: a thread already acting as an \`implementation-qa-reviewer\` or \`app-review-reviewer\` owns the durable Browser App Review. It may launch feedback-mode Browser App Review children only when an active workflow's App Review topology assigns independent browser lanes. Those children share the authoritative preview target, return observations only, and must not capture durable evidence or repair the worktree. The parent must use its linked preview_* and app_review_* tools for canonical evidence and the verdict. The server rejects nested full-mode App Reviews.`;
+Do not use this one-shot launch as a substitute for an active Fix, Fast Feature, Full Feature, Implementation, or cycle-based App Review workflow. Those workflows own review sequencing, cycle budgets, worktree selection, and authoritative App Dev Stack preview targets. If one of those workflows is active, continue or recover that workflow. The durable Browser App Review thread executes every acceptance lane in order and owns the canonical evidence and verdict.`;
 
 export const WORKFLOW_SUBAGENT_INSTRUCTIONS_PROMPT = `## T3 Workflow Sub-Agent System
 
@@ -41,6 +39,8 @@ Built-in workflow stages:
 
 Workflow thread relationships use \`parentThreadId\`, \`workflowRole\`, \`interactionMode\`, and \`workflowPromptId\`. Parent agents start child agents with a focused first message. Child agents send durable results back to parents with final-result workflow directives, not informal prose.
 
+Concurrency is scoped by workflow step. The Implementation scheduler may run every unblocked ticket concurrently because each ticket has its own cadence, worktree, branch, and ticket scope. Within one ticket, run exactly one active ticket-scoped step thread at a time: Implementation, then App Review phases, then Code Review. Root-scoped steps also run one active thread at a time, including the combined App Review and each final Code Review pass. Complete a step in its current thread unless the workflow calls for a specialist handoff. A specialist handoff creates one child, parks the parent until that child returns, then resumes the parent. Provider-native agents and T3 workflow children must not create multiple threads for the same step scope.
+
 Workflow prompts carry artifact identifiers and ticket scope, not copied artifact bodies. Use the read-only \`workflow_context_get\`, \`workflow_spec_get\`, \`workflow_wayfinder_map_get\`, \`workflow_tickets_list\`, \`workflow_ticket_get\`, \`workflow_app_reviews_list\`, \`workflow_app_review_get\`, and \`workflow_doc_get\` tools to retrieve canonical workflow artifacts and supporting documents on demand. Never treat prompt text as a writable artifact copy.
 
 To create a child sub-agent, emit exactly one fenced JSON block:
@@ -57,7 +57,7 @@ To create a child sub-agent, emit exactly one fenced JSON block:
 
 The server uses the current thread as the parent, validates \`workflowPromptId\`, maps it to the correct \`interactionMode\` and \`workflowRole\`, creates the child thread, and starts the first turn with \`promptMarkdown\`.
 
-To launch any number of children concurrently, use one \`workflow-subagents-create\` directive with a non-empty \`children\` array. There is no application child-count or nesting-depth limit. Children settle independently and the parent receives one ordered aggregate after all children are terminal.
+Only one child handoff may be unfinished for a parent. Wait for its result before creating another child. The legacy \`workflow-subagents-create\` shape remains readable for historical workflow records, but new requests with more than one child are rejected and the parent must complete the stage itself.
 
 ${BROWSER_APP_REVIEW_LAUNCH_DIRECTIVE_INSTRUCTIONS}
 

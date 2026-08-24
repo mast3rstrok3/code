@@ -80,9 +80,11 @@ const asThreadId = (value: string): ThreadId => ThreadId.make(value);
 const asTurnId = (value: string): TurnId => TurnId.make(value);
 const codexInstanceId = ProviderInstanceId.make("codex");
 const claudeAgentInstanceId = ProviderInstanceId.make("claudeAgent");
+const openCodeInstanceId = ProviderInstanceId.make("opencode");
 const CODEX_DRIVER = ProviderDriverKind.make("codex");
 const CLAUDE_AGENT_DRIVER = ProviderDriverKind.make("claudeAgent");
 const CURSOR_DRIVER = ProviderDriverKind.make("cursor");
+const OPENCODE_DRIVER = ProviderDriverKind.make("opencode");
 
 type LegacyProviderRuntimeEvent = {
   readonly type: string;
@@ -284,10 +286,12 @@ function makeProviderServiceLayer() {
   const codex = makeFakeCodexAdapter();
   const claude = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
   const cursor = makeFakeCodexAdapter(CURSOR_DRIVER);
+  const openCode = makeFakeCodexAdapter(OPENCODE_DRIVER);
   const registry = makeAdapterRegistryMock({
     [ProviderDriverKind.make("codex")]: codex.adapter,
     [ProviderDriverKind.make("claudeAgent")]: claude.adapter,
     [ProviderDriverKind.make("cursor")]: cursor.adapter,
+    [ProviderDriverKind.make("opencode")]: openCode.adapter,
   });
 
   const providerAdapterLayer = Layer.succeed(
@@ -325,6 +329,7 @@ function makeProviderServiceLayer() {
     codex,
     claude,
     cursor,
+    openCode,
     layer,
   };
 }
@@ -863,6 +868,40 @@ it.effect(
 );
 
 routing.layer("ProviderServiceLive routing", (it) => {
+  it.effect("routes workflow turns to OpenCode", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-opencode-workflow");
+
+      yield* provider.startSession(threadId, {
+        provider: OPENCODE_DRIVER,
+        providerInstanceId: openCodeInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      routing.openCode.sendTurn.mockClear();
+      for (const interactionMode of [
+        "planning-workflow",
+        "product-workflow",
+        "implementation-workflow",
+      ] as const) {
+        yield* provider.sendTurn({
+          threadId,
+          input: `run ${interactionMode}`,
+          attachments: [],
+          interactionMode,
+        });
+      }
+
+      assert.deepEqual(
+        routing.openCode.sendTurn.mock.calls.map(([input]) => input.interactionMode),
+        ["planning-workflow", "product-workflow", "implementation-workflow"],
+      );
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
   it.effect("routes provider operations and rollback conversation", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;

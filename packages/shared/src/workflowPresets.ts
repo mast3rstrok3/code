@@ -1,4 +1,8 @@
-import type { ProviderInteractionMode, WorkflowPreset } from "@t3tools/contracts";
+import type {
+  ImplementationWorkflowSettings,
+  ProviderInteractionMode,
+  WorkflowPreset,
+} from "@t3tools/contracts";
 
 export type WorkflowPresetRoute = "product" | "implementation" | "planning" | "review";
 
@@ -37,12 +41,25 @@ export interface WorkflowPresetDefinition {
   readonly interactionMode: ProviderInteractionMode;
   readonly workflowPromptId?: string;
   readonly helpSteps: ReadonlyArray<WorkflowPresetHelpStep>;
+  readonly group?: "plan" | "engineering";
+  readonly availability?: "available" | "under-development";
+  readonly unavailableReason?: string;
+  readonly implementationDefaults?: ImplementationWorkflowSettings;
 }
 
+const FULL_IMPLEMENTATION_DEFAULTS: ImplementationWorkflowSettings = {
+  ticketAppReviewEnabled: true,
+  appReviewEnabled: true,
+  finalCodeReviewEnabled: true,
+  pullRequestCreationEnabled: true,
+  pullRequestBabysittingEnabled: true,
+};
+
 /**
- * The three agents an App Review cycle runs, each in its own thread: the
- * review (the project's e2e commands first, then the browser), the gap
- * analysis that writes repair tickets, and the fix.
+ * The three agents an App Review cycle runs in order, each in its own thread:
+ * the review (the project's e2e commands first, then the browser), the gap
+ * analysis that writes repair tickets, and the fix. Their threads never overlap
+ * within one review cadence.
  */
 const APP_REVIEW_SUB_STEPS: ReadonlyArray<WorkflowPresetSubStep> = [
   {
@@ -58,6 +75,39 @@ const APP_REVIEW_SUB_STEPS: ReadonlyArray<WorkflowPresetSubStep> = [
   {
     label: "Repair implementation",
     workflowPromptId: "matt-pocock.implement",
+  },
+];
+
+const PLAN_HELP_STEPS: ReadonlyArray<WorkflowPresetHelpStep> = [
+  {
+    label: "Planning",
+    skillId: "planning.fast-feature.codex",
+    threadBoundary: "same thread",
+    note: "uses native CLI Plan mode and answers planning questions automatically",
+  },
+  {
+    label: "Build",
+    skillId: "implementation.tdd.codex",
+    threadBoundary: "new child thread",
+    note: "runs every planned workstream in order in one Build thread",
+  },
+  {
+    label: "App Review",
+    skillId: "implementation.browser-app-review.codex",
+    threadBoundary: "new review thread",
+    note: "runs acceptance lanes in order in the durable reviewer thread",
+    subSteps: APP_REVIEW_SUB_STEPS,
+  },
+  {
+    label: "Final Code Review",
+    skillId: "implementation.code-review.codex",
+    threadBoundary: "new review thread",
+  },
+  { label: "Create pull request", note: "publishes the reviewed branch" },
+  {
+    label: "Babysit pull request",
+    skillId: "implementation.change-request-babysitter.codex",
+    threadBoundary: "new review thread",
   },
 ];
 
@@ -90,7 +140,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
   {
     id: "fast-feature",
     label: "Fast feature",
-    description: "Plan and build a focused feature quickly, then review it and open a PR.",
+    description: "Plan a focused feature, then build and review it one stage thread at a time.",
     route: "product",
     interactionMode: "plan",
     workflowPromptId: "planning.fast-feature.codex",
@@ -99,19 +149,19 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         label: "Planning",
         skillId: "planning.fast-feature.codex",
         threadBoundary: "same thread",
-        note: "may delegate independent research in parallel",
+        note: "discovers repository facts in the planning thread",
       },
       {
         label: "Building",
         skillId: "implementation.tdd.codex",
         threadBoundary: "new child thread",
-        note: "may delegate independent implementation work in parallel",
+        note: "runs ordered workstreams in one Build thread",
       },
       {
         label: "App Review",
         skillId: "implementation.browser-app-review.codex",
         threadBoundary: "new review thread",
-        note: "may delegate independent review analysis in parallel",
+        note: "runs acceptance lanes in order in the durable reviewer thread",
       },
       {
         label: "Code Review",
@@ -120,6 +170,36 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         note: "single pass, applies fixes, commits, and opens the PR for human handoff",
       },
     ],
+  },
+  {
+    id: "quick-plan",
+    label: "Quick Plan",
+    description: "Plan with the provider CLI, build the change, validate it, and stop.",
+    route: "product",
+    interactionMode: "plan",
+    workflowPromptId: "planning.fast-feature.codex",
+    helpSteps: PLAN_HELP_STEPS,
+    group: "plan",
+    availability: "available",
+    implementationDefaults: {
+      ...FULL_IMPLEMENTATION_DEFAULTS,
+      appReviewEnabled: false,
+      finalCodeReviewEnabled: false,
+      pullRequestCreationEnabled: false,
+      pullRequestBabysittingEnabled: false,
+    },
+  },
+  {
+    id: "fast-plan",
+    label: "Fast Plan",
+    description: "Plan and build with the provider CLI, then review and publish the change.",
+    route: "product",
+    interactionMode: "plan",
+    workflowPromptId: "planning.fast-feature.codex",
+    helpSteps: PLAN_HELP_STEPS,
+    group: "plan",
+    availability: "available",
+    implementationDefaults: FULL_IMPLEMENTATION_DEFAULTS,
   },
   {
     id: "full-feature",
@@ -216,6 +296,10 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
     route: "planning",
     interactionMode: "planning-workflow",
     workflowPromptId: "planning.wayfinder.codex",
+    group: "engineering",
+    availability: "under-development",
+    unavailableReason: "Under development",
+    implementationDefaults: FULL_IMPLEMENTATION_DEFAULTS,
     helpSteps: [
       {
         label: "Name the destination",
@@ -257,7 +341,8 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
   {
     id: "implementation",
     label: "Implementation",
-    description: "Implement durable tickets—or create them from the prompt—through review and PR.",
+    description:
+      "Run every ready ticket concurrently, with one active thread per ticket or root review step.",
     route: "implementation",
     interactionMode: "implementation-workflow",
     workflowPromptId: "implementation.orchestrator-planning.codex",
@@ -271,7 +356,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         label: "Execute ticket waves",
         skillId: "implementation.tdd.codex",
         threadBoundary: "new child thread",
-        note: "workers, ten App Review cycles by default, and one Code Review per ticket",
+        note: "all ready tickets concurrently; one active step thread per ticket",
         subSteps: [
           { label: "TDD implementation worker", workflowPromptId: "implementation.tdd.codex" },
           {
@@ -291,14 +376,14 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         label: "Run App Review",
         skillId: "implementation.browser-app-review.codex",
         threadBoundary: "new review thread",
-        note: "ten review, repair-plan, and fix cycles by default",
+        note: "one active thread per ordered review phase; ten cycles by default",
         subSteps: APP_REVIEW_SUB_STEPS,
       },
       {
         label: "Final Code Review",
         skillId: "implementation.code-review.codex",
         threadBoundary: "new review thread",
-        note: "includes final validation",
+        note: "one Code Review thread, followed by final validation",
       },
       {
         label: "Create pull request",
@@ -316,13 +401,16 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
     id: "planning",
     label: "Engineering Workflow",
     description:
-      "Plan with a Product or Engineering Grill, then implement, review, and publish the result.",
+      "Plan, run every ready ticket concurrently, then use one thread for each ticket or root step.",
     route: "planning",
     interactionMode: "planning-workflow",
     // The first turn is the grill, and naming it here is what earns the thread
     // its structured-question tool: the session is provisioned from the prompt
     // id the turn carries, not from the interaction mode alone.
     workflowPromptId: "planning.grill-stage.codex",
+    group: "engineering",
+    availability: "available",
+    implementationDefaults: FULL_IMPLEMENTATION_DEFAULTS,
     helpSteps: [
       { label: "Planning phase · Prepare shared worktree and App Dev Stack", note: "automatic" },
       {
@@ -353,7 +441,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         label: "Implementation phase · Execute ticket waves",
         skillId: "implementation.tdd.codex",
         threadBoundary: "new child thread",
-        note: "automatic; parallel workers, eligible App Reviews, and one Code Review per ticket",
+        note: "automatic; all ready tickets concurrently, with one active step thread per ticket",
         subSteps: [
           { label: "TDD implementation worker", workflowPromptId: "implementation.tdd.codex" },
           {
@@ -374,14 +462,14 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
         label: "Implementation phase · App Review",
         skillId: "implementation.browser-app-review.codex",
         threadBoundary: "new review thread",
-        note: "automatic; ten review, repair-plan, and fix cycles by default",
+        note: "automatic; one active thread per ordered review phase; ten review cycles by default",
         subSteps: APP_REVIEW_SUB_STEPS,
       },
       {
         label: "Implementation phase · Final Code Review",
         skillId: "implementation.code-review.codex",
         threadBoundary: "new review thread",
-        note: "automatic; includes final validation",
+        note: "automatic; one Code Review thread, followed by final validation",
       },
       {
         label: "Implementation phase · Create pull request",
@@ -397,18 +485,58 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
   },
 ];
 
+const ENGINEERING_WORKFLOW_DEFINITION = GUIDED_WORKFLOW_PRESET_DEFINITIONS.find(
+  (definition) => definition.id === "planning",
+)!;
+
+const FAST_ENGINEERING_WORKFLOW_DEFINITION: WorkflowPresetDefinition = {
+  ...ENGINEERING_WORKFLOW_DEFINITION,
+  id: "fast-engineering",
+  label: "Fast Engineering",
+  description:
+    "Run the Engineering Workflow with ticket and combined App Reviews skipped by default.",
+  implementationDefaults: {
+    ...FULL_IMPLEMENTATION_DEFAULTS,
+    ticketAppReviewEnabled: false,
+    appReviewEnabled: false,
+  },
+};
+
+const ALL_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition> = [
+  ...GUIDED_WORKFLOW_PRESET_DEFINITIONS,
+  FAST_ENGINEERING_WORKFLOW_DEFINITION,
+];
+
 export const WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition> = [
-  "fast-feature",
+  "quick-plan",
+  "fast-plan",
+  "fast-engineering",
   "planning",
   "wayfinder",
-  "app-review",
-].map((id) => GUIDED_WORKFLOW_PRESET_DEFINITIONS.find((definition) => definition.id === id)!);
+].map((id) => ALL_WORKFLOW_PRESET_DEFINITIONS.find((definition) => definition.id === id)!);
 
 export const WORKFLOW_PRESET_DEFINITION_BY_ID = Object.fromEntries(
-  [...LEGACY_WORKFLOW_PRESET_DEFINITIONS, ...GUIDED_WORKFLOW_PRESET_DEFINITIONS].map(
-    (definition) => [definition.id, definition],
-  ),
+  [...LEGACY_WORKFLOW_PRESET_DEFINITIONS, ...ALL_WORKFLOW_PRESET_DEFINITIONS].map((definition) => [
+    definition.id,
+    definition,
+  ]),
 ) as Readonly<Record<WorkflowPreset, WorkflowPresetDefinition>>;
+
+export function normalizeImplementationWorkflowSettings(
+  settings: ImplementationWorkflowSettings,
+): ImplementationWorkflowSettings {
+  if (settings.pullRequestCreationEnabled || !settings.pullRequestBabysittingEnabled) {
+    return settings;
+  }
+  return { ...settings, pullRequestBabysittingEnabled: false };
+}
+
+export function implementationDefaultsForWorkflowPreset(
+  preset: WorkflowPreset,
+): ImplementationWorkflowSettings | null {
+  const defaults = WORKFLOW_PRESET_DEFINITION_BY_ID[preset].implementationDefaults;
+  return defaults === undefined ? null : normalizeImplementationWorkflowSettings({ ...defaults });
+}
 
 /** Whether a workflow step runs turns in the workflow root instead of starting a thread. */
 export function workflowPresetStepUsesRootThread(
@@ -457,10 +585,18 @@ export function inferDisplayedWorkflowPreset(input: {
 
 export function isProductWorkflowPreset(
   preset: WorkflowPreset | null | undefined,
-): preset is "fix" | "fast-feature" | "full-feature" | "product-planning" {
+): preset is
+  | "fix"
+  | "fast-feature"
+  | "quick-plan"
+  | "fast-plan"
+  | "full-feature"
+  | "product-planning" {
   return (
     preset === "fix" ||
     preset === "fast-feature" ||
+    preset === "quick-plan" ||
+    preset === "fast-plan" ||
     preset === "full-feature" ||
     preset === "product-planning"
   );
@@ -470,7 +606,13 @@ export function expectedIntentKindForWorkflowPreset(
   preset: WorkflowPreset | null | undefined,
 ): "fix" | "feature" | null {
   if (preset === "fix") return "fix";
-  if (preset === "fast-feature" || preset === "full-feature" || preset === "product-planning")
+  if (
+    preset === "fast-feature" ||
+    preset === "quick-plan" ||
+    preset === "fast-plan" ||
+    preset === "full-feature" ||
+    preset === "product-planning"
+  )
     return "feature";
   return null;
 }

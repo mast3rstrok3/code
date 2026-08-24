@@ -18,6 +18,7 @@ import { useState } from "react";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { EngineeringWorkflowSettings } from "./EngineeringWorkflowSettings";
+import { Switch } from "./ui/switch";
 import { WorkflowStepCyclePins, type SetWorkflowStepCycles } from "./WorkflowStepCycles";
 import {
   WorkflowStepReviewPartPins,
@@ -44,6 +45,45 @@ function pinnableSteps(preset: WorkflowPreset | null): ReadonlyArray<WorkflowPre
   );
 }
 
+function PlanWorkflowStageControls(props: {
+  readonly settings: ImplementationWorkflowSettings;
+  readonly onChange: (settings: ImplementationWorkflowSettings) => void;
+}) {
+  const entries = [
+    ["Combined App Review", "appReviewEnabled"],
+    ["Final Code Review", "finalCodeReviewEnabled"],
+    ["Create pull request", "pullRequestCreationEnabled"],
+    ["Babysit pull request", "pullRequestBabysittingEnabled"],
+  ] as const;
+  const update = (key: (typeof entries)[number][1], checked: boolean) => {
+    const next = { ...props.settings, [key]: checked };
+    if (key === "pullRequestCreationEnabled" && !checked) {
+      next.pullRequestBabysittingEnabled = false;
+    }
+    if (key === "pullRequestBabysittingEnabled" && checked) {
+      next.pullRequestCreationEnabled = true;
+    }
+    props.onChange(next);
+  };
+  return (
+    <section className="space-y-2 border-t border-border/70 pt-3">
+      <h3 className="text-xs font-semibold text-foreground">Optional stages</h3>
+      <div className="divide-y divide-border/60 overflow-hidden rounded-md border border-border/60">
+        {entries.map(([label, key]) => (
+          <label className="flex items-center justify-between gap-3 p-3 text-xs" key={key}>
+            <span>{label}</span>
+            <Switch
+              checked={props.settings[key]}
+              onCheckedChange={(checked) => update(key, checked === true)}
+              aria-label={`Run ${label}`}
+            />
+          </label>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export function WorkflowSettingsBody(props: {
   readonly environmentId: EnvironmentId;
   readonly preset: WorkflowPreset | null;
@@ -64,6 +104,7 @@ export function WorkflowSettingsBody(props: {
   readonly onSetImplementationSettings?:
     | ((settings: ImplementationWorkflowSettings) => void)
     | undefined;
+  readonly implementationSettingsScope?: "defaults" | "run" | undefined;
 }) {
   const choices = useWorkflowModelChoices(props.environmentId);
   const steps = pinnableSteps(props.preset);
@@ -81,7 +122,7 @@ export function WorkflowSettingsBody(props: {
   }
 
   if (
-    props.preset === "planning" &&
+    (props.preset === "planning" || props.preset === "fast-engineering") &&
     props.onSetStepCycles !== undefined &&
     props.onSetStepReviewParts !== undefined
   ) {
@@ -93,6 +134,7 @@ export function WorkflowSettingsBody(props: {
               "Set models, cycle budgets, and App Review parts in the order this workflow runs. Changes apply to the next agent each step starts."}
           </p>
           <EngineeringWorkflowSettings
+            preset={props.preset}
             pinFor={props.pinFor}
             defaultPinFor={defaultPinFor}
             rootModelSelection={props.rootModelSelection}
@@ -110,6 +152,7 @@ export function WorkflowSettingsBody(props: {
             onSetStepReviewParts={props.onSetStepReviewParts}
             implementationSettings={props.implementationSettings}
             onSetImplementationSettings={props.onSetImplementationSettings}
+            implementationSettingsScope={props.implementationSettingsScope}
           />
         </div>
       </ScrollArea>
@@ -172,6 +215,14 @@ export function WorkflowSettingsBody(props: {
             </div>
           );
         })}
+        {(props.preset === "quick-plan" || props.preset === "fast-plan") &&
+        props.implementationSettings !== undefined &&
+        props.onSetImplementationSettings !== undefined ? (
+          <PlanWorkflowStageControls
+            settings={props.implementationSettings}
+            onChange={props.onSetImplementationSettings}
+          />
+        ) : null}
       </div>
     </ScrollArea>
   );
@@ -221,7 +272,11 @@ export function WorkflowSettingsMenu(props: {
       <PopoverPopup
         side="bottom"
         align="end"
-        className={props.preset === "planning" ? "w-[min(42rem,calc(100vw-2rem))] p-0" : "w-80 p-0"}
+        className={
+          props.preset === "planning" || props.preset === "fast-engineering"
+            ? "w-[min(42rem,calc(100vw-2rem))] p-0"
+            : "w-80 p-0"
+        }
       >
         <div className="border-b border-border/70 px-3 py-2">
           <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">

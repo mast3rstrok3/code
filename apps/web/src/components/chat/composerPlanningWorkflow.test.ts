@@ -48,6 +48,21 @@ describe("composer planning workflow provider gate", () => {
     ).toBe("product-workflow");
   });
 
+  it("allows workflow modes for OpenCode providers", () => {
+    const provider = ProviderDriverKind.make("opencode");
+
+    expect(isPlanningWorkflowAvailableForProvider(provider)).toBe(true);
+    for (const interactionMode of [
+      "planning-workflow",
+      "product-workflow",
+      "implementation-workflow",
+    ] as const) {
+      expect(resolveComposerInteractionModeForProvider({ interactionMode, provider })).toBe(
+        interactionMode,
+      );
+    }
+  });
+
   it("downgrades Planning Workflow to Build for unsupported providers", () => {
     const provider = ProviderDriverKind.make("cursor");
 

@@ -22,6 +22,7 @@ import {
   WorkflowStepCycleOverride,
   WorkflowStepReviewPartsOverride,
   WorkflowStepModelOverride,
+  ImplementationWorkflowSettings,
 } from "@t3tools/contracts";
 
 const ProjectionThreadDbRow = ProjectionThread.mapFields(
@@ -39,6 +40,9 @@ const ProjectionThreadDbRow = ProjectionThread.mapFields(
     ),
     workflowStepReviewParts: Schema.NullOr(
       Schema.fromJsonString(Schema.Array(WorkflowStepReviewPartsOverride)),
+    ),
+    workflowImplementationSettings: Schema.NullOr(
+      Schema.fromJsonString(ImplementationWorkflowSettings),
     ),
   }),
 );
@@ -92,6 +96,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           workflow_step_models_json,
           workflow_step_cycles_json,
           workflow_step_review_parts_json,
+          workflow_implementation_settings_json,
           deleted_at
         )
         VALUES (
@@ -135,6 +140,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.workflowStepModels == null ? null : JSON.stringify(row.workflowStepModels)},
           ${row.workflowStepCycles == null ? null : JSON.stringify(row.workflowStepCycles)},
           ${row.workflowStepReviewParts == null ? null : JSON.stringify(row.workflowStepReviewParts)},
+          ${row.workflowImplementationSettings == null ? null : JSON.stringify(row.workflowImplementationSettings)},
           ${row.deletedAt}
         )
         ON CONFLICT (thread_id)
@@ -178,6 +184,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           workflow_step_models_json = excluded.workflow_step_models_json,
           workflow_step_cycles_json = excluded.workflow_step_cycles_json,
           workflow_step_review_parts_json = excluded.workflow_step_review_parts_json,
+          workflow_implementation_settings_json = excluded.workflow_implementation_settings_json,
           deleted_at = excluded.deleted_at
       `,
   });
@@ -233,6 +240,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           workflow_step_models_json AS "workflowStepModels",
           workflow_step_cycles_json AS "workflowStepCycles",
           workflow_step_review_parts_json AS "workflowStepReviewParts",
+          workflow_implementation_settings_json AS "workflowImplementationSettings",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE thread_id = ${threadId}
@@ -290,6 +298,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           workflow_step_models_json AS "workflowStepModels",
           workflow_step_cycles_json AS "workflowStepCycles",
           workflow_step_review_parts_json AS "workflowStepReviewParts",
+          workflow_implementation_settings_json AS "workflowImplementationSettings",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE project_id = ${projectId}

@@ -27,8 +27,10 @@ function withoutPhasePrefix(label: string): string {
   return separator === -1 ? label : label.slice(separator + 3);
 }
 
-export function engineeringWorkflowDefaultSteps(): ReadonlyArray<EngineeringWorkflowDefaultStep> {
-  const definition = WORKFLOW_PRESET_DEFINITION_BY_ID.planning;
+export function engineeringWorkflowDefaultSteps(
+  preset: "planning" | "fast-engineering" = "planning",
+): ReadonlyArray<EngineeringWorkflowDefaultStep> {
+  const definition = WORKFLOW_PRESET_DEFINITION_BY_ID[preset];
   return definition.helpSteps.map((step, index) => {
     const label = withoutPhasePrefix(step.label);
     const phase = step.label.startsWith("Implementation phase · ")

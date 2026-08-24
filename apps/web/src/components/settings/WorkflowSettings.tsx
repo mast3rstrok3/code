@@ -53,7 +53,7 @@ function PageIntro({ title, description }: { title: string; description: string 
           Repository versioned
         </Badge>
         <Badge variant="secondary" size="sm">
-          Codex + Claude
+          Codex + Claude + OpenCode
         </Badge>
       </div>
     </div>
@@ -199,6 +199,7 @@ function WorkflowStepModelDefaultsBody(props: {
       >
         <div className="mt-1 pb-3">
           <EngineeringWorkflowSettings
+            preset="planning"
             pinFor={pinFor}
             rootModelSelection={props.seedSelection}
             rootLabel="The model the Engineering Workflow runs on"

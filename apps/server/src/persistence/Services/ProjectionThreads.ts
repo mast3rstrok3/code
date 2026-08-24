@@ -26,6 +26,7 @@ import {
   TurnId,
   WorkspaceUserId,
   WorkflowPreset,
+  ImplementationWorkflowSettings,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -48,6 +49,7 @@ export const ProjectionThread = Schema.Struct({
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
   workflowPreset: Schema.optionalKey(Schema.NullOr(WorkflowPreset)),
+  workflowImplementationSettings: Schema.optionalKey(Schema.NullOr(ImplementationWorkflowSettings)),
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
   latestTurnId: Schema.NullOr(TurnId),

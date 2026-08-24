@@ -1,26 +1,59 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
   expectedIntentKindForWorkflowPreset,
+  implementationDefaultsForWorkflowPreset,
   inferDisplayedWorkflowPreset,
   interactionModeForWorkflowPreset,
   WORKFLOW_PRESET_DEFINITIONS,
+  WORKFLOW_PRESET_DEFINITION_BY_ID,
   workflowPromptIdForPreset,
 } from "./workflowPresets.js";
 
 describe("workflow presets", () => {
-  it("exposes Fast Feature, Engineering Workflow, Wayfinder, and App Review", () => {
+  it("exposes the Plan and Engineering preset groups", () => {
     expect(WORKFLOW_PRESET_DEFINITIONS.map((definition) => definition.id)).toEqual([
-      "fast-feature",
+      "quick-plan",
+      "fast-plan",
+      "fast-engineering",
       "planning",
       "wayfinder",
-      "app-review",
     ]);
+    expect(WORKFLOW_PRESET_DEFINITIONS.map((definition) => definition.group)).toEqual([
+      "plan",
+      "plan",
+      "engineering",
+      "engineering",
+      "engineering",
+    ]);
+    expect(WORKFLOW_PRESET_DEFINITION_BY_ID.wayfinder.availability).toBe("under-development");
+  });
+
+  it("sets optional stages from each preset without changing global defaults", () => {
+    expect(implementationDefaultsForWorkflowPreset("quick-plan")).toEqual({
+      ticketAppReviewEnabled: true,
+      appReviewEnabled: false,
+      finalCodeReviewEnabled: false,
+      pullRequestCreationEnabled: false,
+      pullRequestBabysittingEnabled: false,
+    });
+    expect(implementationDefaultsForWorkflowPreset("fast-plan")).toEqual({
+      ticketAppReviewEnabled: true,
+      appReviewEnabled: true,
+      finalCodeReviewEnabled: true,
+      pullRequestCreationEnabled: true,
+      pullRequestBabysittingEnabled: true,
+    });
+    expect(implementationDefaultsForWorkflowPreset("fast-engineering")).toEqual({
+      ticketAppReviewEnabled: false,
+      appReviewEnabled: false,
+      finalCodeReviewEnabled: true,
+      pullRequestCreationEnabled: true,
+      pullRequestBabysittingEnabled: true,
+    });
   });
 
   it("makes App Review one looping step over its three agents", () => {
-    const appReview = WORKFLOW_PRESET_DEFINITIONS.find(
-      (definition) => definition.id === "app-review",
-    );
+    const appReview = WORKFLOW_PRESET_DEFINITION_BY_ID["app-review"];
     // Sending in this mode launches a run instead of starting a turn, so the
     // preset carries no entry prompt of its own.
     expect(workflowPromptIdForPreset("app-review")).toBeUndefined();
@@ -58,6 +91,8 @@ describe("workflow presets", () => {
 
   it("maps presets to provider modes and intent kinds", () => {
     expect(interactionModeForWorkflowPreset("fast-feature")).toBe("plan");
+    expect(interactionModeForWorkflowPreset("quick-plan")).toBe("plan");
+    expect(interactionModeForWorkflowPreset("fast-plan")).toBe("plan");
     expect(interactionModeForWorkflowPreset("product-planning")).toBe("product-workflow");
     expect(interactionModeForWorkflowPreset("implementation")).toBe("implementation-workflow");
     expect(expectedIntentKindForWorkflowPreset("fix")).toBe("fix");

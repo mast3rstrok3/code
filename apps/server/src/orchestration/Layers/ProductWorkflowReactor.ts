@@ -11,6 +11,7 @@ import {
   ThreadId,
   type TurnId,
   WORKFLOW_AUTOMATION_RUNTIME_MODE,
+  ApprovalRequestId,
 } from "@t3tools/contracts";
 import {
   resolveImplementationBranchIdentity,
@@ -27,6 +28,7 @@ import { resolveWorkflowStepCycleBudget } from "@t3tools/shared/workflowStepCycl
 import { implementationWorkflowDefaultSkips } from "@t3tools/shared/workflowStepSkips";
 import {
   expectedIntentKindForWorkflowPreset,
+  implementationDefaultsForWorkflowPreset,
   isProductWorkflowRoot,
   workflowPromptIdForPreset,
 } from "@t3tools/shared/workflowPresets";
@@ -70,6 +72,41 @@ const PRODUCT_CONTEXT_RECOVERY_PROMPT_PREFIX =
   "The previous automatic Product Context turn completed without its required workflow directive.";
 
 const isProductWorkflowThread = isProductWorkflowRoot;
+const isPlanWorkflowPreset = (preset: OrchestrationThread["workflowPreset"]) =>
+  preset === "quick-plan" || preset === "fast-plan" || preset === "fast-feature";
+const isEngineeringWorkflowPreset = (preset: OrchestrationThread["workflowPreset"]) =>
+  preset === "planning" || preset === "fast-engineering";
+
+export function resolvePlanQuestionAnswers(payload: unknown): Readonly<Record<string, string>> {
+  if (payload === null || typeof payload !== "object") return {};
+  const questions = (payload as Record<string, unknown>).questions;
+  if (!Array.isArray(questions)) return {};
+  return Object.fromEntries(
+    questions.flatMap((candidate) => {
+      if (candidate === null || typeof candidate !== "object") return [];
+      const question = candidate as Record<string, unknown>;
+      const id = typeof question.id === "string" ? question.id : null;
+      if (id === null) return [];
+      const options = Array.isArray(question.options)
+        ? question.options.flatMap((option) => {
+            if (option === null || typeof option !== "object") return [];
+            const label = (option as Record<string, unknown>).label;
+            return typeof label === "string" && label.length > 0 ? [label] : [];
+          })
+        : [];
+      const recommendation =
+        question.recommendation !== null && typeof question.recommendation === "object"
+          ? (question.recommendation as Record<string, unknown>).optionLabel
+          : undefined;
+      const answer =
+        typeof recommendation === "string" && options.includes(recommendation)
+          ? recommendation
+          : (options[0] ?? "Use your best judgment and continue.");
+      return [[id, answer] as const];
+    }),
+  );
+}
+
 /**
  * A thread that plans in its own root: a Product workflow root, or the standalone
  * Planning preset. Both hand off to implementation, so both belong to every sweep
@@ -77,7 +114,7 @@ const isProductWorkflowThread = isProductWorkflowRoot;
  */
 const isPlanningRootThread = (thread: OrchestrationThread) =>
   isProductWorkflowThread(thread) ||
-  (thread.workflowRole === null && thread.workflowPreset === "planning");
+  (thread.workflowRole === null && isEngineeringWorkflowPreset(thread.workflowPreset));
 const isRecoverablePlanningGrillThread = isPlanningRootThread;
 
 const isProductPlanningOrchestratorThread = (thread: {
@@ -443,6 +480,11 @@ const make = Effect.gen(function* () {
     const settings = yield* serverSettingsService.getSettings.pipe(
       Effect.orElseSucceed(() => undefined),
     );
+    const runSettings =
+      context.productRootThread.workflowImplementationSettings ??
+      (context.productRootThread.workflowPreset === "fast-engineering"
+        ? implementationDefaultsForWorkflowPreset("fast-engineering")
+        : settings?.implementation);
 
     yield* orchestrationEngine.dispatch({
       type: "thread.implementation-run.launch",
@@ -454,7 +496,12 @@ const make = Effect.gen(function* () {
       orchestratorBranch: identity.orchestratorBranch,
       orchestratorWorktreePath: identity.orchestratorWorktreePath,
       validationCommands: [...resolveImplementationValidationCommands({ projectFile })],
-      skips: [...implementationWorkflowDefaultSkips(settings?.implementation)],
+      skips: [
+        ...implementationWorkflowDefaultSkips(
+          runSettings ?? undefined,
+          workflow.tickets.map((ticket) => ticket.id),
+        ),
+      ],
       createdAt: input.occurredAt,
     });
   });
@@ -467,7 +514,7 @@ const make = Effect.gen(function* () {
     const productContext = yield* resolveProductPlanningContext(thread);
     const context =
       productContext ??
-      (thread.workflowRole === null && thread.workflowPreset === "planning"
+      (thread.workflowRole === null && isEngineeringWorkflowPreset(thread.workflowPreset)
         ? { planningThread: thread, productRootThread: thread }
         : null);
     if (context === null) return;
@@ -502,7 +549,8 @@ const make = Effect.gen(function* () {
       const productContext = yield* resolveProductPlanningContext(hydratedThread);
       const context =
         productContext ??
-        (hydratedThread.workflowRole === null && hydratedThread.workflowPreset === "planning"
+        (hydratedThread.workflowRole === null &&
+        isEngineeringWorkflowPreset(hydratedThread.workflowPreset)
           ? { planningThread: hydratedThread, productRootThread: hydratedThread }
           : null);
       if (context === null) continue;
@@ -524,7 +572,8 @@ const make = Effect.gen(function* () {
     const context = yield* resolveProductPlanningContext(thread);
 
     const startsImplementation =
-      context !== null || (thread.workflowRole === null && thread.workflowPreset === "planning");
+      context !== null ||
+      (thread.workflowRole === null && isEngineeringWorkflowPreset(thread.workflowPreset));
 
     // The decider owns "is ticket review over" — a cycle that fixed its own findings completes the
     // stage with status `revised`, so reading the stage is what keeps that cycle from being the
@@ -809,7 +858,7 @@ const make = Effect.gen(function* () {
       const thread = yield* resolveThread(input.threadId);
       if (!thread) return;
       if (thread.workflowRole !== null) return;
-      const isFastFeature = thread.workflowPreset === "fast-feature";
+      const isFastFeature = isPlanWorkflowPreset(thread.workflowPreset);
       const isFix = thread.workflowPreset === "fix" || hasFixIntentLockedActivity(thread);
       if (!isFastFeature && !isFix) return;
       if (isFastFeature) {
@@ -859,6 +908,14 @@ const make = Effect.gen(function* () {
           orchestratorBranch: identity.orchestratorBranch,
           orchestratorWorktreePath: identity.orchestratorWorktreePath,
           validationCommands: [...resolveImplementationValidationCommands({ projectFile })],
+          skips: [
+            ...implementationWorkflowDefaultSkips(
+              thread.workflowImplementationSettings ??
+                (thread.workflowPreset == null
+                  ? undefined
+                  : (implementationDefaultsForWorkflowPreset(thread.workflowPreset) ?? undefined)),
+            ),
+          ],
           createdAt: input.occurredAt,
         });
         return;
@@ -906,7 +963,7 @@ const make = Effect.gen(function* () {
     for (const candidate of readModel.threads) {
       if (
         candidate.deletedAt !== null ||
-        candidate.workflowPreset !== "fast-feature" ||
+        !isPlanWorkflowPreset(candidate.workflowPreset) ||
         candidate.workflowRole !== null ||
         candidate.proposedPlans.every((plan) => plan.implementedAt !== null)
       ) {
@@ -934,7 +991,7 @@ const make = Effect.gen(function* () {
     if (!thread || !isProductWorkflowThread(thread)) return;
     // Fast Feature starts directly in Plan mode. Its completed turn is a plan handoff,
     // not an interrupted Product Grill that needs recovery.
-    if (thread.workflowPreset === "fast-feature") return;
+    if (isPlanWorkflowPreset(thread.workflowPreset)) return;
     if (hasProductIntentLockedActivity(thread) || hasOpenUserInputRequest(thread)) return;
     if (
       thread.activities.some(
@@ -1016,7 +1073,7 @@ const make = Effect.gen(function* () {
       !isRecoverablePlanningGrillThread(thread) ||
       (thread.workflowPreset !== "full-feature" &&
         thread.workflowPreset !== "product-planning" &&
-        thread.workflowPreset !== "planning")
+        !isEngineeringWorkflowPreset(thread.workflowPreset))
     )
       return;
     if (thread.planningWorkflow?.stage !== "grill") return;
@@ -1083,10 +1140,9 @@ const make = Effect.gen(function* () {
       message: {
         messageId: yield* serverMessageId("engineering-grill-recovery"),
         role: "user",
-        text:
-          thread.workflowPreset === "planning"
-            ? buildPlanningGrillRecoveryPrompt()
-            : buildEngineeringGrillRecoveryPrompt(productContextOnly),
+        text: isEngineeringWorkflowPreset(thread.workflowPreset)
+          ? buildPlanningGrillRecoveryPrompt()
+          : buildEngineeringGrillRecoveryPrompt(productContextOnly),
         attachments: [],
       },
       runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
@@ -1147,7 +1203,7 @@ const make = Effect.gen(function* () {
         !isRecoverablePlanningGrillThread(candidate) ||
         (candidate.workflowPreset !== "full-feature" &&
           candidate.workflowPreset !== "product-planning" &&
-          candidate.workflowPreset !== "planning") ||
+          !isEngineeringWorkflowPreset(candidate.workflowPreset)) ||
         candidate.planningWorkflow?.stage !== "grill" ||
         candidate.latestTurn?.state !== "completed"
       ) {
@@ -1164,11 +1220,84 @@ const make = Effect.gen(function* () {
     }
   });
 
+  const autoAnswerPlanQuestion = Effect.fn("ProductWorkflowReactor.autoAnswerPlanQuestion")(
+    function* (input: {
+      readonly threadId: ThreadId;
+      readonly activity: OrchestrationThread["activities"][number];
+    }) {
+      if (input.activity.kind !== "user-input.requested") return;
+      const thread = yield* resolveThread(input.threadId);
+      if (
+        thread === undefined ||
+        thread.workflowRole !== null ||
+        (thread.workflowPreset !== "quick-plan" && thread.workflowPreset !== "fast-plan") ||
+        thread.interactionMode !== "plan"
+      ) {
+        return;
+      }
+      const payload =
+        input.activity.payload !== null && typeof input.activity.payload === "object"
+          ? (input.activity.payload as Record<string, unknown>)
+          : {};
+      const requestId = typeof payload.requestId === "string" ? payload.requestId : null;
+      if (requestId === null) return;
+      const answers = resolvePlanQuestionAnswers(payload);
+      if (Object.keys(answers).length === 0) return;
+      yield* orchestrationEngine.dispatch({
+        type: "thread.user-input.respond",
+        commandId: CommandId.make(`server:plan-auto-answer:${requestId}`),
+        threadId: thread.id,
+        requestId: ApprovalRequestId.make(requestId),
+        answers,
+        createdAt: input.activity.createdAt,
+      });
+    },
+  );
+
+  const reconcilePlanQuestions = Effect.fn("ProductWorkflowReactor.reconcilePlanQuestions")(
+    function* () {
+      const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+      for (const candidate of readModel.threads) {
+        if (
+          candidate.workflowRole !== null ||
+          (candidate.workflowPreset !== "quick-plan" && candidate.workflowPreset !== "fast-plan")
+        ) {
+          continue;
+        }
+        const thread = yield* resolveThread(candidate.id);
+        if (thread === undefined) continue;
+        const open = new Map<string, OrchestrationThread["activities"][number]>();
+        for (const activity of thread.activities) {
+          const payload =
+            activity.payload !== null && typeof activity.payload === "object"
+              ? (activity.payload as Record<string, unknown>)
+              : {};
+          const requestId = typeof payload.requestId === "string" ? payload.requestId : null;
+          if (requestId === null) continue;
+          if (activity.kind === "user-input.requested") open.set(requestId, activity);
+          if (
+            activity.kind === "user-input.resolved" ||
+            activity.kind === "provider.user-input.respond.failed"
+          ) {
+            open.delete(requestId);
+          }
+        }
+        for (const activity of open.values()) {
+          yield* autoAnswerPlanQuestion({ threadId: thread.id, activity });
+        }
+      }
+    },
+  );
+
   const processEvent = Effect.fn("ProductWorkflowReactor.processEvent")(function* (
     event: ProductWorkflowEvent,
   ) {
     switch (event.type) {
       case "thread.activity-appended":
+        yield* autoAnswerPlanQuestion({
+          threadId: event.payload.threadId,
+          activity: event.payload.activity,
+        });
         yield* handleProductIntentLocked(event);
         yield* recoverIncompleteProductGrill(event);
         yield* recoverIncompleteEngineeringGrillFromCheckpoint(event);
@@ -1225,6 +1354,13 @@ const make = Effect.gen(function* () {
     );
 
     const reconcileStartup = Effect.gen(function* () {
+      yield* reconcilePlanQuestions().pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Plan question reconciliation failed", {
+            cause: Cause.pretty(cause),
+          }),
+        ),
+      );
       yield* reconcileIncompleteEngineeringGrills().pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("product workflow Engineering Grill reconciliation failed", {
