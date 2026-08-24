@@ -27,6 +27,7 @@ import * as Equal from "effect/Equal";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
@@ -1767,9 +1768,14 @@ const make = Effect.gen(function* () {
     // Server startup replays pending workflow starts after stale sessions and
     // workflow stages have been reconciled. Replaying here would launch the
     // pre-recovery thread and then launch its continuation as well.
-    // Once activation opens the hot subscriber, sweep again in the background
-    // for starts committed after the pre-readiness replay took its snapshot.
-    yield* forkParked(replayPendingWorkflowTurnStartsSafely);
+    // Once activation opens the hot subscriber, keep sweeping in the
+    // background for starts whose projection crossed the pre-readiness replay
+    // or a prior sweep. Claims and handled keys make every pass idempotent.
+    yield* forkParked(
+      replayPendingWorkflowTurnStartsSafely.pipe(
+        Effect.repeat(Schedule.spaced(Duration.seconds(30))),
+      ),
+    );
 
     // Correlated completions only clear the title request captured here,
     // leaving any newer request untouched.
