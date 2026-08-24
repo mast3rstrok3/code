@@ -147,6 +147,19 @@ describe("OrchestrationReactor", () => {
       "preview-lifecycle-reactor",
       "thread-deletion-reactor",
       "agent-awareness-relay",
+    ]);
+
+    await Effect.runPromise(reactor.reconcilePendingProviderCommands.pipe(Scope.provide(scope)));
+    expect(started).toEqual([
+      "provider-runtime-ingestion",
+      "provider-command-reactor",
+      "checkpoint-reactor",
+      "product-workflow-reactor",
+      "implementation-workflow-reactor",
+      "app-review-workflow-reactor",
+      "preview-lifecycle-reactor",
+      "thread-deletion-reactor",
+      "agent-awareness-relay",
       "product-workflow-flush",
       "implementation-workflow-flush",
       "app-review-workflow-flush",

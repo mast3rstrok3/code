@@ -47,10 +47,6 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
     yield* previewLifecycleReactor.start();
     yield* threadDeletionReactor.start();
     yield* agentAwarenessRelay.start();
-    // Workflow reactors can persist new turn starts while their own startup
-    // reconciliation runs. Sweep once more after every subscriber is active,
-    // then wait for provider-side launch work before startup can report ready.
-    yield* reconcilePendingProviderCommands;
   });
 
   return {

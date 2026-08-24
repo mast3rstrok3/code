@@ -58,6 +58,7 @@ import {
   providerErrorLabel,
   providerErrorLabelFromInstanceHint,
   ProviderCommandReactorLive,
+  workflowStageOwnsPendingThread,
 } from "./ProviderCommandReactor.ts";
 import { WORKFLOW_PROMPT_IDS } from "../../provider/WorkflowPromptRegistry.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
@@ -147,6 +148,33 @@ describe("ProviderCommandReactor", () => {
     it("uses the unknown driver kind when the resolved driver is not registered locally", () => {
       expect(providerErrorLabel("third_party_driver")).toBe("third_party_driver");
     });
+  });
+
+  it("rejects a pending worker turn after the run has claimed a replacement", () => {
+    const staleThread = {
+      id: ThreadId.make("thread-stale-worker"),
+      parentThreadId: ThreadId.make("thread-orchestrator"),
+      workflowRole: "implementation-worker",
+      workflowContext: { workflowId: "implementation-run-1" },
+    } as unknown as Parameters<typeof workflowStageOwnsPendingThread>[1];
+    const readModel = {
+      implementationRuns: [
+        {
+          id: "implementation-run-1",
+          orchestratorThreadId: ThreadId.make("thread-orchestrator"),
+          ticketStates: [
+            {
+              status: "running",
+              workerThreadId: ThreadId.make("thread-current-worker"),
+            },
+          ],
+        },
+      ],
+      appReviewWorkflowRuns: [],
+      threads: [staleThread],
+    } as unknown as Parameters<typeof workflowStageOwnsPendingThread>[0];
+
+    expect(workflowStageOwnsPendingThread(readModel, staleThread)).toBe(false);
   });
 
   async function createHarness(input?: {
@@ -547,6 +575,9 @@ describe("ProviderCommandReactor", () => {
 
     scope = await Effect.runPromise(Scope.make("sequential"));
     await Effect.runPromise(reactor.start().pipe(Scope.provide(scope)));
+    if (input?.pendingWorkflowTurnBeforeStart !== undefined) {
+      await Effect.runPromise(reactor.replayPendingWorkflowTurnStarts.pipe(Scope.provide(scope)));
+    }
     const drain = () => Effect.runPromise(reactor.drain);
 
     return {

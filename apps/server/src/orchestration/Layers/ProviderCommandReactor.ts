@@ -4,6 +4,7 @@ import {
   EventId,
   type ModelSelection,
   type OrchestrationEvent,
+  type OrchestrationReadModel,
   type OrchestrationThread,
   ProviderDriverKind,
   type ProviderInteractionMode,
@@ -104,6 +105,75 @@ function mapProviderSessionStatusToOrchestrationStatus(
 
 const turnStartKey = (payload: TurnStartRequestedEvent["payload"]): string =>
   `${payload.threadId}:${payload.messageId}`;
+
+export function workflowStageOwnsPendingThread(
+  readModel: OrchestrationReadModel,
+  thread: OrchestrationThread,
+): boolean {
+  const workflowId = thread.workflowContext?.workflowId;
+  const implementationRun = readModel.implementationRuns.find(
+    (candidate) =>
+      candidate.id === workflowId || candidate.orchestratorThreadId === thread.parentThreadId,
+  );
+
+  switch (thread.workflowRole) {
+    case "implementation-worker":
+      return (
+        implementationRun === undefined ||
+        implementationRun.ticketStates.some(
+          (state) => state.status === "running" && state.workerThreadId === thread.id,
+        )
+      );
+    case "implementation-validator":
+      return (
+        implementationRun === undefined ||
+        (implementationRun.status === "validating" &&
+          implementationRun.activeValidatorThreadId === thread.id)
+      );
+    case "implementation-fixer":
+      return implementationRun === undefined || implementationRun.activeFixerThreadId === thread.id;
+    case "implementation-code-reviewer":
+      return (
+        implementationRun === undefined ||
+        implementationRun.activeCodeReviewThreadId === thread.id ||
+        implementationRun.ticketStates.some(
+          (state) => state.status === "code-reviewing" && state.codeReviewThreadId === thread.id,
+        )
+      );
+    case "implementation-qa-reviewer": {
+      const reviewRun = (readModel.appReviewWorkflowRuns ?? []).find(
+        (candidate) => candidate.controllerThreadId === thread.parentThreadId,
+      );
+      if (implementationRun === undefined && reviewRun === undefined) return true;
+      return (
+        implementationRun?.activeAppReviewThreadId === thread.id ||
+        (reviewRun?.status === "running" && reviewRun.activeThreadId === thread.id)
+      );
+    }
+    case "implementation-change-request-babysitter":
+      return (
+        implementationRun === undefined ||
+        implementationRun.activeChangeRequestBabysitterThreadId === thread.id
+      );
+    case "app-review-planner":
+    case "app-review-reviewer":
+    case "app-review-fixer": {
+      const reviewRun = (readModel.appReviewWorkflowRuns ?? []).find(
+        (candidate) => candidate.controllerThreadId === thread.parentThreadId,
+      );
+      return reviewRun === undefined || reviewRun.activeThreadId === thread.id;
+    }
+    case "planning-reviewer": {
+      const parent = readModel.threads.find((candidate) => candidate.id === thread.parentThreadId);
+      return (
+        parent === undefined ||
+        parent.planningWorkflow?.activeReview?.reviewerThreadId === thread.id
+      );
+    }
+    default:
+      return true;
+  }
+}
 
 const HANDLED_TURN_START_KEY_MAX = 10_000;
 const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
@@ -1593,56 +1663,68 @@ const make = Effect.gen(function* () {
       projectionTurnRepository.listPendingTurnStarts(),
     ]);
 
-    for (const pending of pendingStarts) {
-      const turns = yield* projectionTurnRepository.listByThreadId({
-        threadId: pending.threadId,
-      });
-      const alreadyStarted = turns.some(
-        (turn) => turn.turnId !== null && turn.requestedAt >= pending.requestedAt,
-      );
-      if (alreadyStarted) {
-        yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
-          threadId: pending.threadId,
-        });
-        continue;
-      }
-      const thread = readModel.threads.find((candidate) => candidate.id === pending.threadId);
-      if (
-        thread === undefined ||
-        thread.deletedAt !== null ||
-        thread.workflowRole === null ||
-        isWorkflowThreadPaused(readModel.threads, thread.id)
-      ) {
-        continue;
-      }
-      const detail = Option.getOrUndefined(
-        yield* projectionSnapshotQuery.getThreadDetailById(thread.id),
-      );
-      if (detail === undefined) continue;
-      const message = detail.messages.find((candidate) => candidate.id === pending.messageId);
-      if (message?.role !== "user") continue;
+    yield* Effect.forEach(
+      pendingStarts,
+      (pending) =>
+        Effect.gen(function* () {
+          const turns = yield* projectionTurnRepository.listByThreadId({
+            threadId: pending.threadId,
+          });
+          const alreadyStarted = turns.some(
+            (turn) => turn.turnId !== null && turn.requestedAt >= pending.requestedAt,
+          );
+          if (alreadyStarted) {
+            yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
+              threadId: pending.threadId,
+            });
+            return;
+          }
+          const thread = readModel.threads.find((candidate) => candidate.id === pending.threadId);
+          if (
+            thread === undefined ||
+            thread.deletedAt !== null ||
+            thread.workflowRole === null ||
+            isWorkflowThreadPaused(readModel.threads, thread.id)
+          ) {
+            return;
+          }
+          if (!workflowStageOwnsPendingThread(readModel, thread)) {
+            yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
+              threadId: pending.threadId,
+            });
+            return;
+          }
+          const detail = Option.getOrUndefined(
+            yield* projectionSnapshotQuery.getThreadDetailById(thread.id),
+          );
+          if (detail === undefined) return;
+          const message = detail.messages.find((candidate) => candidate.id === pending.messageId);
+          if (message?.role !== "user") return;
 
-      yield* processTurnStartRequested({
-        type: "thread.turn-start-requested",
-        payload: {
-          threadId: pending.threadId,
-          messageId: pending.messageId,
-          modelSelection: detail.modelSelection,
-          runtimeMode: detail.runtimeMode,
-          interactionMode: detail.interactionMode,
-          ...(message.workflowPromptId ? { workflowPromptId: message.workflowPromptId } : {}),
-          ...(pending.sourceProposedPlanThreadId !== null && pending.sourceProposedPlanId !== null
-            ? {
-                sourceProposedPlan: {
-                  threadId: pending.sourceProposedPlanThreadId,
-                  planId: pending.sourceProposedPlanId,
-                },
-              }
-            : {}),
-          createdAt: pending.requestedAt,
-        },
-      });
-    }
+          yield* processTurnStartRequested({
+            type: "thread.turn-start-requested",
+            payload: {
+              threadId: pending.threadId,
+              messageId: pending.messageId,
+              modelSelection: detail.modelSelection,
+              runtimeMode: detail.runtimeMode,
+              interactionMode: detail.interactionMode,
+              ...(message.workflowPromptId ? { workflowPromptId: message.workflowPromptId } : {}),
+              ...(pending.sourceProposedPlanThreadId !== null &&
+              pending.sourceProposedPlanId !== null
+                ? {
+                    sourceProposedPlan: {
+                      threadId: pending.sourceProposedPlanThreadId,
+                      planId: pending.sourceProposedPlanId,
+                    },
+                  }
+                : {}),
+              createdAt: pending.requestedAt,
+            },
+          });
+        }),
+      { concurrency: 4, discard: true },
+    );
   });
 
   const replayPendingWorkflowTurnStartsSafely = replayPendingWorkflowTurnStarts().pipe(
@@ -1682,9 +1764,9 @@ const make = Effect.gen(function* () {
     yield* forkParked(Stream.runForEach(orchestrationEngine.streamDomainEvents, processEvent));
 
     // The intent projection is durable, but the provider event stream is hot.
-    // Replay workflow starts committed before a crash after the subscriber is
-    // attached, so a concurrent live event is safely deduplicated.
-    yield* replayPendingWorkflowTurnStartsSafely;
+    // Server startup replays pending workflow starts after stale sessions and
+    // workflow stages have been reconciled. Replaying here would launch the
+    // pre-recovery thread and then launch its continuation as well.
 
     // Correlated completions only clear the title request captured here,
     // leaving any newer request untouched.
