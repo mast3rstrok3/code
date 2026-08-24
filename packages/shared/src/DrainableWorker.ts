@@ -9,6 +9,7 @@
  * @module DrainableWorker
  */
 import * as Scope from "effect/Scope";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
@@ -29,6 +30,12 @@ export interface DrainableWorker<A> {
    * Resolves when the queue is empty and the worker is idle (not processing).
    */
   readonly drain: Effect.Effect<void>;
+
+  /**
+   * Resolves after every item queued before this call has finished. Items
+   * queued after the barrier do not delay it.
+   */
+  readonly flush: Effect.Effect<void>;
 }
 
 export interface KeyedDrainableWorker<A> extends DrainableWorker<A> {}
@@ -46,15 +53,20 @@ export const makeDrainableWorker = <A, E, R>(
   process: (item: A) => Effect.Effect<void, E, R>,
 ): Effect.Effect<DrainableWorker<A>, never, Scope.Scope | R> =>
   Effect.gen(function* () {
-    const queue = yield* Effect.acquireRelease(TxQueue.unbounded<A>(), TxQueue.shutdown);
+    type Entry =
+      | { readonly _tag: "item"; readonly value: A }
+      | { readonly _tag: "barrier"; readonly completed: Deferred.Deferred<void> };
+    const queue = yield* Effect.acquireRelease(TxQueue.unbounded<Entry>(), TxQueue.shutdown);
     const outstanding = yield* TxRef.make(0);
 
     yield* TxQueue.take(queue).pipe(
-      Effect.tap((a) =>
-        Effect.ensuring(
-          process(a),
-          TxRef.update(outstanding, (n) => n - 1),
-        ),
+      Effect.flatMap((entry) =>
+        entry._tag === "barrier"
+          ? Deferred.succeed(entry.completed, undefined).pipe(Effect.orDie)
+          : Effect.ensuring(
+              process(entry.value),
+              TxRef.update(outstanding, (n) => n - 1),
+            ),
       ),
       Effect.forever,
       Effect.forkScoped,
@@ -66,12 +78,18 @@ export const makeDrainableWorker = <A, E, R>(
     );
 
     const enqueue = (element: A): Effect.Effect<boolean, never, never> =>
-      TxQueue.offer(queue, element).pipe(
+      TxQueue.offer(queue, { _tag: "item", value: element }).pipe(
         Effect.tap(() => TxRef.update(outstanding, (n) => n + 1)),
         Effect.tx,
       );
 
-    return { enqueue, drain } satisfies DrainableWorker<A>;
+    const flush = Effect.gen(function* () {
+      const completed = yield* Deferred.make<void>();
+      yield* TxQueue.offer(queue, { _tag: "barrier", completed }).pipe(Effect.tx);
+      yield* Deferred.await(completed);
+    });
+
+    return { enqueue, drain, flush } satisfies DrainableWorker<A>;
   });
 
 /**
@@ -118,5 +136,5 @@ export const makeKeyedDrainableWorker = <A, K, E, R>(options: {
       Effect.tx,
     );
 
-    return { enqueue, drain } satisfies KeyedDrainableWorker<A>;
+    return { enqueue, drain, flush: drain } satisfies KeyedDrainableWorker<A>;
   });

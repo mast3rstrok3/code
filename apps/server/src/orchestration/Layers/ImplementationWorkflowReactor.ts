@@ -8812,6 +8812,7 @@ const make = Effect.gen(function* () {
   return {
     start,
     drain: worker.drain,
+    flush: worker.flush,
     recoverRetryableRuns: () => recoverRetryableRuns().pipe(Effect.orDie),
     recoverIncompleteStages: () => recoverIncompleteStages(true).pipe(Effect.orDie),
   } satisfies ImplementationWorkflowReactorShape;

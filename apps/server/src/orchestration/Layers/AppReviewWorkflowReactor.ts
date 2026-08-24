@@ -2180,7 +2180,12 @@ const make = Effect.gen(function* () {
     );
   });
 
-  return { start, drain: worker.drain, reconcile } satisfies AppReviewWorkflowReactorShape;
+  return {
+    start,
+    drain: worker.drain,
+    flush: worker.flush,
+    reconcile,
+  } satisfies AppReviewWorkflowReactorShape;
 });
 
 export const AppReviewWorkflowReactorLive = Layer.effect(AppReviewWorkflowReactor, make);

@@ -5,6 +5,7 @@ import type * as Scope from "effect/Scope";
 export interface AppReviewWorkflowReactorShape {
   readonly start: () => Effect.Effect<void, never, Scope.Scope>;
   readonly drain: Effect.Effect<void>;
+  readonly flush?: Effect.Effect<void>;
   readonly reconcile: () => Effect.Effect<void>;
 }
 

@@ -54,6 +54,46 @@ describe("makeDrainableWorker", () => {
       }),
     ),
   );
+
+  it.live("flushes through a queue barrier without waiting for later work", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const firstStarted = yield* Deferred.make<void>();
+        const releaseFirst = yield* Deferred.make<void>();
+        const laterStarted = yield* Deferred.make<void>();
+        const releaseLater = yield* Deferred.make<void>();
+        const flushed = yield* Deferred.make<void>();
+
+        const worker = yield* makeDrainableWorker((item: string) =>
+          Effect.gen(function* () {
+            if (item === "first") {
+              yield* Deferred.succeed(firstStarted, undefined).pipe(Effect.orDie);
+              yield* Deferred.await(releaseFirst);
+            }
+            if (item === "later") {
+              yield* Deferred.succeed(laterStarted, undefined).pipe(Effect.orDie);
+              yield* Deferred.await(releaseLater);
+            }
+          }),
+        );
+
+        yield* worker.enqueue("first");
+        yield* Deferred.await(firstStarted);
+        yield* Effect.forkChild(
+          worker.flush.pipe(
+            Effect.tap(() => Deferred.succeed(flushed, undefined).pipe(Effect.orDie)),
+          ),
+        );
+        yield* Effect.yieldNow;
+        yield* worker.enqueue("later");
+        yield* Deferred.succeed(releaseFirst, undefined);
+        yield* Deferred.await(laterStarted);
+
+        expect(yield* Deferred.isDone(flushed)).toBe(true);
+        yield* Deferred.succeed(releaseLater, undefined);
+      }),
+    ),
+  );
 });
 
 describe("makeKeyedDrainableWorker", () => {
