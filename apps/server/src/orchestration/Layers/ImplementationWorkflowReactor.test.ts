@@ -296,6 +296,7 @@ interface ImplementationCalls {
   readonly mergeRefInputs: Ref.Ref<ReadonlyArray<GitMergeRefInput>>;
   readonly localStatusCount: Ref.Ref<number>;
   readonly dirtyWorkerWorktrees: Ref.Ref<boolean>;
+  readonly advancedBranchRefs: Ref.Ref<ReadonlySet<string>>;
   readonly frontendProbeUrls: Ref.Ref<ReadonlyArray<string>>;
 }
 
@@ -457,6 +458,7 @@ function makeTestLayer(
             ),
           resolveCommit: (input) =>
             Effect.gen(function* () {
+              const advancedBranchRefs = yield* Ref.get(calls.advancedBranchRefs);
               if (
                 input.ref === "HEAD" &&
                 (input.cwd.includes(".worktrees/") || input.cwd.includes("-ticket-"))
@@ -477,7 +479,9 @@ function makeTestLayer(
               if (input.ref.includes("-ticket-")) {
                 return {
                   commitSha:
-                    resolvedCommitSha === "def456" ? `${input.ref}@commit` : resolvedCommitSha,
+                    resolvedCommitSha === "def456"
+                      ? `${input.ref}@${advancedBranchRefs.has(input.ref) ? "advanced" : "commit"}`
+                      : resolvedCommitSha,
                 };
               }
               if (input.ref === "HEAD" && input.cwd.includes("-ticket-")) {
@@ -488,7 +492,7 @@ function makeTestLayer(
                 return {
                   commitSha:
                     resolvedCommitSha === "def456" && branch
-                      ? `${branch}@commit`
+                      ? `${branch}@${advancedBranchRefs.has(branch) ? "advanced" : "commit"}`
                       : resolvedCommitSha,
                 };
               }
@@ -788,6 +792,7 @@ function withSystem<A, E>(
     const mergeRefInputs = yield* Ref.make<ReadonlyArray<GitMergeRefInput>>([]);
     const localStatusCount = yield* Ref.make(0);
     const dirtyWorkerWorktrees = yield* Ref.make(options?.dirtyWorkerWorktrees ?? false);
+    const advancedBranchRefs = yield* Ref.make<ReadonlySet<string>>(new Set());
     const frontendProbeUrls = yield* Ref.make<ReadonlyArray<string>>([]);
     const calls = {
       autoCreateInputs,
@@ -800,6 +805,7 @@ function withSystem<A, E>(
       mergeRefInputs,
       localStatusCount,
       dirtyWorkerWorktrees,
+      advancedBranchRefs,
       frontendProbeUrls,
     } satisfies ImplementationCalls;
 
@@ -3474,6 +3480,39 @@ describe("ImplementationWorkflowReactor", () => {
             refName: `${run.launchSummary.plannedWorkers[4]?.branch}@commit`,
           },
         ]);
+      }),
+    ),
+  );
+
+  it.effect("uses a dependency branch commit that advanced from its worker result", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, tickets } = yield* launchRun(system, {
+          tickets: [planningTicket("TICKET-1"), planningTicket("TICKET-2", ["TICKET-1"])],
+        });
+        const base = tickets.find((ticket) => ticket.key === "TICKET-1");
+        const dependent = tickets.find((ticket) => ticket.key === "TICKET-2");
+        if (!base || !dependent) throw new Error("Tickets missing.");
+        yield* appendWorkerResult(system, { run, status: "succeeded", ticketId: base.id });
+
+        const afterBase = yield* system.query.getSnapshot();
+        const baseBranch = afterBase.implementationRuns
+          .find((entry) => entry.id === run.id)
+          ?.ticketStates.find((state) => state.ticketId === base.id)?.branch;
+        if (!baseBranch) throw new Error("Base branch missing.");
+        yield* Ref.set(system.advancedBranchRefs, new Set([baseBranch]));
+        yield* appendWorkerResult(system, {
+          run,
+          status: "succeeded",
+          ticketId: dependent.id,
+        });
+
+        const snapshot = yield* system.query.getSnapshot();
+        const completed = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(completed?.automationHalt).toBeNull();
+        expect(
+          completed?.ticketStates.find((state) => state.ticketId === dependent.id)?.status,
+        ).toBe("succeeded");
       }),
     ),
   );

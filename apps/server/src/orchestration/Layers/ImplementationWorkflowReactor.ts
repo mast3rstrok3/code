@@ -1724,17 +1724,24 @@ const make = Effect.gen(function* () {
         }),
       ]);
       if (resolved.commitSha !== reported.commitSha) {
-        return yield* new GitCommandError({
-          operation: "ImplementationWorkflowReactor.verifiedDependency",
-          command: "git rev-parse",
+        const advanced = yield* gitWorkflow.isAncestor({
           cwd: input.run.orchestratorWorktreePath,
-          detail: `Dependency ticket '${input.ticketId}' branch '${state.branch}' moved from reported commit '${reported.commitSha}' to '${resolved.commitSha}'.`,
+          ancestorRef: reported.commitSha,
+          descendantRef: resolved.commitSha,
         });
+        if (!advanced) {
+          return yield* new GitCommandError({
+            operation: "ImplementationWorkflowReactor.verifiedDependency",
+            command: "git merge-base --is-ancestor",
+            cwd: input.run.orchestratorWorktreePath,
+            detail: `Dependency ticket '${input.ticketId}' branch '${state.branch}' diverged from reported commit '${reported.commitSha}' at '${resolved.commitSha}'.`,
+          });
+        }
       }
       return {
         ticketId: input.ticketId,
         branch: state.branch,
-        commitSha: reported.commitSha,
+        commitSha: resolved.commitSha,
       };
     },
   );
@@ -7908,9 +7915,21 @@ const make = Effect.gen(function* () {
     let recovered = false;
     for (const run of readModel.implementationRuns) {
       const halt = run.automationHalt;
+      const automaticRecoveryFallout =
+        halt !== null &&
+        halt.ticketId !== undefined &&
+        findThread(readModel, run.orchestratorThreadId)?.activities.some(
+          (activity) =>
+            activity.kind === "implementation-rerun-requested" &&
+            activity.createdAt === halt.haltedAt &&
+            typeof activity.payload === "object" &&
+            activity.payload !== null &&
+            "automatic" in activity.payload &&
+            activity.payload.automatic === true,
+        ) === true;
       if (
         halt === null ||
-        !isRecoverableInterruptedWorktreeHalt(halt) ||
+        (!isRecoverableInterruptedWorktreeHalt(halt) && !automaticRecoveryFallout) ||
         isWorkflowThreadPaused(readModel.threads, run.orchestratorThreadId)
       ) {
         continue;
@@ -7936,11 +7955,24 @@ const make = Effect.gen(function* () {
           automationHalt: null,
           retryableFailure:
             run.retryableFailure?.ticketId === halt.ticketId ? null : run.retryableFailure,
-          ticketStates: run.ticketStates.map((state) =>
-            state.workerThreadId !== null && replayedWorkerIds.has(state.workerThreadId)
-              ? { ...state, workerResult: null, warningMarkdown: null, updatedAt: createdAt }
-              : state,
-          ),
+          ticketStates: run.ticketStates.map((state) => {
+            if (state.workerThreadId !== null && replayedWorkerIds.has(state.workerThreadId)) {
+              return { ...state, workerResult: null, warningMarkdown: null, updatedAt: createdAt };
+            }
+            if (
+              state.status === "ready" &&
+              state.attemptCount >= IMPLEMENTATION_STAGE_MAX_LAUNCHES
+            ) {
+              return {
+                ...state,
+                implementationGeneration: state.implementationGeneration + 1,
+                attemptCount: 0,
+                warningMarkdown: null,
+                updatedAt: createdAt,
+              };
+            }
+            return state;
+          }),
           workerResults: run.workerResults.filter(
             (result) => !replayedWorkerIds.has(result.workerThreadId),
           ),
