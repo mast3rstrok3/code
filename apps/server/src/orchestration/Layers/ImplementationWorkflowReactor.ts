@@ -388,7 +388,8 @@ export function isRecoverableInterruptedWorktreeHalt(
     halt.detail.includes("Merge Gate requires clean expected HEAD") ||
     halt.detail.includes("Final validation requires clean expected HEAD") ||
     halt.detail.includes("Repair requires clean expected HEAD") ||
-    halt.detail.includes("worktree is not clean at reviewed HEAD")
+    halt.detail.includes("worktree is not clean at reviewed HEAD") ||
+    halt.detail === WORKFLOW_INTERRUPTION_ERROR_MESSAGE
   );
 }
 
@@ -4902,35 +4903,27 @@ const make = Effect.gen(function* () {
         directive.status === "failed" &&
         directive.notesMarkdown === WORKFLOW_INTERRUPTION_ERROR_MESSAGE
       ) {
-        const interruptedRun: OrchestrationImplementationRun = {
-          ...run,
-          ticketStates: run.ticketStates.map((state) =>
-            state.workerThreadId === threadId
-              ? {
-                  ...state,
-                  status: "failed" as const,
-                  warningMarkdown: directive.notesMarkdown,
-                  updatedAt: directive.reportedAt,
-                }
-              : state,
-          ),
-          updatedAt: directive.reportedAt,
-        };
-        const blocked = yield* blockRun({
-          sourceThreadId,
-          run: interruptedRun,
-          ticketId: directive.ticketId,
-          retryableStage: "worker-execution",
-          reasonMarkdown: directive.notesMarkdown,
-          updatedAt: directive.reportedAt,
-        });
-        if (blocked.automationHalt === null) {
-          yield* requestRunRetry({
+        if (isWorkflowThreadPaused(readModel.threads, run.orchestratorThreadId)) {
+          const parkedRun = reopenTicketForRerun({
+            run: { ...run, automationHalt: null, retryableFailure: null },
+            ticketId: directive.ticketId,
+            stage: "implementation",
+            updatedAt: directive.reportedAt,
+          });
+          yield* updateRun({
             sourceThreadId,
-            runId: run.id,
+            run: parkedRun,
             createdAt: directive.reportedAt,
           });
+          return;
         }
+        yield* resumeTicketWithInheritedWork({
+          sourceThreadId,
+          run,
+          ticketId: directive.ticketId,
+          reasonMarkdown: directive.notesMarkdown,
+          createdAt: directive.reportedAt,
+        });
         return;
       }
 

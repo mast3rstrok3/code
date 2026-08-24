@@ -4030,6 +4030,33 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
+  it.effect("does not spend the launch budget on repeated server interruptions", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        for (const tag of ["first", "second", "third"]) {
+          yield* appendWorkerResult(system, {
+            run,
+            status: "failed",
+            notesMarkdown: WORKFLOW_INTERRUPTION_ERROR_MESSAGE,
+            tag,
+          });
+        }
+
+        const snapshot = yield* system.query.getSnapshot();
+        const continued = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(continued?.status).toBe("running");
+        expect(continued?.automationHalt).toBeNull();
+        expect(continued?.retryableFailure).toBeNull();
+        expect(continued?.ticketStates[0]?.status).toBe("running");
+        expect(continued?.ticketStates[0]?.attemptCount).toBe(1);
+        expect(
+          snapshot.threads.filter((thread) => thread.workflowRole === "implementation-worker"),
+        ).toHaveLength(4);
+      }),
+    ),
+  );
+
   it.effect("replays a completed worker result after clearing a legacy dirty-worktree halt", () =>
     withSystem((system) =>
       Effect.gen(function* () {
