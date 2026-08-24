@@ -52,6 +52,8 @@ import {
   implementationTicketReviewWarningLines,
   implementationTicketStateIsTerminal,
   implementationRunRerunIsPaused,
+  isLegacyDirtyWorkerLaunchHalt,
+  isRecoverableInterruptedWorktreeHalt,
   failImplementationTickets,
   ImplementationWorkflowReactorLive,
   nestedAppReviewAwaitsPreviewRefresh,
@@ -128,6 +130,50 @@ it("matches legacy ticket final Code Review halts to the Code Review stage", () 
       halt,
       ticketId: "ticket-2",
       stage: "code-review",
+    }),
+  ).toBe(false);
+});
+
+it("identifies only the obsolete dirty worker launch halt", () => {
+  const dirtyWorkerHalt = {
+    ticketId: "ticket-1",
+    stage: "implementation",
+    category: "structural-invariant",
+    detail:
+      "Git command failed: Existing worker worktree on 'checkout-ticket-1' is dirty before implementation launch.",
+    haltedAt: now,
+  } as const;
+
+  expect(isLegacyDirtyWorkerLaunchHalt(dirtyWorkerHalt)).toBe(true);
+  expect(
+    isLegacyDirtyWorkerLaunchHalt({
+      ...dirtyWorkerHalt,
+      detail: "Existing worker worktree is on the wrong branch.",
+    }),
+  ).toBe(false);
+  expect(
+    isLegacyDirtyWorkerLaunchHalt({
+      ...dirtyWorkerHalt,
+      stage: "integration",
+    }),
+  ).toBe(false);
+});
+
+it("identifies interrupted worktree halts without treating wrong-branch failures as resumable", () => {
+  const appReviewHalt = {
+    ticketId: "ticket-1",
+    stage: "app-review",
+    category: "structural-invariant",
+    detail:
+      "Embedded App Review requires clean expected branch 'ticket-1', but Git reports 'ticket-1' with uncommitted changes.",
+    haltedAt: now,
+  } as const;
+
+  expect(isRecoverableInterruptedWorktreeHalt(appReviewHalt)).toBe(true);
+  expect(
+    isRecoverableInterruptedWorktreeHalt({
+      ...appReviewHalt,
+      detail: "Existing worker worktree is not on expected branch 'ticket-1'.",
     }),
   ).toBe(false);
 });
@@ -3944,7 +3990,123 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("rejects worker success while the ticket worktree remains dirty", () =>
+  it.effect("replays a completed worker result after clearing a legacy dirty-worktree halt", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        const ticketId = run.ticketStates[0]?.ticketId;
+        if (!ticketId) throw new Error("Ticket missing.");
+        const haltedRun: OrchestrationImplementationRun = {
+          ...run,
+          status: "needs-human-attention",
+          automationHalt: {
+            ticketId,
+            stage: "implementation",
+            category: "structural-invariant",
+            detail:
+              "Git command failed: Existing worker worktree on 'checkout-ticket-1' is dirty before implementation launch.",
+            haltedAt: "2026-01-01T00:00:00.500Z",
+          },
+          updatedAt: "2026-01-01T00:00:00.500Z",
+        };
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("legacy-dirty-worker-halt"),
+          threadId: sourceThreadId,
+          run: haltedRun,
+          createdAt: "2026-01-01T00:00:00.500Z",
+        });
+        yield* system.reactor.drain;
+        yield* appendWorkerResult(system, { run: haltedRun, status: "succeeded" });
+
+        let snapshot = yield* system.query.getSnapshot();
+        const recorded = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(recorded?.automationHalt).not.toBeNull();
+        expect(recorded?.ticketStates[0]?.status).toBe("running");
+        expect(recorded?.ticketStates[0]?.workerResult?.status).toBe("succeeded");
+        expect(recorded?.ticketStates[0]?.warningMarkdown).toBe(
+          "Implementation result recorded after automation halted.",
+        );
+
+        const workersBeforeRecovery = snapshot.threads.filter(
+          (thread) => thread.workflowRole === "implementation-worker",
+        );
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        const recovered = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(recovered?.automationHalt).toBeNull();
+        expect(recovered?.ticketStates[0]?.status).toBe("succeeded");
+        expect(recovered?.ticketStates[0]?.warningMarkdown).toBeNull();
+        expect(recovered?.workerResults).toHaveLength(1);
+        expect(
+          snapshot.threads.filter((thread) => thread.workflowRole === "implementation-worker"),
+        ).toHaveLength(workersBeforeRecovery.length);
+      }),
+    ),
+  );
+
+  it.effect("resumes a halted ticket App Review through its existing worktree", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
+        yield* appendWorkerResult(system, {
+          run,
+          status: "succeeded",
+          completeTicketReview: false,
+        });
+        const beforeHalt = yield* system.query.getSnapshot();
+        const current = beforeHalt.implementationRuns.find((entry) => entry.id === run.id);
+        if (!current) throw new Error("Implementation run missing.");
+        const ticketId = current.ticketStates[0]?.ticketId;
+        if (!ticketId) throw new Error("Ticket missing.");
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("persist-dirty-app-review-halt"),
+          threadId: sourceThreadId,
+          run: {
+            ...current,
+            status: "needs-human-attention",
+            automationHalt: {
+              ticketId,
+              stage: "app-review",
+              category: "structural-invariant",
+              detail:
+                "Embedded App Review requires clean expected branch 'checkout-ticket-1', but Git reports 'checkout-ticket-1' with uncommitted changes.",
+              haltedAt: "2026-01-01T00:00:02.000Z",
+            },
+            updatedAt: "2026-01-01T00:00:02.000Z",
+          },
+          createdAt: "2026-01-01T00:00:02.000Z",
+        });
+        yield* system.reactor.drain;
+        yield* Ref.set(system.dirtyWorkerWorktrees, true);
+
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+
+        const snapshot = yield* system.query.getSnapshot();
+        const recovered = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(recovered?.automationHalt).toBeNull();
+        expect(recovered?.status).toBe("running");
+        expect(recovered?.ticketStates[0]?.status).toBe("running");
+        const workers = snapshot.threads.filter(
+          (thread) => thread.workflowRole === "implementation-worker",
+        );
+        expect(workers).toHaveLength(2);
+        expect(
+          workers.some((worker) =>
+            worker.messages[0]?.text.includes(
+              "contains tracked or untracked changes from an interrupted worker",
+            ),
+          ),
+        ).toBe(true);
+      }),
+    ),
+  );
+
+  it.effect("continues worker success in the same dirty ticket worktree", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
@@ -3952,13 +4114,21 @@ describe("ImplementationWorkflowReactor", () => {
           yield* appendWorkerResult(system, { run, status: "succeeded" });
 
           const snapshot = yield* system.query.getSnapshot();
-          const halted = snapshot.implementationRuns.find((entry) => entry.id === run.id);
-          expect(halted?.status).toBe("needs-human-attention");
-          expect(halted?.retryableFailure?.detail).toContain("must finish");
-          expect(halted?.retryableFailure?.detail).toContain("clean worktree");
+          const continued = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+          expect(continued?.status).toBe("running");
+          expect(continued?.automationHalt).toBeNull();
+          expect(continued?.ticketStates[0]?.status).toBe("running");
+          const workers = snapshot.threads.filter(
+            (thread) => thread.workflowRole === "implementation-worker",
+          );
+          expect(workers).toHaveLength(2);
           expect(
-            snapshot.threads.filter((thread) => thread.workflowRole === "implementation-validator"),
-          ).toHaveLength(0);
+            workers.some((worker) =>
+              worker.messages[0]?.text.includes(
+                "contains tracked or untracked changes from an interrupted worker",
+              ),
+            ),
+          ).toBe(true);
         }),
       { dirtyWorkerWorktrees: true },
     ),

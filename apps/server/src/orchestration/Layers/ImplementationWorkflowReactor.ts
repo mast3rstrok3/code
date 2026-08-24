@@ -364,6 +364,34 @@ export function automationHaltMatchesTicketRerun(input: {
   );
 }
 
+export function isLegacyDirtyWorkerLaunchHalt(
+  halt: NonNullable<OrchestrationImplementationRun["automationHalt"]>,
+): boolean {
+  return (
+    halt.category === "structural-invariant" &&
+    halt.stage === "implementation" &&
+    halt.ticketId !== undefined &&
+    halt.detail.includes("Existing worker worktree") &&
+    halt.detail.includes("dirty before implementation launch")
+  );
+}
+
+export function isRecoverableInterruptedWorktreeHalt(
+  halt: NonNullable<OrchestrationImplementationRun["automationHalt"]>,
+): boolean {
+  if (halt.category !== "structural-invariant") return false;
+  return (
+    isLegacyDirtyWorkerLaunchHalt(halt) ||
+    halt.detail.includes("Ticket App Review requires clean expected HEAD") ||
+    halt.detail.includes("Embedded App Review requires clean expected branch") ||
+    halt.detail.includes("Ticket Code Review requires clean expected HEAD") ||
+    halt.detail.includes("Merge Gate requires clean expected HEAD") ||
+    halt.detail.includes("Final validation requires clean expected HEAD") ||
+    halt.detail.includes("Repair requires clean expected HEAD") ||
+    halt.detail.includes("worktree is not clean at reviewed HEAD")
+  );
+}
+
 function automationHaltMatchesRunRerun(input: {
   readonly halt: NonNullable<OrchestrationImplementationRun["automationHalt"]>;
   readonly stage: OrchestrationImplementationRerunRunStage;
@@ -2312,6 +2340,46 @@ const make = Effect.gen(function* () {
     },
   );
 
+  const resumeTicketWithInheritedWork = Effect.fn(
+    "ImplementationWorkflowReactor.resumeTicketWithInheritedWork",
+  )(function* (input: {
+    readonly sourceThreadId: ThreadId;
+    readonly run: OrchestrationImplementationRun;
+    readonly ticketId: string;
+    readonly reasonMarkdown: string;
+    readonly createdAt: string;
+  }) {
+    const resumedRun = reopenTicketForRerun({
+      run: { ...input.run, automationHalt: null, retryableFailure: null },
+      ticketId: input.ticketId,
+      stage: "implementation",
+      updatedAt: input.createdAt,
+    });
+    yield* appendActivity({
+      threadId: input.run.orchestratorThreadId,
+      tone: "info",
+      kind: "implementation-rerun-requested",
+      summary: `Recovering partial implementation for ticket ${input.ticketId}`,
+      payload: {
+        runId: input.run.id,
+        target: { kind: "ticket", ticketId: input.ticketId, stage: "implementation" },
+        automatic: true,
+        reasonMarkdown: input.reasonMarkdown,
+      },
+      createdAt: input.createdAt,
+    });
+    yield* updateRun({
+      sourceThreadId: input.sourceThreadId,
+      run: resumedRun,
+      createdAt: input.createdAt,
+    });
+    yield* startReadyWorkers({
+      sourceThreadId: input.sourceThreadId,
+      run: resumedRun,
+      createdAt: input.createdAt,
+    });
+  });
+
   /**
    * Applies the tier-down stamp carried by a successful ticket.
    *
@@ -2541,13 +2609,24 @@ const make = Effect.gen(function* () {
         expectedHeadSha === null ||
         preflightHead.commitSha !== expectedHeadSha
       ) {
+        const reasonMarkdown = `Ticket Code Review requires clean expected HEAD '${expectedHeadSha ?? "missing"}' on '${state.branch}', but Git reports '${preflight.refName ?? "detached HEAD"}' at '${preflightHead.commitSha}'${preflight.hasWorkingTreeChanges ? " with uncommitted changes" : ""}.`;
+        if (preflight.isRepo && preflight.refName === state.branch) {
+          yield* resumeTicketWithInheritedWork({
+            sourceThreadId: input.sourceThreadId,
+            run: input.run,
+            ticketId: state.ticketId,
+            reasonMarkdown,
+            createdAt: input.createdAt,
+          });
+          return;
+        }
         yield* blockRun({
           sourceThreadId: input.sourceThreadId,
           run: input.run,
           ticketId: state.ticketId,
           retryableStage: "code-review",
           haltStage: "code-review",
-          reasonMarkdown: `Ticket Code Review requires clean expected HEAD '${expectedHeadSha ?? "missing"}' on '${state.branch}', but Git reports '${preflight.refName ?? "detached HEAD"}' at '${preflightHead.commitSha}'${preflight.hasWorkingTreeChanges ? " with uncommitted changes" : ""}.`,
+          reasonMarkdown,
           updatedAt: input.createdAt,
           humanBlocked: true,
         });
@@ -2729,12 +2808,23 @@ const make = Effect.gen(function* () {
         expectedHeadSha === null ||
         preflightHead.commitSha !== expectedHeadSha
       ) {
+        const reasonMarkdown = `Ticket App Review requires clean expected HEAD '${expectedHeadSha ?? "missing"}' on '${state.branch}', but Git reports '${preflight.refName ?? "detached HEAD"}' at '${preflightHead.commitSha}'${preflight.hasWorkingTreeChanges ? " with uncommitted changes" : ""}.`;
+        if (preflight.isRepo && preflight.refName === state.branch) {
+          yield* resumeTicketWithInheritedWork({
+            sourceThreadId: input.sourceThreadId,
+            run: input.run,
+            ticketId: state.ticketId,
+            reasonMarkdown,
+            createdAt: input.createdAt,
+          });
+          return;
+        }
         yield* blockRun({
           sourceThreadId: input.sourceThreadId,
           run: input.run,
           ticketId: state.ticketId,
           retryableStage: "app-review",
-          reasonMarkdown: `Ticket App Review requires clean expected HEAD '${expectedHeadSha ?? "missing"}' on '${state.branch}', but Git reports '${preflight.refName ?? "detached HEAD"}' at '${preflightHead.commitSha}'${preflight.hasWorkingTreeChanges ? " with uncommitted changes" : ""}.`,
+          reasonMarkdown,
           updatedAt: input.createdAt,
           humanBlocked: true,
         });
@@ -4757,18 +4847,13 @@ const make = Effect.gen(function* () {
   });
 
   const handleWorkerResult = Effect.fn("ImplementationWorkflowReactor.handleWorkerResult")(
-    function* (
-      event: Extract<ImplementationWorkflowEvent, { type: "thread.activity-appended" }>,
-      directive: WorkerDirective,
-    ) {
+    function* (threadId: ThreadId, directive: WorkerDirective) {
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
-      const run = findRunByWorkerThreadId(readModel, event.payload.threadId);
+      const run = findRunByWorkerThreadId(readModel, threadId);
       if (run === null) return;
       const sourceThreadId = findRunSourceThreadId({ readModel, run });
       if (sourceThreadId === null) return;
-      const currentState = run.ticketStates.find(
-        (state) => state.workerThreadId === event.payload.threadId,
-      );
+      const currentState = run.ticketStates.find((state) => state.workerThreadId === threadId);
       if (
         currentState === undefined ||
         currentState.status === "succeeded" ||
@@ -4786,7 +4871,7 @@ const make = Effect.gen(function* () {
           run,
           ticketId: currentState.ticketId,
           retryableStage: "worker-execution",
-          reasonMarkdown: `Worker result identity does not match the active assignment for thread '${event.payload.threadId}'.`,
+          reasonMarkdown: `Worker result identity does not match the active assignment for thread '${threadId}'.`,
           updatedAt: directive.reportedAt,
           humanBlocked: true,
         });
@@ -4813,7 +4898,7 @@ const make = Effect.gen(function* () {
         const interruptedRun: OrchestrationImplementationRun = {
           ...run,
           ticketStates: run.ticketStates.map((state) =>
-            state.workerThreadId === event.payload.threadId
+            state.workerThreadId === threadId
               ? {
                   ...state,
                   status: "failed" as const,
@@ -4846,7 +4931,7 @@ const make = Effect.gen(function* () {
         const failedRun: OrchestrationImplementationRun = {
           ...run,
           ticketStates: run.ticketStates.map((state) =>
-            state.workerThreadId === event.payload.threadId
+            state.workerThreadId === threadId
               ? {
                   ...state,
                   status: "failed" as const,
@@ -4880,31 +4965,53 @@ const make = Effect.gen(function* () {
 
       const acceptedDirective = yield* verifySuccessfulWorkerResult({
         run,
-        threadId: event.payload.threadId,
+        threadId,
         directive,
       }).pipe(
         Effect.catch((error) =>
-          blockRun({
-            sourceThreadId,
-            run: {
-              ...run,
-              ticketStates: run.ticketStates.map((state) =>
-                state.workerThreadId === event.payload.threadId
-                  ? {
-                      ...state,
-                      status: "failed" as const,
-                      workerResult: directive,
-                      updatedAt: directive.reportedAt,
-                    }
-                  : state,
-              ),
-            },
-            retryableStage: "worker-execution",
-            ticketId: currentState.ticketId,
-            reasonMarkdown: errorDetail(error),
-            updatedAt: directive.reportedAt,
-            humanBlocked: structuralGitFailure(errorDetail(error)),
-          }).pipe(Effect.as(null)),
+          Effect.gen(function* () {
+            const detail = errorDetail(error);
+            const status = yield* gitWorkflow
+              .localStatus({ cwd: directive.worktreePath })
+              .pipe(Effect.result);
+            if (
+              structuralGitFailure(detail) &&
+              status._tag === "Success" &&
+              status.success.isRepo &&
+              status.success.refName === directive.branch
+            ) {
+              yield* resumeTicketWithInheritedWork({
+                sourceThreadId,
+                run,
+                ticketId: currentState.ticketId,
+                reasonMarkdown: detail,
+                createdAt: directive.reportedAt,
+              });
+              return null;
+            }
+            yield* blockRun({
+              sourceThreadId,
+              run: {
+                ...run,
+                ticketStates: run.ticketStates.map((state) =>
+                  state.workerThreadId === threadId
+                    ? {
+                        ...state,
+                        status: "failed" as const,
+                        workerResult: directive,
+                        updatedAt: directive.reportedAt,
+                      }
+                    : state,
+                ),
+              },
+              retryableStage: "worker-execution",
+              ticketId: currentState.ticketId,
+              reasonMarkdown: detail,
+              updatedAt: directive.reportedAt,
+              humanBlocked: structuralGitFailure(detail),
+            });
+            return null;
+          }),
         ),
       );
       if (acceptedDirective === null) return;
@@ -4912,7 +5019,7 @@ const make = Effect.gen(function* () {
       const succeededRun: OrchestrationImplementationRun = {
         ...run,
         ticketStates: run.ticketStates.map((state) =>
-          state.workerThreadId === event.payload.threadId
+          state.workerThreadId === threadId
             ? {
                 ...state,
                 status: "app-reviewing" as const,
@@ -4937,7 +5044,7 @@ const make = Effect.gen(function* () {
         const recordedRun: OrchestrationImplementationRun = {
           ...succeededRun,
           ticketStates: succeededRun.ticketStates.map((state) =>
-            state.workerThreadId === event.payload.threadId
+            state.workerThreadId === threadId
               ? {
                   ...state,
                   status: "running" as const,
@@ -4959,7 +5066,7 @@ const make = Effect.gen(function* () {
           {
             ...succeededRun,
             ticketStates: succeededRun.ticketStates.map((state) =>
-              state.workerThreadId === event.payload.threadId
+              state.workerThreadId === threadId
                 ? { ...state, status: "succeeded" as const }
                 : state,
             ),
@@ -4969,7 +5076,7 @@ const make = Effect.gen(function* () {
         const tierDownStampedRun: OrchestrationImplementationRun = {
           ...reviewedRun,
           ticketStates: reviewedRun.ticketStates.map((state) =>
-            state.workerThreadId === event.payload.threadId
+            state.workerThreadId === threadId
               ? { ...state, appDevStackTierDownAt: directive.reportedAt }
               : state,
           ),
@@ -5514,12 +5621,7 @@ const make = Effect.gen(function* () {
         : input.origin === "code-review"
           ? input.run.activeCodeReviewHeadSha
           : (input.run.lastQaFailure?.headSha ?? input.run.activeAppReviewHeadSha);
-    if (
-      !fixerStatus.isRepo ||
-      fixerStatus.refName !== input.run.orchestratorBranch ||
-      fixerStatus.hasWorkingTreeChanges ||
-      (expectedFixerHead !== null && expectedFixerHead !== fixerHead.commitSha)
-    ) {
+    if (!fixerStatus.isRepo || fixerStatus.refName !== input.run.orchestratorBranch) {
       yield* blockRun({
         sourceThreadId: input.sourceThreadId,
         run: input.run,
@@ -5530,6 +5632,9 @@ const make = Effect.gen(function* () {
       });
       return;
     }
+    const inheritsPartialChanges =
+      fixerStatus.hasWorkingTreeChanges ||
+      (expectedFixerHead !== null && expectedFixerHead !== fixerHead.commitSha);
     const fixerThreadId = yield* serverThreadId("implementation-fixer");
     const usesTdd = input.origin === "app-dev-stack" || input.origin === "app-review";
     const preservesReviewedBase =
@@ -5583,7 +5688,14 @@ const make = Effect.gen(function* () {
         messageId: yield* serverMessageId("implementation-fixer"),
         role: "user",
         text: appendWorkflowSkillCommandSection(
-          input.promptText,
+          [
+            ...(inheritsPartialChanges
+              ? [
+                  "The workflow is resuming an existing orchestrator worktree that contains committed or uncommitted work from an interrupted stage. Inspect the current diff and recent commits before changing anything. Preserve useful code, repair or remove incomplete work, run the required validation, commit the finished result, and leave the worktree clean.",
+                ]
+              : []),
+            input.promptText,
+          ].join("\n\n"),
           usesTdd
             ? WORKFLOW_PROMPT_IDS.implementationTddCodex
             : WORKFLOW_PROMPT_IDS.implementationFixCodex,
@@ -7129,6 +7241,30 @@ const make = Effect.gen(function* () {
         return;
       }
       if (outcome !== "passed") {
+        if (
+          (nestedRun.failure?.reason === "embedded-worktree-dirty" ||
+            nestedRun.failure?.reason === "workspace-stale") &&
+          ticketState.worktreePath !== null &&
+          ticketState.branch !== null
+        ) {
+          const status = yield* gitWorkflow
+            .localStatus({ cwd: ticketState.worktreePath })
+            .pipe(Effect.result);
+          if (
+            status._tag === "Success" &&
+            status.success.isRepo &&
+            status.success.refName === ticketState.branch
+          ) {
+            yield* resumeTicketWithInheritedWork({
+              sourceThreadId,
+              run: reviewedTicketRun,
+              ticketId,
+              reasonMarkdown: warningMarkdown ?? "The ticket worktree changed during App Review.",
+              createdAt: event.occurredAt,
+            });
+            return;
+          }
+        }
         yield* blockRun({
           sourceThreadId,
           run: reviewedTicketRun,
@@ -7445,7 +7581,7 @@ const make = Effect.gen(function* () {
     switch (event.payload.activity.kind) {
       case "implementation-worker-result": {
         const directive = asWorkerDirective(event.payload.activity.payload);
-        if (directive !== null) yield* handleWorkerResult(event, directive);
+        if (directive !== null) yield* handleWorkerResult(event.payload.threadId, directive);
         return;
       }
       case "implementation-merge-gate-result": {
@@ -7765,11 +7901,166 @@ const make = Effect.gen(function* () {
     }
   });
 
+  const recoverInterruptedWorktreeHalts = Effect.fn(
+    "ImplementationWorkflowReactor.recoverInterruptedWorktreeHalts",
+  )(function* (input: { readonly readModel: OrchestrationReadModel; readonly createdAt: string }) {
+    const { readModel, createdAt } = input;
+    let recovered = false;
+    for (const run of readModel.implementationRuns) {
+      const halt = run.automationHalt;
+      if (
+        halt === null ||
+        !isRecoverableInterruptedWorktreeHalt(halt) ||
+        isWorkflowThreadPaused(readModel.threads, run.orchestratorThreadId)
+      ) {
+        continue;
+      }
+      const sourceThreadId = findRunSourceThreadId({ readModel, run });
+      if (sourceThreadId === null) continue;
+
+      if (isLegacyDirtyWorkerLaunchHalt(halt)) {
+        const reportedStates = run.ticketStates.filter(
+          (state) =>
+            state.status === "running" &&
+            state.workerThreadId !== null &&
+            state.workerResult !== null,
+        );
+        const replayedWorkerIds = new Set(
+          reportedStates.flatMap((state) =>
+            state.workerThreadId === null ? [] : [state.workerThreadId],
+          ),
+        );
+        const resumedRun: OrchestrationImplementationRun = {
+          ...run,
+          status: "running",
+          automationHalt: null,
+          retryableFailure:
+            run.retryableFailure?.ticketId === halt.ticketId ? null : run.retryableFailure,
+          ticketStates: run.ticketStates.map((state) =>
+            state.workerThreadId !== null && replayedWorkerIds.has(state.workerThreadId)
+              ? { ...state, workerResult: null, warningMarkdown: null, updatedAt: createdAt }
+              : state,
+          ),
+          workerResults: run.workerResults.filter(
+            (result) => !replayedWorkerIds.has(result.workerThreadId),
+          ),
+          updatedAt: createdAt,
+        };
+        yield* updateRun({ sourceThreadId, run: resumedRun, createdAt });
+        recovered = true;
+
+        for (const state of reportedStates) {
+          if (state.workerThreadId === null || state.workerResult === null) continue;
+          yield* handleWorkerResult(state.workerThreadId, {
+            ...state.workerResult,
+            type: "implementation-worker-result",
+          });
+        }
+        if (!reportedStates.some((state) => state.ticketId === halt.ticketId)) {
+          const refreshedReadModel = yield* projectionSnapshotQuery.getCommandReadModel();
+          const refreshedRun = findRunById(refreshedReadModel, run.id);
+          if (refreshedRun !== null && halt.ticketId !== undefined) {
+            yield* resumeTicketWithInheritedWork({
+              sourceThreadId,
+              run: refreshedRun,
+              ticketId: halt.ticketId,
+              reasonMarkdown: halt.detail,
+              createdAt,
+            });
+          }
+        }
+        yield* Effect.logInfo("implementation workflow resumed dirty worker halt", {
+          runId: run.id,
+          ticketId: halt.ticketId,
+          replayedWorkerResults: reportedStates.length,
+        });
+        continue;
+      }
+
+      if (halt.ticketId !== undefined) {
+        const state = run.ticketStates.find((candidate) => candidate.ticketId === halt.ticketId);
+        if (state?.worktreePath == null || state.branch == null) continue;
+        const status = yield* gitWorkflow
+          .localStatus({ cwd: state.worktreePath })
+          .pipe(Effect.result);
+        if (
+          status._tag !== "Success" ||
+          !status.success.isRepo ||
+          status.success.refName !== state.branch
+        ) {
+          continue;
+        }
+        yield* resumeTicketWithInheritedWork({
+          sourceThreadId,
+          run,
+          ticketId: halt.ticketId,
+          reasonMarkdown: halt.detail,
+          createdAt,
+        });
+        yield* Effect.logInfo("implementation workflow resumed interrupted ticket worktree", {
+          runId: run.id,
+          ticketId: halt.ticketId,
+          haltedStage: halt.stage,
+        });
+        recovered = true;
+        continue;
+      }
+
+      const status = yield* gitWorkflow
+        .localStatus({ cwd: run.orchestratorWorktreePath })
+        .pipe(Effect.result);
+      if (
+        status._tag !== "Success" ||
+        !status.success.isRepo ||
+        status.success.refName !== run.orchestratorBranch
+      ) {
+        continue;
+      }
+      const origin =
+        halt.stage === "app-review"
+          ? ("app-review" as const)
+          : halt.stage === "final-code-review"
+            ? ("code-review" as const)
+            : ("merge-gate" as const);
+      const resumedRun: OrchestrationImplementationRun = {
+        ...run,
+        automationHalt: null,
+        retryableFailure: null,
+        activeFixerThreadId: null,
+        updatedAt: createdAt,
+      };
+      yield* startFixer({
+        sourceThreadId,
+        run: resumedRun,
+        status: origin === "code-review" ? "code-review-fixing" : "fixing",
+        origin,
+        title: "Reconcile interrupted workflow work",
+        promptText: [
+          "Reconcile useful work left in the orchestrator worktree by an interrupted workflow stage.",
+          halt.detail,
+          "Inspect the current diff and recent commits. Preserve correct work, finish or repair incomplete work, run focused validation, commit the result, and leave the worktree clean.",
+          `Finish with exactly one fenced JSON directive of type implementation-fix-result for runId ${run.id}.`,
+        ].join("\n\n"),
+        createdAt,
+      });
+      yield* Effect.logInfo("implementation workflow resumed interrupted orchestrator worktree", {
+        runId: run.id,
+        haltedStage: halt.stage,
+      });
+      recovered = true;
+    }
+    return recovered;
+  });
+
   const recoverIncompleteStages = Effect.fn(
     "ImplementationWorkflowReactor.recoverIncompleteStages",
   )(function* () {
-    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
-    const createdAt = DateTime.formatIso(yield* DateTime.now);
+    let readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    let createdAt = DateTime.formatIso(yield* DateTime.now);
+    if (yield* recoverInterruptedWorktreeHalts({ readModel, createdAt })) {
+      readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+      createdAt = DateTime.formatIso(yield* DateTime.now);
+    }
     const nowMs = Date.parse(createdAt);
     for (const run of readModel.implementationRuns) {
       if (run.status === "canceled" || run.automationHalt !== null) continue;
