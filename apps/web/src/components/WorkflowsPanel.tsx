@@ -1273,6 +1273,28 @@ export function runningThreadIdsOf(
     .map((thread) => thread.id);
 }
 
+export function implementationRunWorkflowIds(
+  run: Pick<OrchestrationImplementationRun, "id" | "appReviewWorkflowRunIds" | "ticketStates">,
+  appReviewWorkflowRuns: readonly AppReviewWorkflowRun[],
+): ReadonlySet<string> {
+  const workflowIds = new Set([run.id, ...run.appReviewWorkflowRunIds]);
+  for (const state of run.ticketStates) {
+    const appReviewWorkflowRunId = state.appReviewWorkflowRunId;
+    if (appReviewWorkflowRunId !== null && appReviewWorkflowRunId !== undefined) {
+      workflowIds.add(appReviewWorkflowRunId);
+    }
+  }
+  for (const appReviewRun of appReviewWorkflowRuns) {
+    if (
+      appReviewRun.caller.type === "implementation" &&
+      appReviewRun.caller.implementationRunId === run.id
+    ) {
+      workflowIds.add(appReviewRun.id);
+    }
+  }
+  return workflowIds;
+}
+
 function TicketPhases(props: {
   readonly tickets: readonly OrchestrationPlanningTicket[];
   readonly run: OrchestrationImplementationRun;
@@ -1308,7 +1330,7 @@ function TicketPhases(props: {
 }) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const states = new Map(props.run.ticketStates.map((state) => [state.ticketId, state] as const));
-  const runWorkflowIds = new Set([props.run.id, ...props.run.appReviewWorkflowRunIds]);
+  const runWorkflowIds = implementationRunWorkflowIds(props.run, props.appReviewWorkflowRuns);
   const runThreads = props.threads.filter((thread) =>
     runWorkflowIds.has(thread.workflowContext?.workflowId ?? ""),
   );

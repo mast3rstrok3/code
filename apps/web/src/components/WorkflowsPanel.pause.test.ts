@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   appReviewRunActiveThreadIsBusy,
+  implementationRunWorkflowIds,
   restartablePlanningStage,
   runningThreadIdsOf,
   workflowPauseOf,
@@ -133,5 +134,32 @@ describe("workflow step restart", () => {
 
     expect(restartablePlanningStage(specStep, "spec-authoring")).toBe("spec");
     expect(restartablePlanningStage(specStep, "completed")).toBe("spec");
+  });
+});
+
+describe("implementationRunWorkflowIds", () => {
+  it("keeps every App Review from the current implementation run", () => {
+    const run = {
+      id: "implementation-current",
+      appReviewWorkflowRunIds: ["root-app-review"],
+      ticketStates: [{ appReviewWorkflowRunId: "ticket-app-review-current" }],
+    } as unknown as Parameters<typeof implementationRunWorkflowIds>[0];
+    const appReviewWorkflowRuns = [
+      {
+        id: "ticket-app-review-history",
+        caller: { type: "implementation", implementationRunId: "implementation-current" },
+      },
+      {
+        id: "other-run-app-review",
+        caller: { type: "implementation", implementationRunId: "implementation-old" },
+      },
+    ] as unknown as readonly AppReviewWorkflowRun[];
+
+    expect([...implementationRunWorkflowIds(run, appReviewWorkflowRuns)]).toEqual([
+      "implementation-current",
+      "root-app-review",
+      "ticket-app-review-current",
+      "ticket-app-review-history",
+    ]);
   });
 });
