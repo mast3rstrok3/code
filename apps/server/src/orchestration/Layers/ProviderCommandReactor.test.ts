@@ -606,10 +606,18 @@ describe("ProviderCommandReactor", () => {
       runtimeMode: "approval-required",
     });
 
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      return (
+        readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"))?.session
+          ?.status === "running"
+      );
+    });
     const readModel = await harness.readModel();
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
     expect(thread?.session?.threadId).toBe("thread-1");
-    expect(thread?.session?.status).toBe("starting");
+    expect(thread?.session?.status).toBe("running");
+    expect(thread?.session?.activeTurnId).toBe(asTurnId("turn-1"));
     expect(thread?.session?.runtimeMode).toBe("approval-required");
   });
 
@@ -621,6 +629,11 @@ describe("ProviderCommandReactor", () => {
 
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      return thread?.session?.status === "running" && thread.latestTurn?.turnId === "turn-1";
+    });
     expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
       threadId: ThreadId.make("thread-1"),
       input: "resume this workflow after restart",
@@ -778,9 +791,18 @@ describe("ProviderCommandReactor", () => {
       });
 
       yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+      yield* Effect.promise(() =>
+        waitFor(async () => {
+          const readModel = await harness.readModel();
+          return (
+            readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"))?.session
+              ?.status === "running"
+          );
+        }),
+      );
       readModel = yield* Effect.promise(() => harness.readModel());
       thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
-      expect(thread?.session?.status).toBe("starting");
+      expect(thread?.session?.status).toBe("running");
       expect(thread?.session?.lastError).toBeNull();
     }),
   );

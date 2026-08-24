@@ -11,6 +11,7 @@ import {
   type OrchestrationSession,
   ThreadId,
   type ProviderSession,
+  type ProviderTurnStartResult,
   type RuntimeMode,
   type TurnId,
 } from "@t3tools/contracts";
@@ -18,6 +19,7 @@ import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
@@ -1259,6 +1261,30 @@ const make = Effect.gen(function* () {
         ),
       );
 
+    const acknowledgeTurnStart = Effect.fnUntraced(function* (result: ProviderTurnStartResult) {
+      const current = yield* resolveThread(result.threadId);
+      const session = current?.session;
+      if (
+        session === undefined ||
+        session === null ||
+        (session.status !== "starting" && session.status !== "ready")
+      ) {
+        return;
+      }
+      const acknowledgedAt = DateTime.formatIso(yield* DateTime.now);
+      yield* setThreadSession({
+        threadId: result.threadId,
+        session: {
+          ...session,
+          status: "running",
+          activeTurnId: result.turnId,
+          lastError: null,
+          updatedAt: acknowledgedAt,
+        },
+        createdAt: acknowledgedAt,
+      });
+    });
+
     const providerMessageText = yield* addWorktreeRuntimeContext({
       thread,
       messageText: message.text,
@@ -1284,9 +1310,22 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    yield* providerService
-      .sendTurn(sendTurnRequest.value)
-      .pipe(Effect.catchCause(recoverTurnStartFailure), Effect.forkScoped);
+    yield* providerService.sendTurn(sendTurnRequest.value).pipe(
+      Effect.tap((result) =>
+        acknowledgeTurnStart(result).pipe(
+          Effect.retry({ times: 1 }),
+          Effect.catchCause((cause) =>
+            Effect.logWarning("provider command reactor failed to acknowledge turn start", {
+              threadId: result.threadId,
+              turnId: result.turnId,
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        ),
+      ),
+      Effect.catchCause(recoverTurnStartFailure),
+      Effect.forkScoped,
+    );
   });
 
   const processTurnInterruptRequested = Effect.fn("processTurnInterruptRequested")(function* (
@@ -1555,6 +1594,18 @@ const make = Effect.gen(function* () {
     ]);
 
     for (const pending of pendingStarts) {
+      const turns = yield* projectionTurnRepository.listByThreadId({
+        threadId: pending.threadId,
+      });
+      const alreadyStarted = turns.some(
+        (turn) => turn.turnId !== null && turn.requestedAt >= pending.requestedAt,
+      );
+      if (alreadyStarted) {
+        yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
+          threadId: pending.threadId,
+        });
+        continue;
+      }
       const thread = readModel.threads.find((candidate) => candidate.id === pending.threadId);
       if (
         thread === undefined ||
