@@ -2357,8 +2357,25 @@ const make = Effect.gen(function* () {
     readonly reasonMarkdown: string;
     readonly createdAt: string;
   }) {
+    const renewedRun: OrchestrationImplementationRun = {
+      ...input.run,
+      ticketStates: input.run.ticketStates.map((state) =>
+        state.ticketId !== input.ticketId &&
+        state.status === "ready" &&
+        state.attemptCount >= IMPLEMENTATION_STAGE_MAX_LAUNCHES
+          ? {
+              ...state,
+              implementationGeneration: state.implementationGeneration + 1,
+              attemptCount: 0,
+              warningMarkdown: null,
+              updatedAt: input.createdAt,
+            }
+          : state,
+      ),
+      updatedAt: input.createdAt,
+    };
     const resumedRun = reopenTicketForRerun({
-      run: { ...input.run, automationHalt: null, retryableFailure: null },
+      run: { ...renewedRun, automationHalt: null, retryableFailure: null },
       ticketId: input.ticketId,
       stage: "implementation",
       updatedAt: input.createdAt,
@@ -8013,28 +8030,9 @@ const make = Effect.gen(function* () {
         ) {
           continue;
         }
-        const recoverableRun = persistedLaunchFallout
-          ? {
-              ...run,
-              ticketStates: run.ticketStates.map((candidate) =>
-                candidate.ticketId !== halt.ticketId &&
-                candidate.status === "ready" &&
-                candidate.attemptCount >= IMPLEMENTATION_STAGE_MAX_LAUNCHES
-                  ? {
-                      ...candidate,
-                      implementationGeneration: candidate.implementationGeneration + 1,
-                      attemptCount: 0,
-                      warningMarkdown: null,
-                      updatedAt: createdAt,
-                    }
-                  : candidate,
-              ),
-              updatedAt: createdAt,
-            }
-          : run;
         yield* resumeTicketWithInheritedWork({
           sourceThreadId,
-          run: recoverableRun,
+          run,
           ticketId: halt.ticketId,
           reasonMarkdown: halt.detail,
           createdAt,

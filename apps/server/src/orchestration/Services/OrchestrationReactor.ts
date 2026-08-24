@@ -21,6 +21,9 @@ export interface OrchestrationReactorShape {
    * finalized on shutdown.
    */
   readonly start: () => Effect.Effect<void, never, Scope.Scope>;
+
+  /** Replays and drains provider commands persisted by startup recovery. */
+  readonly reconcilePendingProviderCommands: Effect.Effect<void, never, Scope.Scope>;
 }
 
 /**

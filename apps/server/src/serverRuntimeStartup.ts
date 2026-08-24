@@ -451,6 +451,10 @@ export const make = (options?: StartupOptions) =>
         "stale-turns.start",
         staleTurnReconciler.start().pipe(Scope.provide(reactorScope)),
       );
+      yield* runStartupPhase(
+        "provider-commands.reconcile-after-stale-turns",
+        orchestrationReactor.reconcilePendingProviderCommands.pipe(Scope.provide(reactorScope)),
+      );
 
       const welcomeBase = yield* resolveWelcomeBase;
       const environment = yield* serverEnvironment.getDescriptor;
