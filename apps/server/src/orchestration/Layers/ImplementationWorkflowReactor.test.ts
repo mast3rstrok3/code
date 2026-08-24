@@ -174,6 +174,13 @@ it("identifies interrupted worktree halts without treating wrong-branch failures
   expect(
     isRecoverableInterruptedWorktreeHalt({
       ...appReviewHalt,
+      category: "review-blocked",
+      detail: WORKFLOW_INTERRUPTION_ERROR_MESSAGE,
+    }),
+  ).toBe(true);
+  expect(
+    isRecoverableInterruptedWorktreeHalt({
+      ...appReviewHalt,
       detail: "Existing worker worktree is not on expected branch 'ticket-1'.",
     }),
   ).toBe(false);

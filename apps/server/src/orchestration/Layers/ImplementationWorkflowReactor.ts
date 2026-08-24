@@ -379,6 +379,7 @@ export function isLegacyDirtyWorkerLaunchHalt(
 export function isRecoverableInterruptedWorktreeHalt(
   halt: NonNullable<OrchestrationImplementationRun["automationHalt"]>,
 ): boolean {
+  if (halt.detail === WORKFLOW_INTERRUPTION_ERROR_MESSAGE) return true;
   if (halt.category !== "structural-invariant") return false;
   return (
     isLegacyDirtyWorkerLaunchHalt(halt) ||
@@ -388,8 +389,7 @@ export function isRecoverableInterruptedWorktreeHalt(
     halt.detail.includes("Merge Gate requires clean expected HEAD") ||
     halt.detail.includes("Final validation requires clean expected HEAD") ||
     halt.detail.includes("Repair requires clean expected HEAD") ||
-    halt.detail.includes("worktree is not clean at reviewed HEAD") ||
-    halt.detail === WORKFLOW_INTERRUPTION_ERROR_MESSAGE
+    halt.detail.includes("worktree is not clean at reviewed HEAD")
   );
 }
 
