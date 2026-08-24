@@ -4149,7 +4149,9 @@ describe("ImplementationWorkflowReactor", () => {
   it.effect("gives persisted launch-budget fallout a fresh recovery generation", () =>
     withSystem((system) =>
       Effect.gen(function* () {
-        const { run } = yield* launchRun(system);
+        const { run } = yield* launchRun(system, {
+          tickets: [planningTicket("TICKET-1"), planningTicket("TICKET-2")],
+        });
         const ticketId = run.ticketStates[0]?.ticketId;
         if (!ticketId) throw new Error("Ticket missing.");
         yield* system.engine.dispatch({
@@ -4166,16 +4168,12 @@ describe("ImplementationWorkflowReactor", () => {
               detail: `Ticket '${ticketId}' exhausted its implementation launch budget.`,
               haltedAt: "2026-01-01T00:00:02.000Z",
             },
-            ticketStates: run.ticketStates.map((state) =>
-              state.ticketId === ticketId
-                ? {
-                    ...state,
-                    status: "ready" as const,
-                    workerThreadId: null,
-                    attemptCount: IMPLEMENTATION_STAGE_MAX_LAUNCHES,
-                  }
-                : state,
-            ),
+            ticketStates: run.ticketStates.map((state) => ({
+              ...state,
+              status: "ready" as const,
+              workerThreadId: null,
+              attemptCount: IMPLEMENTATION_STAGE_MAX_LAUNCHES,
+            })),
             updatedAt: "2026-01-01T00:00:02.000Z",
           },
           createdAt: "2026-01-01T00:00:02.000Z",
@@ -4189,11 +4187,15 @@ describe("ImplementationWorkflowReactor", () => {
         const recovered = snapshot.implementationRuns.find((entry) => entry.id === run.id);
         expect(recovered?.automationHalt).toBeNull();
         expect(recovered?.status).toBe("running");
-        expect(recovered?.ticketStates[0]?.status).toBe("running");
-        expect(recovered?.ticketStates[0]?.attemptCount).toBe(1);
-        expect(recovered?.ticketStates[0]?.implementationGeneration).toBe(
-          (run.ticketStates[0]?.implementationGeneration ?? 0) + 1,
-        );
+        expect(recovered?.ticketStates.every((state) => state.status === "running")).toBe(true);
+        expect(recovered?.ticketStates.every((state) => state.attemptCount === 1)).toBe(true);
+        expect(
+          recovered?.ticketStates.every(
+            (state, index) =>
+              state.implementationGeneration ===
+              (run.ticketStates[index]?.implementationGeneration ?? 0) + 1,
+          ),
+        ).toBe(true);
       }),
     ),
   );

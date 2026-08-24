@@ -8020,9 +8020,28 @@ const make = Effect.gen(function* () {
         ) {
           continue;
         }
+        const recoverableRun = persistedLaunchFallout
+          ? {
+              ...run,
+              ticketStates: run.ticketStates.map((candidate) =>
+                candidate.ticketId !== halt.ticketId &&
+                candidate.status === "ready" &&
+                candidate.attemptCount >= IMPLEMENTATION_STAGE_MAX_LAUNCHES
+                  ? {
+                      ...candidate,
+                      implementationGeneration: candidate.implementationGeneration + 1,
+                      attemptCount: 0,
+                      warningMarkdown: null,
+                      updatedAt: createdAt,
+                    }
+                  : candidate,
+              ),
+              updatedAt: createdAt,
+            }
+          : run;
         yield* resumeTicketWithInheritedWork({
           sourceThreadId,
-          run,
+          run: recoverableRun,
           ticketId: halt.ticketId,
           reasonMarkdown: halt.detail,
           createdAt,
