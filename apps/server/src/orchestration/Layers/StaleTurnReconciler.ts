@@ -9,7 +9,7 @@ import {
   type OrchestrationThreadWorkflowRole,
   type ProviderInteractionMode,
   type ThreadId,
-  type TurnId,
+  TurnId,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
@@ -35,6 +35,7 @@ import {
 import {
   isAwaitingWorkflowNudge,
   isWorkflowNudgeCandidate,
+  ORPHANED_PROVIDER_SESSION_ERROR,
   STALE_TURN_RESUME_ACTIVITY_KIND,
   workflowAutomaticRetryLimit,
   workflowNudgeDelayMs,
@@ -99,6 +100,8 @@ interface SweepOptions {
   readonly confirmDelayMs: number;
   /** Spacing between nudges for a thread that stays blocked. */
   readonly nudgeIntervalMs: number;
+  /** Recover owned workflow turns that startup already marked inactive. */
+  readonly recoverInactiveWorkflows: boolean;
   /**
    * Whether to nudge threads that have been blocked for longer than the
    * deferral window. Only the boot pass does: in steady state a thread nobody
@@ -111,7 +114,7 @@ interface SweepOptions {
 }
 
 interface StaleTurnCandidate {
-  readonly kind: "running" | "resumable-error" | "nudge";
+  readonly kind: "running" | "resumable-error" | "workflow-recovery" | "nudge";
   readonly threadId: ThreadId;
   readonly pinnedTurnId: TurnId | null;
 }
@@ -163,8 +166,37 @@ function hasResumableErrorSignature(
   );
 }
 
+/**
+ * An active workflow can retain ownership of a thread after shutdown has
+ * cleared its provider session. The run state is the authority here. A human
+ * pause is checked before the turn is resumed.
+ */
+function hasInactiveWorkflowSignature(
+  readModel: OrchestrationReadModel,
+  thread: OrchestrationThread,
+): boolean {
+  const session = thread.session;
+  const role = thread.workflowRole;
+  if (role === null || !AUTONOMOUS_RESUME_ROLES.has(role)) return false;
+  const staleTurnOwnsRecovery =
+    session?.lastError === ORPHANED_PROVIDER_SESSION_ERROR ||
+    workflowAutomaticRetryLimit(role, 1) > 0;
+  return (
+    staleTurnOwnsRecovery &&
+    (session === null ||
+      (session.status !== "running" &&
+        session.status !== "starting" &&
+        session.activeTurnId === null)) &&
+    resolveResumeTarget(readModel, thread) !== null
+  );
+}
+
 function pinTurnId(thread: OrchestrationThread): TurnId | null {
   return thread.session?.activeTurnId ?? thread.latestTurn?.turnId ?? null;
+}
+
+function startupRecoveryTurnId(threadId: ThreadId): TurnId {
+  return TurnId.make(`turn-stale-startup-recovery-${threadId}`);
 }
 
 /**
@@ -1040,10 +1072,18 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
 
           const sessionLost = !liveThreadIds.has(thread.id);
           const running = sessionLost && hasRunningTurnSignature(thread);
+          const inactiveWorkflow =
+            sweepOptions.recoverInactiveWorkflows &&
+            sessionLost &&
+            !running &&
+            hasInactiveWorkflowSignature(readModel, thread);
           const resumableError =
-            sessionLost && !running && hasResumableErrorSignature(readModel, thread);
+            sessionLost &&
+            !running &&
+            !inactiveWorkflow &&
+            hasResumableErrorSignature(readModel, thread);
 
-          if (running || resumableError) {
+          if (running || inactiveWorkflow || resumableError) {
             if (sweepOptions.graceMs > 0) {
               const referenceIso = thread.session?.updatedAt ?? thread.updatedAt;
               const referenceMs = Date.parse(referenceIso);
@@ -1060,7 +1100,9 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
             candidates.push(
               running
                 ? { kind: "running", threadId: thread.id, pinnedTurnId: pinTurnId(thread) }
-                : { kind: "resumable-error", threadId: thread.id, pinnedTurnId: null },
+                : inactiveWorkflow
+                  ? { kind: "workflow-recovery", threadId: thread.id, pinnedTurnId: null }
+                  : { kind: "resumable-error", threadId: thread.id, pinnedTurnId: null },
             );
             continue;
           }
@@ -1164,7 +1206,7 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
           if (candidate.kind === "running") {
             if (!hasRunningTurnSignature(thread)) continue;
             if (pinTurnId(thread) !== candidate.pinnedTurnId) continue;
-          } else {
+          } else if (candidate.kind === "resumable-error") {
             if (hasRunningTurnSignature(thread)) continue;
             if (!hasResumableErrorSignature(confirmedModel, thread)) continue;
             detail = Option.getOrUndefined(
@@ -1187,6 +1229,31 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
                 ? thread.latestTurn.turnId
                 : lastResumeActivityInterruptedTurnId(detail);
             if (pinnedTurnId === null) continue;
+          } else {
+            if (
+              hasRunningTurnSignature(thread) ||
+              !hasInactiveWorkflowSignature(confirmedModel, thread)
+            ) {
+              continue;
+            }
+            detail = Option.getOrUndefined(
+              yield* projectionSnapshotQuery
+                .getThreadDetailById(thread.id)
+                .pipe(Effect.orElseSucceed(() => Option.none<OrchestrationThread>())),
+            );
+            const latestTurn = detail?.latestTurn;
+            if (detail === undefined) continue;
+            if (latestTurn === null || latestTurn === undefined) {
+              pinnedTurnId = startupRecoveryTurnId(thread.id);
+            } else if (isWorkflowThreadPaused(confirmedModel.threads, thread.id)) {
+              pinnedTurnId = latestTurn.turnId;
+            } else if (latestTurn.state === "error") {
+              if (yield* nudgeBlockedThread({ ...thread, latestTurn }, detail)) settledCount += 1;
+              continue;
+            } else {
+              if (latestTurn.state !== "running" && latestTurn.state !== "interrupted") continue;
+              pinnedTurnId = latestTurn.turnId;
+            }
           }
 
           const settled = yield* reconcileCandidate({
@@ -1243,6 +1310,7 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
           graceMs: 0,
           confirmDelayMs: 0,
           nudgeIntervalMs: 0,
+          recoverInactiveWorkflows: true,
           nudgeLongBlocked: true,
         });
 
@@ -1251,6 +1319,7 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
             graceMs,
             confirmDelayMs,
             nudgeIntervalMs,
+            recoverInactiveWorkflows: false,
             nudgeLongBlocked: false,
           }).pipe(Effect.repeat(Schedule.spaced(Duration.millis(sweepIntervalMs)))),
         );

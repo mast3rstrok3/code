@@ -50,6 +50,7 @@ import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQu
 import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
 import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
 import {
+  ORPHANED_PROVIDER_SESSION_ERROR,
   WORKFLOW_NUDGE_ACTIVITY_KIND,
   WORKFLOW_NUDGE_EXHAUSTED_MESSAGE,
 } from "../workflowNudge.ts";
@@ -403,6 +404,7 @@ function setThreadSession(
     readonly threadId: ThreadId;
     readonly status: OrchestrationSessionStatus;
     readonly activeTurnId: TurnId | null;
+    readonly lastError?: string | null;
     readonly updatedAt?: string;
     readonly tag: string;
   },
@@ -417,7 +419,7 @@ function setThreadSession(
       providerName: "codex",
       runtimeMode: "full-access",
       activeTurnId: input.activeTurnId,
-      lastError: null,
+      lastError: input.lastError ?? null,
       updatedAt: input.updatedAt ?? now,
     },
     createdAt: input.updatedAt ?? now,
@@ -662,6 +664,64 @@ describe("StaleTurnReconciler", () => {
           const thread = yield* getThread(system, threadId);
           expect(thread?.session?.status).toBe("error");
           expect(thread?.session?.activeTurnId).toBeNull();
+        }),
+      { reconciler: bootOnlyOptions },
+    ),
+  );
+
+  it.live("resumes an owned workflow after startup cleared its active turn", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const threadId = ThreadId.make("thread-stale-startup-cleared");
+          const turnId = TurnId.make("turn-stale-startup-cleared");
+          yield* seedProject(system);
+          yield* createPlanningOrchestratorThread(
+            system,
+            threadId,
+            "startup-cleared",
+            "spec-authoring",
+          );
+          yield* setThreadSession(system, {
+            threadId,
+            status: "running",
+            activeTurnId: turnId,
+            tag: "startup-cleared-running",
+          });
+          yield* setThreadSession(system, {
+            threadId,
+            status: "error",
+            activeTurnId: null,
+            lastError: ORPHANED_PROVIDER_SESSION_ERROR,
+            tag: "startup-cleared-error",
+          });
+
+          yield* system.reconciler.start();
+
+          expect(yield* nudgeActivities(system, threadId)).toHaveLength(1);
+          expect(yield* nudgeMessages(system, threadId)).toHaveLength(1);
+        }),
+      { reconciler: bootOnlyOptions },
+    ),
+  );
+
+  it.live("starts an owned workflow whose first turn was never recorded", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const threadId = ThreadId.make("thread-stale-missing-turn");
+          yield* seedProject(system);
+          yield* createPlanningOrchestratorThread(
+            system,
+            threadId,
+            "missing-turn",
+            "spec-authoring",
+          );
+
+          yield* system.reconciler.start();
+
+          expect(yield* resumeActivities(system, threadId)).toHaveLength(1);
+          expect(yield* resumeMessages(system, threadId)).toHaveLength(1);
         }),
       { reconciler: bootOnlyOptions },
     ),
@@ -969,6 +1029,13 @@ describe("StaleTurnReconciler", () => {
             commandId: CommandId.make("cmd-pause-stale-worker"),
             threadId: workerThreadId,
             createdAt: DateTime.formatIso(yield* DateTime.now),
+          });
+          yield* setThreadSession(system, {
+            threadId: workerThreadId,
+            status: "error",
+            activeTurnId: null,
+            lastError: ORPHANED_PROVIDER_SESSION_ERROR,
+            tag: "worker-paused-startup-cleared",
           });
 
           yield* system.reconciler.start();
