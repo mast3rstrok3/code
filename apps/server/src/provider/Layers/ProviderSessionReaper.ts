@@ -1,9 +1,11 @@
+import type { ThreadId } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
+import * as Stream from "effect/Stream";
 
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
@@ -15,10 +17,12 @@ import { forkParked } from "../../serverActivation.ts";
 import { ProviderService } from "../Services/ProviderService.ts";
 
 const DEFAULT_INACTIVITY_THRESHOLD_MS = 30 * 60 * 1000;
+const DEFAULT_ACTIVE_TURN_INACTIVITY_THRESHOLD_MS = 2 * 60 * 60 * 1000;
 const DEFAULT_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 
 export interface ProviderSessionReaperLiveOptions {
   readonly inactivityThresholdMs?: number;
+  readonly activeTurnInactivityThresholdMs?: number;
   readonly sweepIntervalMs?: number;
 }
 
@@ -27,10 +31,15 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
     const providerService = yield* ProviderService;
     const directory = yield* ProviderSessionDirectory;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+    const runtimeEventLastSeenMs = new Map<ThreadId, number>();
 
     const inactivityThresholdMs = Math.max(
       1,
       options?.inactivityThresholdMs ?? DEFAULT_INACTIVITY_THRESHOLD_MS,
+    );
+    const activeTurnInactivityThresholdMs = Math.max(
+      inactivityThresholdMs,
+      options?.activeTurnInactivityThresholdMs ?? DEFAULT_ACTIVE_TURN_INACTIVITY_THRESHOLD_MS,
     );
     const sweepIntervalMs = Math.max(1, options?.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS);
 
@@ -54,7 +63,11 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           continue;
         }
 
-        const idleDurationMs = now - lastSeenMs;
+        const effectiveLastSeenMs = Math.max(
+          lastSeenMs,
+          runtimeEventLastSeenMs.get(binding.threadId) ?? Number.NEGATIVE_INFINITY,
+        );
+        const idleDurationMs = now - effectiveLastSeenMs;
         if (idleDurationMs < inactivityThresholdMs) {
           continue;
         }
@@ -62,11 +75,15 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
         const thread = yield* projectionSnapshotQuery
           .getThreadShellById(binding.threadId)
           .pipe(Effect.map(Option.getOrUndefined));
-        if (thread?.session?.activeTurnId != null) {
+        if (
+          thread?.session?.activeTurnId != null &&
+          idleDurationMs < activeTurnInactivityThresholdMs
+        ) {
           yield* Effect.logDebug("provider.session.reaper.skipped-active-turn", {
             threadId: binding.threadId,
             activeTurnId: thread.session.activeTurnId,
             idleDurationMs,
+            activeTurnInactivityThresholdMs,
           });
           continue;
         }
@@ -106,7 +123,17 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
 
         if (reaped) {
           reapedCount += 1;
+          runtimeEventLastSeenMs.delete(binding.threadId);
         }
+      }
+
+      const retainedThreadIds = new Set(
+        bindings
+          .filter((binding) => binding.status !== "stopped")
+          .map((binding) => binding.threadId),
+      );
+      for (const threadId of runtimeEventLastSeenMs.keys()) {
+        if (!retainedThreadIds.has(threadId)) runtimeEventLastSeenMs.delete(threadId);
       }
 
       if (reapedCount > 0) {
@@ -119,6 +146,23 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
 
     const start: ProviderSessionReaperShape["start"] = () =>
       Effect.gen(function* () {
+        const runtimeEvents =
+          providerService.subscribeEvents === undefined
+            ? providerService.streamEvents
+            : Stream.fromSubscription(yield* providerService.subscribeEvents);
+        yield* Effect.forkScoped(
+          Stream.runForEach(runtimeEvents, (event) =>
+            Clock.currentTimeMillis.pipe(
+              Effect.tap((observedAt) =>
+                Effect.sync(() => runtimeEventLastSeenMs.set(event.threadId, observedAt)),
+              ),
+              Effect.asVoid,
+            ),
+          ),
+        );
+        // Give finite and already-buffered streams a chance to record activity
+        // before the first reaper sweep examines persisted timestamps.
+        yield* Effect.yieldNow;
         yield* forkParked(
           sweep.pipe(
             Effect.catch((error: unknown) =>
@@ -137,6 +181,7 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
 
         yield* Effect.logInfo("provider.session.reaper.started", {
           inactivityThresholdMs,
+          activeTurnInactivityThresholdMs,
           sweepIntervalMs,
         });
       });

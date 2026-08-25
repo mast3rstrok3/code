@@ -49,7 +49,6 @@ import {
   type ProviderRuntimeIngestionShape,
 } from "../Services/ProviderRuntimeIngestion.ts";
 import { projectActivityPayload } from "../ActivityPayloadProjection.ts";
-import { forkParked } from "../../serverActivation.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   appendWorkflowSkillCommandSection,
@@ -353,6 +352,16 @@ function normalizeRuntimeTurnState(
     default:
       return "completed";
   }
+}
+
+/** Only a cleanly completed turn owes its workflow a final-result directive. */
+export function turnOwesWorkflowDirective(
+  event: Extract<ProviderRuntimeEvent, { readonly type: "turn.completed" | "turn.aborted" }>,
+): boolean {
+  return (
+    event.type === "turn.completed" &&
+    normalizeRuntimeTurnState(event.payload.state) === "completed"
+  );
 }
 
 function orchestrationSessionStatusFromRuntimeState(
@@ -3163,11 +3172,15 @@ const make = Effect.gen(function* () {
   const consumeMissingWorkflowDirectiveForTurn = Effect.fn(
     "ProviderRuntimeIngestion.consumeMissingWorkflowDirectiveForTurn",
   )(function* (input: {
-    readonly event: ProviderRuntimeEvent;
+    readonly event: Extract<
+      ProviderRuntimeEvent,
+      { readonly type: "turn.completed" | "turn.aborted" }
+    >;
     readonly threadId: ThreadId;
     readonly turnId: TurnId;
     readonly createdAt: string;
   }) {
+    if (!turnOwesWorkflowDirective(input.event)) return;
     const thread = yield* resolveThreadDetail(input.threadId);
     const expectedDirectiveType =
       thread?.workflowRole === "fast-feature-implementer"
@@ -3176,7 +3189,9 @@ const make = Effect.gen(function* () {
           ? "planning-reviewer-verdict"
           : thread?.workflowRole === "implementation-fixer"
             ? "implementation-fix-result"
-            : null;
+            : thread?.workflowRole === "app-review-fixer"
+              ? "app-review-fix-result"
+              : null;
     if (thread === undefined) return;
 
     if (expectedDirectiveType === null) {
@@ -3208,63 +3223,19 @@ const make = Effect.gen(function* () {
     }
 
     const lastAssistantMessage = findLastAssistantMessageForTurn(thread.messages, input.turnId);
-    const parseResult = parseWorkflowDirectiveFromMarkdown(lastAssistantMessage?.text ?? "");
-    if (parseResult.kind === "parsed" && parseResult.directive.type === expectedDirectiveType) {
-      if (parseResult.directive.type !== "implementation-fast-build-result") return;
-      const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
-      const run = readModel.implementationRuns.find(
-        (candidate) =>
-          candidate.artifactSource === "proposed-plan" &&
-          candidate.orchestratorThreadId === thread.id &&
-          candidate.status !== "canceled",
-      );
-      // A directive naming some other run leaves this one just as stranded as no directive at all.
-      if (run !== undefined && parseResult.directive.runId === run.id) return;
-    }
-
     const messageId = lastAssistantMessage?.id ?? MessageId.make(`assistant:${input.turnId}`);
-    if (expectedDirectiveType === "planning-reviewer-verdict") {
-      yield* consumePlanningReviewerFailure({
-        event: input.event,
-        threadId: input.threadId,
-        messageId,
-        dedupeScope: input.turnId,
-        createdAt: input.createdAt,
-        detail:
-          parseResult.kind === "error"
-            ? `Reviewer directive was rejected: ${parseResult.message}`
-            : "Reviewer completed without the required planning-reviewer-verdict directive.",
-      });
-      return;
-    }
-    if (expectedDirectiveType === "implementation-fix-result") {
-      yield* consumeImplementationFixerFailure({
-        event: input.event,
-        threadId: input.threadId,
-        messageId,
-        dedupeScope: input.turnId,
-        createdAt: input.createdAt,
-        detail:
-          parseResult.kind === "error"
-            ? `QA fixer directive was rejected: ${parseResult.message}`
-            : parseResult.kind === "parsed"
-              ? "QA fixer completed with a directive for the wrong workflow stage or active run."
-              : "QA fixer completed without the required implementation-fix-result directive.",
-      });
-      return;
-    }
-    yield* consumeFastFeatureBuildFailure({
+    // Item completion normally consumes the directive first. Re-read the durable message at the
+    // terminal turn boundary as a fallback for dropped item events and process restarts between
+    // message projection and directive dispatch. The in-memory key and command receipts keep the
+    // ordinary path exactly-once.
+    yield* maybeProcessWorkflowDirective({
       event: input.event,
       threadId: input.threadId,
       messageId,
-      dedupeScope: input.turnId,
+      turnId: input.turnId,
+      markdown: lastAssistantMessage?.text ?? "",
       createdAt: input.createdAt,
-      detail:
-        parseResult.kind === "error"
-          ? `Fast feature Build directive was rejected: ${parseResult.message}`
-          : parseResult.kind === "parsed"
-            ? "Fast feature Build completed with a directive for the wrong workflow stage or run."
-            : "Fast feature Build completed without the required implementation-fast-build-result directive.",
+      synthesizeMissingDirectiveFailure: true,
     });
   });
 
@@ -4001,6 +3972,7 @@ const make = Effect.gen(function* () {
         const messages = detailedThread?.messages ?? [];
         const proposedPlans = detailedThread?.proposedPlans ?? [];
         const turnId = toTurnId(event.turnId);
+        const turnCompletedSuccessfully = turnOwesWorkflowDirective(event);
         if (turnId) {
           const assistantMessageIds = yield* getAssistantMessageIdsForTurn(thread.id, turnId);
           yield* Effect.forEach(
@@ -4016,7 +3988,7 @@ const make = Effect.gen(function* () {
                 finalDeltaCommandTag: "assistant-delta-finalize-fallback",
                 hasProjectedMessage: findMessageById(messages, assistantMessageId) !== undefined,
                 processWorkflowDirective: true,
-                synthesizeMissingDirectiveFailure: true,
+                synthesizeMissingDirectiveFailure: turnCompletedSuccessfully,
                 ...(findMessageById(messages, assistantMessageId)?.text !== undefined
                   ? { existingText: findMessageById(messages, assistantMessageId)!.text }
                   : {}),
@@ -4035,26 +4007,14 @@ const make = Effect.gen(function* () {
             updatedAt: now,
           });
 
-          yield* consumeMissingWorkflowDirectiveForTurn({
-            event,
-            threadId: thread.id,
-            turnId,
-            createdAt: now,
-          });
-        }
-      }
-
-      // A stopped turn still owes its workflow a result. Without this the run sits in `running`
-      // forever, waiting on an agent that is no longer there.
-      if (event.type === "turn.aborted") {
-        const turnId = toTurnId(event.turnId);
-        if (turnId) {
-          yield* consumeMissingWorkflowDirectiveForTurn({
-            event,
-            threadId: thread.id,
-            turnId,
-            createdAt: now,
-          });
+          if (turnCompletedSuccessfully) {
+            yield* consumeMissingWorkflowDirectiveForTurn({
+              event,
+              threadId: thread.id,
+              turnId,
+              createdAt: now,
+            });
+          }
         }
       }
 
@@ -4299,13 +4259,21 @@ const make = Effect.gen(function* () {
 
   const start: ProviderRuntimeIngestionShape["start"] = () =>
     Effect.gen(function* () {
-      yield* forkParked(
-        Stream.runForEach(providerService.streamEvents, (event) =>
-          worker.enqueue({ source: "runtime", event }),
-        ),
+      // These streams are hot and do not replay. Startup reconciliation may launch provider turns
+      // before server activation, so acquire both subscriptions synchronously before forking.
+      const runtimeEvents =
+        providerService.subscribeEvents === undefined
+          ? providerService.streamEvents
+          : Stream.fromSubscription(yield* providerService.subscribeEvents);
+      const domainEvents =
+        orchestrationEngine.subscribeDomainEvents === undefined
+          ? orchestrationEngine.streamDomainEvents
+          : Stream.fromSubscription(yield* orchestrationEngine.subscribeDomainEvents);
+      yield* Effect.forkScoped(
+        Stream.runForEach(runtimeEvents, (event) => worker.enqueue({ source: "runtime", event })),
       );
-      yield* forkParked(
-        Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
+      yield* Effect.forkScoped(
+        Stream.runForEach(domainEvents, (event) => {
           if (
             event.type !== "thread.turn-start-requested" &&
             event.type !== "thread.workflow-subagent-batch-child-updated" &&

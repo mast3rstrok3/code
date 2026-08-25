@@ -18,18 +18,26 @@ import {
   type WorkflowNudgeThread,
 } from "../workflowNudge.ts";
 import {
+  APP_REVIEW_FIXER_IMPLEMENTATION_ONLY_INSTRUCTION,
+  APP_REVIEW_RECOVERY_SWEEP_INTERVAL_MS,
   appReviewPhaseModelStepWorkflowPromptId,
+  appReviewPhaseFailureAction,
+  appReviewPhaseLaunchCount,
   appReviewPhaseThreadState,
+  buildAppReviewFixPrompt,
   buildReviewPrompt,
-  cycleFailureAction,
   e2eCheckIdsForCommands,
   effectiveAppReviewScope,
   resolveEffectiveAppReviewScope,
   priorCycleChecks,
   findAppReviewParentTicket,
+  isSupersededAppReviewPhaseThread,
+  isAppReviewWorkflowActivityKind,
+  isAppReviewWorkflowSessionStatus,
   nextAppReviewWorkflowAction,
+  phaseTurnCompleted,
+  retryReviewPhaseInCycle,
   selectReviewRunToStart,
-  spendFailedCycle,
   selectStandalonePreviewTargets,
   successfulFixAction,
   terminalReviewAction,
@@ -39,6 +47,118 @@ import {
 } from "./AppReviewWorkflowReactor.ts";
 
 const now = "2026-01-01T00:00:00.000Z";
+
+it("reconciles running App Reviews after projection lag", () => {
+  expect(APP_REVIEW_RECOVERY_SWEEP_INTERVAL_MS).toBe(30_000);
+});
+
+it("queues only App Review control and directive activities", () => {
+  expect(isAppReviewWorkflowActivityKind("approval.requested")).toBe(true);
+  expect(isAppReviewWorkflowActivityKind("user-input.requested")).toBe(true);
+  expect(isAppReviewWorkflowActivityKind("app-review-repair-tickets")).toBe(true);
+  expect(isAppReviewWorkflowActivityKind("app-review-fix-result")).toBe(true);
+  expect(isAppReviewWorkflowActivityKind("tool.updated")).toBe(false);
+  expect(isAppReviewWorkflowActivityKind("context-window.updated")).toBe(false);
+});
+
+it("queues only App Review session states that can advance or stop a phase", () => {
+  expect(isAppReviewWorkflowSessionStatus("starting")).toBe(true);
+  expect(isAppReviewWorkflowSessionStatus("running")).toBe(true);
+  expect(isAppReviewWorkflowSessionStatus("error")).toBe(true);
+  expect(isAppReviewWorkflowSessionStatus("ready")).toBe(false);
+  expect(isAppReviewWorkflowSessionStatus("stopped")).toBe(false);
+});
+
+it("treats a completed one-turn phase as terminal once its session is idle", () => {
+  expect(
+    phaseTurnCompleted({ latestTurn: { state: "completed" }, session: { status: "ready" } }),
+  ).toBe(true);
+  expect(
+    phaseTurnCompleted({ latestTurn: { state: "completed" }, session: { status: "running" } }),
+  ).toBe(false);
+  expect(phaseTurnCompleted({ latestTurn: { state: "error" }, session: { status: "error" } })).toBe(
+    false,
+  );
+});
+
+it("identifies phase workers that restart after their cycle was superseded", () => {
+  const reviewer = ThreadId.make("thread-reviewer-old");
+  const planner = ThreadId.make("thread-planner-old");
+  const fixer = ThreadId.make("thread-fixer-old");
+  const current = ThreadId.make("thread-reviewer-current");
+  const workspaceRevision = {
+    headSha: "abc123",
+    workingTreeDiffHash: "working",
+    branchDiffHash: "branch",
+    fingerprint: "abc123:working:branch",
+  };
+  const workflow = run({
+    activeThreadId: current,
+    cycles: [
+      {
+        cycleNumber: 1,
+        status: "failed",
+        reviewId: AppReviewId.make("app-review-old"),
+        reviewerThreadId: reviewer,
+        reviewVerdict: null,
+        actionableFindingsMarkdown: null,
+        planId: null,
+        plannerThreadId: planner,
+        plannerTurnId: null,
+        fixerThreadId: fixer,
+        fixResult: null,
+        workspaceRevision,
+        startedAt: now,
+        completedAt: now,
+      },
+      {
+        cycleNumber: 2,
+        status: "reviewing",
+        reviewId: AppReviewId.make("app-review-current"),
+        reviewerThreadId: current,
+        reviewVerdict: null,
+        actionableFindingsMarkdown: null,
+        planId: null,
+        plannerThreadId: null,
+        plannerTurnId: null,
+        fixerThreadId: null,
+        fixResult: null,
+        workspaceRevision,
+        startedAt: now,
+        completedAt: null,
+      },
+    ],
+  });
+
+  expect(isSupersededAppReviewPhaseThread(workflow, reviewer)).toBe(true);
+  expect(isSupersededAppReviewPhaseThread(workflow, planner)).toBe(true);
+  expect(isSupersededAppReviewPhaseThread(workflow, fixer)).toBe(true);
+  expect(isSupersededAppReviewPhaseThread(workflow, current)).toBe(false);
+  expect(isSupersededAppReviewPhaseThread(workflow, ThreadId.make("thread-unrelated"))).toBe(false);
+});
+
+it("keeps App Review fixers in the implementation-only phase", () => {
+  expect(APP_REVIEW_FIXER_IMPLEMENTATION_ONLY_INSTRUCTION).toContain(
+    "Do not call preview_* or app_review_* tools",
+  );
+  expect(APP_REVIEW_FIXER_IMPLEMENTATION_ONLY_INSTRUCTION).toContain(
+    "starts a fresh reviewer after it receives your app-review-fix-result directive",
+  );
+});
+
+it("tells a replacement App Review fixer to continue inherited work", () => {
+  const cycle = {
+    ...reviewingRun().cycles[0]!,
+    status: "fixing" as const,
+    fixingLaunchCount: 2,
+  };
+
+  const prompt = buildAppReviewFixPrompt({ run: reviewingRun(), cycle, e2eCommands: [] });
+
+  expect(prompt).toContain("A previous fixer worked in this same worktree");
+  expect(prompt).toContain("Inspect Git status, the current diff, and recent commits");
+  expect(prompt).toContain("Do not discard inherited changes merely because this is a new thread");
+});
 
 function run(overrides: Partial<AppReviewWorkflowRun> = {}): AppReviewWorkflowRun {
   return {
@@ -144,15 +264,6 @@ it("always begins a nonterminal run with Browser App Review", () => {
   expect(nextAppReviewWorkflowAction(run())).toBe("review");
 });
 
-it("spends a broken cycle and reviews again instead of ending the run", () => {
-  expect(cycleFailureAction(run({ cyclesUsed: 1 }))).toBe("next-cycle");
-  expect(cycleFailureAction(run({ cyclesUsed: 9 }))).toBe("next-cycle");
-});
-
-it("stops once a broken cycle spends the last of the budget", () => {
-  expect(cycleFailureAction(run({ cyclesUsed: 10 }))).toBe("exhausted");
-});
-
 function reviewingRun(cyclesUsed = 1): AppReviewWorkflowRun {
   return run({
     cyclesUsed,
@@ -183,61 +294,76 @@ function reviewingRun(cyclesUsed = 1): AppReviewWorkflowRun {
   });
 }
 
-const blocked = {
-  reason: "review-blocked",
-  phase: "review",
-  cycleNumber: 1,
-  detailMarkdown: "You've hit your usage limit.",
-  failedAt: "2026-01-01T00:01:00.000Z",
-} as const;
+it("retries an infrastructure failure inside the current App Review cycle", () => {
+  const cycle = reviewingRun().cycles[0]!;
 
-const movedRevision = {
-  headSha: "def456",
-  workingTreeDiffHash: "working",
-  branchDiffHash: "branch",
-  fingerprint: "def456:working:branch",
-} as const;
-
-it("keeps a broken cycle's reason on the cycle and leaves the run running", () => {
-  const spent = spendFailedCycle({
-    run: reviewingRun(),
-    failure: blocked,
-    workspaceRevision: movedRevision,
-  });
-
-  expect(spent.status).toBe("running");
-  expect(spent.outcome).toBeNull();
-  expect(spent.activePhase).toBeNull();
-  expect(spent.activeThreadId).toBeNull();
-  expect(spent.cycles[0]?.status).toBe("failed");
-  expect(spent.cycles[0]?.failure).toEqual(blocked);
-  expect(spent.cycles[0]?.completedAt).toBe(blocked.failedAt);
+  expect(appReviewPhaseLaunchCount(cycle, "review")).toBe(1);
+  expect(appReviewPhaseFailureAction(cycle, "review")).toBe("retry-phase");
+  expect(reviewingRun().cyclesUsed).toBe(1);
 });
 
-it("re-baselines the workspace a repair may have moved before the next cycle", () => {
-  const spent = spendFailedCycle({
-    run: reviewingRun(),
-    failure: blocked,
-    workspaceRevision: movedRevision,
-  });
-
-  expect(spent.workspaceRevision).toEqual(movedRevision);
-  expect(selectReviewRunToStart(spent.id, [spent])).toBe(spent);
-});
-
-it("leaves earlier cycles untouched when a later one breaks", () => {
-  const twoCycles = {
-    ...reviewingRun(2),
-    cycles: [...reviewingRun(1).cycles, ...reviewingRun(2).cycles],
+it("replaces only the reviewer thread when retrying a review phase", () => {
+  const oldReviewer = ThreadId.make("thread-reviewer");
+  const planner = ThreadId.make("thread-old-planner");
+  const fixer = ThreadId.make("thread-old-fixer");
+  const failure = {
+    reason: "review-blocked",
+    phase: "review",
+    cycleNumber: 4,
+    detailMarkdown: "The provider session ended before it recorded a verdict.",
+    failedAt: now,
+  } as const;
+  const workspaceRevision = {
+    headSha: "def456",
+    workingTreeDiffHash: "working-2",
+    branchDiffHash: "branch-2",
+    fingerprint: "def456:working-2:branch-2",
   };
-  const spent = spendFailedCycle({
-    run: twoCycles,
-    failure: blocked,
-    workspaceRevision: movedRevision,
+  const cycle: AppReviewWorkflowCycle = {
+    ...reviewingRun(4).cycles[0]!,
+    reviewLaunchCount: 1,
+    plannerThreadId: planner,
+    plannerTurnId: null,
+    fixerThreadId: fixer,
+    repairTickets: [],
+  };
+
+  const retried = retryReviewPhaseInCycle({
+    cycle,
+    reviewId: AppReviewId.make("app-review-retry"),
+    reviewerThreadId: ThreadId.make("thread-reviewer-retry"),
+    supersededThreadIds: [oldReviewer],
+    failure,
+    workspaceRevision,
   });
 
-  expect(spent.cycles[0]?.status).toBe("reviewing");
-  expect(spent.cycles[1]?.status).toBe("failed");
+  expect(retried.cycleNumber).toBe(4);
+  expect(retried.reviewLaunchCount).toBe(2);
+  expect(retried.planningLaunchCount).toBe(0);
+  expect(retried.fixingLaunchCount).toBe(0);
+  expect(retried.supersededThreadIds).toEqual([oldReviewer]);
+  expect(retried.plannerThreadId).toBeNull();
+  expect(retried.fixerThreadId).toBeNull();
+  expect(retried.repairTickets).toEqual([]);
+  expect(retried.failure).toEqual(failure);
+  expect(retried.workspaceRevision).toEqual(workspaceRevision);
+});
+
+it("fails the run after the current phase exhausts its bounded launches", () => {
+  const cycle = { ...reviewingRun().cycles[0]!, reviewLaunchCount: 2 };
+
+  expect(appReviewPhaseFailureAction(cycle, "review")).toBe("fail-run");
+});
+
+it("counts legacy planner and fixer threads as their first phase launches", () => {
+  const cycle = {
+    ...reviewingRun().cycles[0]!,
+    plannerThreadId: ThreadId.make("thread-planner"),
+    fixerThreadId: ThreadId.make("thread-fixer"),
+  };
+
+  expect(appReviewPhaseLaunchCount(cycle, "planning")).toBe(1);
+  expect(appReviewPhaseLaunchCount(cycle, "fixing")).toBe(1);
 });
 
 it("exhausts a run left between cycles with nothing to spend", () => {
@@ -751,6 +877,8 @@ it("puts the project's e2e commands before browser work with their check ids", (
   expect(prompt.indexOf("Part one of this review is the end-to-end test run")).toBeLessThan(
     prompt.indexOf("Use the linked durable App Review record"),
   );
+  expect(prompt).toContain("Only failures inside the original acceptance brief");
+  expect(prompt).toContain("do not turn them into repair work for this run");
 });
 
 it("says nothing about e2e commands when the project declares none", () => {

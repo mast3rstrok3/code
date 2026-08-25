@@ -40,6 +40,7 @@ import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { proposedPlanTitle } from "@t3tools/shared/orchestrationPlanning";
 import { implementationWorkflowDefaultSkips } from "@t3tools/shared/workflowStepSkips";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -100,6 +101,45 @@ type ImplementationWorkflowEvent = Extract<
       | "thread.workflow-resumed";
   }
 >;
+
+const IMPLEMENTATION_WORKFLOW_ACTIVITY_KINDS = new Set<string>([
+  "implementation-worker-result",
+  "implementation-merge-gate-result",
+  "implementation-fix-result",
+  "implementation-code-review-result",
+  "implementation-fast-build-result",
+  "implementation-change-request-babysit-result",
+]);
+
+export function isImplementationWorkflowActivityKind(kind: string): boolean {
+  return IMPLEMENTATION_WORKFLOW_ACTIVITY_KINDS.has(kind);
+}
+
+const ticketAppReviewLaunchBudgetWarning = () =>
+  `Ticket App Review skipped after exhausting its ${String(IMPLEMENTATION_STAGE_MAX_LAUNCHES)}-launch budget. Ticket Code Review and the combined review stages still run.`;
+
+export function appReviewFailureContinuationMarkdown(run: AppReviewWorkflowRun): string | null {
+  const outcome = run.outcome ?? run.status;
+  if (outcome === "passed") return null;
+  const base =
+    run.failure?.detailMarkdown ??
+    run.cycles.at(-1)?.actionableFindingsMarkdown ??
+    `Ticket App Review ended ${outcome}.`;
+  const unfinishedRepairTickets =
+    run.failure?.phase === "fixing" ? (run.cycles.at(-1)?.repairTickets ?? []) : [];
+  return [
+    base,
+    ...(unfinishedRepairTickets.length === 0
+      ? []
+      : [
+          `Unfinished App Review repair tickets from run '${run.id}':`,
+          ...unfinishedRepairTickets.map(
+            (ticket) =>
+              `## ${ticket.key} · ${ticket.title}\n\n${ticket.bodyMarkdown}\n\nBlocked by: ${ticket.dependencyKeys.join(", ") || "None"}`,
+          ),
+        ]),
+  ].join("\n\n");
+}
 
 type WorkerDirective = OrchestrationImplementationWorkerResult & {
   readonly type: "implementation-worker-result";
@@ -430,6 +470,23 @@ export function ticketAwaitsAppReviewRun(
   );
 }
 
+/** A local App Review claim that a lagging projection has not exposed yet. */
+export function ticketAppReviewClaimIsAhead(input: {
+  readonly local: OrchestrationImplementationRun;
+  readonly observed: OrchestrationImplementationRun;
+  readonly ticketId: string;
+}): boolean {
+  const local = input.local.ticketStates.find((state) => state.ticketId === input.ticketId);
+  const observed = input.observed.ticketStates.find((state) => state.ticketId === input.ticketId);
+  if (local?.appReviewWorkflowRunId == null || observed === undefined) return false;
+  if (local.appReviewGeneration > observed.appReviewGeneration) return true;
+  return (
+    local.appReviewGeneration === observed.appReviewGeneration &&
+    observed.appReviewWorkflowRunId == null &&
+    local.appReviewLaunchCount > observed.appReviewLaunchCount
+  );
+}
+
 /**
  * Whether an embedded App Review is parked between cycles waiting for its
  * caller to refresh the preview.
@@ -462,6 +519,8 @@ function reopenTicketForRerun(input: {
   readonly ticketId: string;
   readonly stage: OrchestrationImplementationRerunTicketStage;
   readonly updatedAt: string;
+  readonly preserveImplementationAttemptCount?: boolean;
+  readonly continuationMarkdown?: string | null;
 }): OrchestrationImplementationRun {
   const reopenedIds = new Set([input.ticketId]);
   let changed = true;
@@ -489,7 +548,7 @@ function reopenTicketForRerun(input: {
       ...state,
       codeReviewThreadId: null,
       codeReviewOutcome: null,
-      warningMarkdown: null,
+      warningMarkdown: input.continuationMarkdown ?? null,
       updatedAt: input.updatedAt,
     };
     if (input.stage === "code-review") {
@@ -523,7 +582,7 @@ function reopenTicketForRerun(input: {
       workerThreadId: null,
       workerResult: null,
       implementationGeneration: state.implementationGeneration + 1,
-      attemptCount: 0,
+      attemptCount: input.preserveImplementationAttemptCount ? state.attemptCount : 0,
     };
   });
   return {
@@ -537,7 +596,7 @@ function reopenTicketForRerun(input: {
     // The combined change gets rebuilt from whatever the re-run produces, so a
     // sha from the previous integration must not reach the next merge gate.
     integrationHeadSha: null,
-    retryableFailure: null,
+    retryableFailure: input.preserveImplementationAttemptCount ? input.run.retryableFailure : null,
     automationHalt:
       input.run.automationHalt !== null &&
       automationHaltMatchesTicketRerun({
@@ -761,6 +820,7 @@ function buildWorkerPrompt(input: {
   readonly worktreePath: string;
   readonly integration: BranchIntegration;
   readonly inheritsPartialChanges: boolean;
+  readonly continuationMarkdown: string | null;
 }): string {
   const integrationLines = [
     `- base ref: ${input.integration.baseRefName}`,
@@ -786,6 +846,9 @@ function buildWorkerPrompt(input: {
         "Continuation state:",
         "- This ticket worktree contains tracked or untracked changes from an interrupted worker.",
         "- Inspect the current status and diff before editing. Treat the inherited changes as partial ticket work. Keep the useful parts, and rewrite or delete anything that does not meet the ticket.",
+        ...(input.continuationMarkdown === null
+          ? []
+          : ["", "Why the prior stage stopped:", input.continuationMarkdown]),
       ]
     : [];
   return [
@@ -1295,6 +1358,9 @@ const make = Effect.gen(function* () {
   const changeRequestLocks = yield* SynchronizedRef.make(
     new Map<string, { readonly semaphore: Semaphore.Semaphore; readonly users: number }>(),
   );
+  const ticketAppReviewLocks = yield* SynchronizedRef.make(
+    new Map<string, { readonly semaphore: Semaphore.Semaphore; readonly users: number }>(),
+  );
 
   /**
    * Asks the frontend URL itself whether a reviewer could load it. Deliberately cheap and
@@ -1397,6 +1463,33 @@ const make = Effect.gen(function* () {
   const serverAppReviewId = () =>
     crypto.randomUUIDv4.pipe(Effect.map((uuid) => AppReviewId.make(`app-review-${uuid}`)));
 
+  // Projection updates trail command dispatch by a small window. Keep the
+  // latest run written by this single-worker reactor so two queued commands
+  // for different tickets cannot each rebuild the run from the same stale
+  // projection and overwrite one another.
+  const locallyUpdatedRuns = new Map<
+    OrchestrationImplementationRun["id"],
+    { readonly run: OrchestrationImplementationRun; readonly writtenAtMs: number }
+  >();
+  const currentRunForQueuedRerun = (
+    readModel: OrchestrationReadModel,
+    runId: OrchestrationImplementationRun["id"],
+    fallback: OrchestrationImplementationRun,
+    nowMs: number,
+  ) => {
+    const projected = findRunById(readModel, runId);
+    const local = locallyUpdatedRuns.get(runId);
+    if (
+      local !== undefined &&
+      nowMs - local.writtenAtMs < 60_000 &&
+      (projected === null || projected.updatedAt <= local.run.updatedAt)
+    ) {
+      return local.run;
+    }
+    locallyUpdatedRuns.delete(runId);
+    return projected ?? fallback;
+  };
+
   const updateRun = Effect.fn("ImplementationWorkflowReactor.updateRun")(function* (input: {
     readonly sourceThreadId: ThreadId;
     readonly run: OrchestrationImplementationRun;
@@ -1450,6 +1543,10 @@ const make = Effect.gen(function* () {
         ? {}
         : { expectedChangeRequestClaim: input.expectedChangeRequestClaim }),
       createdAt: input.createdAt,
+    });
+    locallyUpdatedRuns.set(input.run.id, {
+      run: input.run,
+      writtenAtMs: yield* Clock.currentTimeMillis,
     });
   });
 
@@ -2095,6 +2192,10 @@ const make = Effect.gen(function* () {
             worktreePath: plannedWorker.worktreePath,
             integration,
             inheritsPartialChanges,
+            continuationMarkdown:
+              inheritsPartialChanges && existing.warningMarkdown != null
+                ? existing.warningMarkdown
+                : null,
           }),
           WORKFLOW_PROMPT_IDS.implementationTddCodex,
         ),
@@ -2356,7 +2457,14 @@ const make = Effect.gen(function* () {
     readonly ticketId: string;
     readonly reasonMarkdown: string;
     readonly createdAt: string;
+    readonly preserveRetryBudget?: boolean;
   }) {
+    const priorFailureAttempts =
+      input.preserveRetryBudget === true &&
+      input.run.retryableFailure?.stage === "worker-execution" &&
+      input.run.retryableFailure.ticketId === input.ticketId
+        ? input.run.retryableFailure.attemptCount
+        : 0;
     const renewedRun: OrchestrationImplementationRun = {
       ...input.run,
       ticketStates: input.run.ticketStates.map((state) =>
@@ -2375,10 +2483,27 @@ const make = Effect.gen(function* () {
       updatedAt: input.createdAt,
     };
     const resumedRun = reopenTicketForRerun({
-      run: { ...renewedRun, automationHalt: null, retryableFailure: null },
+      run: {
+        ...renewedRun,
+        automationHalt: null,
+        retryableFailure:
+          input.preserveRetryBudget === true
+            ? {
+                ticketId: input.ticketId,
+                stage: "worker-execution",
+                detail: input.reasonMarkdown,
+                failedAt: input.createdAt,
+                attemptCount: priorFailureAttempts + 1,
+                maxAttempts: IMPLEMENTATION_STAGE_MAX_LAUNCHES,
+                humanBlocked: false,
+              }
+            : null,
+      },
       ticketId: input.ticketId,
       stage: "implementation",
       updatedAt: input.createdAt,
+      continuationMarkdown: input.reasonMarkdown,
+      ...(input.preserveRetryBudget === true ? { preserveImplementationAttemptCount: true } : {}),
     });
     yield* appendActivity({
       threadId: input.run.orchestratorThreadId,
@@ -2786,6 +2911,248 @@ const make = Effect.gen(function* () {
     },
   );
 
+  const startTicketAppReviewUnlocked = Effect.fn(
+    "ImplementationWorkflowReactor.startTicketAppReviewUnlocked",
+  )(function* (input: {
+    readonly sourceThreadId: ThreadId;
+    readonly run: OrchestrationImplementationRun;
+    readonly ticketId: string;
+    readonly createdAt: string;
+  }) {
+    if (input.run.automationHalt !== null) return;
+    const local = locallyUpdatedRuns.get(input.run.id);
+    if (
+      local !== undefined &&
+      (yield* Clock.currentTimeMillis) - local.writtenAtMs < 60_000 &&
+      ticketAppReviewClaimIsAhead({
+        local: local.run,
+        observed: input.run,
+        ticketId: input.ticketId,
+      })
+    ) {
+      return;
+    }
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    const orchestratorThread = findThread(readModel, input.run.orchestratorThreadId);
+    const sourceThread = findThread(readModel, input.sourceThreadId);
+    const state = input.run.ticketStates.find((candidate) => candidate.ticketId === input.ticketId);
+    if (
+      orchestratorThread === null ||
+      state?.worktreePath == null ||
+      state.branch == null ||
+      state.workerThreadId == null ||
+      state.status !== "app-reviewing" ||
+      state.appReviewWorkflowRunId != null
+    )
+      return;
+    if (state.appReviewLaunchCount >= IMPLEMENTATION_STAGE_MAX_LAUNCHES) {
+      yield* startTicketCodeReview({
+        sourceThreadId: input.sourceThreadId,
+        run: input.run,
+        ticketId: state.ticketId,
+        warningMarkdown: ticketAppReviewLaunchBudgetWarning(),
+        createdAt: input.createdAt,
+      });
+      return;
+    }
+    const [preflight, preflightHead] = yield* Effect.all([
+      gitWorkflow.localStatus({ cwd: state.worktreePath }),
+      gitWorkflow.resolveCommit({ cwd: state.worktreePath, ref: "HEAD" }),
+    ]);
+    const expectedHeadSha = state.workerResult?.commitSha ?? null;
+    if (
+      !preflight.isRepo ||
+      preflight.refName !== state.branch ||
+      preflight.hasWorkingTreeChanges ||
+      expectedHeadSha === null ||
+      preflightHead.commitSha !== expectedHeadSha
+    ) {
+      const reasonMarkdown = [
+        `Ticket App Review requires clean expected HEAD '${expectedHeadSha ?? "missing"}' on '${state.branch}', but Git reports '${preflight.refName ?? "detached HEAD"}' at '${preflightHead.commitSha}'${preflight.hasWorkingTreeChanges ? " with uncommitted changes" : ""}.`,
+        ...(state.warningMarkdown == null
+          ? []
+          : ["Previous App Review context:", state.warningMarkdown]),
+      ].join("\n\n");
+      if (preflight.isRepo && preflight.refName === state.branch) {
+        yield* resumeTicketWithInheritedWork({
+          sourceThreadId: input.sourceThreadId,
+          run: input.run,
+          ticketId: state.ticketId,
+          reasonMarkdown,
+          createdAt: input.createdAt,
+        });
+        return;
+      }
+      yield* blockRun({
+        sourceThreadId: input.sourceThreadId,
+        run: input.run,
+        ticketId: state.ticketId,
+        retryableStage: "app-review",
+        reasonMarkdown,
+        updatedAt: input.createdAt,
+        humanBlocked: true,
+      });
+      return;
+    }
+    const ticket = ticketsById(sourceThread ?? orchestratorThread).get(input.ticketId);
+    if (ticket === undefined) return;
+    // A skip reads the same way as a ticket the plan never made eligible: the
+    // stage does not run and the ticket carries on to the next one.
+    if (
+      isTicketStageSkipped(input.run.skips, input.ticketId, "app-review") ||
+      ticket.appReviewEligible !== true ||
+      !ticket.appReviewPlanMarkdown
+    ) {
+      yield* startTicketCodeReview({
+        sourceThreadId: input.sourceThreadId,
+        run: input.run,
+        ticketId: input.ticketId,
+        createdAt: input.createdAt,
+      });
+      return;
+    }
+    // Settings can turn a review part off outright. When the intersection
+    // with the ticket's own scope leaves nothing, the review is skipped and
+    // says so, rather than launching a run with nothing to verify.
+    const settings = yield* serverSettingsService.getSettings.pipe(
+      Effect.orElseSucceed(() => undefined),
+    );
+    const allowedParts = intersectAppReviewParts(
+      resolveLayeredAppReviewStepParts({
+        threadOverrides: findWorkflowStepReviewParts(orchestratorThread, readModel.threads),
+        settingsOverrides: settings?.workflowStepReviewParts,
+        key: {
+          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+          stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+        },
+      }),
+      appReviewPartsForScope(ticket.appReviewScope ?? "both"),
+    );
+    if (appReviewScopeForParts(allowedParts) === null) {
+      yield* startTicketCodeReview({
+        sourceThreadId: input.sourceThreadId,
+        run: input.run,
+        ticketId: input.ticketId,
+        warningMarkdown: `Ticket App Review skipped: turned off in Settings → Workflows (${describeAppReviewParts(allowedParts)}).`,
+        createdAt: input.createdAt,
+      });
+      return;
+    }
+    const stackResult = yield* appDevStackManager
+      .autoCreate({
+        worktreePath: state.worktreePath,
+        displayName: `Ticket ${ticket.key ?? ticket.id}`,
+        gitBranch: state.branch ?? input.run.orchestratorBranch,
+        workflowId: orchestratorThread.workflowContext?.workflowId,
+      })
+      .pipe(Effect.result);
+    const frontendUrl = stackResult._tag === "Success" ? stackResult.success.frontendUrl : null;
+    if (frontendUrl === null) {
+      const warning = `Ticket App Review failed because its App Dev Stack did not provide a frontend URL${stackResult._tag === "Failure" ? `: ${errorDetail(stackResult.failure)}` : "."}`;
+      yield* startTicketCodeReview({
+        sourceThreadId: input.sourceThreadId,
+        run: input.run,
+        ticketId: input.ticketId,
+        warningMarkdown: warning,
+        createdAt: input.createdAt,
+      });
+      return;
+    }
+    const controllerThreadId = yield* serverThreadId("app-review-orchestrator");
+    const appReviewWorkflowRunId = AppReviewWorkflowRunId.make(
+      `app-review-workflow-${controllerThreadId}`,
+    );
+    const claimedRun: OrchestrationImplementationRun = {
+      ...input.run,
+      ticketStates: input.run.ticketStates.map((candidate) =>
+        candidate.ticketId === input.ticketId
+          ? {
+              ...candidate,
+              appReviewWorkflowRunId,
+              appReviewLaunchCount: candidate.appReviewLaunchCount + 1,
+              updatedAt: input.createdAt,
+            }
+          : candidate,
+      ),
+      updatedAt: input.createdAt,
+    };
+    yield* updateRun({
+      sourceThreadId: input.sourceThreadId,
+      run: claimedRun,
+      createdAt: input.createdAt,
+      expectedTicketStageClaims: [
+        {
+          ticketId: state.ticketId,
+          stage: "app-review",
+          generation: state.appReviewGeneration,
+          launchCount: state.appReviewLaunchCount,
+          activeExecutionId: state.appReviewWorkflowRunId ?? null,
+        },
+      ],
+    });
+    yield* orchestrationEngine.dispatch({
+      type: "thread.app-review-workflow.launch",
+      commandId: yield* serverCommandId("implementation-ticket-app-review-launch"),
+      targetThreadId: state.workerThreadId,
+      controllerThreadId,
+      caller: {
+        type: "implementation",
+        implementationRunId: input.run.id,
+        orchestratorThreadId: input.run.orchestratorThreadId,
+        ticketId: input.ticketId,
+      },
+      briefMarkdown: ticket.appReviewPlanMarkdown,
+      supportingContextMarkdown: `Review only ticket ${input.ticketId}: ${ticket.title}. Treat its attached plan and acceptance criteria as authoritative.`,
+      previewTargets: [frontendUrl],
+      ...(ticket.appReviewScope === undefined ? {} : { appReviewScope: ticket.appReviewScope }),
+      cycleBudget: AppReviewWorkflowCycleBudget.make(
+        yield* cyclesForStep({
+          key: {
+            workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+            stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+          },
+          orchestratorThread,
+        }),
+      ),
+      modelSelection: yield* modelForStep({
+        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+        // Per-ticket reviews belong to "Execute ticket waves", so that
+        // step's pin covers them unless they carry a pin of their own.
+        stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+        orchestratorThread,
+        createdAt: input.createdAt,
+      }),
+      createdAt: input.createdAt,
+    });
+  });
+
+  const getTicketAppReviewSemaphore = (key: string) =>
+    SynchronizedRef.modifyEffect(ticketAppReviewLocks, (current) => {
+      const existing = current.get(key);
+      if (existing !== undefined) {
+        const next = new Map(current);
+        next.set(key, { ...existing, users: existing.users + 1 });
+        return Effect.succeed([existing.semaphore, next] as const);
+      }
+      return Semaphore.make(1).pipe(
+        Effect.map((semaphore) => {
+          const next = new Map(current);
+          next.set(key, { semaphore, users: 1 });
+          return [semaphore, next] as const;
+        }),
+      );
+    });
+
+  const releaseTicketAppReviewSemaphore = (key: string) =>
+    SynchronizedRef.update(ticketAppReviewLocks, (current) => {
+      const existing = current.get(key);
+      if (existing === undefined) return current;
+      const next = new Map(current);
+      if (existing.users === 1) next.delete(key);
+      else next.set(key, { ...existing, users: existing.users - 1 });
+      return next;
+    });
+
   const startTicketAppReview = Effect.fn("ImplementationWorkflowReactor.startTicketAppReview")(
     function* (input: {
       readonly sourceThreadId: ThreadId;
@@ -2793,198 +3160,11 @@ const make = Effect.gen(function* () {
       readonly ticketId: string;
       readonly createdAt: string;
     }) {
-      if (input.run.automationHalt !== null) return;
-      const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
-      const orchestratorThread = findThread(readModel, input.run.orchestratorThreadId);
-      const sourceThread = findThread(readModel, input.sourceThreadId);
-      const state = input.run.ticketStates.find(
-        (candidate) => candidate.ticketId === input.ticketId,
-      );
-      if (
-        orchestratorThread === null ||
-        state?.worktreePath == null ||
-        state.branch == null ||
-        state.workerThreadId == null ||
-        state.status !== "app-reviewing" ||
-        state.appReviewWorkflowRunId != null
-      )
-        return;
-      if (state.appReviewLaunchCount >= IMPLEMENTATION_STAGE_MAX_LAUNCHES) {
-        yield* blockRun({
-          sourceThreadId: input.sourceThreadId,
-          run: input.run,
-          ticketId: state.ticketId,
-          reasonMarkdown: `Ticket '${state.ticketId}' exhausted its App Review launch budget.`,
-          updatedAt: input.createdAt,
-          haltCategory: "retry-exhausted",
-          haltStage: "app-review",
-        });
-        return;
-      }
-      const [preflight, preflightHead] = yield* Effect.all([
-        gitWorkflow.localStatus({ cwd: state.worktreePath }),
-        gitWorkflow.resolveCommit({ cwd: state.worktreePath, ref: "HEAD" }),
-      ]);
-      const expectedHeadSha = state.workerResult?.commitSha ?? null;
-      if (
-        !preflight.isRepo ||
-        preflight.refName !== state.branch ||
-        preflight.hasWorkingTreeChanges ||
-        expectedHeadSha === null ||
-        preflightHead.commitSha !== expectedHeadSha
-      ) {
-        const reasonMarkdown = `Ticket App Review requires clean expected HEAD '${expectedHeadSha ?? "missing"}' on '${state.branch}', but Git reports '${preflight.refName ?? "detached HEAD"}' at '${preflightHead.commitSha}'${preflight.hasWorkingTreeChanges ? " with uncommitted changes" : ""}.`;
-        if (preflight.isRepo && preflight.refName === state.branch) {
-          yield* resumeTicketWithInheritedWork({
-            sourceThreadId: input.sourceThreadId,
-            run: input.run,
-            ticketId: state.ticketId,
-            reasonMarkdown,
-            createdAt: input.createdAt,
-          });
-          return;
-        }
-        yield* blockRun({
-          sourceThreadId: input.sourceThreadId,
-          run: input.run,
-          ticketId: state.ticketId,
-          retryableStage: "app-review",
-          reasonMarkdown,
-          updatedAt: input.createdAt,
-          humanBlocked: true,
-        });
-        return;
-      }
-      const ticket = ticketsById(sourceThread ?? orchestratorThread).get(input.ticketId);
-      if (ticket === undefined) return;
-      // A skip reads the same way as a ticket the plan never made eligible: the
-      // stage does not run and the ticket carries on to the next one.
-      if (
-        isTicketStageSkipped(input.run.skips, input.ticketId, "app-review") ||
-        ticket.appReviewEligible !== true ||
-        !ticket.appReviewPlanMarkdown
-      ) {
-        yield* startTicketCodeReview({
-          sourceThreadId: input.sourceThreadId,
-          run: input.run,
-          ticketId: input.ticketId,
-          createdAt: input.createdAt,
-        });
-        return;
-      }
-      // Settings can turn a review part off outright. When the intersection
-      // with the ticket's own scope leaves nothing, the review is skipped and
-      // says so, rather than launching a run with nothing to verify.
-      const settings = yield* serverSettingsService.getSettings.pipe(
-        Effect.orElseSucceed(() => undefined),
-      );
-      const allowedParts = intersectAppReviewParts(
-        resolveLayeredAppReviewStepParts({
-          threadOverrides: findWorkflowStepReviewParts(orchestratorThread, readModel.threads),
-          settingsOverrides: settings?.workflowStepReviewParts,
-          key: {
-            workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
-            stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
-          },
-        }),
-        appReviewPartsForScope(ticket.appReviewScope ?? "both"),
-      );
-      if (appReviewScopeForParts(allowedParts) === null) {
-        yield* startTicketCodeReview({
-          sourceThreadId: input.sourceThreadId,
-          run: input.run,
-          ticketId: input.ticketId,
-          warningMarkdown: `Ticket App Review skipped: turned off in Settings → Workflows (${describeAppReviewParts(allowedParts)}).`,
-          createdAt: input.createdAt,
-        });
-        return;
-      }
-      const stackResult = yield* appDevStackManager
-        .autoCreate({
-          worktreePath: state.worktreePath,
-          displayName: `Ticket ${ticket.key ?? ticket.id}`,
-          gitBranch: state.branch ?? input.run.orchestratorBranch,
-          workflowId: orchestratorThread.workflowContext?.workflowId,
-        })
-        .pipe(Effect.result);
-      const frontendUrl = stackResult._tag === "Success" ? stackResult.success.frontendUrl : null;
-      if (frontendUrl === null) {
-        const warning = `Ticket App Review failed because its App Dev Stack did not provide a frontend URL${stackResult._tag === "Failure" ? `: ${errorDetail(stackResult.failure)}` : "."}`;
-        yield* startTicketCodeReview({
-          sourceThreadId: input.sourceThreadId,
-          run: input.run,
-          ticketId: input.ticketId,
-          warningMarkdown: warning,
-          createdAt: input.createdAt,
-        });
-        return;
-      }
-      const controllerThreadId = yield* serverThreadId("app-review-orchestrator");
-      const appReviewWorkflowRunId = AppReviewWorkflowRunId.make(
-        `app-review-workflow-${controllerThreadId}`,
-      );
-      const claimedRun: OrchestrationImplementationRun = {
-        ...input.run,
-        ticketStates: input.run.ticketStates.map((candidate) =>
-          candidate.ticketId === input.ticketId
-            ? {
-                ...candidate,
-                appReviewWorkflowRunId,
-                appReviewLaunchCount: candidate.appReviewLaunchCount + 1,
-                updatedAt: input.createdAt,
-              }
-            : candidate,
-        ),
-        updatedAt: input.createdAt,
-      };
-      yield* updateRun({
-        sourceThreadId: input.sourceThreadId,
-        run: claimedRun,
-        createdAt: input.createdAt,
-        expectedTicketStageClaims: [
-          {
-            ticketId: state.ticketId,
-            stage: "app-review",
-            generation: state.appReviewGeneration,
-            launchCount: state.appReviewLaunchCount,
-            activeExecutionId: state.appReviewWorkflowRunId ?? null,
-          },
-        ],
-      });
-      yield* orchestrationEngine.dispatch({
-        type: "thread.app-review-workflow.launch",
-        commandId: yield* serverCommandId("implementation-ticket-app-review-launch"),
-        targetThreadId: state.workerThreadId,
-        controllerThreadId,
-        caller: {
-          type: "implementation",
-          implementationRunId: input.run.id,
-          orchestratorThreadId: input.run.orchestratorThreadId,
-          ticketId: input.ticketId,
-        },
-        briefMarkdown: ticket.appReviewPlanMarkdown,
-        supportingContextMarkdown: `Review only ticket ${input.ticketId}: ${ticket.title}. Treat its attached plan and acceptance criteria as authoritative.`,
-        previewTargets: [frontendUrl],
-        ...(ticket.appReviewScope === undefined ? {} : { appReviewScope: ticket.appReviewScope }),
-        cycleBudget: AppReviewWorkflowCycleBudget.make(
-          yield* cyclesForStep({
-            key: {
-              workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
-              stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
-            },
-            orchestratorThread,
-          }),
-        ),
-        modelSelection: yield* modelForStep({
-          workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
-          // Per-ticket reviews belong to "Execute ticket waves", so that
-          // step's pin covers them unless they carry a pin of their own.
-          stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
-          orchestratorThread,
-          createdAt: input.createdAt,
-        }),
-        createdAt: input.createdAt,
-      });
+      const key = `${input.run.id}:${input.ticketId}`;
+      const semaphore = yield* getTicketAppReviewSemaphore(key);
+      return yield* semaphore
+        .withPermit(startTicketAppReviewUnlocked(input))
+        .pipe(Effect.ensuring(releaseTicketAppReviewSemaphore(key)));
     },
   );
 
@@ -4926,6 +5106,7 @@ const make = Effect.gen(function* () {
             ticketId: directive.ticketId,
             stage: "implementation",
             updatedAt: directive.reportedAt,
+            preserveImplementationAttemptCount: true,
           });
           yield* updateRun({
             sourceThreadId,
@@ -4940,6 +5121,7 @@ const make = Effect.gen(function* () {
           ticketId: directive.ticketId,
           reasonMarkdown: directive.notesMarkdown,
           createdAt: directive.reportedAt,
+          preserveRetryBudget: true,
         });
         return;
       }
@@ -6855,7 +7037,12 @@ const make = Effect.gen(function* () {
     >,
   ) {
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
-    const run = findRunById(readModel, event.payload.run.id) ?? event.payload.run;
+    const run = currentRunForQueuedRerun(
+      readModel,
+      event.payload.run.id,
+      event.payload.run,
+      yield* Clock.currentTimeMillis,
+    );
     const sourceThreadId = findRunSourceThreadId({ readModel, run });
     if (sourceThreadId === null) return;
     const target = event.payload.target;
@@ -6971,11 +7158,26 @@ const make = Effect.gen(function* () {
         createdAt,
       });
     }
+    const ticketState = run.ticketStates.find((state) => state.ticketId === target.ticketId);
+    const priorAppReviewRun =
+      ticketState?.appReviewWorkflowRunId == null
+        ? undefined
+        : (readModel.appReviewWorkflowRuns ?? []).find(
+            (candidate) => candidate.id === ticketState.appReviewWorkflowRunId,
+          );
     const rerunRun = reopenTicketForRerun({
       run,
       ticketId: target.ticketId,
       stage: target.stage,
       updatedAt: createdAt,
+      continuationMarkdown:
+        target.stage === "app-review"
+          ? ((priorAppReviewRun === undefined
+              ? null
+              : appReviewFailureContinuationMarkdown(priorAppReviewRun)) ??
+            ticketState?.warningMarkdown ??
+            null)
+          : null,
     });
     yield* updateRun({ sourceThreadId, run: rerunRun, createdAt });
     switch (target.stage) {
@@ -7179,9 +7381,7 @@ const make = Effect.gen(function* () {
       const warningMarkdown =
         outcome === "passed"
           ? undefined
-          : (input.nestedRun.failure?.detailMarkdown ??
-            input.nestedRun.cycles.at(-1)?.actionableFindingsMarkdown ??
-            `Ticket App Review ended ${outcome}.`);
+          : (appReviewFailureContinuationMarkdown(input.nestedRun) ?? undefined);
       const reviewedTicketRun: OrchestrationImplementationRun = {
         ...input.run,
         ticketStates: input.run.ticketStates.map((state) =>
@@ -7950,11 +8150,17 @@ const make = Effect.gen(function* () {
     let recovered = false;
     for (const run of readModel.implementationRuns) {
       const halt = run.automationHalt;
+      const persistedTicketAppReviewLaunchFallout =
+        input.recoverPersistedLaunchFallout &&
+        halt?.category === "retry-exhausted" &&
+        halt.stage === "app-review" &&
+        halt.ticketId !== undefined;
       const persistedLaunchFallout =
         input.recoverPersistedLaunchFallout &&
         halt !== null &&
         halt.ticketId !== undefined &&
-        ((halt.category === "retry-exhausted" && halt.stage === "implementation") ||
+        ((halt.category === "retry-exhausted" &&
+          (halt.stage === "implementation" || halt.stage === "app-review")) ||
           halt.detail.includes("moved from reported commit"));
       if (
         halt === null ||
@@ -7965,6 +8171,31 @@ const make = Effect.gen(function* () {
       }
       const sourceThreadId = findRunSourceThreadId({ readModel, run });
       if (sourceThreadId === null) continue;
+
+      if (persistedTicketAppReviewLaunchFallout && halt.ticketId !== undefined) {
+        const resumedRun: OrchestrationImplementationRun = {
+          ...run,
+          status: "running",
+          automationHalt: null,
+          retryableFailure:
+            run.retryableFailure?.ticketId === halt.ticketId ? null : run.retryableFailure,
+          updatedAt: createdAt,
+        };
+        yield* updateRun({ sourceThreadId, run: resumedRun, createdAt });
+        yield* startTicketCodeReview({
+          sourceThreadId,
+          run: resumedRun,
+          ticketId: halt.ticketId,
+          warningMarkdown: ticketAppReviewLaunchBudgetWarning(),
+          createdAt,
+        });
+        yield* Effect.logInfo("implementation workflow continued past App Review launch fallout", {
+          runId: run.id,
+          ticketId: halt.ticketId,
+        });
+        recovered = true;
+        continue;
+      }
 
       if (isLegacyDirtyWorkerLaunchHalt(halt)) {
         const reportedStates = run.ticketStates.filter(
@@ -8783,8 +9014,18 @@ const make = Effect.gen(function* () {
   });
 
   const start: ImplementationWorkflowReactorShape["start"] = Effect.fn("start")(function* () {
+    const domainEvents =
+      orchestrationEngine.subscribeDomainEvents === undefined
+        ? orchestrationEngine.streamDomainEvents
+        : Stream.fromSubscription(yield* orchestrationEngine.subscribeDomainEvents);
     yield* Effect.forkScoped(
-      Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
+      Stream.runForEach(domainEvents, (event) => {
+        if (
+          event.type === "thread.activity-appended" &&
+          !isImplementationWorkflowActivityKind(event.payload.activity.kind)
+        ) {
+          return Effect.void;
+        }
         if (
           event.type !== "thread.planning-tickets-created" &&
           event.type !== "thread.implementation-run-launched" &&

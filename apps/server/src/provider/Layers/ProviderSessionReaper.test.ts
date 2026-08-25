@@ -1,7 +1,9 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   DEFAULT_WORKSPACE_USER_ID,
+  EventId,
   ProjectId,
+  type ProviderRuntimeEvent,
   ThreadId,
   TurnId,
   ProviderDriverKind,
@@ -154,6 +156,8 @@ describe("ProviderSessionReaper", () => {
 
   async function createHarness(input: {
     readonly readModel: ReturnType<typeof makeReadModel>;
+    readonly activeTurnInactivityThresholdMs?: number;
+    readonly runtimeEvents?: Stream.Stream<ProviderRuntimeEvent>;
     readonly stopSessionImplementation?: (input: {
       readonly threadId: ThreadId;
     }) => ReturnType<ProviderServiceShape["stopSession"]>;
@@ -191,7 +195,7 @@ describe("ProviderSessionReaper", () => {
         });
       },
       rollbackConversation: () => unsupported(),
-      streamEvents: Stream.empty,
+      streamEvents: input.runtimeEvents ?? Stream.empty,
     };
 
     const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
@@ -202,6 +206,7 @@ describe("ProviderSessionReaper", () => {
     );
     const layer = makeProviderSessionReaperLive({
       inactivityThresholdMs: 1_000,
+      activeTurnInactivityThresholdMs: input.activeTurnInactivityThresholdMs ?? 2_000,
       sweepIntervalMs: 60_000,
     }).pipe(
       Layer.provideMerge(providerSessionDirectoryLayer),
@@ -287,7 +292,7 @@ describe("ProviderSessionReaper", () => {
     expect(harness.stoppedThreadIds.has(threadId)).toBe(true);
   });
 
-  it("skips stale sessions when the thread still has an active turn", async () => {
+  it("keeps active turns within the longer active-turn inactivity threshold", async () => {
     const threadId = ThreadId.make("thread-reaper-active-turn");
     const turnId = TurnId.make("turn-reaper-active");
     const now = "2026-01-01T00:00:00.000Z";
@@ -319,7 +324,9 @@ describe("ProviderSessionReaper", () => {
         adapterKey: "claudeAgent",
         runtimeMode: "full-access",
         status: "running",
-        lastSeenAt: "2026-04-14T00:00:00.000Z",
+        lastSeenAt: DateTime.formatIso(
+          DateTime.makeUnsafe((await Effect.runPromise(Clock.currentTimeMillis)) - 1_500),
+        ),
         resumeCursor: {
           opaque: "resume-active-turn",
         },
@@ -333,6 +340,110 @@ describe("ProviderSessionReaper", () => {
     expect(harness.stopSession).not.toHaveBeenCalled();
     const remaining = await runtime!.runPromise(repository.getByThreadId({ threadId }));
     expect(Option.isSome(remaining)).toBe(true);
+  });
+
+  it("reaps active turns that stop producing runtime events", async () => {
+    const threadId = ThreadId.make("thread-reaper-stalled-active-turn");
+    const turnId = TurnId.make("turn-reaper-stalled-active");
+    const now = "2026-01-01T00:00:00.000Z";
+    const harness = await createHarness({
+      readModel: makeReadModel([
+        {
+          id: threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: turnId,
+            lastError: null,
+            updatedAt: now,
+          },
+        },
+      ]),
+    });
+    const repository = await runtime!.runPromise(
+      Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
+    );
+
+    await runtime!.runPromise(
+      repository.upsert({
+        threadId,
+        providerName: "codex",
+        providerInstanceId: null,
+        adapterKey: "codex",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: "2026-04-14T00:00:00.000Z",
+        resumeCursor: {
+          opaque: "resume-stalled-active-turn",
+        },
+        runtimePayload: null,
+      }),
+    );
+
+    await startReaper();
+    await waitFor(() => harness.stopSession.mock.calls.length === 1);
+
+    expect(harness.stopSession.mock.calls[0]?.[0]).toEqual({ threadId });
+  });
+
+  it("keeps an active turn when provider events are still arriving", async () => {
+    const threadId = ThreadId.make("thread-reaper-active-runtime-events");
+    const turnId = TurnId.make("turn-reaper-active-runtime-events");
+    const now = "2026-01-01T00:00:00.000Z";
+    const harness = await createHarness({
+      readModel: makeReadModel([
+        {
+          id: threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: turnId,
+            lastError: null,
+            updatedAt: now,
+          },
+        },
+      ]),
+      runtimeEvents: Stream.succeed({
+        type: "content.delta",
+        eventId: EventId.make("event-active-runtime-heartbeat"),
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        turnId,
+        createdAt: now,
+        payload: {
+          streamKind: "assistant_text",
+          delta: "Still working.",
+        },
+      }),
+    });
+    const repository = await runtime!.runPromise(
+      Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
+    );
+
+    await runtime!.runPromise(
+      repository.upsert({
+        threadId,
+        providerName: "codex",
+        providerInstanceId: null,
+        adapterKey: "codex",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: "2026-04-14T00:00:00.000Z",
+        resumeCursor: {
+          opaque: "resume-active-runtime-events",
+        },
+        runtimePayload: null,
+      }),
+    );
+
+    await startReaper();
+    await Effect.runPromise(drainFibers);
+
+    expect(harness.stopSession).not.toHaveBeenCalled();
   });
 
   it("skips stale sessions while background work is still live", async () => {

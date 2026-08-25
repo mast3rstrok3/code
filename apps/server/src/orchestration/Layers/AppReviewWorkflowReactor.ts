@@ -36,6 +36,7 @@ import { resolveAppReviewE2eCommands } from "@t3tools/shared/t3ProjectFile";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -87,8 +88,24 @@ type AppReviewWorkflowEvent = Extract<
 >;
 
 const terminalStatuses = new Set(["passed", "failed", "exhausted"]);
+const APP_REVIEW_WORKFLOW_ACTIVITY_KINDS = new Set<string>([
+  "approval.requested",
+  "user-input.requested",
+  "app-review-repair-tickets",
+  "app-review-fix-result",
+]);
 const APP_REVIEW_IMPLEMENT_SKILL_ID = "matt-pocock.implement";
 const APP_REVIEW_TO_TICKETS_SKILL_ID = "matt-pocock.to-tickets";
+export const APP_REVIEW_FIXER_IMPLEMENTATION_ONLY_INSTRUCTION =
+  "This is an implementation-only phase. Do not call preview_* or app_review_* tools, collect browser evidence, or update the review verdict. The workflow starts a fresh reviewer after it receives your app-review-fix-result directive, so unavailable review tools must not block this repair.";
+
+export function isAppReviewWorkflowActivityKind(kind: string): boolean {
+  return APP_REVIEW_WORKFLOW_ACTIVITY_KINDS.has(kind);
+}
+
+export function isAppReviewWorkflowSessionStatus(status: string): boolean {
+  return status === "starting" || status === "running" || status === "error";
+}
 
 export function appReviewPhaseModelStepWorkflowPromptId(
   run: Pick<AppReviewWorkflowRun, "caller">,
@@ -273,6 +290,15 @@ export function threadTurnFailed(thread: {
   );
 }
 
+/** A one-turn phase finished cleanly and cannot emit another result on this thread. */
+export function phaseTurnCompleted(thread: {
+  readonly latestTurn: { readonly state: string } | null;
+  readonly session: { readonly status: string } | null;
+}): boolean {
+  if (thread.session?.status === "starting" || thread.session?.status === "running") return false;
+  return thread.latestTurn?.state === "completed";
+}
+
 /**
  * What a phase thread's state means for the run: still working, waiting on
  * automatic recovery, or failed for good. The `nudging` state covers both the
@@ -303,53 +329,77 @@ export function successfulFixAction(
   return run.caller.type === "standalone" ? "review" : "await-preview-refresh";
 }
 
-/**
- * What a cycle that could not finish its own work means for the run.
- *
- * Cycles exist to catch and repair what implementation missed, and a reviewer
- * that died, a gap analysis that wrote nothing, or a repair that failed its
- * validation all leave that job undone. So the cycle is spent, not the run: the
- * next one starts a fresh review, and only an empty budget stops the loop. The
- * caller then gets an exhausted run, which it already takes to the merge gate
- * the same way it takes a run whose last repair never satisfied the review.
- */
-export function cycleFailureAction(run: AppReviewWorkflowRun): "next-cycle" | "exhausted" {
-  return run.cyclesUsed < run.cycleBudget ? "next-cycle" : "exhausted";
+export const APP_REVIEW_PHASE_MAX_LAUNCHES = 2;
+export const APP_REVIEW_RECOVERY_SWEEP_INTERVAL_MS = 30_000;
+
+export function appReviewPhaseLaunchCount(
+  cycle: AppReviewWorkflowCycle,
+  phase: AppReviewWorkflowPhase,
+): number {
+  switch (phase) {
+    case "review":
+      return cycle.reviewLaunchCount ?? 1;
+    case "planning":
+      return cycle.planningLaunchCount ?? (cycle.plannerThreadId == null ? 0 : 1);
+    case "fixing":
+      return cycle.fixingLaunchCount ?? (cycle.fixerThreadId === null ? 0 : 1);
+  }
 }
 
-/**
- * Close the run's latest cycle on a failure, leaving the run idle between
- * cycles.
- *
- * The cycle keeps the reason it stopped, because the run moves on and would
- * otherwise carry only the last one of ten. The workspace is re-baselined from
- * what the caller measured: a repair that failed its validation may still have
- * committed, and every phase entry point refuses to run against a workspace
- * that moved since the phase before it recorded one.
- */
-export function spendFailedCycle(input: {
-  readonly run: AppReviewWorkflowRun;
+export function appReviewPhaseFailureAction(
+  cycle: AppReviewWorkflowCycle,
+  phase: AppReviewWorkflowPhase,
+): "retry-phase" | "fail-run" {
+  return appReviewPhaseLaunchCount(cycle, phase) < APP_REVIEW_PHASE_MAX_LAUNCHES
+    ? "retry-phase"
+    : "fail-run";
+}
+
+export function retryReviewPhaseInCycle(input: {
+  readonly cycle: AppReviewWorkflowCycle;
+  readonly reviewId: AppReviewId;
+  readonly reviewerThreadId: ThreadId;
+  readonly supersededThreadIds: ReadonlyArray<ThreadId>;
   readonly failure: AppReviewWorkflowFailure;
   readonly workspaceRevision: AppReviewWorkflowWorkspaceRevision;
-}): AppReviewWorkflowRun {
-  const cycleNumber = input.run.cycles.at(-1)?.cycleNumber;
+}): AppReviewWorkflowCycle {
   return {
-    ...input.run,
-    activePhase: null,
-    activeThreadId: null,
+    ...input.cycle,
+    status: "reviewing",
+    reviewId: input.reviewId,
+    reviewerThreadId: input.reviewerThreadId,
+    reviewLaunchCount: appReviewPhaseLaunchCount(input.cycle, "review") + 1,
+    planningLaunchCount: 0,
+    fixingLaunchCount: 0,
+    supersededThreadIds: [...input.supersededThreadIds],
+    reviewVerdict: null,
+    actionableFindingsMarkdown: null,
+    planId: null,
+    plannerThreadId: null,
+    plannerTurnId: null,
+    fixerThreadId: null,
+    repairTickets: [],
+    ticketingTurnId: null,
+    fixResult: null,
+    failure: input.failure,
     workspaceRevision: input.workspaceRevision,
-    cycles: input.run.cycles.map((cycle) =>
-      cycle.cycleNumber === cycleNumber
-        ? {
-            ...cycle,
-            status: "failed" as const,
-            failure: input.failure,
-            completedAt: input.failure.failedAt,
-          }
-        : cycle,
-    ),
-    updatedAt: input.failure.failedAt,
+    completedAt: null,
   };
+}
+
+/** Whether a provider turn belongs to a phase the run has already left. */
+export function isSupersededAppReviewPhaseThread(
+  run: Pick<AppReviewWorkflowRun, "activeThreadId" | "cycles">,
+  threadId: ThreadId,
+): boolean {
+  if (run.activeThreadId === threadId) return false;
+  return run.cycles.some(
+    (cycle) =>
+      cycle.reviewerThreadId === threadId ||
+      cycle.plannerThreadId === threadId ||
+      cycle.fixerThreadId === threadId ||
+      (cycle.supersededThreadIds ?? []).includes(threadId),
+  );
 }
 
 /** A check an earlier cycle passed, offered to the next reviewer to carry forward. */
@@ -586,7 +636,7 @@ export function buildReviewPrompt(input: {
             "",
             `Part one of this review is the end-to-end test run. Run each command from the selected worktree, in order, with the environment variable ${APP_REVIEW_PREVIEW_URL_ENV} set to the first preview target above, and record each command as a check with the exact id shown:`,
             ...e2eCommands.map((command, index) => `- e2e-${index + 1}: ${command}`),
-            "A passing command is a passed check whose notes summarize the suite result. A failing command is a failed check whose notes name the failing tests, and each distinct product failure it reveals is an actionable finding. Run these commands fresh every cycle and never carry an e2e check forward.",
+            "A passing command is a passed check whose notes summarize the suite result. A failing command is a failed check whose notes name the failing tests. Only failures inside the original acceptance brief, caused by the work under review, or blocking verification of that brief are actionable findings. Record unrelated or pre-existing failures in the check notes or as note-severity findings; do not turn them into repair work for this run. Run these commands fresh every cycle and never carry an e2e check forward.",
             scope === "e2e"
               ? "This review is end-to-end only: the test run is the verification. Skip the browser entirely — do not open the preview or start a recording, and no screenshots are required. Base the verdict on the check matrix."
               : "Part two is the browser review, scoped to what the tests did not prove: acceptance criteria without e2e coverage, visual and interaction quality, and every failure the run surfaced. Do not re-drive a flow a passing e2e test already exercises end-to-end. Evidence requirements are unchanged: still record the session and capture screenshots of the states you verify.",
@@ -621,6 +671,81 @@ export function buildReviewPrompt(input: {
           ]),
     ].join("\n"),
     WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+  );
+}
+
+export function buildAppReviewFixPrompt(input: {
+  readonly run: AppReviewWorkflowRun;
+  readonly cycle: AppReviewWorkflowCycle;
+  readonly e2eCommands: ReadonlyArray<string>;
+}): string {
+  const continuesInterruptedFix = (input.cycle.fixingLaunchCount ?? 0) > 1;
+  return appendWorkflowSkillCommandSection(
+    [
+      `Implement the App Review repair tickets for run '${input.run.id}', cycle ${input.cycle.cycleNumber}.`,
+      ...(continuesInterruptedFix
+        ? [
+            "",
+            "Continuation state:",
+            "- A previous fixer worked in this same worktree and stopped before it returned a valid result.",
+            "- Inspect Git status, the current diff, and recent commits before editing. Treat those changes as partial work on the repair tickets below.",
+            "- Keep useful work, repair or remove incomplete work, and finish every ticket. Do not discard inherited changes merely because this is a new thread.",
+          ]
+        : []),
+      "",
+      "Use TDD: write the test each ticket names, watch it fail, then repair. Address every actionable finding together, preserve unrelated work, and run focused validation. Do not ask the user questions.",
+      APP_REVIEW_FIXER_IMPLEMENTATION_ONLY_INSTRUCTION,
+      ...(input.e2eCommands.length === 0
+        ? []
+        : [
+            `Before reporting succeeded, run the project's end-to-end test commands${
+              input.run.previewTargets[0] === undefined
+                ? ""
+                : ` with ${APP_REVIEW_PREVIEW_URL_ENV}=${input.run.previewTargets[0]}`
+            } and report each as a validation entry:`,
+            ...input.e2eCommands.map((command) => `- ${command}`),
+          ]),
+      input.run.caller.type === "implementation"
+        ? "Commit the complete repair, leave the orchestrator worktree clean, and report a commit SHA matching HEAD."
+        : "Edit the selected worktree in place. A commit and initially clean worktree are not required; preserve unrelated WIP and rely on T3 checkpoints for recovery.",
+      "",
+      "Original acceptance brief:",
+      input.run.briefMarkdown,
+      "",
+      "Actionable findings:",
+      input.cycle.actionableFindingsMarkdown ?? "Missing findings",
+      "",
+      "Durable repair tickets:",
+      ...(input.cycle.repairTickets ?? []).map(
+        (ticket) =>
+          `## ${ticket.key} · ${ticket.title}\n\n${ticket.bodyMarkdown}\n\nBlocked by: ${ticket.dependencyKeys.join(", ") || "None"}`,
+      ),
+      "",
+      "Finish with exactly one fenced JSON block:",
+      "```json",
+      JSON.stringify(
+        {
+          type: "app-review-fix-result",
+          runId: input.run.id,
+          planId: input.cycle.planId,
+          status: "succeeded",
+          commitSha: input.run.caller.type === "implementation" ? "required-HEAD-sha" : undefined,
+          validations: [
+            {
+              command: "vp test run focused-test",
+              status: "passed",
+              outputMarkdown: "Important output or empty string.",
+              completedAt: "2026-01-01T00:00:00.000Z",
+            },
+          ],
+          notesMarkdown: "What changed and what remains.",
+        },
+        null,
+        2,
+      ),
+      "```",
+    ].join("\n"),
+    APP_REVIEW_IMPLEMENT_SKILL_ID,
   );
 }
 
@@ -730,6 +855,18 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const interruptActivePhaseTurn = Effect.fn("AppReviewWorkflowReactor.interruptActivePhaseTurn")(
+    function* (run: AppReviewWorkflowRun, occurredAt: string) {
+      if (run.activeThreadId === null) return;
+      yield* orchestrationEngine.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: yield* serverCommandId("app-review-workflow-phase-interrupt"),
+        threadId: run.activeThreadId,
+        createdAt: occurredAt,
+      });
+    },
+  );
+
   const computeWorkspaceRevision = Effect.fn("AppReviewWorkflowReactor.computeWorkspaceRevision")(
     function* (cwd: string) {
       const [head, preview] = yield* Effect.all([
@@ -778,8 +915,15 @@ const make = Effect.gen(function* () {
         cycle.cycleNumber === cycleNumber
           ? {
               ...cycle,
-              status: "completed",
+              status: "failed",
               reviewVerdict: cycle.reviewVerdict === "passed" ? "passed" : "failed",
+              failure: {
+                reason: input.reason,
+                phase: input.run.activePhase,
+                cycleNumber,
+                detailMarkdown: input.detailMarkdown,
+                failedAt: input.occurredAt,
+              },
               completedAt: input.occurredAt,
             }
           : cycle,
@@ -1002,6 +1146,10 @@ const make = Effect.gen(function* () {
       status: "reviewing",
       reviewId: yield* serverReviewId(),
       reviewerThreadId: yield* serverThreadId("app-review-reviewer"),
+      reviewLaunchCount: 1,
+      planningLaunchCount: 0,
+      fixingLaunchCount: 0,
+      supersededThreadIds: [],
       reviewVerdict: null,
       actionableFindingsMarkdown: null,
       planId: null,
@@ -1084,6 +1232,7 @@ const make = Effect.gen(function* () {
               ...entry,
               status: "completed",
               reviewVerdict: "passed",
+              failure: null,
               completedAt: occurredAt,
             }
           : entry,
@@ -1119,16 +1268,12 @@ const make = Effect.gen(function* () {
   });
 
   /**
-   * End the current cycle on a failure and keep the run going.
+   * Retry a failed phase without spending the product-review cycle.
    *
-   * Only the work a cycle owns belongs here: the review, the gap analysis and
-   * the repair. A broken precondition, such as no worktree, no preview target,
-   * or a workspace that moved, is not something another cycle can get past, and
-   * still goes through `failRun`.
-   *
-   * The next cycle re-baselines the workspace first, the same way an operator's
-   * phase re-run does. A repair that failed its validation may still have
-   * committed, and that head is what the next review has to look at.
+   * One cycle owns one combined E2E/browser review, one gap-analysis plan when
+   * that review finds defects, and one repair. Provider and runtime failures
+   * relaunch only the phase that failed. A bounded phase budget stops a broken
+   * provider from turning the ten-cycle product budget into a retry loop.
    */
   const failCycle = Effect.fn("AppReviewWorkflowReactor.failCycle")(function* (input: {
     readonly run: AppReviewWorkflowRun;
@@ -1139,31 +1284,110 @@ const make = Effect.gen(function* () {
     const run = input.run;
     if (terminalStatuses.has(run.status)) return;
     const cycle = run.cycles.at(-1);
-    if (cycle === undefined) {
+    const phase = run.activePhase;
+    if (cycle === undefined || phase === null) {
       yield* failRun(input);
       return;
     }
+    yield* interruptActivePhaseTurn(run, input.occurredAt);
     const target = yield* resolveTarget(run.targetThreadId);
-    const spentRun = spendFailedCycle({
-      run,
-      failure: {
+    const workspaceRevision =
+      target === null ? run.workspaceRevision : yield* computeWorkspaceRevision(target.cwd);
+    const failure: AppReviewWorkflowFailure = {
+      reason: input.reason,
+      phase,
+      cycleNumber: cycle.cycleNumber,
+      detailMarkdown: input.detailMarkdown,
+      failedAt: input.occurredAt,
+    };
+    const supersededThreadIds = Array.from(
+      new Set([
+        ...(cycle.supersededThreadIds ?? []),
+        ...(run.activeThreadId === null ? [] : [run.activeThreadId]),
+      ]),
+    );
+    const retryBase: AppReviewWorkflowRun = {
+      ...run,
+      workspaceRevision,
+      cycles: run.cycles.map((entry) =>
+        entry.cycleNumber === cycle.cycleNumber
+          ? { ...entry, failure, supersededThreadIds }
+          : entry,
+      ),
+      updatedAt: input.occurredAt,
+    };
+    if (appReviewPhaseFailureAction(cycle, phase) === "fail-run") {
+      yield* failRun({
+        run: retryBase,
         reason: input.reason,
-        phase: run.activePhase,
-        cycleNumber: cycle.cycleNumber,
-        detailMarkdown: input.detailMarkdown,
-        failedAt: input.occurredAt,
-      },
-      workspaceRevision:
-        target === null ? run.workspaceRevision : yield* computeWorkspaceRevision(target.cwd),
-    });
-    yield* updateRun(spentRun);
-    switch (cycleFailureAction(spentRun)) {
-      case "next-cycle":
-        yield* startReview(spentRun, input.occurredAt);
+        detailMarkdown: `${phase} exhausted its ${String(APP_REVIEW_PHASE_MAX_LAUNCHES)} phase launches.\n\n${input.detailMarkdown}`,
+        occurredAt: input.occurredAt,
+      });
+      return;
+    }
+
+    switch (phase) {
+      case "review": {
+        const reviewerThreadId = yield* serverThreadId("app-review-reviewer");
+        const retryCycle = retryReviewPhaseInCycle({
+          cycle,
+          reviewId: yield* serverReviewId(),
+          reviewerThreadId,
+          supersededThreadIds,
+          failure,
+          workspaceRevision,
+        });
+        const reviewingRun: AppReviewWorkflowRun = {
+          ...retryBase,
+          activePhase: "review",
+          activeThreadId: reviewerThreadId,
+          cycles: retryBase.cycles.map((entry) =>
+            entry.cycleNumber === cycle.cycleNumber ? retryCycle : entry,
+          ),
+        };
+        yield* updateRun(reviewingRun);
+        yield* ensureReviewLaunch(reviewingRun, retryCycle);
         return;
-      case "exhausted":
-        yield* finishExhausted(spentRun, input.occurredAt);
+      }
+      case "planning": {
+        const controller = yield* resolveThread(run.controllerThreadId);
+        const review = controller === undefined ? null : reviewRecordForCycle(controller, cycle);
+        if (review === null || cycle.actionableFindingsMarkdown === null) {
+          yield* failRun({
+            run: retryBase,
+            reason: "plan-missing",
+            detailMarkdown: "Gap analysis cannot retry because its review findings are missing.",
+            occurredAt: input.occurredAt,
+          });
+          return;
+        }
+        yield* startPlanning({
+          run: retryBase,
+          review,
+          actionableFindingsMarkdown: cycle.actionableFindingsMarkdown,
+          occurredAt: input.occurredAt,
+        });
         return;
+      }
+      case "fixing": {
+        const repairTickets = cycle.repairTickets ?? [];
+        if (repairTickets.length === 0) {
+          yield* failRun({
+            run: retryBase,
+            reason: "plan-missing",
+            detailMarkdown: "Repair cannot retry because gap analysis produced no tickets.",
+            occurredAt: input.occurredAt,
+          });
+          return;
+        }
+        yield* startFixer({
+          run: retryBase,
+          repairTickets,
+          plannerTurnId: cycle.plannerTurnId,
+          occurredAt: input.occurredAt,
+        });
+        return;
+      }
     }
   });
 
@@ -1204,8 +1428,10 @@ const make = Effect.gen(function* () {
               reviewVerdict: "failed",
               actionableFindingsMarkdown: input.actionableFindingsMarkdown,
               plannerThreadId,
+              planningLaunchCount: (entry.planningLaunchCount ?? 0) + 1,
               repairTickets: [],
               ticketingTurnId: null,
+              failure: null,
             }
           : entry,
       ),
@@ -1332,11 +1558,11 @@ const make = Effect.gen(function* () {
       return;
     }
     const review = controller === undefined ? null : reviewRecordForCycle(controller, cycle);
-    if (
-      (review === null || !["passed", "failed"].includes(review.status)) &&
-      threadTurnFailed(reviewer)
-    ) {
-      if ((yield* phaseThreadState(reviewer)) === "nudging") return;
+    if (review === null || !["passed", "failed"].includes(review.status)) {
+      const failed = threadTurnFailed(reviewer);
+      const completedWithoutReview = phaseTurnCompleted(reviewer) && hasSettledCheckpoint(reviewer);
+      if (!failed && !completedWithoutReview) return;
+      if (failed && (yield* phaseThreadState(reviewer)) === "nudging") return;
       yield* failCycle({
         run,
         reason: "review-blocked",
@@ -1347,7 +1573,6 @@ const make = Effect.gen(function* () {
       });
       return;
     }
-    if (review === null || !["passed", "failed"].includes(review.status)) return;
     if (!hasSettledCheckpoint(reviewer)) return;
     const target = yield* resolveTarget(run.targetThreadId);
     if (target === null) return;
@@ -1405,69 +1630,6 @@ const make = Effect.gen(function* () {
     });
   });
 
-  const buildFixPrompt = (input: {
-    readonly run: AppReviewWorkflowRun;
-    readonly cycle: AppReviewWorkflowCycle;
-    readonly e2eCommands: ReadonlyArray<string>;
-  }) =>
-    appendWorkflowSkillCommandSection(
-      [
-        `Implement the App Review repair tickets for run '${input.run.id}', cycle ${input.cycle.cycleNumber}.`,
-        "",
-        "Use TDD: write the test each ticket names, watch it fail, then repair. Address every actionable finding together, preserve unrelated work, and run focused validation. Do not ask the user questions.",
-        ...(input.e2eCommands.length === 0
-          ? []
-          : [
-              `Before reporting succeeded, run the project's end-to-end test commands${
-                input.run.previewTargets[0] === undefined
-                  ? ""
-                  : ` with ${APP_REVIEW_PREVIEW_URL_ENV}=${input.run.previewTargets[0]}`
-              } and report each as a validation entry:`,
-              ...input.e2eCommands.map((command) => `- ${command}`),
-            ]),
-        input.run.caller.type === "implementation"
-          ? "Commit the complete repair, leave the orchestrator worktree clean, and report a commit SHA matching HEAD."
-          : "Edit the selected worktree in place. A commit and initially clean worktree are not required; preserve unrelated WIP and rely on T3 checkpoints for recovery.",
-        "",
-        "Original acceptance brief:",
-        input.run.briefMarkdown,
-        "",
-        "Actionable findings:",
-        input.cycle.actionableFindingsMarkdown ?? "Missing findings",
-        "",
-        "Durable repair tickets:",
-        ...(input.cycle.repairTickets ?? []).map(
-          (ticket) =>
-            `## ${ticket.key} · ${ticket.title}\n\n${ticket.bodyMarkdown}\n\nBlocked by: ${ticket.dependencyKeys.join(", ") || "None"}`,
-        ),
-        "",
-        "Finish with exactly one fenced JSON block:",
-        "```json",
-        JSON.stringify(
-          {
-            type: "app-review-fix-result",
-            runId: input.run.id,
-            planId: input.cycle.planId,
-            status: "succeeded",
-            commitSha: input.run.caller.type === "implementation" ? "required-HEAD-sha" : undefined,
-            validations: [
-              {
-                command: "vp test run focused-test",
-                status: "passed",
-                outputMarkdown: "Important output or empty string.",
-                completedAt: "2026-01-01T00:00:00.000Z",
-              },
-            ],
-            notesMarkdown: "What changed and what remains.",
-          },
-          null,
-          2,
-        ),
-        "```",
-      ].join("\n"),
-      APP_REVIEW_IMPLEMENT_SKILL_ID,
-    );
-
   const ensureFixerLaunch = Effect.fn("AppReviewWorkflowReactor.ensureFixerLaunch")(function* (
     run: AppReviewWorkflowRun,
     cycle: AppReviewWorkflowCycle,
@@ -1510,7 +1672,7 @@ const make = Effect.gen(function* () {
       message: {
         messageId: yield* serverMessageId("app-review-workflow-fixer"),
         role: "user",
-        text: buildFixPrompt({ run, cycle, e2eCommands }),
+        text: buildAppReviewFixPrompt({ run, cycle, e2eCommands }),
         attachments: [],
       },
       runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
@@ -1550,6 +1712,8 @@ const make = Effect.gen(function* () {
       ticketingTurnId: input.plannerTurnId,
       repairTickets: input.repairTickets,
       fixerThreadId,
+      fixingLaunchCount: (cycle.fixingLaunchCount ?? 0) + 1,
+      failure: null,
     };
     const fixingRun: AppReviewWorkflowRun = {
       ...stableRun,
@@ -1771,8 +1935,11 @@ const make = Effect.gen(function* () {
       return;
     }
     const result = parseFixResult(fixer, run, cycle);
-    if (result === null && threadTurnFailed(fixer)) {
-      if ((yield* phaseThreadState(fixer)) === "nudging") return;
+    if (result === null) {
+      const failed = threadTurnFailed(fixer);
+      const completedWithoutResult = phaseTurnCompleted(fixer) && hasSettledCheckpoint(fixer);
+      if (!failed && !completedWithoutResult) return;
+      if (failed && (yield* phaseThreadState(fixer)) === "nudging") return;
       yield* failCycle({
         run,
         reason: "fixer-failed",
@@ -1783,7 +1950,7 @@ const make = Effect.gen(function* () {
       });
       return;
     }
-    if (result === null || !hasSettledCheckpoint(fixer)) return;
+    if (!hasSettledCheckpoint(fixer)) return;
     if (result.status !== "succeeded") {
       yield* failCycle({
         run,
@@ -1841,7 +2008,13 @@ const make = Effect.gen(function* () {
       workspaceRevision: revision,
       cycles: run.cycles.map((entry) =>
         entry.cycleNumber === cycle.cycleNumber
-          ? { ...entry, status: "completed", fixResult: result, completedAt: occurredAt }
+          ? {
+              ...entry,
+              status: "completed",
+              fixResult: result,
+              failure: null,
+              completedAt: occurredAt,
+            }
           : entry,
       ),
       updatedAt: occurredAt,
@@ -1912,6 +2085,7 @@ const make = Effect.gen(function* () {
     const target = yield* resolveTarget(run.targetThreadId);
     if (target === null) return;
     const workspaceRevision = yield* computeWorkspaceRevision(target.cwd);
+    yield* interruptActivePhaseTurn(run, occurredAt);
     // A finished run reopens: the phase that ran is exactly what the user is
     // saying was wrong, so its verdict cannot stand.
     const reopened = {
@@ -2018,7 +2192,10 @@ const make = Effect.gen(function* () {
           (run.controllerThreadId === threadId ||
             run.activeThreadId === threadId ||
             run.cycles.some(
-              (cycle) => cycle.reviewerThreadId === threadId || cycle.fixerThreadId === threadId,
+              (cycle) =>
+                cycle.reviewerThreadId === threadId ||
+                cycle.plannerThreadId === threadId ||
+                cycle.fixerThreadId === threadId,
             )),
       ) ?? null
     );
@@ -2055,6 +2232,21 @@ const make = Effect.gen(function* () {
       yield* rerunPhase(event.payload.run, event.payload.phase, event.occurredAt);
       return;
     }
+    if (
+      event.type === "thread.session-set" &&
+      (event.payload.session.status === "starting" || event.payload.session.status === "running")
+    ) {
+      const run = yield* runForEvent(event);
+      if (run !== null && isSupersededAppReviewPhaseThread(run, event.payload.threadId)) {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.turn.interrupt",
+          commandId: yield* serverCommandId("app-review-workflow-superseded-interrupt"),
+          threadId: event.payload.threadId,
+          createdAt: event.occurredAt,
+        });
+        return;
+      }
+    }
     if (event.type === "thread.activity-appended") {
       const run = yield* runForEvent(event);
       if (run === null) return;
@@ -2079,8 +2271,8 @@ const make = Effect.gen(function* () {
       if (run !== null && run.activeThreadId === event.payload.threadId) {
         const active = yield* resolveThread(event.payload.threadId);
         if (active !== undefined && (yield* phaseThreadState(active)) === "nudging") return;
-        // A phase we can name is that cycle's work failing, so the cycle pays
-        // for it. A session error with no phase to blame has no cycle to spend.
+        // A named phase owns its bounded in-cycle replacement. A session error
+        // with no active phase has no safe retry target.
         const phaseReason =
           run.activePhase === "fixing"
             ? ("fixer-failed" as const)
@@ -2126,8 +2318,6 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  const worker = yield* makeDrainableWorker(processEventSafely);
-
   const reconcileRuns = Effect.fn("AppReviewWorkflowReactor.reconcileRuns")(function* () {
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
     const occurredAt = yield* nowIso;
@@ -2149,19 +2339,44 @@ const make = Effect.gen(function* () {
     }
   });
 
+  type WorkItem =
+    | { readonly kind: "event"; readonly event: AppReviewWorkflowEvent }
+    | { readonly kind: "reconcile" };
+
+  const worker = yield* makeDrainableWorker((item: WorkItem) =>
+    item.kind === "event"
+      ? processEventSafely(item.event)
+      : reconcileRuns().pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("App Review workflow recovery sweep failed", {
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        ),
+  );
+
   const reconcile: AppReviewWorkflowReactorShape["reconcile"] = () =>
-    reconcileRuns().pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("App Review workflow reconciliation failed", {
-          cause: Cause.pretty(cause),
-        }),
-      ),
-    );
+    worker.enqueue({ kind: "reconcile" }).pipe(Effect.andThen(worker.flush));
 
   const start: AppReviewWorkflowReactorShape["start"] = Effect.fn("start")(function* () {
-    yield* reconcile();
+    const domainEvents =
+      orchestrationEngine.subscribeDomainEvents === undefined
+        ? orchestrationEngine.streamDomainEvents
+        : Stream.fromSubscription(yield* orchestrationEngine.subscribeDomainEvents);
     yield* Effect.forkScoped(
-      Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
+      Stream.runForEach(domainEvents, (event) => {
+        if (
+          event.type === "thread.activity-appended" &&
+          !isAppReviewWorkflowActivityKind(event.payload.activity.kind)
+        ) {
+          return Effect.void;
+        }
+        if (
+          event.type === "thread.session-set" &&
+          !isAppReviewWorkflowSessionStatus(event.payload.session.status)
+        ) {
+          return Effect.void;
+        }
         if (
           event.type !== "thread.app-review-workflow-launched" &&
           event.type !== "thread.app-review-workflow-resume-requested" &&
@@ -2175,8 +2390,15 @@ const make = Effect.gen(function* () {
         ) {
           return Effect.void;
         }
-        return worker.enqueue(event);
+        return worker.enqueue({ kind: "event", event });
       }),
+    );
+    yield* reconcile();
+    yield* Effect.forkScoped(
+      Effect.sleep(Duration.millis(APP_REVIEW_RECOVERY_SWEEP_INTERVAL_MS)).pipe(
+        Effect.andThen(reconcile()),
+        Effect.forever,
+      ),
     );
   });
 

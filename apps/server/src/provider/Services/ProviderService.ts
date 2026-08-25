@@ -26,6 +26,8 @@ import type {
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
+import type * as PubSub from "effect/PubSub";
+import type * as Scope from "effect/Scope";
 import type * as Stream from "effect/Stream";
 
 import type { ProviderServiceError } from "../Errors.ts";
@@ -111,6 +113,13 @@ export interface ProviderServiceShape {
    * Fan-out is owned by ProviderService (not by a standalone event-bus service).
    */
   readonly streamEvents: Stream.Stream<ProviderRuntimeEvent>;
+
+  /** Acquire the hot runtime-event subscription before forking its consumer. */
+  readonly subscribeEvents?: Effect.Effect<
+    PubSub.Subscription<ProviderRuntimeEvent>,
+    never,
+    Scope.Scope
+  >;
 }
 
 /**

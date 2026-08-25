@@ -727,6 +727,85 @@ describe("StaleTurnReconciler", () => {
     ),
   );
 
+  it.live("does not settle a provider launch created during startup recovery", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const threadId = ThreadId.make("thread-starting-provider-launch");
+          yield* seedProject(system);
+          yield* createPlanningOrchestratorThread(
+            system,
+            threadId,
+            "starting-provider-launch",
+            "spec-authoring",
+          );
+          const updatedAt = DateTime.formatIso(yield* DateTime.now);
+          yield* setThreadSession(system, {
+            threadId,
+            status: "starting",
+            activeTurnId: null,
+            updatedAt,
+            tag: "starting-provider-launch",
+          });
+
+          yield* system.reconciler.start();
+          yield* Effect.sleep(Duration.millis(100));
+
+          expect(yield* sessionStatus(system, threadId)).toBe("starting");
+          expect(yield* resumeActivities(system, threadId)).toHaveLength(0);
+        }),
+      { reconciler: { ...bootOnlyOptions, graceMs: 60_000 } },
+    ),
+  );
+
+  it.live("gives a starting provider launch a longer periodic grace", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const launchThreadId = ThreadId.make("thread-starting-provider-periodic");
+          const sentinelThreadId = ThreadId.make("thread-starting-provider-sentinel");
+          yield* seedProject(system);
+          yield* createPlainThread(system, launchThreadId, "starting provider periodic");
+          yield* createPlainThread(system, sentinelThreadId, "starting provider sentinel");
+
+          yield* system.reconciler.start();
+
+          const updatedAt = DateTime.formatIso(yield* DateTime.now);
+          yield* setThreadSession(system, {
+            threadId: launchThreadId,
+            status: "starting",
+            activeTurnId: null,
+            updatedAt,
+            tag: "starting-provider-periodic",
+          });
+          yield* setThreadSession(system, {
+            threadId: sentinelThreadId,
+            status: "running",
+            activeTurnId: TurnId.make("turn-starting-provider-sentinel"),
+            updatedAt: "2020-01-01T00:00:00.000Z",
+            tag: "starting-provider-sentinel",
+          });
+
+          yield* waitUntil(
+            sessionStatus(system, sentinelThreadId).pipe(
+              Effect.map((status) => status === "error"),
+            ),
+            "periodic sweep sentinel to settle",
+          );
+
+          expect(yield* sessionStatus(system, launchThreadId)).toBe("starting");
+        }),
+      {
+        reconciler: {
+          sweepIntervalMs: 50,
+          graceMs: 0,
+          startingProviderLaunchGraceMs: 60_000,
+          confirmDelayMs: 0,
+        },
+      },
+    ),
+  );
+
   it.live("settles orphaned running turns at boot without touching non-workflow threads", () =>
     withSystem(
       (system) =>
@@ -942,6 +1021,12 @@ describe("StaleTurnReconciler", () => {
             "worker failure handoff",
           );
           yield* system.reactor.drain;
+          yield* waitUntil(
+            getRun(system, run.id).pipe(
+              Effect.map((entry) => entry?.ticketStates[0]?.attemptCount === 2),
+            ),
+            "worker retry state",
+          );
 
           const workerThread = yield* getThread(system, workerThreadId);
           expect(workerThread?.session?.status).toBe("error");

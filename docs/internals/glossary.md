@@ -163,7 +163,7 @@ The persistent thread that owns one App Review run and keeps the original brief 
 
 #### App Review cycle
 
-One complete App Review budget unit: UI review, gap analysis and plan after a failure, and implementation, each in its own thread. The initial review is cycle 1. A pass completes its cycle without the unnecessary planning and implementation steps; the final failed cycle still implements its plan before the run becomes exhausted.
+One complete App Review budget unit: one reviewer thread that owns both declared E2E commands and browser review, gap analysis and planning in a second thread after a product failure, and repair in a third thread. Each phase thread gets one turn. The initial review is cycle 1. A pass completes its cycle without the unnecessary planning and repair steps; the final failed product review still implements its plan before the run becomes exhausted. Provider and runtime failures replace only their current phase thread, with a bounded launch budget, and do not consume another product-review cycle.
 
 #### App Review outcome
 

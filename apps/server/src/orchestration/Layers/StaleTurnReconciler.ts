@@ -50,6 +50,7 @@ import { isWorkflowThreadPaused } from "../workflowPause.ts";
 
 const DEFAULT_SWEEP_INTERVAL_MS = 60 * 1000;
 const DEFAULT_GRACE_MS = 60 * 1000;
+const DEFAULT_STARTING_PROVIDER_LAUNCH_GRACE_MS = 5 * 60 * 1000;
 const DEFAULT_CONFIRM_DELAY_MS = 15 * 1000;
 const DEFAULT_MAX_RESUME_ATTEMPTS = 2;
 
@@ -81,6 +82,7 @@ const AUTONOMOUS_RESUME_ROLES: ReadonlySet<OrchestrationThreadWorkflowRole> =
 export interface StaleTurnReconcilerLiveOptions {
   readonly sweepIntervalMs?: number;
   readonly graceMs?: number;
+  readonly startingProviderLaunchGraceMs?: number;
   readonly confirmDelayMs?: number;
   readonly maxResumeAttempts?: number;
   readonly nudgeIntervalMs?: number;
@@ -89,6 +91,7 @@ export interface StaleTurnReconcilerLiveOptions {
 
 interface SweepOptions {
   readonly graceMs: number;
+  readonly startingProviderLaunchGraceMs: number;
   readonly confirmDelayMs: number;
   /** Spacing between nudges for a thread that stays blocked. */
   readonly nudgeIntervalMs: number;
@@ -136,6 +139,17 @@ function hasRunningTurnSignature(thread: OrchestrationThread): boolean {
       session.status === "starting" ||
       session.activeTurnId !== null);
   return sessionActive || thread.latestTurn?.state === "running";
+}
+
+/**
+ * A workflow reactor can create its phase thread while startup recovery is
+ * still running. The provider command has not claimed a turn yet, so the boot
+ * sweep must leave this handoff alone. The periodic sweep applies a longer
+ * launch grace because a busy provider can take more than one sweep interval
+ * to claim its first turn.
+ */
+function isStartingProviderLaunch(thread: OrchestrationThread): boolean {
+  return thread.session?.status === "starting" && thread.session.activeTurnId === null;
 }
 
 /**
@@ -422,6 +436,10 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
 
     const sweepIntervalMs = Math.max(1, options?.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS);
     const graceMs = Math.max(0, options?.graceMs ?? DEFAULT_GRACE_MS);
+    const startingProviderLaunchGraceMs = Math.max(
+      graceMs,
+      options?.startingProviderLaunchGraceMs ?? DEFAULT_STARTING_PROVIDER_LAUNCH_GRACE_MS,
+    );
     const confirmDelayMs = Math.max(0, options?.confirmDelayMs ?? DEFAULT_CONFIRM_DELAY_MS);
     const maxResumeAttempts = Math.max(
       1,
@@ -1063,7 +1081,10 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
           if (thread.deletedAt !== null) continue;
 
           const sessionLost = !liveThreadIds.has(thread.id);
-          const running = sessionLost && hasRunningTurnSignature(thread);
+          const running =
+            sessionLost &&
+            hasRunningTurnSignature(thread) &&
+            !(sweepOptions.recoverInactiveWorkflows && isStartingProviderLaunch(thread));
           const inactiveWorkflow =
             sweepOptions.recoverInactiveWorkflows &&
             sessionLost &&
@@ -1076,7 +1097,10 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
             hasResumableErrorSignature(readModel, thread);
 
           if (running || inactiveWorkflow || resumableError) {
-            if (sweepOptions.graceMs > 0) {
+            const candidateGraceMs = isStartingProviderLaunch(thread)
+              ? sweepOptions.startingProviderLaunchGraceMs
+              : sweepOptions.graceMs;
+            if (candidateGraceMs > 0) {
               const referenceIso = thread.session?.updatedAt ?? thread.updatedAt;
               const referenceMs = Date.parse(referenceIso);
               if (Number.isNaN(referenceMs)) {
@@ -1086,7 +1110,7 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
                 });
                 continue;
               }
-              if (now - referenceMs < sweepOptions.graceMs) continue;
+              if (now - referenceMs < candidateGraceMs) continue;
             }
 
             candidates.push(
@@ -1197,6 +1221,9 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
 
           if (candidate.kind === "running") {
             if (!hasRunningTurnSignature(thread)) continue;
+            if (sweepOptions.recoverInactiveWorkflows && isStartingProviderLaunch(thread)) {
+              continue;
+            }
             if (pinTurnId(thread) !== candidate.pinnedTurnId) continue;
           } else if (candidate.kind === "resumable-error") {
             if (hasRunningTurnSignature(thread)) continue;
@@ -1309,6 +1336,7 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
         // could leave a workflow waiting for the slower periodic sweep.
         yield* safeSweep({
           graceMs: 0,
+          startingProviderLaunchGraceMs,
           confirmDelayMs: 0,
           nudgeIntervalMs: 0,
           recoverInactiveWorkflows: true,
@@ -1318,6 +1346,7 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
         yield* Effect.forkScoped(
           safeSweep({
             graceMs,
+            startingProviderLaunchGraceMs,
             confirmDelayMs,
             nudgeIntervalMs,
             recoverInactiveWorkflows: false,
@@ -1328,6 +1357,7 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
         yield* Effect.logInfo("stale-turn.reconciler.started", {
           sweepIntervalMs,
           graceMs,
+          startingProviderLaunchGraceMs,
           confirmDelayMs,
           maxResumeAttempts,
           nudgeIntervalMs,

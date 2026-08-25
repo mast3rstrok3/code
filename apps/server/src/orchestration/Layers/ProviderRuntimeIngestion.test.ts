@@ -51,6 +51,7 @@ import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQu
 import {
   MAX_PRODUCT_INTENT_LOCK_REJECTION_BOUNCES,
   ProviderRuntimeIngestionLive,
+  turnOwesWorkflowDirective,
 } from "./ProviderRuntimeIngestion.ts";
 import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
 import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
@@ -60,6 +61,7 @@ import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeInge
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { ServerActivation } from "../../serverActivation.ts";
 import { WORKFLOW_PROMPT_IDS } from "../../provider/WorkflowPromptRegistry.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
@@ -73,6 +75,37 @@ const asEventId = (value: string): EventId => EventId.make(value);
 const asMessageId = (value: string): MessageId => MessageId.make(value);
 const asThreadId = (value: string): ThreadId => ThreadId.make(value);
 const asTurnId = (value: string): TurnId => TurnId.make(value);
+
+it("requires workflow directives only from cleanly completed turns", () => {
+  const base = {
+    eventId: asEventId("event-workflow-directive-terminal-state"),
+    provider: ProviderDriverKind.make("codex"),
+    createdAt: "2026-01-01T00:00:00.000Z",
+    threadId: asThreadId("thread-workflow-directive-terminal-state"),
+    turnId: asTurnId("turn-workflow-directive-terminal-state"),
+  };
+
+  expect(
+    turnOwesWorkflowDirective({ ...base, type: "turn.completed", payload: { state: "completed" } }),
+  ).toBe(true);
+  expect(
+    turnOwesWorkflowDirective({
+      ...base,
+      type: "turn.completed",
+      payload: { state: "failed", errorMessage: "Provider endpoint is unavailable." },
+    }),
+  ).toBe(false);
+  expect(
+    turnOwesWorkflowDirective({
+      ...base,
+      type: "turn.completed",
+      payload: { state: "interrupted" },
+    }),
+  ).toBe(false);
+  expect(
+    turnOwesWorkflowDirective({ ...base, type: "turn.aborted", payload: { reason: "Stopped" } }),
+  ).toBe(false);
+});
 
 type LegacyProviderRuntimeEvent = {
   readonly type: string;
@@ -250,6 +283,7 @@ describe("ProviderRuntimeIngestion", () => {
   });
 
   async function createHarness(options?: {
+    activation?: Effect.Effect<void>;
     serverSettings?: DeepPartial<ServerSettings>;
     threadTitle?: string;
   }) {
@@ -279,6 +313,7 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provideMerge(Layer.succeed(ProviderService, provider.service)),
       Layer.provideMerge(makeTestServerSettingsLayer(options?.serverSettings)),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+      Layer.provideMerge(Layer.succeed(ServerActivation, options?.activation)),
       Layer.provideMerge(NodeServices.layer),
     );
     runtime = ManagedRuntime.make(layer);
@@ -394,6 +429,27 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(thread.session?.status).toBe("error");
     expect(thread.session?.lastError).toBe("turn failed");
+  });
+
+  it("subscribes to hot provider events before server activation", async () => {
+    const harness = await createHarness({ activation: Effect.never });
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-started-before-activation"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: now,
+      turnId: asTurnId("turn-before-activation"),
+    });
+
+    await waitForThread(
+      harness.readModel,
+      (thread) =>
+        thread.session?.status === "running" &&
+        thread.session?.activeTurnId === "turn-before-activation",
+    );
   });
 
   it("applies provider session.state.changed transitions directly", async () => {
@@ -5695,6 +5751,108 @@ describe("ProviderRuntimeIngestion", () => {
       (thread) => thread.id === implementerThreadId,
     );
     expect(fastBuildResults(settled!)).toHaveLength(1);
+  });
+
+  it("leaves a failed Build turn to workflow recovery instead of reporting a missing directive", async () => {
+    const harness = await createHarness();
+    const { implementerThreadId } = await seedFastFeatureRun(harness);
+    emitFastBuildTurnStart(harness, implementerThreadId, "turn-fast-provider-failed");
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-fast-provider-failed-item"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:02.000Z",
+      threadId: implementerThreadId,
+      turnId: asTurnId("turn-fast-provider-failed"),
+      itemId: asItemId("item-fast-provider-failed"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail: "I was still validating the repair.",
+      },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-fast-provider-failed-turn"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:03.000Z",
+      threadId: implementerThreadId,
+      turnId: asTurnId("turn-fast-provider-failed"),
+      payload: { state: "failed", errorMessage: "Provider aborted the active command." },
+    });
+
+    await harness.drain();
+    const implementer = (await harness.readModel()).threads.find(
+      (thread) => thread.id === implementerThreadId,
+    );
+    expect(implementer?.session?.status).toBe("error");
+    expect(fastBuildResults(implementer!)).toHaveLength(0);
+  });
+
+  it("replays a valid Build directive from the projected terminal message", async () => {
+    const harness = await createHarness();
+    const { implementerThreadId, runId } = await seedFastFeatureRun(harness);
+    const turnId = asTurnId("turn-fast-terminal-replay");
+    const messageId = asMessageId("message-fast-terminal-replay");
+    emitFastBuildTurnStart(harness, implementerThreadId, turnId);
+    await harness.drain();
+
+    const directive = `\`\`\`json
+{
+  "type": "implementation-fast-build-result",
+  "runId": "${runId}",
+  "status": "succeeded",
+  "commitSha": "terminal123",
+  "validations": [],
+  "notesMarkdown": "Recovered from the projected terminal message."
+}
+\`\`\``;
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.message.assistant.delta",
+        commandId: CommandId.make("cmd-fast-terminal-replay-delta"),
+        threadId: implementerThreadId,
+        messageId,
+        turnId,
+        delta: directive,
+        createdAt: "2026-01-01T00:00:02.000Z",
+      }),
+    );
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.message.assistant.complete",
+        commandId: CommandId.make("cmd-fast-terminal-replay-complete"),
+        threadId: implementerThreadId,
+        messageId,
+        turnId,
+        createdAt: "2026-01-01T00:00:02.000Z",
+      }),
+    );
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-fast-terminal-replay-turn"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:03.000Z",
+      threadId: implementerThreadId,
+      turnId,
+      payload: { state: "completed" },
+    });
+
+    const implementer = await waitForThread(
+      harness.readModel,
+      (thread) => fastBuildResults(thread).length > 0,
+      2_000,
+      implementerThreadId,
+    );
+    expect(fastBuildResults(implementer)).toHaveLength(1);
+    expect(fastBuildResults(implementer)[0]?.payload).toMatchObject({
+      type: "implementation-fast-build-result",
+      runId,
+      status: "succeeded",
+      commitSha: "terminal123",
+    });
   });
 
   it("still accepts a valid Build directive on an intermediate assistant message", async () => {

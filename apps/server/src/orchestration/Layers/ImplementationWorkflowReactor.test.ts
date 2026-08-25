@@ -53,12 +53,14 @@ import {
   implementationTicketReviewWarningLines,
   implementationTicketStateIsTerminal,
   implementationRunRerunIsPaused,
+  isImplementationWorkflowActivityKind,
   isLegacyDirtyWorkerLaunchHalt,
   isRecoverableInterruptedWorktreeHalt,
   failImplementationTickets,
   ImplementationWorkflowReactorLive,
   nestedAppReviewAwaitsPreviewRefresh,
   passedAppReviewContinuation,
+  ticketAppReviewClaimIsAhead,
   workflowIdForRun,
 } from "./ImplementationWorkflowReactor.ts";
 import {
@@ -85,6 +87,19 @@ import {
 
 const now = "2026-01-01T00:00:00.000Z";
 const decodeImplementationRun = Schema.decodeUnknownEffect(OrchestrationImplementationRun);
+
+it("queues only implementation directive activities", () => {
+  expect(isImplementationWorkflowActivityKind("implementation-worker-result")).toBe(true);
+  expect(isImplementationWorkflowActivityKind("implementation-merge-gate-result")).toBe(true);
+  expect(isImplementationWorkflowActivityKind("implementation-fix-result")).toBe(true);
+  expect(isImplementationWorkflowActivityKind("implementation-code-review-result")).toBe(true);
+  expect(isImplementationWorkflowActivityKind("implementation-fast-build-result")).toBe(true);
+  expect(isImplementationWorkflowActivityKind("implementation-change-request-babysit-result")).toBe(
+    true,
+  );
+  expect(isImplementationWorkflowActivityKind("tool.updated")).toBe(false);
+  expect(isImplementationWorkflowActivityKind("context-window.updated")).toBe(false);
+});
 
 it("treats reviewed successes and best-effort failures as terminal tickets", () => {
   expect(implementationTicketStateIsTerminal("succeeded")).toBe(true);
@@ -213,6 +228,46 @@ it("knows when an embedded App Review is parked awaiting a preview refresh", () 
       ...parked,
       cycles: [],
     } as unknown as Parameters<typeof nestedAppReviewAwaitsPreviewRefresh>[0]),
+  ).toBe(false);
+});
+
+it("recognizes a ticket App Review claim hidden by projection lag", () => {
+  const observed = {
+    ticketStates: [
+      {
+        ticketId: "ticket-1",
+        appReviewGeneration: 2,
+        appReviewLaunchCount: 0,
+        appReviewWorkflowRunId: null,
+      },
+    ],
+  } as unknown as OrchestrationImplementationRun;
+  const local = {
+    ticketStates: [
+      {
+        ticketId: "ticket-1",
+        appReviewGeneration: 2,
+        appReviewLaunchCount: 1,
+        appReviewWorkflowRunId: "app-review-workflow-1",
+      },
+    ],
+  } as unknown as OrchestrationImplementationRun;
+
+  expect(ticketAppReviewClaimIsAhead({ local, observed, ticketId: "ticket-1" })).toBe(true);
+  expect(
+    ticketAppReviewClaimIsAhead({
+      local,
+      observed: {
+        ...observed,
+        ticketStates: [
+          {
+            ...observed.ticketStates[0]!,
+            appReviewGeneration: 3,
+          },
+        ],
+      },
+      ticketId: "ticket-1",
+    }),
   ).toBe(false);
 });
 
@@ -4037,29 +4092,45 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("does not spend the launch budget on repeated server interruptions", () =>
+  it.effect("halts after repeated server interruptions exhaust the launch budget", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         const { run } = yield* launchRun(system);
-        for (const tag of ["first", "second", "third"]) {
-          yield* appendWorkerResult(system, {
-            run,
-            status: "failed",
-            notesMarkdown: WORKFLOW_INTERRUPTION_ERROR_MESSAGE,
-            tag,
-          });
-        }
+        yield* appendWorkerResult(system, {
+          run,
+          status: "failed",
+          notesMarkdown: WORKFLOW_INTERRUPTION_ERROR_MESSAGE,
+          tag: "first",
+        });
 
-        const snapshot = yield* system.query.getSnapshot();
-        const continued = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        const continuedSnapshot = yield* system.query.getSnapshot();
+        const continued = continuedSnapshot.implementationRuns.find((entry) => entry.id === run.id);
         expect(continued?.status).toBe("running");
         expect(continued?.automationHalt).toBeNull();
-        expect(continued?.retryableFailure).toBeNull();
+        expect(continued?.retryableFailure?.attemptCount).toBe(1);
         expect(continued?.ticketStates[0]?.status).toBe("running");
-        expect(continued?.ticketStates[0]?.attemptCount).toBe(1);
+        expect(continued?.ticketStates[0]?.attemptCount).toBe(2);
+
+        yield* appendWorkerResult(system, {
+          run,
+          status: "failed",
+          notesMarkdown: WORKFLOW_INTERRUPTION_ERROR_MESSAGE,
+          tag: "second",
+        });
+
+        const haltedSnapshot = yield* system.query.getSnapshot();
+        const halted = haltedSnapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(halted?.status).toBe("needs-human-attention");
+        expect(halted?.retryableFailure?.attemptCount).toBe(2);
+        expect(halted?.automationHalt).toMatchObject({
+          stage: "implementation",
+          category: "retry-exhausted",
+        });
         expect(
-          snapshot.threads.filter((thread) => thread.workflowRole === "implementation-worker"),
-        ).toHaveLength(4);
+          haltedSnapshot.threads.filter(
+            (thread) => thread.workflowRole === "implementation-worker",
+          ),
+        ).toHaveLength(2);
       }),
     ),
   );
@@ -4227,13 +4298,18 @@ describe("ImplementationWorkflowReactor", () => {
           (thread) => thread.workflowRole === "implementation-worker",
         );
         expect(workers).toHaveLength(2);
-        expect(
-          workers.some((worker) =>
-            worker.messages[0]?.text.includes(
-              "contains tracked or untracked changes from an interrupted worker",
-            ),
+        const replacementPrompt = workers.find((worker) =>
+          worker.messages[0]?.text.includes(
+            "contains tracked or untracked changes from an interrupted worker",
           ),
-        ).toBe(true);
+        )?.messages[0]?.text;
+        expect(replacementPrompt).toContain(
+          "contains tracked or untracked changes from an interrupted worker",
+        );
+        expect(replacementPrompt).toContain("Why the prior stage stopped:");
+        expect(replacementPrompt).toContain(
+          "Embedded App Review requires clean expected branch 'checkout-ticket-1'",
+        );
       }),
     ),
   );
@@ -4288,6 +4364,66 @@ describe("ImplementationWorkflowReactor", () => {
               (run.ticketStates[index]?.implementationGeneration ?? 0) + 1,
           ),
         ).toBe(true);
+      }),
+    ),
+  );
+
+  it.effect("continues persisted ticket App Review launch-budget fallout in Code Review", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, ticket, nestedRun } = yield* launchTicketAppReview(system);
+        const current = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (entry) => entry.id === run.id,
+        );
+        if (current === undefined) throw new Error("Implementation run missing.");
+        const haltedRun: OrchestrationImplementationRun = {
+          ...current,
+          status: "needs-human-attention",
+          automationHalt: {
+            ticketId: ticket.id,
+            stage: "app-review",
+            category: "retry-exhausted",
+            detail: `Ticket '${ticket.id}' exhausted its App Review launch budget.`,
+            haltedAt: "2026-01-01T00:05:00.000Z",
+          },
+          ticketStates: current.ticketStates.map((state) =>
+            state.ticketId === ticket.id
+              ? {
+                  ...state,
+                  appReviewWorkflowRunId: null,
+                  appReviewLaunchCount: IMPLEMENTATION_STAGE_MAX_LAUNCHES,
+                }
+              : state,
+          ),
+          updatedAt: "2026-01-01T00:05:00.000Z",
+        };
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("persist-ticket-app-review-launch-budget-fallout"),
+          threadId: sourceThreadId,
+          run: haltedRun,
+          createdAt: "2026-01-01T00:05:00.000Z",
+        });
+        yield* system.reactor.drain;
+
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+
+        const snapshot = yield* system.query.getSnapshot();
+        const recovered = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        const state = recovered?.ticketStates.find((entry) => entry.ticketId === ticket.id);
+        expect(recovered?.status).toBe("running");
+        expect(recovered?.automationHalt).toBeNull();
+        expect(state?.status).toBe("code-reviewing");
+        expect(state?.warningMarkdown).toContain("exhausting its 2-launch budget");
+        expect(
+          snapshot.threads.filter(
+            (thread) => thread.workflowRole === "implementation-code-reviewer",
+          ),
+        ).toHaveLength(1);
+        expect(
+          (snapshot.appReviewWorkflowRuns ?? []).find((entry) => entry.id === nestedRun.id)?.status,
+        ).toBe("failed");
       }),
     ),
   );
@@ -6214,6 +6350,68 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
+  it.effect("an exhausted ticket App Review launch budget continues to Code Review", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, ticket } = yield* launchRun(system, {
+          appReviewStrategy: "nested-workflow",
+          tickets: [
+            {
+              ...planningTicket("TICKET-1"),
+              appReviewEligible: true,
+              appReviewPlanMarkdown: "Review checkout.",
+            },
+          ],
+        });
+        const current = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (entry) => entry.id === run.id,
+        );
+        if (current === undefined) throw new Error("Implementation run missing.");
+        const budgetedRun: OrchestrationImplementationRun = {
+          ...current,
+          ticketStates: current.ticketStates.map((state) =>
+            state.ticketId === ticket.id
+              ? { ...state, appReviewLaunchCount: IMPLEMENTATION_STAGE_MAX_LAUNCHES }
+              : state,
+          ),
+        };
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("exhaust-ticket-app-review-launch-budget"),
+          threadId: sourceThreadId,
+          run: budgetedRun,
+          createdAt: "2026-01-01T00:00:00.500Z",
+        });
+        yield* system.reactor.drain;
+
+        yield* appendWorkerResult(system, {
+          run,
+          status: "succeeded",
+          ticketId: ticket.id,
+          completeTicketReview: false,
+        });
+
+        const snapshot = yield* system.query.getSnapshot();
+        const updated = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        const state = updated?.ticketStates.find((entry) => entry.ticketId === ticket.id);
+        expect(updated?.status).toBe("running");
+        expect(updated?.automationHalt).toBeNull();
+        expect(state).toMatchObject({
+          status: "code-reviewing",
+          appReviewOutcome: "failed",
+        });
+        expect(state?.appReviewWorkflowRunId ?? null).toBeNull();
+        expect(state?.warningMarkdown).toContain("exhausting its 2-launch budget");
+        expect(snapshot.appReviewWorkflowRuns ?? []).toHaveLength(0);
+        expect(
+          snapshot.threads.filter(
+            (thread) => thread.workflowRole === "implementation-code-reviewer",
+          ),
+        ).toHaveLength(1);
+      }),
+    ),
+  );
+
   it.effect("lifting a skip leaves the run with none recorded", () =>
     withSystem((system) =>
       Effect.gen(function* () {
@@ -6392,6 +6590,193 @@ describe("ImplementationWorkflowReactor", () => {
               thread.workflowContext.ticketScope[0] === ticket.id,
           ),
         ).toBe(true);
+      }),
+    ),
+  );
+
+  it.effect("keeps back-to-back ticket App Review reruns in the same run", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, tickets } = yield* launchRun(system, {
+          appReviewStrategy: "nested-workflow",
+          tickets: [
+            {
+              ...planningTicket("TICKET-1"),
+              appReviewEligible: true,
+              appReviewPlanMarkdown: "Review the first page.",
+            },
+            {
+              ...planningTicket("TICKET-2"),
+              appReviewEligible: true,
+              appReviewPlanMarkdown: "Review the second page.",
+            },
+          ],
+        });
+        for (const ticket of tickets) {
+          yield* appendWorkerResult(system, {
+            run,
+            status: "succeeded",
+            ticketId: ticket.id,
+            completeTicketReview: false,
+          });
+        }
+
+        let snapshot = yield* system.query.getSnapshot();
+        const oldReviewIds = new Map(
+          snapshot.implementationRuns
+            .find((entry) => entry.id === run.id)
+            ?.ticketStates.map((state) => [state.ticketId, state.appReviewWorkflowRunId] as const),
+        );
+        for (const ticket of tickets) {
+          const oldReviewId = oldReviewIds.get(ticket.id);
+          const nested = (snapshot.appReviewWorkflowRuns ?? []).find(
+            (entry) => entry.id === oldReviewId,
+          );
+          if (nested === undefined) throw new Error(`Nested review missing for ${ticket.id}.`);
+          yield* system.engine.dispatch({
+            type: "thread.app-review-workflow.update",
+            commandId: commandId(`fail-old-review-${ticket.id}`),
+            threadId: nested.controllerThreadId,
+            run: {
+              ...nested,
+              status: "failed",
+              outcome: "failed",
+              activePhase: null,
+              activeThreadId: null,
+              failure: {
+                reason: "review-blocked",
+                phase: "review",
+                cycleNumber: 1,
+                detailMarkdown: "The provider stopped.",
+                failedAt: "2026-01-01T00:04:00.000Z",
+              },
+              updatedAt: "2026-01-01T00:04:00.000Z",
+              completedAt: "2026-01-01T00:04:00.000Z",
+            },
+            createdAt: "2026-01-01T00:04:00.000Z",
+          });
+        }
+        yield* system.reactor.drain;
+
+        for (const ticket of tickets) {
+          yield* system.engine.dispatch({
+            type: "thread.implementation-run.rerun",
+            commandId: commandId(`rerun-review-${ticket.id}`),
+            threadId: sourceThreadId,
+            runId: run.id,
+            target: { kind: "ticket", ticketId: ticket.id, stage: "app-review" },
+            createdAt: "2026-01-01T00:05:00.000Z",
+          });
+        }
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        const current = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(current?.status).toBe("running");
+        for (const ticket of tickets) {
+          const state = current?.ticketStates.find((entry) => entry.ticketId === ticket.id);
+          expect(state?.status).toBe("app-reviewing");
+          expect(state?.attemptCount).toBe(1);
+          expect(state?.appReviewWorkflowRunId).not.toBe(oldReviewIds.get(ticket.id));
+          expect(
+            (snapshot.appReviewWorkflowRuns ?? []).find(
+              (entry) => entry.id === state?.appReviewWorkflowRunId,
+            )?.status,
+          ).toBe("running");
+        }
+      }),
+    ),
+  );
+
+  it.effect("hands unfinished App Review repairs to the replacement worker", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, ticket, nestedRun } = yield* launchTicketAppReview(system);
+        const failedAt = "2026-01-01T00:04:00.000Z";
+        const failure = {
+          reason: "fixer-failed" as const,
+          phase: "fixing" as const,
+          cycleNumber: 1,
+          detailMarkdown:
+            "App Review fixer completed without the required app-review-fix-result directive.",
+          failedAt,
+        };
+        yield* system.engine.dispatch({
+          type: "thread.app-review-workflow.update",
+          commandId: commandId("fail-ticket-review-with-partial-repair"),
+          threadId: nestedRun.controllerThreadId,
+          run: {
+            ...nestedRun,
+            status: "failed",
+            outcome: "failed",
+            activePhase: null,
+            activeThreadId: null,
+            failure,
+            cyclesUsed: 1,
+            cycles: [
+              {
+                cycleNumber: 1,
+                status: "failed",
+                reviewId: AppReviewId.make("app-review-partial-repair"),
+                reviewerThreadId: ThreadId.make("thread-app-review-reviewer-partial"),
+                reviewLaunchCount: 1,
+                planningLaunchCount: 1,
+                fixingLaunchCount: 2,
+                supersededThreadIds: [ThreadId.make("thread-app-review-fixer-old")],
+                reviewVerdict: "failed",
+                actionableFindingsMarkdown: "The evidence table loses its selected row.",
+                planId: "app-review-repair-tickets:partial",
+                plannerThreadId: ThreadId.make("thread-app-review-planner-partial"),
+                plannerTurnId: null,
+                fixerThreadId: ThreadId.make("thread-app-review-fixer-partial"),
+                repairTickets: [
+                  {
+                    key: "AR-1",
+                    parentTicketKey: ticket.id,
+                    title: "Preserve the selected evidence row",
+                    bodyMarkdown:
+                      "Add a focused regression test and keep the selected row visible.",
+                    dependencyKeys: [],
+                  },
+                ],
+                ticketingTurnId: null,
+                fixResult: null,
+                failure,
+                workspaceRevision: nestedRun.workspaceRevision,
+                startedAt: now,
+                completedAt: failedAt,
+              },
+            ],
+            updatedAt: failedAt,
+            completedAt: failedAt,
+          },
+          createdAt: failedAt,
+        });
+        yield* system.reactor.drain;
+        yield* Ref.set(system.dirtyWorkerWorktrees, true);
+
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.rerun",
+          commandId: commandId("rerun-dirty-ticket-app-review"),
+          threadId: sourceThreadId,
+          runId: run.id,
+          target: { kind: "ticket", ticketId: ticket.id, stage: "app-review" },
+          createdAt: "2026-01-01T00:05:00.000Z",
+        });
+        yield* system.reactor.drain;
+
+        const snapshot = yield* system.query.getSnapshot();
+        const workers = snapshot.threads.filter(
+          (thread) => thread.workflowRole === "implementation-worker",
+        );
+        const replacementPrompt = workers[1]?.messages[0]?.text;
+        expect(workers).toHaveLength(2);
+        expect(replacementPrompt).toContain("Why the prior stage stopped:");
+        expect(replacementPrompt).toContain("Unfinished App Review repair tickets");
+        expect(replacementPrompt).toContain("AR-1 · Preserve the selected evidence row");
+        expect(replacementPrompt).toContain(
+          "Add a focused regression test and keep the selected row visible.",
+        );
       }),
     ),
   );

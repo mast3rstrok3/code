@@ -150,7 +150,7 @@ export const AppReviewWorkflowCycleStatus = Schema.Literals([
   "planning",
   "fixing",
   "completed",
-  /** The cycle could not finish its own work. The run spends it and reviews again. */
+  /** Automation could not complete the cycle after bounded in-cycle phase retries. */
   "failed",
 ]);
 export type AppReviewWorkflowCycleStatus = typeof AppReviewWorkflowCycleStatus.Type;
@@ -160,6 +160,12 @@ export const AppReviewWorkflowCycle = Schema.Struct({
   status: AppReviewWorkflowCycleStatus,
   reviewId: AppReviewId,
   reviewerThreadId: ThreadId,
+  /** Provider launches for the current phase. Runtime failures retry in-cycle. */
+  reviewLaunchCount: Schema.optionalKey(NonNegativeInt),
+  planningLaunchCount: Schema.optionalKey(NonNegativeInt),
+  fixingLaunchCount: Schema.optionalKey(NonNegativeInt),
+  /** Older phase threads replaced by an in-cycle retry. */
+  supersededThreadIds: Schema.optionalKey(Schema.Array(ThreadId)),
   reviewVerdict: Schema.NullOr(Schema.Literals(["pending", "passed", "failed"])),
   actionableFindingsMarkdown: Schema.NullOr(Schema.String),
   planId: Schema.NullOr(TrimmedNonEmptyString),
@@ -175,8 +181,8 @@ export const AppReviewWorkflowCycle = Schema.Struct({
   ticketingTurnId: Schema.optionalKey(Schema.NullOr(TurnId)),
   fixResult: Schema.NullOr(AppReviewWorkflowFixResult),
   /**
-   * Why this cycle stopped short, when it did. The run keeps going, so the
-   * cycle is the only place a spent cycle's reason survives.
+   * The latest phase failure. A successful phase clears it. The run keeps the
+   * final failure here when a phase exhausts its launch limit.
    */
   failure: Schema.optionalKey(Schema.NullOr(AppReviewWorkflowFailure)),
   workspaceRevision: AppReviewWorkflowWorkspaceRevision,

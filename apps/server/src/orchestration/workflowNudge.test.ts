@@ -15,10 +15,12 @@ import {
   type WorkflowNudgeThread,
 } from "./workflowNudge.ts";
 
-it("keeps stage recovery and App Review phase retries inside one automatic allowance", () => {
+it("resumes App Review once before its stage owner replaces the phase", () => {
   expect(workflowAutomaticRetryLimit("implementation-worker", 48)).toBe(0);
   expect(workflowAutomaticRetryLimit("implementation-code-reviewer", 48)).toBe(0);
   expect(workflowAutomaticRetryLimit("app-review-reviewer", 48)).toBe(1);
+  expect(workflowAutomaticRetryLimit("app-review-planner", 48)).toBe(1);
+  expect(workflowAutomaticRetryLimit("app-review-fixer", 48)).toBe(1);
   expect(workflowAutomaticRetryLimit("planning-reviewer", 48)).toBe(48);
 });
 
