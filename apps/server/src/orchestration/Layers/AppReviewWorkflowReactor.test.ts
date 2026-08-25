@@ -4,6 +4,7 @@ import {
   AppReviewWorkflowCycleBudget,
   AppReviewWorkflowRunId,
   ThreadId,
+  TurnId,
   type AppReviewCheck,
   type AppReviewRecord,
   type AppReviewWorkflowCycle,
@@ -24,8 +25,8 @@ import {
   appReviewPhaseModelStepWorkflowPromptId,
   appReviewPhaseFailureAction,
   appReviewPhaseLaunchCount,
+  appReviewPhaseTurnPending,
   appReviewRecoveryEvidenceIsCurrent,
-  appReviewRecoveryTurnPending,
   appReviewPhaseThreadState,
   buildAppReviewFixPrompt,
   buildReviewPrompt,
@@ -34,6 +35,7 @@ import {
   resolveEffectiveAppReviewScope,
   recoverableFailedAppReviewPhase,
   reopenFailedAppReviewPhase,
+  rerunPlanningPhaseInCycle,
   priorCycleChecks,
   findAppReviewParentTicket,
   isSupersededAppReviewPhaseThread,
@@ -509,7 +511,7 @@ it("finishes or observes a continuation claim interrupted between its run and tu
   });
 });
 
-it("waits for a claimed continuation to replace the phase thread's old turn", () => {
+it("waits for the current phase launch to replace the phase thread's old turn", () => {
   const failed = failedImplementationReview("TICKET-1");
   const active = run({
     ...failed,
@@ -525,29 +527,74 @@ it("waits for a claimed continuation to replace the phase thread's old turn", ()
   const cycle = active.cycles[0]!;
 
   expect(
-    appReviewRecoveryTurnPending(active, cycle, {
+    appReviewPhaseTurnPending(active, cycle, {
       latestTurn: { requestedAt: "2026-01-01T00:00:01.000Z", state: "error" },
       session: { status: "stopped" },
     }),
   ).toBe(true);
   expect(
-    appReviewRecoveryTurnPending(active, cycle, {
+    appReviewPhaseTurnPending(active, cycle, {
       latestTurn: { requestedAt: "2026-01-01T00:00:01.000Z", state: "running" },
       session: { status: "running" },
     }),
-  ).toBe(false);
+  ).toBe(true);
   expect(
-    appReviewRecoveryTurnPending(active, cycle, {
+    appReviewPhaseTurnPending(active, cycle, {
+      latestTurn: { requestedAt: "2026-01-01T00:00:01.000Z", state: "completed" },
+      session: { status: "starting" },
+    }),
+  ).toBe(true);
+  expect(
+    appReviewPhaseTurnPending(active, cycle, {
       latestTurn: { requestedAt: "2026-01-01T00:00:02.000Z", state: "running" },
       session: { status: "stopped" },
     }),
   ).toBe(true);
   expect(
-    appReviewRecoveryTurnPending(active, cycle, {
+    appReviewPhaseTurnPending(active, cycle, {
       latestTurn: { requestedAt: "2026-01-01T00:00:02.000Z", state: "running" },
       session: { status: "starting" },
     }),
   ).toBe(false);
+});
+
+it("gives a manual gap-analysis rerun a fresh planner thread claim", () => {
+  const cycle = {
+    ...reviewingRun(2).cycles[0]!,
+    status: "failed" as const,
+    plannerThreadId: ThreadId.make("thread-planner-old"),
+    plannerTurnId: TurnId.make("turn-planner-old"),
+    ticketingTurnId: TurnId.make("turn-planner-old"),
+    planId: "app-review-repair-tickets:old",
+    fixerThreadId: ThreadId.make("thread-fixer-old"),
+    repairTickets: [
+      {
+        key: "TICKET-1.1",
+        parentTicketKey: "TICKET-1",
+        title: "Old repair",
+        bodyMarkdown: "Old repair body.",
+        dependencyKeys: [],
+      },
+    ],
+  };
+  const workspaceRevision = {
+    headSha: "def456",
+    workingTreeDiffHash: "working-2",
+    branchDiffHash: "branch-2",
+    fingerprint: "def456:working-2:branch-2",
+  };
+
+  const rerun = rerunPlanningPhaseInCycle({ cycle, workspaceRevision });
+
+  expect(rerun.status).toBe("planning");
+  expect(rerun.plannerThreadId).toBeNull();
+  expect(rerun.plannerTurnId).toBeNull();
+  expect(rerun.ticketingTurnId).toBeNull();
+  expect(rerun.planId).toBeNull();
+  expect(rerun.fixerThreadId).toBeNull();
+  expect(rerun.repairTickets).toEqual([]);
+  expect(rerun.failure).toBeNull();
+  expect(rerun.workspaceRevision).toEqual(workspaceRevision);
 });
 
 it("replays only recovery evidence created after the terminal failure", () => {

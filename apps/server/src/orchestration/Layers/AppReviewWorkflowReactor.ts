@@ -500,8 +500,8 @@ export function reopenFailedAppReviewPhase(input: {
   };
 }
 
-/** A claimed continuation is queued but its new turn has not replaced the old terminal turn yet. */
-export function appReviewRecoveryTurnPending(
+/** The current phase launch is still waiting for its turn to replace older thread state. */
+export function appReviewPhaseTurnPending(
   run: AppReviewWorkflowRun,
   cycle: AppReviewWorkflowCycle,
   thread: {
@@ -509,14 +509,13 @@ export function appReviewRecoveryTurnPending(
     readonly session: { readonly status: string } | null;
   },
 ): boolean {
-  if ((cycle.recoveryContinuationCount ?? 0) === 0 || run.activePhase === null) return false;
-  if (thread.session?.status === "starting" || thread.session?.status === "running") return false;
-  if (thread.latestTurn === null || thread.latestTurn.requestedAt < run.updatedAt) return true;
-  return (
-    thread.latestTurn.state === "running" &&
-    thread.session?.status !== "starting" &&
-    thread.session?.status !== "running"
-  );
+  if (run.activePhase === null) return false;
+  const sessionIsActive =
+    thread.session?.status === "starting" || thread.session?.status === "running";
+  if (thread.latestTurn === null || thread.latestTurn.requestedAt < run.updatedAt) {
+    return sessionIsActive || (cycle.recoveryContinuationCount ?? 0) > 0;
+  }
+  return thread.latestTurn.state === "running" && !sessionIsActive;
 }
 
 export function appReviewRecoveryEvidenceIsCurrent(
@@ -555,6 +554,26 @@ export function retryReviewPhaseInCycle(input: {
     ticketingTurnId: null,
     fixResult: null,
     failure: input.failure,
+    workspaceRevision: input.workspaceRevision,
+    completedAt: null,
+  };
+}
+
+export function rerunPlanningPhaseInCycle(input: {
+  readonly cycle: AppReviewWorkflowCycle;
+  readonly workspaceRevision: AppReviewWorkflowWorkspaceRevision;
+}): AppReviewWorkflowCycle {
+  return {
+    ...input.cycle,
+    status: "planning",
+    planId: null,
+    plannerThreadId: null,
+    plannerTurnId: null,
+    ticketingTurnId: null,
+    repairTickets: [],
+    fixerThreadId: null,
+    fixResult: null,
+    failure: null,
     workspaceRevision: input.workspaceRevision,
     completedAt: null,
   };
@@ -1787,7 +1806,7 @@ const make = Effect.gen(function* () {
       !["passed", "failed"].includes(review.status) ||
       !appReviewRecoveryEvidenceIsCurrent(run, cycle, review.updatedAt)
     ) {
-      if (appReviewRecoveryTurnPending(run, cycle, reviewer)) return;
+      if (appReviewPhaseTurnPending(run, cycle, reviewer)) return;
       const failed = threadTurnFailed(reviewer);
       const completedWithoutReview = phaseTurnCompleted(reviewer) && hasSettledCheckpoint(reviewer);
       if (!failed && !completedWithoutReview) return;
@@ -2019,7 +2038,7 @@ const make = Effect.gen(function* () {
     // the reviewer, and their plans still have to reconcile.
     const planner = yield* resolveThread(cycle.plannerThreadId ?? cycle.reviewerThreadId);
     if (planner === undefined) return;
-    if (appReviewRecoveryTurnPending(run, cycle, planner) && !hasSettledCheckpoint(planner)) return;
+    if (appReviewPhaseTurnPending(run, cycle, planner)) return;
     if (threadTurnFailed(planner) && !hasSettledCheckpoint(planner)) {
       if ((yield* phaseThreadState(planner)) === "nudging") return;
       yield* failCycle({
@@ -2181,7 +2200,7 @@ const make = Effect.gen(function* () {
     }
     const result = parseFixResult(fixer, run, cycle);
     if (result === null) {
-      if (appReviewRecoveryTurnPending(run, cycle, fixer)) return;
+      if (appReviewPhaseTurnPending(run, cycle, fixer)) return;
       const failed = threadTurnFailed(fixer);
       const completedWithoutResult = phaseTurnCompleted(fixer) && hasSettledCheckpoint(fixer);
       if (!failed && !completedWithoutResult) return;
@@ -2361,17 +2380,7 @@ const make = Effect.gen(function* () {
         ...reopened,
         cycles: run.cycles.map((entry) =>
           entry.cycleNumber === cycle.cycleNumber
-            ? {
-                ...entry,
-                status: "planning" as const,
-                planId: null,
-                ticketingTurnId: null,
-                repairTickets: [],
-                fixerThreadId: null,
-                fixResult: null,
-                workspaceRevision,
-                completedAt: null,
-              }
+            ? rerunPlanningPhaseInCycle({ cycle: entry, workspaceRevision })
             : entry,
         ),
       };
