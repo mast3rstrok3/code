@@ -125,6 +125,7 @@ export const AppReviewWorkflowFailureReason = Schema.Literals([
   "plan-missing",
   "plan-malformed",
   "fixer-failed",
+  "fix-result-missing",
   "workspace-stale",
   "automation-unavailable",
   "unexpected-approval",
@@ -167,6 +168,8 @@ export const AppReviewWorkflowCycle = Schema.Struct({
   fixingLaunchCount: Schema.optionalKey(NonNegativeInt),
   /** One-time same-thread continuations claimed while recovering a terminal phase. */
   recoveryContinuationCount: Schema.optionalKey(NonNegativeInt),
+  /** One result-only continuation after a fixer completes without its directive. */
+  fixResultContinuationCount: Schema.optionalKey(NonNegativeInt),
   /** Older phase threads replaced by an in-cycle retry. */
   supersededThreadIds: Schema.optionalKey(Schema.Array(ThreadId)),
   reviewVerdict: Schema.NullOr(Schema.Literals(["pending", "passed", "failed"])),

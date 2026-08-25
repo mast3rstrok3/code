@@ -21,7 +21,9 @@ import {
 } from "../workflowNudge.ts";
 import {
   APP_REVIEW_FIXER_IMPLEMENTATION_ONLY_INSTRUCTION,
+  APP_REVIEW_FIX_RESULT_MAX_CONTINUATIONS,
   APP_REVIEW_RECOVERY_SWEEP_INTERVAL_MS,
+  appReviewFixResultContinuationNeedsLaunch,
   appReviewRepairPlanAction,
   appReviewPhaseModelStepWorkflowPromptId,
   appReviewPhaseFailureAction,
@@ -30,12 +32,15 @@ import {
   appReviewRecoveryEvidenceIsCurrent,
   appReviewPhaseThreadState,
   buildAppReviewFixPrompt,
+  buildAppReviewFixResultContinuationPrompt,
   buildReviewPrompt,
   e2eCheckIdsForCommands,
   emptyAppReviewRepairPlanTurnId,
   effectiveAppReviewScope,
   resolveEffectiveAppReviewScope,
   recoverableFailedAppReviewPhase,
+  claimAppReviewFixResultContinuation,
+  isMissingAppReviewFixResult,
   reopenFailedAppReviewPhase,
   rerunPlanningPhaseInCycle,
   priorCycleChecks,
@@ -198,6 +203,60 @@ it("tells a retried App Review fixer to continue inherited work", () => {
   expect(prompt).toContain("A previous fixer worked in this same worktree");
   expect(prompt).toContain("Inspect Git status, the current diff, and recent commits");
   expect(prompt).toContain("finish every ticket in this durable phase thread");
+});
+
+it("asks a completed fixer only for its missing result", () => {
+  const cycle = {
+    ...reviewingRun().cycles[0]!,
+    status: "fixing" as const,
+    planId: "app-review-repair-tickets:1",
+    fixerThreadId: ThreadId.make("thread-fixer"),
+    fixingLaunchCount: 2,
+  };
+  const prompt = buildAppReviewFixResultContinuationPrompt({
+    run: failedImplementationReview("TICKET-1"),
+    cycle,
+  });
+
+  expect(prompt).toContain("ended without its required result directive");
+  expect(prompt).toContain("Do not restart the repair or broaden its scope");
+  expect(prompt).toContain('"type": "app-review-fix-result"');
+});
+
+it("relaunches a claimed result continuation after an interrupted dispatch", () => {
+  const claimedAt = "2026-01-01T00:00:02.000Z";
+  const cycle = {
+    ...reviewingRun().cycles[0]!,
+    status: "fixing" as const,
+    fixerThreadId: ThreadId.make("thread-fixer"),
+    fixResultContinuationCount: 1,
+  };
+  const active = run({
+    ...reviewingRun(),
+    activePhase: "fixing",
+    activeThreadId: cycle.fixerThreadId,
+    cycles: [cycle],
+    updatedAt: claimedAt,
+  });
+
+  expect(
+    appReviewFixResultContinuationNeedsLaunch(active, cycle, {
+      latestTurn: { requestedAt: now },
+      session: { status: "ready" },
+    }),
+  ).toBe(true);
+  expect(
+    appReviewFixResultContinuationNeedsLaunch(active, cycle, {
+      latestTurn: { requestedAt: claimedAt },
+      session: { status: "ready" },
+    }),
+  ).toBe(false);
+  expect(
+    appReviewFixResultContinuationNeedsLaunch(active, cycle, {
+      latestTurn: { requestedAt: now },
+      session: { status: "running" },
+    }),
+  ).toBe(false);
 });
 
 function run(overrides: Partial<AppReviewWorkflowRun> = {}): AppReviewWorkflowRun {
@@ -394,13 +453,15 @@ it("fails the run after the current phase exhausts its bounded launches", () => 
   expect(appReviewPhaseFailureAction(cycle, "review")).toBe("fail-run");
 });
 
-function failedImplementationReview(ticketId?: string): AppReviewWorkflowRun {
+function failedImplementationReview(
+  ticketId?: string,
+  detailMarkdown = "fixing exhausted its 2 phase launches.\n\nApp Review fixer completed without the required app-review-fix-result directive.",
+): AppReviewWorkflowRun {
   const failure = {
     reason: "fixer-failed" as const,
     phase: "fixing" as const,
     cycleNumber: 1,
-    detailMarkdown:
-      "fixing exhausted its 2 phase launches.\n\nApp Review fixer completed without the required app-review-fix-result directive.",
+    detailMarkdown,
     failedAt: now,
   };
   return run({
@@ -443,8 +504,18 @@ function failedImplementationReview(ticketId?: string): AppReviewWorkflowRun {
   });
 }
 
-it("claims one same-thread continuation for the failed review still owned by its ticket", () => {
-  const failed = failedImplementationReview("TICKET-1");
+it("claims one result-only continuation for a missing fixer result", () => {
+  const original = failedImplementationReview("TICKET-1");
+  const failed = run({
+    ...original,
+    cycles: [
+      {
+        ...original.cycles[0]!,
+        fixingLaunchCount: 6,
+        recoveryContinuationCount: 1,
+      },
+    ],
+  });
   const parent = {
     id: "implementation-run-1",
     status: "needs-human-attention",
@@ -465,29 +536,42 @@ it("claims one same-thread continuation for the failed review still owned by its
     ],
   } as unknown as OrchestrationImplementationRun;
 
+  expect(isMissingAppReviewFixResult(failed.failure)).toBe(true);
   const claim = recoverableFailedAppReviewPhase({ run: failed, implementationRuns: [parent] });
   expect(claim).toEqual({
     phase: "fixing",
     threadId: ThreadId.make("thread-fixer"),
-    mode: "claim",
+    mode: "request-result",
   });
   const reopened = reopenFailedAppReviewPhase({
     run: failed,
     phase: "fixing",
     workspaceRevision: failed.workspaceRevision,
     occurredAt: "2026-01-01T00:00:01.000Z",
+    incrementRecoveryCount: false,
+    incrementReviewLaunchCount: false,
   });
-  expect(reopened?.status).toBe("running");
-  expect(reopened?.activeThreadId).toBe(ThreadId.make("thread-fixer"));
-  expect(reopened?.cycles[0]?.fixerThreadId).toBe(ThreadId.make("thread-fixer"));
-  expect(reopened?.cycles[0]?.recoveryContinuationCount).toBe(1);
+  const continued = claimAppReviewFixResultContinuation({
+    run: reopened!,
+    occurredAt: "2026-01-01T00:00:01.000Z",
+  });
+  expect(continued?.status).toBe("running");
+  expect(continued?.activeThreadId).toBe(ThreadId.make("thread-fixer"));
+  expect(continued?.cycles[0]?.fixerThreadId).toBe(ThreadId.make("thread-fixer"));
+  expect(continued?.cycles[0]?.fixingLaunchCount).toBe(6);
+  expect(continued?.cycles[0]?.recoveryContinuationCount).toBe(1);
+  expect(continued?.cycles[0]?.fixResultContinuationCount).toBe(1);
+  expect(APP_REVIEW_FIX_RESULT_MAX_CONTINUATIONS).toBe(1);
   expect(
-    recoverableFailedAppReviewPhase({ run: reopened!, implementationRuns: [parent] }),
+    recoverableFailedAppReviewPhase({ run: continued!, implementationRuns: [parent] }),
   ).toBeNull();
 });
 
 it("finishes or observes a continuation claim interrupted between its run and turn writes", () => {
-  const failed = failedImplementationReview("TICKET-1");
+  const failed = failedImplementationReview(
+    "TICKET-1",
+    "fixing exhausted its 2 phase launches.\n\nThe provider session stopped.",
+  );
   const parent = {
     id: "implementation-run-1",
     status: "needs-human-attention",

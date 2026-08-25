@@ -371,7 +371,20 @@ export function successfulFixAction(
 }
 
 export const APP_REVIEW_PHASE_MAX_LAUNCHES = 2;
+export const APP_REVIEW_FIX_RESULT_MAX_CONTINUATIONS = 1;
 export const APP_REVIEW_RECOVERY_SWEEP_INTERVAL_MS = 30_000;
+
+const APP_REVIEW_FIX_RESULT_MISSING_MESSAGE =
+  "The App Review implementation thread stopped without the required result directive.";
+
+export function isMissingAppReviewFixResult(failure: AppReviewWorkflowFailure | null): boolean {
+  return (
+    failure?.phase === "fixing" &&
+    (failure.reason === "fix-result-missing" ||
+      failure.detailMarkdown.includes("without the required result directive") ||
+      failure.detailMarkdown.includes("without the required app-review-fix-result directive"))
+  );
+}
 
 export function appReviewPhaseLaunchCount(
   cycle: AppReviewWorkflowCycle,
@@ -399,7 +412,7 @@ export function appReviewPhaseFailureAction(
 export interface FailedAppReviewPhaseRecovery {
   readonly phase: AppReviewWorkflowPhase;
   readonly threadId: ThreadId;
-  readonly mode: "claim" | "resume-claim" | "observe-claim";
+  readonly mode: "claim" | "resume-claim" | "observe-claim" | "request-result";
 }
 
 /**
@@ -421,6 +434,7 @@ export function recoverableFailedAppReviewPhase(input: {
   const failure = run.failure ?? cycle?.failure ?? null;
   const phase = failure?.phase ?? null;
   const recoveryContinuationCount = cycle?.recoveryContinuationCount ?? 0;
+  const missingFixResult = isMissingAppReviewFixResult(failure);
   const phaseLaunchCount =
     cycle === undefined || phase === null ? null : appReviewPhaseLaunchCount(cycle, phase);
   if (
@@ -432,7 +446,9 @@ export function recoverableFailedAppReviewPhase(input: {
     phaseLaunchCount < APP_REVIEW_PHASE_MAX_LAUNCHES ||
     !failure?.detailMarkdown.includes(
       `${phase} exhausted its ${String(APP_REVIEW_PHASE_MAX_LAUNCHES)} phase launches.`,
-    )
+    ) ||
+    (missingFixResult &&
+      (cycle.fixResultContinuationCount ?? 0) >= APP_REVIEW_FIX_RESULT_MAX_CONTINUATIONS)
   ) {
     return null;
   }
@@ -476,8 +492,9 @@ export function recoverableFailedAppReviewPhase(input: {
   return {
     phase,
     threadId,
-    mode:
-      recoveryContinuationCount === 0
+    mode: missingFixResult
+      ? "request-result"
+      : recoveryContinuationCount === 0
         ? "claim"
         : phaseLaunchCount === APP_REVIEW_PHASE_MAX_LAUNCHES
           ? "resume-claim"
@@ -537,6 +554,49 @@ export function reopenFailedAppReviewPhase(input: {
   };
 }
 
+export function claimAppReviewFixResultContinuation(input: {
+  readonly run: AppReviewWorkflowRun;
+  readonly occurredAt: string;
+}): AppReviewWorkflowRun | null {
+  const cycle = input.run.cycles.at(-1);
+  if (
+    cycle === undefined ||
+    cycle.fixerThreadId === null ||
+    (cycle.fixResultContinuationCount ?? 0) >= APP_REVIEW_FIX_RESULT_MAX_CONTINUATIONS
+  ) {
+    return null;
+  }
+  return {
+    ...input.run,
+    cycles: input.run.cycles.map((entry) =>
+      entry.cycleNumber === cycle.cycleNumber
+        ? {
+            ...entry,
+            fixResultContinuationCount: (entry.fixResultContinuationCount ?? 0) + 1,
+          }
+        : entry,
+    ),
+    updatedAt: input.occurredAt,
+  };
+}
+
+export function appReviewFixResultContinuationNeedsLaunch(
+  run: AppReviewWorkflowRun,
+  cycle: AppReviewWorkflowCycle,
+  thread: {
+    readonly latestTurn: { readonly requestedAt: string } | null;
+    readonly session: { readonly status: string } | null;
+  },
+): boolean {
+  if ((cycle.fixResultContinuationCount ?? 0) === 0) return false;
+  const sessionIsActive =
+    thread.session?.status === "starting" || thread.session?.status === "running";
+  return (
+    !sessionIsActive &&
+    (thread.latestTurn === null || thread.latestTurn.requestedAt < run.updatedAt)
+  );
+}
+
 /** The current phase launch is still waiting for its turn to replace older thread state. */
 export function appReviewPhaseTurnPending(
   run: AppReviewWorkflowRun,
@@ -550,7 +610,11 @@ export function appReviewPhaseTurnPending(
   const sessionIsActive =
     thread.session?.status === "starting" || thread.session?.status === "running";
   if (thread.latestTurn === null || thread.latestTurn.requestedAt < run.updatedAt) {
-    return sessionIsActive || (cycle.recoveryContinuationCount ?? 0) > 0;
+    return (
+      sessionIsActive ||
+      (cycle.recoveryContinuationCount ?? 0) > 0 ||
+      (cycle.fixResultContinuationCount ?? 0) > 0
+    );
   }
   return thread.latestTurn.state === "running" && !sessionIsActive;
 }
@@ -564,7 +628,7 @@ export function appReviewRecoveryEvidenceIsCurrent(
   const baseline =
     run.status === "failed"
       ? failedAt
-      : (cycle.recoveryContinuationCount ?? 0) > 0
+      : (cycle.recoveryContinuationCount ?? 0) > 0 || (cycle.fixResultContinuationCount ?? 0) > 0
         ? run.updatedAt
         : null;
   return baseline === null || createdAt > baseline;
@@ -951,6 +1015,46 @@ export function buildAppReviewFixPrompt(input: {
       ),
       "",
       "Finish with exactly one fenced JSON block:",
+      "```json",
+      JSON.stringify(
+        {
+          type: "app-review-fix-result",
+          runId: input.run.id,
+          planId: input.cycle.planId,
+          status: "succeeded",
+          commitSha: input.run.caller.type === "implementation" ? "required-HEAD-sha" : undefined,
+          validations: [
+            {
+              command: "vp test run focused-test",
+              status: "passed",
+              outputMarkdown: "Important output or empty string.",
+              completedAt: "2026-01-01T00:00:00.000Z",
+            },
+          ],
+          notesMarkdown: "What changed and what remains.",
+        },
+        null,
+        2,
+      ),
+      "```",
+    ].join("\n"),
+    APP_REVIEW_IMPLEMENT_SKILL_ID,
+  );
+}
+
+export function buildAppReviewFixResultContinuationPrompt(input: {
+  readonly run: AppReviewWorkflowRun;
+  readonly cycle: AppReviewWorkflowCycle;
+}): string {
+  return appendWorkflowSkillCommandSection(
+    [
+      `Your App Review repair turn for run '${input.run.id}', cycle ${input.cycle.cycleNumber}, ended without its required result directive.`,
+      "Continue in the existing thread and worktree. Do not restart the repair or broaden its scope.",
+      "Inspect the current Git state, recent commits, and the validation output already in this thread. If the repair is complete, run only the focused checks still needed to report it accurately. If the work is incomplete or unsafe to claim, report blocked or failed with concrete notes.",
+      input.run.caller.type === "implementation"
+        ? "A succeeded result requires a clean worktree and a commit SHA that matches HEAD."
+        : "A standalone repair may report succeeded without a commit SHA.",
+      "Finish with exactly one fenced JSON block and no text after it:",
       "```json",
       JSON.stringify(
         {
@@ -2234,6 +2338,45 @@ const make = Effect.gen(function* () {
     return null;
   };
 
+  const ensureFixResultContinuationLaunch = Effect.fn(
+    "AppReviewWorkflowReactor.ensureFixResultContinuationLaunch",
+  )(function* (run: AppReviewWorkflowRun, cycle: AppReviewWorkflowCycle) {
+    if (cycle.fixerThreadId === null) return;
+    const continuationNumber = cycle.fixResultContinuationCount ?? 0;
+    if (continuationNumber === 0) return;
+    yield* orchestrationEngine.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.make(
+        `server:app-review-fix-result-continuation:${run.id}:${String(cycle.cycleNumber)}:${String(continuationNumber)}`,
+      ),
+      threadId: cycle.fixerThreadId,
+      message: {
+        messageId: MessageId.make(
+          `message-app-review-fix-result-continuation-${run.id}-${String(cycle.cycleNumber)}-${String(continuationNumber)}`,
+        ),
+        role: "user",
+        text: buildAppReviewFixResultContinuationPrompt({ run, cycle }),
+        attachments: [],
+      },
+      runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
+      interactionMode: "default",
+      workflowPromptId: APP_REVIEW_IMPLEMENT_SKILL_ID,
+      createdAt: run.updatedAt,
+    });
+  });
+
+  const continueFixerForMissingResult = Effect.fn(
+    "AppReviewWorkflowReactor.continueFixerForMissingResult",
+  )(function* (run: AppReviewWorkflowRun, occurredAt: string) {
+    const continued = claimAppReviewFixResultContinuation({ run, occurredAt });
+    if (continued === null) return null;
+    const cycle = continued.cycles.at(-1);
+    if (cycle === undefined) return null;
+    yield* updateRun(continued);
+    yield* ensureFixResultContinuationLaunch(continued, cycle);
+    return continued;
+  });
+
   const reconcileFixer = Effect.fn("AppReviewWorkflowReactor.reconcileFixer")(function* (
     run: AppReviewWorkflowRun,
     occurredAt: string,
@@ -2248,17 +2391,27 @@ const make = Effect.gen(function* () {
     }
     const result = parseFixResult(fixer, run, cycle);
     if (result === null) {
+      if (appReviewFixResultContinuationNeedsLaunch(run, cycle, fixer)) {
+        yield* ensureFixResultContinuationLaunch(run, cycle);
+        return;
+      }
       if (appReviewPhaseTurnPending(run, cycle, fixer)) return;
       const failed = threadTurnFailed(fixer);
       const completedWithoutResult = phaseTurnCompleted(fixer) && hasSettledCheckpoint(fixer);
       if (!failed && !completedWithoutResult) return;
       if (failed && (yield* phaseThreadState(fixer)) === "nudging") return;
+      if (completedWithoutResult) {
+        const continued = yield* continueFixerForMissingResult(run, occurredAt);
+        if (continued !== null) return;
+      }
       yield* failCycle({
         run,
-        reason: "fixer-failed",
+        reason: completedWithoutResult ? "fix-result-missing" : "fixer-failed",
         detailMarkdown:
           fixer.session?.lastError ??
-          "The App Review implementation thread stopped without the required result directive.",
+          (completedWithoutResult
+            ? `${APP_REVIEW_FIX_RESULT_MISSING_MESSAGE} Its result-only continuation was already used.`
+            : APP_REVIEW_FIX_RESULT_MISSING_MESSAGE),
         occurredAt,
       });
       return;
@@ -2690,6 +2843,32 @@ const make = Effect.gen(function* () {
     const cycle = input.run.cycles.at(-1);
     if (cycle === undefined) return false;
     const failure = input.run.failure ?? cycle.failure ?? null;
+    if (claim.mode === "request-result") {
+      const workspaceRevision = yield* computeWorkspaceRevision(target.cwd);
+      const reopened = reopenFailedAppReviewPhase({
+        run: input.run,
+        phase: "fixing",
+        workspaceRevision,
+        occurredAt: input.occurredAt,
+        incrementRecoveryCount: false,
+        incrementReviewLaunchCount: false,
+      });
+      if (reopened === null) return false;
+      const continued = claimAppReviewFixResultContinuation({
+        run: reopened,
+        occurredAt: input.occurredAt,
+      });
+      if (continued === null) return false;
+      const continuedCycle = continued.cycles.at(-1);
+      if (continuedCycle === undefined) return false;
+      yield* updateRun(continued);
+      yield* ensureFixResultContinuationLaunch(continued, continuedCycle);
+      yield* Effect.logInfo("App Review requested a missing fixer result", {
+        runId: input.run.id,
+        threadId: claim.threadId,
+      });
+      return true;
+    }
     const rejectedEmptyPlanTurnId =
       claim.phase === "planning" && failure?.reason === "plan-missing"
         ? emptyAppReviewRepairPlanTurnId({

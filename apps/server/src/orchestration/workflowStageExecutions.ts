@@ -405,6 +405,19 @@ export function normalizeImplementationRunExecutions(
   };
 }
 
+function categoryForAppReviewFailure(
+  failure: AppReviewWorkflowRun["failure"],
+): WorkflowFailureCategory {
+  if (
+    failure?.reason === "plan-missing" ||
+    failure?.reason === "plan-malformed" ||
+    failure?.reason === "fix-result-missing"
+  ) {
+    return "missing-directive";
+  }
+  return failure?.reason === "review-blocked" ? "review-findings" : "provider-terminal";
+}
+
 export function normalizeAppReviewPhaseExecution(run: AppReviewWorkflowRun): AppReviewWorkflowRun {
   if (run.activePhase === null) {
     if (run.phaseExecution === null || run.status === "running") return run;
@@ -420,7 +433,7 @@ export function normalizeAppReviewPhaseExecution(run: AppReviewWorkflowRun): App
             failure:
               state === "halted"
                 ? (run.phaseExecution.failure ?? {
-                    category: "provider-terminal",
+                    category: categoryForAppReviewFailure(run.failure),
                     detail: run.failure?.detailMarkdown ?? "App Review phase halted.",
                     failedAt: run.updatedAt,
                     nextAction: "rerun-stage",
@@ -444,7 +457,25 @@ export function normalizeAppReviewPhaseExecution(run: AppReviewWorkflowRun): App
     run.phaseExecution !== null &&
     workflowStageTargetKey(run.phaseExecution.target) === workflowStageTargetKey(target)
   ) {
-    return run;
+    if (!TERMINAL_STATES.has(run.phaseExecution.state)) return run;
+    return {
+      ...run,
+      phaseExecution: {
+        ...run.phaseExecution,
+        state: "reconciling",
+        claimedAt: run.updatedAt,
+        leaseRenewedAt: run.updatedAt,
+        leaseExpiresAt: DateTime.formatIso(
+          DateTime.add(DateTime.makeUnsafe(Date.parse(run.updatedAt)), {
+            milliseconds: WORKFLOW_PROVIDER_LEASE_MS,
+          }),
+        ),
+        lastProgressAt: run.updatedAt,
+        failure: null,
+        recovery: null,
+        updatedAt: run.updatedAt,
+      },
+    };
   }
   return {
     ...run,
@@ -457,12 +488,7 @@ export function normalizeAppReviewPhaseExecution(run: AppReviewWorkflowRun): App
       ...(failure === null
         ? {}
         : {
-            category:
-              failure.reason === "plan-missing" || failure.reason === "plan-malformed"
-                ? ("missing-directive" as const)
-                : failure.reason === "review-blocked"
-                  ? ("review-findings" as const)
-                  : ("provider-terminal" as const),
+            category: categoryForAppReviewFailure(failure),
             detail: failure.detailMarkdown,
           }),
     }),

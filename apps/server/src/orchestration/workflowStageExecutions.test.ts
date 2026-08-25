@@ -1,4 +1,5 @@
 import type {
+  AppReviewWorkflowRun,
   DurableValidationJob,
   OrchestrationImplementationRun,
   OrchestrationImplementationTicketState,
@@ -13,6 +14,7 @@ import { createEmptyReadModel } from "./projector.ts";
 import { queueImplementationRerun } from "./implementationRerun.ts";
 import {
   reconcileWorkflowState,
+  normalizeAppReviewPhaseExecution,
   normalizeImplementationRunExecutions,
   recoverWorkflowRunsAfterStartup,
   WORKFLOW_CRASH_RECOVERY_MS,
@@ -99,6 +101,64 @@ function model(implementationRun: OrchestrationImplementationRun) {
 }
 
 describe("workflow stage reconciliation", () => {
+  it("classifies a missing App Review fixer result as a missing directive", () => {
+    const appReviewRun = {
+      id: "app-review-run-1",
+      status: "failed",
+      activePhase: null,
+      phaseExecution: {
+        target: {
+          kind: "app-review-phase",
+          runId: "app-review-run-1",
+          cycleNumber: 1,
+          phase: "fixing",
+        },
+        generation: 0,
+        executionId: "app-review-run-1:fixing:0",
+        state: "running",
+        queuedAt: now,
+        claimedAt: now,
+        leaseRenewedAt: now,
+        leaseExpiresAt: null,
+        lastProgressAt: now,
+        durableJobId: null,
+        failure: null,
+        recovery: null,
+        updatedAt: now,
+      },
+      failure: {
+        reason: "fix-result-missing",
+        phase: "fixing",
+        cycleNumber: 1,
+        detailMarkdown: "The fixer omitted its result directive.",
+        failedAt: now,
+      },
+      cycles: [
+        {
+          cycleNumber: 1,
+          status: "failed",
+          reviewerThreadId: "thread-reviewer",
+          fixerThreadId: "thread-fixer",
+        },
+      ],
+      updatedAt: now,
+    } as unknown as AppReviewWorkflowRun;
+
+    const normalized = normalizeAppReviewPhaseExecution(appReviewRun);
+    expect(normalized.phaseExecution?.state).toBe("halted");
+    expect(normalized.phaseExecution?.failure?.category).toBe("missing-directive");
+
+    const reopened = normalizeAppReviewPhaseExecution({
+      ...normalized,
+      status: "running",
+      activePhase: "fixing",
+      activeThreadId: "thread-fixer",
+      updatedAt: "2026-01-01T00:00:01.000Z",
+    } as AppReviewWorkflowRun);
+    expect(reopened.phaseExecution?.state).toBe("reconciling");
+    expect(reopened.phaseExecution?.failure).toBeNull();
+  });
+
   it("normalizes historical halt and retry summaries into canonical executions", () => {
     const historicalHalt = {
       ...run({ tickets: [ticket({ ticketId: "ticket-a", status: "failed" })] }),
