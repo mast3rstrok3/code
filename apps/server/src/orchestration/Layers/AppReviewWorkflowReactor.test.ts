@@ -8,6 +8,7 @@ import {
   type AppReviewRecord,
   type AppReviewWorkflowCycle,
   type AppReviewWorkflowRun,
+  type OrchestrationImplementationRun,
 } from "@t3tools/contracts";
 
 import {
@@ -29,6 +30,8 @@ import {
   e2eCheckIdsForCommands,
   effectiveAppReviewScope,
   resolveEffectiveAppReviewScope,
+  recoverableFailedAppReviewPhase,
+  reopenFailedAppReviewPhase,
   priorCycleChecks,
   findAppReviewParentTicket,
   isSupersededAppReviewPhaseThread,
@@ -351,6 +354,112 @@ it("fails the run after the current phase exhausts its bounded launches", () => 
   const cycle = { ...reviewingRun().cycles[0]!, reviewLaunchCount: 2 };
 
   expect(appReviewPhaseFailureAction(cycle, "review")).toBe("fail-run");
+});
+
+function failedImplementationReview(ticketId?: string): AppReviewWorkflowRun {
+  const failure = {
+    reason: "fixer-failed" as const,
+    phase: "fixing" as const,
+    cycleNumber: 1,
+    detailMarkdown:
+      "fixing exhausted its 2 phase launches.\n\nApp Review fixer completed without the required app-review-fix-result directive.",
+    failedAt: now,
+  };
+  return run({
+    caller: {
+      type: "implementation",
+      implementationRunId: "implementation-run-1",
+      orchestratorThreadId: ThreadId.make("thread-implementation-orchestrator"),
+      ...(ticketId === undefined ? {} : { ticketId }),
+    },
+    status: "failed",
+    outcome: "failed",
+    cyclesUsed: 1,
+    activePhase: null,
+    activeThreadId: null,
+    failure,
+    cycles: [
+      {
+        ...reviewingRun().cycles[0]!,
+        status: "failed",
+        reviewVerdict: "failed",
+        actionableFindingsMarkdown: "The selected row disappears.",
+        planId: "app-review-repair-tickets:1",
+        plannerThreadId: ThreadId.make("thread-planner"),
+        fixerThreadId: ThreadId.make("thread-fixer"),
+        repairTickets: [
+          {
+            key: "TICKET-1.1",
+            parentTicketKey: "TICKET-1",
+            title: "Preserve the row",
+            bodyMarkdown: "Keep the selected row visible.",
+            dependencyKeys: [],
+          },
+        ],
+        fixingLaunchCount: 2,
+        failure,
+        completedAt: now,
+      },
+    ],
+    completedAt: now,
+  });
+}
+
+it("claims one same-thread continuation for the failed review still owned by its ticket", () => {
+  const failed = failedImplementationReview("TICKET-1");
+  const parent = {
+    id: "implementation-run-1",
+    status: "needs-human-attention",
+    automationHalt: {
+      ticketId: "TICKET-1",
+      stage: "app-review",
+      category: "review-blocked",
+      detail: failed.failure?.detailMarkdown ?? "Review failed.",
+      haltedAt: now,
+    },
+    appReviewWorkflowRunIds: [],
+    ticketStates: [
+      {
+        ticketId: "TICKET-1",
+        status: "app-reviewing",
+        appReviewWorkflowRunId: failed.id,
+      },
+    ],
+  } as unknown as OrchestrationImplementationRun;
+
+  const claim = recoverableFailedAppReviewPhase({ run: failed, implementationRuns: [parent] });
+  expect(claim).toEqual({ phase: "fixing", threadId: ThreadId.make("thread-fixer") });
+  const reopened = reopenFailedAppReviewPhase({
+    run: failed,
+    phase: "fixing",
+    workspaceRevision: failed.workspaceRevision,
+    occurredAt: "2026-01-01T00:00:01.000Z",
+  });
+  expect(reopened?.status).toBe("running");
+  expect(reopened?.activeThreadId).toBe(ThreadId.make("thread-fixer"));
+  expect(reopened?.cycles[0]?.fixerThreadId).toBe(ThreadId.make("thread-fixer"));
+  expect(reopened?.cycles[0]?.recoveryContinuationCount).toBe(1);
+  expect(
+    recoverableFailedAppReviewPhase({ run: reopened!, implementationRuns: [parent] }),
+  ).toBeNull();
+});
+
+it("does not recover an old failed review that the halted parent no longer owns", () => {
+  const failed = failedImplementationReview();
+  const parent = {
+    id: "implementation-run-1",
+    status: "needs-human-attention",
+    automationHalt: {
+      stage: "app-review",
+      category: "review-blocked",
+      detail: failed.failure?.detailMarkdown ?? "Review failed.",
+      haltedAt: now,
+    },
+    appReviewWorkflowRunIds: ["app-review-workflow-newer"],
+    ticketStates: [],
+  } as unknown as OrchestrationImplementationRun;
+
+  expect(recoverableFailedAppReviewPhase({ run: failed, implementationRuns: [parent] })).toBeNull();
 });
 
 it("counts legacy planner and fixer threads as their first phase launches", () => {

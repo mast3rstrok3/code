@@ -164,6 +164,8 @@ export const AppReviewWorkflowCycle = Schema.Struct({
   reviewLaunchCount: Schema.optionalKey(NonNegativeInt),
   planningLaunchCount: Schema.optionalKey(NonNegativeInt),
   fixingLaunchCount: Schema.optionalKey(NonNegativeInt),
+  /** One-time same-thread continuations claimed while recovering a terminal phase. */
+  recoveryContinuationCount: Schema.optionalKey(NonNegativeInt),
   /** Older phase threads replaced by an in-cycle retry. */
   supersededThreadIds: Schema.optionalKey(Schema.Array(ThreadId)),
   reviewVerdict: Schema.NullOr(Schema.Literals(["pending", "passed", "failed"])),

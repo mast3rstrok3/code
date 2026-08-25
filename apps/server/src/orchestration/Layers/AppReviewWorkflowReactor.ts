@@ -19,6 +19,8 @@ import {
   MessageId,
   ThreadId,
   type OrchestrationEvent,
+  type OrchestrationImplementationRun,
+  type OrchestrationReadModel,
   type OrchestrationThread,
   WORKFLOW_AUTOMATION_RUNTIME_MODE,
 } from "@t3tools/contracts";
@@ -355,6 +357,125 @@ export function appReviewPhaseFailureAction(
   return appReviewPhaseLaunchCount(cycle, phase) < APP_REVIEW_PHASE_MAX_LAUNCHES
     ? "retry-phase"
     : "fail-run";
+}
+
+export interface FailedAppReviewPhaseRecovery {
+  readonly phase: AppReviewWorkflowPhase;
+  readonly threadId: ThreadId;
+}
+
+/**
+ * Claims one continuation for a failed phase that still owns its parent stage.
+ *
+ * Older runtimes made a nested run terminal after two provider turns. The
+ * parent then retained that exact run and entered human attention. Recover only
+ * that current pair, once, so historical reviews that no parent awaits remain
+ * terminal.
+ */
+export function recoverableFailedAppReviewPhase(input: {
+  readonly run: AppReviewWorkflowRun;
+  readonly implementationRuns: ReadonlyArray<OrchestrationImplementationRun>;
+}): FailedAppReviewPhaseRecovery | null {
+  const { run } = input;
+  if (run.status !== "failed" || run.caller.type !== "implementation") return null;
+  const caller = run.caller;
+  const cycle = run.cycles.at(-1);
+  const failure = run.failure ?? cycle?.failure ?? null;
+  const phase = failure?.phase ?? null;
+  if (
+    cycle === undefined ||
+    cycle.status !== "failed" ||
+    phase === null ||
+    (cycle.recoveryContinuationCount ?? 0) > 0 ||
+    appReviewPhaseLaunchCount(cycle, phase) !== APP_REVIEW_PHASE_MAX_LAUNCHES ||
+    !failure?.detailMarkdown.includes(
+      `${phase} exhausted its ${String(APP_REVIEW_PHASE_MAX_LAUNCHES)} phase launches.`,
+    )
+  ) {
+    return null;
+  }
+  const parent = input.implementationRuns.find(
+    (candidate) => candidate.id === caller.implementationRunId,
+  );
+  const halt = parent?.automationHalt ?? null;
+  if (
+    parent === undefined ||
+    parent.status !== "needs-human-attention" ||
+    halt === null ||
+    halt.stage !== "app-review" ||
+    halt.category !== "review-blocked"
+  ) {
+    return null;
+  }
+  const ticketId = caller.ticketId;
+  if (ticketId === undefined) {
+    if (halt.ticketId !== undefined || parent.appReviewWorkflowRunIds.at(-1) !== run.id)
+      return null;
+  } else {
+    const ticket = parent.ticketStates.find((candidate) => candidate.ticketId === ticketId);
+    if (
+      halt.ticketId !== ticketId ||
+      ticket?.status !== "app-reviewing" ||
+      ticket.appReviewWorkflowRunId !== run.id
+    ) {
+      return null;
+    }
+  }
+  const threadId =
+    phase === "review"
+      ? cycle.reviewerThreadId
+      : phase === "planning"
+        ? (cycle.plannerThreadId ?? null)
+        : cycle.fixerThreadId;
+  return threadId === null ? null : { phase, threadId };
+}
+
+export function reopenFailedAppReviewPhase(input: {
+  readonly run: AppReviewWorkflowRun;
+  readonly phase: AppReviewWorkflowPhase;
+  readonly workspaceRevision: AppReviewWorkflowWorkspaceRevision;
+  readonly occurredAt: string;
+}): AppReviewWorkflowRun | null {
+  const cycle = input.run.cycles.at(-1);
+  if (cycle === undefined) return null;
+  return {
+    ...input.run,
+    status: "running",
+    outcome: null,
+    failure: null,
+    finalHeadSha: null,
+    activePhase: input.phase,
+    activeThreadId:
+      input.phase === "review"
+        ? cycle.reviewerThreadId
+        : input.phase === "planning"
+          ? (cycle.plannerThreadId ?? null)
+          : cycle.fixerThreadId,
+    workspaceRevision: input.workspaceRevision,
+    cycles: input.run.cycles.map((entry) =>
+      entry.cycleNumber === cycle.cycleNumber
+        ? {
+            ...entry,
+            status:
+              input.phase === "review"
+                ? ("reviewing" as const)
+                : input.phase === "planning"
+                  ? ("planning" as const)
+                  : ("fixing" as const),
+            reviewLaunchCount:
+              input.phase === "review"
+                ? appReviewPhaseLaunchCount(entry, "review") + 1
+                : appReviewPhaseLaunchCount(entry, "review"),
+            recoveryContinuationCount: (entry.recoveryContinuationCount ?? 0) + 1,
+            failure: null,
+            workspaceRevision: input.workspaceRevision,
+            completedAt: null,
+          }
+        : entry,
+    ),
+    updatedAt: input.occurredAt,
+    completedAt: null,
+  };
 }
 
 export function retryReviewPhaseInCycle(input: {
@@ -2375,10 +2496,121 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  const phaseHasReplayableResult = (
+    run: AppReviewWorkflowRun,
+    cycle: AppReviewWorkflowCycle,
+    phase: AppReviewWorkflowPhase,
+    thread: OrchestrationThread,
+    controller: OrchestrationThread | undefined,
+  ) => {
+    if (!hasSettledCheckpoint(thread)) return false;
+    if (phase === "review") {
+      const review = controller === undefined ? null : reviewRecordForCycle(controller, cycle);
+      return review !== null && (review.status === "passed" || review.status === "failed");
+    }
+    if (phase === "planning") {
+      return thread.activities.some(
+        (activity) =>
+          activity.kind === "app-review-repair-tickets" &&
+          Predicate.isObject(activity.payload) &&
+          activity.payload["type"] === "app-review-repair-tickets" &&
+          activity.payload["runId"] === run.id &&
+          activity.payload["cycleNumber"] === cycle.cycleNumber &&
+          Array.isArray(activity.payload["tickets"]) &&
+          activity.payload["tickets"].length > 0,
+      );
+    }
+    return parseFixResult(thread, run, cycle) !== null;
+  };
+
+  const recoverFailedImplementationPhase = Effect.fn(
+    "AppReviewWorkflowReactor.recoverFailedImplementationPhase",
+  )(function* (input: {
+    readonly run: AppReviewWorkflowRun;
+    readonly readModel: OrchestrationReadModel;
+    readonly occurredAt: string;
+  }) {
+    const claim = recoverableFailedAppReviewPhase({
+      run: input.run,
+      implementationRuns: input.readModel.implementationRuns,
+    });
+    if (claim === null) return false;
+    if (isWorkflowThreadPaused(input.readModel.threads, input.run.controllerThreadId)) return false;
+    const [phaseThread, controller, target] = yield* Effect.all([
+      resolveThread(claim.threadId),
+      resolveThread(input.run.controllerThreadId),
+      resolveTarget(input.run.targetThreadId),
+    ]);
+    if (
+      phaseThread === undefined ||
+      phaseThread.deletedAt !== null ||
+      phaseThread.session?.status === "starting" ||
+      phaseThread.session?.status === "running" ||
+      (phaseThread.session !== null && phaseThread.session.activeTurnId !== null) ||
+      target === null
+    ) {
+      return false;
+    }
+    const cycle = input.run.cycles.at(-1);
+    if (cycle === undefined) return false;
+    const planningReview =
+      claim.phase === "planning" && controller !== undefined
+        ? reviewRecordForCycle(controller, cycle)
+        : null;
+    if (
+      claim.phase === "planning" &&
+      (planningReview === null || cycle.actionableFindingsMarkdown === null)
+    ) {
+      return false;
+    }
+    const repairTickets = cycle.repairTickets ?? [];
+    if (claim.phase === "fixing" && repairTickets.length === 0) return false;
+    const workspaceRevision = yield* computeWorkspaceRevision(target.cwd);
+    const reopened = reopenFailedAppReviewPhase({
+      run: input.run,
+      phase: claim.phase,
+      workspaceRevision,
+      occurredAt: input.occurredAt,
+    });
+    if (reopened === null) return false;
+    yield* updateRun(reopened);
+    const reopenedCycle = reopened.cycles.at(-1);
+    if (reopenedCycle === undefined) return false;
+    if (phaseHasReplayableResult(reopened, reopenedCycle, claim.phase, phaseThread, controller)) {
+      yield* reconcileRun(reopened, input.occurredAt);
+    } else if (claim.phase === "review") {
+      yield* ensureReviewLaunch(reopened, reopenedCycle);
+    } else if (claim.phase === "planning") {
+      if (planningReview === null || cycle.actionableFindingsMarkdown === null) return false;
+      yield* startPlanning({
+        run: reopened,
+        review: planningReview,
+        actionableFindingsMarkdown: cycle.actionableFindingsMarkdown,
+        occurredAt: input.occurredAt,
+      });
+    } else {
+      yield* startFixer({
+        run: reopened,
+        repairTickets,
+        plannerTurnId: cycle.plannerTurnId,
+        occurredAt: input.occurredAt,
+      });
+    }
+    yield* Effect.logInfo("App Review continued a failed historical phase in its existing thread", {
+      runId: input.run.id,
+      phase: claim.phase,
+      threadId: claim.threadId,
+    });
+    return true;
+  });
+
   const reconcileRuns = Effect.fn("AppReviewWorkflowReactor.reconcileRuns")(function* () {
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
     const occurredAt = yield* nowIso;
     for (const run of readModel.appReviewWorkflowRuns ?? []) {
+      if (run.status === "failed") {
+        if (yield* recoverFailedImplementationPhase({ run, readModel, occurredAt })) continue;
+      }
       if (run.status !== "running") continue;
       if (isWorkflowThreadPaused(readModel.threads, run.controllerThreadId)) continue;
       yield* reconcileRun(run, occurredAt).pipe(

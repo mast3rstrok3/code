@@ -5,6 +5,9 @@ import {
   CommandId,
   DEFAULT_WORKSPACE_USER_ID,
   AppReviewId,
+  type AppReviewWorkflowCycle,
+  type AppReviewWorkflowFailure,
+  type AppReviewWorkflowRun,
   EventId,
   GitCommandError,
   IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
@@ -1167,6 +1170,41 @@ function launchTicketAppReview(system: ImplementationSystem) {
   });
 }
 
+function failedReviewRecoveryState(run: AppReviewWorkflowRun, failedAt: string, idSuffix: string) {
+  const failure: AppReviewWorkflowFailure = {
+    reason: "review-blocked",
+    phase: "review",
+    cycleNumber: 1,
+    detailMarkdown:
+      "review exhausted its 2 phase launches.\n\nWorkflow nudges exhausted before App Review reported a verdict.",
+    failedAt,
+  };
+  const cycle: AppReviewWorkflowCycle = {
+    cycleNumber: 1,
+    status: "failed",
+    reviewId: AppReviewId.make(`app-review-recovery-${idSuffix}`),
+    reviewerThreadId: ThreadId.make(`thread-app-review-recovery-${idSuffix}`),
+    reviewLaunchCount: 2,
+    planningLaunchCount: 0,
+    fixingLaunchCount: 0,
+    supersededThreadIds: [],
+    reviewVerdict: null,
+    actionableFindingsMarkdown: null,
+    planId: null,
+    plannerThreadId: null,
+    plannerTurnId: null,
+    fixerThreadId: null,
+    repairTickets: [],
+    ticketingTurnId: null,
+    fixResult: null,
+    failure,
+    workspaceRevision: run.workspaceRevision,
+    startedAt: now,
+    completedAt: failedAt,
+  };
+  return { cycle, failure };
+}
+
 function passMergeGate(system: ImplementationSystem, run: OrchestrationImplementationRun) {
   return Effect.gen(function* () {
     const snapshot = yield* system.query.getSnapshot();
@@ -1742,6 +1780,86 @@ describe("ImplementationWorkflowReactor", () => {
         expect(
           snapshot.threads.some((thread) => thread.workflowRole === "implementation-qa-reviewer"),
         ).toBe(false);
+      }),
+    ),
+  );
+
+  it.effect("reconnects a halted Fast Feature run to its recovered App Review thread", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, nestedRun } = yield* launchFastFeatureNestedReview(system);
+        const failedAt = "2026-01-01T00:04:00.000Z";
+        const { cycle, failure } = failedReviewRecoveryState(nestedRun, failedAt, "fast-feature");
+        const failedRun = {
+          ...nestedRun,
+          status: "failed" as const,
+          outcome: "failed" as const,
+          activePhase: null,
+          activeThreadId: null,
+          failure,
+          cycles: [
+            {
+              ...cycle,
+              status: "failed" as const,
+              reviewLaunchCount: 2,
+              failure,
+              completedAt: failedAt,
+            },
+          ],
+          updatedAt: failedAt,
+          completedAt: failedAt,
+        };
+        yield* system.engine.dispatch({
+          type: "thread.app-review-workflow.update",
+          commandId: commandId("fail-fast-feature-review-before-recovery"),
+          threadId: nestedRun.controllerThreadId,
+          run: failedRun,
+          createdAt: failedAt,
+        });
+        yield* system.reactor.drain;
+
+        let current = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (candidate) => candidate.id === run.id,
+        );
+        expect(current?.status).toBe("needs-human-attention");
+        expect(current?.automationHalt).toMatchObject({
+          stage: "app-review",
+          category: "review-blocked",
+        });
+
+        yield* system.engine.dispatch({
+          type: "thread.app-review-workflow.update",
+          commandId: commandId("recover-fast-feature-review-in-place"),
+          threadId: nestedRun.controllerThreadId,
+          run: {
+            ...failedRun,
+            status: "running",
+            outcome: null,
+            activePhase: "review",
+            activeThreadId: cycle.reviewerThreadId,
+            failure: null,
+            cycles: [
+              {
+                ...cycle,
+                status: "reviewing",
+                recoveryContinuationCount: 1,
+                failure: null,
+                completedAt: null,
+              },
+            ],
+            updatedAt: "2026-01-01T00:05:00.000Z",
+            completedAt: null,
+          },
+          createdAt: "2026-01-01T00:05:00.000Z",
+        });
+        yield* system.reactor.drain;
+
+        current = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (candidate) => candidate.id === run.id,
+        );
+        expect(current?.status).toBe("qa-reviewing");
+        expect(current?.automationHalt).toBeNull();
+        expect(current?.appReviewWorkflowRunIds.at(-1)).toBe(nestedRun.id);
       }),
     ),
   );
@@ -6747,6 +6865,89 @@ describe("ImplementationWorkflowReactor", () => {
               thread.workflowContext.ticketScope[0] === ticket.id,
           ),
         ).toBe(true);
+      }),
+    ),
+  );
+
+  it.effect("reconnects a halted ticket to its recovered App Review thread", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, ticket, nestedRun } = yield* launchTicketAppReview(system);
+        const failedAt = "2026-01-01T00:04:00.000Z";
+        const { cycle, failure } = failedReviewRecoveryState(nestedRun, failedAt, "ticket");
+        const failedRun = {
+          ...nestedRun,
+          status: "failed" as const,
+          outcome: "failed" as const,
+          activePhase: null,
+          activeThreadId: null,
+          failure,
+          cycles: [
+            {
+              ...cycle,
+              status: "failed" as const,
+              reviewLaunchCount: 2,
+              failure,
+              completedAt: failedAt,
+            },
+          ],
+          updatedAt: failedAt,
+          completedAt: failedAt,
+        };
+        yield* system.engine.dispatch({
+          type: "thread.app-review-workflow.update",
+          commandId: commandId("fail-ticket-review-before-recovery"),
+          threadId: nestedRun.controllerThreadId,
+          run: failedRun,
+          createdAt: failedAt,
+        });
+        yield* system.reactor.drain;
+
+        let current = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (candidate) => candidate.id === run.id,
+        );
+        expect(current?.status).toBe("needs-human-attention");
+        expect(current?.automationHalt).toMatchObject({
+          stage: "app-review",
+          category: "review-blocked",
+          ticketId: ticket.id,
+        });
+
+        yield* system.engine.dispatch({
+          type: "thread.app-review-workflow.update",
+          commandId: commandId("recover-ticket-review-in-place"),
+          threadId: nestedRun.controllerThreadId,
+          run: {
+            ...failedRun,
+            status: "running",
+            outcome: null,
+            activePhase: "review",
+            activeThreadId: cycle.reviewerThreadId,
+            failure: null,
+            cycles: [
+              {
+                ...cycle,
+                status: "reviewing",
+                recoveryContinuationCount: 1,
+                failure: null,
+                completedAt: null,
+              },
+            ],
+            updatedAt: "2026-01-01T00:05:00.000Z",
+            completedAt: null,
+          },
+          createdAt: "2026-01-01T00:05:00.000Z",
+        });
+        yield* system.reactor.drain;
+
+        current = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (candidate) => candidate.id === run.id,
+        );
+        const state = current?.ticketStates.find((candidate) => candidate.ticketId === ticket.id);
+        expect(current?.status).toBe("running");
+        expect(current?.automationHalt).toBeNull();
+        expect(state?.status).toBe("app-reviewing");
+        expect(state?.appReviewWorkflowRunId).toBe(nestedRun.id);
       }),
     ),
   );

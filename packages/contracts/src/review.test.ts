@@ -263,6 +263,22 @@ it.effect("decodes cycles recorded before a cycle could carry its own failure", 
   }),
 );
 
+it.effect("decodes cycles recorded before failed-phase recovery claims", () =>
+  Effect.gen(function* () {
+    const historical = yield* decodeAppReviewWorkflowRun({
+      ...workflowRun,
+      cycles: [legacyCycle],
+    });
+    assert.strictEqual(historical.cycles[0]?.recoveryContinuationCount, undefined);
+
+    const recovered = yield* decodeAppReviewWorkflowRun({
+      ...workflowRun,
+      cycles: [{ ...legacyCycle, recoveryContinuationCount: 1 }],
+    });
+    assert.strictEqual(recovered.cycles[0]?.recoveryContinuationCount, 1);
+  }),
+);
+
 it.effect("keeps why a spent cycle stopped short", () =>
   Effect.gen(function* () {
     const run = yield* decodeAppReviewWorkflowRun({

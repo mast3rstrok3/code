@@ -480,6 +480,15 @@ export function nestedAppReviewAwaitsPreviewRefresh(run: AppReviewWorkflowRun): 
   );
 }
 
+export function nestedAppReviewIsRecoveryContinuation(run: AppReviewWorkflowRun): boolean {
+  return (
+    run.status === "running" &&
+    run.activePhase !== null &&
+    run.activeThreadId !== null &&
+    (run.cycles.at(-1)?.recoveryContinuationCount ?? 0) > 0
+  );
+}
+
 /**
  * Rewind one ticket to the start of `stage`, and reopen everything that failed
  * only because this ticket did.
@@ -7952,8 +7961,17 @@ const make = Effect.gen(function* () {
       // would carry every other ticket along with it, from the pre-rewind
       // snapshot this update was built on.
       if (!ticketAwaitsAppReviewRun(ticketState, nestedRun.id)) return;
+      const recoveredContinuation =
+        nestedAppReviewIsRecoveryContinuation(nestedRun) &&
+        run.status === "needs-human-attention" &&
+        run.automationHalt?.stage === "app-review" &&
+        run.automationHalt.category === "review-blocked" &&
+        run.automationHalt.ticketId === ticketId;
       const linkedTicketRun: OrchestrationImplementationRun = {
         ...run,
+        ...(recoveredContinuation
+          ? { status: "running" as const, automationHalt: null, retryableFailure: null }
+          : {}),
         ticketStates: run.ticketStates.map((state) =>
           state.ticketId === ticketId
             ? {
@@ -7998,6 +8016,28 @@ const make = Effect.gen(function* () {
       latestAppReviewWorkflowOutcome: nestedRun.outcome,
       updatedAt: event.occurredAt,
     };
+    const recoveredContinuation =
+      event.type === "thread.app-review-workflow-updated" &&
+      nestedAppReviewIsRecoveryContinuation(nestedRun) &&
+      run.status === "needs-human-attention" &&
+      run.automationHalt?.stage === "app-review" &&
+      run.automationHalt.category === "review-blocked" &&
+      run.automationHalt.ticketId === undefined &&
+      run.appReviewWorkflowRunIds.at(-1) === nestedRun.id;
+    if (recoveredContinuation) {
+      yield* updateRun({
+        sourceThreadId,
+        run: {
+          ...linkedRun,
+          status: "qa-reviewing",
+          automationHalt: null,
+          retryableFailure: null,
+          latestAppReviewWorkflowOutcome: null,
+        },
+        createdAt: event.occurredAt,
+      });
+      return;
+    }
     if (event.type === "thread.app-review-workflow-launched") {
       yield* updateRun({ sourceThreadId, run: linkedRun, createdAt: event.occurredAt });
       return;
