@@ -7,6 +7,7 @@ import type {
   WorkflowStepModelOverride,
   WorkflowStepReviewPartsOverride,
 } from "@t3tools/contracts";
+import { WORKFLOW_RECOVERY_FALLBACK_MODEL_PIN } from "@t3tools/contracts";
 import {
   WORKFLOW_PRESET_DEFINITION_BY_ID,
   type WorkflowPresetHelpStep,
@@ -27,6 +28,7 @@ import {
 import {
   useWorkflowModelChoices,
   workflowModelPinKey,
+  WorkflowModelPinControls,
   WorkflowStepModelPins,
   type SetWorkflowStepModel,
   type WorkflowModelPinKey,
@@ -84,6 +86,10 @@ function PlanWorkflowStageControls(props: {
   );
 }
 
+const RECOVERY_BACKUP_PIN_KEY: WorkflowModelPinKey = {
+  workflowPromptId: WORKFLOW_RECOVERY_FALLBACK_MODEL_PIN,
+};
+
 export function WorkflowSettingsBody(props: {
   readonly environmentId: EnvironmentId;
   readonly preset: WorkflowPreset | null;
@@ -112,12 +118,37 @@ export function WorkflowSettingsBody(props: {
     props.defaultStepModels?.find(
       (entry) => workflowModelPinKey(entry) === workflowModelPinKey(key),
     )?.modelSelection ?? null;
+  const recoveryBackup = props.pinFor(RECOVERY_BACKUP_PIN_KEY);
+  const defaultRecoveryBackup = defaultPinFor(RECOVERY_BACKUP_PIN_KEY);
+  const recoveryInheritedSelection = defaultRecoveryBackup ?? props.rootModelSelection;
+  const recoveryBackupControl = (
+    <section className="space-y-2 border-b border-border/70 pb-4">
+      <h3 className="text-xs font-semibold text-foreground">Recovery backup</h3>
+      <WorkflowModelPinControls
+        pinKey={RECOVERY_BACKUP_PIN_KEY}
+        label="Backup provider and model"
+        note="Used only after one recovery attempt on the primary model fails. An identical choice stays on the primary."
+        pinnedSelection={recoveryBackup}
+        inheritedSelection={recoveryInheritedSelection}
+        inheritedLabel={
+          defaultRecoveryBackup === null
+            ? "Auto has no standing backup. Recovery stays on the primary model."
+            : `Auto follows Settings (${choices.describeSelection(defaultRecoveryBackup)})`
+        }
+        choices={choices}
+        onSetStepModel={props.onSetStepModel}
+      />
+    </section>
+  );
 
   if (steps.length === 0) {
     return (
-      <p className="px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
-        This workflow has no steps with agents of their own, so there is nothing to set.
-      </p>
+      <div className="space-y-3 px-3 py-2">
+        {recoveryBackupControl}
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
+          This workflow has no other agent model settings.
+        </p>
+      </div>
     );
   }
 
@@ -129,6 +160,7 @@ export function WorkflowSettingsBody(props: {
     return (
       <ScrollArea className="max-h-[min(42rem,75vh)]">
         <div className="space-y-4 px-3 py-2">
+          {recoveryBackupControl}
           <p className="text-[11px] leading-relaxed text-muted-foreground">
             {props.description ??
               "Set models, cycle budgets, and App Review parts in workflow order. App Review stops at 10 cycles. Ticket and Final Code Review stop clean or run at most five cycles. Recovery continues the current cycle thread. Changes apply to the next agent each step starts."}
@@ -162,6 +194,7 @@ export function WorkflowSettingsBody(props: {
   return (
     <ScrollArea className="max-h-[26rem]">
       <div className="space-y-3 px-3 py-2">
+        {recoveryBackupControl}
         <p className="text-[11px] leading-relaxed text-muted-foreground">
           {props.description ??
             "Set models for steps that start separate threads, cycle budgets, and the parts an App Review verifies. App Review stops at 10 cycles. Ticket and Final Code Review stop clean or run at most five cycles. Recovery continues the current cycle thread. Shared-thread steps use the workflow composer model. Changes apply to the next agent a step starts."}

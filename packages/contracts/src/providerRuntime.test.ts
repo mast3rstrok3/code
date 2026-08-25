@@ -6,6 +6,46 @@ import { classifyTaskAgentKind, ProviderRuntimeEvent } from "./providerRuntime.t
 const decodeRuntimeEvent = Schema.decodeUnknownSync(ProviderRuntimeEvent);
 
 describe("ProviderRuntimeEvent", () => {
+  it("decodes structured failure recovery and accepts historical failures without it", () => {
+    const current = decodeRuntimeEvent({
+      type: "turn.completed",
+      eventId: "event-failed-current",
+      provider: "opencode",
+      createdAt: "2026-02-28T00:00:00.000Z",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      payload: {
+        state: "failed",
+        errorMessage: "Service unavailable",
+        recovery: {
+          disposition: "retryable",
+          reason: "overloaded",
+          statusCode: 503,
+          retryAt: "2026-02-28T00:05:00.000Z",
+        },
+      },
+    });
+    const historical = decodeRuntimeEvent({
+      type: "turn.completed",
+      eventId: "event-failed-historical",
+      provider: "opencode",
+      createdAt: "2026-02-28T00:00:00.000Z",
+      threadId: "thread-1",
+      turnId: "turn-0",
+      payload: { state: "failed", errorMessage: "Old failure" },
+    });
+
+    expect(current.type === "turn.completed" ? current.payload.recovery : undefined).toEqual({
+      disposition: "retryable",
+      reason: "overloaded",
+      statusCode: 503,
+      retryAt: "2026-02-28T00:05:00.000Z",
+    });
+    expect(
+      historical.type === "turn.completed" ? historical.payload.recovery : undefined,
+    ).toBeUndefined();
+  });
+
   it("accepts fork-provided driver kinds as branded slugs", () => {
     const parsed = decodeRuntimeEvent({
       type: "session.started",

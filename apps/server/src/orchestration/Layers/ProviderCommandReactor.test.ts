@@ -291,6 +291,12 @@ describe("ProviderCommandReactor", () => {
         }
       }),
     );
+    const resetSessionForRecovery = vi.fn((threadId: ThreadId) =>
+      Effect.sync(() => {
+        const index = runtimeSessions.findIndex((session) => session.threadId === threadId);
+        if (index >= 0) runtimeSessions.splice(index, 1);
+      }),
+    );
     const renameBranch = vi.fn((input: unknown) =>
       Effect.succeed({
         branch:
@@ -352,6 +358,9 @@ describe("ProviderCommandReactor", () => {
           ? { requiresNewThreadForModelChange: true }
           : {}),
       },
+      ...(modelSelection.instanceId === ProviderInstanceId.make("claudeAgent")
+        ? []
+        : [{ instanceId: ProviderInstanceId.make("claudeAgent") }]),
     ];
 
     const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
@@ -362,6 +371,7 @@ describe("ProviderCommandReactor", () => {
       respondToRequest: respondToRequest as ProviderServiceShape["respondToRequest"],
       respondToUserInput: respondToUserInput as ProviderServiceShape["respondToUserInput"],
       stopSession: stopSession as ProviderServiceShape["stopSession"],
+      resetSessionForRecovery,
       listSessions: () => Effect.succeed(runtimeSessions),
       getCapabilities: (_provider) =>
         Effect.succeed({
@@ -586,6 +596,7 @@ describe("ProviderCommandReactor", () => {
       respondToRequest,
       respondToUserInput,
       stopSession,
+      resetSessionForRecovery,
       renameBranch,
       refreshStatus,
       generateBranchName,
@@ -2644,6 +2655,102 @@ describe("ProviderCommandReactor", () => {
         detail: expect.stringContaining("cannot switch to 'claudeAgent'"),
       },
     });
+  });
+
+  it("replaces the provider session for a server recovery turn without changing the thread", async () => {
+    const harness = await createHarness({ threadWorkflowRole: "implementation-worker" });
+    const now = "2026-01-01T00:00:00.000Z";
+    const threadId = ThreadId.make("thread-1");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-before-recovery-failover"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-before-recovery-failover"),
+          role: "user",
+          text: "primary attempt",
+          attachments: [],
+        },
+        interactionMode: "implementation-workflow",
+        runtimeMode: "full-access",
+        createdAt: now,
+      }),
+    );
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      const thread = readModel.threads.find((entry) => entry.id === threadId);
+      return thread?.session?.status === "running" && thread.latestTurn?.state === "running";
+    });
+    await harness.drain();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-error-before-recovery-failover"),
+        threadId,
+        session: {
+          threadId,
+          status: "error",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "full-access",
+          activeTurnId: null,
+          lastError: "Service unavailable",
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      const thread = readModel.threads.find((entry) => entry.id === threadId);
+      return thread?.session?.status === "error" && thread.latestTurn?.state === "error";
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("server:workflow-nudge:turn:thread-1:series:2"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-recovery-failover"),
+          role: "user",
+          text: "clean recovery prompt",
+          attachments: [],
+        },
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("claudeAgent"),
+          model: "claude-opus-4-6",
+        },
+        freshProviderSession: true,
+        interactionMode: "implementation-workflow",
+        runtimeMode: "full-access",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    await harness.drain();
+
+    expect(harness.resetSessionForRecovery).toHaveBeenCalledWith(threadId);
+    expect(harness.startSession).toHaveBeenCalledTimes(2);
+    expect(harness.startSession.mock.calls[1]?.[0]).toBe(threadId);
+    expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+      threadId,
+      provider: "claudeAgent",
+      providerInstanceId: "claudeAgent",
+      modelSelection: {
+        instanceId: "claudeAgent",
+        model: "claude-opus-4-6",
+      },
+    });
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === threadId);
+    expect(thread?.id).toBe(threadId);
+    expect(
+      thread?.activities.some((activity) => activity.kind === "workflow-provider-failed-over"),
+    ).toBe(true);
   });
 
   it("rejects cross-driver provider changes after the existing thread session has stopped", async () => {

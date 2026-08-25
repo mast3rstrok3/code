@@ -12,6 +12,7 @@ import {
   type OrchestrationSession,
   ThreadId,
   type ProviderSession,
+  type ProviderFailureRecovery,
   type ProviderTurnStartResult,
   type RuntimeMode,
   type TurnId,
@@ -36,6 +37,7 @@ import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { increment, orchestrationEventsProcessedTotal } from "../../observability/Metrics.ts";
 import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
 import type { ProviderServiceError } from "../../provider/Errors.ts";
+import { classifyProviderFailure } from "../../provider/providerFailureRecovery.ts";
 import { TextGeneration } from "../../textGeneration/TextGeneration.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
@@ -489,6 +491,7 @@ const make = Effect.gen(function* () {
     readonly turnId: TurnId | null;
     readonly createdAt: string;
     readonly requestId?: string;
+    readonly recovery?: ProviderFailureRecovery;
   }) =>
     Effect.all({
       commandId: serverCommandId("provider-failure-activity"),
@@ -506,6 +509,7 @@ const make = Effect.gen(function* () {
             summary: input.summary,
             payload: {
               detail: input.detail,
+              ...(input.recovery === undefined ? {} : { recovery: input.recovery }),
               ...(input.requestId ? { requestId: input.requestId } : {}),
             },
             turnId: input.turnId,
@@ -623,6 +627,7 @@ const make = Effect.gen(function* () {
       readonly modelSelection?: ModelSelection;
       readonly workflowPromptId?: string;
       readonly pendingTurnStart?: boolean;
+      readonly freshProviderSession?: boolean;
     },
   ) {
     const thread = yield* resolveThread(threadId);
@@ -636,6 +641,13 @@ const make = Effect.gen(function* () {
       providerService
         .listSessions()
         .pipe(Effect.map((sessions) => sessions.find((session) => session.threadId === threadId)));
+
+    if (options?.freshProviderSession === true) {
+      yield* (
+        providerService.resetSessionForRecovery?.(threadId) ??
+          providerService.stopSession({ threadId })
+      );
+    }
 
     const activeSession = yield* resolveActiveSession(threadId);
     const activeThreadSession =
@@ -663,20 +675,24 @@ const make = Effect.gen(function* () {
     const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
     const desiredWorkflowPromptId = options?.workflowPromptId;
     const desiredInstanceId = desiredModelSelection.instanceId;
-    const currentInfo = yield* providerService.getInstanceInfo(currentInstanceId).pipe(
-      Effect.mapError(
-        () =>
-          new ProviderAdapterRequestError({
-            provider: providerErrorLabelFromInstanceHint({
-              instanceId: String(currentInstanceId),
-              modelSelectionInstanceId: String(thread.modelSelection.instanceId),
-              sessionProvider: thread.session?.providerName ?? undefined,
+    const currentInfo = yield* providerService
+      .getInstanceInfo(
+        options?.freshProviderSession === true ? desiredInstanceId : currentInstanceId,
+      )
+      .pipe(
+        Effect.mapError(
+          () =>
+            new ProviderAdapterRequestError({
+              provider: providerErrorLabelFromInstanceHint({
+                instanceId: String(currentInstanceId),
+                modelSelectionInstanceId: String(thread.modelSelection.instanceId),
+                sessionProvider: thread.session?.providerName ?? undefined,
+              }),
+              method: "thread.turn.start",
+              detail: `Thread '${threadId}' references unknown provider instance '${currentInstanceId}'. The instance is not configured in this build.`,
             }),
-            method: "thread.turn.start",
-            detail: `Thread '${threadId}' references unknown provider instance '${currentInstanceId}'. The instance is not configured in this build.`,
-          }),
-      ),
-    );
+        ),
+      );
     const desiredInfo = yield* providerService.getInstanceInfo(desiredInstanceId).pipe(
       Effect.mapError(
         () =>
@@ -714,7 +730,7 @@ const make = Effect.gen(function* () {
         createdAt,
       });
     }
-    if (thread.session !== null) {
+    if (thread.session !== null && options?.freshProviderSession !== true) {
       yield* rejectStartedThreadModelChangeIfRequired({
         threadId,
         currentModelSelection:
@@ -729,6 +745,7 @@ const make = Effect.gen(function* () {
       });
     }
     if (
+      options?.freshProviderSession !== true &&
       thread.session !== null &&
       requestedModelSelection !== undefined &&
       requestedModelSelection.instanceId !== currentInstanceId
@@ -892,6 +909,7 @@ const make = Effect.gen(function* () {
     readonly modelSelection?: ModelSelection;
     readonly interactionMode?: ProviderInteractionMode;
     readonly workflowPromptId?: string;
+    readonly freshProviderSession?: boolean;
     readonly createdAt: string;
   }) {
     const thread = yield* resolveThread(input.threadId);
@@ -904,6 +922,9 @@ const make = Effect.gen(function* () {
       ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
       ...(input.workflowPromptId !== undefined ? { workflowPromptId: input.workflowPromptId } : {}),
       pendingTurnStart: true,
+      ...(input.freshProviderSession !== undefined
+        ? { freshProviderSession: input.freshProviderSession }
+        : {}),
     });
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
@@ -1301,6 +1322,12 @@ const make = Effect.gen(function* () {
         return Effect.void;
       }
       const detail = formatFailureDetail(cause);
+      const failReason = cause.reasons.find(Cause.isFailReason);
+      const recovery = classifyProviderFailure({
+        error: failReason?.error,
+        message: detail,
+        failedAt: event.payload.createdAt,
+      });
       return setThreadSessionErrorOnTurnStartFailure({
         threadId: event.payload.threadId,
         detail,
@@ -1312,6 +1339,7 @@ const make = Effect.gen(function* () {
             kind: "provider.turn.start.failed",
             summary: "Provider turn start failed",
             detail,
+            recovery,
             turnId: null,
             createdAt: event.payload.createdAt,
           }),
@@ -1371,6 +1399,9 @@ const make = Effect.gen(function* () {
       ...(event.payload.workflowPromptId !== undefined
         ? { workflowPromptId: event.payload.workflowPromptId }
         : {}),
+      ...(event.payload.freshProviderSession !== undefined
+        ? { freshProviderSession: event.payload.freshProviderSession }
+        : {}),
       createdAt: event.payload.createdAt,
     }).pipe(
       Effect.map(Option.some),
@@ -1379,6 +1410,31 @@ const make = Effect.gen(function* () {
 
     if (Option.isNone(sendTurnRequest)) {
       return;
+    }
+
+    if (event.payload.freshProviderSession === true) {
+      const selectedModel = event.payload.modelSelection ?? thread.modelSelection;
+      yield* orchestrationEngine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.make(
+          `server:workflow-provider-failed-over:${event.payload.threadId}:${event.payload.messageId}`,
+        ),
+        threadId: event.payload.threadId,
+        activity: {
+          id: yield* serverEventId(),
+          tone: "info",
+          kind: "workflow-provider-failed-over",
+          summary: `Recovery started a clean provider session on ${selectedModel.model}`,
+          payload: {
+            providerInstanceId: selectedModel.instanceId,
+            model: selectedModel.model,
+            recoveryMessageId: event.payload.messageId,
+          },
+          turnId: null,
+          createdAt: event.payload.createdAt,
+        },
+        createdAt: event.payload.createdAt,
+      });
     }
 
     yield* providerService.sendTurn(sendTurnRequest.value).pipe(

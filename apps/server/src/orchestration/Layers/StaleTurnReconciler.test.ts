@@ -8,6 +8,7 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  WORKFLOW_RECOVERY_FALLBACK_MODEL_PIN,
   ThreadId,
   TurnId,
   type OrchestrationImplementationRun,
@@ -108,6 +109,7 @@ function eventId(value: string) {
 function makeTestLayer(
   liveSessions: Ref.Ref<ReadonlyArray<ProviderSession>>,
   reconcilerOptions?: StaleTurnReconcilerLiveOptions,
+  settingsOverrides?: Parameters<typeof serverSettingsLayerTest>[0],
 ) {
   const coreLayer = Layer.mergeAll(
     OrchestrationEngineLive.pipe(
@@ -134,11 +136,26 @@ function makeTestLayer(
 
   const providerServiceLayer = Layer.mock(ProviderService)({
     listSessions: () => Ref.get(liveSessions),
+    getInstanceInfo: (instanceId) => {
+      const driverKind = ProviderDriverKind.make(
+        String(instanceId).startsWith("claude") ? "claudeAgent" : String(instanceId),
+      );
+      return Effect.succeed({
+        instanceId,
+        driverKind,
+        displayName: undefined,
+        enabled: true,
+        continuationIdentity: {
+          driverKind,
+          continuationKey: `${driverKind}:instance:${instanceId}`,
+        },
+      });
+    },
   });
 
   const reactorLayer = ImplementationWorkflowReactorLive.pipe(
     Layer.provide(coreLayer),
-    Layer.provide(serverSettingsLayerTest({})),
+    Layer.provide(serverSettingsLayerTest(settingsOverrides)),
     Layer.provide(
       Layer.succeed(T3ProjectFileLoader, {
         load: () => Effect.succeed(Option.none()),
@@ -268,13 +285,17 @@ function makeTestLayer(
       Layer.provide(coreLayer),
       Layer.provide(directoryLayer),
       Layer.provide(providerServiceLayer),
+      Layer.provide(serverSettingsLayerTest(settingsOverrides)),
     ),
   );
 }
 
 function withSystem<A, E>(
   use: (system: ReconcilerSystem) => Effect.Effect<A, E, Scope.Scope>,
-  options?: { readonly reconciler?: StaleTurnReconcilerLiveOptions },
+  options?: {
+    readonly reconciler?: StaleTurnReconcilerLiveOptions;
+    readonly settings?: Parameters<typeof serverSettingsLayerTest>[0];
+  },
 ) {
   return Effect.gen(function* () {
     const liveSessions = yield* Ref.make<ReadonlyArray<ProviderSession>>([]);
@@ -298,7 +319,7 @@ function withSystem<A, E>(
           liveSessions,
         });
       }),
-    ).pipe(Effect.provide(makeTestLayer(liveSessions, options?.reconciler)));
+    ).pipe(Effect.provide(makeTestLayer(liveSessions, options?.reconciler, options?.settings)));
   });
 }
 
@@ -401,6 +422,41 @@ function blockThreadOnFailedTurn(
       updatedAt: blockedAt,
       tag: `${input.tag}-stopped`,
     });
+  });
+}
+
+function appendProviderTurnFailure(
+  system: ReconcilerSystem,
+  input: {
+    readonly threadId: ThreadId;
+    readonly turnId: TurnId;
+    readonly tag: string;
+    readonly createdAt: string;
+    readonly disposition?: "retryable" | "terminal" | "unknown";
+    readonly reason?: "overloaded" | "authentication" | "unknown";
+  },
+) {
+  return system.engine.dispatch({
+    type: "thread.activity.append",
+    commandId: commandId(`provider-failure-${input.tag}`),
+    threadId: input.threadId,
+    activity: {
+      id: eventId(`provider-failure-${input.tag}`),
+      tone: "error",
+      kind: "provider.turn.failed",
+      summary: `Provider turn failed: ${input.reason ?? "unknown"}`,
+      payload: {
+        turnId: input.turnId,
+        recovery: {
+          disposition: input.disposition ?? "retryable",
+          reason: input.reason ?? "overloaded",
+          statusCode: input.reason === "authentication" ? 401 : 503,
+        },
+      },
+      turnId: input.turnId,
+      createdAt: input.createdAt,
+    },
+    createdAt: input.createdAt,
   });
 }
 
@@ -688,10 +744,14 @@ describe("StaleTurnReconciler", () => {
             "startup-cleared",
             "spec-authoring",
           );
+          const failedAt = DateTime.formatIso(
+            DateTime.subtract(yield* DateTime.now, { minutes: 5 }),
+          );
           yield* setThreadSession(system, {
             threadId,
             status: "running",
             activeTurnId: turnId,
+            updatedAt: failedAt,
             tag: "startup-cleared-running",
           });
           yield* setThreadSession(system, {
@@ -699,6 +759,7 @@ describe("StaleTurnReconciler", () => {
             status: "error",
             activeTurnId: null,
             lastError: ORPHANED_PROVIDER_SESSION_ERROR,
+            updatedAt: failedAt,
             tag: "startup-cleared-error",
           });
 
@@ -1244,7 +1305,7 @@ describe("StaleTurnReconciler", () => {
     ),
   );
 
-  it.live("leaves errored workflow sessions alone when the reconciler never resumed them", () =>
+  it.live("leaves errored workflow sessions alone when the turn did not fail", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
@@ -1275,7 +1336,6 @@ describe("StaleTurnReconciler", () => {
           yield* system.reactor.drain;
 
           const workerThread = yield* getThread(system, workerThreadId);
-          // Untouched: the reconciler's settle would have stamped lastError.
           expect(workerThread?.session?.lastError).toBeNull();
           expect(yield* resumeActivities(system, workerThreadId)).toHaveLength(0);
           expect(yield* resumeMessages(system, workerThreadId)).toHaveLength(0);
@@ -1337,7 +1397,201 @@ describe("StaleTurnReconciler", () => {
     ),
   );
 
-  it.live("cannot use a nudge to bypass the stage launch budget", () =>
+  it.live("nudges a failed turn when the adapter still lists an errored session", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          const workerThreadId = requireWorkerThreadId(run);
+          const failedTurnId = TurnId.make("turn-nudge-listed-error");
+          const blockedAt = DateTime.formatIso(
+            DateTime.subtract(yield* DateTime.now, { hours: 9 }),
+          );
+          yield* blockThreadOnFailedTurn(system, {
+            threadId: workerThreadId,
+            turnId: failedTurnId,
+            tag: "nudge-listed-error",
+            blockedAt,
+          });
+          yield* system.directory.upsert({
+            threadId: workerThreadId,
+            provider: ProviderDriverKind.make("opencode"),
+            providerInstanceId: ProviderInstanceId.make("opencode"),
+            status: "running",
+            runtimeMode: "full-access",
+            resumeCursor: { sessionId: "ses_stale" },
+          });
+          yield* Ref.set(system.liveSessions, [
+            {
+              threadId: workerThreadId,
+              provider: ProviderDriverKind.make("opencode"),
+              providerInstanceId: ProviderInstanceId.make("opencode"),
+              status: "error",
+              runtimeMode: "full-access",
+              createdAt: blockedAt,
+              updatedAt: blockedAt,
+              lastError: "Upstream service unavailable",
+            },
+          ]);
+
+          yield* system.reconciler.start();
+
+          const recoveryAttempts = yield* nudgeActivities(system, workerThreadId);
+          expect(recoveryAttempts).toHaveLength(1);
+          expect(recoveryAttempts[0]?.payload).toMatchObject({
+            attempt: 1,
+            phase: "primary",
+            selectedProviderInstanceId: "codex",
+            selectedModel: "gpt-5-codex",
+          });
+          expect(yield* nudgeMessages(system, workerThreadId)).toHaveLength(1);
+          const binding = Option.getOrUndefined(yield* system.directory.getBinding(workerThreadId));
+          expect(binding?.status).toBe("stopped");
+        }),
+      { reconciler: bootOnlyOptions },
+    ),
+  );
+
+  it.live("moves the second retryable recovery attempt to the configured backup", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          const workerThreadId = requireWorkerThreadId(run);
+          const original = yield* getThread(system, workerThreadId);
+          const assignmentMessageId = original?.messages.find(
+            (message) => message.role === "user",
+          )?.id;
+          expect(assignmentMessageId).toBeDefined();
+
+          const recoveryStartedAt = DateTime.formatIso(
+            DateTime.subtract(yield* DateTime.now, { minutes: 5 }),
+          );
+          const firstTurnId = TurnId.make("turn-backup-first-failure");
+          const firstNudgeMessageId = messageId("backup-primary-retry");
+          yield* blockThreadOnFailedTurn(system, {
+            threadId: workerThreadId,
+            turnId: firstTurnId,
+            tag: "backup-first-failure",
+            blockedAt: recoveryStartedAt,
+          });
+          yield* appendProviderTurnFailure(system, {
+            threadId: workerThreadId,
+            turnId: firstTurnId,
+            tag: "backup-first-failure",
+            createdAt: recoveryStartedAt,
+          });
+          const firstAttemptAt = DateTime.formatIso(
+            DateTime.subtract(yield* DateTime.now, { minutes: 3 }),
+          );
+          yield* system.engine.dispatch({
+            type: "thread.activity.append",
+            commandId: commandId("backup-primary-recovery-record"),
+            threadId: workerThreadId,
+            activity: {
+              id: eventId("backup-primary-recovery-record"),
+              tone: "info",
+              kind: WORKFLOW_NUDGE_ACTIVITY_KIND,
+              summary: "Recovery primary attempt 1/48",
+              payload: {
+                type: WORKFLOW_NUDGE_ACTIVITY_KIND,
+                attempt: 1,
+                attemptCeiling: 48,
+                blockedTurnId: firstTurnId,
+                nudgeMessageId: firstNudgeMessageId,
+                reason: "turn-failed",
+                recoveryStartedAt,
+                recoveryDeadlineAt: DateTime.formatIso(
+                  DateTime.add(DateTime.makeUnsafe(Date.parse(recoveryStartedAt)), { hours: 8 }),
+                ),
+                phase: "primary",
+                primaryModelSelection: {
+                  instanceId: ProviderInstanceId.make("codex"),
+                  model: "gpt-5-codex",
+                },
+                assignmentMessageIds: [assignmentMessageId!],
+                scheduledRetryAt: firstAttemptAt,
+              },
+              turnId: null,
+              createdAt: firstAttemptAt,
+            },
+            createdAt: firstAttemptAt,
+          });
+          yield* system.engine.dispatch({
+            type: "thread.turn.start",
+            commandId: commandId("backup-primary-recovery-turn"),
+            threadId: workerThreadId,
+            message: {
+              messageId: firstNudgeMessageId,
+              role: "user",
+              text: "Primary recovery attempt",
+              attachments: [],
+            },
+            interactionMode: "implementation-workflow",
+            workflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
+            runtimeMode: "full-access",
+            createdAt: firstAttemptAt,
+          });
+
+          const secondFailureAt = DateTime.formatIso(
+            DateTime.subtract(yield* DateTime.now, { minutes: 2 }),
+          );
+          const secondTurnId = TurnId.make("turn-backup-second-failure");
+          yield* blockThreadOnFailedTurn(system, {
+            threadId: workerThreadId,
+            turnId: secondTurnId,
+            tag: "backup-second-failure",
+            blockedAt: secondFailureAt,
+          });
+          yield* appendProviderTurnFailure(system, {
+            threadId: workerThreadId,
+            turnId: secondTurnId,
+            tag: "backup-second-failure",
+            createdAt: secondFailureAt,
+          });
+
+          yield* system.reconciler.start();
+
+          const attempts = yield* nudgeActivities(system, workerThreadId);
+          expect(attempts).toHaveLength(2);
+          expect(attempts[1]?.payload).toMatchObject({
+            attempt: 2,
+            phase: "backup",
+            selectedProviderInstanceId: "claudeBackup",
+            selectedModel: "claude-sonnet-5",
+          });
+          const recovered = yield* getThread(system, workerThreadId);
+          const recoveryPrompt = recovered?.messages.at(-1)?.text ?? "";
+          expect(recoveryPrompt).toContain(`Assignment message ${assignmentMessageId}`);
+          expect(recoveryPrompt).toContain(
+            "Inspect Git status, the current diff, and recent commits",
+          );
+          expect(recoveryPrompt.length).toBeLessThan(120_000);
+        }),
+      {
+        reconciler: bootOnlyOptions,
+        settings: {
+          providerInstances: {
+            [ProviderInstanceId.make("claudeBackup")]: {
+              driver: ProviderDriverKind.make("claudeAgent"),
+              enabled: true,
+            },
+          },
+          workflowStepModels: [
+            {
+              workflowPromptId: WORKFLOW_RECOVERY_FALLBACK_MODEL_PIN,
+              modelSelection: {
+                instanceId: ProviderInstanceId.make("claudeBackup"),
+                model: "claude-sonnet-5",
+              },
+            },
+          ],
+        },
+      },
+    ),
+  );
+
+  it.live("hands terminal authentication failures to the stage owner without retrying", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
@@ -1348,11 +1602,34 @@ describe("StaleTurnReconciler", () => {
           const blockedAt = DateTime.formatIso(
             DateTime.subtract(yield* DateTime.now, { minutes: 5 }),
           );
+          const failedTurnId = TurnId.make("turn-nudge-exhaust");
           yield* blockThreadOnFailedTurn(system, {
             threadId: workerThreadId,
-            turnId: TurnId.make("turn-nudge-exhaust"),
+            turnId: failedTurnId,
             tag: "nudge-exhaust",
             blockedAt,
+          });
+          yield* system.engine.dispatch({
+            type: "thread.activity.append",
+            commandId: commandId("terminal-auth-failure"),
+            threadId: workerThreadId,
+            activity: {
+              id: eventId("terminal-auth-failure"),
+              tone: "error",
+              kind: "provider.turn.failed",
+              summary: "Provider turn failed: authentication",
+              payload: {
+                turnId: failedTurnId,
+                recovery: {
+                  disposition: "terminal",
+                  reason: "authentication",
+                  statusCode: 401,
+                },
+              },
+              turnId: failedTurnId,
+              createdAt: blockedAt,
+            },
+            createdAt: blockedAt,
           });
 
           yield* system.reconciler.start();
@@ -1384,6 +1661,55 @@ describe("StaleTurnReconciler", () => {
           nudgeIntervalMs: 0,
         },
       },
+    ),
+  );
+
+  it.live("emits one exhaustion result after the original eight-hour deadline", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          const workerThreadId = requireWorkerThreadId(run);
+          const failedTurnId = TurnId.make("turn-recovery-expired");
+          const failedAt = DateTime.formatIso(DateTime.subtract(yield* DateTime.now, { hours: 9 }));
+          yield* blockThreadOnFailedTurn(system, {
+            threadId: workerThreadId,
+            turnId: failedTurnId,
+            tag: "recovery-expired",
+            blockedAt: failedAt,
+          });
+          yield* appendProviderTurnFailure(system, {
+            threadId: workerThreadId,
+            turnId: failedTurnId,
+            tag: "recovery-expired",
+            createdAt: failedAt,
+          });
+
+          yield* system.reconciler.start();
+          yield* waitUntil(
+            getThread(system, workerThreadId).pipe(
+              Effect.map(
+                (thread) => thread?.session?.lastError === WORKFLOW_NUDGE_EXHAUSTED_MESSAGE,
+              ),
+            ),
+            "expired recovery handoff",
+          );
+          yield* system.reactor.drain;
+
+          const thread = yield* getThread(system, workerThreadId);
+          expect(
+            thread?.activities.filter(
+              (activity) => activity.kind === "workflow-recovery-exhausted",
+            ),
+          ).toHaveLength(1);
+          expect(
+            thread?.activities.filter(
+              (activity) => activity.kind === "implementation-worker-result",
+            ),
+          ).toHaveLength(1);
+          expect(yield* nudgeActivities(system, workerThreadId)).toHaveLength(0);
+        }),
+      { reconciler: bootOnlyOptions },
     ),
   );
 });

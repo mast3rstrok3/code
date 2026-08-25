@@ -81,6 +81,11 @@ export interface ProviderServiceShape {
     input: ProviderStopSessionInput,
   ) => Effect.Effect<void, ProviderServiceError>;
 
+  /** Stop a recovery source session and discard provider-native resume state. */
+  readonly resetSessionForRecovery?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<void, ProviderServiceError>;
+
   /**
    * List active provider sessions.
    *

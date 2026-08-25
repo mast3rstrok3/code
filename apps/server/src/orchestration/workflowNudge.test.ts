@@ -7,6 +7,8 @@ import {
   isWorkflowNudgeCandidate,
   ORPHANED_PROVIDER_SESSION_ERROR,
   workflowAutomaticRetryLimit,
+  workflowRecoveryAttemptLimit,
+  workflowRecoveryJitterMs,
   workflowNudgeDelayMs,
   WORKFLOW_NUDGE_DEFERRAL_WINDOW_MS,
   WORKFLOW_NUDGE_EXHAUSTED_MESSAGE,
@@ -15,13 +17,31 @@ import {
   type WorkflowNudgeThread,
 } from "./workflowNudge.ts";
 
-it("resumes App Review once before its stage owner replaces the phase", () => {
+it("keeps interrupted-session resumes inside their existing stage budgets", () => {
   expect(workflowAutomaticRetryLimit("implementation-worker", 48)).toBe(0);
   expect(workflowAutomaticRetryLimit("implementation-code-reviewer", 48)).toBe(0);
   expect(workflowAutomaticRetryLimit("app-review-reviewer", 48)).toBe(1);
   expect(workflowAutomaticRetryLimit("app-review-planner", 48)).toBe(1);
   expect(workflowAutomaticRetryLimit("app-review-fixer", 48)).toBe(1);
   expect(workflowAutomaticRetryLimit("planning-reviewer", 48)).toBe(48);
+});
+
+it("limits unknown failures and rejects terminal failures", () => {
+  expect(workflowRecoveryAttemptLimit({ disposition: "retryable", reason: "overloaded" }, 48)).toBe(
+    48,
+  );
+  expect(workflowRecoveryAttemptLimit({ disposition: "unknown", reason: "unknown" }, 48)).toBe(2);
+  expect(
+    workflowRecoveryAttemptLimit({ disposition: "terminal", reason: "authentication" }, 48),
+  ).toBe(0);
+});
+
+it("adds stable bounded jitter", () => {
+  expect(workflowRecoveryJitterMs("thread-a", false)).toBe(
+    workflowRecoveryJitterMs("thread-a", false),
+  );
+  expect(workflowRecoveryJitterMs("thread-a", false)).toBeLessThanOrEqual(15_000);
+  expect(workflowRecoveryJitterMs("thread-a", true)).toBeLessThanOrEqual(60_000);
 });
 
 const blockedAt = "2026-01-01T00:00:00.000Z";

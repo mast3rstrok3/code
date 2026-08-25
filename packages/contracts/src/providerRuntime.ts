@@ -361,6 +361,22 @@ const TurnStartedPayload = Schema.Struct({
 });
 export type TurnStartedPayload = typeof TurnStartedPayload.Type;
 
+export const ProviderFailureRecovery = Schema.Struct({
+  disposition: Schema.Literals(["retryable", "terminal", "unknown"]),
+  reason: Schema.Literals([
+    "rate-limit",
+    "overloaded",
+    "transport",
+    "authentication",
+    "configuration",
+    "provider",
+    "unknown",
+  ]),
+  retryAt: Schema.optional(IsoDateTime),
+  statusCode: Schema.optional(Schema.Int),
+});
+export type ProviderFailureRecovery = typeof ProviderFailureRecovery.Type;
+
 const TurnCompletedPayload = Schema.Struct({
   state: RuntimeTurnState,
   stopReason: Schema.optional(Schema.NullOr(TrimmedNonEmptyStringSchema)),
@@ -368,6 +384,7 @@ const TurnCompletedPayload = Schema.Struct({
   modelUsage: Schema.optional(UnknownRecordSchema),
   totalCostUsd: Schema.optional(Schema.Number),
   errorMessage: Schema.optional(TrimmedNonEmptyStringSchema),
+  recovery: Schema.optional(ProviderFailureRecovery),
 });
 export type TurnCompletedPayload = typeof TurnCompletedPayload.Type;
 

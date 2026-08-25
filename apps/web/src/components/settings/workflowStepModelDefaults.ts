@@ -33,11 +33,7 @@ export function engineeringWorkflowDefaultSteps(
   const definition = WORKFLOW_PRESET_DEFINITION_BY_ID[preset];
   return definition.helpSteps.map((step, index) => {
     const label = withoutPhasePrefix(step.label);
-    const phase = step.label.startsWith("Implementation phase · ")
-      ? "implementation"
-      : label === "Ticket review and revision cycles"
-        ? "ticket-review"
-        : "planning";
+    const phase = index < 4 ? "planning" : index === 4 ? "ticket-review" : "implementation";
     const configurable = workflowPresetStepCanPinModel(definition.id, step);
     return {
       number: index + 1,

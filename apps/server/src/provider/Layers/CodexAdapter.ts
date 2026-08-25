@@ -66,6 +66,7 @@ import {
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import { isRegisteredWorkflowPromptId } from "../WorkflowPromptRegistry.ts";
 import { resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
+import { classifyProviderFailure } from "../providerFailureRecovery.ts";
 const isCodexAppServerProcessExitedError = Schema.is(CodexErrors.CodexAppServerProcessExitedError);
 const isCodexAppServerTransportError = Schema.is(CodexErrors.CodexAppServerTransportError);
 const isCodexSessionRuntimeThreadIdMissingError = Schema.is(
@@ -1056,13 +1057,24 @@ function mapToRuntimeEvents(
       return [];
     }
     const errorMessage = trimText(payload.turn.error?.message);
+    const base = runtimeEventBase(event, canonicalThreadId);
+    const state = toTurnStatus(payload.turn.status);
     return [
       {
-        ...runtimeEventBase(event, canonicalThreadId),
+        ...base,
         type: "turn.completed",
         payload: {
-          state: toTurnStatus(payload.turn.status),
+          state,
           ...(errorMessage ? { errorMessage } : {}),
+          ...(state === "failed" && errorMessage
+            ? {
+                recovery: classifyProviderFailure({
+                  error: payload.turn.error,
+                  message: errorMessage,
+                  failedAt: base.createdAt,
+                }),
+              }
+            : {}),
         },
       },
     ];

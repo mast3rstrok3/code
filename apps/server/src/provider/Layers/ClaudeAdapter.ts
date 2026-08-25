@@ -77,6 +77,7 @@ import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
+import { classifyProviderFailure } from "../providerFailureRecovery.ts";
 import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
 import {
   getClaudeModelCapabilities,
@@ -2455,6 +2456,15 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           ? { totalCostUsd: result.total_cost_usd }
           : {}),
         ...(errorMessage ? { errorMessage } : {}),
+        ...(status === "failed" && errorMessage
+          ? {
+              recovery: classifyProviderFailure({
+                error: result,
+                message: errorMessage,
+                failedAt: stamp.createdAt,
+              }),
+            }
+          : {}),
       },
       providerRefs: nativeProviderRefs(context),
     });

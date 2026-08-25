@@ -1,4 +1,8 @@
-import { ProviderInstanceId, type ModelSelection } from "@t3tools/contracts";
+import {
+  ProviderInstanceId,
+  WORKFLOW_RECOVERY_FALLBACK_MODEL_PIN,
+  type ModelSelection,
+} from "@t3tools/contracts";
 import { expect, it } from "vite-plus/test";
 
 import {
@@ -33,10 +37,10 @@ it("lists the eleven Engineering Workflow steps in phase order", () => {
     "Grill with Docs",
     "Spec authoring",
     "Ticket authoring",
-    "Ticket review and revision cycles",
+    "Ticket review and revision",
     "Execute ticket waves",
     "Merge ticket branches",
-    "App Review",
+    "Final App Review",
     "Final Code Review",
     "Create pull request",
     "Babysit pull request",
@@ -70,7 +74,7 @@ it("marks automatic, same-thread, and separately configurable steps", () => {
 it("keeps nested worker and review agents under their workflow step", () => {
   const targets = engineeringWorkflowDefaultSteps();
   const ticketWaves = targets.find((target) => target.label === "Execute ticket waves");
-  const appReview = targets.find((target) => target.label === "App Review");
+  const appReview = targets.find((target) => target.label === "Final App Review");
 
   expect(ticketWaves?.subSteps.map((subStep) => subStep.label)).toEqual([
     "TDD implementation worker",
@@ -129,4 +133,26 @@ it("sets and clears a model across several review pins", () => {
   expect(assigned).toHaveLength(2);
   expect(assigned.every((entry) => entry.modelSelection === selection)).toBe(true);
   expect(setWorkflowStepModelDefaults(assigned, keys, null)).toEqual([]);
+});
+
+it("stores the recovery backup in the reserved workflow model pin", () => {
+  const assigned = setWorkflowStepModelDefault(
+    [],
+    { workflowPromptId: WORKFLOW_RECOVERY_FALLBACK_MODEL_PIN },
+    selection,
+  );
+
+  expect(assigned).toEqual([
+    {
+      workflowPromptId: WORKFLOW_RECOVERY_FALLBACK_MODEL_PIN,
+      modelSelection: selection,
+    },
+  ]);
+  expect(
+    setWorkflowStepModelDefault(
+      assigned,
+      { workflowPromptId: WORKFLOW_RECOVERY_FALLBACK_MODEL_PIN },
+      null,
+    ),
+  ).toEqual([]);
 });

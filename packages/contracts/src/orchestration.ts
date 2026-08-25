@@ -396,6 +396,8 @@ export const WorkflowStepModelOverride = Schema.Struct({
 });
 export type WorkflowStepModelOverride = typeof WorkflowStepModelOverride.Type;
 
+export const WORKFLOW_RECOVERY_FALLBACK_MODEL_PIN = "workflow.recovery-fallback";
+
 /**
  * How many times one workflow step repeats before the run moves on.
  *
@@ -2555,6 +2557,8 @@ export const ThreadTurnStartCommand = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
   workflowPromptId: Schema.optional(TrimmedNonEmptyString),
+  /** Server-only recovery escape hatch. Client commands cannot set it. */
+  freshProviderSession: Schema.optional(Schema.Boolean),
   bootstrap: Schema.optional(ThreadTurnStartBootstrap),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
   createdAt: IsoDateTime,
@@ -3452,6 +3456,7 @@ export const ThreadTurnStartRequestedPayload = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
   workflowPromptId: Schema.optional(TrimmedNonEmptyString),
+  freshProviderSession: Schema.optional(Schema.Boolean),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
   createdAt: IsoDateTime,
 });

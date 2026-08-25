@@ -12,7 +12,6 @@ import type {
 } from "@t3tools/contracts";
 import {
   ApprovalRequestId,
-  EnvironmentId,
   EventId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -1415,6 +1414,42 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("clears provider-native continuation state for a fresh recovery session", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const runtimeRepository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+      const threadId = asThreadId("thread-fresh-recovery-reset");
+      const session = yield* provider.startSession(threadId, {
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* provider.sendTurn({
+        threadId,
+        input: "primary attempt",
+        attachments: [],
+      });
+
+      assert.isDefined(provider.resetSessionForRecovery);
+      yield* provider.resetSessionForRecovery!(threadId);
+
+      const runtime = yield* runtimeRepository.getByThreadId({ threadId });
+      assert.equal(Option.isSome(runtime), true);
+      if (Option.isSome(runtime)) {
+        assert.equal(runtime.value.status, "stopped");
+        assert.equal(runtime.value.resumeCursor, null);
+        assert.equal(runtime.value.runtimePayload, null);
+      }
+      assert.equal(
+        (yield* provider.listSessions()).some(
+          (candidate) => candidate.threadId === session.threadId,
+        ),
+        false,
+      );
+    }),
+  );
+
   it.effect("reuses persisted resume cursor when startSession is called after a restart", () =>
     Effect.gen(function* () {
       const tempDir = NodeFS.mkdtempSync(
@@ -1626,6 +1661,46 @@ routing.layer("ProviderServiceLive routing", (it) => {
 
 const fanout = makeProviderServiceLayer();
 fanout.layer("ProviderServiceLive fanout", (it) => {
+  it.effect("marks the persisted runtime binding errored after a failed turn", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const runtimeRepository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+      const threadId = asThreadId("thread-terminal-runtime-sync");
+      yield* provider.startSession(threadId, {
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* advanceTestClock(50);
+
+      fanout.codex.emit({
+        type: "turn.completed",
+        eventId: asEventId("evt-terminal-runtime-sync"),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId,
+        turnId: asTurnId("turn-terminal-runtime-sync"),
+        payload: {
+          state: "failed",
+          errorMessage: "Service unavailable",
+          recovery: { disposition: "retryable", reason: "overloaded", statusCode: 503 },
+        },
+      });
+      yield* advanceTestClock(50);
+
+      const runtime = yield* runtimeRepository.getByThreadId({ threadId });
+      assert.equal(Option.isSome(runtime), true);
+      if (Option.isSome(runtime)) {
+        assert.equal(runtime.value.status, "error");
+        assert.equal(
+          (runtime.value.runtimePayload as { activeTurnId?: unknown }).activeTurnId,
+          null,
+        );
+      }
+    }),
+  );
+
   it.effect("fans out adapter turn completion events", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;

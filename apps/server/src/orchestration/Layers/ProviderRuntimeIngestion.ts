@@ -3777,6 +3777,40 @@ const make = Effect.gen(function* () {
             },
             createdAt: now,
           });
+
+          if (
+            event.type === "turn.completed" &&
+            normalizeRuntimeTurnState(event.payload.state) === "failed" &&
+            eventTurnId !== undefined
+          ) {
+            const recovery = event.payload.recovery ?? {
+              disposition: "unknown" as const,
+              reason: "unknown" as const,
+            };
+            yield* orchestrationEngine.dispatch({
+              type: "thread.activity.append",
+              commandId: yield* providerCommandId(event, "provider-turn-failed"),
+              threadId: thread.id,
+              activity: {
+                id: EventId.make(yield* crypto.randomUUIDv4),
+                tone: "error",
+                kind: "provider.turn.failed",
+                summary: `Provider turn failed: ${recovery.reason}`,
+                payload: {
+                  turnId: eventTurnId,
+                  provider: event.provider,
+                  providerInstanceId:
+                    event.providerInstanceId ?? thread.session?.providerInstanceId ?? null,
+                  model: thread.modelSelection.model,
+                  recovery,
+                  errorMessage: event.payload.errorMessage ?? null,
+                },
+                turnId: eventTurnId,
+                createdAt: now,
+              },
+              createdAt: now,
+            });
+          }
         }
       }
 

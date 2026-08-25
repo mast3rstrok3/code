@@ -52,6 +52,7 @@ import {
   type OpenCodeServerConnection,
 } from "../opencodeRuntime.ts";
 import * as Option from "effect/Option";
+import { classifyProviderFailure } from "../providerFailureRecovery.ts";
 
 const PROVIDER = ProviderDriverKind.make("opencode");
 
@@ -1104,16 +1105,22 @@ export function makeOpenCodeAdapter(
             { clearActiveTurnId: true },
           );
           if (activeTurnId) {
+            const eventBase = yield* buildEventBase({
+              threadId: context.session.threadId,
+              turnId: activeTurnId,
+              raw: event,
+            });
             yield* emit({
-              ...(yield* buildEventBase({
-                threadId: context.session.threadId,
-                turnId: activeTurnId,
-                raw: event,
-              })),
+              ...eventBase,
               type: "turn.completed",
               payload: {
                 state: "failed",
                 errorMessage: message,
+                recovery: classifyProviderFailure({
+                  error: event.properties.error,
+                  message,
+                  failedAt: eventBase.createdAt,
+                }),
               },
             });
           }

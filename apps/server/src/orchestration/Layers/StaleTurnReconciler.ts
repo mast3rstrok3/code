@@ -3,11 +3,14 @@ import {
   AppReviewId,
   EventId,
   MessageId,
+  type ModelSelection,
   type OrchestrationProposedPlanId,
   type OrchestrationReadModel,
   type OrchestrationThread,
   type OrchestrationThreadWorkflowRole,
   type ProviderInteractionMode,
+  type ProviderFailureRecovery,
+  type ProviderSession,
   type ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -18,10 +21,12 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as Schedule from "effect/Schedule";
 
 import { ProviderSessionDirectory } from "../../provider/Services/ProviderSessionDirectory.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   appendWorkflowSkillCommandSection,
   WORKFLOW_PROMPT_IDS,
@@ -33,20 +38,23 @@ import {
   type StaleTurnReconcilerShape,
 } from "../Services/StaleTurnReconciler.ts";
 import {
-  isAwaitingWorkflowNudge,
   isWorkflowNudgeCandidate,
   NUDGEABLE_WORKFLOW_ROLES,
   ORPHANED_PROVIDER_SESSION_ERROR,
   STALE_TURN_RESUME_ACTIVITY_KIND,
   workflowAutomaticRetryLimit,
+  workflowRecoveryAttemptLimit,
+  workflowRecoveryJitterMs,
   workflowNudgeDelayMs,
   WORKFLOW_INTERRUPTION_ERROR_MESSAGE,
   WORKFLOW_NUDGE_ACTIVITY_KIND,
   WORKFLOW_NUDGE_EXHAUSTED_MESSAGE,
   WORKFLOW_NUDGE_INTERVAL_MS,
   WORKFLOW_NUDGE_MAX_ATTEMPTS,
+  WORKFLOW_RECOVERY_WINDOW_MS,
 } from "../workflowNudge.ts";
 import { isWorkflowThreadPaused } from "../workflowPause.ts";
+import { resolveWorkflowRecoveryBackupSelection } from "../workflowSubagents.ts";
 
 const DEFAULT_SWEEP_INTERVAL_MS = 60 * 1000;
 const DEFAULT_GRACE_MS = 60 * 1000;
@@ -70,6 +78,160 @@ const STALE_TURN_RESUME_MESSAGE =
  */
 const WORKFLOW_NUDGE_MESSAGE =
   "Your previous turn stopped on a provider failure — an API error, or a plan usage limit that has since had time to lift. Nothing else about the work changed. Pick up exactly where you left off and finish by emitting your required directive.";
+
+const MAX_RECOVERY_ASSIGNMENT_CHARS = 80_000;
+const MAX_RECOVERY_ASSISTANT_TAIL_CHARS = 20_000;
+const MAX_PROVIDER_RECOVERY_PROMPT_CHARS = 119_000;
+const RECOVERY_TRUNCATION_MARKER = "\n\n[Middle omitted for provider prompt limit]\n\n";
+
+interface WorkflowRecoveryAttemptPayload {
+  readonly attempt: number;
+  readonly phase?: "primary" | "backup";
+  readonly nudgeMessageId?: string;
+  readonly recoveryStartedAt?: string;
+  readonly recoveryDeadlineAt?: string;
+  readonly assignmentMessageIds?: ReadonlyArray<string>;
+  readonly primaryModelSelection?: ModelSelection;
+  readonly selectedProviderInstanceId?: string;
+  readonly selectedModel?: string;
+}
+
+function providerSessionSuppressesRecovery(session: ProviderSession): boolean {
+  return session.status === "connecting" || session.status === "running";
+}
+
+function boundedEnds(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  const available = maxChars - RECOVERY_TRUNCATION_MARKER.length;
+  const start = Math.ceil(available / 2);
+  const end = Math.floor(available / 2);
+  return `${text.slice(0, start)}${RECOVERY_TRUNCATION_MARKER}${text.slice(-end)}`;
+}
+
+function readRecoveryAttemptPayload(value: unknown): WorkflowRecoveryAttemptPayload | null {
+  if (!Predicate.isObject(value) || typeof value["attempt"] !== "number") return null;
+  return value as unknown as WorkflowRecoveryAttemptPayload;
+}
+
+function readFailureRecovery(
+  detail: OrchestrationThread,
+  turnId: TurnId,
+): {
+  readonly recovery: ProviderFailureRecovery;
+  readonly failedAt: string;
+  readonly compatibilityClock: boolean;
+} {
+  for (let index = detail.activities.length - 1; index >= 0; index -= 1) {
+    const activity = detail.activities[index];
+    if (
+      activity === undefined ||
+      (activity.kind !== "provider.turn.failed" &&
+        activity.kind !== "provider.turn.start.failed") ||
+      !Predicate.isObject(activity.payload)
+    ) {
+      continue;
+    }
+    if (activity.kind === "provider.turn.failed" && activity.turnId !== turnId) continue;
+    const recovery = activity.payload["recovery"];
+    if (
+      Predicate.isObject(recovery) &&
+      (recovery["disposition"] === "retryable" ||
+        recovery["disposition"] === "terminal" ||
+        recovery["disposition"] === "unknown") &&
+      typeof recovery["reason"] === "string"
+    ) {
+      return {
+        recovery: recovery as ProviderFailureRecovery,
+        failedAt: activity.createdAt,
+        compatibilityClock: false,
+      };
+    }
+    return {
+      recovery: { disposition: "unknown", reason: "unknown" },
+      failedAt: activity.createdAt,
+      compatibilityClock: true,
+    };
+  }
+  return {
+    recovery: { disposition: "unknown", reason: "unknown" },
+    failedAt: detail.latestTurn?.completedAt ?? detail.session?.updatedAt ?? detail.updatedAt,
+    compatibilityClock: true,
+  };
+}
+
+function currentRecoveryAttempts(detail: OrchestrationThread): {
+  readonly attempts: ReadonlyArray<{
+    readonly activity: OrchestrationThread["activities"][number];
+    readonly payload: WorkflowRecoveryAttemptPayload;
+  }>;
+  readonly recoveryStartedAt: string | null;
+  readonly recoveryDeadlineAt: string | null;
+  readonly assignmentMessageIds: ReadonlyArray<string>;
+  readonly primaryModelSelection: ModelSelection;
+} {
+  const latestUserMessage = detail.messages.toReversed().find((message) => message.role === "user");
+  const activities = detail.activities.flatMap((activity) => {
+    if (activity.kind !== WORKFLOW_NUDGE_ACTIVITY_KIND) return [];
+    const payload = readRecoveryAttemptPayload(activity.payload);
+    return payload === null ? [] : [{ activity, payload }];
+  });
+  const current = activities
+    .toReversed()
+    .find((entry) => entry.payload.nudgeMessageId === latestUserMessage?.id);
+  if (current === undefined) {
+    return {
+      attempts: [],
+      recoveryStartedAt: null,
+      recoveryDeadlineAt: null,
+      assignmentMessageIds: latestUserMessage === undefined ? [] : [latestUserMessage.id],
+      primaryModelSelection: detail.modelSelection,
+    };
+  }
+  const recoveryStartedAt = current.payload.recoveryStartedAt ?? current.activity.createdAt;
+  const matching = activities.filter(
+    (entry) => (entry.payload.recoveryStartedAt ?? entry.activity.createdAt) === recoveryStartedAt,
+  );
+  return {
+    attempts: matching,
+    recoveryStartedAt,
+    recoveryDeadlineAt: current.payload.recoveryDeadlineAt ?? null,
+    assignmentMessageIds: current.payload.assignmentMessageIds ?? [],
+    primaryModelSelection: current.payload.primaryModelSelection ?? detail.modelSelection,
+  };
+}
+
+function buildFreshRecoveryPrompt(input: {
+  readonly detail: OrchestrationThread;
+  readonly assignmentMessageIds: ReadonlyArray<string>;
+  readonly sourceProposedPlan: ResumeTarget["sourceProposedPlan"];
+}): string {
+  const assignments = input.assignmentMessageIds.flatMap((messageId) => {
+    const message = input.detail.messages.find((candidate) => candidate.id === messageId);
+    return message === undefined
+      ? []
+      : [
+          `Assignment message ${messageId}:\n${boundedEnds(message.text, MAX_RECOVERY_ASSIGNMENT_CHARS)}`,
+        ];
+  });
+  const assistantText = input.detail.messages
+    .filter((message) => message.role === "assistant")
+    .map((message) => message.text)
+    .join("\n\n")
+    .slice(-MAX_RECOVERY_ASSISTANT_TAIL_CHARS);
+  return [
+    "The primary provider session failed. Continue this workflow phase in a clean provider session.",
+    "Inspect Git status, the current diff, and recent commits before editing. Preserve useful work already present in the worktree.",
+    "Complete the original phase assignment and emit its required workflow directive.",
+    ...(input.sourceProposedPlan === undefined
+      ? []
+      : [
+          `The existing proposed-plan reference is ${input.sourceProposedPlan.threadId}/${input.sourceProposedPlan.planId}.`,
+        ]),
+    "",
+    ...assignments,
+    ...(assistantText.length === 0 ? [] : ["Interrupted assistant output tail:", assistantText]),
+  ].join("\n\n");
+}
 
 /**
  * Workflow roles whose orphaned turns are resumed autonomously instead of
@@ -414,24 +576,13 @@ function countResumeActivities(detail: OrchestrationThread): number {
     .length;
 }
 
-function nudgeActivities(detail: OrchestrationThread) {
-  return detail.activities.filter((activity) => activity.kind === WORKFLOW_NUDGE_ACTIVITY_KIND);
-}
-
-/** When the last nudge went out, or null when none has. */
-function lastNudgeAtMs(detail: OrchestrationThread): number | null {
-  const last = nudgeActivities(detail).at(-1);
-  if (last === undefined) return null;
-  const parsed = Date.parse(last.createdAt);
-  return Number.isNaN(parsed) ? null : parsed;
-}
-
 const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
   Effect.gen(function* () {
     const orchestrationEngine = yield* OrchestrationEngineService;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     const providerService = yield* ProviderService;
     const directory = yield* ProviderSessionDirectory;
+    const serverSettingsService = yield* ServerSettingsService;
     const crypto = yield* Crypto.Crypto;
 
     const sweepIntervalMs = Math.max(1, options?.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS);
@@ -447,6 +598,34 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
     );
     const nudgeIntervalMs = Math.max(0, options?.nudgeIntervalMs ?? WORKFLOW_NUDGE_INTERVAL_MS);
     const maxNudgeAttempts = Math.max(1, options?.maxNudgeAttempts ?? WORKFLOW_NUDGE_MAX_ATTEMPTS);
+
+    const resolveRecoveryBackup = Effect.fn("StaleTurnReconciler.resolveRecoveryBackup")(
+      function* (input: {
+        readonly readModel: OrchestrationReadModel;
+        readonly thread: OrchestrationThread;
+        readonly primaryModelSelection: ModelSelection;
+      }) {
+        const settings = yield* serverSettingsService.getSettings;
+        const resolved = resolveWorkflowRecoveryBackupSelection({
+          thread: input.thread,
+          threads: input.readModel.threads,
+          settings,
+          primaryModelSelection: input.primaryModelSelection,
+        });
+        const selected = resolved.modelSelection;
+        if (selected === null) return resolved;
+        const available = yield* providerService
+          .getInstanceInfo(selected.instanceId)
+          .pipe(Effect.option);
+        if (Option.isNone(available) || !available.value.enabled) {
+          return {
+            modelSelection: null,
+            skippedReason: `Recovery backup provider instance '${selected.instanceId}' is unavailable.`,
+          };
+        }
+        return { modelSelection: selected, skippedReason: null };
+      },
+    );
 
     const staleTurnCommandId = (tag: string, threadId: ThreadId, pinnedTurnId: TurnId | null) =>
       pinnedTurnId !== null
@@ -837,16 +1016,30 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
      */
     const nudgeThread = Effect.fn("StaleTurnReconciler.nudgeThread")(function* (input: {
       readonly thread: OrchestrationThread;
+      readonly detail: OrchestrationThread;
       readonly blockedTurnId: TurnId;
       readonly target: ResumeTarget;
       readonly attempt: number;
       readonly maxAttempts: number;
+      readonly phase: "primary" | "backup";
+      readonly modelSelection: ModelSelection;
+      readonly primaryModelSelection: ModelSelection;
+      readonly freshProviderSession: boolean;
+      readonly failoverSkippedReason: string | null;
+      readonly failureRecovery: ProviderFailureRecovery;
+      readonly recoveryStartedAt: string;
+      readonly recoveryDeadlineAt: string;
+      readonly scheduledRetryAt: string;
+      readonly assignmentMessageIds: ReadonlyArray<string>;
       readonly updatedAt: string;
     }) {
       const { thread, blockedTurnId, target, attempt, maxAttempts, updatedAt } = input;
-      const nudgeMessageId = MessageId.make(`message-workflow-nudge-${thread.id}-${attempt}`);
+      const recoveryKey = encodeURIComponent(input.recoveryStartedAt);
+      const nudgeMessageId = MessageId.make(
+        `message-workflow-nudge-${thread.id}-${recoveryKey}-${attempt}`,
+      );
       const nudgeCommandId = (tag: string) =>
-        CommandId.make(`server:workflow-nudge:${tag}:${thread.id}:${attempt}`);
+        CommandId.make(`server:workflow-nudge:${tag}:${thread.id}:${recoveryKey}:${attempt}`);
 
       yield* orchestrationEngine.dispatch({
         type: "thread.activity.append",
@@ -856,16 +1049,28 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
           id: EventId.make(yield* crypto.randomUUIDv4),
           tone: "info",
           kind: WORKFLOW_NUDGE_ACTIVITY_KIND,
-          summary: `Nudged after a failed turn (attempt ${attempt}/${maxAttempts})`,
+          summary: `Recovery ${input.phase} attempt ${attempt}/${maxAttempts}`,
           payload: {
             type: WORKFLOW_NUDGE_ACTIVITY_KIND,
             attempt,
-            maxAttempts,
+            attemptCeiling: maxAttempts,
             blockedTurnId,
             nudgeMessageId,
             workflowPromptId: target.workflowPromptId,
             reason: "turn-failed",
             blockedError: thread.session?.lastError ?? null,
+            recoveryStartedAt: input.recoveryStartedAt,
+            recoveryDeadlineAt: input.recoveryDeadlineAt,
+            phase: input.phase,
+            selectedProviderInstanceId: input.modelSelection.instanceId,
+            selectedModel: input.modelSelection.model,
+            primaryModelSelection: input.primaryModelSelection,
+            failureRecovery: input.failureRecovery,
+            scheduledRetryAt: input.scheduledRetryAt,
+            assignmentMessageIds: [...input.assignmentMessageIds],
+            ...(input.failoverSkippedReason === null
+              ? {}
+              : { failoverSkippedReason: input.failoverSkippedReason }),
             nudgedAt: updatedAt,
           },
           turnId: null,
@@ -874,7 +1079,21 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
         createdAt: updatedAt,
       });
 
-      yield* stopBinding(thread.id);
+      if (!input.freshProviderSession) {
+        yield* stopBinding(thread.id);
+      }
+
+      const prompt = input.freshProviderSession
+        ? buildFreshRecoveryPrompt({
+            detail: input.detail,
+            assignmentMessageIds: input.assignmentMessageIds,
+            sourceProposedPlan: target.sourceProposedPlan,
+          })
+        : WORKFLOW_NUDGE_MESSAGE;
+      const providerPrompt = boundedEnds(
+        appendWorkflowSkillCommandSection(prompt, target.workflowPromptId),
+        MAX_PROVIDER_RECOVERY_PROMPT_CHARS,
+      );
 
       yield* orchestrationEngine.dispatch({
         type: "thread.turn.start",
@@ -883,9 +1102,11 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
         message: {
           messageId: nudgeMessageId,
           role: "user",
-          text: appendWorkflowSkillCommandSection(WORKFLOW_NUDGE_MESSAGE, target.workflowPromptId),
+          text: providerPrompt,
           attachments: [],
         },
+        modelSelection: input.modelSelection,
+        ...(input.freshProviderSession ? { freshProviderSession: true } : {}),
         ...(target.workflowPromptId !== null ? { workflowPromptId: target.workflowPromptId } : {}),
         runtimeMode: thread.session?.runtimeMode ?? thread.runtimeMode,
         interactionMode: target.interactionMode,
@@ -901,6 +1122,9 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
         workflowRole: thread.workflowRole,
         attempt,
         maxAttempts,
+        phase: input.phase,
+        providerInstanceId: input.modelSelection.instanceId,
+        model: input.modelSelection.model,
       });
     });
 
@@ -926,12 +1150,51 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
         // that decides what happens next.
         if (target === null) return false;
 
-        const priorAttempts = nudgeActivities(detail).length;
-        const nudgeAttemptLimit = workflowAutomaticRetryLimit(
-          thread.workflowRole,
-          maxNudgeAttempts,
-        );
-        if (priorAttempts >= nudgeAttemptLimit) {
+        const recoveryState = currentRecoveryAttempts(detail);
+        const priorAttempts = recoveryState.attempts.length;
+        const failure = readFailureRecovery(detail, blockedTurnId);
+        const nudgeAttemptLimit = workflowRecoveryAttemptLimit(failure.recovery, maxNudgeAttempts);
+        const recoveryStartedAt =
+          recoveryState.recoveryStartedAt ??
+          (failure.compatibilityClock ? updatedAt : failure.failedAt);
+        const recoveryStartedAtMs = Date.parse(recoveryStartedAt);
+        const recoveryDeadlineAt =
+          recoveryState.recoveryDeadlineAt ??
+          (Number.isNaN(recoveryStartedAtMs)
+            ? updatedAt
+            : DateTime.formatIso(
+                DateTime.makeUnsafe(recoveryStartedAtMs + WORKFLOW_RECOVERY_WINDOW_MS),
+              ));
+        const recoveryDeadlineAtMs = Date.parse(recoveryDeadlineAt);
+        const exhausted =
+          priorAttempts >= nudgeAttemptLimit ||
+          Number.isNaN(recoveryStartedAtMs) ||
+          Number.isNaN(recoveryDeadlineAtMs) ||
+          input.nowMs >= recoveryDeadlineAtMs;
+        if (exhausted) {
+          yield* orchestrationEngine.dispatch({
+            type: "thread.activity.append",
+            commandId: CommandId.make(
+              `server:workflow-nudge:exhausted:${thread.id}:${recoveryStartedAt}`,
+            ),
+            threadId: thread.id,
+            activity: {
+              id: EventId.make(yield* crypto.randomUUIDv4),
+              tone: "error",
+              kind: "workflow-recovery-exhausted",
+              summary: "Automatic workflow recovery exhausted",
+              payload: {
+                recoveryStartedAt,
+                recoveryDeadlineAt,
+                attempts: priorAttempts,
+                attemptCeiling: nudgeAttemptLimit,
+                failureRecovery: failure.recovery,
+              },
+              turnId: blockedTurnId,
+              createdAt: updatedAt,
+            },
+            createdAt: updatedAt,
+          });
           yield* propagateWorkflowFailure({
             readModel,
             thread,
@@ -954,19 +1217,60 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
           return true;
         }
 
-        const lastNudge = lastNudgeAtMs(detail);
-        const dueAfterMs =
-          lastNudge === null
-            ? Date.parse(thread.session?.updatedAt ?? "") + workflowNudgeDelayMs(0)
-            : lastNudge + input.nudgeIntervalMs;
+        const lastNudge = recoveryState.attempts.at(-1)?.activity;
+        const normalDelayMs = priorAttempts <= 1 ? workflowNudgeDelayMs(0) : input.nudgeIntervalMs;
+        const scheduleBaseMs = Date.parse(lastNudge?.createdAt ?? failure.failedAt);
+        const normalDueAfterMs =
+          scheduleBaseMs + normalDelayMs + workflowRecoveryJitterMs(thread.id, priorAttempts > 0);
+        const retryAtMs = Date.parse(failure.recovery.retryAt ?? "");
+        const dueAfterMs = Number.isNaN(retryAtMs)
+          ? normalDueAfterMs
+          : Math.max(normalDueAfterMs, retryAtMs);
         if (!Number.isNaN(dueAfterMs) && input.nowMs < dueAfterMs) return false;
+
+        const attempt = priorAttempts + 1;
+        const primaryModelSelection = recoveryState.primaryModelSelection;
+        const backup =
+          attempt === 1
+            ? { modelSelection: null, skippedReason: null }
+            : yield* resolveRecoveryBackup({
+                readModel,
+                thread: detail,
+                primaryModelSelection,
+              });
+        const phase = backup.modelSelection === null ? "primary" : "backup";
+        const modelSelection = backup.modelSelection ?? primaryModelSelection;
+        const priorPayload = recoveryState.attempts.at(-1)?.payload;
+        const priorSelection =
+          priorPayload?.selectedProviderInstanceId !== undefined &&
+          priorPayload.selectedModel !== undefined
+            ? {
+                instanceId: priorPayload.selectedProviderInstanceId,
+                model: priorPayload.selectedModel,
+              }
+            : primaryModelSelection;
+        const freshProviderSession =
+          attempt > 1 &&
+          (priorSelection.instanceId !== modelSelection.instanceId ||
+            priorSelection.model !== modelSelection.model);
 
         yield* nudgeThread({
           thread,
+          detail,
           blockedTurnId,
           target,
-          attempt: priorAttempts + 1,
+          attempt,
           maxAttempts: nudgeAttemptLimit,
+          phase,
+          modelSelection,
+          primaryModelSelection,
+          freshProviderSession,
+          failoverSkippedReason: attempt > 1 ? backup.skippedReason : null,
+          failureRecovery: failure.recovery,
+          recoveryStartedAt,
+          recoveryDeadlineAt,
+          scheduledRetryAt: DateTime.formatIso(DateTime.makeUnsafe(dueAfterMs)),
+          assignmentMessageIds: recoveryState.assignmentMessageIds,
           updatedAt,
         });
         return true;
@@ -1073,7 +1377,9 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
       Effect.gen(function* () {
         const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
         const liveSessions = yield* providerService.listSessions();
-        const liveThreadIds = new Set<ThreadId>(liveSessions.map((session) => session.threadId));
+        const liveThreadIds = new Set<ThreadId>(
+          liveSessions.filter(providerSessionSuppressesRecovery).map((session) => session.threadId),
+        );
         const now = yield* Clock.currentTimeMillis;
 
         const candidates: StaleTurnCandidate[] = [];
@@ -1127,9 +1433,7 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
           // did with its session afterwards — Claude tears the session down
           // after an API error, others leave it idle — so this is decided
           // independently of the live session list.
-          const nudgeable = sweepOptions.nudgeLongBlocked
-            ? isWorkflowNudgeCandidate({ threads: readModel.threads, thread })
-            : isAwaitingWorkflowNudge({ threads: readModel.threads, thread, nowMs: now });
+          const nudgeable = isWorkflowNudgeCandidate({ threads: readModel.threads, thread });
           if (!nudgeable) continue;
           const blockedTurnId = thread.latestTurn?.turnId ?? null;
           if (blockedTurnId === null) continue;
@@ -1158,7 +1462,9 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
         const confirmedModel = yield* projectionSnapshotQuery.getCommandReadModel();
         const confirmedLiveSessions = yield* providerService.listSessions();
         const confirmedLiveThreadIds = new Set<ThreadId>(
-          confirmedLiveSessions.map((session) => session.threadId),
+          confirmedLiveSessions
+            .filter(providerSessionSuppressesRecovery)
+            .map((session) => session.threadId),
         );
         const updatedAt = DateTime.formatIso(yield* DateTime.now);
 
@@ -1338,7 +1644,7 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
           graceMs: 0,
           startingProviderLaunchGraceMs,
           confirmDelayMs: 0,
-          nudgeIntervalMs: 0,
+          nudgeIntervalMs,
           recoverInactiveWorkflows: true,
           nudgeLongBlocked: true,
         });

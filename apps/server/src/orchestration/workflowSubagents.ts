@@ -9,6 +9,7 @@ import {
   type ServerSettings,
   type WorkflowStepModelOverride,
   type WorkflowStepReviewPartsOverride,
+  WORKFLOW_RECOVERY_FALLBACK_MODEL_PIN,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 
@@ -287,6 +288,44 @@ export function findWorkflowStepModels(
     threads.find((candidate) => candidate.id === rootThreadId)?.workflowStepModels ??
     thread.workflowStepModels
   );
+}
+
+export function resolveWorkflowRecoveryBackupSelection(input: {
+  readonly thread: WorkflowStepModelThread;
+  readonly threads: ReadonlyArray<WorkflowStepModelThread>;
+  readonly settings: ServerSettings;
+  readonly primaryModelSelection: ModelSelection;
+}): { readonly modelSelection: ModelSelection | null; readonly skippedReason: string | null } {
+  const runPin = findWorkflowStepModels(input.thread, input.threads)?.find(
+    (entry) =>
+      entry.workflowPromptId === WORKFLOW_RECOVERY_FALLBACK_MODEL_PIN &&
+      entry.stepWorkflowPromptId === undefined,
+  );
+  const standingPin = input.settings.workflowStepModels.find(
+    (entry) =>
+      entry.workflowPromptId === WORKFLOW_RECOVERY_FALLBACK_MODEL_PIN &&
+      entry.stepWorkflowPromptId === undefined,
+  );
+  const selected = runPin?.modelSelection ?? standingPin?.modelSelection;
+  if (selected === undefined) {
+    return { modelSelection: null, skippedReason: "No recovery backup is selected." };
+  }
+  if (!isProviderInstanceEnabled(input.settings, selected.instanceId)) {
+    return {
+      modelSelection: null,
+      skippedReason: `Recovery backup provider instance '${selected.instanceId}' is disabled or no longer configured.`,
+    };
+  }
+  if (
+    selected.instanceId === input.primaryModelSelection.instanceId &&
+    selected.model === input.primaryModelSelection.model
+  ) {
+    return {
+      modelSelection: null,
+      skippedReason: "Recovery backup matches the primary provider instance and model.",
+    };
+  }
+  return { modelSelection: selected, skippedReason: null };
 }
 
 /** A thread as far as run-level App Review parts are concerned. */

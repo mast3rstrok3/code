@@ -5,6 +5,7 @@ import {
   type ModelSelection,
   type ProviderInstanceConfigMap,
   type ServerSettings,
+  WORKFLOW_RECOVERY_FALLBACK_MODEL_PIN,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -13,6 +14,7 @@ import {
   findWorkflowStepModels,
   isWorkflowSubagentParentRoleAllowed,
   resolveWorkflowStepModelSelection,
+  resolveWorkflowRecoveryBackupSelection,
   resolveWorkflowSubagentModelSelection,
   resolveWorkflowSubagentSpawnDefinition,
   type WorkflowSubagentSpawnDefinition,
@@ -638,5 +640,92 @@ describe("findWorkflowStepModels", () => {
   it("returns undefined when the run has no pins", () => {
     const child = { id: "child", workflowContext: { rootThreadId: "root" } };
     expect(findWorkflowStepModels(child, [{ id: "root" }, child])).toBeUndefined();
+  });
+});
+
+describe("resolveWorkflowRecoveryBackupSelection", () => {
+  const standingSelection: ModelSelection = {
+    instanceId: ProviderInstanceId.make("claudeAgent"),
+    model: "claude-sonnet-5",
+  };
+  const runSelection: ModelSelection = {
+    instanceId: ProviderInstanceId.make("codex"),
+    model: "gpt-5.6-sol",
+  };
+  const backupPin = (modelSelection: ModelSelection) => ({
+    workflowPromptId: WORKFLOW_RECOVERY_FALLBACK_MODEL_PIN,
+    modelSelection,
+  });
+
+  it("uses a run pin before the standing backup", () => {
+    const root = { id: "root", workflowStepModels: [backupPin(runSelection)] };
+    expect(
+      resolveWorkflowRecoveryBackupSelection({
+        thread: { id: "child", workflowContext: { rootThreadId: "root" } },
+        threads: [root],
+        settings: settingsWith({
+          providerInstances: {
+            [ProviderInstanceId.make("claudeAgent")]: {
+              driver: ProviderDriverKind.make("claudeAgent"),
+              enabled: true,
+            },
+          },
+          workflowStepModels: [backupPin(standingSelection)],
+        }),
+        primaryModelSelection: claudeParentSelection,
+      }).modelSelection,
+    ).toEqual(runSelection);
+  });
+
+  it("uses the standing backup when the run stays on Auto", () => {
+    expect(
+      resolveWorkflowRecoveryBackupSelection({
+        thread: { id: "root" },
+        threads: [],
+        settings: settingsWith({
+          providerInstances: {
+            [ProviderInstanceId.make("claudeAgent")]: {
+              driver: ProviderDriverKind.make("claudeAgent"),
+              enabled: true,
+            },
+          },
+          workflowStepModels: [backupPin(standingSelection)],
+        }),
+        primaryModelSelection: runSelection,
+      }).modelSelection,
+    ).toEqual(standingSelection);
+  });
+
+  it("skips missing, disabled, and identical backups", () => {
+    const base = {
+      thread: { id: "root" },
+      threads: [] as ReadonlyArray<{ id: string }>,
+      primaryModelSelection: claudeParentSelection,
+    };
+    const missing = resolveWorkflowRecoveryBackupSelection({
+      ...base,
+      settings: settingsWith({ workflowStepModels: [] }),
+    });
+    const disabled = resolveWorkflowRecoveryBackupSelection({
+      ...base,
+      settings: settingsWith({
+        providerInstances: {
+          [ProviderInstanceId.make("claudeAgent")]: {
+            driver: ProviderDriverKind.make("claudeAgent"),
+            enabled: false,
+          },
+        },
+        workflowStepModels: [backupPin(standingSelection)],
+      }),
+    });
+    const identical = resolveWorkflowRecoveryBackupSelection({
+      ...base,
+      settings: enabledClaudeSettings,
+      thread: { id: "root", workflowStepModels: [backupPin(claudeParentSelection)] },
+    });
+
+    expect(missing.modelSelection).toBeNull();
+    expect(disabled.skippedReason).toContain("disabled");
+    expect(identical.skippedReason).toContain("matches the primary");
   });
 });

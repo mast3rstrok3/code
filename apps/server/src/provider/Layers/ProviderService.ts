@@ -375,12 +375,52 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     event: ProviderRuntimeEvent,
   ): Effect.Effect<void> =>
     Effect.sync(() => correlateRuntimeEventWithInstance(source, event)).pipe(
-      Effect.flatMap((canonicalEvent) =>
-        increment(providerRuntimeEventsTotal, {
+      Effect.flatMap((canonicalEvent) => {
+        const status =
+          canonicalEvent.type === "turn.completed" && canonicalEvent.payload?.state === "failed"
+            ? "error"
+            : canonicalEvent.type === "runtime.error"
+              ? "error"
+              : canonicalEvent.type === "session.exited"
+                ? "stopped"
+                : null;
+        const synchronizeBinding =
+          status === null
+            ? Effect.void
+            : directory
+                .upsert({
+                  threadId: canonicalEvent.threadId,
+                  provider: canonicalEvent.provider,
+                  providerInstanceId: canonicalEvent.providerInstanceId ?? source.instanceId,
+                  status,
+                  runtimePayload: {
+                    activeTurnId: null,
+                    lastRuntimeEvent: canonicalEvent.type,
+                    lastRuntimeEventAt: canonicalEvent.createdAt,
+                    ...(canonicalEvent.type === "turn.completed"
+                      ? { lastError: canonicalEvent.payload?.errorMessage ?? null }
+                      : canonicalEvent.type === "runtime.error"
+                        ? { lastError: canonicalEvent.payload.message }
+                        : {}),
+                  },
+                })
+                .pipe(
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning("provider runtime binding terminal sync failed", {
+                      threadId: canonicalEvent.threadId,
+                      eventType: canonicalEvent.type,
+                      cause,
+                    }),
+                  ),
+                );
+        return increment(providerRuntimeEventsTotal, {
           provider: canonicalEvent.provider,
           eventType: canonicalEvent.type,
-        }).pipe(Effect.andThen(publishRuntimeEvent(canonicalEvent))),
-      ),
+        }).pipe(
+          Effect.andThen(publishRuntimeEvent(canonicalEvent)),
+          Effect.andThen(synchronizeBinding),
+        );
+      }),
     );
 
   // `subscribedAdapters` is our source-of-truth for "which instance adapters
@@ -1127,6 +1167,34 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     },
   );
 
+  const resetSessionForRecovery = Effect.fn("ProviderService.resetSessionForRecovery")(function* (
+    threadId: ThreadId,
+  ) {
+    const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+    const adapters = yield* getAdapterEntries;
+    yield* Effect.forEach(
+      adapters,
+      ([, adapter]) =>
+        adapter
+          .hasSession(threadId)
+          .pipe(
+            Effect.flatMap((hasSession) =>
+              hasSession ? adapter.stopSession(threadId) : Effect.void,
+            ),
+          ),
+      { discard: true },
+    );
+    yield* clearMcpSession(threadId);
+    if (binding !== undefined) {
+      yield* directory.upsert({
+        ...binding,
+        status: "stopped",
+        resumeCursor: null,
+        runtimePayload: null,
+      });
+    }
+  });
+
   const getCapabilities: ProviderServiceMethod<"getCapabilities"> = (instanceId) =>
     registry.getByInstance(instanceId).pipe(Effect.map((adapter) => adapter.capabilities));
 
@@ -1241,6 +1309,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     respondToRequest,
     respondToUserInput,
     stopSession,
+    resetSessionForRecovery,
     listSessions,
     getCapabilities,
     getInstanceInfo,

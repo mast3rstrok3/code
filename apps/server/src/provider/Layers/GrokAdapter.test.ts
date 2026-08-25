@@ -936,6 +936,10 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
       if (failedTurnCompleted?.type === "turn.completed") {
         assert.equal(failedTurnCompleted.payload.state, "failed");
         assert.isString(failedTurnCompleted.payload.errorMessage);
+        assert.deepEqual(failedTurnCompleted.payload.recovery, {
+          disposition: "unknown",
+          reason: "unknown",
+        });
       }
 
       yield* Fiber.interrupt(runtimeEventsFiber);

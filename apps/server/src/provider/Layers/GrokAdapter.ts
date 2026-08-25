@@ -42,6 +42,7 @@ import {
   ProviderAdapterValidationError,
 } from "../Errors.ts";
 import { mapAcpToAdapterError } from "../acp/AcpAdapterSupport.ts";
+import { classifyProviderFailure } from "../providerFailureRecovery.ts";
 import type * as AcpSessionRuntime from "../acp/AcpSessionRuntime.ts";
 import {
   makeAcpAssistantItemEvent,
@@ -330,15 +331,21 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
           }
           if (options?.emitTurnCompletion !== false) {
             if (options?.errorMessage !== undefined) {
+              const stamp = yield* makeEventStamp();
               yield* offerRuntimeEvent({
                 type: "turn.completed",
-                ...(yield* makeEventStamp()),
+                ...stamp,
                 provider: PROVIDER,
                 threadId,
                 turnId,
                 payload: {
                   state: "failed",
                   errorMessage: options.errorMessage,
+                  recovery: classifyProviderFailure({
+                    error: options.errorMessage,
+                    message: options.errorMessage,
+                    failedAt: stamp.createdAt,
+                  }),
                 },
               });
             } else if (options?.completedStopReason !== undefined) {
@@ -406,15 +413,21 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
           return;
         }
         if (shouldEmitFailedTurn) {
+          const stamp = yield* makeEventStamp();
           yield* offerRuntimeEvent({
             type: "turn.completed",
-            ...(yield* makeEventStamp()),
+            ...stamp,
             provider: PROVIDER,
             threadId,
             turnId: settleTurnId,
             payload: {
               state: "failed",
               errorMessage: options.errorMessage,
+              recovery: classifyProviderFailure({
+                error: options.errorMessage,
+                message: options.errorMessage,
+                failedAt: stamp.createdAt,
+              }),
             },
           });
         } else if (shouldEmitCompletedTurn) {

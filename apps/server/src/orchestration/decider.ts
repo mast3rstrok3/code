@@ -52,6 +52,7 @@ import {
   planningReviewerVerdictExampleJson,
 } from "./workflowDirectives.ts";
 import { isWorkflowThreadPaused } from "./workflowPause.ts";
+import { NUDGEABLE_WORKFLOW_ROLES } from "./workflowNudge.ts";
 import { buildPlanImplementationThreadTitle } from "@t3tools/shared/orchestrationPlanning";
 import { APP_REVIEW_PARTS_TARGETS } from "@t3tools/shared/appReviewParts";
 import { resolveImplementationValidationCommands } from "@t3tools/shared/t3ProjectFile";
@@ -4917,6 +4918,28 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `workflow ancestor of ${targetThread.id} is paused`,
         });
       }
+      if (command.freshProviderSession === true) {
+        const recoveryCommand = command.commandId.startsWith("server:workflow-nudge:");
+        const autonomousRole =
+          targetThread.workflowRole !== null &&
+          NUDGEABLE_WORKFLOW_ROLES.has(targetThread.workflowRole);
+        const hasActiveTurn =
+          targetThread.session?.status === "starting" ||
+          targetThread.session?.status === "running" ||
+          (targetThread.session !== null && targetThread.session.activeTurnId !== null);
+        if (
+          !recoveryCommand ||
+          !autonomousRole ||
+          isWorkflowThreadPaused(readModel.threads, targetThread.id) ||
+          hasActiveTurn ||
+          targetThread.latestTurn?.state !== "error"
+        ) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Fresh provider sessions are limited to server recovery on an unpaused autonomous workflow thread with a terminal failed turn.`,
+          });
+        }
+      }
       const targetProject = readModel.projects.find(
         (project) => project.id === targetThread.projectId,
       );
@@ -5005,6 +5028,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           interactionMode: targetThread.interactionMode,
           ...(command.workflowPromptId !== undefined
             ? { workflowPromptId: command.workflowPromptId }
+            : {}),
+          ...(command.freshProviderSession !== undefined
+            ? { freshProviderSession: command.freshProviderSession }
             : {}),
           ...(sourceProposedPlan !== undefined ? { sourceProposedPlan } : {}),
           createdAt: command.createdAt,

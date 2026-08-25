@@ -11,9 +11,8 @@
  * with dead threads until a human notices.
  *
  * So a blocked thread is nudged instead: the same thread, keeping its context,
- * gets a short "your turn stopped, continue" prompt — once shortly after the
- * failure (transport blips recover immediately), then on a slow cadence for as
- * long as it stays blocked, plus once whenever the server starts. The reactors
+ * gets a short "your turn stopped, continue" prompt once shortly after the
+ * failure, then on a slow cadence for as long as it stays blocked. The reactors
  * that own the stage defer to the nudge while it is pending, so nothing is
  * relaunched or failed underneath it.
  *
@@ -21,7 +20,7 @@
  * `Layers/StaleTurnReconciler.ts`; this module holds the vocabulary both sides
  * share, so a stage owner can never wait for a nudge that will not come.
  */
-import type { OrchestrationThreadWorkflowRole } from "@t3tools/contracts";
+import type { OrchestrationThreadWorkflowRole, ProviderFailureRecovery } from "@t3tools/contracts";
 import * as Predicate from "effect/Predicate";
 
 import { isWorkflowThreadPaused, type WorkflowPauseThread } from "./workflowPause.ts";
@@ -45,7 +44,7 @@ export const ORPHANED_PROVIDER_SESSION_ERROR =
 
 export const STALE_TURN_RESUME_ACTIVITY_KIND = "stale-turn-resumed";
 
-/** First retry after a failed turn — fast, because most failures are transient. */
+/** First retry after a failed turn. Most provider failures are transient. */
 export const WORKFLOW_NUDGE_FIRST_DELAY_MS = 60 * 1000;
 
 /**
@@ -62,6 +61,10 @@ export const WORKFLOW_NUDGE_INTERVAL_MS = 10 * 60 * 1000;
  * credentials, a provider that fails every start).
  */
 export const WORKFLOW_NUDGE_MAX_ATTEMPTS = 48;
+export const WORKFLOW_RECOVERY_WINDOW_MS = 8 * 60 * 60 * 1000;
+export const WORKFLOW_RECOVERY_UNKNOWN_MAX_ATTEMPTS = 2;
+export const WORKFLOW_RECOVERY_INITIAL_JITTER_MAX_MS = 15 * 1000;
+export const WORKFLOW_RECOVERY_LATER_JITTER_MAX_MS = 60 * 1000;
 
 const STAGE_RETRY_OWNED_WORKFLOW_ROLES: ReadonlySet<OrchestrationThreadWorkflowRole> = new Set([
   "implementation-worker",
@@ -72,22 +75,49 @@ const STAGE_RETRY_OWNED_WORKFLOW_ROLES: ReadonlySet<OrchestrationThreadWorkflowR
   "implementation-change-request-babysitter",
 ]);
 
-const SINGLE_NUDGE_RETRY_WORKFLOW_ROLES: ReadonlySet<OrchestrationThreadWorkflowRole> = new Set([
+const SINGLE_RESUME_WORKFLOW_ROLES: ReadonlySet<OrchestrationThreadWorkflowRole> = new Set([
   "app-review-reviewer",
   "app-review-planner",
   "app-review-fixer",
 ]);
 
-/** Keep recovery mechanisms inside the stage's durable automatic retry budget. */
+/** Keep interrupted-session resumes inside their existing stage budgets. */
 export function workflowAutomaticRetryLimit(
   role: OrchestrationThreadWorkflowRole | null,
   configuredLimit: number,
 ): number {
   if (role !== null && STAGE_RETRY_OWNED_WORKFLOW_ROLES.has(role)) return 0;
-  if (role !== null && SINGLE_NUDGE_RETRY_WORKFLOW_ROLES.has(role)) {
+  if (role !== null && SINGLE_RESUME_WORKFLOW_ROLES.has(role)) {
     return Math.min(1, configuredLimit);
   }
   return configuredLimit;
+}
+
+export function workflowRecoveryAttemptLimit(
+  recovery: ProviderFailureRecovery,
+  configuredLimit: number,
+): number {
+  if (recovery.disposition === "terminal") return 0;
+  if (recovery.disposition === "unknown") {
+    return Math.min(WORKFLOW_RECOVERY_UNKNOWN_MAX_ATTEMPTS, configuredLimit);
+  }
+  return configuredLimit;
+}
+
+function stableThreadHash(threadId: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < threadId.length; index += 1) {
+    hash ^= threadId.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+export function workflowRecoveryJitterMs(threadId: string, later: boolean): number {
+  const ceiling = later
+    ? WORKFLOW_RECOVERY_LATER_JITTER_MAX_MS
+    : WORKFLOW_RECOVERY_INITIAL_JITTER_MAX_MS;
+  return stableThreadHash(`${threadId}:${later ? "later" : "initial"}`) % (ceiling + 1);
 }
 
 /**

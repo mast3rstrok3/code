@@ -9,7 +9,12 @@ import {
   SparklesIcon,
   WorkflowIcon,
 } from "lucide-react";
-import type { EnvironmentId, ModelSelection, ServerSettings } from "@t3tools/contracts";
+import {
+  WORKFLOW_RECOVERY_FALLBACK_MODEL_PIN,
+  type EnvironmentId,
+  type ModelSelection,
+  type ServerSettings,
+} from "@t3tools/contracts";
 import { Link } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
 import { useEffect, useRef } from "react";
@@ -23,6 +28,7 @@ import { usePrimaryEnvironmentId } from "../../state/environments";
 import { EngineeringWorkflowSettings } from "../EngineeringWorkflowSettings";
 import {
   useWorkflowModelChoices,
+  WorkflowModelPinControls,
   type SetWorkflowStepModel,
   type WorkflowModelPinKey,
 } from "../WorkflowModelPins";
@@ -181,6 +187,10 @@ function WorkflowStepModelDefaultsBody(props: {
   const pinFor = (key: WorkflowModelPinKey): ModelSelection | null =>
     props.defaults.find((entry) => workflowStepModelPinKeysEqual(entry, key))?.modelSelection ??
     null;
+  const recoveryKey: WorkflowModelPinKey = {
+    workflowPromptId: WORKFLOW_RECOVERY_FALLBACK_MODEL_PIN,
+  };
+  const recoveryBackup = pinFor(recoveryKey);
   return (
     <SettingsSection
       title="Engineering Workflow defaults"
@@ -193,6 +203,23 @@ function WorkflowStepModelDefaultsBody(props: {
         )
       }
     >
+      <SettingsRow
+        title="Recovery backup"
+        description="After one retry on the selected model, retryable provider failures can continue on this backup for up to eight hours. Auto leaves failover disabled."
+      >
+        <div className="mt-1 max-w-md pb-3">
+          <WorkflowModelPinControls
+            pinKey={recoveryKey}
+            label="Backup provider and model"
+            note="This choice applies only to recovery turns."
+            pinnedSelection={recoveryBackup}
+            inheritedSelection={props.seedSelection}
+            inheritedLabel="Auto has no backup. Recovery stays on the primary model."
+            choices={choices}
+            onSetStepModel={props.onSetStepModel}
+          />
+        </div>
+      </SettingsRow>
       <SettingsRow
         title="Models and defaults for all eleven steps"
         description="The order below matches the Engineering Workflow. App Review stops at 10 cycles. Ticket and Final Code Review stop clean or run at most five cycles. Recovery continues the current phase or cycle thread. Same-thread work uses the model selected when the workflow starts. Review and publication steps can be skipped by default."

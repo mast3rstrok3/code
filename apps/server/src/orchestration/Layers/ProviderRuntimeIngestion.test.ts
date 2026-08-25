@@ -417,6 +417,12 @@ describe("ProviderRuntimeIngestion", () => {
       payload: {
         state: "failed",
         errorMessage: "turn failed",
+        recovery: {
+          disposition: "retryable",
+          reason: "overloaded",
+          statusCode: 503,
+          retryAt: "2026-01-01T00:05:00.000Z",
+        },
       },
     });
 
@@ -425,10 +431,25 @@ describe("ProviderRuntimeIngestion", () => {
       (entry) =>
         entry.session?.status === "error" &&
         entry.session?.activeTurnId === null &&
-        entry.session?.lastError === "turn failed",
+        entry.session?.lastError === "turn failed" &&
+        entry.activities.some((activity) => activity.kind === "provider.turn.failed"),
     );
     expect(thread.session?.status).toBe("error");
     expect(thread.session?.lastError).toBe("turn failed");
+    expect(
+      thread.activities.find((activity) => activity.kind === "provider.turn.failed"),
+    ).toMatchObject({
+      turnId: "turn-1",
+      payload: {
+        provider: "codex",
+        recovery: {
+          disposition: "retryable",
+          reason: "overloaded",
+          statusCode: 503,
+          retryAt: "2026-01-01T00:05:00.000Z",
+        },
+      },
+    });
   });
 
   it("subscribes to hot provider events before server activation", async () => {
