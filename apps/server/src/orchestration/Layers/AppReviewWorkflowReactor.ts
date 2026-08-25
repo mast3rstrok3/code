@@ -519,6 +519,15 @@ export function appReviewRecoveryTurnPending(
   );
 }
 
+export function appReviewRecoveryEvidenceIsNewer(
+  run: AppReviewWorkflowRun,
+  cycle: AppReviewWorkflowCycle,
+  createdAt: string,
+): boolean {
+  const failedAt = run.failure?.failedAt ?? cycle.failure?.failedAt ?? null;
+  return failedAt !== null && createdAt > failedAt;
+}
+
 export function retryReviewPhaseInCycle(input: {
   readonly cycle: AppReviewWorkflowCycle;
   readonly failure: AppReviewWorkflowFailure;
@@ -2550,11 +2559,16 @@ const make = Effect.gen(function* () {
     if (!hasSettledCheckpoint(thread)) return false;
     if (phase === "review") {
       const review = controller === undefined ? null : reviewRecordForCycle(controller, cycle);
-      return review !== null && (review.status === "passed" || review.status === "failed");
+      return (
+        review !== null &&
+        (review.status === "passed" || review.status === "failed") &&
+        appReviewRecoveryEvidenceIsNewer(run, cycle, review.updatedAt)
+      );
     }
     if (phase === "planning") {
       return thread.activities.some(
         (activity) =>
+          appReviewRecoveryEvidenceIsNewer(run, cycle, activity.createdAt) &&
           activity.kind === "app-review-repair-tickets" &&
           Predicate.isObject(activity.payload) &&
           activity.payload["type"] === "app-review-repair-tickets" &&
@@ -2564,7 +2578,22 @@ const make = Effect.gen(function* () {
           activity.payload["tickets"].length > 0,
       );
     }
-    return parseFixResult(thread, run, cycle) !== null;
+    const result = parseFixResult(thread, run, cycle);
+    return (
+      result !== null &&
+      thread.activities.some(
+        (activity) =>
+          appReviewRecoveryEvidenceIsNewer(run, cycle, activity.createdAt) &&
+          activity.kind === "app-review-fix-result" &&
+          Predicate.isObject(activity.payload) &&
+          activity.payload["type"] === "app-review-fix-result" &&
+          activity.payload["runId"] === run.id &&
+          activity.payload["planId"] === cycle.planId &&
+          (activity.payload["status"] === "succeeded" ||
+            activity.payload["status"] === "failed" ||
+            activity.payload["status"] === "blocked"),
+      )
+    );
   };
 
   const recoverFailedImplementationPhase = Effect.fn(

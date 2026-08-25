@@ -24,6 +24,7 @@ import {
   appReviewPhaseModelStepWorkflowPromptId,
   appReviewPhaseFailureAction,
   appReviewPhaseLaunchCount,
+  appReviewRecoveryEvidenceIsNewer,
   appReviewRecoveryTurnPending,
   appReviewPhaseThreadState,
   buildAppReviewFixPrompt,
@@ -547,6 +548,14 @@ it("waits for a claimed continuation to replace the phase thread's old turn", ()
       session: { status: "starting" },
     }),
   ).toBe(false);
+});
+
+it("replays only recovery evidence created after the terminal failure", () => {
+  const failed = failedImplementationReview("TICKET-1");
+  const cycle = failed.cycles[0]!;
+
+  expect(appReviewRecoveryEvidenceIsNewer(failed, cycle, now)).toBe(false);
+  expect(appReviewRecoveryEvidenceIsNewer(failed, cycle, "2026-01-01T00:00:01.000Z")).toBe(true);
 });
 
 it("does not recover an old failed review that the halted parent no longer owns", () => {
