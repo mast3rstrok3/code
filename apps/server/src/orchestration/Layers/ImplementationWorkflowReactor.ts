@@ -132,27 +132,6 @@ export function isImplementationWorkflowActivityKind(kind: string): boolean {
 const ticketAppReviewLaunchBudgetWarning = () =>
   `Ticket App Review skipped after exhausting its ${String(IMPLEMENTATION_STAGE_MAX_LAUNCHES)}-launch budget. Ticket Code Review and the combined review stages still run.`;
 
-export const MAX_CONCURRENT_TICKET_APP_REVIEWS = 2;
-
-export function ticketAppReviewCapacityAvailable(
-  runs: ReadonlyArray<Pick<OrchestrationImplementationRun, "ticketStates">>,
-  activeAppReviewRunIds?: ReadonlySet<string>,
-): boolean {
-  const activeReviews = runs.reduce(
-    (count, run) =>
-      count +
-      run.ticketStates.filter(
-        (state) =>
-          state.status === "app-reviewing" &&
-          state.appReviewWorkflowRunId != null &&
-          (activeAppReviewRunIds === undefined ||
-            activeAppReviewRunIds.has(state.appReviewWorkflowRunId)),
-      ).length,
-    0,
-  );
-  return activeReviews < MAX_CONCURRENT_TICKET_APP_REVIEWS;
-}
-
 export function appReviewFailureContinuationMarkdown(run: AppReviewWorkflowRun): string | null {
   const outcome = run.outcome ?? run.status;
   if (outcome === "passed") return null;
@@ -3144,26 +3123,6 @@ const make = Effect.gen(function* () {
     ) {
       return;
     }
-    const projectedRunIds = new Set(readModel.implementationRuns.map((run) => run.id));
-    const effectiveRuns = readModel.implementationRuns.map((run) => {
-      const local = locallyUpdatedRuns.get(run.id);
-      return local !== undefined &&
-        nowMs - local.writtenAtMs < 60_000 &&
-        run.updatedAt <= local.run.updatedAt
-        ? local.run
-        : run;
-    });
-    for (const [runId, local] of locallyUpdatedRuns) {
-      if (!projectedRunIds.has(runId) && nowMs - local.writtenAtMs < 60_000) {
-        effectiveRuns.push(local.run);
-      }
-    }
-    const activeAppReviewRunIds = new Set(
-      (readModel.appReviewWorkflowRuns ?? [])
-        .filter((run) => run.status === "running")
-        .map((run) => run.id),
-    );
-    if (!ticketAppReviewCapacityAvailable(effectiveRuns, activeAppReviewRunIds)) return;
     const orchestratorThread = findThread(readModel, currentRun.orchestratorThreadId);
     const sourceThread = findThread(readModel, input.sourceThreadId);
     const state = currentRun.ticketStates.find(

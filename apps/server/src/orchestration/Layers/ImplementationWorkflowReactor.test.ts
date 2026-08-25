@@ -65,7 +65,6 @@ import {
   findAwaitingNestedAppReview,
   ImplementationWorkflowReactorLive,
   nestedAppReviewAwaitsPreviewRefresh,
-  ticketAppReviewCapacityAvailable,
   ticketAppReviewClaimIsAhead,
   workflowIdForRun,
 } from "./ImplementationWorkflowReactor.ts";
@@ -293,50 +292,6 @@ it("recognizes a ticket App Review claim hidden by projection lag", () => {
       ticketId: "ticket-1",
     }),
   ).toBe(false);
-});
-
-it("queues ticket App Reviews when the server-wide review capacity is full", () => {
-  const runs = [
-    {
-      ticketStates: [
-        {
-          status: "app-reviewing",
-          appReviewWorkflowRunId: "app-review-workflow-1",
-        },
-        {
-          status: "app-reviewing",
-          appReviewWorkflowRunId: "app-review-workflow-2",
-        },
-        {
-          status: "app-reviewing",
-          appReviewWorkflowRunId: null,
-        },
-        {
-          status: "app-reviewing",
-        },
-      ],
-    },
-  ] as unknown as ReadonlyArray<Pick<OrchestrationImplementationRun, "ticketStates">>;
-
-  expect(ticketAppReviewCapacityAvailable(runs)).toBe(false);
-  expect(ticketAppReviewCapacityAvailable(runs, new Set(["app-review-workflow-1"]))).toBe(true);
-  expect(
-    ticketAppReviewCapacityAvailable(
-      runs,
-      new Set(["app-review-workflow-1", "app-review-workflow-2"]),
-    ),
-  ).toBe(false);
-  expect(
-    ticketAppReviewCapacityAvailable([
-      {
-        ticketStates: runs[0]!.ticketStates.map((state, index) =>
-          index === 0
-            ? { ...state, status: "code-reviewing", appReviewWorkflowRunId: null }
-            : state,
-        ),
-      },
-    ]),
-  ).toBe(true);
 });
 
 it("formats ticket review problems for pull request publication", () => {
@@ -6671,6 +6626,42 @@ describe("ImplementationWorkflowReactor", () => {
         expect(state?.status).toBe("code-reviewing");
         expect(state?.appReviewWorkflowRunId ?? null).toBeNull();
         expect(snapshot.appReviewWorkflowRuns ?? []).toHaveLength(0);
+      }),
+    ),
+  );
+
+  it.effect("starts more than two ticket App Reviews in parallel", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, tickets } = yield* launchRun(system, {
+          appReviewStrategy: "nested-workflow",
+          tickets: ["TICKET-1", "TICKET-2", "TICKET-3"].map((key) => ({
+            ...planningTicket(key),
+            appReviewEligible: true,
+            appReviewPlanMarkdown: `Review ${key}.`,
+          })),
+        });
+
+        for (const ticket of tickets) {
+          yield* appendWorkerResult(system, {
+            run,
+            status: "succeeded",
+            ticketId: ticket.id,
+            completeTicketReview: false,
+          });
+        }
+
+        const snapshot = yield* system.query.getSnapshot();
+        const current = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        const reviewIds = current?.ticketStates.flatMap((state) =>
+          state.appReviewWorkflowRunId == null ? [] : [state.appReviewWorkflowRunId],
+        );
+
+        expect(reviewIds).toHaveLength(3);
+        expect(new Set(reviewIds).size).toBe(3);
+        expect(
+          (snapshot.appReviewWorkflowRuns ?? []).filter((review) => reviewIds?.includes(review.id)),
+        ).toHaveLength(3);
       }),
     ),
   );
