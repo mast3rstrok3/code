@@ -4362,6 +4362,76 @@ describe("ProviderRuntimeIngestion", () => {
     expect(Array.isArray(payload?.["tickets"]) ? payload["tickets"].length : 0).toBe(1);
   });
 
+  it("records an empty App Review repair plan emitted by the gap analysis planner", async () => {
+    const harness = await createHarness();
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    const plannerThreadId = asThreadId("thread-app-review-planner-empty-tickets");
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-app-review-planner-empty-tickets-create"),
+        threadId: plannerThreadId,
+        projectId: asProjectId("project-1"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+        parentThreadId: null,
+        workflowRole: "app-review-planner",
+        title: "App Review gap analysis 8",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: "default",
+        runtimeMode: "full-access",
+        branch: "feature/review",
+        worktreePath: "/tmp/app-review-planner-empty-tickets",
+        createdAt,
+      }),
+    );
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-planner-empty-repair-tickets"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt,
+      threadId: plannerThreadId,
+      turnId: asTurnId("turn-planner-empty-repair-tickets"),
+      itemId: asItemId("item-planner-empty-repair-tickets"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail: `\`\`\`json
+{
+  "type": "app-review-repair-tickets",
+  "runId": "app-review-workflow-run-1",
+  "cycleNumber": 8,
+  "tickets": []
+}
+\`\`\``,
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) =>
+        entry.activities.some(
+          (activity: ProviderRuntimeTestActivity) => activity.kind === "app-review-repair-tickets",
+        ),
+      2_000,
+      plannerThreadId,
+    );
+    const activity = thread.activities.find(
+      (entry: ProviderRuntimeTestActivity) => entry.kind === "app-review-repair-tickets",
+    );
+    const payload =
+      activity?.payload && typeof activity.payload === "object"
+        ? (activity.payload as Record<string, unknown>)
+        : undefined;
+
+    expect(payload?.["runId"]).toBe("app-review-workflow-run-1");
+    expect(payload?.["cycleNumber"]).toBe(8);
+    expect(payload?.["tickets"]).toEqual([]);
+  });
+
   it("ignores App Review repair tickets from a thread outside the review workflow", async () => {
     const harness = await createHarness();
     const createdAt = "2026-01-01T00:00:00.000Z";

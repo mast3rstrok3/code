@@ -103,6 +103,10 @@ import {
   type ProjectionThreadCheckpointContext,
   type ProjectionSnapshotQueryShape,
 } from "../Services/ProjectionSnapshotQuery.ts";
+import {
+  normalizeAppReviewPhaseExecution,
+  normalizeImplementationRunExecutions,
+} from "../workflowStageExecutions.ts";
 
 const decodeReadModel = Schema.decodeUnknownEffect(OrchestrationReadModel);
 const decodeShellSnapshot = Schema.decodeUnknownEffect(OrchestrationShellSnapshot);
@@ -2642,8 +2646,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 snapshotSequence: computeSnapshotSequence(stateRows),
                 projects,
                 threads,
-                implementationRuns: implementationRunRows.map((row) => row.run),
-                appReviewWorkflowRuns: appReviewWorkflowRunRows.map((row) => row.run),
+                implementationRuns: implementationRunRows.map((row) =>
+                  normalizeImplementationRunExecutions(row.run),
+                ),
+                appReviewWorkflowRuns: appReviewWorkflowRunRows.map((row) =>
+                  normalizeAppReviewPhaseExecution(row.run),
+                ),
                 updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
               };
 
@@ -3083,8 +3091,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 snapshotSequence: computeSnapshotSequence(stateRows),
                 projects,
                 threads,
-                implementationRuns: implementationRunRows.map((row) => row.run),
-                appReviewWorkflowRuns: appReviewWorkflowRunRows.map((row) => row.run),
+                implementationRuns: implementationRunRows.map((row) =>
+                  normalizeImplementationRunExecutions(row.run),
+                ),
+                appReviewWorkflowRuns: appReviewWorkflowRunRows.map((row) =>
+                  normalizeAppReviewPhaseExecution(row.run),
+                ),
                 updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
               } satisfies OrchestrationReadModel;
             }),
@@ -3193,7 +3205,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                     visibleThreadIds.has(row.sourceThreadId) ||
                     visibleThreadIds.has(row.run.orchestratorThreadId),
                 )
-                .map((row) => row.run);
+                .map((row) => normalizeImplementationRunExecutions(row.run));
               const visibleAppReviewWorkflowRuns = appReviewWorkflowRunRows
                 .filter(
                   (row) =>
@@ -3207,7 +3219,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                         (cycle.fixerThreadId !== null && visibleThreadIds.has(cycle.fixerThreadId)),
                     ),
                 )
-                .map((row) => row.run);
+                .map((row) => normalizeAppReviewPhaseExecution(row.run));
               let updatedAt: string | null = null;
               for (const row of projectRows) {
                 updatedAt = maxIso(updatedAt, row.updatedAt);
@@ -3391,7 +3403,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                     visibleThreadIds.has(row.sourceThreadId) ||
                     visibleThreadIds.has(row.run.orchestratorThreadId),
                 )
-                .map((row) => row.run);
+                .map((row) => normalizeImplementationRunExecutions(row.run));
               const visibleAppReviewWorkflowRuns = appReviewWorkflowRunRows
                 .filter(
                   (row) =>
@@ -3405,7 +3417,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                         (cycle.fixerThreadId !== null && visibleThreadIds.has(cycle.fixerThreadId)),
                     ),
                 )
-                .map((row) => row.run);
+                .map((row) => normalizeAppReviewPhaseExecution(row.run));
               let updatedAt: string | null = null;
               for (const row of projectRows) {
                 updatedAt = maxIso(updatedAt, row.updatedAt);

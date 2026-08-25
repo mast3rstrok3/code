@@ -367,6 +367,7 @@ function makeAppReviewWorkflowRun(): AppReviewWorkflowRun {
     ],
     activePhase: "planning",
     activeThreadId: ThreadId.make("thread-reviewer"),
+    phaseExecution: null,
     workspaceRevision: revision,
     finalHeadSha: null,
     outcome: null,

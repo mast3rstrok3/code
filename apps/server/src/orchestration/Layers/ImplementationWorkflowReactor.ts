@@ -18,6 +18,7 @@ import {
   ThreadId,
   type OrchestrationEvent,
   type OrchestrationImplementationRerunRunStage,
+  type OrchestrationImplementationRerunTarget,
   type OrchestrationImplementationRerunTicketStage,
   type OrchestrationImplementationRun,
   type OrchestrationImplementationTicketState,
@@ -26,6 +27,7 @@ import {
   type OrchestrationPlanningTicket,
   type OrchestrationReadModel,
   type OrchestrationThread,
+  type WorkflowStageExecution,
   WORKFLOW_AUTOMATION_RUNTIME_MODE,
   type WorkspaceUserId,
 } from "@t3tools/contracts";
@@ -34,7 +36,6 @@ import {
   describeAppReviewParts,
   resolveLayeredAppReviewStepParts,
 } from "@t3tools/shared/appReviewParts";
-import { resolveAppReviewE2eCommands } from "@t3tools/shared/t3ProjectFile";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { proposedPlanTitle } from "@t3tools/shared/orchestrationPlanning";
 import { implementationWorkflowDefaultSkips } from "@t3tools/shared/workflowStepSkips";
@@ -46,6 +47,7 @@ import * as Duration from "effect/Duration";
 import { HttpClient } from "effect/unstable/http";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 import * as Semaphore from "effect/Semaphore";
@@ -60,7 +62,6 @@ import {
   WORKFLOW_PROMPT_IDS,
 } from "../../provider/WorkflowPromptRegistry.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
-import { T3ProjectFileLoader } from "../../project/T3ProjectFileLoader.ts";
 import { resolveEffectiveAppReviewScope } from "./AppReviewWorkflowReactor.ts";
 import {
   ImplementationWorkflowReactor,
@@ -81,6 +82,17 @@ import {
 import { isWorkflowThreadPaused } from "../workflowPause.ts";
 import { isAwaitingWorkflowNudge, WORKFLOW_INTERRUPTION_ERROR_MESSAGE } from "../workflowNudge.ts";
 import { ServerActivation } from "../../serverActivation.ts";
+import { implementationRerunTargetMatchesHalt } from "../implementationRerun.ts";
+import { reconcileWorkflowState, WORKFLOW_PROVIDER_LEASE_MS } from "../workflowStageExecutions.ts";
+import {
+  metricAttributes,
+  workflowMissingChildExecutionsTotal,
+  workflowParkedRateLimits,
+  workflowQueuedStagesWithoutOwners,
+  workflowStageLaunchLatency,
+  workflowStaleLeasesTotal,
+  workflowWatchdogFindingsTotal,
+} from "../../observability/Metrics.ts";
 
 // Code Review owns its fixes and final validation.
 
@@ -119,6 +131,27 @@ export function isImplementationWorkflowActivityKind(kind: string): boolean {
 
 const ticketAppReviewLaunchBudgetWarning = () =>
   `Ticket App Review skipped after exhausting its ${String(IMPLEMENTATION_STAGE_MAX_LAUNCHES)}-launch budget. Ticket Code Review and the combined review stages still run.`;
+
+export const MAX_CONCURRENT_TICKET_APP_REVIEWS = 2;
+
+export function ticketAppReviewCapacityAvailable(
+  runs: ReadonlyArray<Pick<OrchestrationImplementationRun, "ticketStates">>,
+  activeAppReviewRunIds?: ReadonlySet<string>,
+): boolean {
+  const activeReviews = runs.reduce(
+    (count, run) =>
+      count +
+      run.ticketStates.filter(
+        (state) =>
+          state.status === "app-reviewing" &&
+          state.appReviewWorkflowRunId != null &&
+          (activeAppReviewRunIds === undefined ||
+            activeAppReviewRunIds.has(state.appReviewWorkflowRunId)),
+      ).length,
+    0,
+  );
+  return activeReviews < MAX_CONCURRENT_TICKET_APP_REVIEWS;
+}
 
 export function appReviewFailureContinuationMarkdown(run: AppReviewWorkflowRun): string | null {
   const outcome = run.outcome ?? run.status;
@@ -381,11 +414,11 @@ export function automationHaltMatchesTicketRerun(input: {
   readonly ticketId: string;
   readonly stage: OrchestrationImplementationRerunTicketStage;
 }): boolean {
-  if (input.halt.ticketId !== input.ticketId) return false;
-  return (
-    input.halt.stage === input.stage ||
-    (input.stage === "code-review" && input.halt.stage === "final-code-review")
-  );
+  return implementationRerunTargetMatchesHalt(input.halt, {
+    kind: "ticket",
+    ticketId: input.ticketId,
+    stage: input.stage,
+  });
 }
 
 export function isLegacyDirtyWorkerLaunchHalt(
@@ -412,18 +445,10 @@ function automationHaltMatchesRunRerun(input: {
   readonly halt: NonNullable<OrchestrationImplementationRun["automationHalt"]>;
   readonly stage: OrchestrationImplementationRerunRunStage;
 }): boolean {
-  switch (input.stage) {
-    case "integration":
-    case "merge-gate":
-      return input.halt.ticketId === undefined && input.halt.stage === "integration";
-    case "app-review":
-      return input.halt.ticketId === undefined && input.halt.stage === "app-review";
-    case "code-review":
-      return (
-        input.halt.ticketId === undefined &&
-        (input.halt.stage === "code-review" || input.halt.stage === "final-code-review")
-      );
-  }
+  return implementationRerunTargetMatchesHalt(input.halt, {
+    kind: "run",
+    stage: input.stage,
+  });
 }
 
 /**
@@ -480,13 +505,16 @@ export function nestedAppReviewAwaitsPreviewRefresh(run: AppReviewWorkflowRun): 
   );
 }
 
-export function nestedAppReviewIsRecoveryContinuation(run: AppReviewWorkflowRun): boolean {
-  return (
-    run.status === "running" &&
-    run.activePhase !== null &&
-    run.activeThreadId !== null &&
-    (run.cycles.at(-1)?.recoveryContinuationCount ?? 0) > 0
-  );
+export function findAwaitingNestedAppReview(
+  runs: OrchestrationReadModel["appReviewWorkflowRuns"],
+  runId: string,
+): AppReviewWorkflowRun | null {
+  const run = (runs ?? []).find((candidate) => candidate.id === runId);
+  return run !== undefined && nestedAppReviewAwaitsPreviewRefresh(run) ? run : null;
+}
+
+export function nestedAppReviewOwnsActivePhase(run: AppReviewWorkflowRun): boolean {
+  return run.status === "running" && run.activePhase !== null && run.activeThreadId !== null;
 }
 
 /**
@@ -506,6 +534,37 @@ function reopenTicketForRerun(input: {
   readonly preserveImplementationAttemptCount?: boolean;
   readonly continuationMarkdown?: string | null;
 }): OrchestrationImplementationRun {
+  const queuedGeneration = (state: OrchestrationImplementationTicketState) =>
+    state.stageExecutions.findLast(
+      (execution) =>
+        execution.state === "queued" &&
+        execution.target.kind === "ticket" &&
+        execution.target.ticketId === input.ticketId &&
+        execution.target.stage === input.stage,
+    )?.generation;
+  const claimExecution = (
+    executions: readonly WorkflowStageExecution[],
+    generation: number,
+  ): readonly WorkflowStageExecution[] =>
+    executions.map((execution) =>
+      execution.state === "queued" &&
+      execution.generation === generation &&
+      execution.target.kind === "ticket" &&
+      execution.target.ticketId === input.ticketId &&
+      execution.target.stage === input.stage
+        ? {
+            ...execution,
+            state: "starting" as const,
+            claimedAt: input.updatedAt,
+            leaseRenewedAt: input.updatedAt,
+            leaseExpiresAt: DateTime.formatIso(
+              DateTime.add(DateTime.makeUnsafe(Date.parse(input.updatedAt)), { minutes: 5 }),
+            ),
+            lastProgressAt: input.updatedAt,
+            updatedAt: input.updatedAt,
+          }
+        : execution,
+    );
   const reopenedIds = new Set([input.ticketId]);
   let changed = true;
   while (changed) {
@@ -536,12 +595,14 @@ function reopenTicketForRerun(input: {
       updatedAt: input.updatedAt,
     };
     if (input.stage === "code-review") {
+      const generation = queuedGeneration(state) ?? state.codeReviewGeneration + 1;
       return {
         ...cleared,
         status: "code-reviewing" as const,
-        codeReviewGeneration: state.codeReviewGeneration + 1,
+        codeReviewGeneration: generation,
         codeReviewLaunchCount: 0,
         codeReviewPassCount: 0,
+        stageExecutions: claimExecution(state.stageExecutions, generation),
       };
     }
     const withoutAppReview = {
@@ -551,22 +612,26 @@ function reopenTicketForRerun(input: {
       appReviewOutcome: null,
     };
     if (input.stage === "app-review") {
+      const generation = queuedGeneration(state) ?? state.appReviewGeneration + 1;
       return {
         ...withoutAppReview,
         status: "app-reviewing" as const,
-        appReviewGeneration: state.appReviewGeneration + 1,
+        appReviewGeneration: generation,
         appReviewLaunchCount: 0,
+        stageExecutions: claimExecution(state.stageExecutions, generation),
       };
     }
     // The worker starts another turn in its durable thread. Its reported
     // result stops standing for this ticket, while the thread, worktree,
     // branch, partial changes, and conversation history survive.
+    const generation = queuedGeneration(state) ?? state.implementationGeneration + 1;
     return {
       ...withoutAppReview,
       status: "ready" as const,
       workerResult: null,
-      implementationGeneration: state.implementationGeneration + 1,
+      implementationGeneration: generation,
       attemptCount: input.preserveImplementationAttemptCount ? state.attemptCount : 0,
+      stageExecutions: claimExecution(state.stageExecutions, generation),
     };
   });
   return {
@@ -606,8 +671,30 @@ function clearRunStageForRerun(input: {
   readonly stage: OrchestrationImplementationRerunRunStage;
   readonly updatedAt: string;
 }): OrchestrationImplementationRun {
+  const queued = input.run.stageExecutions.findLast(
+    (execution) =>
+      execution.state === "queued" &&
+      execution.target.kind === "run" &&
+      execution.target.stage === input.stage,
+  );
+  const claimedExecutions = input.run.stageExecutions.map((execution) =>
+    execution.executionId === queued?.executionId
+      ? {
+          ...execution,
+          state: "starting" as const,
+          claimedAt: input.updatedAt,
+          leaseRenewedAt: input.updatedAt,
+          leaseExpiresAt: DateTime.formatIso(
+            DateTime.add(DateTime.makeUnsafe(Date.parse(input.updatedAt)), { minutes: 5 }),
+          ),
+          lastProgressAt: input.updatedAt,
+          updatedAt: input.updatedAt,
+        }
+      : execution,
+  );
   const base = {
     ...input.run,
+    stageExecutions: claimedExecutions,
     reviewGateExhaustedAt: null,
     reviewGateExhaustionReason: null,
     retryableFailure: null,
@@ -648,7 +735,7 @@ function clearRunStageForRerun(input: {
         activeCodeReviewThreadId: null,
         activeCodeReviewHeadSha: null,
         codeReviewedHeadSha: null,
-        finalCodeReviewGeneration: input.run.finalCodeReviewGeneration + 1,
+        finalCodeReviewGeneration: queued?.generation ?? input.run.finalCodeReviewGeneration + 1,
         finalCodeReviewLaunchCount: 0,
         finalCodeReviewPassCount: 0,
         codeReviewExhaustedAt: null,
@@ -1377,7 +1464,6 @@ const make = Effect.gen(function* () {
   const gitWorkflow = yield* GitWorkflowService;
   const appDevStackManager = yield* AppDevStackManager;
   const serverSettingsService = yield* ServerSettingsService;
-  const projectFileLoader = yield* T3ProjectFileLoader;
   const httpClient = yield* HttpClient.HttpClient;
   const changeRequestLocks = yield* SynchronizedRef.make(
     new Map<string, { readonly semaphore: Semaphore.Semaphore; readonly users: number }>(),
@@ -1385,6 +1471,7 @@ const make = Effect.gen(function* () {
   const ticketAppReviewLocks = yield* SynchronizedRef.make(
     new Map<string, { readonly semaphore: Semaphore.Semaphore; readonly users: number }>(),
   );
+  const ticketAppReviewAdmission = yield* Semaphore.make(1);
 
   /**
    * Asks the frontend URL itself whether a reviewer could load it. Deliberately cheap and
@@ -1519,6 +1606,13 @@ const make = Effect.gen(function* () {
     readonly run: OrchestrationImplementationRun;
     readonly createdAt: string;
     readonly allowCanceledFinalCodeReviewRerun?: boolean;
+    readonly expectedStageExecutionTransition?: {
+      readonly target: WorkflowStageExecution["target"];
+      readonly generation: number;
+      readonly executionId: string;
+      readonly priorState: WorkflowStageExecution["state"];
+      readonly priorLeaseExpiresAt: string | null;
+    };
     readonly expectedCodeReviewClaim?: {
       readonly attemptCount: OrchestrationImplementationRun["codeReviewAttemptCount"];
       readonly activeThreadId: ThreadId | null;
@@ -1557,6 +1651,9 @@ const make = Effect.gen(function* () {
       commandId: yield* serverCommandId("implementation-run-update"),
       threadId: input.sourceThreadId,
       run: input.run,
+      ...(input.expectedStageExecutionTransition === undefined
+        ? {}
+        : { expectedStageExecutionTransition: input.expectedStageExecutionTransition }),
       ...(input.expectedCodeReviewClaim === undefined
         ? {}
         : { expectedCodeReviewClaim: input.expectedCodeReviewClaim }),
@@ -2464,20 +2561,18 @@ const make = Effect.gen(function* () {
           firstFailure?.result._tag === "Failure"
             ? `Ticket worker setup failed: ${errorDetail(firstFailure.result.failure)}`
             : "Ticket worker setup failed for an unknown reason.";
-        const failedRun: OrchestrationImplementationRun = {
-          ...nextRun,
-          ticketStates: nextRun.ticketStates.map((state) =>
-            failedStarts.some(({ ticketId }) => ticketId === state.ticketId)
-              ? {
-                  ...state,
-                  status: "failed" as const,
-                  warningMarkdown: failureDetail,
-                  updatedAt: input.createdAt,
-                }
-              : state,
+        const failedRun = failImplementationTickets(
+          nextRun,
+          new Map(
+            failedStarts.map(({ ticketId, result }) => [
+              ticketId,
+              result._tag === "Failure"
+                ? `Ticket worker setup failed: ${errorDetail(result.failure)}`
+                : failureDetail,
+            ]),
           ),
-          updatedAt: input.createdAt,
-        };
+          input.createdAt,
+        );
         return yield* blockRun({
           sourceThreadId: input.sourceThreadId,
           run: failedRun,
@@ -3036,23 +3131,44 @@ const make = Effect.gen(function* () {
     readonly ticketId: string;
     readonly createdAt: string;
   }) {
-    if (input.run.automationHalt !== null) return;
-    const local = locallyUpdatedRuns.get(input.run.id);
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    const nowMs = yield* Clock.currentTimeMillis;
+    const currentRun = currentRunForQueuedRerun(readModel, input.run.id, input.run, nowMs);
+    if (currentRun.automationHalt !== null) return;
     if (
-      local !== undefined &&
-      (yield* Clock.currentTimeMillis) - local.writtenAtMs < 60_000 &&
       ticketAppReviewClaimIsAhead({
-        local: local.run,
+        local: currentRun,
         observed: input.run,
         ticketId: input.ticketId,
       })
     ) {
       return;
     }
-    const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
-    const orchestratorThread = findThread(readModel, input.run.orchestratorThreadId);
+    const projectedRunIds = new Set(readModel.implementationRuns.map((run) => run.id));
+    const effectiveRuns = readModel.implementationRuns.map((run) => {
+      const local = locallyUpdatedRuns.get(run.id);
+      return local !== undefined &&
+        nowMs - local.writtenAtMs < 60_000 &&
+        run.updatedAt <= local.run.updatedAt
+        ? local.run
+        : run;
+    });
+    for (const [runId, local] of locallyUpdatedRuns) {
+      if (!projectedRunIds.has(runId) && nowMs - local.writtenAtMs < 60_000) {
+        effectiveRuns.push(local.run);
+      }
+    }
+    const activeAppReviewRunIds = new Set(
+      (readModel.appReviewWorkflowRuns ?? [])
+        .filter((run) => run.status === "running")
+        .map((run) => run.id),
+    );
+    if (!ticketAppReviewCapacityAvailable(effectiveRuns, activeAppReviewRunIds)) return;
+    const orchestratorThread = findThread(readModel, currentRun.orchestratorThreadId);
     const sourceThread = findThread(readModel, input.sourceThreadId);
-    const state = input.run.ticketStates.find((candidate) => candidate.ticketId === input.ticketId);
+    const state = currentRun.ticketStates.find(
+      (candidate) => candidate.ticketId === input.ticketId,
+    );
     if (
       orchestratorThread === null ||
       state?.worktreePath == null ||
@@ -3065,7 +3181,7 @@ const make = Effect.gen(function* () {
     if (state.appReviewLaunchCount >= IMPLEMENTATION_STAGE_MAX_LAUNCHES) {
       yield* startTicketCodeReview({
         sourceThreadId: input.sourceThreadId,
-        run: input.run,
+        run: currentRun,
         ticketId: state.ticketId,
         warningMarkdown: ticketAppReviewLaunchBudgetWarning(),
         createdAt: input.createdAt,
@@ -3093,7 +3209,7 @@ const make = Effect.gen(function* () {
       if (preflight.isRepo && preflight.refName === state.branch) {
         yield* resumeTicketWithInheritedWork({
           sourceThreadId: input.sourceThreadId,
-          run: input.run,
+          run: currentRun,
           ticketId: state.ticketId,
           reasonMarkdown,
           createdAt: input.createdAt,
@@ -3102,7 +3218,7 @@ const make = Effect.gen(function* () {
       }
       yield* blockRun({
         sourceThreadId: input.sourceThreadId,
-        run: input.run,
+        run: currentRun,
         ticketId: state.ticketId,
         retryableStage: "app-review",
         reasonMarkdown,
@@ -3118,13 +3234,13 @@ const make = Effect.gen(function* () {
     // A skip reads the same way as a ticket the plan never made eligible: the
     // stage does not run and the ticket carries on to the next one.
     if (
-      isTicketStageSkipped(input.run.skips, input.ticketId, "app-review") ||
+      isTicketStageSkipped(currentRun.skips, input.ticketId, "app-review") ||
       ticket.appReviewEligible !== true ||
       !ticket.appReviewPlanMarkdown
     ) {
       yield* startTicketCodeReview({
         sourceThreadId: input.sourceThreadId,
-        run: input.run,
+        run: currentRun,
         ticketId: input.ticketId,
         createdAt: input.createdAt,
       });
@@ -3144,17 +3260,19 @@ const make = Effect.gen(function* () {
         stepWorkflowPromptId: WORKFLOW_PROMPT_IDS.implementationTddCodex,
       },
     });
-    const loadedProjectFile = yield* projectFileLoader.load(state.worktreePath);
-    const e2eCommands = resolveAppReviewE2eCommands(Option.getOrUndefined(loadedProjectFile));
+    // Ticket workers own focused E2E validation and persist those commands in
+    // their worker result. Project-level e2eCommands are integration-wide and
+    // can surface unrelated failures, so nested ticket reviews only inspect the
+    // browser. The run-level App Review still runs the complete configured suite.
     const effectiveScope = resolveEffectiveAppReviewScope({
       run: { appReviewScope: ticket.appReviewScope ?? "both" },
       settingsParts: configuredParts,
-      e2eCommandCount: e2eCommands.length,
+      e2eCommandCount: 0,
     });
     if (effectiveScope === null) {
       yield* startTicketCodeReview({
         sourceThreadId: input.sourceThreadId,
-        run: input.run,
+        run: currentRun,
         ticketId: input.ticketId,
         warningMarkdown: `Ticket App Review skipped because its effective E2E and browser scope is empty. Configured parts: ${describeAppReviewParts(configuredParts)}.`,
         appReviewOutcome: "skipped",
@@ -3166,7 +3284,7 @@ const make = Effect.gen(function* () {
       .autoCreate({
         worktreePath: state.worktreePath,
         displayName: `Ticket ${ticket.key ?? ticket.id}`,
-        gitBranch: state.branch ?? input.run.orchestratorBranch,
+        gitBranch: state.branch ?? currentRun.orchestratorBranch,
         workflowId: orchestratorThread.workflowContext?.workflowId,
       })
       .pipe(Effect.result);
@@ -3180,7 +3298,7 @@ const make = Effect.gen(function* () {
     ) {
       yield* blockRun({
         sourceThreadId: input.sourceThreadId,
-        run: input.run,
+        run: currentRun,
         ticketId: input.ticketId,
         retryableStage: "app-dev-stack",
         haltStage: "app-review",
@@ -3194,7 +3312,7 @@ const make = Effect.gen(function* () {
     if (frontendUrl === null) {
       yield* blockRun({
         sourceThreadId: input.sourceThreadId,
-        run: input.run,
+        run: currentRun,
         ticketId: input.ticketId,
         retryableStage: "app-dev-stack",
         haltStage: "app-review",
@@ -3209,8 +3327,8 @@ const make = Effect.gen(function* () {
       `app-review-workflow-${controllerThreadId}`,
     );
     const claimedRun: OrchestrationImplementationRun = {
-      ...input.run,
-      ticketStates: input.run.ticketStates.map((candidate) =>
+      ...currentRun,
+      ticketStates: currentRun.ticketStates.map((candidate) =>
         candidate.ticketId === input.ticketId
           ? {
               ...candidate,
@@ -3243,8 +3361,8 @@ const make = Effect.gen(function* () {
       controllerThreadId,
       caller: {
         type: "implementation",
-        implementationRunId: input.run.id,
-        orchestratorThreadId: input.run.orchestratorThreadId,
+        implementationRunId: currentRun.id,
+        orchestratorThreadId: currentRun.orchestratorThreadId,
         ticketId: input.ticketId,
       },
       briefMarkdown: ticket.appReviewPlanMarkdown,
@@ -3308,8 +3426,8 @@ const make = Effect.gen(function* () {
     }) {
       const key = `${input.run.id}:${input.ticketId}`;
       const semaphore = yield* getTicketAppReviewSemaphore(key);
-      return yield* semaphore
-        .withPermit(startTicketAppReviewUnlocked(input))
+      return yield* ticketAppReviewAdmission
+        .withPermit(semaphore.withPermit(startTicketAppReviewUnlocked(input)))
         .pipe(Effect.ensuring(releaseTicketAppReviewSemaphore(key)));
     },
   );
@@ -5321,24 +5439,18 @@ const make = Effect.gen(function* () {
       }
 
       if (directive.status === "failed") {
-        const failedRun: OrchestrationImplementationRun = {
-          ...run,
-          ticketStates: run.ticketStates.map((state) =>
-            state.workerThreadId === threadId
-              ? {
-                  ...state,
-                  status: "failed" as const,
-                  workerResult: directive,
-                  warningMarkdown:
-                    directive.notesMarkdown || `Worker '${directive.ticketId}' failed.`,
-                  updatedAt: directive.reportedAt,
-                }
-              : state,
-          ),
-          workerResults: [...run.workerResults, directive],
-          retryableFailure: null,
-          updatedAt: directive.reportedAt,
-        };
+        const warningMarkdown = directive.notesMarkdown || `Worker '${directive.ticketId}' failed.`;
+        const failedRun = failImplementationTickets(
+          {
+            ...run,
+            ticketStates: run.ticketStates.map((state) =>
+              state.workerThreadId === threadId ? { ...state, workerResult: directive } : state,
+            ),
+            workerResults: [...run.workerResults, directive],
+          },
+          new Map([[directive.ticketId, warningMarkdown]]),
+          directive.reportedAt,
+        );
         if (run.automationHalt !== null) {
           yield* updateRun({ sourceThreadId, run: failedRun, createdAt: directive.reportedAt });
           return;
@@ -5347,8 +5459,7 @@ const make = Effect.gen(function* () {
           sourceThreadId,
           run: failedRun,
           ticketId: directive.ticketId,
-          reasonMarkdown:
-            directive.notesMarkdown || `Ticket '${directive.ticketId}' implementation failed.`,
+          reasonMarkdown: warningMarkdown,
           updatedAt: directive.reportedAt,
           haltCategory: "stage-failed",
           haltStage: "implementation",
@@ -7451,6 +7562,11 @@ const make = Effect.gen(function* () {
       readonly createdAt: string;
     }) {
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+      if (
+        findAwaitingNestedAppReview(readModel.appReviewWorkflowRuns, input.nestedRun.id) === null
+      ) {
+        return;
+      }
       const orchestratorThread = findThread(readModel, input.run.orchestratorThreadId);
       const state = input.run.ticketStates.find(
         (candidate) => candidate.ticketId === input.ticketId,
@@ -7474,13 +7590,29 @@ const make = Effect.gen(function* () {
         });
         return;
       }
+      const refreshedReadModel = yield* projectionSnapshotQuery.getCommandReadModel();
+      const nestedRun = findAwaitingNestedAppReview(
+        refreshedReadModel.appReviewWorkflowRuns,
+        input.nestedRun.id,
+      );
+      const currentRun = findRunById(refreshedReadModel, input.run.id);
+      const currentTicket = currentRun?.ticketStates.find(
+        (candidate) => candidate.ticketId === input.ticketId,
+      );
+      if (
+        nestedRun === null ||
+        currentTicket === undefined ||
+        !ticketAwaitsAppReviewRun(currentTicket, nestedRun.id)
+      ) {
+        return;
+      }
       yield* orchestrationEngine.dispatch({
         type: "thread.app-review-workflow.resume",
         commandId: yield* serverCommandId("implementation-ticket-app-review-preview-refresh"),
-        threadId: input.nestedRun.controllerThreadId,
-        runId: input.nestedRun.id,
+        threadId: nestedRun.controllerThreadId,
+        runId: nestedRun.id,
         previewTargets: [frontendUrl],
-        workspaceRevision: input.nestedRun.workspaceRevision,
+        workspaceRevision: nestedRun.workspaceRevision,
         createdAt: input.createdAt,
       });
     },
@@ -7495,6 +7627,192 @@ const make = Effect.gen(function* () {
    * shares. The previous threads are left intact and still linked to the
    * ticket, so the earlier attempt stays readable next to the new one.
    */
+  const runAcceptedRerun = Effect.fn("ImplementationWorkflowReactor.runAcceptedRerun")(
+    function* (input: {
+      readonly readModel: OrchestrationReadModel;
+      readonly run: OrchestrationImplementationRun;
+      readonly target: OrchestrationImplementationRerunTarget;
+      readonly createdAt: string;
+    }) {
+      const { readModel, run, target, createdAt } = input;
+      const sourceThreadId = findRunSourceThreadId({ readModel, run });
+      if (sourceThreadId === null) return;
+      const queuedExecution =
+        target.kind === "run"
+          ? run.stageExecutions.findLast(
+              (execution) =>
+                execution.target.kind === "run" &&
+                execution.target.stage === target.stage &&
+                execution.state === "queued",
+            )
+          : run.ticketStates
+              .find((ticket) => ticket.ticketId === target.ticketId)
+              ?.stageExecutions.findLast(
+                (execution) =>
+                  execution.target.kind === "ticket" &&
+                  execution.target.stage === target.stage &&
+                  execution.state === "queued",
+              );
+      const expectedStageExecutionTransition =
+        queuedExecution === undefined
+          ? undefined
+          : {
+              target: queuedExecution.target,
+              generation: queuedExecution.generation,
+              executionId: queuedExecution.executionId,
+              priorState: queuedExecution.state,
+              priorLeaseExpiresAt: queuedExecution.leaseExpiresAt,
+            };
+      const resumesCanceledFinalCodeReview =
+        run.status === "canceled" && target.kind === "run" && target.stage === "code-review";
+
+      // A pause can land after acceptance. The queued execution remains durable
+      // and workflow reconciliation claims it after the pause clears.
+      if (
+        implementationRunRerunIsPaused({
+          threads: readModel.threads,
+          sourceThreadId,
+          orchestratorThreadId: run.orchestratorThreadId,
+        })
+      ) {
+        return;
+      }
+
+      if (
+        run.automationHalt !== null &&
+        (target.kind === "ticket"
+          ? !automationHaltMatchesTicketRerun({
+              halt: run.automationHalt,
+              ticketId: target.ticketId,
+              stage: target.stage,
+            })
+          : !automationHaltMatchesRunRerun({ halt: run.automationHalt, stage: target.stage }))
+      ) {
+        return;
+      }
+
+      yield* appendActivity({
+        threadId: run.orchestratorThreadId,
+        tone: "info",
+        kind: "implementation-rerun-requested",
+        summary:
+          target.kind === "ticket"
+            ? `Starting ${target.stage} again for ticket ${target.ticketId}`
+            : `Starting ${target.stage} again`,
+        payload: { runId: run.id, target },
+        createdAt,
+      });
+
+      if (target.kind === "run") {
+        const rerunRun = clearRunStageForRerun({ run, stage: target.stage, updatedAt: createdAt });
+        yield* updateRun({
+          sourceThreadId,
+          run: rerunRun,
+          createdAt,
+          ...(expectedStageExecutionTransition === undefined
+            ? {}
+            : { expectedStageExecutionTransition }),
+          ...(resumesCanceledFinalCodeReview ? { allowCanceledFinalCodeReviewRerun: true } : {}),
+        });
+        switch (target.stage) {
+          case "integration":
+            yield* integrateCompletedRun({ sourceThreadId, run: rerunRun, createdAt });
+            return;
+          case "merge-gate":
+            // A merge-gate re-run validates the branch as it stands; it merges
+            // nothing, so the prompt describes an integration that moved nothing.
+            yield* startMergeGate({
+              sourceThreadId,
+              run: rerunRun,
+              integration: {
+                baseTicketId: null,
+                baseRefName: rerunRun.orchestratorBranch,
+                mergedTicketIds: [],
+                conflictedTicketId: null,
+                conflictedRefName: null,
+                conflictedFiles: [],
+                remainingTicketIds: [],
+                remainingRefNames: [],
+              },
+              kind: "integration",
+              createdAt,
+            });
+            return;
+          case "app-review":
+            yield* startBrowserReview({ sourceThreadId, run: rerunRun, createdAt });
+            return;
+          case "code-review":
+            yield* startCodeReview({
+              sourceThreadId,
+              run: rerunRun,
+              createdAt,
+              ...(resumesCanceledFinalCodeReview ? { skipAppReviewRequirement: true } : {}),
+            });
+            return;
+        }
+      }
+
+      if (target.stage !== "code-review") {
+        yield* cancelTicketAppReview({
+          run,
+          ticketId: target.ticketId,
+          reason: "The ticket was sent back to an earlier stage.",
+          createdAt,
+        });
+      }
+      const ticketState = run.ticketStates.find((state) => state.ticketId === target.ticketId);
+      const priorAppReviewRun =
+        ticketState?.appReviewWorkflowRunId == null
+          ? undefined
+          : (readModel.appReviewWorkflowRuns ?? []).find(
+              (candidate) => candidate.id === ticketState.appReviewWorkflowRunId,
+            );
+      const rerunRun = reopenTicketForRerun({
+        run,
+        ticketId: target.ticketId,
+        stage: target.stage,
+        updatedAt: createdAt,
+        continuationMarkdown:
+          target.stage === "app-review"
+            ? ((priorAppReviewRun === undefined
+                ? null
+                : appReviewFailureContinuationMarkdown(priorAppReviewRun)) ??
+              ticketState?.warningMarkdown ??
+              null)
+            : null,
+      });
+      yield* updateRun({
+        sourceThreadId,
+        run: rerunRun,
+        createdAt,
+        ...(expectedStageExecutionTransition === undefined
+          ? {}
+          : { expectedStageExecutionTransition }),
+      });
+      switch (target.stage) {
+        case "implementation":
+          yield* startReadyWorkers({ sourceThreadId, run: rerunRun, createdAt });
+          return;
+        case "app-review":
+          yield* startTicketAppReview({
+            sourceThreadId,
+            run: rerunRun,
+            ticketId: target.ticketId,
+            createdAt,
+          });
+          return;
+        case "code-review":
+          yield* startTicketCodeReview({
+            sourceThreadId,
+            run: rerunRun,
+            ticketId: target.ticketId,
+            createdAt,
+          });
+          return;
+      }
+    },
+  );
+
   const handleRunRerun = Effect.fn("ImplementationWorkflowReactor.handleRunRerun")(function* (
     event: Extract<
       ImplementationWorkflowEvent,
@@ -7502,170 +7820,12 @@ const make = Effect.gen(function* () {
     >,
   ) {
     const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
-    const run = currentRunForQueuedRerun(
+    yield* runAcceptedRerun({
       readModel,
-      event.payload.run.id,
-      event.payload.run,
-      yield* Clock.currentTimeMillis,
-    );
-    const sourceThreadId = findRunSourceThreadId({ readModel, run });
-    if (sourceThreadId === null) return;
-    const target = event.payload.target;
-    const createdAt = event.occurredAt;
-    const resumesCanceledFinalCodeReview =
-      run.status === "canceled" && target.kind === "run" && target.stage === "code-review";
-
-    // A pause can land after the decider accepted this request but before the
-    // reactor handles it. Leave the run untouched so worker setup cannot turn
-    // the pause into a failed ticket and dependency cascade.
-    if (
-      implementationRunRerunIsPaused({
-        threads: readModel.threads,
-        sourceThreadId,
-        orchestratorThreadId: run.orchestratorThreadId,
-      })
-    ) {
-      yield* appendActivity({
-        threadId: run.orchestratorThreadId,
-        tone: "info",
-        kind: "implementation-rerun-skipped",
-        summary: "Stage re-run skipped while the workflow is paused",
-        payload: { runId: run.id, target },
-        createdAt,
-      });
-      return;
-    }
-
-    if (
-      run.automationHalt !== null &&
-      (target.kind === "ticket"
-        ? !automationHaltMatchesTicketRerun({
-            halt: run.automationHalt,
-            ticketId: target.ticketId,
-            stage: target.stage,
-          })
-        : !automationHaltMatchesRunRerun({ halt: run.automationHalt, stage: target.stage }))
-    ) {
-      yield* appendActivity({
-        threadId: run.orchestratorThreadId,
-        tone: "info",
-        kind: "implementation-rerun-skipped",
-        summary: "Stage re-run did not match the halted stage",
-        payload: { runId: run.id, target, automationHalt: run.automationHalt },
-        createdAt,
-      });
-      return;
-    }
-
-    yield* appendActivity({
-      threadId: run.orchestratorThreadId,
-      tone: "info",
-      kind: "implementation-rerun-requested",
-      summary:
-        target.kind === "ticket"
-          ? `Starting ${target.stage} again for ticket ${target.ticketId}`
-          : `Starting ${target.stage} again`,
-      payload: { runId: run.id, target },
-      createdAt,
+      run: findRunById(readModel, event.payload.run.id) ?? event.payload.run,
+      target: event.payload.target,
+      createdAt: event.occurredAt,
     });
-
-    if (target.kind === "run") {
-      const rerunRun = clearRunStageForRerun({ run, stage: target.stage, updatedAt: createdAt });
-      yield* updateRun({
-        sourceThreadId,
-        run: rerunRun,
-        createdAt,
-        ...(resumesCanceledFinalCodeReview ? { allowCanceledFinalCodeReviewRerun: true } : {}),
-      });
-      switch (target.stage) {
-        case "integration":
-          yield* integrateCompletedRun({ sourceThreadId, run: rerunRun, createdAt });
-          return;
-        case "merge-gate":
-          // A merge-gate re-run validates the branch as it stands; it merges
-          // nothing, so the prompt describes an integration that moved nothing.
-          yield* startMergeGate({
-            sourceThreadId,
-            run: rerunRun,
-            integration: {
-              baseTicketId: null,
-              baseRefName: rerunRun.orchestratorBranch,
-              mergedTicketIds: [],
-              conflictedTicketId: null,
-              conflictedRefName: null,
-              conflictedFiles: [],
-              remainingTicketIds: [],
-              remainingRefNames: [],
-            },
-            kind: "integration",
-            createdAt,
-          });
-          return;
-        case "app-review":
-          yield* startBrowserReview({ sourceThreadId, run: rerunRun, createdAt });
-          return;
-        case "code-review":
-          yield* startCodeReview({
-            sourceThreadId,
-            run: rerunRun,
-            createdAt,
-            ...(resumesCanceledFinalCodeReview ? { skipAppReviewRequirement: true } : {}),
-          });
-          return;
-      }
-    }
-
-    if (target.stage !== "code-review") {
-      yield* cancelTicketAppReview({
-        run,
-        ticketId: target.ticketId,
-        reason: "The ticket was sent back to an earlier stage.",
-        createdAt,
-      });
-    }
-    const ticketState = run.ticketStates.find((state) => state.ticketId === target.ticketId);
-    const priorAppReviewRun =
-      ticketState?.appReviewWorkflowRunId == null
-        ? undefined
-        : (readModel.appReviewWorkflowRuns ?? []).find(
-            (candidate) => candidate.id === ticketState.appReviewWorkflowRunId,
-          );
-    const rerunRun = reopenTicketForRerun({
-      run,
-      ticketId: target.ticketId,
-      stage: target.stage,
-      updatedAt: createdAt,
-      continuationMarkdown:
-        target.stage === "app-review"
-          ? ((priorAppReviewRun === undefined
-              ? null
-              : appReviewFailureContinuationMarkdown(priorAppReviewRun)) ??
-            ticketState?.warningMarkdown ??
-            null)
-          : null,
-    });
-    yield* updateRun({ sourceThreadId, run: rerunRun, createdAt });
-    switch (target.stage) {
-      case "implementation":
-        yield* startReadyWorkers({ sourceThreadId, run: rerunRun, createdAt });
-        return;
-      case "app-review":
-        yield* startTicketAppReview({
-          sourceThreadId,
-          run: rerunRun,
-          ticketId: target.ticketId,
-          createdAt,
-        });
-        return;
-      case "code-review":
-        yield* startTicketCodeReview({
-          sourceThreadId,
-          run: rerunRun,
-          ticketId: target.ticketId,
-          createdAt,
-        });
-        return;
-    }
   });
 
   /**
@@ -7962,10 +8122,9 @@ const make = Effect.gen(function* () {
       // snapshot this update was built on.
       if (!ticketAwaitsAppReviewRun(ticketState, nestedRun.id)) return;
       const recoveredContinuation =
-        nestedAppReviewIsRecoveryContinuation(nestedRun) &&
+        nestedAppReviewOwnsActivePhase(nestedRun) &&
         run.status === "needs-human-attention" &&
         run.automationHalt?.stage === "app-review" &&
-        run.automationHalt.category === "review-blocked" &&
         run.automationHalt.ticketId === ticketId;
       const linkedTicketRun: OrchestrationImplementationRun = {
         ...run,
@@ -7978,6 +8137,7 @@ const make = Effect.gen(function* () {
                 ...state,
                 status: "app-reviewing" as const,
                 appReviewWorkflowRunId: nestedRun.id,
+                ...(recoveredContinuation ? { appReviewOutcome: null, warningMarkdown: null } : {}),
                 updatedAt: event.occurredAt,
               }
             : state,
@@ -8018,10 +8178,9 @@ const make = Effect.gen(function* () {
     };
     const recoveredContinuation =
       event.type === "thread.app-review-workflow-updated" &&
-      nestedAppReviewIsRecoveryContinuation(nestedRun) &&
+      nestedAppReviewOwnsActivePhase(nestedRun) &&
       run.status === "needs-human-attention" &&
       run.automationHalt?.stage === "app-review" &&
-      run.automationHalt.category === "review-blocked" &&
       run.automationHalt.ticketId === undefined &&
       run.appReviewWorkflowRunIds.at(-1) === nestedRun.id;
     if (recoveredContinuation) {
@@ -8806,6 +8965,32 @@ const make = Effect.gen(function* () {
         continue;
       }
       yield* tierDownTicketStacks({ run, createdAt });
+      const failedTicketWarnings = new Map(
+        run.ticketStates
+          .filter((state) => state.status === "failed")
+          .map((state) => [
+            state.ticketId,
+            state.warningMarkdown?.trim() || "Implementation did not complete.",
+          ]),
+      );
+      if (failedTicketWarnings.size > 0) {
+        const reconciledRun = failImplementationTickets(run, failedTicketWarnings, createdAt);
+        const hasStrandedDependent = run.ticketStates.some(
+          (state, index) =>
+            state.status !== "failed" && reconciledRun.ticketStates[index]?.status === "failed",
+        );
+        if (hasStrandedDependent) {
+          const sourceThreadId = findRunSourceThreadId({ readModel, run });
+          if (sourceThreadId !== null) {
+            yield* recoverRunStage(
+              run.id,
+              "failed-ticket-dependencies",
+              updateRun({ sourceThreadId, run: reconciledRun, createdAt }),
+            );
+          }
+          continue;
+        }
+      }
       if (run.automationHalt !== null) continue;
       // A paused run is waiting for the user, not for recovery. Re-entering its
       // stage would create the stage's thread and then fail to start the turn
@@ -9453,8 +9638,326 @@ const make = Effect.gen(function* () {
     }
   });
 
+  const reconcileCanonicalStageExecutions = Effect.fn(
+    "ImplementationWorkflowReactor.reconcileCanonicalStageExecutions",
+  )(function* () {
+    let readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+    const createdAt = DateTime.formatIso(yield* DateTime.now);
+    const actions = reconcileWorkflowState(readModel, createdAt);
+    const executions = readModel.implementationRuns.flatMap((run) => [
+      ...run.stageExecutions,
+      ...run.ticketStates.flatMap((ticket) => ticket.stageExecutions),
+    ]);
+    yield* Metric.update(
+      workflowQueuedStagesWithoutOwners,
+      executions.filter((execution) => execution.state === "queued").length,
+    );
+    yield* Metric.update(
+      workflowParkedRateLimits,
+      executions.filter(
+        (execution) =>
+          execution.state === "retry-wait" && execution.failure?.category === "provider-rate-limit",
+      ).length,
+    );
+
+    for (const action of actions) {
+      if (action.type === "claim-queued-stage") {
+        const queuedAtMs = Date.parse(action.execution.queuedAt);
+        const claimedAtMs = Date.parse(createdAt);
+        if (!Number.isNaN(queuedAtMs) && !Number.isNaN(claimedAtMs)) {
+          yield* Metric.update(
+            Metric.withAttributes(
+              workflowStageLaunchLatency,
+              metricAttributes({ targetKind: action.execution.target.kind }),
+            ),
+            Duration.millis(Math.max(0, claimedAtMs - queuedAtMs)),
+          );
+        }
+        if (!action.execution.executionId.startsWith("workflow-execution-")) continue;
+        const executionTarget = action.execution.target;
+        if (executionTarget.kind === "app-review-phase") continue;
+        const target: OrchestrationImplementationRerunTarget | null =
+          executionTarget.kind === "ticket"
+            ? executionTarget.stage === "validation"
+              ? null
+              : {
+                  kind: "ticket",
+                  ticketId: executionTarget.ticketId,
+                  stage: executionTarget.stage,
+                }
+            : executionTarget.stage === "integration" ||
+                executionTarget.stage === "merge-gate" ||
+                executionTarget.stage === "app-review" ||
+                executionTarget.stage === "code-review"
+              ? { kind: "run", stage: executionTarget.stage }
+              : null;
+        if (target === null) continue;
+        const run = findRunById(readModel, executionTarget.runId);
+        if (run === null) continue;
+        yield* runAcceptedRerun({ readModel, run, target, createdAt });
+        readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+        continue;
+      }
+
+      if (
+        action.type === "expire-lease" ||
+        action.type === "leave-retry-wait" ||
+        action.type === "revoke-stale-execution"
+      ) {
+        if (action.type === "expire-lease") {
+          yield* Metric.update(
+            Metric.withAttributes(
+              workflowStaleLeasesTotal,
+              metricAttributes({ targetKind: action.execution.target.kind }),
+            ),
+            1,
+          );
+        }
+        const executionTarget = action.execution.target;
+        if (executionTarget.kind === "app-review-phase") continue;
+        const run = findRunById(readModel, executionTarget.runId);
+        if (run === null) continue;
+        const sourceThreadId = findRunSourceThreadId({ readModel, run });
+        if (sourceThreadId === null) continue;
+        const ticket =
+          executionTarget.kind === "ticket"
+            ? run.ticketStates.find((candidate) => candidate.ticketId === executionTarget.ticketId)
+            : null;
+        const nestedReview =
+          executionTarget.stage === "app-review"
+            ? (readModel.appReviewWorkflowRuns ?? []).find(
+                (candidate) =>
+                  candidate.caller.type === "implementation" &&
+                  candidate.caller.implementationRunId === run.id &&
+                  (executionTarget.kind === "run"
+                    ? candidate.caller.ticketId === undefined
+                    : candidate.caller.ticketId === executionTarget.ticketId),
+              )
+            : undefined;
+        const ownerThreadId =
+          executionTarget.kind === "ticket"
+            ? executionTarget.stage === "implementation"
+              ? ticket?.workerThreadId
+              : executionTarget.stage === "code-review"
+                ? ticket?.codeReviewThreadId
+                : nestedReview?.activeThreadId
+            : executionTarget.stage === "app-review"
+              ? (nestedReview?.activeThreadId ?? run.activeAppReviewThreadId)
+              : executionTarget.stage === "code-review"
+                ? run.activeCodeReviewThreadId
+                : executionTarget.stage === "babysitting"
+                  ? run.activeChangeRequestBabysitterThreadId
+                  : run.activeValidatorThreadId;
+        const owner =
+          ownerThreadId == null
+            ? undefined
+            : readModel.threads.find((thread) => thread.id === ownerThreadId);
+        const ownerIsLive =
+          owner?.session?.status === "starting" ||
+          owner?.session?.status === "running" ||
+          owner?.session?.activeTurnId != null;
+        if (action.type === "expire-lease" && owner === undefined) {
+          yield* Metric.update(
+            Metric.withAttributes(
+              workflowMissingChildExecutionsTotal,
+              metricAttributes({ targetKind: action.execution.target.kind }),
+            ),
+            1,
+          );
+        }
+        const nextExecution: WorkflowStageExecution =
+          action.type === "revoke-stale-execution"
+            ? {
+                ...action.execution,
+                state: "skipped",
+                claimedAt: null,
+                leaseRenewedAt: null,
+                leaseExpiresAt: null,
+                lastProgressAt: createdAt,
+                failure: null,
+                recovery: null,
+                updatedAt: createdAt,
+              }
+            : action.type === "expire-lease" && ownerIsLive
+              ? {
+                  ...action.execution,
+                  state: "running",
+                  leaseRenewedAt: createdAt,
+                  leaseExpiresAt: DateTime.formatIso(
+                    DateTime.add(DateTime.makeUnsafe(Date.parse(createdAt)), {
+                      milliseconds: WORKFLOW_PROVIDER_LEASE_MS,
+                    }),
+                  ),
+                  lastProgressAt: createdAt,
+                  updatedAt: createdAt,
+                }
+              : {
+                  ...action.execution,
+                  state: "reconciling",
+                  claimedAt: null,
+                  leaseRenewedAt: null,
+                  leaseExpiresAt: null,
+                  lastProgressAt: createdAt,
+                  failure:
+                    action.type === "expire-lease"
+                      ? {
+                          category: "provider-transport",
+                          detail: "The stage lease expired without a confirmed live owner.",
+                          failedAt: createdAt,
+                          nextAction: "continue-stage",
+                        }
+                      : action.execution.failure,
+                  recovery:
+                    action.execution.recovery === null
+                      ? null
+                      : { ...action.execution.recovery, retryAt: null },
+                  updatedAt: createdAt,
+                };
+        const replace = (execution: WorkflowStageExecution) =>
+          execution.executionId === action.execution.executionId ? nextExecution : execution;
+        const nextRun =
+          executionTarget.kind === "ticket"
+            ? {
+                ...run,
+                ticketStates: run.ticketStates.map((candidate) =>
+                  candidate.ticketId === executionTarget.ticketId
+                    ? { ...candidate, stageExecutions: candidate.stageExecutions.map(replace) }
+                    : candidate,
+                ),
+                updatedAt: createdAt,
+              }
+            : {
+                ...run,
+                stageExecutions: run.stageExecutions.map(replace),
+                updatedAt: createdAt,
+              };
+        yield* updateRun({
+          sourceThreadId,
+          run: nextRun,
+          expectedStageExecutionTransition: {
+            target: action.execution.target,
+            generation: action.execution.generation,
+            executionId: action.execution.executionId,
+            priorState: action.execution.state,
+            priorLeaseExpiresAt: action.execution.leaseExpiresAt,
+          },
+          createdAt,
+        });
+        readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+        continue;
+      }
+
+      if (
+        action.type === "derive-dependency-block" ||
+        action.type === "derive-dependency-eligibility"
+      ) {
+        const run = findRunById(readModel, action.runId);
+        if (run === null) continue;
+        const sourceThreadId = findRunSourceThreadId({ readModel, run });
+        if (sourceThreadId === null) continue;
+        const ticketStates = run.ticketStates.map((ticket) => {
+          if (ticket.ticketId !== action.ticketId) return ticket;
+          if (action.type === "derive-dependency-eligibility") {
+            return {
+              ...ticket,
+              status: "ready" as const,
+              stageExecutions: ticket.stageExecutions.map((execution) =>
+                execution.failure?.category === "dependency-failed" && execution.state === "halted"
+                  ? {
+                      ...execution,
+                      state: "skipped" as const,
+                      lastProgressAt: createdAt,
+                      failure: null,
+                      updatedAt: createdAt,
+                    }
+                  : execution,
+              ),
+              updatedAt: createdAt,
+            };
+          }
+          const dependencyExecution: WorkflowStageExecution = {
+            target: {
+              kind: "ticket",
+              runId: run.id,
+              ticketId: ticket.ticketId,
+              stage: "implementation",
+            },
+            generation: ticket.implementationGeneration,
+            executionId: action.commandId,
+            state: "halted",
+            queuedAt: createdAt,
+            claimedAt: null,
+            leaseRenewedAt: null,
+            leaseExpiresAt: null,
+            lastProgressAt: createdAt,
+            durableJobId: null,
+            failure: {
+              category: "dependency-failed",
+              detail: `Waiting for dependencies: ${action.dependencyTicketIds.join(", ")}.`,
+              failedAt: createdAt,
+              nextAction: "wait-for-dependencies",
+            },
+            recovery: null,
+            updatedAt: createdAt,
+          };
+          return {
+            ...ticket,
+            status: "blocked" as const,
+            stageExecutions: [...ticket.stageExecutions, dependencyExecution],
+            updatedAt: createdAt,
+          };
+        });
+        const nextRun = { ...run, ticketStates, updatedAt: createdAt };
+        yield* updateRun({ sourceThreadId, run: nextRun, createdAt });
+        if (action.type === "derive-dependency-eligibility") {
+          yield* startReadyWorkers({ sourceThreadId, run: nextRun, createdAt });
+        }
+        readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+        continue;
+      }
+
+      if (action.type === "report-watchdog") {
+        const run = findRunById(readModel, action.runId);
+        if (run === null) continue;
+        yield* Metric.update(
+          Metric.withAttributes(
+            workflowWatchdogFindingsTotal,
+            metricAttributes({ nextAction: action.nextAction }),
+          ),
+          1,
+        );
+        yield* orchestrationEngine.dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.make(action.commandId),
+          threadId: run.orchestratorThreadId,
+          activity: {
+            id: EventId.make(`${action.commandId}:activity`),
+            tone: "error",
+            kind: "workflow-watchdog-finding",
+            summary: `Workflow needs action: ${action.nextAction}`,
+            payload: {
+              runId: run.id,
+              fingerprint: action.fingerprint,
+              nextAction: action.nextAction,
+            },
+            turnId: null,
+            createdAt,
+          },
+          createdAt,
+        });
+      }
+    }
+  });
+
   const reconcileStartup = Effect.fn("ImplementationWorkflowReactor.reconcileStartup")(
     function* () {
+      yield* reconcileCanonicalStageExecutions().pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("implementation workflow canonical reconciliation failed", {
+            cause: Cause.pretty(cause),
+          }),
+        ),
+      );
       yield* recoverIncompleteIntegrations().pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("implementation workflow integration recovery failed", {
@@ -9522,6 +10025,13 @@ const make = Effect.gen(function* () {
     if ((yield* ServerActivation) === undefined) yield* reconcileStartup();
     yield* Effect.forkScoped(
       Effect.gen(function* () {
+        yield* reconcileCanonicalStageExecutions().pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("implementation workflow canonical reconciliation failed", {
+              cause: Cause.pretty(cause),
+            }),
+          ),
+        );
         yield* recoverRetryableRuns().pipe(
           Effect.catchCause((cause) =>
             Effect.logWarning("implementation workflow automatic retry sweep failed", {

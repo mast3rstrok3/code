@@ -62,8 +62,10 @@ import {
   isLegacyDirtyWorkerLaunchHalt,
   isRecoverableInterruptedWorktreeHalt,
   failImplementationTickets,
+  findAwaitingNestedAppReview,
   ImplementationWorkflowReactorLive,
   nestedAppReviewAwaitsPreviewRefresh,
+  ticketAppReviewCapacityAvailable,
   ticketAppReviewClaimIsAhead,
   workflowIdForRun,
 } from "./ImplementationWorkflowReactor.ts";
@@ -235,6 +237,24 @@ it("knows when an embedded App Review is parked awaiting a preview refresh", () 
   ).toBe(false);
 });
 
+it("does not resolve a stale embedded App Review update as awaiting a preview refresh", () => {
+  const parked = {
+    id: "app-review-workflow-1",
+    caller: { type: "implementation", implementationRunId: "run-1", ticketId: "ticket-1" },
+    status: "running",
+    activePhase: null,
+    cycles: [{ cycleNumber: 1, status: "completed", fixResult: { status: "succeeded" } }],
+  } as unknown as AppReviewWorkflowRun;
+
+  expect(findAwaitingNestedAppReview([parked], parked.id)).toBe(parked);
+  expect(
+    findAwaitingNestedAppReview(
+      [{ ...parked, status: "exhausted", outcome: "exhausted" }],
+      parked.id,
+    ),
+  ).toBeNull();
+});
+
 it("recognizes a ticket App Review claim hidden by projection lag", () => {
   const observed = {
     ticketStates: [
@@ -273,6 +293,50 @@ it("recognizes a ticket App Review claim hidden by projection lag", () => {
       ticketId: "ticket-1",
     }),
   ).toBe(false);
+});
+
+it("queues ticket App Reviews when the server-wide review capacity is full", () => {
+  const runs = [
+    {
+      ticketStates: [
+        {
+          status: "app-reviewing",
+          appReviewWorkflowRunId: "app-review-workflow-1",
+        },
+        {
+          status: "app-reviewing",
+          appReviewWorkflowRunId: "app-review-workflow-2",
+        },
+        {
+          status: "app-reviewing",
+          appReviewWorkflowRunId: null,
+        },
+        {
+          status: "app-reviewing",
+        },
+      ],
+    },
+  ] as unknown as ReadonlyArray<Pick<OrchestrationImplementationRun, "ticketStates">>;
+
+  expect(ticketAppReviewCapacityAvailable(runs)).toBe(false);
+  expect(ticketAppReviewCapacityAvailable(runs, new Set(["app-review-workflow-1"]))).toBe(true);
+  expect(
+    ticketAppReviewCapacityAvailable(
+      runs,
+      new Set(["app-review-workflow-1", "app-review-workflow-2"]),
+    ),
+  ).toBe(false);
+  expect(
+    ticketAppReviewCapacityAvailable([
+      {
+        ticketStates: runs[0]!.ticketStates.map((state, index) =>
+          index === 0
+            ? { ...state, status: "code-reviewing", appReviewWorkflowRunId: null }
+            : state,
+        ),
+      },
+    ]),
+  ).toBe(true);
 });
 
 it("formats ticket review problems for pull request publication", () => {
@@ -1784,7 +1848,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("reconnects a halted Fast Feature run to its recovered App Review thread", () =>
+  it.effect("reconnects a halted Fast Feature run to its manually rerun App Review thread", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         const { run, nestedRun } = yield* launchFastFeatureNestedReview(system);
@@ -1827,6 +1891,25 @@ describe("ImplementationWorkflowReactor", () => {
           category: "review-blocked",
         });
 
+        if (current === undefined) throw new Error("Halted Fast Feature run missing.");
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("replace-fast-feature-review-halt"),
+          threadId: sourceThreadId,
+          run: {
+            ...current,
+            automationHalt: {
+              stage: "app-review",
+              category: "structural-invariant",
+              detail: "A stale parent worktree check halted the active nested review.",
+              haltedAt: "2026-01-01T00:04:30.000Z",
+            },
+            updatedAt: "2026-01-01T00:04:30.000Z",
+          },
+          createdAt: "2026-01-01T00:04:30.000Z",
+        });
+        yield* system.reactor.drain;
+
         yield* system.engine.dispatch({
           type: "thread.app-review-workflow.update",
           commandId: commandId("recover-fast-feature-review-in-place"),
@@ -1842,7 +1925,7 @@ describe("ImplementationWorkflowReactor", () => {
               {
                 ...cycle,
                 status: "reviewing",
-                recoveryContinuationCount: 1,
+                recoveryContinuationCount: 0,
                 failure: null,
                 completedAt: null,
               },
@@ -2918,17 +3001,18 @@ describe("ImplementationWorkflowReactor", () => {
           expect(settled?.appDevStack.status).toBe("not-requested");
           expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(0);
 
-          const rerun = yield* Effect.result(
-            system.engine.dispatch({
-              type: "thread.implementation-run.rerun",
-              commandId: commandId("implementation-rerun-canceled-before-review"),
-              threadId: sourceThreadId,
-              runId: run.id,
-              target: { kind: "run", stage: "code-review" },
-              createdAt: "2026-01-01T00:00:02.000Z",
-            }),
-          );
-          expect(rerun._tag).toBe("Failure");
+          const rerun = yield* system.engine.dispatch({
+            type: "thread.implementation-run.rerun",
+            commandId: commandId("implementation-rerun-canceled-before-review"),
+            threadId: sourceThreadId,
+            runId: run.id,
+            target: { kind: "run", stage: "code-review" },
+            createdAt: "2026-01-01T00:00:02.000Z",
+          });
+          expect(rerun.outcome).toMatchObject({
+            type: "rejected",
+            reasonCode: "wrong-stage",
+          });
         }),
       ),
   );
@@ -4337,6 +4421,90 @@ describe("ImplementationWorkflowReactor", () => {
         expect(
           snapshot.threads.filter((thread) => thread.workflowRole === "implementation-worker"),
         ).toHaveLength(workersBeforeRecovery.length);
+      }),
+    ),
+  );
+
+  it.effect("settles dependents of a failed ticket while another ticket owns the halt", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, tickets } = yield* launchRun(system, {
+          tickets: [
+            {
+              key: "TICKET-1",
+              title: "Failed base",
+              bodyMarkdown: "Base work.",
+              plannedFileChanges: [{ path: "src/base.ts", action: "create" }],
+              dependencyKeys: [],
+            },
+            {
+              key: "TICKET-2",
+              title: "Blocked dependent",
+              bodyMarkdown: "Dependent work.",
+              plannedFileChanges: [{ path: "src/dependent.ts", action: "create" }],
+              dependencyKeys: ["TICKET-1"],
+            },
+            {
+              key: "TICKET-3",
+              title: "Current review",
+              bodyMarkdown: "Independent work.",
+              plannedFileChanges: [{ path: "src/review.ts", action: "create" }],
+              dependencyKeys: [],
+            },
+          ],
+        });
+        const failed = tickets.find((ticket) => ticket.key === "TICKET-1")!;
+        const dependent = tickets.find((ticket) => ticket.key === "TICKET-2")!;
+        const reviewing = tickets.find((ticket) => ticket.key === "TICKET-3")!;
+        const snapshot = yield* system.query.getSnapshot();
+        const current = snapshot.implementationRuns.find((entry) => entry.id === run.id)!;
+        const haltedAt = "2026-01-01T00:05:00.000Z";
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("halt-with-stranded-dependent"),
+          threadId: sourceThreadId,
+          run: {
+            ...current,
+            status: "needs-human-attention",
+            automationHalt: {
+              ticketId: reviewing.id,
+              stage: "app-review",
+              category: "review-blocked",
+              detail: "The independent ticket App Review failed.",
+              haltedAt,
+            },
+            ticketStates: current.ticketStates.map((state) =>
+              state.ticketId === failed.id
+                ? {
+                    ...state,
+                    status: "failed" as const,
+                    warningMarkdown: "The worker stopped.",
+                    updatedAt: haltedAt,
+                  }
+                : state.ticketId === dependent.id
+                  ? { ...state, status: "blocked" as const, updatedAt: haltedAt }
+                  : state,
+            ),
+            updatedAt: haltedAt,
+          },
+          createdAt: haltedAt,
+        });
+        yield* system.reactor.drain;
+
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+
+        const recovered = (yield* system.query.getSnapshot()).implementationRuns.find(
+          (entry) => entry.id === run.id,
+        )!;
+        expect(recovered.status).toBe("needs-human-attention");
+        expect(recovered.automationHalt?.ticketId).toBe(reviewing.id);
+        expect(
+          recovered.ticketStates.find((state) => state.ticketId === dependent.id),
+        ).toMatchObject({
+          status: "failed",
+          warningMarkdown: `Blocked by failed dependency: '${failed.id}'.`,
+        });
       }),
     ),
   );
@@ -6755,13 +6923,33 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("provisions a ticket stack for E2E-only App Review", () =>
+  it.effect("skips ticket App Review when only project-wide E2E is enabled", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
-          const { nestedRun } = yield* launchTicketAppReview(system);
-          expect(nestedRun.appReviewScope).toBe("e2e");
-          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(1);
+          const { run } = yield* launchRun(system, {
+            appReviewStrategy: "nested-workflow",
+            tickets: [
+              {
+                ...planningTicket("TICKET-1"),
+                appReviewEligible: true,
+                appReviewPlanMarkdown: "Review the ticket.",
+              },
+            ],
+          });
+          yield* appendWorkerResult(system, {
+            run,
+            status: "succeeded",
+            completeTicketReview: false,
+          });
+
+          const snapshot = yield* system.query.getSnapshot();
+          expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(0);
+          expect(snapshot.appReviewWorkflowRuns ?? []).toHaveLength(0);
+          expect(snapshot.implementationRuns[0]?.ticketStates[0]).toMatchObject({
+            status: "code-reviewing",
+            appReviewOutcome: "skipped",
+          });
         }),
       {
         projectFile: { e2eCommands: ["vp test run e2e/checkout.test.ts"] },
@@ -6779,12 +6967,12 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("provisions one ticket stack when App Review runs E2E and browser checks", () =>
+  it.effect("keeps project-wide E2E out of a ticket browser review", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
           const { nestedRun } = yield* launchTicketAppReview(system);
-          expect(nestedRun.appReviewScope).toBe("both");
+          expect(nestedRun.appReviewScope).toBe("browser");
           expect(yield* Ref.get(system.autoCreateInputs)).toHaveLength(1);
         }),
       {
@@ -6869,7 +7057,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("reconnects a halted ticket to its recovered App Review thread", () =>
+  it.effect("reconnects a halted ticket to its manually rerun App Review thread", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         const { run, ticket, nestedRun } = yield* launchTicketAppReview(system);
@@ -6912,6 +7100,11 @@ describe("ImplementationWorkflowReactor", () => {
           category: "review-blocked",
           ticketId: ticket.id,
         });
+        const failedState = current?.ticketStates.find(
+          (candidate) => candidate.ticketId === ticket.id,
+        );
+        expect(failedState?.appReviewOutcome).toBe("failed");
+        expect(failedState?.warningMarkdown).toContain("exhausted its 2 phase launches");
 
         yield* system.engine.dispatch({
           type: "thread.app-review-workflow.update",
@@ -6928,7 +7121,7 @@ describe("ImplementationWorkflowReactor", () => {
               {
                 ...cycle,
                 status: "reviewing",
-                recoveryContinuationCount: 1,
+                recoveryContinuationCount: 0,
                 failure: null,
                 completedAt: null,
               },
@@ -6948,6 +7141,8 @@ describe("ImplementationWorkflowReactor", () => {
         expect(current?.automationHalt).toBeNull();
         expect(state?.status).toBe("app-reviewing");
         expect(state?.appReviewWorkflowRunId).toBe(nestedRun.id);
+        expect(state?.appReviewOutcome).toBeNull();
+        expect(state?.warningMarkdown).toBeNull();
       }),
     ),
   );
@@ -6978,7 +7173,6 @@ describe("ImplementationWorkflowReactor", () => {
             completeTicketReview: false,
           });
         }
-
         let snapshot = yield* system.query.getSnapshot();
         const oldReviewIds = new Map(
           snapshot.implementationRuns
@@ -7478,7 +7672,7 @@ describe("ImplementationWorkflowReactor", () => {
         let current = snapshot.implementationRuns.find((entry) => entry.id === run.id);
         expect(current?.ticketStates.find((s) => s.ticketId === base.id)?.status).toBe("failed");
         expect(current?.ticketStates.find((s) => s.ticketId === dependent.id)?.status).toBe(
-          "blocked",
+          "failed",
         );
         const workersBefore = snapshot.threads.filter(
           (thread) => thread.workflowRole === "implementation-worker",
@@ -7714,19 +7908,20 @@ describe("ImplementationWorkflowReactor", () => {
         });
         yield* system.reactor.drain;
 
-        // Starting a second reviewer on the same branch is how one worktree
-        // ends up with two writers, so the command is refused outright.
-        const error = yield* system.engine
-          .dispatch({
-            type: "thread.implementation-run.rerun",
-            commandId: commandId("rerun-while-live"),
-            threadId: sourceThreadId,
-            runId: run.id,
-            target: { kind: "run", stage: "code-review" },
-            createdAt: "2026-01-01T00:05:00.000Z",
-          })
-          .pipe(Effect.flip);
-        expect(String(error)).toContain(reviewer.id);
+        const result = yield* system.engine.dispatch({
+          type: "thread.implementation-run.rerun",
+          commandId: commandId("rerun-while-live"),
+          threadId: sourceThreadId,
+          runId: run.id,
+          target: { kind: "run", stage: "code-review" },
+          createdAt: "2026-01-01T00:05:00.000Z",
+        });
+        expect(result.outcome).toMatchObject({
+          type: "rejected",
+          reasonCode: "live-stage-owner",
+        });
+        if (result.outcome?.type !== "rejected") throw new Error("Expected a typed rejection.");
+        expect(result.outcome.detail).toContain(reviewer.id);
 
         const snapshot = yield* system.query.getSnapshot();
         expect(

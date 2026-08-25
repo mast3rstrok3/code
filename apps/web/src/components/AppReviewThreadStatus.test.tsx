@@ -33,6 +33,7 @@ function failedRun(): AppReviewWorkflowRun {
     cycles: [],
     activePhase: null,
     activeThreadId: null,
+    phaseExecution: null,
     workspaceRevision: {
       headSha: "pending",
       workingTreeDiffHash: "pending",

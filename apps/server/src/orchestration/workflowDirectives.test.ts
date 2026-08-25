@@ -46,6 +46,21 @@ describe("workflowDirectives", () => {
     NodeAssert.equal(result.directive.tickets[0]?.key, "TICKET-1.2");
   });
 
+  it("parses an empty App Review repair ticket result", () => {
+    const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
+{
+  "type": "app-review-repair-tickets",
+  "runId": "app-review-run-1",
+  "cycleNumber": 2,
+  "tickets": []
+}
+\`\`\``);
+
+    NodeAssert.equal(result.kind, "parsed");
+    if (result.kind !== "parsed" || result.directive.type !== "app-review-repair-tickets") return;
+    NodeAssert.deepEqual(result.directive.tickets, []);
+  });
+
   it("parses App Review fixer results with focused validations", () => {
     const result = parseWorkflowDirectiveFromMarkdown(`\`\`\`json
 {

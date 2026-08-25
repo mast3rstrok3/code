@@ -79,6 +79,10 @@ import {
   parseThreadSegmentFromAttachmentId,
   toSafeThreadAttachmentSegment,
 } from "../../attachmentStore.ts";
+import {
+  normalizeAppReviewPhaseExecution,
+  normalizeImplementationRunExecutions,
+} from "../workflowStageExecutions.ts";
 
 export const ORCHESTRATION_PROJECTOR_NAMES = {
   projects: "projection.projects",
@@ -1709,7 +1713,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionImplementationRunRepository.upsert({
             runId: event.payload.run.id,
             sourceThreadId: event.payload.sourceThreadId,
-            run: event.payload.run,
+            run: normalizeImplementationRunExecutions(event.payload.run),
           });
           return;
 
@@ -1717,7 +1721,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionImplementationRunRepository.upsert({
             runId: event.payload.run.id,
             sourceThreadId: event.payload.run.orchestratorThreadId,
-            run: event.payload.run,
+            run: normalizeImplementationRunExecutions(event.payload.run),
           });
           return;
 
@@ -1737,7 +1741,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionAppReviewWorkflowRunRepository.upsert({
             runId: event.payload.run.id,
             sourceThreadId: event.payload.sourceThreadId,
-            run: event.payload.run,
+            run: normalizeAppReviewPhaseExecution(event.payload.run),
           });
           return;
         default:

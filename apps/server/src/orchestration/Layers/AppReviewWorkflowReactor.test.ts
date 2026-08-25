@@ -22,6 +22,7 @@ import {
 import {
   APP_REVIEW_FIXER_IMPLEMENTATION_ONLY_INSTRUCTION,
   APP_REVIEW_RECOVERY_SWEEP_INTERVAL_MS,
+  appReviewRepairPlanAction,
   appReviewPhaseModelStepWorkflowPromptId,
   appReviewPhaseFailureAction,
   appReviewPhaseLaunchCount,
@@ -31,6 +32,7 @@ import {
   buildAppReviewFixPrompt,
   buildReviewPrompt,
   e2eCheckIdsForCommands,
+  emptyAppReviewRepairPlanTurnId,
   effectiveAppReviewScope,
   resolveEffectiveAppReviewScope,
   recoverableFailedAppReviewPhase,
@@ -74,6 +76,37 @@ it("queues only App Review session states that can advance or stop a phase", () 
   expect(isAppReviewWorkflowSessionStatus("error")).toBe(true);
   expect(isAppReviewWorkflowSessionStatus("ready")).toBe(false);
   expect(isAppReviewWorkflowSessionStatus("stopped")).toBe(false);
+});
+
+it("distinguishes an explicit empty repair plan from a missing directive", () => {
+  expect(appReviewRepairPlanAction(undefined)).toBe("missing");
+  expect(appReviewRepairPlanAction([])).toBe("finish-without-fixing");
+  expect(appReviewRepairPlanAction([{ key: "TICKET-1.1" }])).toBe("validate-tickets");
+});
+
+it("recovers the turn id from a historical empty repair plan", () => {
+  const turnId = TurnId.make("turn-empty-repair-plan");
+  expect(
+    emptyAppReviewRepairPlanTurnId({
+      runId: "app-review-workflow-run-1",
+      cycleNumber: 2,
+      latestTurnId: turnId,
+      messages: [
+        {
+          role: "assistant",
+          turnId,
+          text: `\`\`\`json
+{
+  "type": "app-review-repair-tickets",
+  "runId": "app-review-workflow-run-1",
+  "cycleNumber": 2,
+  "tickets": []
+}
+\`\`\``,
+        },
+      ],
+    }),
+  ).toBe(turnId);
 });
 
 it("treats a completed one-turn phase as terminal once its session is idle", () => {
@@ -180,6 +213,7 @@ function run(overrides: Partial<AppReviewWorkflowRun> = {}): AppReviewWorkflowRu
     cyclesUsed: 0,
     status: "running",
     cycles: [],
+    phaseExecution: null,
     activePhase: null,
     activeThreadId: null,
     workspaceRevision: {

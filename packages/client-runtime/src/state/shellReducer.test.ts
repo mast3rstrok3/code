@@ -72,6 +72,7 @@ const stubAppReviewWorkflowRun: AppReviewWorkflowRun = {
   cycles: [],
   activePhase: null,
   activeThreadId: null,
+  phaseExecution: null,
   workspaceRevision: {
     headSha: "abc123",
     workingTreeDiffHash: "working-tree-hash",

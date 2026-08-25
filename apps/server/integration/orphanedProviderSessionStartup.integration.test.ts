@@ -40,6 +40,7 @@ import * as ProviderSessionReaper from "../src/provider/Services/ProviderSession
 import * as RepositoryIdentityResolver from "../src/project/RepositoryIdentityResolver.ts";
 import * as ServerLifecycleEvents from "../src/serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "../src/serverRuntimeStartup.ts";
+import * as WorkflowDrainCoordinator from "../src/orchestration/WorkflowDrainCoordinator.ts";
 import * as ServerSettings from "../src/serverSettings.ts";
 import * as AnalyticsService from "../src/telemetry/AnalyticsService.ts";
 
@@ -75,6 +76,7 @@ const startupDependencies = Layer.mergeAll(
     start: () => Effect.void,
     drainPendingProviderCommands: Effect.void,
     reconcilePendingProviderCommands: Effect.void,
+    drainForShutdown: Effect.void,
   }),
   Layer.succeed(ProviderSessionReaper.ProviderSessionReaper, {
     start: () => Effect.void,
@@ -83,6 +85,29 @@ const startupDependencies = Layer.mergeAll(
     start: () => Effect.void,
   }),
   ServerLifecycleEvents.layer,
+  Layer.succeed(WorkflowDrainCoordinator.WorkflowDrainCoordinator, {
+    state: Effect.succeed({
+      status: "accepting" as const,
+      operationId: null,
+      requestedAt: null,
+      deadlineAt: null,
+    }),
+    accepting: Effect.succeed(true),
+    startupRecoveryCause: null,
+    requestDrain: () =>
+      Effect.succeed({
+        status: "ready" as const,
+        operationId: null,
+        requestedAt: null,
+        deadlineAt: null,
+      }),
+    force: Effect.succeed({
+      status: "accepting" as const,
+      operationId: null,
+      requestedAt: null,
+      deadlineAt: null,
+    }),
+  }),
   Layer.succeed(ServerEnvironment.ServerEnvironment, {
     getEnvironmentId: Effect.succeed(EnvironmentId.make("environment-startup-orphan")),
     getDescriptor: Effect.succeed({

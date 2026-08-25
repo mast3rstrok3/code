@@ -1905,6 +1905,67 @@ describe("OrchestrationEngine", () => {
     await system.dispose();
   });
 
+  it("replays a typed rerun rejection from the command receipt", async () => {
+    const createdAt = now();
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-rerun-rejection-project"),
+        projectId: asProjectId("project-rerun-rejection"),
+        title: "Rerun rejection",
+        workspaceRoot: "/tmp/project-rerun-rejection",
+        defaultModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-rerun-rejection-thread"),
+        threadId: ThreadId.make("thread-rerun-rejection"),
+        projectId: asProjectId("project-rerun-rejection"),
+        ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+        title: "Rerun rejection",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+
+    const command = {
+      type: "thread.implementation-run.rerun",
+      commandId: CommandId.make("cmd-rerun-rejection"),
+      threadId: ThreadId.make("thread-rerun-rejection"),
+      runId: "missing-run",
+      target: { kind: "run", stage: "integration" },
+      createdAt,
+    } as const;
+    const first = await system.run(engine.dispatch(command));
+    const second = await system.run(engine.dispatch(command));
+
+    expect(first.outcome).toEqual({
+      type: "rejected",
+      reasonCode: "missing-target",
+      detail: "Implementation Run 'missing-run' does not exist.",
+      allowedNextAction: "inspect-workflow",
+    });
+    expect(second).toEqual(first);
+
+    await system.dispose();
+  });
+
   it("rejects reusing an accepted command id for a different aggregate", async () => {
     const createdAt = now();
     const system = await createOrchestrationSystem();

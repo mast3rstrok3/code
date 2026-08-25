@@ -32,6 +32,8 @@ import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSna
 import * as OrchestrationReactor from "./orchestration/Services/OrchestrationReactor.ts";
 import { ORPHANED_PROVIDER_SESSION_ERROR } from "./orchestration/workflowNudge.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
+import * as WorkflowDrainCoordinator from "./orchestration/WorkflowDrainCoordinator.ts";
+import { recoverWorkflowRunsAfterStartup } from "./orchestration/workflowStageExecutions.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
@@ -395,12 +397,33 @@ export const make = (options?: StartupOptions) =>
     const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
     const crypto = yield* Crypto.Crypto;
     const launcher = yield* ServiceLauncherClient.ServiceLauncherClient;
+    const workflowDrain = yield* WorkflowDrainCoordinator.WorkflowDrainCoordinator;
+    const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+    const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
 
     const commandGate = yield* makeCommandGate;
     const httpListening = yield* Deferred.make<void>();
     const reactorScope = yield* Scope.make("sequential");
+    const startupCompleted = yield* Ref.make(false);
 
     yield* Effect.addFinalizer(() => Scope.close(reactorScope, Exit.void));
+    yield* Effect.addFinalizer(() =>
+      Ref.get(startupCompleted).pipe(
+        Effect.flatMap((completed) =>
+          completed
+            ? Effect.gen(function* () {
+                const requestedAt = DateTime.formatIso(yield* DateTime.now);
+                yield* workflowDrain.requestDrain({
+                  operationId: `workflow-drain-${requestedAt}`,
+                  requestedAt,
+                  drain: orchestrationReactor.drainForShutdown,
+                });
+              })
+            : Effect.void,
+        ),
+        Effect.uninterruptible,
+      ),
+    );
 
     const startup = Effect.gen(function* () {
       yield* Effect.logDebug("startup phase: starting keybindings runtime");
@@ -434,6 +457,48 @@ export const make = (options?: StartupOptions) =>
       );
 
       yield* Effect.logDebug("startup phase: parking orchestration roots at activation");
+      if (workflowDrain.startupRecoveryCause !== null) {
+        const recoveryCause = workflowDrain.startupRecoveryCause;
+        yield* runStartupPhase(
+          "workflow-executions.recover",
+          Effect.gen(function* () {
+            const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+            const recoveredAt = DateTime.formatIso(yield* DateTime.now);
+            const recovered = recoverWorkflowRunsAfterStartup({
+              readModel,
+              cause: recoveryCause,
+              now: recoveredAt,
+            });
+            for (const [index, run] of recovered.appReviewRuns.entries()) {
+              if (run === (readModel.appReviewWorkflowRuns ?? [])[index]) continue;
+              yield* orchestrationEngine.dispatch({
+                type: "thread.app-review-workflow.update",
+                commandId: CommandId.make(
+                  `startup-recovery:${recoveryCause}:app-review:${run.id}:${recoveredAt}`,
+                ),
+                threadId: run.controllerThreadId,
+                run,
+                createdAt: recoveredAt,
+              });
+            }
+            for (const [index, run] of recovered.implementationRuns.entries()) {
+              if (run === readModel.implementationRuns[index]) continue;
+              const orchestrator = readModel.threads.find(
+                (thread) => thread.id === run.orchestratorThreadId,
+              );
+              yield* orchestrationEngine.dispatch({
+                type: "thread.implementation-run.update",
+                commandId: CommandId.make(
+                  `startup-recovery:${recoveryCause}:implementation:${run.id}:${recoveredAt}`,
+                ),
+                threadId: orchestrator?.parentThreadId ?? run.orchestratorThreadId,
+                run,
+                createdAt: recoveredAt,
+              });
+            }
+          }),
+        );
+      }
       yield* runStartupPhase(
         "reactors.start",
         Effect.gen(function* () {
@@ -564,6 +629,7 @@ export const make = (options?: StartupOptions) =>
         }),
       );
       yield* Effect.logDebug("startup phase: complete");
+      yield* Ref.set(startupCompleted, true);
     }).pipe(
       Effect.annotateSpans({
         "server.mode": serverConfig.mode,

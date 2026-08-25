@@ -57,10 +57,22 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
     yield* agentAwarenessRelay.start();
   });
 
+  const drainForShutdown = Effect.gen(function* () {
+    yield* providerRuntimeIngestion.drain;
+    yield* appReviewWorkflowReactor.flush ?? appReviewWorkflowReactor.drain;
+    yield* implementationWorkflowReactor.flush ?? implementationWorkflowReactor.drain;
+    yield* productWorkflowReactor.flush ?? productWorkflowReactor.drain;
+    yield* providerCommandReactor.drain;
+    yield* checkpointReactor.drain;
+    yield* providerRuntimeIngestion.drain;
+    yield* checkpointReactor.drain;
+  });
+
   return {
     start,
     drainPendingProviderCommands,
     reconcilePendingProviderCommands,
+    drainForShutdown,
   } satisfies OrchestrationReactorShape;
 });
 

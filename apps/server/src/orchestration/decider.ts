@@ -53,6 +53,11 @@ import {
 } from "./workflowDirectives.ts";
 import { isWorkflowThreadPaused } from "./workflowPause.ts";
 import { NUDGEABLE_WORKFLOW_ROLES } from "./workflowNudge.ts";
+import {
+  normalizeImplementationRerunTargetForHalt,
+  queueImplementationRerun,
+} from "./implementationRerun.ts";
+import { workflowStageTargetKey } from "./workflowStageExecutions.ts";
 import { buildPlanImplementationThreadTitle } from "@t3tools/shared/orchestrationPlanning";
 import { APP_REVIEW_PARTS_TARGETS } from "@t3tools/shared/appReviewParts";
 import { resolveImplementationValidationCommands } from "@t3tools/shared/t3ProjectFile";
@@ -596,6 +601,7 @@ function buildImplementationRun(input: {
       codeReviewGeneration: 0,
       codeReviewLaunchCount: 0,
       codeReviewPassCount: 0,
+      stageExecutions: [],
       updatedAt: input.command.createdAt,
     };
   });
@@ -719,6 +725,8 @@ function buildImplementationRun(input: {
     changeRequestFailure: null,
     changeRequestPublisherUserId: input.publisherUserId,
     fastBuildResult: null,
+    stageExecutions: [],
+    validationJobs: [],
     retryableFailure: null,
     automationHalt: null,
     createdAt: input.command.createdAt,
@@ -3369,6 +3377,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         changeRequestFailure: null,
         changeRequestPublisherUserId: sourceThread.ownerUserId,
         fastBuildResult: null,
+        stageExecutions: [],
+        validationJobs: [],
         retryableFailure: null,
         automationHalt: null,
         createdAt: command.createdAt,
@@ -3547,6 +3557,48 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           commandType: command.type,
           detail: `Implementation Run '${command.run.id}' does not exist.`,
         });
+      }
+      if (command.expectedStageExecutionTransition !== undefined) {
+        const expected = command.expectedStageExecutionTransition;
+        const executions = [
+          ...existingRun.stageExecutions,
+          ...existingRun.ticketStates.flatMap((ticket) => ticket.stageExecutions),
+        ];
+        const existingExecution = executions.find(
+          (execution) => execution.executionId === expected.executionId,
+        );
+        const targetMatches =
+          existingExecution !== undefined &&
+          workflowStageTargetKey(existingExecution.target) ===
+            workflowStageTargetKey(expected.target);
+        if (
+          !targetMatches ||
+          existingExecution.generation !== expected.generation ||
+          existingExecution.state !== expected.priorState ||
+          existingExecution.leaseExpiresAt !== expected.priorLeaseExpiresAt
+        ) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Implementation Run '${command.run.id}' stage execution transition is stale.`,
+          });
+        }
+        const nextExecutions = [
+          ...command.run.stageExecutions,
+          ...command.run.ticketStates.flatMap((ticket) => ticket.stageExecutions),
+        ];
+        const nextExecution = nextExecutions.find(
+          (execution) => execution.executionId === expected.executionId,
+        );
+        if (
+          nextExecution === undefined ||
+          nextExecution.generation !== expected.generation ||
+          workflowStageTargetKey(nextExecution.target) !== workflowStageTargetKey(expected.target)
+        ) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Implementation Run '${command.run.id}' stage execution transition is invalid.`,
+          });
+        }
       }
       for (const nextState of command.run.ticketStates) {
         const existingState = existingRun.ticketStates.find(
@@ -3808,7 +3860,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Implementation Run '${command.runId}' does not exist.`,
         });
       }
-      const target = command.target;
+      const target = normalizeImplementationRerunTargetForHalt(existingRun, command.target);
       if (
         existingRun.status === "canceled" &&
         !canRerunCanceledFinalCodeReview({ run: existingRun, target })
@@ -3857,6 +3909,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
       const occurredAt = command.createdAt;
+      const queued = queueImplementationRerun({
+        run: existingRun,
+        target,
+        executionId: `workflow-execution-${command.commandId}`,
+        createdAt: occurredAt,
+      });
       const rerunEvent = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -3865,7 +3923,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           commandId: command.commandId,
         })),
         type: "thread.implementation-run-rerun-requested" as const,
-        payload: { run: existingRun, target },
+        payload: { run: queued.run, target },
       };
       if (command.modelSelection === undefined || stepPin === null) return rerunEvent;
       // Pins live on the workflow root, same as the Workflows panel writes them.
@@ -4138,6 +4196,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         cycles: [],
         activePhase: null,
         activeThreadId: null,
+        phaseExecution: null,
         workspaceRevision: command.workspaceRevision ?? {
           headSha: "pending",
           workingTreeDiffHash: "pending",

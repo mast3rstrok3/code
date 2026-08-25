@@ -1,11 +1,12 @@
 import type {
+  DispatchResult as DispatchResultType,
   OrchestrationClientOrigin,
   OrchestrationEvent,
   OrchestrationReadModel,
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
-import { OrchestrationCommand } from "@t3tools/contracts";
+import { DispatchResult, OrchestrationCommand } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
@@ -49,19 +50,26 @@ import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
 } from "../Services/OrchestrationEngine.ts";
+import { implementationRerunWorkflowTarget } from "../implementationRerun.ts";
+import { WorkflowDrainCoordinator } from "../WorkflowDrainCoordinator.ts";
+import { workflowStageTargetKey } from "../workflowStageExecutions.ts";
 const isOrchestrationCommandPreviouslyRejectedError = Schema.is(
   OrchestrationCommandPreviouslyRejectedError,
 );
 const isOrchestrationCommandIdConflictError = Schema.is(OrchestrationCommandIdConflictError);
 const isOrchestrationCommandInvariantError = Schema.is(OrchestrationCommandInvariantError);
+const DispatchResultJson = Schema.fromJsonString(DispatchResult);
+const decodeDispatchResultJson = Schema.decodeUnknownSync(DispatchResultJson);
+const encodeDispatchResultJson = Schema.encodeSync(DispatchResultJson);
 
 interface CommandEnvelope {
   command: OrchestrationCommand;
   origin: OrchestrationClientOrigin | undefined;
   priority: "interactive" | "background";
   queueSequence: number;
-  result: Deferred.Deferred<{ sequence: number }, OrchestrationDispatchError>;
+  result: Deferred.Deferred<DispatchResultType, OrchestrationDispatchError>;
   startedAtMs: number;
+  workflowAdmitted: boolean;
 }
 
 const commandEnvelopeOrder = Order.make<CommandEnvelope>((self, that) => {
@@ -109,8 +117,17 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const projectionPipeline = yield* OrchestrationProjectionPipeline;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const crypto = yield* Crypto.Crypto;
+  const workflowDrain = yield* Effect.serviceOption(WorkflowDrainCoordinator);
 
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+  const parseReceiptResult = (resultJson: string | null, sequence: number): DispatchResultType => {
+    if (resultJson === null) return { sequence, outcome: { type: "accepted" } };
+    try {
+      return decodeDispatchResultJson(resultJson);
+    } catch {
+      return { sequence, outcome: { type: "accepted" } };
+    }
+  };
   let commandReadModel = createEmptyReadModel(yield* nowIso);
 
   const commandQueue = yield* TxPriorityQueue.empty(commandEnvelopeOrder);
@@ -182,13 +199,63 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             });
           }
           if (existingReceipt.value.status === "accepted") {
-            return {
-              sequence: existingReceipt.value.resultSequence,
-            };
+            return parseReceiptResult(
+              existingReceipt.value.resultJson,
+              existingReceipt.value.resultSequence,
+            );
           }
           return yield* new OrchestrationCommandPreviouslyRejectedError({
             commandId: envelope.command.commandId,
             detail: existingReceipt.value.error ?? "Previously rejected.",
+          });
+        }
+
+        const startsWorkflowWork = (() => {
+          const command = envelope.command;
+          switch (command.type) {
+            case "thread.implementation-run.launch":
+            case "thread.fast-feature-run.launch":
+            case "thread.implementation-run.rerun":
+            case "thread.app-review-workflow.launch":
+            case "thread.app-review-workflow.rerun":
+            case "thread.planning-workflow.launch":
+            case "thread.planning-stage.start":
+              return true;
+            case "thread.turn.start":
+              return (
+                commandReadModel.threads.find((thread) => thread.id === command.threadId)
+                  ?.workflowRole !== null
+              );
+            default:
+              return false;
+          }
+        })();
+        if (startsWorkflowWork && !envelope.workflowAdmitted) {
+          if (envelope.command.type === "thread.implementation-run.rerun") {
+            const result: DispatchResultType = {
+              sequence: commandReadModel.snapshotSequence,
+              outcome: {
+                type: "rejected",
+                reasonCode: "server-drain",
+                detail: "The server is draining workflow work for a planned restart.",
+                allowedNextAction: "wait-for-restart",
+              },
+            };
+            yield* commandReceiptRepository.upsert({
+              commandId: envelope.command.commandId,
+              aggregateKind: aggregateRef.aggregateKind,
+              aggregateId: aggregateRef.aggregateId,
+              acceptedAt: yield* nowIso,
+              resultSequence: result.sequence,
+              status: "accepted",
+              error: null,
+              resultJson: encodeDispatchResultJson(result),
+            });
+            return result;
+          }
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: envelope.command.type,
+            detail: "The server is draining workflow work for a planned restart.",
           });
         }
 
@@ -238,6 +305,67 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                 });
               }
 
+              const result: DispatchResultType = (() => {
+                if (envelope.command.type !== "thread.implementation-run.rerun") {
+                  return { sequence: lastSavedEvent.sequence, outcome: { type: "accepted" } };
+                }
+                const rerunEvent = committedEvents.find(
+                  (event) => event.type === "thread.implementation-run-rerun-requested",
+                );
+                if (rerunEvent?.type !== "thread.implementation-run-rerun-requested") {
+                  return { sequence: lastSavedEvent.sequence, outcome: { type: "accepted" } };
+                }
+                const requestedTarget = implementationRerunWorkflowTarget(
+                  envelope.command.runId,
+                  envelope.command.target,
+                );
+                const effectiveTarget = implementationRerunWorkflowTarget(
+                  envelope.command.runId,
+                  rerunEvent.payload.target,
+                );
+                if (
+                  workflowStageTargetKey(requestedTarget) !==
+                  workflowStageTargetKey(effectiveTarget)
+                ) {
+                  return {
+                    sequence: lastSavedEvent.sequence,
+                    outcome: {
+                      type: "redirected",
+                      requestedTarget,
+                      effectiveTarget,
+                      reason: "The requested run stage belongs to the halted ticket stage.",
+                    },
+                  };
+                }
+                const queuedStage =
+                  effectiveTarget.kind === "ticket"
+                    ? rerunEvent.payload.run.ticketStates
+                        .find((ticket) => ticket.ticketId === effectiveTarget.ticketId)
+                        ?.stageExecutions.find(
+                          (execution) =>
+                            execution.executionId ===
+                            `workflow-execution-${envelope.command.commandId}`,
+                        )
+                    : rerunEvent.payload.run.stageExecutions.find(
+                        (execution) =>
+                          execution.executionId ===
+                          `workflow-execution-${envelope.command.commandId}`,
+                      );
+                if (queuedStage === undefined) {
+                  return { sequence: lastSavedEvent.sequence, outcome: { type: "accepted" } };
+                }
+                return {
+                  sequence: lastSavedEvent.sequence,
+                  outcome: {
+                    type: "started",
+                    target: effectiveTarget,
+                    generation: queuedStage.generation,
+                    executionId: queuedStage.executionId,
+                    queuedStage,
+                  },
+                };
+              })();
+
               yield* commandReceiptRepository.upsert({
                 commandId: envelope.command.commandId,
                 aggregateKind: lastSavedEvent.aggregateKind,
@@ -246,12 +374,14 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                 resultSequence: lastSavedEvent.sequence,
                 status: "accepted",
                 error: null,
+                resultJson: encodeDispatchResultJson(result),
               });
 
               return {
                 committedEvents,
                 lastSequence: lastSavedEvent.sequence,
                 nextCommandReadModel,
+                result,
               } as const;
             }),
           )
@@ -279,7 +409,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             );
           }
         }
-        return { sequence: committedCommand.lastSequence };
+        return committedCommand.result;
       }).pipe(Effect.withSpan(`orchestration.command.${envelope.command.type}`)),
     ).pipe(
       Effect.flatMap((exit) =>
@@ -314,6 +444,53 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
           const error = Cause.squash(exit.cause) as OrchestrationDispatchError;
           if (
+            envelope.command.type === "thread.implementation-run.rerun" &&
+            isOrchestrationCommandInvariantError(error)
+          ) {
+            const detail = error.detail;
+            const reasonCode = detail.includes("paused")
+              ? "paused-workflow"
+              : detail.includes("still running")
+                ? "live-stage-owner"
+                : detail.includes("does not exist") || detail.includes("not part")
+                  ? "missing-target"
+                  : detail.includes("depend")
+                    ? "dependency-block"
+                    : "wrong-stage";
+            const result: DispatchResultType = {
+              sequence: commandReadModel.snapshotSequence,
+              outcome: {
+                type: "rejected",
+                reasonCode,
+                detail,
+                allowedNextAction:
+                  reasonCode === "paused-workflow"
+                    ? "resume-workflow"
+                    : reasonCode === "live-stage-owner"
+                      ? "wait-for-stage"
+                      : "inspect-workflow",
+              },
+            };
+            const receiptExit = yield* Effect.exit(
+              commandReceiptRepository.upsert({
+                commandId: envelope.command.commandId,
+                aggregateKind: aggregateRef.aggregateKind,
+                aggregateId: aggregateRef.aggregateId,
+                acceptedAt: yield* nowIso,
+                resultSequence: result.sequence,
+                status: "accepted",
+                error: null,
+                resultJson: encodeDispatchResultJson(result),
+              }),
+            );
+            if (Exit.isFailure(receiptExit)) {
+              yield* Deferred.failCause(envelope.result, receiptExit.cause);
+              return;
+            }
+            yield* Deferred.succeed(envelope.result, result);
+            return;
+          }
+          if (
             !isOrchestrationCommandPreviouslyRejectedError(error) &&
             !isOrchestrationCommandIdConflictError(error)
           ) {
@@ -340,6 +517,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                   resultSequence: commandReadModel.snapshotSequence,
                   status: "rejected",
                   error: error.message,
+                  resultJson: null,
                 })
                 .pipe(Effect.catch(() => Effect.void));
             }
@@ -367,7 +545,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
   const dispatch: OrchestrationEngineShape["dispatch"] = (command, options) =>
     Effect.gen(function* () {
-      const result = yield* Deferred.make<{ sequence: number }, OrchestrationDispatchError>();
+      const result = yield* Deferred.make<DispatchResultType, OrchestrationDispatchError>();
       const queueSequence = yield* Ref.getAndUpdate(nextQueueSequence, (current) => current + 1);
       const envelope: CommandEnvelope = {
         command,
@@ -376,6 +554,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         queueSequence,
         result,
         startedAtMs: yield* Clock.currentTimeMillis,
+        workflowAdmitted: Option.isNone(workflowDrain) || (yield* workflowDrain.value.accepting),
       };
       yield* TxPriorityQueue.offer(commandQueue, envelope);
       return yield* Deferred.await(result);

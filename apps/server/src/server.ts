@@ -70,6 +70,7 @@ import { PreviewLifecycleReactorLive } from "./orchestration/Layers/PreviewLifec
 import { ProductWorkflowReactorLive } from "./orchestration/Layers/ProductWorkflowReactor.ts";
 import { ImplementationWorkflowReactorLive } from "./orchestration/Layers/ImplementationWorkflowReactor.ts";
 import { AppReviewWorkflowReactorLive } from "./orchestration/Layers/AppReviewWorkflowReactor.ts";
+import * as WorkflowDrainCoordinator from "./orchestration/WorkflowDrainCoordinator.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
@@ -457,7 +458,9 @@ const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(
   Layer.provideMerge(AppDevStackManager.AppDevStackManager.layer),
   Layer.provideMerge(ExternalLauncher.layer),
   Layer.provideMerge(RemoteOpenTargets.layer),
-  Layer.provideMerge(ServerLifecycleEvents.layer),
+  Layer.provideMerge(
+    WorkflowDrainCoordinator.layer.pipe(Layer.provideMerge(ServerLifecycleEvents.layer)),
+  ),
   Layer.provide(NetService.layer),
 );
 

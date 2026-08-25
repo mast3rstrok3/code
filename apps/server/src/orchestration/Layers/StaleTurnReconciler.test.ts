@@ -58,6 +58,7 @@ import {
 } from "../workflowNudge.ts";
 import {
   makeStaleTurnReconcilerLive,
+  resolveImplementationCodeReviewOwner,
   STALE_TURN_RESUME_ACTIVITY_KIND,
   type StaleTurnReconcilerLiveOptions,
 } from "./StaleTurnReconciler.ts";
@@ -706,6 +707,32 @@ const bootOnlyOptions: StaleTurnReconcilerLiveOptions = {
   confirmDelayMs: 0,
 };
 
+it("keeps ticket Code Review owned while its parent implementation run is running", () => {
+  const reviewerThreadId = ThreadId.make("thread-ticket-code-reviewer");
+  const orchestratorThreadId = ThreadId.make("thread-implementation-orchestrator");
+  const workerThreadId = ThreadId.make("thread-implementation-worker");
+  const run = {
+    id: "implementation-run-1",
+    orchestratorThreadId,
+    status: "running",
+    activeCodeReviewThreadId: null,
+    ticketStates: [
+      {
+        ticketId: "ticket-1",
+        status: "code-reviewing",
+        codeReviewThreadId: reviewerThreadId,
+      },
+    ],
+  } as unknown as OrchestrationImplementationRun;
+
+  expect(
+    resolveImplementationCodeReviewOwner([run], {
+      id: reviewerThreadId,
+      parentThreadId: workerThreadId,
+    }),
+  ).toEqual({ run, ticketId: "ticket-1" });
+});
+
 describe("StaleTurnReconciler", () => {
   it.live("finishes the boot reconciliation before start returns", () =>
     withSystem(
@@ -1053,7 +1080,7 @@ describe("StaleTurnReconciler", () => {
     ),
   );
 
-  it.live("continues an interrupted worker in place and halts after the second interruption", () =>
+  it.live("halts only the interrupted stage when crash recovery is exhausted", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
@@ -1077,22 +1104,19 @@ describe("StaleTurnReconciler", () => {
 
           yield* system.reconciler.start();
           yield* waitUntil(
-            getThread(system, workerThreadId).pipe(
+            getRun(system, run.id).pipe(
               Effect.map(
-                (thread) =>
-                  (thread?.activities ?? []).filter(
-                    (activity) => activity.kind === "implementation-worker-result",
-                  ).length === 1,
+                (entry) =>
+                  entry?.ticketStates[0]?.stageExecutions.some(
+                    (execution) =>
+                      execution.target.kind === "ticket" &&
+                      execution.target.stage === "implementation" &&
+                      execution.state === "halted" &&
+                      execution.failure?.category === "provider-terminal",
+                  ) === true,
               ),
             ),
-            "worker failure handoff",
-          );
-          yield* system.reactor.drain;
-          yield* waitUntil(
-            getRun(system, run.id).pipe(
-              Effect.map((entry) => entry?.ticketStates[0]?.attemptCount === 2),
-            ),
-            "worker retry state",
+            "worker stage halt",
           );
 
           const workerThread = yield* getThread(system, workerThreadId);
@@ -1112,38 +1136,13 @@ describe("StaleTurnReconciler", () => {
           const settledRun = yield* getRun(system, run.id);
           expect(settledRun?.status).toBe("running");
           expect(settledRun?.ticketStates[0]?.status).toBe("running");
-          expect(settledRun?.ticketStates[0]?.attemptCount).toBe(2);
+          expect(settledRun?.ticketStates[0]?.attemptCount).toBe(1);
           expect(settledRun?.ticketStates[0]?.workerThreadId).toBe(workerThreadId);
-          expect(settledRun?.retryableFailure?.attemptCount).toBe(1);
           expect(settledRun?.workerResults).toHaveLength(0);
           const workerResultActivities = (workerThread?.activities ?? []).filter(
             (activity) => activity.kind === "implementation-worker-result",
           );
-          expect(workerResultActivities).toHaveLength(1);
-
-          yield* setThreadSession(system, {
-            threadId: workerThreadId,
-            status: "running",
-            activeTurnId: TurnId.make("turn-stale-worker-retry"),
-            tag: "worker-retry-orphan",
-          });
-          yield* waitUntil(
-            getRun(system, run.id).pipe(
-              Effect.map((entry) => entry?.automationHalt?.category === "retry-exhausted"),
-            ),
-            "worker retry budget to halt",
-          );
-          yield* system.reactor.drain;
-
-          const haltedRun = yield* getRun(system, run.id);
-          expect(haltedRun?.status).toBe("needs-human-attention");
-          expect(haltedRun?.retryableFailure?.attemptCount).toBe(2);
-          expect(haltedRun?.automationHalt).toMatchObject({
-            ticketId: run.ticketStates[0]?.ticketId,
-            stage: "implementation",
-            category: "retry-exhausted",
-          });
-          expect(haltedRun?.workerResults).toHaveLength(0);
+          expect(workerResultActivities).toHaveLength(0);
         }),
       { reconciler: { sweepIntervalMs: 100, graceMs: 0, confirmDelayMs: 0 } },
     ),
@@ -1634,23 +1633,25 @@ describe("StaleTurnReconciler", () => {
 
           yield* system.reconciler.start();
           yield* waitUntil(
-            getThread(system, workerThreadId).pipe(
+            getRun(system, run.id).pipe(
               Effect.map(
-                (thread) => thread?.session?.lastError === WORKFLOW_NUDGE_EXHAUSTED_MESSAGE,
+                (entry) =>
+                  entry?.ticketStates[0]?.stageExecutions.some(
+                    (execution) =>
+                      execution.state === "halted" &&
+                      execution.failure?.nextAction === "fix-authentication",
+                  ) === true,
               ),
             ),
-            "nudge budget to be exhausted",
+            "authentication stage halt",
           );
-          yield* system.reactor.drain;
 
           expect(yield* nudgeActivities(system, workerThreadId)).toHaveLength(0);
           const thread = yield* getThread(system, workerThreadId);
           const reported = (thread?.activities ?? []).filter(
             (activity) => activity.kind === "implementation-worker-result",
           );
-          expect(reported).toHaveLength(1);
-          const failure = reported[0]?.payload as Record<string, unknown> | undefined;
-          expect(failure?.["status"]).toBe("failed");
+          expect(reported).toHaveLength(0);
         }),
       {
         reconciler: {
@@ -1706,7 +1707,15 @@ describe("StaleTurnReconciler", () => {
             thread?.activities.filter(
               (activity) => activity.kind === "implementation-worker-result",
             ),
-          ).toHaveLength(1);
+          ).toHaveLength(0);
+          const halted = yield* getRun(system, run.id);
+          expect(
+            halted?.ticketStates[0]?.stageExecutions.some(
+              (execution) =>
+                execution.state === "halted" &&
+                execution.failure?.category === "provider-transport",
+            ),
+          ).toBe(true);
           expect(yield* nudgeActivities(system, workerThreadId)).toHaveLength(0);
         }),
       { reconciler: bootOnlyOptions },

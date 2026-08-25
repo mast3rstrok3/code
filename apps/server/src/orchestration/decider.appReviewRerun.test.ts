@@ -123,6 +123,7 @@ function makeReadModel(input: {
     cyclesUsed: input.cyclesUsed ?? input.cycles.length,
     status: "running",
     cycles: input.cycles,
+    phaseExecution: null,
     activePhase: null,
     activeThreadId: input.activeThreadId ?? null,
     workspaceRevision: {
@@ -429,6 +430,45 @@ it.layer(NodeServices.layer)("App Review phase re-run decider", (it) => {
       expect(events.map((entry) => entry.type)).toEqual([
         "thread.implementation-run-rerun-requested",
       ]);
+    }),
+  );
+
+  it.effect("routes a run App Review restart to the ticket that halted there", () =>
+    Effect.gen(function* () {
+      const readModel = makeReadModel({
+        cycles: [cycle({})],
+        activeThreadId: PLANNER,
+        activeSession: "ready",
+      });
+      const implementationRun = readModel.implementationRuns[0]!;
+      const event = yield* decideOrchestrationCommand({
+        command: rerunRunAppReview(),
+        readModel: {
+          ...readModel,
+          implementationRuns: [
+            {
+              ...implementationRun,
+              status: "needs-human-attention",
+              automationHalt: {
+                ticketId: "planning-ticket-1",
+                stage: "app-review",
+                category: "review-blocked",
+                detail: "The ticket App Review failed.",
+                haltedAt: NOW,
+              },
+            },
+          ],
+        },
+      });
+      const events = Array.isArray(event) ? event : [event];
+      const rerunEvent = events.find(
+        (entry) => entry.type === "thread.implementation-run-rerun-requested",
+      );
+      expect(rerunEvent?.payload.target).toEqual({
+        kind: "ticket",
+        ticketId: "planning-ticket-1",
+        stage: "app-review",
+      });
     }),
   );
 });

@@ -897,8 +897,8 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
       if (!Number.isInteger(cycleNumber) || (cycleNumber as number) < 1) {
         return "app-review-repair-tickets.cycleNumber must be a positive integer.";
       }
-      if (!Array.isArray(rawTickets) || rawTickets.length === 0) {
-        return "app-review-repair-tickets.tickets must be a non-empty array.";
+      if (!Array.isArray(rawTickets)) {
+        return "app-review-repair-tickets.tickets must be an array.";
       }
       const tickets: Array<{
         key: string;

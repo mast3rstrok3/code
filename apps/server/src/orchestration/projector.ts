@@ -14,6 +14,10 @@ import * as Schema from "effect/Schema";
 
 import { toProjectorDecodeError, type OrchestrationProjectorDecodeError } from "./Errors.ts";
 import {
+  normalizeAppReviewPhaseExecution,
+  normalizeImplementationRunExecutions,
+} from "./workflowStageExecutions.ts";
+import {
   MessageSentPayloadSchema,
   ProjectCreatedPayload,
   ProjectDeletedPayload,
@@ -38,6 +42,7 @@ import {
   ThreadImplementationChangeRequestRetryRequestedPayload,
   ThreadImplementationRunCancelRequestedPayload,
   ThreadImplementationRunLaunchedPayload,
+  ThreadImplementationRunRerunRequestedPayload,
   ThreadImplementationRunUpdatedPayload,
   ThreadPlanningTicketReviewRequestedPayload,
   ThreadPlanningTicketsCreatedPayload,
@@ -984,7 +989,10 @@ export function projectEvent(
       ).pipe(
         Effect.map((payload) => ({
           ...nextBase,
-          implementationRuns: upsertImplementationRun(nextBase.implementationRuns, payload.run),
+          implementationRuns: upsertImplementationRun(
+            nextBase.implementationRuns,
+            normalizeImplementationRunExecutions(payload.run),
+          ),
         })),
       );
 
@@ -997,7 +1005,26 @@ export function projectEvent(
       ).pipe(
         Effect.map((payload) => ({
           ...nextBase,
-          implementationRuns: upsertImplementationRun(nextBase.implementationRuns, payload.run),
+          implementationRuns: upsertImplementationRun(
+            nextBase.implementationRuns,
+            normalizeImplementationRunExecutions(payload.run),
+          ),
+        })),
+      );
+
+    case "thread.implementation-run-rerun-requested":
+      return decodeForEvent(
+        ThreadImplementationRunRerunRequestedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          implementationRuns: upsertImplementationRun(
+            nextBase.implementationRuns,
+            normalizeImplementationRunExecutions(payload.run),
+          ),
         })),
       );
 
@@ -1010,7 +1037,10 @@ export function projectEvent(
       ).pipe(
         Effect.map((payload) => ({
           ...nextBase,
-          implementationRuns: upsertImplementationRun(nextBase.implementationRuns, payload.run),
+          implementationRuns: upsertImplementationRun(
+            nextBase.implementationRuns,
+            normalizeImplementationRunExecutions(payload.run),
+          ),
         })),
       );
 
@@ -1023,7 +1053,10 @@ export function projectEvent(
       ).pipe(
         Effect.map((payload) => ({
           ...nextBase,
-          implementationRuns: upsertImplementationRun(nextBase.implementationRuns, payload.run),
+          implementationRuns: upsertImplementationRun(
+            nextBase.implementationRuns,
+            normalizeImplementationRunExecutions(payload.run),
+          ),
         })),
       );
 
@@ -1038,7 +1071,7 @@ export function projectEvent(
           ...nextBase,
           appReviewWorkflowRuns: upsertAppReviewWorkflowRun(
             nextBase.appReviewWorkflowRuns ?? [],
-            payload.run,
+            normalizeAppReviewPhaseExecution(payload.run),
           ),
         })),
       );
@@ -1054,7 +1087,7 @@ export function projectEvent(
           ...nextBase,
           appReviewWorkflowRuns: upsertAppReviewWorkflowRun(
             nextBase.appReviewWorkflowRuns ?? [],
-            payload.run,
+            normalizeAppReviewPhaseExecution(payload.run),
           ),
         })),
       );
@@ -1070,7 +1103,7 @@ export function projectEvent(
           ...nextBase,
           appReviewWorkflowRuns: upsertAppReviewWorkflowRun(
             nextBase.appReviewWorkflowRuns ?? [],
-            payload.run,
+            normalizeAppReviewPhaseExecution(payload.run),
           ),
         })),
       );
@@ -1086,7 +1119,7 @@ export function projectEvent(
           ...nextBase,
           appReviewWorkflowRuns: upsertAppReviewWorkflowRun(
             nextBase.appReviewWorkflowRuns ?? [],
-            payload.run,
+            normalizeAppReviewPhaseExecution(payload.run),
           ),
         })),
       );

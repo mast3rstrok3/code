@@ -2504,8 +2504,30 @@ function ChatViewContent(props: ChatViewProps) {
   const serverUpdateState = useAtomValue(
     serverEnvironment.updateStateAtom(serverUpdateEnvironmentId),
   );
+  const serverLifecycleEvent = useAtomValue(
+    serverEnvironment.lifecycleValueAtom(serverUpdateEnvironmentId),
+  );
   const systemComposerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
     const items: ComposerBannerStackItem[] = [];
+    if (serverLifecycleEvent?.type === "draining") {
+      items.push({
+        id: `server-draining:${serverLifecycleEvent.payload.operationId}`,
+        variant: "default",
+        urgent: true,
+        icon: (
+          <span
+            className="size-1.5 animate-status-pulse rounded-full bg-foreground"
+            aria-hidden="true"
+          />
+        ),
+        title: serverLifecycleEvent.payload.forced
+          ? "Restarting server now"
+          : "Preparing server restart",
+        description: serverLifecycleEvent.payload.forced
+          ? "The remaining drain wait was skipped. Reconnecting keeps queued workflow work intact."
+          : `Active workflow turns and checkpoints may finish until ${serverLifecycleEvent.payload.deadlineAt}. New stage work will stay queued.`,
+      });
+    }
     const updateRunning = serverUpdateState.status === "running";
     const unavailableConnection = activeEnvironmentUnavailableState?.connection ?? null;
     const environmentReconnecting =
@@ -2662,6 +2684,7 @@ function ChatViewContent(props: ChatViewProps) {
     versionMismatch,
     versionMismatchDismissKey,
     serverUpdateEnvironmentId,
+    serverLifecycleEvent,
     versionMismatchSelfUpdate,
     versionMismatchServerLabel,
   ]);
@@ -3221,14 +3244,37 @@ function ChatViewContent(props: ChatViewProps) {
       readonly target: OrchestrationImplementationRerunTarget;
     }) => {
       if (!activeThread) return;
-      void rerunImplementationStage({
-        environmentId: activeThread.environmentId,
-        input: {
-          threadId: activeThread.id,
-          runId: input.runId,
-          target: input.target,
-        },
-      });
+      void (async () => {
+        const result = await rerunImplementationStage({
+          environmentId: activeThread.environmentId,
+          input: {
+            threadId: activeThread.id,
+            runId: input.runId,
+            target: input.target,
+          },
+        });
+        if (result._tag !== "Success") return;
+        const outcome = result.value.outcome;
+        if (outcome?.type === "started") {
+          toastManager.add({
+            type: "success",
+            title: "Stage queued",
+            description: `Generation ${String(outcome.generation)} now owns the re-run.`,
+          });
+        } else if (outcome?.type === "redirected") {
+          toastManager.add({
+            type: "warning",
+            title: "Re-run redirected",
+            description: outcome.reason,
+          });
+        } else if (outcome?.type === "rejected") {
+          toastManager.add({
+            type: "warning",
+            title: "Stage did not start",
+            description: outcome.detail,
+          });
+        }
+      })();
     },
     [activeThread, rerunImplementationStage],
   );

@@ -217,13 +217,37 @@ The ticket and final automated review stage. One logical cycle uses one fresh th
 
 The maximum number of durable thread IDs a workflow stage may claim. Another turn in an existing thread does not spend the budget. A new review cycle, a ticket that has never started, or an explicit rerun generation may claim a fresh ID. Recovery never clears a claimed active ID to obtain a replacement.
 
+#### Stage execution
+
+The canonical ownership record for one Implementation stage, ticket stage, or nested App Review phase. It combines a target, generation, execution ID, explicit state, claim and lease times, last progress, failure, recovery episode, and optional durable job ID. Compatibility run and ticket statuses are derived from these records.
+
+#### Recovery episode
+
+One durable attempt sequence for a planned restart, crash, provider interruption, or historical failure. It stores its cause, start and deadline, attempt count, selected model, fallback history, and optional retry time. Infrastructure episodes do not consume product budgets.
+
+#### Retry-wait
+
+A stage state that has no active provider owner and a durable time at which recovery becomes eligible. Provider usage limits use the latest provider retry time, or five hours when none is available.
+
+#### Lease
+
+A renewable ownership deadline. Provider activity renews a stage lease for five minutes. A missed deadline moves the stage to reconciliation so the server can inspect sessions, commands, turns, results, checkpoints, and pause state before it resumes work.
+
+#### Durable validation job
+
+A persisted E2E command tied to a stage generation. It records the command, working directory, state, 30-second heartbeat, timestamps, output summary, and result receipt. Two minutes without a heartbeat expires its lease. Late results from revoked generations are ignored.
+
+#### Planned drain
+
+The server shutdown state used for updates and signals. It writes a planned-restart marker, stops new workflow launches, and waits up to 90 seconds for accepted work, provider turns, checkpoints, and internal queues. Repeated drain requests share one operation, and force ends the remaining wait.
+
 #### Implementation run
 
 One orchestrated execution of a Spec's tickets: a dedicated worktree, dependency-chained TDD workers, programmatic merges, App Review, and Code Review, driven by [ImplementationWorkflowReactor.ts][29]. Each ticket allocates one durable Implementation thread. Recovery adds continuation turns to that thread. An explicit rerun creates a new stage generation.
 
 #### Workflow nudge
 
-The gated recovery of a blocked autonomous workflow thread. A terminal failed turn and projected error session are authoritative unless the adapter still reports the provider session as starting or running. The first T3 retry stays in the same provider session and on the primary model. A second retryable failure may replace that session with the run-level or standing `workflow.recovery-fallback` model pin. The replacement keeps the T3 thread and workspace identity but clears provider-native continuation state. Later retryable attempts use the backup every ten minutes until the original eight-hour deadline or the 48-attempt ceiling. Stable jitter and a later structured `retryAt` extend each due time. Unknown historical failures get two compatibility attempts. Authentication failures, configuration failures, pauses, live turns, approvals, user-input waits, and deliberate interruptions do not enter recovery. [StaleTurnReconciler.ts][32] records each attempt and hands exhaustion back to the owning reactor's normal failure path. The shared policy lives in [workflowNudge.ts][33].
+The provider-facing part of stage recovery. It resumes the primary model once, resolves the run or standing `workflow.recovery-fallback` pin, and can replace the provider-native session while retaining the T3 thread and workspace. Usage limits then park until `retryAt` or five hours and may repeat without an attempt ceiling. Transport failures remain bounded to eight hours. Unknown historical failures keep two compatibility attempts. Authentication, configuration, pauses, live turns, approvals, user-input waits, and deliberate interruptions do not enter automatic retry. [StaleTurnReconciler.ts][32] records provider evidence; the stage execution owns the canonical recovery state.
 
 #### App dev stack
 

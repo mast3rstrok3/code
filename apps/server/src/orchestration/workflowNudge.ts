@@ -97,6 +97,7 @@ export function workflowRecoveryAttemptLimit(
   recovery: ProviderFailureRecovery,
   configuredLimit: number,
 ): number {
+  if (recovery.reason === "rate-limit") return Number.POSITIVE_INFINITY;
   if (recovery.disposition === "terminal") return 0;
   if (recovery.disposition === "unknown") {
     return Math.min(WORKFLOW_RECOVERY_UNKNOWN_MAX_ATTEMPTS, configuredLimit);

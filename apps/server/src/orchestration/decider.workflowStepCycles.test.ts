@@ -77,6 +77,7 @@ function appReviewRun(input: {
     outcome: null,
     activePhase: "review",
     activeThreadId: null,
+    phaseExecution: null,
     briefMarkdown: "Review it.",
     supportingContextMarkdown: null,
     previewTargets: ["http://localhost:3000"],

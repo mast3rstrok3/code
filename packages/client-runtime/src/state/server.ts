@@ -4,6 +4,7 @@ import {
   type ServerConfigStreamEvent,
   type ServerLifecycleWelcomePayload,
   type ServerLifecycleStreamReadyEvent,
+  type ServerLifecycleStreamEvent,
   type ServerSelfUpdateProgressEvent,
   type ServerSelfUpdateResult,
   WS_METHODS,
@@ -441,10 +442,9 @@ export function serverConfigStateChanges(environmentId: EnvironmentId) {
 
 export function projectServerWelcome(
   current: Option.Option<ServerLifecycleWelcomePayload>,
-  event: {
-    readonly type: "welcome" | "ready";
-    readonly payload: unknown;
-  },
+  event:
+    | { readonly type: "welcome"; readonly payload: ServerLifecycleWelcomePayload }
+    | { readonly type: "ready" | "draining"; readonly payload: unknown },
 ): readonly [
   Option.Option<ServerLifecycleWelcomePayload>,
   ReadonlyArray<ServerLifecycleWelcomePayload>,
@@ -693,12 +693,28 @@ export function createServerEnvironmentAtoms<R, E>(
       Atom.withLabel(`environment-data:server:providers:${environmentId}`),
     ),
   );
+  const lifecycle = createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+    label: "environment-data:server:lifecycle",
+    tag: WS_METHODS.subscribeServerLifecycle,
+  });
+  const lifecycleValueAtom = Atom.family((environmentId: EnvironmentId | null) => {
+    if (environmentId === null) {
+      return Atom.make<ServerLifecycleStreamEvent | null>(null).pipe(
+        Atom.withLabel("environment-data:server:lifecycle:none"),
+      );
+    }
+    const target = { environmentId, input: {} };
+    return Atom.make((get) => Option.getOrNull(AsyncResult.value(get(lifecycle(target))))).pipe(
+      Atom.withLabel(`environment-data:server:lifecycle:${environmentId}`),
+    );
+  });
 
   return {
     configValueAtom,
     updateStateAtom,
     settingsValueAtom,
     providersValueAtom,
+    lifecycleValueAtom,
     traceDiagnostics: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:trace-diagnostics",
       tag: WS_METHODS.serverGetTraceDiagnostics,

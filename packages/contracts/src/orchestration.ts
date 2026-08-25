@@ -43,6 +43,12 @@ import {
 } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import { DEFAULT_WORKSPACE_USER_ID, WorkspaceUserId, WorkspaceUserView } from "./workspaceUsers.ts";
+import {
+  DurableValidationJob,
+  WorkflowStageExecution,
+  WorkflowStageExecutionState,
+  WorkflowStageTarget,
+} from "./workflowExecution.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
@@ -1057,6 +1063,9 @@ export const OrchestrationImplementationTicketState = Schema.Struct({
   codeReviewGeneration: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
   codeReviewLaunchCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
   codeReviewPassCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+  stageExecutions: Schema.Array(WorkflowStageExecution).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
   updatedAt: IsoDateTime,
 });
 export type OrchestrationImplementationTicketState =
@@ -1309,6 +1318,12 @@ export const OrchestrationImplementationRun = Schema.Struct({
   ),
   fastBuildResult: Schema.NullOr(OrchestrationImplementationFastBuildResult).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  stageExecutions: Schema.Array(WorkflowStageExecution).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
+  validationJobs: Schema.Array(DurableValidationJob).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
   ),
   retryableFailure: Schema.NullOr(OrchestrationImplementationRetryableFailure).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
@@ -2291,6 +2306,15 @@ const ThreadImplementationRunUpdateCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   run: OrchestrationImplementationRun,
+  expectedStageExecutionTransition: Schema.optionalKey(
+    Schema.Struct({
+      target: WorkflowStageTarget,
+      generation: NonNegativeInt,
+      executionId: TrimmedNonEmptyString,
+      priorState: WorkflowStageExecutionState,
+      priorLeaseExpiresAt: Schema.NullOr(IsoDateTime),
+    }),
+  ),
   expectedCodeReviewClaim: Schema.optionalKey(
     Schema.Struct({
       attemptCount: NonNegativeInt,
@@ -3984,6 +4008,39 @@ export type ProjectionPendingApprovalDecision = typeof ProjectionPendingApproval
 
 export const DispatchResult = Schema.Struct({
   sequence: NonNegativeInt,
+  outcome: Schema.optionalKey(
+    Schema.Union([
+      Schema.Struct({ type: Schema.Literal("accepted") }),
+      Schema.Struct({
+        type: Schema.Literal("started"),
+        target: WorkflowStageTarget,
+        generation: NonNegativeInt,
+        executionId: TrimmedNonEmptyString,
+        queuedStage: WorkflowStageExecution,
+      }),
+      Schema.Struct({
+        type: Schema.Literal("redirected"),
+        requestedTarget: WorkflowStageTarget,
+        effectiveTarget: WorkflowStageTarget,
+        reason: TrimmedNonEmptyString,
+      }),
+      Schema.Struct({
+        type: Schema.Literal("rejected"),
+        reasonCode: Schema.Literals([
+          "paused-workflow",
+          "live-stage-owner",
+          "stale-generation",
+          "wrong-stage",
+          "missing-target",
+          "dependency-block",
+          "server-drain",
+        ]),
+        detail: TrimmedNonEmptyString,
+        currentState: Schema.optionalKey(Schema.String),
+        allowedNextAction: Schema.optionalKey(Schema.String),
+      }),
+    ]),
+  ),
 });
 export type DispatchResult = typeof DispatchResult.Type;
 

@@ -22,6 +22,7 @@ import {
   type OrchestrationImplementationRun,
   type OrchestrationReadModel,
   type OrchestrationThread,
+  type TurnId,
   WORKFLOW_AUTOMATION_RUNTIME_MODE,
 } from "@t3tools/contracts";
 import {
@@ -68,6 +69,7 @@ import {
   type WorkflowNudgeThread,
 } from "../workflowNudge.ts";
 import { isWorkflowThreadPaused } from "../workflowPause.ts";
+import { parseWorkflowDirectiveFromMarkdown } from "../workflowDirectives.ts";
 import {
   findWorkflowStepModels,
   findWorkflowStepReviewParts,
@@ -324,6 +326,41 @@ export function appReviewPhaseThreadState(input: {
 export function terminalReviewAction(review: AppReviewRecord): "passed" | "planning" {
   if (review.status === "passed" && review.document.verdict === "passed") return "passed";
   return "planning";
+}
+
+export function appReviewRepairPlanAction(
+  rawTickets: unknown,
+): "missing" | "finish-without-fixing" | "validate-tickets" {
+  if (!Array.isArray(rawTickets)) return "missing";
+  return rawTickets.length === 0 ? "finish-without-fixing" : "validate-tickets";
+}
+
+export function emptyAppReviewRepairPlanTurnId(input: {
+  readonly runId: string;
+  readonly cycleNumber: number;
+  readonly latestTurnId: TurnId | null;
+  readonly messages: ReadonlyArray<{
+    readonly role: string;
+    readonly turnId: TurnId | null;
+    readonly text: string;
+  }>;
+}): TurnId | null {
+  if (input.latestTurnId === null) return null;
+  const message = input.messages
+    .toReversed()
+    .find((candidate) => candidate.role === "assistant" && candidate.turnId === input.latestTurnId);
+  if (message === undefined) return null;
+  const result = parseWorkflowDirectiveFromMarkdown(message.text);
+  if (
+    result.kind !== "parsed" ||
+    result.directive.type !== "app-review-repair-tickets" ||
+    result.directive.runId !== input.runId ||
+    result.directive.cycleNumber !== input.cycleNumber ||
+    result.directive.tickets.length !== 0
+  ) {
+    return null;
+  }
+  return input.latestTurnId;
 }
 
 export function successfulFixAction(
@@ -1987,45 +2024,45 @@ const make = Effect.gen(function* () {
   });
 
   /**
-   * End a review-only run once its repair tickets are written.
+   * End a cycle that has no repair to run.
    *
-   * The cycle did everything it was launched to do, so it completes rather
-   * than failing; the run itself ends `exhausted` because the findings it
-   * recorded are still unresolved and no cycle remains to verify a repair.
-   * That is the same terminal a one-cycle run reaches today after its fix.
+   * Review-only runs stop after writing their tickets. A valid empty ticket
+   * result also stops here because gap analysis found no in-scope repair. The
+   * cycle completed its contract, while the non-passing review remains visible
+   * as an exhausted run instead of an automation failure.
    */
-  const finishReviewedWithoutFixing = Effect.fn(
-    "AppReviewWorkflowReactor.finishReviewedWithoutFixing",
-  )(function* (input: {
-    readonly run: AppReviewWorkflowRun;
-    readonly repairTickets: ReadonlyArray<AppReviewWorkflowRepairTicket>;
-    readonly plannerTurnId: AppReviewWorkflowCycle["plannerTurnId"];
-    readonly occurredAt: string;
-  }) {
-    const cycle = input.run.cycles.at(-1);
-    if (cycle === undefined) return;
-    const reviewedRun: AppReviewWorkflowRun = {
-      ...input.run,
-      activePhase: null,
-      activeThreadId: null,
-      cycles: input.run.cycles.map((entry) =>
-        entry.cycleNumber === cycle.cycleNumber
-          ? {
-              ...entry,
-              status: "completed",
-              planId: `app-review-repair-tickets:${input.run.id}:${cycle.cycleNumber}`,
-              plannerTurnId: input.plannerTurnId,
-              ticketingTurnId: input.plannerTurnId,
-              repairTickets: input.repairTickets,
-              completedAt: input.occurredAt,
-            }
-          : entry,
-      ),
-      updatedAt: input.occurredAt,
-    };
-    yield* updateRun(reviewedRun);
-    yield* finishExhausted(reviewedRun, input.occurredAt);
-  });
+  const finishWithoutFixing = Effect.fn("AppReviewWorkflowReactor.finishWithoutFixing")(
+    function* (input: {
+      readonly run: AppReviewWorkflowRun;
+      readonly repairTickets: ReadonlyArray<AppReviewWorkflowRepairTicket>;
+      readonly plannerTurnId: AppReviewWorkflowCycle["plannerTurnId"];
+      readonly occurredAt: string;
+    }) {
+      const cycle = input.run.cycles.at(-1);
+      if (cycle === undefined) return;
+      const reviewedRun: AppReviewWorkflowRun = {
+        ...input.run,
+        activePhase: null,
+        activeThreadId: null,
+        cycles: input.run.cycles.map((entry) =>
+          entry.cycleNumber === cycle.cycleNumber
+            ? {
+                ...entry,
+                status: "completed",
+                planId: `app-review-repair-tickets:${input.run.id}:${cycle.cycleNumber}`,
+                plannerTurnId: input.plannerTurnId,
+                ticketingTurnId: input.plannerTurnId,
+                repairTickets: input.repairTickets,
+                completedAt: input.occurredAt,
+              }
+            : entry,
+        ),
+        updatedAt: input.occurredAt,
+      };
+      yield* updateRun(reviewedRun);
+      yield* finishExhausted(reviewedRun, input.occurredAt);
+    },
+  );
 
   const reconcilePlanning = Effect.fn("AppReviewWorkflowReactor.reconcilePlanning")(function* (
     run: AppReviewWorkflowRun,
@@ -2078,7 +2115,8 @@ const make = Effect.gen(function* () {
       ticketActivity !== undefined && Predicate.isObject(ticketActivity.payload)
         ? ticketActivity.payload["tickets"]
         : undefined;
-    if (!Array.isArray(rawTickets) || rawTickets.length === 0) {
+    const planAction = appReviewRepairPlanAction(rawTickets);
+    if (planAction === "missing") {
       yield* failCycle({
         run,
         reason: "plan-missing",
@@ -2087,6 +2125,16 @@ const make = Effect.gen(function* () {
       });
       return;
     }
+    if (planAction === "finish-without-fixing") {
+      yield* finishWithoutFixing({
+        run,
+        repairTickets: [],
+        plannerTurnId: turn.turnId,
+        occurredAt,
+      });
+      return;
+    }
+    if (!Array.isArray(rawTickets)) return;
     const repairTickets = rawTickets.filter(
       (ticket): ticket is AppReviewWorkflowRepairTicket =>
         Predicate.isObject(ticket) &&
@@ -2137,7 +2185,7 @@ const make = Effect.gen(function* () {
       return;
     }
     if (run.reviewOnly === true) {
-      yield* finishReviewedWithoutFixing({
+      yield* finishWithoutFixing({
         run,
         repairTickets,
         plannerTurnId: turn.turnId,
@@ -2598,8 +2646,7 @@ const make = Effect.gen(function* () {
           activity.payload["type"] === "app-review-repair-tickets" &&
           activity.payload["runId"] === run.id &&
           activity.payload["cycleNumber"] === cycle.cycleNumber &&
-          Array.isArray(activity.payload["tickets"]) &&
-          activity.payload["tickets"].length > 0,
+          Array.isArray(activity.payload["tickets"]),
       );
     }
     const result = parseFixResult(thread, run, cycle);
@@ -2642,6 +2689,40 @@ const make = Effect.gen(function* () {
       return false;
     const cycle = input.run.cycles.at(-1);
     if (cycle === undefined) return false;
+    const failure = input.run.failure ?? cycle.failure ?? null;
+    const rejectedEmptyPlanTurnId =
+      claim.phase === "planning" && failure?.reason === "plan-missing"
+        ? emptyAppReviewRepairPlanTurnId({
+            runId: input.run.id,
+            cycleNumber: cycle.cycleNumber,
+            latestTurnId: phaseThread.latestTurn?.turnId ?? null,
+            messages: phaseThread.messages,
+          })
+        : null;
+    if (rejectedEmptyPlanTurnId !== null && hasSettledCheckpoint(phaseThread)) {
+      const workspaceRevision = yield* computeWorkspaceRevision(target.cwd);
+      const reopened = reopenFailedAppReviewPhase({
+        run: input.run,
+        phase: "planning",
+        workspaceRevision,
+        occurredAt: input.occurredAt,
+        incrementRecoveryCount: false,
+        incrementReviewLaunchCount: false,
+      });
+      if (reopened === null) return false;
+      yield* updateRun(reopened);
+      yield* finishWithoutFixing({
+        run: reopened,
+        repairTickets: [],
+        plannerTurnId: rejectedEmptyPlanTurnId,
+        occurredAt: input.occurredAt,
+      });
+      yield* Effect.logInfo("App Review accepted a historical empty repair plan", {
+        runId: input.run.id,
+        threadId: claim.threadId,
+      });
+      return true;
+    }
     const replayableResult = phaseHasReplayableResult(
       input.run,
       cycle,

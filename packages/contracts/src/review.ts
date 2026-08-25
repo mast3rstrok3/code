@@ -11,6 +11,7 @@ import {
 } from "./baseSchemas.ts";
 import { GitCommandError } from "./git.ts";
 import { VcsError } from "./vcs.ts";
+import { WorkflowStageExecution } from "./workflowExecution.ts";
 
 export const AppReviewId = TrimmedNonEmptyString.pipe(Schema.brand("AppReviewId"));
 export type AppReviewId = typeof AppReviewId.Type;
@@ -224,6 +225,9 @@ export const AppReviewWorkflowRun = Schema.Struct({
   cycles: Schema.Array(AppReviewWorkflowCycle),
   activePhase: Schema.NullOr(AppReviewWorkflowPhase),
   activeThreadId: Schema.NullOr(ThreadId),
+  phaseExecution: Schema.NullOr(WorkflowStageExecution).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   workspaceRevision: AppReviewWorkflowWorkspaceRevision,
   finalHeadSha: Schema.NullOr(TrimmedNonEmptyString),
   outcome: Schema.NullOr(AppReviewWorkflowOutcome),

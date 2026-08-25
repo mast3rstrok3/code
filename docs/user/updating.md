@@ -15,10 +15,13 @@ update the server, and the version difference remains visible in Connections.
 
 ## Before You Update
 
-Let active agent work and terminal commands finish first. Updating restarts the server, so the
-connection will disappear briefly and work that is still running may be interrupted.
+An update asks the server to drain workflow work before restart. The server stops starting new
+stages, keeps accepted work queued, and gives active turns and checkpoints up to 90 seconds to
+finish. The app shows the pending restart and its deadline. A forced update skips the remaining
+wait.
 
-The update does not remove saved threads, settings, or project files.
+The update does not remove saved threads, settings, project files, branches, worktrees, or
+checkpoints. Interrupted stages resume in the same logical thread and generation after reconnect.
 
 ## Choose the Action You See
 
@@ -62,6 +65,10 @@ commands.
 Keep the web or desktop app open while the server restarts. The update completes only after the
 service launcher reports that exact update committed and the replacement server is ready to accept
 commands. A rollback is reported immediately instead of waiting for a generic reconnect timeout.
+
+Planned restart recovery clears old provider and crash recovery counters. A parked provider limit
+is tried immediately after startup. This recovery does not use workflow launch, review, repair, or
+validation budgets.
 
 If a step fails:
 

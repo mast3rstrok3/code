@@ -30,7 +30,9 @@ import {
 
 const HANDOFF_DELAY_MS = 2_000;
 const PREPARED_TIMEOUT_MS = 120_000;
-const TERMINATE_GRACE_MS = 5_000;
+// The child drains workflow turns for up to 90 seconds before its Effect scope
+// closes. Keep a small launcher margin before the force signal.
+const TERMINATE_GRACE_MS = 95_000;
 
 type TerminalStatus = "committed" | "rolled-back" | "failed";
 type ChildRole = "active" | "trial";

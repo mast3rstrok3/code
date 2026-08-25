@@ -1,6 +1,5 @@
 import {
   CommandId,
-  AppReviewId,
   EventId,
   MessageId,
   type ModelSelection,
@@ -13,6 +12,9 @@ import {
   type ProviderSession,
   type ThreadId,
   TurnId,
+  type WorkflowCanonicalNextAction,
+  type WorkflowFailureCategory,
+  type WorkflowStageExecution,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
@@ -55,12 +57,17 @@ import {
 } from "../workflowNudge.ts";
 import { isWorkflowThreadPaused } from "../workflowPause.ts";
 import { resolveWorkflowRecoveryBackupSelection } from "../workflowSubagents.ts";
+import {
+  normalizeAppReviewPhaseExecution,
+  normalizeImplementationRunExecutions,
+} from "../workflowStageExecutions.ts";
 
 const DEFAULT_SWEEP_INTERVAL_MS = 60 * 1000;
 const DEFAULT_GRACE_MS = 60 * 1000;
 const DEFAULT_STARTING_PROVIDER_LAUNCH_GRACE_MS = 5 * 60 * 1000;
 const DEFAULT_CONFIRM_DELAY_MS = 15 * 1000;
 const DEFAULT_MAX_RESUME_ATTEMPTS = 2;
+const RATE_LIMIT_PARK_MS = 5 * 60 * 60 * 1_000;
 
 /** The two App Review phase skills, mirrored from the App Review reactor. */
 const APP_REVIEW_TO_TICKETS_SKILL_ID = "matt-pocock.to-tickets";
@@ -367,6 +374,26 @@ function startupRecoveryTurnId(threadId: ThreadId): TurnId {
   return TurnId.make(`turn-stale-startup-recovery-${threadId}`);
 }
 
+export function resolveImplementationCodeReviewOwner(
+  runs: OrchestrationReadModel["implementationRuns"],
+  thread: Pick<OrchestrationThread, "id" | "parentThreadId">,
+) {
+  for (const run of runs) {
+    const ticket = run.ticketStates.find(
+      (state) => state.status === "code-reviewing" && state.codeReviewThreadId === thread.id,
+    );
+    if (ticket !== undefined) return { run, ticketId: ticket.ticketId };
+    if (
+      run.orchestratorThreadId === thread.parentThreadId &&
+      run.status === "code-reviewing" &&
+      run.activeCodeReviewThreadId === thread.id
+    ) {
+      return { run, ticketId: null };
+    }
+  }
+  return null;
+}
+
 /**
  * Where a resumed turn should restart, per role. Doubles as the guard shared by
  * resume, nudge, budget-fail, and the safety net: a null target means the
@@ -418,12 +445,9 @@ function resolveResumeTarget(
       };
     }
     case "implementation-code-reviewer": {
-      const run = readModel.implementationRuns.find(
-        (candidate) =>
-          candidate.orchestratorThreadId === thread.parentThreadId &&
-          candidate.status === "code-reviewing",
-      );
-      if (run === undefined) return null;
+      if (resolveImplementationCodeReviewOwner(readModel.implementationRuns, thread) === null) {
+        return null;
+      }
       return {
         workflowPromptId: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
         interactionMode: "implementation-workflow",
@@ -662,21 +686,133 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
       },
     );
 
-    /**
-     * Synthesize the failure directive the ImplementationWorkflowReactor
-     * listens for, so a dead workflow-role turn flips its run to
-     * `needs-human-attention` instead of hanging forever. Roles without a
-     * failure directive (planning/product/batch children) settle only.
-     */
+    const stageFailure = (input: {
+      readonly recovery: ProviderFailureRecovery | null;
+      readonly detail: string;
+      readonly failedAt: string;
+    }): {
+      readonly category: WorkflowFailureCategory;
+      readonly nextAction: WorkflowCanonicalNextAction;
+      readonly detail: string;
+      readonly failedAt: string;
+    } => {
+      switch (input.recovery?.reason) {
+        case "authentication":
+          return { ...input, category: "provider-terminal", nextAction: "fix-authentication" };
+        case "configuration":
+          return { ...input, category: "provider-terminal", nextAction: "fix-configuration" };
+        case "rate-limit":
+          return { ...input, category: "provider-rate-limit", nextAction: "wait-for-retry" };
+        case "overloaded":
+        case "transport":
+          return { ...input, category: "provider-transport", nextAction: "rerun-stage" };
+        case "provider":
+        case "unknown":
+        case undefined:
+          return { ...input, category: "provider-terminal", nextAction: "rerun-stage" };
+      }
+    };
+
+    const haltExecution = (
+      execution: WorkflowStageExecution,
+      failure: ReturnType<typeof stageFailure>,
+    ): WorkflowStageExecution => ({
+      ...execution,
+      state: "halted",
+      leaseExpiresAt: null,
+      lastProgressAt: failure.failedAt,
+      failure,
+      updatedAt: failure.failedAt,
+    });
+
+    /** Persist provider exhaustion on the stage that owns the turn. */
     const propagateWorkflowFailure = Effect.fn("StaleTurnReconciler.propagateWorkflowFailure")(
       function* (input: {
         readonly readModel: OrchestrationReadModel;
         readonly thread: OrchestrationThread;
         readonly pinnedTurnId: TurnId | null;
         readonly createdAt: string;
+        readonly recovery?: ProviderFailureRecovery;
+        readonly detail?: string;
       }) {
         const { readModel, thread, pinnedTurnId, createdAt } = input;
         if (pinnedTurnId === null) return;
+
+        const failure = stageFailure({
+          recovery: input.recovery ?? null,
+          detail: input.detail ?? WORKFLOW_INTERRUPTION_ERROR_MESSAGE,
+          failedAt: createdAt,
+        });
+
+        const updateImplementationExecution = (
+          runCandidate: OrchestrationReadModel["implementationRuns"][number] | undefined,
+          select: (run: OrchestrationReadModel["implementationRuns"][number]) =>
+            | { readonly scope: "run"; readonly execution: WorkflowStageExecution }
+            | {
+                readonly scope: "ticket";
+                readonly ticketId: string;
+                readonly execution: WorkflowStageExecution;
+              }
+            | null,
+        ) =>
+          Effect.gen(function* () {
+            if (runCandidate === undefined) return;
+            const run = normalizeImplementationRunExecutions(runCandidate);
+            const selected = select(run);
+            if (selected === null) return;
+            const halted = haltExecution(selected.execution, failure);
+            const nextRun =
+              selected.scope === "run"
+                ? {
+                    ...run,
+                    stageExecutions: run.stageExecutions.map((execution) =>
+                      execution.executionId === halted.executionId ? halted : execution,
+                    ),
+                    updatedAt: createdAt,
+                  }
+                : {
+                    ...run,
+                    ticketStates: run.ticketStates.map((ticket) =>
+                      ticket.ticketId === selected.ticketId
+                        ? {
+                            ...ticket,
+                            stageExecutions: ticket.stageExecutions.map((execution) =>
+                              execution.executionId === halted.executionId ? halted : execution,
+                            ),
+                            updatedAt: createdAt,
+                          }
+                        : ticket,
+                    ),
+                    updatedAt: createdAt,
+                  };
+            yield* orchestrationEngine.dispatch({
+              type: "thread.implementation-run.update",
+              commandId: yield* staleTurnCommandId(
+                `halt-stage:${halted.executionId}`,
+                thread.id,
+                pinnedTurnId,
+              ),
+              threadId: run.orchestratorThreadId,
+              run: nextRun,
+              expectedStageExecutionTransition: {
+                target: selected.execution.target,
+                generation: selected.execution.generation,
+                executionId: selected.execution.executionId,
+                priorState: selected.execution.state,
+                priorLeaseExpiresAt: selected.execution.leaseExpiresAt,
+              },
+              createdAt,
+            });
+          });
+
+        const activeExecution = (executions: ReadonlyArray<WorkflowStageExecution>) =>
+          executions.find(
+            (execution) =>
+              execution.state === "running" ||
+              execution.state === "starting" ||
+              execution.state === "reconciling" ||
+              execution.state === "retry-wait",
+          ) ?? null;
 
         switch (thread.workflowRole) {
           case "fast-feature-implementer": {
@@ -684,23 +820,11 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
               (candidate) =>
                 candidate.artifactSource === "proposed-plan" &&
                 candidate.orchestratorThreadId === thread.id &&
-                candidate.status === "running",
+                candidate.orchestratorThreadId === thread.id,
             );
-            if (run === undefined) return;
-            yield* appendFailureActivity({
-              threadId: thread.id,
-              pinnedTurnId,
-              tag: "fast-build-result",
-              kind: "implementation-fast-build-result",
-              summary: "Fast feature Build blocked",
-              payload: {
-                type: "implementation-fast-build-result",
-                runId: run.id,
-                status: "blocked",
-                validations: [],
-                notesMarkdown: WORKFLOW_INTERRUPTION_ERROR_MESSAGE,
-              },
-              createdAt,
+            yield* updateImplementationExecution(run, (current) => {
+              const execution = activeExecution(current.stageExecutions);
+              return execution === null ? null : { scope: "run", execution };
             });
             return;
           }
@@ -711,27 +835,16 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
             const ticketState = run?.ticketStates.find(
               (state) => state.workerThreadId === thread.id,
             );
-            if (run === undefined || ticketState === undefined) return;
-            if (ticketState.status !== "running") return;
-            yield* appendFailureActivity({
-              threadId: thread.id,
-              pinnedTurnId,
-              tag: "worker-result",
-              kind: "implementation-worker-result",
-              summary: `Worker ${ticketState.ticketId} failed`,
-              payload: {
-                type: "implementation-worker-result",
-                status: "failed",
-                ticketId: ticketState.ticketId,
-                workerThreadId: thread.id,
-                branch: ticketState.branch ?? "unknown",
-                worktreePath: ticketState.worktreePath ?? "unknown",
-                validations: [],
-                notesMarkdown: WORKFLOW_INTERRUPTION_ERROR_MESSAGE,
-                reportedAt: createdAt,
-                commitSha: null,
-              },
-              createdAt,
+            yield* updateImplementationExecution(run, (current) => {
+              if (ticketState === undefined) return null;
+              const ticket = current.ticketStates.find(
+                (candidate) => candidate.ticketId === ticketState.ticketId,
+              );
+              if (ticket === undefined) return null;
+              const execution = activeExecution(ticket.stageExecutions);
+              return execution === null
+                ? null
+                : { scope: "ticket", ticketId: ticket.ticketId, execution };
             });
             return;
           }
@@ -741,21 +854,9 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
                 candidate.orchestratorThreadId === thread.parentThreadId &&
                 candidate.status === "validating",
             );
-            if (run === undefined) return;
-            yield* appendFailureActivity({
-              threadId: thread.id,
-              pinnedTurnId,
-              tag: "merge-gate-result",
-              kind: "implementation-merge-gate-result",
-              summary: "Merge gate failed",
-              payload: {
-                type: "implementation-merge-gate-result",
-                runId: run.id,
-                status: "failed",
-                validations: [],
-                summaryMarkdown: WORKFLOW_INTERRUPTION_ERROR_MESSAGE,
-              },
-              createdAt,
+            yield* updateImplementationExecution(run, (current) => {
+              const execution = activeExecution(current.stageExecutions);
+              return execution === null ? null : { scope: "run", execution };
             });
             return;
           }
@@ -765,68 +866,54 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
                 candidate.orchestratorThreadId === thread.parentThreadId &&
                 (candidate.status === "fixing" || candidate.status === "code-review-fixing"),
             );
-            if (run === undefined) return;
-            yield* appendFailureActivity({
-              threadId: thread.id,
-              pinnedTurnId,
-              tag: "fix-result",
-              kind: "implementation-fix-result",
-              summary: "Implementation fix failed",
-              payload: {
-                type: "implementation-fix-result",
-                runId: run.id,
-                status: "failed",
-                validations: [],
-                notesMarkdown: WORKFLOW_INTERRUPTION_ERROR_MESSAGE,
-              },
-              createdAt,
+            yield* updateImplementationExecution(run, (current) => {
+              const execution = activeExecution(current.stageExecutions);
+              return execution === null ? null : { scope: "run", execution };
             });
             return;
           }
           case "implementation-code-reviewer": {
-            const run = readModel.implementationRuns.find(
-              (candidate) =>
-                candidate.orchestratorThreadId === thread.parentThreadId &&
-                candidate.status === "code-reviewing",
+            const owner = resolveImplementationCodeReviewOwner(
+              readModel.implementationRuns,
+              thread,
             );
-            if (run === undefined) return;
-            yield* appendFailureActivity({
-              threadId: thread.id,
-              pinnedTurnId,
-              tag: "code-review-result",
-              kind: "implementation-code-review-result",
-              summary: "Implementation code review blocked",
-              payload: {
-                type: "implementation-code-review-result",
-                runId: run.id,
-                status: "blocked",
-                validations: [],
-                reportMarkdown: WORKFLOW_INTERRUPTION_ERROR_MESSAGE,
-              },
-              createdAt,
+            yield* updateImplementationExecution(owner?.run, (current) => {
+              if (owner === null) return null;
+              if (owner.ticketId === null) {
+                const execution = activeExecution(current.stageExecutions);
+                return execution === null ? null : { scope: "run", execution };
+              }
+              const ticket = current.ticketStates.find(
+                (candidate) => candidate.ticketId === owner.ticketId,
+              );
+              if (ticket === undefined) return null;
+              const execution = activeExecution(ticket.stageExecutions);
+              return execution === null
+                ? null
+                : { scope: "ticket", ticketId: ticket.ticketId, execution };
             });
             return;
           }
           case "implementation-qa-reviewer": {
-            const run = readModel.implementationRuns.find(
-              (candidate) =>
-                candidate.orchestratorThreadId === thread.parentThreadId &&
-                candidate.status === "qa-reviewing" &&
-                candidate.activeAppReviewThreadId === thread.id,
+            const appReviewRun = (readModel.appReviewWorkflowRuns ?? []).find(
+              (candidate) => candidate.activeThreadId === thread.id,
             );
-            const reviewId = run?.appReviewIds.at(-1);
-            if (run === undefined || reviewId === undefined) return;
+            if (appReviewRun === undefined) return;
+            const run = normalizeAppReviewPhaseExecution(appReviewRun);
+            if (run.phaseExecution === null) return;
             yield* orchestrationEngine.dispatch({
-              type: "thread.app-review.update",
+              type: "thread.app-review-workflow.update",
               commandId: yield* staleTurnCommandId(
-                "browser-review-runtime-failure",
+                `halt-app-review-phase:${run.phaseExecution.executionId}`,
                 thread.id,
                 pinnedTurnId,
               ),
-              threadId: run.orchestratorThreadId,
-              reviewId: AppReviewId.make(reviewId),
-              status: "failed",
-              updatedAt: createdAt,
+              threadId: run.controllerThreadId,
+              run: {
+                ...run,
+                phaseExecution: haltExecution(run.phaseExecution, failure),
+                updatedAt: createdAt,
+              },
               createdAt,
             });
             return;
@@ -1166,11 +1253,34 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
                 DateTime.makeUnsafe(recoveryStartedAtMs + WORKFLOW_RECOVERY_WINDOW_MS),
               ));
         const recoveryDeadlineAtMs = Date.parse(recoveryDeadlineAt);
+        const rateLimited = failure.recovery.reason === "rate-limit";
+        const requiresConfiguration =
+          failure.recovery.reason === "authentication" ||
+          failure.recovery.reason === "configuration";
+        if (requiresConfiguration) {
+          yield* propagateWorkflowFailure({
+            readModel,
+            thread,
+            pinnedTurnId: blockedTurnId,
+            createdAt: updatedAt,
+            recovery: failure.recovery,
+            detail: thread.session?.lastError ?? WORKFLOW_INTERRUPTION_ERROR_MESSAGE,
+          });
+          yield* settleSessionAndBinding({
+            thread,
+            pinnedTurnId: blockedTurnId,
+            updatedAt,
+            lastError: thread.session?.lastError ?? WORKFLOW_INTERRUPTION_ERROR_MESSAGE,
+            tag: "provider-configuration",
+          });
+          return true;
+        }
         const exhausted =
-          priorAttempts >= nudgeAttemptLimit ||
-          Number.isNaN(recoveryStartedAtMs) ||
-          Number.isNaN(recoveryDeadlineAtMs) ||
-          input.nowMs >= recoveryDeadlineAtMs;
+          !rateLimited &&
+          (priorAttempts >= nudgeAttemptLimit ||
+            Number.isNaN(recoveryStartedAtMs) ||
+            Number.isNaN(recoveryDeadlineAtMs) ||
+            input.nowMs >= recoveryDeadlineAtMs);
         if (exhausted) {
           yield* orchestrationEngine.dispatch({
             type: "thread.activity.append",
@@ -1200,6 +1310,8 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
             thread,
             pinnedTurnId: blockedTurnId,
             createdAt: updatedAt,
+            recovery: failure.recovery,
+            detail: thread.session?.lastError ?? WORKFLOW_INTERRUPTION_ERROR_MESSAGE,
           });
           yield* settleSessionAndBinding({
             thread,
@@ -1222,22 +1334,31 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
         const scheduleBaseMs = Date.parse(lastNudge?.createdAt ?? failure.failedAt);
         const normalDueAfterMs =
           scheduleBaseMs + normalDelayMs + workflowRecoveryJitterMs(thread.id, priorAttempts > 0);
-        const retryAtMs = Date.parse(failure.recovery.retryAt ?? "");
-        const dueAfterMs = Number.isNaN(retryAtMs)
-          ? normalDueAfterMs
-          : Math.max(normalDueAfterMs, retryAtMs);
-        if (!Number.isNaN(dueAfterMs) && input.nowMs < dueAfterMs) return false;
-
         const attempt = priorAttempts + 1;
         const primaryModelSelection = recoveryState.primaryModelSelection;
-        const backup =
-          attempt === 1
-            ? { modelSelection: null, skippedReason: null }
-            : yield* resolveRecoveryBackup({
-                readModel,
-                thread: detail,
-                primaryModelSelection,
-              });
+        const usePrimary = rateLimited ? attempt % 2 === 1 : attempt === 1;
+        const backup = usePrimary
+          ? { modelSelection: null, skippedReason: null }
+          : yield* resolveRecoveryBackup({
+              readModel,
+              thread: detail,
+              primaryModelSelection,
+            });
+        const retryAtMs = Date.parse(failure.recovery.retryAt ?? "");
+        const startsFreshRateLimitEpisode =
+          rateLimited && priorAttempts >= 2 && priorAttempts % 2 === 0;
+        const missingFallbackMustPark =
+          rateLimited && !usePrimary && backup.modelSelection === null;
+        const dueAfterMs =
+          startsFreshRateLimitEpisode || missingFallbackMustPark
+            ? Number.isNaN(retryAtMs)
+              ? Date.parse(failure.failedAt) + RATE_LIMIT_PARK_MS
+              : retryAtMs
+            : Number.isNaN(retryAtMs)
+              ? normalDueAfterMs
+              : Math.max(normalDueAfterMs, retryAtMs);
+        if (!Number.isNaN(dueAfterMs) && input.nowMs < dueAfterMs) return false;
+
         const phase = backup.modelSelection === null ? "primary" : "backup";
         const modelSelection = backup.modelSelection ?? primaryModelSelection;
         const priorPayload = recoveryState.attempts.at(-1)?.payload;
