@@ -1189,7 +1189,7 @@ describe("ProductWorkflowReactor", () => {
     ),
   );
 
-  it.effect("keeps reviewing past the built-in five cycles when the budget asks for more", () =>
+  it.effect("clamps ticket review overrides to the five-cycle budget", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
@@ -1197,8 +1197,6 @@ describe("ProductWorkflowReactor", () => {
           const planningThread = yield* lockProductIntent(system);
           yield* seedProductSpecAndTickets(system, planningThread.id);
 
-          // Five failed cycles used to be the end of ticket review, no matter
-          // what: the decider refused a sixth.
           for (let index = 1; index <= 5; index += 1) {
             const beforeVerdict = yield* system.query.getSnapshot();
             const workflow = beforeVerdict.threads.find(
@@ -1230,8 +1228,9 @@ describe("ProductWorkflowReactor", () => {
           const workflow = snapshot.threads.find(
             (entry) => entry.id === planningThread.id,
           )?.planningWorkflow;
-          expect(workflow?.stage).toBe("ticket-review");
-          expect(workflow?.activeReview?.cycleNumber).toBe(6);
+          expect(workflow?.stage).toBe("completed-with-warnings");
+          expect(workflow?.reviewCycles).toHaveLength(5);
+          expect(workflow?.activeReview).toBeNull();
         }),
       {
         serverSettings: {

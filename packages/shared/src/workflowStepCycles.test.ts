@@ -12,6 +12,11 @@ const TICKET_APP_REVIEW = {
   workflowPromptId: "implementation.browser-app-review.codex",
   stepWorkflowPromptId: "implementation.tdd.codex",
 };
+const FINAL_CODE_REVIEW = { workflowPromptId: "implementation.code-review.codex" };
+const TICKET_CODE_REVIEW = {
+  workflowPromptId: "implementation.code-review.codex",
+  stepWorkflowPromptId: "implementation.tdd.codex",
+};
 
 it("falls back to the step's own default when nothing is set", () => {
   expect(resolveWorkflowStepCycleBudget({ key: APP_REVIEW })).toBe(10);
@@ -20,6 +25,26 @@ it("falls back to the step's own default when nothing is set", () => {
       key: { workflowPromptId: "planning.ticket-reviewer.codex" },
     }),
   ).toBe(5);
+  expect(resolveWorkflowStepCycleBudget({ key: FINAL_CODE_REVIEW })).toBe(5);
+  expect(resolveWorkflowStepCycleBudget({ key: TICKET_CODE_REVIEW })).toBe(5);
+});
+
+it("bounds both Code Review budgets and honors the run before Settings", () => {
+  for (const key of [FINAL_CODE_REVIEW, TICKET_CODE_REVIEW]) {
+    expect(
+      resolveWorkflowStepCycleBudget({
+        key,
+        threadOverrides: [{ ...key, maxCycles: 2 }],
+        settingsOverrides: [{ ...key, maxCycles: 1 }],
+      }),
+    ).toBe(2);
+    expect(
+      resolveWorkflowStepCycleBudget({
+        key,
+        settingsOverrides: [{ ...key, maxCycles: 99 }],
+      }),
+    ).toBe(5);
+  }
 });
 
 it("prefers the run's own budget over the standing default", () => {

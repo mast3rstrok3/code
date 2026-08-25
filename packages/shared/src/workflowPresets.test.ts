@@ -71,9 +71,33 @@ describe("workflow presets", () => {
       (definition) => definition.id === "planning",
     );
     expect(engineeringWorkflow?.helpSteps.slice(-3).map((step) => step.label)).toEqual([
-      "Implementation phase · Final Code Review",
-      "Implementation phase · Create pull request",
-      "Implementation phase · Babysit pull request",
+      "Final Code Review",
+      "Create pull request",
+      "Babysit pull request",
+    ]);
+    expect(engineeringWorkflow?.helpSteps.at(-3)?.note).toContain("up to five cycles");
+    const ticketWave = engineeringWorkflow?.helpSteps.find((step) =>
+      step.label.includes("Execute ticket waves"),
+    );
+    expect(
+      ticketWave?.subSteps?.find((step) => step.label === "Ticket Code Review")?.note,
+    ).toContain("up to five cycles");
+  });
+
+  it("shows the eleven Engineering Workflow phases in order", () => {
+    const steps = WORKFLOW_PRESET_DEFINITION_BY_ID.planning.helpSteps;
+    expect(steps.map((step) => step.label)).toEqual([
+      "Prepare shared worktree and App Dev Stack",
+      "Grill with Docs",
+      "Spec authoring",
+      "Ticket authoring",
+      "Ticket review and revision",
+      "Execute ticket waves",
+      "Merge ticket branches",
+      "Final App Review",
+      "Final Code Review",
+      "Create pull request",
+      "Babysit pull request",
     ]);
   });
 
@@ -82,9 +106,9 @@ describe("workflow presets", () => {
       (definition) => definition.id === "planning",
     );
     expect(engineeringWorkflow?.helpSteps.slice(-5, -2).map((step) => step.label)).toEqual([
-      "Implementation phase · Merge ticket branches",
-      "Implementation phase · App Review",
-      "Implementation phase · Final Code Review",
+      "Merge ticket branches",
+      "Final App Review",
+      "Final Code Review",
     ]);
     expect(engineeringWorkflow?.helpSteps.at(-4)?.note).toContain("ten review");
   });
@@ -103,10 +127,8 @@ describe("workflow presets", () => {
     const planning = WORKFLOW_PRESET_DEFINITIONS.find((definition) => definition.id === "planning");
     expect(planning?.label).toBe("Engineering Workflow");
     expect(planning?.helpSteps[1]?.label).toContain("Grill with Docs");
-    expect(planning?.helpSteps.some((step) => step.label.startsWith("Planning phase"))).toBe(true);
-    expect(planning?.helpSteps.some((step) => step.label.startsWith("Implementation phase"))).toBe(
-      true,
-    );
+    expect(planning?.helpSteps.map((step) => step.label)).toContain("Spec authoring");
+    expect(planning?.helpSteps.map((step) => step.label)).toContain("Execute ticket waves");
     expect(planning?.helpSteps.at(-2)?.label).toContain("pull request");
   });
 

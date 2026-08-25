@@ -1,4 +1,10 @@
-import type { OrchestrationPlanningTicket } from "@t3tools/contracts";
+import {
+  AppReviewWorkflowRunId,
+  ThreadId,
+  type AppReviewWorkflowRun,
+  type OrchestrationImplementationRun,
+  type OrchestrationPlanningTicket,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -18,6 +24,8 @@ import {
   resolveWorkflowTicketStatus,
   resolveWorkflowThreadTimeRange,
   resolveWorkflowThreadStatus,
+  resolveWorkflowCurrentPath,
+  workflowCurrentPathScrollTarget,
   selectWorkflowRootForThread,
   workflowNavigationIsAvailable,
   implementationRunCurrentStage,
@@ -61,6 +69,237 @@ describe("buildTicketWaves", () => {
       ["ticket-3"],
       ["ticket-4"],
     ]);
+  });
+});
+
+describe("resolveWorkflowCurrentPath", () => {
+  const steps: readonly WorkflowTimelineStep<TestThread>[] = [
+    {
+      id: "planning-ticket-review",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      label: "Planning phase · Ticket review and revision cycles",
+      skillId: "planning.ticket-reviewer.codex",
+      repeatsAsCycles: true,
+      usesRootThread: false,
+      entries: [],
+    },
+    {
+      id: "ticket-waves",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      label: "Implementation phase · Execute ticket waves",
+      skillId: "implementation.tdd.codex",
+      repeatsAsCycles: false,
+      usesRootThread: false,
+      entries: [],
+    },
+    {
+      id: "final-review",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      label: "Implementation phase · Final Code Review",
+      skillId: "implementation.code-review.codex",
+      repeatsAsCycles: true,
+      usesRootThread: false,
+      entries: [],
+    },
+    {
+      id: "publication",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      label: "Implementation phase · Create pull request",
+      skillId: null,
+      repeatsAsCycles: false,
+      usesRootThread: false,
+      entries: [],
+    },
+  ];
+  const ticketState = (
+    ticketId: string,
+    status: OrchestrationImplementationRun["ticketStates"][number]["status"],
+    overrides: Partial<OrchestrationImplementationRun["ticketStates"][number]> = {},
+  ) =>
+    ({
+      ticketId,
+      status,
+      workerThreadId: null,
+      appReviewWorkflowRunId: null,
+      codeReviewThreadId: null,
+      codeReviewPassCount: 0,
+      ...overrides,
+    }) as OrchestrationImplementationRun["ticketStates"][number];
+  const implementationRun = (
+    ticketStates: OrchestrationImplementationRun["ticketStates"],
+    overrides: Partial<OrchestrationImplementationRun> = {},
+  ) =>
+    ({
+      id: "run",
+      status: "running",
+      planningTicketIds: ticketStates.map((state) => state.ticketId),
+      ticketStates,
+      automationHalt: null,
+      retryableFailure: null,
+      finalCodeReviewPassCount: 0,
+      activeCodeReviewThreadId: null,
+      activeAppReviewThreadId: null,
+      activeValidatorThreadId: null,
+      activeChangeRequestBabysitterThreadId: null,
+      ...overrides,
+    }) as OrchestrationImplementationRun;
+  const resolve = (
+    run: OrchestrationImplementationRun,
+    appReviewWorkflowRuns: readonly AppReviewWorkflowRun[] = [],
+    threads: readonly TestThread[] = [],
+  ) =>
+    resolveWorkflowCurrentPath({
+      groupId: "workflow:run",
+      workflowLabel: "Implementation",
+      steps,
+      run,
+      appReviewWorkflowRuns,
+      tickets: [planningTicket("ticket-1", 0), planningTicket("ticket-2", 1)],
+      threads,
+      workflowPaused: false,
+      ticketCodeReviewBudget: 3,
+      finalCodeReviewBudget: 3,
+    });
+
+  it("prefers a blocked ticket over a running sibling and keeps wave order", () => {
+    const run = implementationRun(
+      [ticketState("ticket-1", "running"), ticketState("ticket-2", "failed")],
+      {
+        status: "needs-human-attention",
+        automationHalt: {
+          ticketId: "ticket-2",
+          stage: "implementation",
+          category: "structural-invariant",
+          detail: "wrong branch",
+          haltedAt: "2026-01-01T00:00:00.000Z",
+        },
+      },
+    );
+    const path = resolve(run);
+    expect(path.status).toBe("blocked");
+    expect(path.ticketId).toBe("ticket-2");
+    expect(path.activeTicketCount).toBe(1);
+  });
+
+  it("resolves a ticket's durable Implementation thread", () => {
+    const path = resolve(
+      implementationRun([
+        ticketState("ticket-1", "running", {
+          workerThreadId: ThreadId.make("implementation-thread"),
+        }),
+      ]),
+    );
+    expect(path.ticketStage).toBe("implementation");
+    expect(path.threadId).toBe("implementation-thread");
+  });
+
+  it.each([
+    ["review", "E2E and browser review"],
+    ["planning", "Gap analysis"],
+    ["fixing", "TDD repair"],
+  ] as const)("names App Review %s in the current cycle", (activePhase, phaseLabel) => {
+    const appReviewRun = {
+      id: "app-review-1",
+      cycleBudget: 10,
+      cyclesUsed: 2,
+      activePhase,
+      activeThreadId: `${activePhase}-thread`,
+      cycles: [{ cycleNumber: 2 }],
+    } as unknown as AppReviewWorkflowRun;
+    const path = resolve(
+      implementationRun([
+        ticketState("ticket-1", "app-reviewing", {
+          appReviewWorkflowRunId: appReviewRun.id,
+        }),
+      ]),
+      [appReviewRun],
+    );
+    expect(path.subtitle).toContain(`App Review · Cycle 2 · ${phaseLabel}`);
+    expect(path.threadId).toBe(`${activePhase}-thread`);
+  });
+
+  it("resolves the current ticket Code Review cycle", () => {
+    const path = resolve(
+      implementationRun([
+        ticketState("ticket-1", "code-reviewing", {
+          codeReviewPassCount: 1,
+          codeReviewThreadId: ThreadId.make("ticket-code-review-thread"),
+        }),
+      ]),
+    );
+    expect(path.ticketStage).toBe("code-review");
+    expect(path.cycleNumber).toBe(2);
+    expect(path.threadId).toBe("ticket-code-review-thread");
+  });
+
+  it("targets a durable cycle row before its phase thread exists", () => {
+    const path = resolve(
+      implementationRun([
+        ticketState("ticket-1", "app-reviewing", {
+          appReviewWorkflowRunId: AppReviewWorkflowRunId.make("app-review-1"),
+        }),
+      ]),
+      [
+        {
+          id: "app-review-1",
+          cycleBudget: 10,
+          cyclesUsed: 2,
+          activePhase: null,
+          activeThreadId: null,
+          cycles: [{ cycleNumber: 2 }],
+        } as unknown as AppReviewWorkflowRun,
+      ],
+    );
+    expect(workflowCurrentPathScrollTarget(path)).toBe("app-review-cycle:app-review-1:2");
+  });
+
+  it("resolves final Code Review from run state without a working thread", () => {
+    const path = resolve(
+      implementationRun([], {
+        status: "code-reviewing",
+        finalCodeReviewPassCount: 1,
+      }),
+    );
+    expect(path.stepId).toBe("final-review");
+    expect(path.cycleNumber).toBe(2);
+    expect(path.subtitle).toContain("Cycle 2");
+  });
+
+  it("keeps final validation under the final Code Review step", () => {
+    const path = resolve(
+      implementationRun([], {
+        status: "validating",
+        activeValidationKind: "final",
+        activeValidatorThreadId: ThreadId.make("validator-thread"),
+      }),
+    );
+    expect(path.stepId).toBe("final-review");
+    expect(path.subtitle).toContain("Final validation");
+    expect(path.threadId).toBe("validator-thread");
+  });
+
+  it("resolves pull-request publication without a working thread", () => {
+    const path = resolve(implementationRun([], { status: "publishing-change-request" }));
+    expect(path.stepId).toBe("publication");
+    expect(path.subtitle).toContain("Create pull request");
+  });
+
+  it("resolves Planning from its durable stage", () => {
+    const path = resolveWorkflowCurrentPath({
+      groupId: "workflow:planning",
+      workflowLabel: "Engineering Workflow",
+      steps,
+      run: null,
+      appReviewWorkflowRuns: [],
+      tickets: [],
+      threads: [],
+      planningStage: "ticket-review",
+      workflowPaused: false,
+      ticketCodeReviewBudget: 3,
+      finalCodeReviewBudget: 3,
+    });
+    expect(path.phase).toBe("Planning");
+    expect(path.stepId).toBe("planning-ticket-review");
   });
 });
 
@@ -247,14 +486,14 @@ describe("buildWorkflowViewModel", () => {
       workflow
         ? buildWorkflowSteps(workflow.groups[0]!, workflow.groups, workflow.root)
             .map((step) => step.label)
-            .filter((label) => label?.startsWith("Planning phase"))
+            .slice(0, 5)
         : [],
     ).toEqual([
-      "Planning phase · Prepare shared worktree and App Dev Stack",
-      "Planning phase · Grill with Docs",
-      "Planning phase · Spec authoring",
-      "Planning phase · Ticket authoring",
-      "Planning phase · Ticket review and revision cycles",
+      "Prepare shared worktree and App Dev Stack",
+      "Grill with Docs",
+      "Spec authoring",
+      "Ticket authoring",
+      "Ticket review and revision",
     ]);
     expect(workflowNavigationIsAvailable(workflow)).toBe(true);
     expect(workflowNavigationIsAvailable(ordinary)).toBe(false);
@@ -767,17 +1006,17 @@ describe("buildWorkflowViewModel", () => {
       : [];
 
     expect(steps.map((step) => step.label)).toEqual([
-      "Planning phase · Prepare shared worktree and App Dev Stack",
-      "Planning phase · Grill with Docs",
-      "Planning phase · Spec authoring",
-      "Planning phase · Ticket authoring",
-      "Planning phase · Ticket review and revision cycles",
-      "Implementation phase · Execute ticket waves",
-      "Implementation phase · Merge ticket branches",
-      "Implementation phase · App Review",
-      "Implementation phase · Final Code Review",
-      "Implementation phase · Create pull request",
-      "Implementation phase · Babysit pull request",
+      "Prepare shared worktree and App Dev Stack",
+      "Grill with Docs",
+      "Spec authoring",
+      "Ticket authoring",
+      "Ticket review and revision",
+      "Execute ticket waves",
+      "Merge ticket branches",
+      "Final App Review",
+      "Final Code Review",
+      "Create pull request",
+      "Babysit pull request",
     ]);
     expect(steps[5]?.entries.map((entry) => entry.id)).toEqual([
       "env:ticket-app-review",

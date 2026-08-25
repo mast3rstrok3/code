@@ -146,7 +146,7 @@ it("keeps App Review fixers in the implementation-only phase", () => {
   );
 });
 
-it("tells a replacement App Review fixer to continue inherited work", () => {
+it("tells a retried App Review fixer to continue inherited work", () => {
   const cycle = {
     ...reviewingRun().cycles[0]!,
     status: "fixing" as const,
@@ -157,7 +157,7 @@ it("tells a replacement App Review fixer to continue inherited work", () => {
 
   expect(prompt).toContain("A previous fixer worked in this same worktree");
   expect(prompt).toContain("Inspect Git status, the current diff, and recent commits");
-  expect(prompt).toContain("Do not discard inherited changes merely because this is a new thread");
+  expect(prompt).toContain("finish every ticket in this durable phase thread");
 });
 
 function run(overrides: Partial<AppReviewWorkflowRun> = {}): AppReviewWorkflowRun {
@@ -302,8 +302,7 @@ it("retries an infrastructure failure inside the current App Review cycle", () =
   expect(reviewingRun().cyclesUsed).toBe(1);
 });
 
-it("replaces only the reviewer thread when retrying a review phase", () => {
-  const oldReviewer = ThreadId.make("thread-reviewer");
+it("reuses the reviewer thread when retrying a review phase", () => {
   const planner = ThreadId.make("thread-old-planner");
   const fixer = ThreadId.make("thread-old-fixer");
   const failure = {
@@ -330,9 +329,6 @@ it("replaces only the reviewer thread when retrying a review phase", () => {
 
   const retried = retryReviewPhaseInCycle({
     cycle,
-    reviewId: AppReviewId.make("app-review-retry"),
-    reviewerThreadId: ThreadId.make("thread-reviewer-retry"),
-    supersededThreadIds: [oldReviewer],
     failure,
     workspaceRevision,
   });
@@ -341,7 +337,9 @@ it("replaces only the reviewer thread when retrying a review phase", () => {
   expect(retried.reviewLaunchCount).toBe(2);
   expect(retried.planningLaunchCount).toBe(0);
   expect(retried.fixingLaunchCount).toBe(0);
-  expect(retried.supersededThreadIds).toEqual([oldReviewer]);
+  expect(retried.reviewId).toBe(cycle.reviewId);
+  expect(retried.reviewerThreadId).toBe(cycle.reviewerThreadId);
+  expect(retried.supersededThreadIds).toEqual(cycle.supersededThreadIds);
   expect(retried.plannerThreadId).toBeNull();
   expect(retried.fixerThreadId).toBeNull();
   expect(retried.repairTickets).toEqual([]);

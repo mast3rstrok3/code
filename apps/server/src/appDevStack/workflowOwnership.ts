@@ -3,54 +3,101 @@ import type {
   AppDevStackListResult,
   OrchestrationReadModel,
 } from "@t3tools/contracts";
-const normalizeWorktreePath = (value: string) =>
+
+export const normalizeWorkflowWorktreePath = (value: string) =>
   value
     .trim()
     .replaceAll("\\", "/")
     .replace(/\/{2,}/gu, "/")
     .replace(/\/+$/u, "");
 
+type WorkflowConflict = NonNullable<AppDevStackListResult["workflowConflicts"]>[number];
+
+/** Report only ownership shapes that can stop or reuse the wrong stack. */
 export function appDevStackWorkflowConflicts(
   stacks: ReadonlyArray<AppDevStack>,
   readModel: OrchestrationReadModel,
 ): NonNullable<AppDevStackListResult["workflowConflicts"]> {
-  const groups = new Map<
-    string,
-    { stackIds: Set<string>; runIds: Set<string>; worktreePaths: Set<string> }
-  >();
-  const add = (workflowId: string, stack: AppDevStack, runId?: string) => {
-    const group = groups.get(workflowId) ?? {
-      stackIds: new Set<string>(),
-      runIds: new Set<string>(),
-      worktreePaths: new Set<string>(),
-    };
-    group.stackIds.add(stack.id);
-    group.worktreePaths.add(normalizeWorktreePath(stack.worktreePath));
-    if (runId !== undefined) group.runIds.add(runId);
-    groups.set(workflowId, group);
-  };
-
-  for (const stack of stacks) {
-    if (stack.workflowId) add(stack.workflowId, stack);
-  }
-
-  const stacksByPath = new Map(
-    stacks.map((stack) => [normalizeWorktreePath(stack.worktreePath), stack] as const),
-  );
   const threadsById = new Map(readModel.threads.map((thread) => [thread.id, thread] as const));
+  const expectedByWorkflow = new Map<
+    string,
+    Map<string, { readonly runIds: Set<string>; readonly roles: Set<"shared" | "ticket"> }>
+  >();
+  const workflowsByPath = new Map<string, Set<string>>();
+
   for (const run of readModel.implementationRuns) {
     const workflowId = threadsById.get(run.orchestratorThreadId)?.workflowContext?.workflowId;
-    const stack = stacksByPath.get(normalizeWorktreePath(run.orchestratorWorktreePath));
-    if (workflowId !== undefined && stack !== undefined) add(workflowId, stack, run.id);
+    if (workflowId === undefined) continue;
+    const addExpected = (path: string, role: "shared" | "ticket") => {
+      const normalizedPath = normalizeWorkflowWorktreePath(path);
+      const paths = expectedByWorkflow.get(workflowId) ?? new Map();
+      const expected = paths.get(normalizedPath) ?? {
+        runIds: new Set<string>(),
+        roles: new Set<"shared" | "ticket">(),
+      };
+      expected.runIds.add(run.id);
+      expected.roles.add(role);
+      paths.set(normalizedPath, expected);
+      expectedByWorkflow.set(workflowId, paths);
+      const workflows = workflowsByPath.get(normalizedPath) ?? new Set<string>();
+      workflows.add(workflowId);
+      workflowsByPath.set(normalizedPath, workflows);
+    };
+    addExpected(run.orchestratorWorktreePath, "shared");
+    for (const state of run.ticketStates ?? []) {
+      if (state.worktreePath !== null) addExpected(state.worktreePath, "ticket");
+    }
   }
 
-  return [...groups.entries()]
-    .filter(([, group]) => group.stackIds.size > 1)
-    .map(([workflowId, group]) => ({
+  const conflicts: WorkflowConflict[] = [];
+  const explicitGroups = new Map<string, AppDevStack[]>();
+  for (const stack of stacks) {
+    if (!stack.workflowId) continue;
+    const path = normalizeWorkflowWorktreePath(stack.worktreePath);
+    const key = `${stack.workflowId}\0${path}`;
+    const group = explicitGroups.get(key) ?? [];
+    group.push(stack);
+    explicitGroups.set(key, group);
+
+    const expected = expectedByWorkflow.get(stack.workflowId)?.get(path);
+    const otherOwners = [...(workflowsByPath.get(path) ?? [])].filter(
+      (workflowId) => workflowId !== stack.workflowId,
+    );
+    if (
+      expected === undefined &&
+      (expectedByWorkflow.has(stack.workflowId) || otherOwners.length > 0)
+    ) {
+      conflicts.push({
+        kind: "ownership-mismatch",
+        workflowId: stack.workflowId,
+        stackIds: [stack.id],
+        runIds: [],
+        worktreePaths: [path],
+      });
+    }
+  }
+
+  for (const [key, group] of explicitGroups) {
+    if (group.length < 2) continue;
+    const separator = key.indexOf("\0");
+    const workflowId = key.slice(0, separator);
+    const path = key.slice(separator + 1);
+    const expected = expectedByWorkflow.get(workflowId)?.get(path);
+    conflicts.push({
+      kind: "duplicate-worktree",
       workflowId,
-      stackIds: [...group.stackIds].sort(),
-      runIds: [...group.runIds].sort(),
-      worktreePaths: [...group.worktreePaths].sort(),
-    }))
-    .sort((left, right) => left.workflowId.localeCompare(right.workflowId));
+      stackIds: group.map((stack) => stack.id).sort(),
+      runIds: [...(expected?.runIds ?? [])].sort(),
+      worktreePaths: [path],
+    });
+  }
+
+  return conflicts.toSorted((left, right) => {
+    const workflow = left.workflowId.localeCompare(right.workflowId);
+    if (workflow !== 0) return workflow;
+    const kind = (left.kind ?? "").localeCompare(right.kind ?? "");
+    return kind !== 0
+      ? kind
+      : left.worktreePaths.join("\0").localeCompare(right.worktreePaths.join("\0"));
+  });
 }

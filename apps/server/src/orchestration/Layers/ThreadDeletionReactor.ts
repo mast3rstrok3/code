@@ -1,9 +1,10 @@
-import type { OrchestrationEvent } from "@t3tools/contracts";
+import { CommandId, type OrchestrationEvent, ThreadId } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import * as TerminalManager from "../../terminal/Manager.ts";
@@ -13,6 +14,7 @@ import {
   type ThreadDeletionReactorShape,
 } from "../Services/ThreadDeletionReactor.ts";
 import { forkParked } from "../../serverActivation.ts";
+import { selectOrphanWorkflowThreads } from "../orphanWorkflowThreads.ts";
 
 type ThreadDeletedEvent = Extract<OrchestrationEvent, { type: "thread.deleted" }>;
 
@@ -41,6 +43,7 @@ const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const providerService = yield* ProviderService;
   const terminalManager = yield* TerminalManager.TerminalManager;
+  const sql = yield* SqlClient.SqlClient;
 
   const stopProviderSession = (threadId: ThreadDeletedEvent["payload"]["threadId"]) =>
     logCleanupCauseUnlessInterrupted({
@@ -91,9 +94,32 @@ const make = Effect.gen(function* () {
     );
   });
 
+  const cleanupEmptyWorkflowShells = Effect.gen(function* () {
+    const orphans = yield* selectOrphanWorkflowThreads().pipe(
+      Effect.provideService(SqlClient.SqlClient, sql),
+    );
+    for (const orphan of orphans) {
+      yield* orchestrationEngine.dispatch({
+        type: "thread.delete",
+        commandId: CommandId.make(`server:startup-orphan-cleanup:${orphan.threadId}`),
+        threadId: ThreadId.make(orphan.threadId),
+      });
+    }
+    yield* worker.drain;
+    yield* Effect.logInfo("workflow startup cleanup finished", {
+      deletedEmptyThreadCount: orphans.length,
+    });
+    return orphans.length;
+  }).pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning("workflow startup cleanup failed", { cause }).pipe(Effect.as(0)),
+    ),
+  );
+
   return {
     start,
     drain: worker.drain,
+    cleanupEmptyWorkflowShells,
   } satisfies ThreadDeletionReactorShape;
 });
 

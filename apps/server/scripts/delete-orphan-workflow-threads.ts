@@ -39,8 +39,7 @@ import * as NodeSqliteClient from "../src/persistence/NodeSqliteClient.ts";
 import * as RepositoryIdentityResolver from "../src/project/RepositoryIdentityResolver.ts";
 import { OrchestrationLayerLive } from "../src/orchestration/runtimeLayer.ts";
 import { OrchestrationEngineService } from "../src/orchestration/Services/OrchestrationEngine.ts";
-
-const OrphanRow = Schema.Struct({ threadId: Schema.String });
+import { selectOrphanWorkflowThreads } from "../src/orchestration/orphanWorkflowThreads.ts";
 
 export class OrphanCleanupDatabaseMissingError extends Schema.TaggedErrorClass<OrphanCleanupDatabaseMissingError>()(
   "OrphanCleanupDatabaseMissingError",
@@ -59,27 +58,6 @@ export class OrphanCleanupDatabaseMissingError extends Schema.TaggedErrorClass<O
  * that has none of them, and is not itself referenced as a run's live stage
  * thread, only ever existed as a failed attempt.
  */
-const selectOrphans = (workflowRole: string) =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    return yield* sql`
-      SELECT t.thread_id AS "threadId"
-      FROM projection_threads t
-      WHERE t.workflow_role = ${workflowRole}
-        AND t.deleted_at IS NULL
-        AND NOT EXISTS (SELECT 1 FROM projection_thread_sessions s WHERE s.thread_id = t.thread_id)
-        AND NOT EXISTS (SELECT 1 FROM projection_thread_messages m WHERE m.thread_id = t.thread_id)
-        AND NOT EXISTS (SELECT 1 FROM projection_thread_activities a WHERE a.thread_id = t.thread_id)
-        AND NOT EXISTS (SELECT 1 FROM projection_threads c WHERE c.parent_thread_id = t.thread_id AND c.deleted_at IS NULL)
-        AND NOT EXISTS (
-          SELECT 1 FROM projection_implementation_runs r
-          WHERE r.status NOT IN ('completed', 'canceled')
-            AND r.ticket_states_json LIKE '%' || t.thread_id || '%'
-        )
-      ORDER BY t.created_at ASC
-    `.pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(OrphanRow))));
-  });
-
 const run = (input: {
   readonly baseDir: string;
   readonly workflowRole: string;
@@ -94,7 +72,9 @@ const run = (input: {
 
     const sqlLayer = NodeSqliteClient.layer({ filename: databasePath, readonly: false });
 
-    const orphans = yield* selectOrphans(input.workflowRole).pipe(Effect.provide(sqlLayer));
+    const orphans = yield* selectOrphanWorkflowThreads(input.workflowRole).pipe(
+      Effect.provide(sqlLayer),
+    );
     yield* Console.log(
       `${String(orphans.length)} orphan '${input.workflowRole}' thread(s) in ${databasePath}`,
     );

@@ -22,7 +22,7 @@ const stack = (id: string, worktreePath: string, workflowId?: string): AppDevSta
 });
 
 describe("appDevStackWorkflowConflicts", () => {
-  it("reports legacy stacks mapped to separate runs in one workflow", () => {
+  it("accepts shared and ticket stacks on distinct worktrees in one workflow", () => {
     const readModel = {
       threads: [
         {
@@ -39,6 +39,7 @@ describe("appDevStackWorkflowConflicts", () => {
           id: "run-1",
           orchestratorThreadId: "orchestrator-1",
           orchestratorWorktreePath: "/repo/worktrees/feature",
+          ticketStates: [{ worktreePath: "/repo/worktrees/ticket-1" }],
         },
         {
           id: "run-2",
@@ -51,33 +52,70 @@ describe("appDevStackWorkflowConflicts", () => {
     expect(
       appDevStackWorkflowConflicts(
         [
-          stack("stack-1", "/repo/worktrees/feature/"),
-          stack("stack-2", "/repo/worktrees/feature-2"),
+          stack("stack-1", "/repo/worktrees/feature/", "workflow-1"),
+          stack("stack-2", "/repo/worktrees/ticket-1", "workflow-1"),
+          stack("stack-3", "/repo/worktrees/feature-2", "workflow-1"),
         ],
         readModel,
       ),
-    ).toEqual([
-      {
-        workflowId: "workflow-1",
-        stackIds: ["stack-1", "stack-2"],
-        runIds: ["run-1", "run-2"],
-        worktreePaths: ["/repo/worktrees/feature", "/repo/worktrees/feature-2"],
-      },
-    ]);
+    ).toEqual([]);
   });
 
-  it("reports duplicate explicit ownership without run history", () => {
+  it("accepts distinct explicit worktrees without run history", () => {
     expect(
       appDevStackWorkflowConflicts(
         [stack("stack-1", "/repo/one", "workflow-1"), stack("stack-2", "/repo/two", "workflow-1")],
         { threads: [], implementationRuns: [] } as unknown as OrchestrationReadModel,
       ),
+    ).toEqual([]);
+  });
+
+  it("reports duplicate stacks for one normalized worktree", () => {
+    expect(
+      appDevStackWorkflowConflicts(
+        [
+          stack("stack-1", "/repo/one/", "workflow-1"),
+          stack("stack-2", "/repo//one", "workflow-1"),
+        ],
+        { threads: [], implementationRuns: [] } as unknown as OrchestrationReadModel,
+      ),
     ).toEqual([
       {
+        kind: "duplicate-worktree",
         workflowId: "workflow-1",
         stackIds: ["stack-1", "stack-2"],
         runIds: [],
-        worktreePaths: ["/repo/one", "/repo/two"],
+        worktreePaths: ["/repo/one"],
+      },
+    ]);
+  });
+
+  it("reports explicit workflow ownership on the wrong worktree", () => {
+    const readModel = {
+      threads: [
+        {
+          id: "orchestrator-1",
+          workflowContext: { workflowId: "workflow-1", rootThreadId: "root-1" },
+        },
+      ],
+      implementationRuns: [
+        {
+          id: "run-1",
+          orchestratorThreadId: "orchestrator-1",
+          orchestratorWorktreePath: "/repo/expected",
+          ticketStates: [],
+        },
+      ],
+    } as unknown as OrchestrationReadModel;
+    expect(
+      appDevStackWorkflowConflicts([stack("stack-1", "/repo/wrong", "workflow-1")], readModel),
+    ).toEqual([
+      {
+        kind: "ownership-mismatch",
+        workflowId: "workflow-1",
+        stackIds: ["stack-1"],
+        runIds: [],
+        worktreePaths: ["/repo/wrong"],
       },
     ]);
   });

@@ -68,7 +68,8 @@ describe("WorkflowPromptRegistry", () => {
       implementationPrompt,
       /exactly one active ticket-scoped step thread at a time/,
     );
-    NodeAssert.match(implementationPrompt, /exactly one root-scoped final Code Review thread/);
+    NodeAssert.match(implementationPrompt, /up to five Code Review cycles/);
+    NodeAssert.match(implementationPrompt, /fresh review-and-fix thread per cycle/);
   });
 
   it("builds a validated, deduplicated workflow catalog", () => {
@@ -486,7 +487,7 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /After each behavioral slice, run the relevant focused test/);
     NodeAssert.match(rendered, /affected-file formatting, linting, typing/);
     NodeAssert.match(rendered, /sub-minute fast check/);
-    NodeAssert.match(rendered, /final gate after Code Review owns complete validation/);
+    NodeAssert.match(rendered, /Final Code Review owns complete validation/);
     NodeAssert.doesNotMatch(rendered, /canonical log line/);
 
     const mockingDoc = tdd.associatedDocs?.find((doc) => doc.id === "tdd-mocking");
@@ -567,17 +568,17 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /app-dev-stack\.md/);
     NodeAssert.match(rendered, /never run launch-level complete validation commands/);
     NodeAssert.match(rendered, /sub-minute fast checks/);
-    NodeAssert.match(rendered, /final gate runs each launch validation command once/);
-    NodeAssert.match(rendered, /after Code Review/);
+    NodeAssert.match(rendered, /Final Code Review cycle that ends the stage runs each launch/);
+    NodeAssert.match(rendered, /Final Code Review owns complete repository validation/);
     NodeAssert.match(rendered, /When Planning supplied tickets, use them as-is/);
     NodeAssert.match(rendered, /derive one or more tracer-bullet tickets from the user's prompt/);
     NodeAssert.match(rendered, /fresh prompt-originated Implementation thread/);
     NodeAssert.match(rendered, /T3 launches implementation automatically/);
     NodeAssert.match(rendered, /its configured cycle budget when eligible/);
-    NodeAssert.match(rendered, /exactly one Code Review/);
-    NodeAssert.match(rendered, /create one integration thread/);
-    NodeAssert.match(rendered, /exactly one root-scoped Code Review thread/);
-    NodeAssert.match(rendered, /exactly one root-scoped final Code Review thread/);
+    NodeAssert.match(rendered, /up to five Code Review cycles/);
+    NodeAssert.match(rendered, /use one merge-gate thread/);
+    NodeAssert.match(rendered, /fresh review-and-fix thread per cycle/);
+    NodeAssert.match(rendered, /Do not create a separate final-validation thread/);
     NodeAssert.match(
       rendered,
       /Pull-request creation and pull-request babysitting are separate workflow stages/,

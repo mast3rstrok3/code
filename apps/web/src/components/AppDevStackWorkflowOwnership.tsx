@@ -28,9 +28,13 @@ export function AppDevStackWorkflowConflictWarning(props: {
     <div className="flex gap-2 rounded-lg border border-amber-500/25 bg-amber-500/5 p-3 text-xs text-amber-800 dark:text-amber-400">
       <TriangleAlertIcon className="mt-0.5 size-4 shrink-0" />
       <div className="space-y-1">
-        <div className="font-medium">Multiple stacks map to one workflow</div>
+        <div className="font-medium">Workflow stack ownership conflicts</div>
         {props.conflicts.map((conflict) => (
-          <div key={conflict.workflowId}>{appDevStackWorkflowConflictSummary(conflict)}</div>
+          <div
+            key={`${conflict.workflowId}:${conflict.kind ?? "legacy"}:${conflict.worktreePaths.join(":")}`}
+          >
+            {appDevStackWorkflowConflictSummary(conflict)}
+          </div>
         ))}
         <div>No stacks were stopped or deleted automatically.</div>
       </div>

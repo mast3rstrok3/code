@@ -42,8 +42,8 @@ import * as Stream from "effect/Stream";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import { T3ProjectFileLoader } from "../../project/T3ProjectFileLoader.ts";
 import { WORKFLOW_PROMPT_IDS } from "../../provider/WorkflowPromptRegistry.ts";
-import { forkParked, ServerActivation } from "../../serverActivation.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { ServerActivation } from "../../serverActivation.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   ProductWorkflowReactor,
@@ -1336,6 +1336,42 @@ const make = Effect.gen(function* () {
 
   const worker = yield* makeDrainableWorker(processEventSafely);
 
+  const reconcileStartup = Effect.fn("ProductWorkflowReactor.reconcileStartup")(function* () {
+    yield* reconcilePlanQuestions().pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Plan question reconciliation failed", { cause: Cause.pretty(cause) }),
+      ),
+    );
+    yield* reconcileIncompleteEngineeringGrills().pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("product workflow Engineering Grill reconciliation failed", {
+          cause: Cause.pretty(cause),
+        }),
+      ),
+    );
+    yield* reconcileImplementationLaunches().pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("product workflow implementation reconciliation failed", {
+          cause: Cause.pretty(cause),
+        }),
+      ),
+    );
+    yield* reconcileFastFeatureImplementations().pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("product workflow Fast Build reconciliation failed", {
+          cause: Cause.pretty(cause),
+        }),
+      ),
+    );
+    yield* reconcileFixImplementations().pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("product workflow fix handover reconciliation failed", {
+          cause: Cause.pretty(cause),
+        }),
+      ),
+    );
+  });
+
   const start: ProductWorkflowReactorShape["start"] = Effect.fn("start")(function* () {
     yield* Effect.forkScoped(
       Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
@@ -1352,58 +1388,14 @@ const make = Effect.gen(function* () {
         return worker.enqueue(event);
       }),
     );
-
-    const reconcileStartup = Effect.gen(function* () {
-      yield* reconcilePlanQuestions().pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("Plan question reconciliation failed", {
-            cause: Cause.pretty(cause),
-          }),
-        ),
-      );
-      yield* reconcileIncompleteEngineeringGrills().pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("product workflow Engineering Grill reconciliation failed", {
-            cause: Cause.pretty(cause),
-          }),
-        ),
-      );
-      yield* reconcileImplementationLaunches().pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("product workflow implementation reconciliation failed", {
-            cause: Cause.pretty(cause),
-          }),
-        ),
-      );
-      yield* reconcileFastFeatureImplementations().pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("product workflow Fast Build reconciliation failed", {
-            cause: Cause.pretty(cause),
-          }),
-        ),
-      );
-      yield* reconcileFixImplementations().pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("product workflow fix handover reconciliation failed", {
-            cause: Cause.pretty(cause),
-          }),
-        ),
-      );
-    });
-    const activation = yield* ServerActivation;
-    if (activation === undefined) {
-      yield* reconcileStartup;
-    } else {
-      // Provider command handling parks at the same activation boundary. Yield once after
-      // activation so its hot-stream subscriber is live before reconciliation emits turns.
-      yield* forkParked(Effect.yieldNow.pipe(Effect.andThen(reconcileStartup)));
-    }
+    if ((yield* ServerActivation) === undefined) yield* reconcileStartup();
   });
 
   return {
     start,
     drain: worker.drain,
     flush: worker.flush,
+    reconcileStartup,
   } satisfies ProductWorkflowReactorShape;
 });
 

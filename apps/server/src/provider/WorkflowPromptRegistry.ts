@@ -1245,7 +1245,7 @@ Implement the work described by the user in the spec or tickets.
 
 Use /tdd where possible, at pre-agreed seams.
 
-Run focused tests and scoped static checks during implementation. Documented sub-minute fast checks such as \`pnpm check\` are allowed. The final gate after Code Review owns complete repository validation.
+Run focused tests and scoped static checks during implementation. Documented sub-minute fast checks such as \`pnpm check\` are allowed. Final Code Review owns complete repository validation.
 
 Once done, use /code-review to review the work.
 
@@ -1261,12 +1261,11 @@ This stage orchestrates the upstream implement loop across sub-threads instead o
 - The run reuses the Planning workflow's dedicated worktree and branch, which were created from the branch the user selected before Planning began. The finished change request is filed back into that original branch.
 - Reuse the AppDevStack created for the Planning worktree as the combined integration stack. Load \`app-dev-stack.md\` before diagnosing it. Ticket App Dev Stacks are separate, worktree-owned runtimes and must never substitute for the combined stack.
 - Run every currently unblocked ticket in parallel. Each ticket owns a child thread, worktree, branch, and—when \`appReviewEligible\`—an App Dev Stack started from that ticket worktree.
-- Within each ticket, run exactly one active ticket-scoped step thread at a time. A ticket runs TDD implementation, then its attached App Review phases for its configured cycle budget when eligible, then exactly one Code Review. Claim each next step only after the current step finishes. App Review failures, exhaustion, or blockers are recorded on the ticket and in workflow activity but never stop the frontier; Code Review still runs once. Ineligible tickets skip only App Review.
-- After every ticket reaches a terminal best-effort state, create one integration thread in the original workflow worktree and branch. Merge all usable ticket branches there, retaining recorded warnings for branches that could not be integrated.
-- Run exactly one root-scoped Code Review thread on the combined changes. Then run one root-scoped combined App Review workflow for its configured cycle budget, focused on cross-ticket flows plus ticket reviews that failed or exhausted their budgets. Its ordered review phases each have one active thread. Continue after either result.
-- Run exactly one root-scoped final Code Review thread after the combined App Review, then run complete validation. Pull-request creation and pull-request babysitting are separate workflow stages after review. The PR body must include all ticket-level and combined App Review warnings.
-- Code Review is intentionally bounded: once per ticket, once immediately after integration, and once after the combined App Review. Do not add a review/validation feedback loop between those fixed passes.
-- Ticket workers never run launch-level complete validation commands or full test suites, but may run documented sub-minute fast checks. The final gate runs each launch validation command once on the final reviewed HEAD before publication.
+- Within each ticket, run exactly one active ticket-scoped step thread at a time. A ticket runs one durable TDD implementation thread, then its attached App Review phases for its configured cycle budget when eligible, then up to five Code Review cycles. Each Code Review cycle uses a fresh thread to review, fix, validate, commit, and report. Stop early when clean. Findings advance to a fresh cycle thread while budget remains. Interrupted turns retry in the same cycle thread and do not consume a logical cycle. App Review or Code Review exhaustion becomes a ticket warning and does not stop the frontier. Ineligible tickets skip only App Review.
+- After every ticket reaches a terminal best-effort state, use one merge-gate thread to finish integration and focused integration validation. Then run one root-scoped combined App Review workflow for its configured cycle budget, focused on cross-ticket flows plus ticket reviews that failed or exhausted their budgets. Its ordered review phases each have one active thread. Continue after either result.
+- Run root-scoped Final Code Review after the combined App Review. It uses one fresh review-and-fix thread per cycle, stops early when clean, and repeats findings for at most five cycles. Earlier findings cycles run focused validation. A clean cycle and cycle five run complete validation on the exact committed HEAD in that same review thread. Do not create a separate final-validation thread for a new run. Pull-request creation and pull-request babysitting are separate workflow stages. The PR body must include ticket and combined App Review warnings, Code Review exhaustion details, and failed validation evidence.
+- Code Review is intentionally bounded. Do not add a review and validation feedback loop beyond the configured five-cycle ceiling. Review or validation exhaustion is a warning when the branch remains clean and usable. Dirty Git state, invalid review evidence, and publication failures still stop automation.
+- Ticket workers never run launch-level complete validation commands or full test suites, but may run documented sub-minute fast checks. The Final Code Review cycle that ends the stage runs each launch validation command once on the final reviewed HEAD before publication.
 
 Plan the implementation run from the available tickets or create them from the prompt first. Identify the dependency frontier, worktrees, ticket App Review eligibility and attached plans, integration strategy, combined-review focus, validation commands, and warning reporting. Settings can skip the combined App Review, final Code Review, pull-request creation, or pull-request babysitting. Only PR publication is externally visible; intermediate review problems stay in the workflow panel until summarized in that PR. These rules override only upstream single-thread mechanics; TDD at pre-agreed seams, regular typechecking, review before publication, and committed work remain authoritative.
 </collaboration_mode>`;
@@ -1533,7 +1532,7 @@ When this prompt is run by an automatic implementation-worker thread, do not ask
 - Run one focused failing test before implementation.
 - After each behavioral slice, run the relevant focused test.
 - At completion, run only affected-file formatting, linting, typing, and focused tests.
-- Do not run launch-level complete validation commands or full test suites. A documented sub-minute fast check such as \`pnpm check\` is allowed. The final gate after Code Review owns complete validation.
+- Do not run launch-level complete validation commands or full test suites. A documented sub-minute fast check such as \`pnpm check\` is allowed. Final Code Review owns complete validation.
 - Do not rerun an unchanged passing command unless a code change could affect its result.
 
 \`\`\`json
@@ -1560,7 +1559,7 @@ When this prompt is run by an automatic implementation-worker thread, do not ask
 
 ## Orchestrated QA Repair Result
 
-When the launch message identifies an AppDevStack or Browser App Review failure, this is a QA repair thread rather than a planning-ticket worker. Load \`app-dev-stack.md\` before changing dependency or runtime setup. The programmatic diagnostics, original Spec/tickets or proposed plan, and the failed review are the pre-agreed seams. Do not ask the user to confirm them. Work red then green in the orchestrator worktree, run focused validation or a documented sub-minute fast check, commit the repair, leave the worktree clean, and finish with exactly one fenced JSON block using this shape. The final gate after Code Review owns complete validation on the new HEAD; do not run launch-level complete validation commands here.
+When the launch message identifies an AppDevStack or Browser App Review failure, this is a QA repair thread rather than a planning-ticket worker. Load \`app-dev-stack.md\` before changing dependency or runtime setup. The programmatic diagnostics, original Spec/tickets or proposed plan, and the failed review are the pre-agreed seams. Do not ask the user to confirm them. Work red then green in the orchestrator worktree, run focused validation or a documented sub-minute fast check, commit the repair, leave the worktree clean, and finish with exactly one fenced JSON block using this shape. Final Code Review owns complete validation on the new HEAD; do not run launch-level complete validation commands here.
 
 \`\`\`json
 {
@@ -1661,7 +1660,7 @@ Use only the preview_* tools in feedback mode and preview_* plus app_review_* to
 
 const IMPLEMENTATION_FIX_PROMPT = `<collaboration_mode># Implementation Workflow: Fix
 
-Fix the Browser App Review, integration-gate, final-gate, or code-review failures in the orchestrator worktree. Do not ask the user questions. Make the smallest reliable change, run focused validation or a documented sub-minute fast check, commit the repair, and report whether the run can continue. Do not run launch-level complete validation commands. The final gate after Code Review owns complete validation on the new HEAD.
+Fix the Browser App Review, integration-gate, historical final-gate, or code-review failures in the orchestrator worktree. Do not ask the user questions. Make the smallest reliable change, run focused validation or a documented sub-minute fast check, commit the repair, and report whether the run can continue. Do not run launch-level complete validation commands. Final Code Review owns complete validation on the new HEAD.
 
 When the failure involves an AppDevStack, Feature URL, or preview runtime, load \`app-dev-stack.md\` before changing dependency or runtime setup.
 

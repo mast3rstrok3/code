@@ -31,6 +31,7 @@ import {
   WORKFLOW_PRESET_DEFINITION_BY_ID,
   type WorkflowPresetSubStep,
 } from "@t3tools/shared/workflowPresets";
+import { resolveWorkflowStepCycleBudget } from "@t3tools/shared/workflowStepCycles";
 import {
   Archive,
   ArrowUpRight,
@@ -69,11 +70,14 @@ import {
   resolveWorkflowThreadTimeRange,
   resolveWorkflowThreadStatus,
   resolveWorkflowTicketStatus,
+  resolveWorkflowCurrentPath,
+  workflowCurrentPathScrollTarget,
   workflowStatusIsActive,
   workflowStepCanRetryImplementationFailure,
   workflowStepMatchesImplementationFailure,
   workflowThreadKey,
   type WorkflowGroup,
+  type WorkflowCurrentPath,
   type WorkflowRoot,
   type WorkflowStepStatus,
   type WorkflowTimelineStep,
@@ -403,6 +407,7 @@ function ThreadRow(props: {
   return (
     <button
       type="button"
+      data-workflow-current-target={row.thread.id}
       onClick={() => props.onOpenThread(row.thread)}
       aria-current={active ? "page" : undefined}
       className={cn(
@@ -568,9 +573,8 @@ function resolveStepRestart(input: {
     const restart = input.onRestartPlanningStage;
     return { run: () => restart(stage), disabledReason: null };
   }
-  // A paused run keeps its worktrees, branches, and App Dev Stack. Resuming
-  // starts fresh agents on that same work, which is also how a step's model pin
-  // reaches a stage that was already in flight when the pause landed.
+  // A paused run keeps its worktrees, branches, App Dev Stack, and active
+  // stage threads. Resuming continues the stage in its recorded thread.
   if (input.workflowPaused) {
     if (input.isResumeStep && input.onResumeWorkflow !== undefined) {
       const resume = input.onResumeWorkflow;
@@ -848,7 +852,7 @@ function TicketAppReviewCycles(props: {
         .map((cycle) => {
           const steps = [
             {
-              label: "App review",
+              label: "E2E and browser review",
               phase: "review" as const,
               detail:
                 cycle.reviewVerdict ?? (cycle.status === "reviewing" ? "in progress" : "pending"),
@@ -869,7 +873,7 @@ function TicketAppReviewCycles(props: {
               thread: threadRow(cycle.plannerThreadId ?? cycle.reviewerThreadId),
             },
             {
-              label: "Fix the problem",
+              label: "TDD repair",
               phase: "fixing" as const,
               detail:
                 cycle.fixResult?.status ?? (cycle.status === "fixing" ? "in progress" : "pending"),
@@ -884,6 +888,8 @@ function TicketAppReviewCycles(props: {
           return (
             <article
               key={cycle.cycleNumber}
+              data-workflow-current-target={`app-review-cycle:${props.run.id}:${cycle.cycleNumber}`}
+              data-app-review-cycle={cycle.cycleNumber}
               className="rounded-md border border-border/70 bg-background/60 p-2"
             >
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -905,7 +911,11 @@ function TicketAppReviewCycles(props: {
                 {steps.map((step, index) => {
                   const phaseStatus = resolveWorkflowStageDetailStatus(step.detail);
                   return (
-                    <li key={step.label} className="relative">
+                    <li
+                      key={step.label}
+                      data-workflow-current-target={step.threadId ?? undefined}
+                      className="relative"
+                    >
                       <span
                         className={cn(
                           "absolute -left-[1.05rem] top-0.5 flex size-3.5 items-center justify-center rounded-full border border-border bg-background text-[8px]",
@@ -1152,6 +1162,23 @@ function ThreadRowList(props: {
   );
 }
 
+function EarlierThreads(props: {
+  readonly threads: readonly EnvironmentThreadShell[];
+  readonly timestampFormat: TimestampFormat;
+  readonly activeThreadKey: string | null;
+  readonly onOpenThread: (thread: EnvironmentThreadShell) => void;
+}) {
+  if (props.threads.length === 0) return null;
+  return (
+    <details className="mt-1 rounded border border-border/60 px-1.5 py-1">
+      <summary className="cursor-pointer text-[10px] text-muted-foreground">
+        Earlier threads · {props.threads.length}
+      </summary>
+      <ThreadRowList {...props} />
+    </details>
+  );
+}
+
 /**
  * The wave step every per-ticket agent runs under. Ticket reviews are sub-steps
  * of it, so their pins carry it as the step id. Matches the id the ticket
@@ -1327,8 +1354,23 @@ function TicketPhases(props: {
   readonly onOpenAppReview: () => void;
   readonly activeThreadKey: string | null;
   readonly timestampFormat: TimestampFormat;
+  readonly currentPath: WorkflowCurrentPath | null;
+  readonly ticketCodeReviewBudget: number;
 }) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    if (props.currentPath?.ticketId === null || props.currentPath?.ticketId === undefined) return;
+    setExpanded((current) => ({ ...current, [props.currentPath!.ticketId!]: true }));
+    const frame = window.requestAnimationFrame(() => {
+      const targetId =
+        props.currentPath === null ? null : workflowCurrentPathScrollTarget(props.currentPath);
+      if (targetId === null || targetId === undefined) return;
+      document
+        .querySelector(`[data-workflow-current-target="${CSS.escape(targetId)}"]`)
+        ?.scrollIntoView({ block: "nearest" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [props.currentPath]);
   const states = new Map(props.run.ticketStates.map((state) => [state.ticketId, state] as const));
   const runWorkflowIds = implementationRunWorkflowIds(props.run, props.appReviewWorkflowRuns);
   const runThreads = props.threads.filter((thread) =>
@@ -1463,6 +1505,35 @@ function TicketPhases(props: {
               const codeReviewThreads = linkedThreads.filter(
                 (thread) => thread.workflowRole === "implementation-code-reviewer",
               );
+              const primaryImplementationThreads = implementationThreads.filter(
+                (thread) => thread.id === state?.workerThreadId,
+              );
+              const earlierImplementationThreads = implementationThreads.filter(
+                (thread) => thread.id !== state?.workerThreadId,
+              );
+              const currentAppReviewThreadIds = new Set(
+                (appReviewRun?.cycles ?? []).flatMap((cycle) =>
+                  [cycle.reviewerThreadId, cycle.plannerThreadId, cycle.fixerThreadId].flatMap(
+                    (threadId) => (threadId === null ? [] : [threadId]),
+                  ),
+                ),
+              );
+              const earlierAppReviewThreads = appReviewThreads.filter(
+                (thread) => !currentAppReviewThreadIds.has(thread.id),
+              );
+              const currentCodeReviewCycleCount = Math.min(
+                props.ticketCodeReviewBudget,
+                (state?.codeReviewPassCount ?? 0) +
+                  (state?.status === "code-reviewing" && state.codeReviewThreadId !== null ? 1 : 0),
+              );
+              const currentCodeReviewThreads =
+                currentCodeReviewCycleCount === 0
+                  ? []
+                  : codeReviewThreads.slice(-currentCodeReviewCycleCount);
+              const earlierCodeReviewThreads = codeReviewThreads.slice(
+                0,
+                Math.max(0, codeReviewThreads.length - currentCodeReviewThreads.length),
+              );
               const ticketTimeRanges = linkedThreads.map(resolveWorkflowThreadTimeRange);
               const ticketTimeRange =
                 ticketTimeRanges.length === 0
@@ -1488,7 +1559,7 @@ function TicketPhases(props: {
                 {
                   label: "Implementation",
                   detail: stageDetails.implementation,
-                  threads: implementationThreads,
+                  threads: primaryImplementationThreads,
                 },
                 {
                   label: "App Review",
@@ -1498,7 +1569,7 @@ function TicketPhases(props: {
                 {
                   label: "Code Review",
                   detail: stageDetails.codeReview,
-                  threads: codeReviewThreads,
+                  threads: currentCodeReviewThreads,
                 },
               ] as const;
               const ticketLabel = ticket.key ?? `Ticket ${ticket.ordinal + 1}`;
@@ -1516,7 +1587,11 @@ function TicketPhases(props: {
                     ? "paused"
                     : (state?.status ?? ticket.status);
               return (
-                <div key={ticket.id} className="border-t border-border/60 first:border-t-0">
+                <div
+                  key={ticket.id}
+                  data-workflow-current-target={ticket.id}
+                  className="border-t border-border/60 first:border-t-0"
+                >
                   <div className="flex w-full items-center gap-1">
                     <button
                       type="button"
@@ -1727,37 +1802,99 @@ function TicketPhases(props: {
                                 />
                               </div>
                               {stage.label === "App Review" && appReviewRun ? (
-                                <TicketAppReviewCycles
-                                  run={appReviewRun}
-                                  onStopThreads={props.onStopThreads}
-                                  onResumeThreads={props.onResumeThreads}
-                                  callerBusyReason={
-                                    [...implementationThreads, ...codeReviewThreads].some(
-                                      (thread) =>
-                                        thread.session?.status === "starting" ||
-                                        thread.session?.status === "running",
-                                    )
-                                      ? "This ticket has an agent working in the same worktree. Stop it before starting a phase again."
-                                      : null
-                                  }
-                                  environmentId={props.environmentId}
-                                  rootModelSelection={props.rootModelSelection}
-                                  pinFor={props.pinFor}
-                                  onSetStepModel={props.onSetStepModel}
-                                  onRerunPhase={
-                                    props.onRerunAppReviewPhase === undefined
-                                      ? undefined
-                                      : (phase) =>
-                                          props.onRerunAppReviewPhase?.({
-                                            appReviewRunId: appReviewRun.id,
-                                            phase,
-                                          })
-                                  }
-                                  threads={runThreads}
-                                  onOpenThread={props.onOpenThread}
-                                  activeThreadKey={props.activeThreadKey}
-                                  timestampFormat={props.timestampFormat}
-                                />
+                                <>
+                                  <TicketAppReviewCycles
+                                    run={appReviewRun}
+                                    onStopThreads={props.onStopThreads}
+                                    onResumeThreads={props.onResumeThreads}
+                                    callerBusyReason={
+                                      [...implementationThreads, ...codeReviewThreads].some(
+                                        (thread) =>
+                                          thread.session?.status === "starting" ||
+                                          thread.session?.status === "running",
+                                      )
+                                        ? "This ticket has an agent working in the same worktree. Stop it before starting a phase again."
+                                        : null
+                                    }
+                                    environmentId={props.environmentId}
+                                    rootModelSelection={props.rootModelSelection}
+                                    pinFor={props.pinFor}
+                                    onSetStepModel={props.onSetStepModel}
+                                    onRerunPhase={
+                                      props.onRerunAppReviewPhase === undefined
+                                        ? undefined
+                                        : (phase) =>
+                                            props.onRerunAppReviewPhase?.({
+                                              appReviewRunId: appReviewRun.id,
+                                              phase,
+                                            })
+                                    }
+                                    threads={runThreads}
+                                    onOpenThread={props.onOpenThread}
+                                    activeThreadKey={props.activeThreadKey}
+                                    timestampFormat={props.timestampFormat}
+                                  />
+                                  <EarlierThreads
+                                    threads={earlierAppReviewThreads}
+                                    timestampFormat={props.timestampFormat}
+                                    activeThreadKey={props.activeThreadKey}
+                                    onOpenThread={props.onOpenThread}
+                                  />
+                                </>
+                              ) : stage.label === "Implementation" ? (
+                                <>
+                                  {stage.threads.length > 0 ? (
+                                    <ThreadRowList
+                                      threads={stage.threads}
+                                      timestampFormat={props.timestampFormat}
+                                      activeThreadKey={props.activeThreadKey}
+                                      onOpenThread={props.onOpenThread}
+                                    />
+                                  ) : (
+                                    <div className="py-1 text-[10px] text-muted-foreground/65">
+                                      No thread created
+                                    </div>
+                                  )}
+                                  <EarlierThreads
+                                    threads={earlierImplementationThreads}
+                                    timestampFormat={props.timestampFormat}
+                                    activeThreadKey={props.activeThreadKey}
+                                    onOpenThread={props.onOpenThread}
+                                  />
+                                </>
+                              ) : stage.label === "Code Review" ? (
+                                <>
+                                  <div className="space-y-1.5">
+                                    {currentCodeReviewThreads.map((thread, index) => (
+                                      <article
+                                        key={thread.id}
+                                        data-workflow-current-target={`ticket-code-review:${ticket.id}:${index + 1}`}
+                                        className="rounded-md border border-border/70 bg-background/60 p-1.5"
+                                      >
+                                        <div className="px-1 text-[10px] font-medium text-muted-foreground">
+                                          Cycle {index + 1} of {props.ticketCodeReviewBudget}
+                                        </div>
+                                        <ThreadRowList
+                                          threads={[thread]}
+                                          timestampFormat={props.timestampFormat}
+                                          activeThreadKey={props.activeThreadKey}
+                                          onOpenThread={props.onOpenThread}
+                                        />
+                                      </article>
+                                    ))}
+                                  </div>
+                                  {currentCodeReviewThreads.length === 0 ? (
+                                    <div className="py-1 text-[10px] text-muted-foreground/65">
+                                      No cycle started
+                                    </div>
+                                  ) : null}
+                                  <EarlierThreads
+                                    threads={earlierCodeReviewThreads}
+                                    timestampFormat={props.timestampFormat}
+                                    activeThreadKey={props.activeThreadKey}
+                                    onOpenThread={props.onOpenThread}
+                                  />
+                                </>
                               ) : stage.threads.length > 0 ? (
                                 <ThreadRowList
                                   threads={stage.threads}
@@ -1856,6 +1993,7 @@ function WorkflowGroupCard(props: {
   readonly onOpenSkill: (skillId: string) => void;
   readonly nested?: boolean;
   readonly cycleLabel?: string | undefined;
+  readonly currentPath: WorkflowCurrentPath | null;
 }) {
   const { group } = props;
   const expanded = props.expandedById[group.id] ?? false;
@@ -1889,6 +2027,14 @@ function WorkflowGroupCard(props: {
   );
   const pinFor = (key: WorkflowModelPinKey): ModelSelection | null =>
     stepModelByPinKey.get(workflowModelPinKey(key)) ?? null;
+  const ticketCodeReviewBudget = resolveWorkflowStepCycleBudget({
+    key: {
+      workflowPromptId: "implementation.code-review.codex",
+      stepWorkflowPromptId: "implementation.tdd.codex",
+    },
+    threadOverrides: props.workflowRoot.workflowStepCycles,
+    settingsOverrides: props.defaultStepCycles,
+  });
   const steps = buildWorkflowSteps(group, props.groups, props.workflowRoot, {
     flattenNestedWorkflows: group.parentGroupId === null,
   });
@@ -1900,6 +2046,19 @@ function WorkflowGroupCard(props: {
     readonly markdown: string;
   } | null>(null);
   const phases = groupWorkflowStepsByPhase(steps);
+  const currentPathStep =
+    props.currentPath?.groupId === group.id
+      ? (steps.find((candidate) => candidate.id === props.currentPath?.stepId) ?? null)
+      : null;
+  const currentPathPhase = currentPathStep === null ? null : workflowStepPhase(currentPathStep);
+  useEffect(() => {
+    if (currentPathStep === null || currentPathPhase === null) return;
+    setExpandedPhases((current) => ({
+      ...current,
+      [`${group.id}:${currentPathPhase}`]: true,
+    }));
+    setExpandedSteps((current) => ({ ...current, [currentPathStep.id]: true }));
+  }, [currentPathPhase, currentPathStep?.id, group.id]);
   // A pause on the workflow root stops the whole run, and the header's Resume
   // clears it. Scopes inside the run carry their own marks and their own
   // Resume; this one is only about the run as a whole.
@@ -1988,7 +2147,10 @@ function WorkflowGroupCard(props: {
     candidates.find((step) => stepStatusOf(step) === "running") ??
     candidates.find((step) => stepStatusOf(step) === "paused") ??
     null;
-  const currentStep = liveStepOf(steps);
+  const currentStep =
+    props.currentPath?.groupId === group.id && props.currentPath.stepId !== null
+      ? (steps.find((step) => step.id === props.currentPath?.stepId) ?? liveStepOf(steps))
+      : liveStepOf(steps);
   // The card's own color: a run that stopped for a human outranks everything,
   // then a pause on the whole workflow, then the most demanding step under it.
   const headerStatus: WorkflowStepStatus =
@@ -2001,12 +2163,33 @@ function WorkflowGroupCard(props: {
           : steps.length > 0
             ? groupStepStatus
             : threadStatusAsStepStatus(groupStatus(group));
+  const recoveredExistingThread =
+    linkedImplementationRun !== null &&
+    (linkedImplementationRun.finalCodeReviewLaunchCount > 1 ||
+      (linkedImplementationRun.retryableFailure?.attemptCount ?? 0) > 1 ||
+      linkedImplementationRun.ticketStates.some(
+        (state) =>
+          state.attemptCount > 1 ||
+          state.appReviewLaunchCount > 1 ||
+          state.codeReviewLaunchCount > 1,
+      ));
+  const completedWithWarnings =
+    linkedImplementationRun?.status === "completed" &&
+    (linkedImplementationRun.codeReviewExhaustedAt !== null ||
+      linkedImplementationRun.appReviewExhaustedAt !== null ||
+      linkedImplementationRun.ticketStates.some((state) => state.warningMarkdown !== null));
   const headerLabel =
     headerStatus === "blocked"
       ? "Needs attention"
-      : linkedAppReviewRun !== null && runPresentation.label !== null && !workflowPaused
-        ? runPresentation.label
-        : STEP_VISUALS[headerStatus].label;
+      : completedWithWarnings
+        ? "Completed with warnings"
+        : linkedImplementationRun?.status === "completed"
+          ? "Clean"
+          : recoveredExistingThread && headerStatus === "running"
+            ? "Resumed"
+            : linkedAppReviewRun !== null && runPresentation.label !== null && !workflowPaused
+              ? runPresentation.label
+              : STEP_VISUALS[headerStatus].label;
 
   return (
     <div className={cn("relative", props.nested && "ml-3 my-1.5")}>
@@ -2266,6 +2449,14 @@ function WorkflowGroupCard(props: {
                           const isCombinedAppReviewStep =
                             workflowStepLabel(step).toLowerCase().includes("app review") &&
                             !isTicketExecutionStep;
+                          const effectiveStepCycleBudget =
+                            step.skillId === null
+                              ? null
+                              : resolveWorkflowStepCycleBudget({
+                                  key: { workflowPromptId: step.skillId },
+                                  threadOverrides: props.workflowRoot.workflowStepCycles,
+                                  settingsOverrides: props.defaultStepCycles,
+                                });
                           const combinedAppReviewRuns =
                             linkedImplementationRun === null
                               ? []
@@ -2344,7 +2535,12 @@ function WorkflowGroupCard(props: {
                                   ) : null}
                                   {isCombinedAppReviewStep ? (
                                     <span className="mt-1 shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
-                                      Up to 10 cycles
+                                      Up to {effectiveStepCycleBudget ?? 10} cycles
+                                    </span>
+                                  ) : step.skillId === "implementation.code-review.codex" &&
+                                    effectiveStepCycleBudget !== null ? (
+                                    <span className="mt-1 shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
+                                      Up to {effectiveStepCycleBudget} cycles
                                     </span>
                                   ) : step.repeatsAsCycles && step.entries.length > 1 ? (
                                     <span className="mt-1 shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
@@ -2461,6 +2657,8 @@ function WorkflowGroupCard(props: {
                                     onOpenAppReview={props.onOpenAppReview}
                                     activeThreadKey={props.activeThreadKey}
                                     timestampFormat={props.timestampFormat}
+                                    currentPath={props.currentPath}
+                                    ticketCodeReviewBudget={ticketCodeReviewBudget}
                                   />
                                 </div>
                               ) : stepOpen &&
@@ -2654,6 +2852,7 @@ export function WorkflowsPanel(props: {
   const groups = props.workflow?.groups ?? [];
   const focusedGroupRef = useRef<HTMLElement>(null);
   const [expandedById, setExpandedById] = useState<Record<string, boolean>>({});
+  const [drilldownGroupId, setDrilldownGroupId] = useState<string | null>(null);
 
   useEffect(() => {
     if (props.focusedWorkflowId === null) return;
@@ -2692,6 +2891,47 @@ export function WorkflowsPanel(props: {
 
   const workflow = props.workflow;
   const rootTimeRange = resolveWorkflowThreadTimeRange(workflow.root);
+  const topLevelGroups = groups.filter((group) => group.parentGroupId === null);
+  const currentPathByGroupId = new Map(
+    topLevelGroups.map((group) => {
+      const run = resolveGroupImplementationRun(group, groups, props.implementationRuns, {
+        specId: props.spec?.id ?? null,
+        rootThreadId: workflow.root.id,
+      });
+      const steps = buildWorkflowSteps(group, groups, workflow.root, {
+        flattenNestedWorkflows: true,
+      });
+      const ticketCodeReviewBudget = resolveWorkflowStepCycleBudget({
+        key: {
+          workflowPromptId: "implementation.code-review.codex",
+          stepWorkflowPromptId: "implementation.tdd.codex",
+        },
+        threadOverrides: workflow.root.workflowStepCycles,
+        settingsOverrides: props.defaultStepCycles,
+      });
+      const finalCodeReviewBudget = resolveWorkflowStepCycleBudget({
+        key: { workflowPromptId: "implementation.code-review.codex" },
+        threadOverrides: workflow.root.workflowStepCycles,
+        settingsOverrides: props.defaultStepCycles,
+      });
+      return [
+        group.id,
+        resolveWorkflowCurrentPath({
+          groupId: group.id,
+          workflowLabel: groupTitle(group),
+          steps,
+          run,
+          appReviewWorkflowRuns: props.appReviewWorkflowRuns,
+          tickets: props.tickets,
+          threads: [workflow.root, ...workflow.members],
+          planningStage: workflow.root.planningWorkflowSummary?.stage ?? null,
+          workflowPaused: workflow.root.workflowPausedAt != null,
+          ticketCodeReviewBudget,
+          finalCodeReviewBudget,
+        }),
+      ] as const;
+    }),
+  );
 
   return (
     <ScrollArea className="min-h-0 flex-1">
@@ -2702,53 +2942,56 @@ export function WorkflowsPanel(props: {
               Interaction modes
             </div>
             <div className="flex gap-2 overflow-x-auto pb-1">
-              {groups
-                .filter((group) => group.parentGroupId === null)
-                .map((group) => {
-                  const chipStatus =
-                    workflow.root.workflowPausedAt != null
-                      ? "paused"
-                      : threadStatusAsStepStatus(groupStatus(group));
-                  const activeStep = buildWorkflowSteps(group, groups, workflow.root).find((step) =>
-                    step.entries.some((entry) =>
-                      entry.kind === "thread"
-                        ? resolveWorkflowThreadStatus(entry.row.thread) === "working"
-                        : entry.group.isActive,
-                    ),
-                  );
-                  return (
-                    <button
-                      key={group.id}
-                      type="button"
-                      onClick={() => {
-                        setExpandedById((current) => ({ ...current, [group.id]: true }));
-                        document
-                          .querySelector(`[data-workflow-group="${CSS.escape(group.id)}"]`)
-                          ?.scrollIntoView({ block: "nearest" });
-                      }}
-                      className="cursor-pointer flex min-w-36 shrink-0 items-start gap-2 rounded-md border border-border/70 px-2.5 py-2 text-left hover:bg-accent"
-                    >
-                      <StatusDot status={chipStatus} className="mt-1" />
-                      <span className="min-w-0">
-                        <span className="block truncate text-xs font-medium">
-                          {groupTitle(group)}
-                        </span>
-                        <span
-                          className={cn(
-                            "block truncate text-[10px]",
-                            activeStep === undefined
-                              ? STEP_VISUALS[chipStatus].textClass
-                              : "text-muted-foreground",
-                          )}
-                        >
-                          {activeStep
-                            ? `${workflowStepPhase(activeStep)} · ${workflowStepLabel(activeStep)}`
-                            : STEP_VISUALS[chipStatus].label}
-                        </span>
+              {topLevelGroups.map((group) => {
+                const currentPath = currentPathByGroupId.get(group.id)!;
+                const chipStatus: WorkflowStepStatus =
+                  currentPath.status === "blocked"
+                    ? "blocked"
+                    : currentPath.status === "awaiting"
+                      ? "awaiting"
+                      : currentPath.status === "running"
+                        ? "running"
+                        : currentPath.status === "paused"
+                          ? "paused"
+                          : currentPath.status === "done"
+                            ? "done"
+                            : "pending";
+                return (
+                  <button
+                    key={group.id}
+                    type="button"
+                    aria-expanded={expandedById[group.id] ?? false}
+                    onClick={() => {
+                      setDrilldownGroupId(group.id);
+                      setExpandedById((current) => ({ ...current, [group.id]: true }));
+                      window.requestAnimationFrame(() => {
+                        const targetId = workflowCurrentPathScrollTarget(currentPath);
+                        const target =
+                          targetId === null
+                            ? null
+                            : document.querySelector(
+                                `[data-workflow-current-target="${CSS.escape(targetId)}"]`,
+                              );
+                        (
+                          target ??
+                          document.querySelector(`[data-workflow-group="${CSS.escape(group.id)}"]`)
+                        )?.scrollIntoView({ block: "nearest" });
+                      });
+                    }}
+                    className="cursor-pointer flex min-w-56 shrink-0 items-start gap-2 rounded-md border border-border/70 px-2.5 py-2 text-left hover:bg-accent"
+                  >
+                    <StatusDot status={chipStatus} className="mt-1" />
+                    <span className="min-w-0">
+                      <span className="block truncate text-xs font-medium">
+                        {groupTitle(group)}
                       </span>
-                    </button>
-                  );
-                })}
+                      <span className={cn("block truncate text-[10px]", "text-muted-foreground")}>
+                        {currentPath.subtitle}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           </div>
         ) : null}
@@ -2841,45 +3084,46 @@ export function WorkflowsPanel(props: {
         ) : null}
 
         <div className="space-y-2">
-          {groups
-            .filter((group) => group.parentGroupId === null)
-            .map((group) => (
-              <WorkflowGroupCard
-                key={group.id}
-                group={group}
-                groups={groups}
-                expandedById={expandedById}
-                setExpandedById={setExpandedById}
-                focusedWorkflowId={props.focusedWorkflowId}
-                focusedGroupRef={focusedGroupRef}
-                activeThreadKey={props.activeThreadKey}
-                timestampFormat={props.timestampFormat}
-                appReviewWorkflowRuns={props.appReviewWorkflowRuns}
-                implementationRuns={props.implementationRuns}
-                defaultStepCycles={props.defaultStepCycles}
-                onSetStepCycles={props.onSetStepCycles}
-                defaultStepReviewParts={props.defaultStepReviewParts}
-                onSetStepReviewParts={props.onSetStepReviewParts}
-                spec={props.spec}
-                tickets={props.tickets}
-                skillTitlesById={props.skillTitlesById}
-                onOpenSkill={props.onOpenSkill}
-                workflowRoot={workflow.root}
-                onOpenThread={props.onOpenThread}
-                onOpenAppReview={props.onOpenAppReview}
-                onCopyWorkflowLink={props.onCopyWorkflowLink}
-                onRetryImplementationRun={props.onRetryImplementationRun}
-                onRerunImplementationStage={props.onRerunImplementationStage}
-                onResetImplementationStage={props.onResetImplementationStage}
-                onSetImplementationSkip={props.onSetImplementationSkip}
-                onRerunAppReviewPhase={props.onRerunAppReviewPhase}
-                onRestartPlanningStage={props.onRestartPlanningStage}
-                onResumeWorkflow={props.onResumeWorkflow}
-                onResumeThreads={props.onResumeThreads}
-                onSetStepModel={props.onSetStepModel}
-                onStopThreads={props.onStopThreads}
-              />
-            ))}
+          {topLevelGroups.map((group) => (
+            <WorkflowGroupCard
+              key={group.id}
+              group={group}
+              groups={groups}
+              expandedById={expandedById}
+              setExpandedById={setExpandedById}
+              focusedWorkflowId={props.focusedWorkflowId}
+              focusedGroupRef={focusedGroupRef}
+              activeThreadKey={props.activeThreadKey}
+              timestampFormat={props.timestampFormat}
+              appReviewWorkflowRuns={props.appReviewWorkflowRuns}
+              implementationRuns={props.implementationRuns}
+              defaultStepCycles={props.defaultStepCycles}
+              onSetStepCycles={props.onSetStepCycles}
+              defaultStepReviewParts={props.defaultStepReviewParts}
+              onSetStepReviewParts={props.onSetStepReviewParts}
+              spec={props.spec}
+              tickets={props.tickets}
+              skillTitlesById={props.skillTitlesById}
+              onOpenSkill={props.onOpenSkill}
+              workflowRoot={workflow.root}
+              onOpenThread={props.onOpenThread}
+              onOpenAppReview={props.onOpenAppReview}
+              onCopyWorkflowLink={props.onCopyWorkflowLink}
+              onRetryImplementationRun={props.onRetryImplementationRun}
+              onRerunImplementationStage={props.onRerunImplementationStage}
+              onResetImplementationStage={props.onResetImplementationStage}
+              onSetImplementationSkip={props.onSetImplementationSkip}
+              onRerunAppReviewPhase={props.onRerunAppReviewPhase}
+              onRestartPlanningStage={props.onRestartPlanningStage}
+              onResumeWorkflow={props.onResumeWorkflow}
+              onResumeThreads={props.onResumeThreads}
+              onSetStepModel={props.onSetStepModel}
+              onStopThreads={props.onStopThreads}
+              currentPath={
+                drilldownGroupId === group.id ? (currentPathByGroupId.get(group.id) ?? null) : null
+              }
+            />
+          ))}
         </div>
       </div>
     </ScrollArea>

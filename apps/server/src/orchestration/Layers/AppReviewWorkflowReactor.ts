@@ -4,6 +4,7 @@ import {
   type AppReviewScope,
   CommandId,
   AppReviewId,
+  EMPTY_APP_REVIEW_EVIDENCE,
   hasCompleteAppReviewEvidence,
   hasScreenshotBackedAppReviewFailure,
   type AppReviewRecord,
@@ -46,6 +47,7 @@ import * as Stream from "effect/Stream";
 import { AppDevStackManager } from "../../appDevStack/AppDevStackManager.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import { T3ProjectFileLoader } from "../../project/T3ProjectFileLoader.ts";
+import { ServerActivation } from "../../serverActivation.ts";
 import {
   appendWorkflowSkillCommandSection,
   WORKFLOW_PROMPT_IDS,
@@ -357,21 +359,15 @@ export function appReviewPhaseFailureAction(
 
 export function retryReviewPhaseInCycle(input: {
   readonly cycle: AppReviewWorkflowCycle;
-  readonly reviewId: AppReviewId;
-  readonly reviewerThreadId: ThreadId;
-  readonly supersededThreadIds: ReadonlyArray<ThreadId>;
   readonly failure: AppReviewWorkflowFailure;
   readonly workspaceRevision: AppReviewWorkflowWorkspaceRevision;
 }): AppReviewWorkflowCycle {
   return {
     ...input.cycle,
     status: "reviewing",
-    reviewId: input.reviewId,
-    reviewerThreadId: input.reviewerThreadId,
     reviewLaunchCount: appReviewPhaseLaunchCount(input.cycle, "review") + 1,
     planningLaunchCount: 0,
     fixingLaunchCount: 0,
-    supersededThreadIds: [...input.supersededThreadIds],
     reviewVerdict: null,
     actionableFindingsMarkdown: null,
     planId: null,
@@ -689,7 +685,7 @@ export function buildAppReviewFixPrompt(input: {
             "Continuation state:",
             "- A previous fixer worked in this same worktree and stopped before it returned a valid result.",
             "- Inspect Git status, the current diff, and recent commits before editing. Treat those changes as partial work on the repair tickets below.",
-            "- Keep useful work, repair or remove incomplete work, and finish every ticket. Do not discard inherited changes merely because this is a new thread.",
+            "- Keep useful work, repair or remove incomplete work, and finish every ticket in this durable phase thread.",
           ]
         : []),
       "",
@@ -1035,7 +1031,6 @@ const make = Effect.gen(function* () {
     cycle: AppReviewWorkflowCycle,
   ) {
     const reviewer = yield* resolveThread(cycle.reviewerThreadId);
-    if (reviewer !== undefined) return;
     const controller = yield* resolveThread(run.controllerThreadId);
     if (controller === undefined) {
       yield* failRun({
@@ -1064,33 +1059,82 @@ const make = Effect.gen(function* () {
       });
       return;
     }
-    yield* orchestrationEngine.dispatch({
-      type: "thread.app-review.launch",
-      commandId: yield* serverCommandId("app-review-workflow-review-launch"),
-      sourceThreadId: run.controllerThreadId,
-      reviewThreadId: cycle.reviewerThreadId,
-      reviewId: cycle.reviewId,
-      planningTicketIds: [...(controller.workflowContext?.ticketScope ?? [])],
-      message: {
-        messageId: yield* serverMessageId("app-review-workflow-review"),
-        role: "user",
-        text: buildReviewPrompt({
-          run,
-          cycle,
-          priorFindingIds: prior.findingIds,
-          carryableChecks: prior.carryable,
-          e2eCommands,
-          reviewScope,
-        }),
-        attachments: [],
-      },
-      modelSelection: yield* modelForPrompt(
-        WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
-        controller,
+    const message = {
+      messageId: yield* serverMessageId("app-review-workflow-review"),
+      role: "user" as const,
+      text: buildReviewPrompt({
         run,
-      ),
-      runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
+        cycle,
+        priorFindingIds: prior.findingIds,
+        carryableChecks: prior.carryable,
+        e2eCommands,
+        reviewScope,
+      }),
+      attachments: [],
+    };
+    if (reviewer === undefined) {
+      yield* orchestrationEngine.dispatch({
+        type: "thread.app-review.launch",
+        commandId: yield* serverCommandId("app-review-workflow-review-launch"),
+        sourceThreadId: run.controllerThreadId,
+        reviewThreadId: cycle.reviewerThreadId,
+        reviewId: cycle.reviewId,
+        planningTicketIds: [...(controller.workflowContext?.ticketScope ?? [])],
+        message,
+        modelSelection: yield* modelForPrompt(
+          WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+          controller,
+          run,
+        ),
+        runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
+        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+        createdAt: run.updatedAt,
+      });
+      return;
+    }
+    if (reviewer.deletedAt !== null) {
+      yield* failRun({
+        run,
+        reason: "unknown",
+        detailMarkdown: `The durable App Review thread '${reviewer.id}' was deleted.`,
+        occurredAt: run.updatedAt,
+      });
+      return;
+    }
+    yield* orchestrationEngine.dispatch({
+      type: "thread.app-review.update",
+      commandId: yield* serverCommandId("app-review-workflow-review-reset"),
+      threadId: run.controllerThreadId,
+      reviewId: cycle.reviewId,
+      status: "running",
+      document: {
+        verdict: "pending",
+        summary: "",
+        checks: [],
+        findings: [],
+        questions: [],
+        nextSteps: [],
+      },
+      updatedAt: run.updatedAt,
+      createdAt: run.updatedAt,
+    });
+    yield* orchestrationEngine.dispatch({
+      type: "thread.app-review.evidence.update",
+      commandId: yield* serverCommandId("app-review-workflow-review-evidence-reset"),
+      threadId: run.controllerThreadId,
+      reviewId: cycle.reviewId,
+      evidence: EMPTY_APP_REVIEW_EVIDENCE,
+      updatedAt: run.updatedAt,
+      createdAt: run.updatedAt,
+    });
+    yield* orchestrationEngine.dispatch({
+      type: "thread.turn.start",
+      commandId: yield* serverCommandId("app-review-workflow-review-retry"),
+      threadId: reviewer.id,
+      message,
       workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+      runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
+      interactionMode: reviewer.interactionMode,
       createdAt: run.updatedAt,
     });
   });
@@ -1300,12 +1344,7 @@ const make = Effect.gen(function* () {
       detailMarkdown: input.detailMarkdown,
       failedAt: input.occurredAt,
     };
-    const supersededThreadIds = Array.from(
-      new Set([
-        ...(cycle.supersededThreadIds ?? []),
-        ...(run.activeThreadId === null ? [] : [run.activeThreadId]),
-      ]),
-    );
+    const supersededThreadIds = [...(cycle.supersededThreadIds ?? [])];
     const retryBase: AppReviewWorkflowRun = {
       ...run,
       workspaceRevision,
@@ -1328,19 +1367,15 @@ const make = Effect.gen(function* () {
 
     switch (phase) {
       case "review": {
-        const reviewerThreadId = yield* serverThreadId("app-review-reviewer");
         const retryCycle = retryReviewPhaseInCycle({
           cycle,
-          reviewId: yield* serverReviewId(),
-          reviewerThreadId,
-          supersededThreadIds,
           failure,
           workspaceRevision,
         });
         const reviewingRun: AppReviewWorkflowRun = {
           ...retryBase,
           activePhase: "review",
-          activeThreadId: reviewerThreadId,
+          activeThreadId: cycle.reviewerThreadId,
           cycles: retryBase.cycles.map((entry) =>
             entry.cycleNumber === cycle.cycleNumber ? retryCycle : entry,
           ),
@@ -1415,7 +1450,17 @@ const make = Effect.gen(function* () {
     // Gap analysis runs in a thread of its own so it can be given its own
     // model. The reviewer's evidence does not travel with it, so the prompt
     // below carries the brief and the complete actionable findings.
-    const plannerThreadId = yield* serverThreadId("app-review-planner");
+    const plannerThreadId = cycle.plannerThreadId ?? (yield* serverThreadId("app-review-planner"));
+    const plannerThread = yield* resolveThread(plannerThreadId);
+    if (plannerThread?.deletedAt !== null && plannerThread !== undefined) {
+      yield* failRun({
+        run: stableRun,
+        reason: "unknown",
+        detailMarkdown: `The durable App Review gap-analysis thread '${plannerThreadId}' was deleted.`,
+        occurredAt: input.occurredAt,
+      });
+      return;
+    }
     const planningRun: AppReviewWorkflowRun = {
       ...stableRun,
       activePhase: "planning",
@@ -1466,24 +1511,26 @@ const make = Effect.gen(function* () {
       0,
     );
     const firstChildKey = `${parentTicketKey}.${existingRepairTicketCount + 1}`;
-    yield* orchestrationEngine.dispatch({
-      type: "thread.create",
-      commandId: yield* serverCommandId("app-review-workflow-planner-create"),
-      threadId: plannerThreadId,
-      projectId: reviewer.projectId,
-      ownerUserId: reviewer.ownerUserId,
-      parentThreadId: reviewer.id,
-      workflowRole: "app-review-planner",
-      workflowContext: reviewer.workflowContext ?? null,
-      title: `App Review gap analysis ${cycle.cycleNumber}`,
-      modelSelection: yield* modelForPrompt(APP_REVIEW_TO_TICKETS_SKILL_ID, reviewer, input.run),
-      runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
-      interactionMode: "default",
-      workflowPreset: "app-review",
-      branch: reviewer.branch,
-      worktreePath: reviewer.worktreePath,
-      createdAt: input.occurredAt,
-    });
+    if (plannerThread === undefined) {
+      yield* orchestrationEngine.dispatch({
+        type: "thread.create",
+        commandId: yield* serverCommandId("app-review-workflow-planner-create"),
+        threadId: plannerThreadId,
+        projectId: reviewer.projectId,
+        ownerUserId: reviewer.ownerUserId,
+        parentThreadId: reviewer.id,
+        workflowRole: "app-review-planner",
+        workflowContext: reviewer.workflowContext ?? null,
+        title: `App Review gap analysis · Cycle ${cycle.cycleNumber} of ${stableRun.cycleBudget}`,
+        modelSelection: yield* modelForPrompt(APP_REVIEW_TO_TICKETS_SKILL_ID, reviewer, input.run),
+        runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
+        interactionMode: "default",
+        workflowPreset: "app-review",
+        branch: reviewer.branch,
+        worktreePath: reviewer.worktreePath,
+        createdAt: input.occurredAt,
+      });
+    }
     yield* orchestrationEngine.dispatch({
       type: "thread.turn.start",
       commandId: yield* serverCommandId("app-review-workflow-ticket-turn"),
@@ -1636,7 +1683,15 @@ const make = Effect.gen(function* () {
   ) {
     if (cycle.fixerThreadId === null) return;
     const existing = yield* resolveThread(cycle.fixerThreadId);
-    if (existing !== undefined) return;
+    if (existing?.deletedAt !== null && existing !== undefined) {
+      yield* failRun({
+        run,
+        reason: "unknown",
+        detailMarkdown: `The durable App Review repair thread '${cycle.fixerThreadId}' was deleted.`,
+        occurredAt: run.updatedAt,
+      });
+      return;
+    }
     const reviewer = yield* resolveThread(cycle.reviewerThreadId);
     const target = yield* resolveThread(run.targetThreadId);
     if (reviewer === undefined || target === undefined) return;
@@ -1647,24 +1702,26 @@ const make = Effect.gen(function* () {
     // run it either.
     const fixerScope = yield* reviewScopeForRun(run, declaredE2eCommands.length);
     const e2eCommands = fixerScope === "e2e" || fixerScope === "both" ? declaredE2eCommands : [];
-    yield* orchestrationEngine.dispatch({
-      type: "thread.create",
-      commandId: yield* serverCommandId("app-review-workflow-fixer-create"),
-      threadId: cycle.fixerThreadId,
-      projectId: target.projectId,
-      ownerUserId: target.ownerUserId,
-      parentThreadId: reviewer.id,
-      workflowRole: "app-review-fixer",
-      workflowContext: reviewer.workflowContext ?? null,
-      title: `App Review implementation ${cycle.cycleNumber}`,
-      modelSelection: yield* modelForPrompt(APP_REVIEW_IMPLEMENT_SKILL_ID, reviewer, run),
-      runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
-      interactionMode: "default",
-      workflowPreset: "app-review",
-      branch: target.branch,
-      worktreePath: target.worktreePath,
-      createdAt: run.updatedAt,
-    });
+    if (existing === undefined) {
+      yield* orchestrationEngine.dispatch({
+        type: "thread.create",
+        commandId: yield* serverCommandId("app-review-workflow-fixer-create"),
+        threadId: cycle.fixerThreadId,
+        projectId: target.projectId,
+        ownerUserId: target.ownerUserId,
+        parentThreadId: reviewer.id,
+        workflowRole: "app-review-fixer",
+        workflowContext: reviewer.workflowContext ?? null,
+        title: `App Review implementation · Cycle ${cycle.cycleNumber} of ${run.cycleBudget}`,
+        modelSelection: yield* modelForPrompt(APP_REVIEW_IMPLEMENT_SKILL_ID, reviewer, run),
+        runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
+        interactionMode: "default",
+        workflowPreset: "app-review",
+        branch: target.branch,
+        worktreePath: target.worktreePath,
+        createdAt: run.updatedAt,
+      });
+    }
     yield* orchestrationEngine.dispatch({
       type: "thread.turn.start",
       commandId: yield* serverCommandId("app-review-workflow-fixer-turn"),
@@ -1702,7 +1759,7 @@ const make = Effect.gen(function* () {
       interactionMode: "default",
       createdAt: input.occurredAt,
     });
-    const fixerThreadId = yield* serverThreadId("app-review-fixer");
+    const fixerThreadId = cycle.fixerThreadId ?? (yield* serverThreadId("app-review-fixer"));
     const repairTicketBatchId = `app-review-repair-tickets:${input.run.id}:${cycle.cycleNumber}`;
     const fixingCycle: AppReviewWorkflowCycle = {
       ...cycle,
@@ -2271,8 +2328,8 @@ const make = Effect.gen(function* () {
       if (run !== null && run.activeThreadId === event.payload.threadId) {
         const active = yield* resolveThread(event.payload.threadId);
         if (active !== undefined && (yield* phaseThreadState(active)) === "nudging") return;
-        // A named phase owns its bounded in-cycle replacement. A session error
-        // with no active phase has no safe retry target.
+        // A named phase owns bounded continuation turns in its durable thread.
+        // A session error with no active phase has no safe retry target.
         const phaseReason =
           run.activePhase === "fixing"
             ? ("fixer-failed" as const)
@@ -2393,7 +2450,7 @@ const make = Effect.gen(function* () {
         return worker.enqueue({ kind: "event", event });
       }),
     );
-    yield* reconcile();
+    if ((yield* ServerActivation) === undefined) yield* reconcile();
     yield* Effect.forkScoped(
       Effect.sleep(Duration.millis(APP_REVIEW_RECOVERY_SWEEP_INTERVAL_MS)).pipe(
         Effect.andThen(reconcile()),

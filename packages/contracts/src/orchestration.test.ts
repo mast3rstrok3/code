@@ -76,7 +76,7 @@ const decodeDispatchCommandError = Schema.decodeUnknownEffect(OrchestrationDispa
 it("exports the QA repair cap with deprecated compatibility aliases", () => {
   assert.strictEqual(IMPLEMENTATION_RUN_MAX_QA_REPAIRS, 10);
   assert.strictEqual(IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS, 3);
-  assert.strictEqual(IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES, 1);
+  assert.strictEqual(IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES, 5);
   assert.strictEqual(IMPLEMENTATION_RUN_MAX_QA_CYCLES, IMPLEMENTATION_RUN_MAX_QA_REPAIRS);
   assert.strictEqual(IMPLEMENTATION_RUN_MAX_QA_ATTEMPTS, IMPLEMENTATION_RUN_MAX_QA_REPAIRS);
 });

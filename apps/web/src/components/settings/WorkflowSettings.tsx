@@ -195,7 +195,7 @@ function WorkflowStepModelDefaultsBody(props: {
     >
       <SettingsRow
         title="Models and defaults for all eleven steps"
-        description="The order below matches the Engineering Workflow. App Review stops at 10 cycles, Code Review gets one valid pass, and an interrupted launch retries once. Same-thread work uses the model selected when the workflow starts. Review and publication steps can be skipped by default."
+        description="The order below matches the Engineering Workflow. App Review stops at 10 cycles. Ticket and Final Code Review stop clean or run at most five cycles. Recovery continues the current phase or cycle thread. Same-thread work uses the model selected when the workflow starts. Review and publication steps can be skipped by default."
       >
         <div className="mt-1 pb-3">
           <EngineeringWorkflowSettings

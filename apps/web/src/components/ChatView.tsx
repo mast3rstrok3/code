@@ -3306,8 +3306,8 @@ function ChatViewContent(props: ChatViewProps) {
     [activeWorkflowNavigation, restartPlanningStage, resumeWorkflowTree],
   );
   // Resuming clears the paused subtree; the run's reactor then re-enters
-  // whichever stage it stopped at, reusing the worktrees and branches it
-  // already has and starting fresh agents on the step's current model pin.
+  // whichever stage it stopped at, reusing its worktrees, branches, and
+  // recorded active thread.
   const handleResumeWorkflow = useCallback(() => {
     const root = activeWorkflowNavigation?.root;
     if (!root) return;

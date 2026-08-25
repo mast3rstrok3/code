@@ -386,12 +386,14 @@ export const makeOrchestrationIntegrationHarness = (
         Layer.succeed(ProductWorkflowReactor, {
           start: () => Effect.void,
           drain: Effect.void,
+          reconcileStartup: () => Effect.void,
         }),
       ),
       Layer.provideMerge(
         Layer.succeed(ImplementationWorkflowReactor, {
           start: () => Effect.void,
           drain: Effect.void,
+          reconcileStartup: () => Effect.void,
           recoverRetryableRuns: () => Effect.void,
           recoverIncompleteStages: () => Effect.void,
         }),
@@ -413,6 +415,7 @@ export const makeOrchestrationIntegrationHarness = (
         Layer.succeed(ThreadDeletionReactor, {
           start: () => Effect.void,
           drain: Effect.void,
+          cleanupEmptyWorkflowShells: Effect.succeed(0),
         }),
       ),
       Layer.provideMerge(

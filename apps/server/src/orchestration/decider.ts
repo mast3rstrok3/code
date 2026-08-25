@@ -705,6 +705,8 @@ function buildImplementationRun(input: {
     finalCodeReviewGeneration: 0,
     finalCodeReviewLaunchCount: 0,
     finalCodeReviewPassCount: 0,
+    codeReviewExhaustedAt: null,
+    codeReviewExhaustionReason: null,
     reviewGateExhaustedAt: null,
     reviewGateExhaustionReason: null,
     activeFixerThreadId: null,
@@ -2845,6 +2847,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const reviewerThreadId = ThreadId.make(`thread-planning-reviewer-${reviewerThreadUuid}`);
       const reviewerMessageId = MessageId.make(`message-planning-reviewer-${reviewerMessageUuid}`);
       const { cycleNumber, mode, targetPlanningTicketIds, previousCycle } = reviewRequest;
+      const cycleBudget = resolveWorkflowStepCycleBudget({
+        key: { workflowPromptId: WORKFLOW_PROMPT_IDS.planningTicketReviewerCodex },
+        threadOverrides: planningThread.workflowStepCycles,
+      });
       if (targetPlanningTicketIds.length === 0) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -2895,7 +2901,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             }),
             ticketScope: targetPlanningTicketIds,
           },
-          title: `Review ${spec.title}`,
+          title: `Review ${spec.title} · Cycle ${cycleNumber} of ${cycleBudget}`,
           modelSelection: planningThread.modelSelection,
           runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
           interactionMode: planningThread.interactionMode,
@@ -3349,6 +3355,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         finalCodeReviewGeneration: 0,
         finalCodeReviewLaunchCount: 0,
         finalCodeReviewPassCount: 0,
+        codeReviewExhaustedAt: null,
+        codeReviewExhaustionReason: null,
         reviewGateExhaustedAt: null,
         reviewGateExhaustionReason: null,
         activeFixerThreadId: null,
@@ -3554,6 +3562,28 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
               commandType: command.type,
               detail: `Ticket '${nextState.ticketId}' ${claimName} claim is stale.`,
             });
+          }
+          if (
+            claimName === "Implementation" &&
+            existingClaim != null &&
+            nextClaim == null &&
+            command.run.status !== "canceled" &&
+            (nextState.status === "ready" || nextState.status === "running")
+          ) {
+            const generationAdvanced =
+              nextState.implementationGeneration > existingState.implementationGeneration;
+            const resultPersisted =
+              readModel.threads
+                .find((thread) => thread.id === existingClaim)
+                ?.activities.some(
+                  (activity) => activity.kind === "implementation-worker-result",
+                ) === true;
+            if (!generationAdvanced && !resultPersisted) {
+              return yield* new OrchestrationCommandInvariantError({
+                commandType: command.type,
+                detail: `Ticket '${nextState.ticketId}' ${claimName} claim cannot clear before its terminal result is persisted.`,
+              });
+            }
           }
         }
       }
@@ -4452,6 +4482,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         createdAt: command.createdAt,
         updatedAt: command.createdAt,
       };
+      const workflowReviewCycle = (readModel.appReviewWorkflowRuns ?? [])
+        .flatMap((run) => run.cycles.map((cycle) => ({ run, cycle })))
+        .find(({ cycle }) => cycle.reviewId === command.reviewId);
       const threadCreatedEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -4477,7 +4510,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.batchProvenance !== undefined
             ? { workflowSubagentBatchProvenance: command.batchProvenance }
             : {}),
-          title: "Browser App Review",
+          title:
+            workflowReviewCycle === undefined
+              ? "Browser App Review"
+              : `Browser App Review · Cycle ${workflowReviewCycle.cycle.cycleNumber} of ${workflowReviewCycle.run.cycleBudget}`,
           modelSelection: command.modelSelection,
           runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
           interactionMode:

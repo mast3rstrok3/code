@@ -100,6 +100,7 @@ export const AppDevStackListResult = Schema.Struct({
   workflowConflicts: Schema.optionalKey(
     Schema.Array(
       Schema.Struct({
+        kind: Schema.optionalKey(Schema.Literals(["duplicate-worktree", "ownership-mismatch"])),
         workflowId: TrimmedNonEmptyString,
         stackIds: Schema.Array(TrimmedNonEmptyString),
         runIds: Schema.Array(TrimmedNonEmptyString),

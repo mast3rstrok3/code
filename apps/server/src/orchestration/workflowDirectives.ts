@@ -1013,8 +1013,8 @@ function parseDirectiveRecord(record: Record<string, unknown>): WorkflowDirectiv
       if (typeof commitSha === "string" && commitSha.startsWith("Directive field"))
         return commitSha;
       if (typeof ticketId === "string" && ticketId.startsWith("Directive field")) return ticketId;
-      // Code Review is a single review-and-fix pass, so "findings" means the reviewer landed its own
-      // fixes and must name the commit they produced.
+      // Each Code Review cycle owns its fixes, so "findings" means the reviewer landed its own
+      // fixes and must name the commit it produced before the next fresh cycle starts.
       if (status === "findings" && commitSha === undefined) {
         return "implementation-code-review-result.commitSha is required when status is findings.";
       }

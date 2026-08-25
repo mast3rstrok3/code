@@ -1,8 +1,11 @@
 import type {
+  AppReviewWorkflowRun,
   OrchestrationImplementationAutomationHalt,
+  OrchestrationImplementationRun,
   OrchestrationImplementationRetryableFailure,
   OrchestrationImplementationRunStatus,
   OrchestrationPlanningTicket,
+  OrchestrationPlanningWorkflowStage,
   OrchestrationSessionStatus,
   OrchestrationThreadWorkflowRole,
   WorkflowPreset,
@@ -504,6 +507,7 @@ function definedStepRepeatsAsCycles(step: WorkflowPresetHelpStep): boolean {
   const label = step.label.toLowerCase();
   return (
     step.skillId === "implementation.browser-app-review.codex" ||
+    step.skillId === "implementation.code-review.codex" ||
     step.skillId === "planning.ticket-reviewer.codex" ||
     label.includes("cycle")
   );
@@ -591,6 +595,352 @@ export function resolveGroupImplementationRun<
   );
   if (group.parentGroupId !== null) return newestImplementationRun(directlyLinked);
   return newestImplementationRun([...new Set([...directlyLinked, ...scopedRuns])]);
+}
+
+export interface WorkflowCurrentPath {
+  readonly groupId: string;
+  readonly status: "blocked" | "awaiting" | "running" | "paused" | "upcoming" | "done";
+  readonly phase: string;
+  readonly stepId: string | null;
+  readonly stepLabel: string;
+  readonly waveIndex: number | null;
+  readonly ticketId: string | null;
+  readonly ticketLabel: string | null;
+  readonly ticketStage: "implementation" | "app-review" | "code-review" | null;
+  readonly appReviewRunId: string | null;
+  readonly cycleNumber: number | null;
+  readonly cycleBudget: number | null;
+  readonly appReviewPhase: "review" | "planning" | "fixing" | null;
+  readonly threadId: string | null;
+  readonly activeTicketCount: number;
+  readonly subtitle: string;
+}
+
+/** The deepest durable row the Interaction Modes chip can reveal. */
+export function workflowCurrentPathScrollTarget(path: WorkflowCurrentPath): string | null {
+  if (path.threadId !== null) return path.threadId;
+  if (
+    path.appReviewRunId !== null &&
+    path.cycleNumber !== null &&
+    path.ticketStage === "app-review"
+  ) {
+    return `app-review-cycle:${path.appReviewRunId}:${path.cycleNumber}`;
+  }
+  if (path.ticketId !== null && path.cycleNumber !== null && path.ticketStage === "code-review") {
+    return `ticket-code-review:${path.ticketId}:${path.cycleNumber}`;
+  }
+  return path.ticketId;
+}
+
+const currentPathStep = <TThread extends WorkflowModelThread>(
+  steps: readonly WorkflowTimelineStep<TThread>[],
+  predicate: (label: string) => boolean,
+) => steps.find((step) => predicate((step.label ?? "").toLowerCase())) ?? null;
+
+/**
+ * Resolve the durable workflow location that a chip and card should reveal.
+ *
+ * Ticket state wins over a missing or stale worker session. Among concurrent
+ * tickets, a human block wins, then input, running work, a pause, and upcoming
+ * work. Wave and ticket order break ties.
+ */
+export function resolveWorkflowCurrentPath<TThread extends WorkflowModelThread>(input: {
+  readonly groupId: string;
+  readonly workflowLabel: string;
+  readonly steps: readonly WorkflowTimelineStep<TThread>[];
+  readonly run: OrchestrationImplementationRun | null;
+  readonly appReviewWorkflowRuns: readonly AppReviewWorkflowRun[];
+  readonly tickets: readonly OrchestrationPlanningTicket[];
+  readonly threads: readonly TThread[];
+  readonly planningStage?: OrchestrationPlanningWorkflowStage | null | undefined;
+  readonly workflowPaused: boolean;
+  readonly ticketCodeReviewBudget: number;
+  readonly finalCodeReviewBudget: number;
+}): WorkflowCurrentPath {
+  const run = input.run;
+  if (run !== null) {
+    const ticketById = new Map(input.tickets.map((ticket) => [ticket.id, ticket] as const));
+    const waves = buildTicketWaves(
+      input.tickets.filter((ticket) => run.planningTicketIds.includes(ticket.id)),
+    );
+    const order = new Map<string, { readonly waveIndex: number; readonly ordinal: number }>();
+    waves.forEach((wave, waveIndex) =>
+      wave.forEach((ticket) => order.set(ticket.id, { waveIndex, ordinal: ticket.ordinal })),
+    );
+    const threadPriority = (ticketId: string) => {
+      const threads = input.threads.filter((thread) =>
+        thread.workflowContext?.ticketScope?.includes(ticketId),
+      );
+      if (threads.some((thread) => thread.hasPendingApprovals || thread.hasPendingUserInput)) {
+        return 1;
+      }
+      return 9;
+    };
+    const ticketPriority = (state: OrchestrationImplementationRun["ticketStates"][number]) => {
+      if (run.automationHalt?.ticketId === state.ticketId || state.status === "failed") return 0;
+      const pendingPriority = threadPriority(state.ticketId);
+      if (pendingPriority < 9) return pendingPriority;
+      if (
+        state.status === "running" ||
+        state.status === "app-reviewing" ||
+        state.status === "code-reviewing"
+      )
+        return 2;
+      if (input.workflowPaused && state.status !== "succeeded") return 3;
+      if (state.status === "ready" || state.status === "blocked") return 4;
+      return 9;
+    };
+    const focusedState = run.ticketStates
+      .filter((state) => ticketPriority(state) < 9)
+      .toSorted((left, right) => {
+        const priority = ticketPriority(left) - ticketPriority(right);
+        if (priority !== 0) return priority;
+        const leftOrder = order.get(left.ticketId) ?? { waveIndex: Number.MAX_VALUE, ordinal: 0 };
+        const rightOrder = order.get(right.ticketId) ?? { waveIndex: Number.MAX_VALUE, ordinal: 0 };
+        return (
+          leftOrder.waveIndex - rightOrder.waveIndex ||
+          leftOrder.ordinal - rightOrder.ordinal ||
+          left.ticketId.localeCompare(right.ticketId)
+        );
+      })[0];
+    const activeTicketCount = run.ticketStates.filter(
+      (state) =>
+        state.status === "running" ||
+        state.status === "app-reviewing" ||
+        state.status === "code-reviewing",
+    ).length;
+    if (focusedState !== undefined) {
+      const ticket = ticketById.get(focusedState.ticketId);
+      const ticketLabel = ticket?.key ?? `Ticket ${(ticket?.ordinal ?? 0) + 1}`;
+      const waveIndex = order.get(focusedState.ticketId)?.waveIndex ?? 0;
+      const priority = ticketPriority(focusedState);
+      const status =
+        priority === 0
+          ? "blocked"
+          : priority === 1
+            ? "awaiting"
+            : priority === 2
+              ? "running"
+              : priority === 3
+                ? "paused"
+                : "upcoming";
+      const haltedStage =
+        run.automationHalt?.ticketId === focusedState.ticketId ? run.automationHalt.stage : null;
+      const ticketStage =
+        focusedState.status === "app-reviewing" || haltedStage === "app-review"
+          ? ("app-review" as const)
+          : focusedState.status === "code-reviewing" ||
+              haltedStage === "code-review" ||
+              haltedStage === "final-code-review"
+            ? ("code-review" as const)
+            : ("implementation" as const);
+      const appReviewRun =
+        ticketStage === "app-review"
+          ? (input.appReviewWorkflowRuns.find(
+              (candidate) => candidate.id === focusedState.appReviewWorkflowRunId,
+            ) ?? null)
+          : null;
+      const appReviewCycle = appReviewRun?.cycles.at(-1) ?? null;
+      const cycleNumber =
+        ticketStage === "app-review"
+          ? (appReviewCycle?.cycleNumber ??
+            (Math.min(appReviewRun?.cyclesUsed ?? 0, appReviewRun?.cycleBudget ?? 1) || 1))
+          : ticketStage === "code-review"
+            ? Math.min(focusedState.codeReviewPassCount + 1, input.ticketCodeReviewBudget)
+            : null;
+      const cycleBudget =
+        ticketStage === "app-review"
+          ? (appReviewRun?.cycleBudget ?? null)
+          : ticketStage === "code-review"
+            ? input.ticketCodeReviewBudget
+            : null;
+      const appReviewPhase = appReviewRun?.activePhase ?? null;
+      const phaseLabel =
+        appReviewPhase === "review"
+          ? "E2E and browser review"
+          : appReviewPhase === "planning"
+            ? "Gap analysis"
+            : appReviewPhase === "fixing"
+              ? "TDD repair"
+              : null;
+      const segments = [
+        input.workflowLabel,
+        "Execute ticket waves",
+        activeTicketCount > 1 ? `${activeTicketCount} active` : null,
+        ticketLabel,
+        ticketStage === "implementation"
+          ? "Implementation"
+          : ticketStage === "app-review"
+            ? "App Review"
+            : "Code Review",
+        cycleNumber === null ? null : `Cycle ${cycleNumber}`,
+        phaseLabel,
+      ].filter((segment): segment is string => segment !== null);
+      const ticketStep = currentPathStep(input.steps, (label) => label.includes("ticket wave"));
+      return {
+        groupId: input.groupId,
+        status,
+        phase: "Implementation",
+        stepId: ticketStep?.id ?? null,
+        stepLabel: ticketStep?.label ?? "Execute ticket waves",
+        waveIndex,
+        ticketId: focusedState.ticketId,
+        ticketLabel,
+        ticketStage,
+        appReviewRunId: appReviewRun?.id ?? null,
+        cycleNumber,
+        cycleBudget,
+        appReviewPhase,
+        threadId:
+          ticketStage === "implementation"
+            ? focusedState.workerThreadId
+            : ticketStage === "app-review"
+              ? (appReviewRun?.activeThreadId ?? null)
+              : (focusedState.codeReviewThreadId ?? null),
+        activeTicketCount,
+        subtitle: segments.join(" · "),
+      };
+    }
+
+    const stage = implementationRunCurrentStage(run);
+    const finalValidation = run.status === "validating" && run.activeValidationKind === "final";
+    const step = finalValidation
+      ? (currentPathStep(input.steps, (label) => label.includes("final code review")) ??
+        currentPathStep(input.steps, (label) => label.includes("code review")))
+      : stage === "app-review"
+        ? currentPathStep(input.steps, (label) => label.includes("app review"))
+        : stage === "code-review"
+          ? (currentPathStep(input.steps, (label) => label.includes("final code review")) ??
+            currentPathStep(input.steps, (label) => label.includes("code review")))
+          : stage === "change-request" || stage === "change-request-babysit"
+            ? currentPathStep(input.steps, (label) =>
+                stage === "change-request-babysit"
+                  ? label.includes("babysit")
+                  : label.includes("pull request") || label.includes("publication"),
+              )
+            : currentPathStep(input.steps, (label) =>
+                stage === "merge-gate" || stage === "integration"
+                  ? label.includes("merge") || label.includes("integrat")
+                  : label.includes("implementation"),
+              );
+    const finalCodeReview = stage === "code-review" && !finalValidation;
+    const combinedAppReview =
+      stage === "app-review"
+        ? (input.appReviewWorkflowRuns
+            .filter(
+              (candidate) =>
+                candidate.caller.type === "implementation" &&
+                candidate.caller.implementationRunId === run.id &&
+                candidate.caller.ticketId === undefined,
+            )
+            .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0] ?? null)
+        : null;
+    const combinedAppReviewCycle = combinedAppReview?.cycles.at(-1) ?? null;
+    const cycleNumber = finalCodeReview
+      ? Math.min(run.finalCodeReviewPassCount + 1, input.finalCodeReviewBudget)
+      : (combinedAppReviewCycle?.cycleNumber ?? null);
+    const appReviewPhase = combinedAppReview?.activePhase ?? null;
+    const appReviewPhaseLabel =
+      appReviewPhase === "review"
+        ? "E2E and browser review"
+        : appReviewPhase === "planning"
+          ? "Gap analysis"
+          : appReviewPhase === "fixing"
+            ? "TDD repair"
+            : null;
+    const status =
+      run.status === "needs-human-attention"
+        ? "blocked"
+        : input.workflowPaused
+          ? "paused"
+          : run.status === "completed"
+            ? "done"
+            : "running";
+    const segments = [
+      input.workflowLabel,
+      finalValidation
+        ? "Final validation"
+        : (step?.label ?? stage?.replaceAll("-", " ") ?? "Complete"),
+      cycleNumber === null ? null : `Cycle ${cycleNumber}`,
+      appReviewPhaseLabel,
+    ].filter((segment): segment is string => segment !== null);
+    return {
+      groupId: input.groupId,
+      status,
+      phase: finalCodeReview || finalValidation ? "Code Review" : "Implementation",
+      stepId: step?.id ?? null,
+      stepLabel: step?.label ?? "Workflow",
+      waveIndex: null,
+      ticketId: null,
+      ticketLabel: null,
+      ticketStage: null,
+      appReviewRunId: combinedAppReview?.id ?? null,
+      cycleNumber,
+      cycleBudget: finalCodeReview
+        ? input.finalCodeReviewBudget
+        : (combinedAppReview?.cycleBudget ?? null),
+      appReviewPhase,
+      threadId:
+        run.activeCodeReviewThreadId ??
+        combinedAppReview?.activeThreadId ??
+        run.activeAppReviewThreadId ??
+        run.activeValidatorThreadId ??
+        run.activeChangeRequestBabysitterThreadId,
+      activeTicketCount,
+      subtitle: segments.join(" · "),
+    };
+  }
+
+  const planningNeedle =
+    input.planningStage === "grill"
+      ? "grill"
+      : input.planningStage === "spec-authoring"
+        ? "spec authoring"
+        : input.planningStage === "tickets-authoring"
+          ? "ticket authoring"
+          : input.planningStage === "ticket-review" || input.planningStage === "ticket-revision"
+            ? "ticket review"
+            : null;
+  const planningStep =
+    (planningNeedle === null
+      ? null
+      : currentPathStep(input.steps, (label) => label.includes(planningNeedle))) ??
+    input.steps.find((step) => step.entries.length > 0) ??
+    input.steps[0] ??
+    null;
+  const hasPendingUserAction = input.threads.some(
+    (thread) => thread.hasPendingApprovals || thread.hasPendingUserInput,
+  );
+  const status =
+    input.planningStage === "needs-human-attention"
+      ? "blocked"
+      : hasPendingUserAction
+        ? "awaiting"
+        : input.workflowPaused
+          ? "paused"
+          : input.planningStage === "completed"
+            ? "done"
+            : planningStep === null
+              ? "upcoming"
+              : "running";
+  return {
+    groupId: input.groupId,
+    status,
+    phase: "Planning",
+    stepId: planningStep?.id ?? null,
+    stepLabel: planningStep?.label ?? "Planning",
+    waveIndex: null,
+    ticketId: null,
+    ticketLabel: null,
+    ticketStage: null,
+    appReviewRunId: null,
+    cycleNumber: null,
+    cycleBudget: null,
+    appReviewPhase: null,
+    threadId: input.threads[0]?.id ?? null,
+    activeTicketCount: 0,
+    subtitle: [input.workflowLabel, planningStep?.label ?? "Planning"].join(" · "),
+  };
 }
 
 function descendantGroups<TThread extends WorkflowModelThread>(

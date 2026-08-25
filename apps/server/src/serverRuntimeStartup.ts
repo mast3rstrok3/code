@@ -443,6 +443,10 @@ export const make = (options?: StartupOptions) =>
       );
 
       yield* runStartupPhase("provider-sessions.reconcile", reconcileProviderSessions);
+      yield* runStartupPhase(
+        "provider-commands.drain-before-stale-turns",
+        orchestrationReactor.drainPendingProviderCommands.pipe(Scope.provide(reactorScope)),
+      );
       // Provider reconciliation first marks sessions that did not survive the
       // restart. The awaited boot sweep can then recover every unpaused
       // workflow from one stable snapshot. Workflow subscribers are already

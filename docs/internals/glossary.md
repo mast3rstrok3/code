@@ -207,15 +207,19 @@ The durable map of decision tickets for efforts too large to specify in one pass
 
 #### App review
 
-The bounded QA stage of an implementation run. AppDevStack and App Review failures share up to `IMPLEMENTATION_RUN_MAX_QA_REPAIRS` (10) fresh automated repair agents in [the contracts][1]. Initial probes and Browser App Reviews do not consume slots; replacing a malformed, failed, blocked, or interrupted repair does. A successful AppDevStack repair re-ensures the stack directly; the final merge gate after Code Review owns complete validation instead of rerunning the integration gate after every stack repair. Exhaustion proceeds through best-effort Code Review and flagged publication only from a clean, merge-gate-validated HEAD. A clean legacy HEAD without a validation receipt reruns the merge gate; dirty, wrong-branch, non-repository, or controller-invisible worktrees require human attention. The persisted `qaCycleCount` name remains for compatibility but records consumed repair slots; `qaAttemptCount` records Browser App Review launches.
+The bounded QA stage of an implementation run. A run may use up to ten cycles. Each cycle has an E2E and browser review thread, a gap-analysis thread when actionable findings exist, and a TDD repair thread. A passing review stops the run early. Budget exhaustion records unresolved findings and lets Implementation continue to Code Review. Ticket App Review resolves its effective scope before creating a ticket App Dev Stack. A missing preview, stale workspace, dirty embedded worktree, or invalid workspace identity still requires human attention.
 
 #### Code review
 
-The final automated review stage: one comprehensive review-and-fix pass along the Standards and Spec axes, followed only when necessary by delta reviews of final-validation repairs. The review/validation loop is capped at `IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES` (3); exhaustion publishes a clean work-in-progress change request with unresolved validation evidence instead of looping indefinitely. Prompted by `implementation.code-review.codex` in [WorkflowPromptRegistry.ts][26].
+The ticket and final automated review stage. One logical cycle uses one fresh thread to review the complete applicable diff, apply clear fixes, validate, commit, and report. A clean result stops early. Findings start another fresh cycle, up to `IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES` (5). Interrupted turns retry in the current cycle thread and do not consume a cycle. The Final Code Review thread that ends the stage runs complete validation. Exhaustion becomes a pull-request warning when the branch remains clean and usable. Prompted by `implementation.code-review.codex` in [WorkflowPromptRegistry.ts][26].
+
+#### Thread budget
+
+The maximum number of durable thread IDs a workflow stage may claim. Another turn in an existing thread does not spend the budget. A new review cycle, a ticket that has never started, or an explicit rerun generation may claim a fresh ID. Recovery never clears a claimed active ID to obtain a replacement.
 
 #### Implementation run
 
-One orchestrated execution of a Spec's tickets: a dedicated worktree, dependency-chained TDD workers, programmatic merges, app review, and code review, driven by [ImplementationWorkflowReactor.ts][29].
+One orchestrated execution of a Spec's tickets: a dedicated worktree, dependency-chained TDD workers, programmatic merges, App Review, and Code Review, driven by [ImplementationWorkflowReactor.ts][29]. Each ticket allocates one durable Implementation thread. Recovery adds continuation turns to that thread. An explicit rerun creates a new stage generation.
 
 #### Workflow nudge
 
@@ -223,9 +227,10 @@ The retry a blocked workflow thread gets in place. A turn that ends in a provide
 
 #### App dev stack
 
-A Kubernetes development deployment for a worktree. Workflow orchestration may own one stack at a
-time through its durable workflow ID. A matching pre-existing or standing stack can be reused but
-is not adopted, replaced, or deleted by that workflow.
+A Kubernetes development deployment for a worktree. One workflow may own a shared stack and several
+ticket stacks, each identified by the durable workflow ID and a distinct normalized worktree path.
+A matching stack can be reused after restart. Duplicate stacks for one worktree and ownership
+mismatches are reported instead of stopped automatically.
 
 The per-worktree development stack (dev servers, preview) that implementation runs start only after Build or worker integration has produced a stable worktree. Transitional `pending` and `starting` states are retried as waiting states, while controller visibility failures and unhealthy non-optional services block before Browser App Review. App Review then uses its live surface. See [app-dev-stacks.md][30].
 

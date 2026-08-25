@@ -22,6 +22,9 @@ export interface OrchestrationReactorShape {
    */
   readonly start: () => Effect.Effect<void, never, Scope.Scope>;
 
+  /** Replays saved provider commands before stale-turn recovery inspects sessions. */
+  readonly drainPendingProviderCommands: Effect.Effect<void, never, Scope.Scope>;
+
   /** Replays and drains provider commands persisted by startup recovery. */
   readonly reconcilePendingProviderCommands: Effect.Effect<void, never, Scope.Scope>;
 }

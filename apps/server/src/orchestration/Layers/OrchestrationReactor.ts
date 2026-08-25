@@ -26,15 +26,23 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
   const threadDeletionReactor = yield* ThreadDeletionReactor;
   const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
 
-  const reconcilePendingProviderCommands = Effect.gen(function* () {
-    // Restart recovery can enqueue workflow events that create continuation
-    // turns. Materialize those turns before replaying provider starts so the
-    // server does not report ready with recovered work still unlaunched.
-    yield* productWorkflowReactor.flush ?? productWorkflowReactor.drain;
-    yield* implementationWorkflowReactor.flush ?? implementationWorkflowReactor.drain;
-    yield* appReviewWorkflowReactor.flush ?? appReviewWorkflowReactor.drain;
+  const drainPendingProviderCommands = Effect.gen(function* () {
     yield* providerCommandReactor.replayPendingWorkflowTurnStarts;
     yield* providerCommandReactor.drain;
+  });
+
+  const reconcilePendingProviderCommands = Effect.gen(function* () {
+    // Stale-turn recovery has settled before this phase. Nested App Review
+    // settles first so parent ticket recovery sees its durable result.
+    yield* appReviewWorkflowReactor.reconcile();
+    yield* appReviewWorkflowReactor.flush ?? appReviewWorkflowReactor.drain;
+    yield* implementationWorkflowReactor.reconcileStartup();
+    yield* implementationWorkflowReactor.flush ?? implementationWorkflowReactor.drain;
+    yield* productWorkflowReactor.reconcileStartup();
+    yield* productWorkflowReactor.flush ?? productWorkflowReactor.drain;
+    yield* providerCommandReactor.replayPendingWorkflowTurnStarts;
+    yield* providerCommandReactor.drain;
+    yield* threadDeletionReactor.cleanupEmptyWorkflowShells;
   });
 
   const start: OrchestrationReactorShape["start"] = Effect.fn("start")(function* () {
@@ -51,6 +59,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
 
   return {
     start,
+    drainPendingProviderCommands,
     reconcilePendingProviderCommands,
   } satisfies OrchestrationReactorShape;
 });

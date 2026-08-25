@@ -333,7 +333,7 @@ function EngineeringWorkflowStepControls(
               className="space-y-2 border-t border-border/60 pt-3"
             />
           </div>
-          <div className="p-3">
+          <div className="grid gap-4 p-3 sm:grid-cols-2">
             <StepModelControl
               label="Ticket Code Review"
               note="reviews the ticket after implementation and App Review"
@@ -347,6 +347,15 @@ function EngineeringWorkflowStepControls(
               inheritedLabel={`Follows the implementation step (${props.choices.describeSelection(implementationSelection)})`}
               choices={props.choices}
               onSetStepModel={props.onSetStepModel}
+            />
+            <WorkflowStepCyclePins
+              workflowPromptId={TDD_STEP_KEY.workflowPromptId}
+              subStepWorkflowPromptIds={[TICKET_CODE_REVIEW_KEY.workflowPromptId]}
+              overrides={props.stepCycles}
+              defaults={props.defaultStepCycles}
+              inheritedLabel="Runs the built-in number of cycles"
+              onSetStepCycles={props.onSetStepCycles}
+              showHeading={false}
             />
           </div>
         </div>

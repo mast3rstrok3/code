@@ -74,6 +74,10 @@ describe("OrchestrationReactor", () => {
             flush: Effect.sync(() => {
               started.push("product-workflow-flush");
             }),
+            reconcileStartup: () =>
+              Effect.sync(() => {
+                started.push("product-workflow-reconcile");
+              }),
           }),
         ),
         Layer.provideMerge(
@@ -86,6 +90,10 @@ describe("OrchestrationReactor", () => {
             flush: Effect.sync(() => {
               started.push("implementation-workflow-flush");
             }),
+            reconcileStartup: () =>
+              Effect.sync(() => {
+                started.push("implementation-workflow-reconcile");
+              }),
             recoverRetryableRuns: () => Effect.void,
             recoverIncompleteStages: () => Effect.void,
           }),
@@ -100,7 +108,10 @@ describe("OrchestrationReactor", () => {
             flush: Effect.sync(() => {
               started.push("app-review-workflow-flush");
             }),
-            reconcile: () => Effect.void,
+            reconcile: () =>
+              Effect.sync(() => {
+                started.push("app-review-workflow-reconcile");
+              }),
           }),
         ),
         Layer.provideMerge(
@@ -119,6 +130,10 @@ describe("OrchestrationReactor", () => {
               return Effect.void;
             },
             drain: Effect.void,
+            cleanupEmptyWorkflowShells: Effect.sync(() => {
+              started.push("workflow-shell-cleanup");
+              return 0;
+            }),
           }),
         ),
         Layer.provideMerge(
@@ -149,6 +164,7 @@ describe("OrchestrationReactor", () => {
       "agent-awareness-relay",
     ]);
 
+    await Effect.runPromise(reactor.drainPendingProviderCommands.pipe(Scope.provide(scope)));
     await Effect.runPromise(reactor.reconcilePendingProviderCommands.pipe(Scope.provide(scope)));
     expect(started).toEqual([
       "provider-runtime-ingestion",
@@ -160,11 +176,17 @@ describe("OrchestrationReactor", () => {
       "preview-lifecycle-reactor",
       "thread-deletion-reactor",
       "agent-awareness-relay",
-      "product-workflow-flush",
-      "implementation-workflow-flush",
-      "app-review-workflow-flush",
       "provider-command-replay",
       "provider-command-drain",
+      "app-review-workflow-reconcile",
+      "app-review-workflow-flush",
+      "implementation-workflow-reconcile",
+      "implementation-workflow-flush",
+      "product-workflow-reconcile",
+      "product-workflow-flush",
+      "provider-command-replay",
+      "provider-command-drain",
+      "workflow-shell-cleanup",
     ]);
 
     await Effect.runPromise(Scope.close(scope, Exit.void));

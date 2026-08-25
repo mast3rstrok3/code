@@ -6,6 +6,7 @@ export interface ImplementationWorkflowReactorShape {
   readonly start: () => Effect.Effect<void, never, Scope.Scope>;
   readonly drain: Effect.Effect<void>;
   readonly flush?: Effect.Effect<void>;
+  readonly reconcileStartup: () => Effect.Effect<void>;
   /**
    * One pass of the automatic retry sweep that `start` otherwise runs every 30s.
    * Exposed so its guards can be exercised without waiting on the schedule.

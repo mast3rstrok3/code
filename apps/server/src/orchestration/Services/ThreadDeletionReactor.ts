@@ -27,6 +27,8 @@ export interface ThreadDeletionReactorShape {
    * Intended for test use to replace timing-sensitive sleeps.
    */
   readonly drain: Effect.Effect<void>;
+  /** Runs conservative empty-shell cleanup after startup recovery drains. */
+  readonly cleanupEmptyWorkflowShells: Effect.Effect<number>;
 }
 
 /**

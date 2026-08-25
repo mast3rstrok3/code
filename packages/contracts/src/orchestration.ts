@@ -614,8 +614,8 @@ export type OrchestrationPlanningSpecBundle = typeof OrchestrationPlanningSpecBu
 export const IMPLEMENTATION_RUN_MAX_QA_REPAIRS = 10;
 /** Maximum number of fresh nested App Review runs launched after consecutive blocked outcomes. */
 export const IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS = 3;
-/** One logical Code Review pass. Findings may be repaired, but never reviewed again automatically. */
-export const IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES = 1;
+/** Maximum number of logical Code Review cycles before findings become a warning. */
+export const IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES = 5;
 /** One initial launch plus one automatic retry before a valid stage result. */
 export const IMPLEMENTATION_STAGE_MAX_LAUNCHES = 2;
 /** @deprecated Use IMPLEMENTATION_RUN_MAX_QA_REPAIRS. */
@@ -1223,7 +1223,7 @@ export const OrchestrationImplementationRun = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   latestAppReviewWorkflowOutcome: Schema.NullOr(
-    Schema.Literals(["passed", "failed", "exhausted"]),
+    Schema.Literals(["passed", "failed", "exhausted", "skipped"]),
   ).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   appReviewUnblockAttemptCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
   appReviews: Schema.Array(OrchestrationImplementationAppReviewArtifact).pipe(
@@ -1248,7 +1248,8 @@ export const OrchestrationImplementationRun = Schema.Struct({
   lastQaFailure: Schema.NullOr(OrchestrationImplementationQaFailure).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
-  // Set when automated QA used every allowed repair without passing. Automation halts at that point.
+  // Set when automated QA used every allowed repair without passing. The run
+  // carries the unresolved review into Code Review and the pull-request note.
   appReviewExhaustedAt: Schema.NullOr(IsoDateTime).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
@@ -1268,6 +1269,12 @@ export const OrchestrationImplementationRun = Schema.Struct({
   finalCodeReviewGeneration: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
   finalCodeReviewLaunchCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
   finalCodeReviewPassCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+  codeReviewExhaustedAt: Schema.NullOr(IsoDateTime).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  codeReviewExhaustionReason: Schema.NullOr(Schema.String).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   reviewGateExhaustedAt: Schema.NullOr(IsoDateTime).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),

@@ -6,6 +6,7 @@ export interface ProductWorkflowReactorShape {
   readonly start: () => Effect.Effect<void, never, Scope.Scope>;
   readonly drain: Effect.Effect<void>;
   readonly flush?: Effect.Effect<void>;
+  readonly reconcileStartup: () => Effect.Effect<void>;
 }
 
 export class ProductWorkflowReactor extends Context.Service<

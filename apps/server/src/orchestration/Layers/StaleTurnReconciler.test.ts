@@ -39,6 +39,7 @@ import * as ProviderSessionRuntime from "../../persistence/ProviderSessionRuntim
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
+import { T3ProjectFileLoader } from "../../project/T3ProjectFileLoader.ts";
 import { WORKFLOW_PROMPT_IDS } from "../../provider/WorkflowPromptRegistry.ts";
 import { ProviderSessionDirectory } from "../../provider/Services/ProviderSessionDirectory.ts";
 import { ProviderSessionDirectoryLive } from "../../provider/Layers/ProviderSessionDirectory.ts";
@@ -138,6 +139,11 @@ function makeTestLayer(
   const reactorLayer = ImplementationWorkflowReactorLive.pipe(
     Layer.provide(coreLayer),
     Layer.provide(serverSettingsLayerTest({})),
+    Layer.provide(
+      Layer.succeed(T3ProjectFileLoader, {
+        load: () => Effect.succeed(Option.none()),
+      }),
+    ),
     // The reactor probes the App Review frontend URL; answer it without real network I/O.
     Layer.provide(
       Layer.succeed(
@@ -986,7 +992,7 @@ describe("StaleTurnReconciler", () => {
     ),
   );
 
-  it.live("retries an interrupted worker once and halts after the second interruption", () =>
+  it.live("continues an interrupted worker in place and halts after the second interruption", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
@@ -1046,7 +1052,7 @@ describe("StaleTurnReconciler", () => {
           expect(settledRun?.status).toBe("running");
           expect(settledRun?.ticketStates[0]?.status).toBe("running");
           expect(settledRun?.ticketStates[0]?.attemptCount).toBe(2);
-          expect(settledRun?.ticketStates[0]?.workerThreadId).not.toBe(workerThreadId);
+          expect(settledRun?.ticketStates[0]?.workerThreadId).toBe(workerThreadId);
           expect(settledRun?.retryableFailure?.attemptCount).toBe(1);
           expect(settledRun?.workerResults).toHaveLength(0);
           const workerResultActivities = (workerThread?.activities ?? []).filter(
@@ -1054,10 +1060,8 @@ describe("StaleTurnReconciler", () => {
           );
           expect(workerResultActivities).toHaveLength(1);
 
-          const retryWorkerThreadId = settledRun?.ticketStates[0]?.workerThreadId;
-          if (!retryWorkerThreadId) throw new Error("Retry worker missing.");
           yield* setThreadSession(system, {
-            threadId: retryWorkerThreadId,
+            threadId: workerThreadId,
             status: "running",
             activeTurnId: TurnId.make("turn-stale-worker-retry"),
             tag: "worker-retry-orphan",
