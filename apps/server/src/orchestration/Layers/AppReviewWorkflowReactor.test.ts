@@ -24,6 +24,7 @@ import {
   appReviewPhaseModelStepWorkflowPromptId,
   appReviewPhaseFailureAction,
   appReviewPhaseLaunchCount,
+  appReviewRecoveryTurnPending,
   appReviewPhaseThreadState,
   buildAppReviewFixPrompt,
   buildReviewPrompt,
@@ -428,7 +429,11 @@ it("claims one same-thread continuation for the failed review still owned by its
   } as unknown as OrchestrationImplementationRun;
 
   const claim = recoverableFailedAppReviewPhase({ run: failed, implementationRuns: [parent] });
-  expect(claim).toEqual({ phase: "fixing", threadId: ThreadId.make("thread-fixer") });
+  expect(claim).toEqual({
+    phase: "fixing",
+    threadId: ThreadId.make("thread-fixer"),
+    mode: "claim",
+  });
   const reopened = reopenFailedAppReviewPhase({
     run: failed,
     phase: "fixing",
@@ -442,6 +447,106 @@ it("claims one same-thread continuation for the failed review still owned by its
   expect(
     recoverableFailedAppReviewPhase({ run: reopened!, implementationRuns: [parent] }),
   ).toBeNull();
+});
+
+it("finishes or observes a continuation claim interrupted between its run and turn writes", () => {
+  const failed = failedImplementationReview("TICKET-1");
+  const parent = {
+    id: "implementation-run-1",
+    status: "needs-human-attention",
+    automationHalt: {
+      ticketId: "TICKET-1",
+      stage: "app-review",
+      category: "review-blocked",
+      detail: failed.failure?.detailMarkdown ?? "Review failed.",
+      haltedAt: now,
+    },
+    appReviewWorkflowRunIds: [],
+    ticketStates: [
+      {
+        ticketId: "TICKET-1",
+        status: "app-reviewing",
+        appReviewWorkflowRunId: failed.id,
+      },
+    ],
+  } as unknown as OrchestrationImplementationRun;
+  const claimedCycle = {
+    ...failed.cycles[0]!,
+    recoveryContinuationCount: 1,
+  };
+  const interruptedClaim = run({
+    ...failed,
+    cycles: [claimedCycle],
+  });
+
+  expect(
+    recoverableFailedAppReviewPhase({ run: interruptedClaim, implementationRuns: [parent] }),
+  ).toEqual({
+    phase: "fixing",
+    threadId: ThreadId.make("thread-fixer"),
+    mode: "resume-claim",
+  });
+
+  const observingParent = {
+    ...parent,
+    status: "running",
+    automationHalt: null,
+  } as unknown as OrchestrationImplementationRun;
+  const launchedClaim = run({
+    ...interruptedClaim,
+    cycles: [{ ...claimedCycle, fixingLaunchCount: 3 }],
+  });
+  expect(
+    recoverableFailedAppReviewPhase({
+      run: launchedClaim,
+      implementationRuns: [observingParent],
+    }),
+  ).toEqual({
+    phase: "fixing",
+    threadId: ThreadId.make("thread-fixer"),
+    mode: "observe-claim",
+  });
+});
+
+it("waits for a claimed continuation to replace the phase thread's old turn", () => {
+  const failed = failedImplementationReview("TICKET-1");
+  const active = run({
+    ...failed,
+    status: "running",
+    outcome: null,
+    activePhase: "fixing",
+    activeThreadId: ThreadId.make("thread-fixer"),
+    cycles: [{ ...failed.cycles[0]!, status: "fixing", recoveryContinuationCount: 1 }],
+    failure: null,
+    updatedAt: "2026-01-01T00:00:02.000Z",
+    completedAt: null,
+  });
+  const cycle = active.cycles[0]!;
+
+  expect(
+    appReviewRecoveryTurnPending(active, cycle, {
+      latestTurn: { requestedAt: "2026-01-01T00:00:01.000Z", state: "error" },
+      session: { status: "stopped" },
+    }),
+  ).toBe(true);
+  expect(
+    appReviewRecoveryTurnPending(active, cycle, {
+      latestTurn: { requestedAt: "2026-01-01T00:00:01.000Z", state: "running" },
+      session: { status: "running" },
+    }),
+  ).toBe(false);
+  expect(
+    appReviewRecoveryTurnPending(active, cycle, {
+      latestTurn: { requestedAt: "2026-01-01T00:00:02.000Z", state: "running" },
+      session: { status: "stopped" },
+    }),
+  ).toBe(true);
+  expect(
+    appReviewRecoveryTurnPending(active, cycle, {
+      latestTurn: { requestedAt: "2026-01-01T00:00:02.000Z", state: "running" },
+      session: { status: "starting" },
+    }),
+  ).toBe(false);
 });
 
 it("does not recover an old failed review that the halted parent no longer owns", () => {

@@ -362,6 +362,7 @@ export function appReviewPhaseFailureAction(
 export interface FailedAppReviewPhaseRecovery {
   readonly phase: AppReviewWorkflowPhase;
   readonly threadId: ThreadId;
+  readonly mode: "claim" | "resume-claim" | "observe-claim";
 }
 
 /**
@@ -382,12 +383,16 @@ export function recoverableFailedAppReviewPhase(input: {
   const cycle = run.cycles.at(-1);
   const failure = run.failure ?? cycle?.failure ?? null;
   const phase = failure?.phase ?? null;
+  const recoveryContinuationCount = cycle?.recoveryContinuationCount ?? 0;
+  const phaseLaunchCount =
+    cycle === undefined || phase === null ? null : appReviewPhaseLaunchCount(cycle, phase);
   if (
     cycle === undefined ||
     cycle.status !== "failed" ||
     phase === null ||
-    (cycle.recoveryContinuationCount ?? 0) > 0 ||
-    appReviewPhaseLaunchCount(cycle, phase) !== APP_REVIEW_PHASE_MAX_LAUNCHES ||
+    recoveryContinuationCount > 1 ||
+    phaseLaunchCount === null ||
+    phaseLaunchCount < APP_REVIEW_PHASE_MAX_LAUNCHES ||
     !failure?.detailMarkdown.includes(
       `${phase} exhausted its ${String(APP_REVIEW_PHASE_MAX_LAUNCHES)} phase launches.`,
     )
@@ -398,25 +403,28 @@ export function recoverableFailedAppReviewPhase(input: {
     (candidate) => candidate.id === caller.implementationRunId,
   );
   const halt = parent?.automationHalt ?? null;
-  if (
-    parent === undefined ||
-    parent.status !== "needs-human-attention" ||
-    halt === null ||
-    halt.stage !== "app-review" ||
-    halt.category !== "review-blocked"
-  ) {
-    return null;
-  }
+  if (parent === undefined) return null;
+  const parentIsHaltedForReview =
+    parent.status === "needs-human-attention" &&
+    halt?.stage === "app-review" &&
+    halt.category === "review-blocked";
   const ticketId = caller.ticketId;
   if (ticketId === undefined) {
-    if (halt.ticketId !== undefined || parent.appReviewWorkflowRunIds.at(-1) !== run.id)
+    if (
+      parent.appReviewWorkflowRunIds.at(-1) !== run.id ||
+      (parentIsHaltedForReview
+        ? halt.ticketId !== undefined
+        : recoveryContinuationCount === 0 || parent.status !== "qa-reviewing" || halt !== null)
+    )
       return null;
   } else {
     const ticket = parent.ticketStates.find((candidate) => candidate.ticketId === ticketId);
     if (
-      halt.ticketId !== ticketId ||
       ticket?.status !== "app-reviewing" ||
-      ticket.appReviewWorkflowRunId !== run.id
+      ticket.appReviewWorkflowRunId !== run.id ||
+      (parentIsHaltedForReview
+        ? halt.ticketId !== ticketId
+        : recoveryContinuationCount === 0 || parent.status !== "running" || halt !== null)
     ) {
       return null;
     }
@@ -427,7 +435,17 @@ export function recoverableFailedAppReviewPhase(input: {
       : phase === "planning"
         ? (cycle.plannerThreadId ?? null)
         : cycle.fixerThreadId;
-  return threadId === null ? null : { phase, threadId };
+  if (threadId === null) return null;
+  return {
+    phase,
+    threadId,
+    mode:
+      recoveryContinuationCount === 0
+        ? "claim"
+        : phaseLaunchCount === APP_REVIEW_PHASE_MAX_LAUNCHES
+          ? "resume-claim"
+          : "observe-claim",
+  };
 }
 
 export function reopenFailedAppReviewPhase(input: {
@@ -435,6 +453,8 @@ export function reopenFailedAppReviewPhase(input: {
   readonly phase: AppReviewWorkflowPhase;
   readonly workspaceRevision: AppReviewWorkflowWorkspaceRevision;
   readonly occurredAt: string;
+  readonly incrementRecoveryCount?: boolean;
+  readonly incrementReviewLaunchCount?: boolean;
 }): AppReviewWorkflowRun | null {
   const cycle = input.run.cycles.at(-1);
   if (cycle === undefined) return null;
@@ -463,10 +483,12 @@ export function reopenFailedAppReviewPhase(input: {
                   ? ("planning" as const)
                   : ("fixing" as const),
             reviewLaunchCount:
-              input.phase === "review"
+              input.phase === "review" && input.incrementReviewLaunchCount !== false
                 ? appReviewPhaseLaunchCount(entry, "review") + 1
                 : appReviewPhaseLaunchCount(entry, "review"),
-            recoveryContinuationCount: (entry.recoveryContinuationCount ?? 0) + 1,
+            recoveryContinuationCount:
+              (entry.recoveryContinuationCount ?? 0) +
+              (input.incrementRecoveryCount === false ? 0 : 1),
             failure: null,
             workspaceRevision: input.workspaceRevision,
             completedAt: null,
@@ -476,6 +498,25 @@ export function reopenFailedAppReviewPhase(input: {
     updatedAt: input.occurredAt,
     completedAt: null,
   };
+}
+
+/** A claimed continuation is queued but its new turn has not replaced the old terminal turn yet. */
+export function appReviewRecoveryTurnPending(
+  run: AppReviewWorkflowRun,
+  cycle: AppReviewWorkflowCycle,
+  thread: {
+    readonly latestTurn: { readonly requestedAt: string; readonly state: string } | null;
+    readonly session: { readonly status: string } | null;
+  },
+): boolean {
+  if ((cycle.recoveryContinuationCount ?? 0) === 0 || run.activePhase === null) return false;
+  if (thread.session?.status === "starting" || thread.session?.status === "running") return false;
+  if (thread.latestTurn === null || thread.latestTurn.requestedAt < run.updatedAt) return true;
+  return (
+    thread.latestTurn.state === "running" &&
+    thread.session?.status !== "starting" &&
+    thread.session?.status !== "running"
+  );
 }
 
 export function retryReviewPhaseInCycle(input: {
@@ -1727,6 +1768,7 @@ const make = Effect.gen(function* () {
     }
     const review = controller === undefined ? null : reviewRecordForCycle(controller, cycle);
     if (review === null || !["passed", "failed"].includes(review.status)) {
+      if (appReviewRecoveryTurnPending(run, cycle, reviewer)) return;
       const failed = threadTurnFailed(reviewer);
       const completedWithoutReview = phaseTurnCompleted(reviewer) && hasSettledCheckpoint(reviewer);
       if (!failed && !completedWithoutReview) return;
@@ -1958,6 +2000,7 @@ const make = Effect.gen(function* () {
     // the reviewer, and their plans still have to reconcile.
     const planner = yield* resolveThread(cycle.plannerThreadId ?? cycle.reviewerThreadId);
     if (planner === undefined) return;
+    if (appReviewRecoveryTurnPending(run, cycle, planner) && !hasSettledCheckpoint(planner)) return;
     if (threadTurnFailed(planner) && !hasSettledCheckpoint(planner)) {
       if ((yield* phaseThreadState(planner)) === "nudging") return;
       yield* failCycle({
@@ -2114,6 +2157,7 @@ const make = Effect.gen(function* () {
     }
     const result = parseFixResult(fixer, run, cycle);
     if (result === null) {
+      if (appReviewRecoveryTurnPending(run, cycle, fixer)) return;
       const failed = threadTurnFailed(fixer);
       const completedWithoutResult = phaseTurnCompleted(fixer) && hasSettledCheckpoint(fixer);
       if (!failed && !completedWithoutResult) return;
@@ -2541,18 +2585,29 @@ const make = Effect.gen(function* () {
       resolveThread(input.run.controllerThreadId),
       resolveTarget(input.run.targetThreadId),
     ]);
-    if (
-      phaseThread === undefined ||
-      phaseThread.deletedAt !== null ||
-      phaseThread.session?.status === "starting" ||
-      phaseThread.session?.status === "running" ||
-      (phaseThread.session !== null && phaseThread.session.activeTurnId !== null) ||
-      target === null
-    ) {
+    if (phaseThread === undefined || phaseThread.deletedAt !== null || target === null)
       return false;
-    }
     const cycle = input.run.cycles.at(-1);
     if (cycle === undefined) return false;
+    const replayableResult = phaseHasReplayableResult(
+      input.run,
+      cycle,
+      claim.phase,
+      phaseThread,
+      controller,
+    );
+    const phaseTurnIsLive =
+      phaseThread.latestTurn?.state === "running" ||
+      phaseThread.session?.status === "starting" ||
+      phaseThread.session?.status === "running" ||
+      (phaseThread.session?.activeTurnId ?? null) !== null;
+    const observeExistingClaim =
+      claim.mode === "observe-claim" || (claim.mode === "resume-claim" && phaseTurnIsLive);
+    if (observeExistingClaim) {
+      if (!phaseTurnIsLive && !replayableResult) return false;
+    } else if (phaseTurnIsLive) {
+      return false;
+    }
     const planningReview =
       claim.phase === "planning" && controller !== undefined
         ? reviewRecordForCycle(controller, cycle)
@@ -2571,12 +2626,14 @@ const make = Effect.gen(function* () {
       phase: claim.phase,
       workspaceRevision,
       occurredAt: input.occurredAt,
+      incrementRecoveryCount: claim.mode === "claim",
+      incrementReviewLaunchCount: !observeExistingClaim,
     });
     if (reopened === null) return false;
     yield* updateRun(reopened);
     const reopenedCycle = reopened.cycles.at(-1);
     if (reopenedCycle === undefined) return false;
-    if (phaseHasReplayableResult(reopened, reopenedCycle, claim.phase, phaseThread, controller)) {
+    if (replayableResult || observeExistingClaim) {
       yield* reconcileRun(reopened, input.occurredAt);
     } else if (claim.phase === "review") {
       yield* ensureReviewLaunch(reopened, reopenedCycle);
@@ -2600,6 +2657,7 @@ const make = Effect.gen(function* () {
       runId: input.run.id,
       phase: claim.phase,
       threadId: claim.threadId,
+      recoveryMode: observeExistingClaim ? "observe-claim" : claim.mode,
     });
     return true;
   });
