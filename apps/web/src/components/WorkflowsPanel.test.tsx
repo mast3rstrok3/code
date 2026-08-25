@@ -23,7 +23,7 @@ describe("TicketAppReviewCycles", () => {
     expect(markup).not.toContain("Gaps to fix");
   });
 
-  it("shows compact phase and report headers without their bodies when a cycle opens", () => {
+  it("keeps repair tickets and gaps collapsed when only the cycle opens", () => {
     const markup = renderCycles({
       "app-review-cycle:group-1:app-review-run-1:1": true,
     });
@@ -31,6 +31,20 @@ describe("TicketAppReviewCycles", () => {
     expect(markup).toContain("E2E and browser review");
     expect(markup).toContain("Gap analysis &amp; repair tickets");
     expect(markup).toContain("TDD repair");
+    expect(markup).not.toContain("TICKET-1 · Fix the workflow panel");
+    expect(markup).not.toContain("TICKET-2 · Keep reports independent");
+    expect(markup).not.toContain("Gaps to fix");
+    expect(markup).not.toContain("FIRST REPAIR BODY");
+    expect(markup).not.toContain("SECOND REPAIR BODY");
+    expect(markup).not.toContain("FULL FINDINGS BODY");
+  });
+
+  it("reveals repair ticket and gap headers when gap analysis opens", () => {
+    const markup = renderCycles({
+      "app-review-cycle:group-1:app-review-run-1:1": true,
+      "app-review-phase:group-1:app-review-run-1:1:planning": true,
+    });
+
     expect(markup).toContain("TICKET-1 · Fix the workflow panel");
     expect(markup).toContain("TICKET-2 · Keep reports independent");
     expect(markup).toContain("Gaps to fix");
@@ -42,6 +56,7 @@ describe("TicketAppReviewCycles", () => {
   it("opens one repair ticket without opening its sibling or the gaps", () => {
     const markup = renderCycles({
       "app-review-cycle:group-1:app-review-run-1:1": true,
+      "app-review-phase:group-1:app-review-run-1:1:planning": true,
       "repair-ticket:group-1:app-review-run-1:1:TICKET-1": true,
     });
 
@@ -53,6 +68,7 @@ describe("TicketAppReviewCycles", () => {
   it("opens gaps without opening repair tickets", () => {
     const markup = renderCycles({
       "app-review-cycle:group-1:app-review-run-1:1": true,
+      "app-review-phase:group-1:app-review-run-1:1:planning": true,
       "gaps:group-1:app-review-run-1:1": true,
     });
 

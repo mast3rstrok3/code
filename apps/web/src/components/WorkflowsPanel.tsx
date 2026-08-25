@@ -979,6 +979,13 @@ export function TicketAppReviewCycles(props: {
             cycle.cycleNumber,
           );
           const gapsOpen = props.disclosures.expanded[gapsDisclosureId] ?? false;
+          const planningDisclosureId = workflowAppReviewPhaseDisclosureId(
+            props.groupId,
+            props.run.id,
+            cycle.cycleNumber,
+            "planning",
+          );
+          const planningOpen = props.disclosures.expanded[planningDisclosureId] ?? false;
           return (
             <article
               key={cycle.cycleNumber}
@@ -1121,7 +1128,7 @@ export function TicketAppReviewCycles(props: {
                       );
                     })}
                   </ol>
-                  {cycle.repairTickets && cycle.repairTickets.length > 0 ? (
+                  {planningOpen && cycle.repairTickets && cycle.repairTickets.length > 0 ? (
                     <div className="mt-2 space-y-1">
                       {cycle.repairTickets.map((ticket) => {
                         const ticketDisclosureId = workflowRepairTicketDisclosureId(
@@ -1161,7 +1168,7 @@ export function TicketAppReviewCycles(props: {
                       })}
                     </div>
                   ) : null}
-                  {cycle.actionableFindingsMarkdown ? (
+                  {planningOpen && cycle.actionableFindingsMarkdown ? (
                     <section className="mt-2 overflow-hidden rounded border border-border/60">
                       <button
                         type="button"
