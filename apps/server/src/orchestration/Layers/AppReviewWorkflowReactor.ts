@@ -519,13 +519,19 @@ export function appReviewRecoveryTurnPending(
   );
 }
 
-export function appReviewRecoveryEvidenceIsNewer(
+export function appReviewRecoveryEvidenceIsCurrent(
   run: AppReviewWorkflowRun,
   cycle: AppReviewWorkflowCycle,
   createdAt: string,
 ): boolean {
   const failedAt = run.failure?.failedAt ?? cycle.failure?.failedAt ?? null;
-  return failedAt !== null && createdAt > failedAt;
+  const baseline =
+    run.status === "failed"
+      ? failedAt
+      : (cycle.recoveryContinuationCount ?? 0) > 0
+        ? run.updatedAt
+        : null;
+  return baseline === null || createdAt > baseline;
 }
 
 export function retryReviewPhaseInCycle(input: {
@@ -1776,7 +1782,11 @@ const make = Effect.gen(function* () {
       return;
     }
     const review = controller === undefined ? null : reviewRecordForCycle(controller, cycle);
-    if (review === null || !["passed", "failed"].includes(review.status)) {
+    if (
+      review === null ||
+      !["passed", "failed"].includes(review.status) ||
+      !appReviewRecoveryEvidenceIsCurrent(run, cycle, review.updatedAt)
+    ) {
       if (appReviewRecoveryTurnPending(run, cycle, reviewer)) return;
       const failed = threadTurnFailed(reviewer);
       const completedWithoutReview = phaseTurnCompleted(reviewer) && hasSettledCheckpoint(reviewer);
@@ -2039,6 +2049,7 @@ const make = Effect.gen(function* () {
       .find(
         (activity) =>
           activity.kind === "app-review-repair-tickets" &&
+          appReviewRecoveryEvidenceIsCurrent(run, cycle, activity.createdAt) &&
           Predicate.isObject(activity.payload) &&
           activity.payload["type"] === "app-review-repair-tickets" &&
           activity.payload["runId"] === run.id &&
@@ -2124,7 +2135,11 @@ const make = Effect.gen(function* () {
     cycle: AppReviewWorkflowCycle,
   ): AppReviewWorkflowFixResult | null => {
     for (const activity of thread.activities.toReversed()) {
-      if (activity.kind !== "app-review-fix-result" || !Predicate.isObject(activity.payload)) {
+      if (
+        activity.kind !== "app-review-fix-result" ||
+        !appReviewRecoveryEvidenceIsCurrent(run, cycle, activity.createdAt) ||
+        !Predicate.isObject(activity.payload)
+      ) {
         continue;
       }
       const payload = activity.payload as Record<string, unknown>;
@@ -2562,13 +2577,13 @@ const make = Effect.gen(function* () {
       return (
         review !== null &&
         (review.status === "passed" || review.status === "failed") &&
-        appReviewRecoveryEvidenceIsNewer(run, cycle, review.updatedAt)
+        appReviewRecoveryEvidenceIsCurrent(run, cycle, review.updatedAt)
       );
     }
     if (phase === "planning") {
       return thread.activities.some(
         (activity) =>
-          appReviewRecoveryEvidenceIsNewer(run, cycle, activity.createdAt) &&
+          appReviewRecoveryEvidenceIsCurrent(run, cycle, activity.createdAt) &&
           activity.kind === "app-review-repair-tickets" &&
           Predicate.isObject(activity.payload) &&
           activity.payload["type"] === "app-review-repair-tickets" &&
@@ -2583,7 +2598,7 @@ const make = Effect.gen(function* () {
       result !== null &&
       thread.activities.some(
         (activity) =>
-          appReviewRecoveryEvidenceIsNewer(run, cycle, activity.createdAt) &&
+          appReviewRecoveryEvidenceIsCurrent(run, cycle, activity.createdAt) &&
           activity.kind === "app-review-fix-result" &&
           Predicate.isObject(activity.payload) &&
           activity.payload["type"] === "app-review-fix-result" &&
