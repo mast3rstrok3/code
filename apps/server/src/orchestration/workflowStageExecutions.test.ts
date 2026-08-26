@@ -290,6 +290,34 @@ describe("workflow stage reconciliation", () => {
     );
   });
 
+  it("does not let a stale halted execution block a succeeded dependency", () => {
+    const staleHalt = execution({
+      ticketId: "upstream",
+      state: "halted",
+      updatedAt: "2026-01-01T00:00:01.000Z",
+      failure: {
+        category: "dependency-failed",
+        detail: "A delayed dependency update arrived after success.",
+        failedAt: "2026-01-01T00:00:01.000Z",
+        nextAction: "wait-for-dependencies",
+      },
+    });
+    const actions = reconcileWorkflowState(
+      model(
+        run({
+          tickets: [
+            ticket({ ticketId: "upstream", status: "succeeded", executions: [staleHalt] }),
+            ticket({ ticketId: "downstream", status: "blocked", dependencies: ["upstream"] }),
+          ],
+        }),
+      ),
+      "2026-01-01T00:00:02.000Z",
+    );
+
+    expect(actions.some((action) => action.type === "derive-dependency-block")).toBe(false);
+    expect(actions.some((action) => action.type === "derive-dependency-eligibility")).toBe(true);
+  });
+
   it("resets planned restart recovery without spending product counters", () => {
     const active = execution({
       ticketId: "ticket-a",

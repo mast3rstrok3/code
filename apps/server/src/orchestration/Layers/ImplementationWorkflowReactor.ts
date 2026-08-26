@@ -83,7 +83,11 @@ import { isWorkflowThreadPaused } from "../workflowPause.ts";
 import { isAwaitingWorkflowNudge, WORKFLOW_INTERRUPTION_ERROR_MESSAGE } from "../workflowNudge.ts";
 import { ServerActivation } from "../../serverActivation.ts";
 import { implementationRerunTargetMatchesHalt } from "../implementationRerun.ts";
-import { reconcileWorkflowState, WORKFLOW_PROVIDER_LEASE_MS } from "../workflowStageExecutions.ts";
+import {
+  reconcileWorkflowState,
+  ticketDependencyState,
+  WORKFLOW_PROVIDER_LEASE_MS,
+} from "../workflowStageExecutions.ts";
 import {
   metricAttributes,
   workflowMissingChildExecutionsTotal,
@@ -9917,6 +9921,17 @@ const make = Effect.gen(function* () {
         if (run === null) continue;
         const sourceThreadId = findRunSourceThreadId({ readModel, run });
         if (sourceThreadId === null) continue;
+        const currentTicket = run.ticketStates.find(
+          (ticket) => ticket.ticketId === action.ticketId,
+        );
+        if (currentTicket === undefined) continue;
+        const dependencyState = ticketDependencyState(run, currentTicket);
+        if (
+          (action.type === "derive-dependency-block" && dependencyState !== "blocked") ||
+          (action.type === "derive-dependency-eligibility" && dependencyState !== "eligible")
+        ) {
+          continue;
+        }
         const ticketStates = run.ticketStates.map((ticket) => {
           if (ticket.ticketId !== action.ticketId) return ticket;
           if (action.type === "derive-dependency-eligibility") {
