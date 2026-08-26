@@ -1244,7 +1244,8 @@ const make = Effect.gen(function* () {
     readonly completedAt: string;
   }) {
     if (
-      input.thread.workflowRole !== "implementation-qa-reviewer" ||
+      (input.thread.workflowRole !== "implementation-qa-reviewer" &&
+        input.thread.workflowRole !== "app-review-reviewer") ||
       input.thread.parentThreadId === null
     ) {
       return;
@@ -1257,6 +1258,11 @@ const make = Effect.gen(function* () {
       (review) => review.reviewThreadId === input.thread.id && review.status === "running",
     );
     if (reviewer === undefined || parent === undefined || canonical === undefined) return;
+
+    const terminalSummary = [...reviewer.messages]
+      .reverse()
+      .find((message) => message.role === "assistant" && message.text.trim().length > 0)
+      ?.text.trim();
 
     const nestedTerminal = [...reviewer.appReviews]
       .filter((review) => review.status === "passed" || review.status === "failed")
@@ -1283,6 +1289,7 @@ const make = Effect.gen(function* () {
         verdict: "failed",
         summary:
           canonical.document.summary ||
+          terminalSummary ||
           "Browser App Review agent completed without terminally updating its canonical review.",
       },
       updatedAt: input.completedAt,

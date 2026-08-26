@@ -4907,6 +4907,108 @@ describe("ProviderRuntimeIngestion", () => {
     );
   });
 
+  it("settles a standalone App Review from the reviewer's terminal report", async () => {
+    const harness = await createHarness();
+    const controllerThreadId = asThreadId("thread-app-review-controller");
+    const reviewerThreadId = asThreadId("thread-app-review-reviewer");
+    const reviewId = AppReviewId.make("review-standalone");
+    await harness.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make("cmd-app-review-controller-create"),
+      threadId: controllerThreadId,
+      projectId: asProjectId("project-1"),
+      ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+      parentThreadId: asThreadId("thread-1"),
+      workflowRole: "app-review-orchestrator",
+      title: "App Review",
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5.6-sol",
+      },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "full-access",
+      branch: null,
+      worktreePath: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.app-review.launch",
+        commandId: CommandId.make("cmd-standalone-review-launch"),
+        sourceThreadId: controllerThreadId,
+        reviewThreadId: reviewerThreadId,
+        reviewId,
+        message: {
+          messageId: asMessageId("message-standalone-review"),
+          role: "user",
+          text: "Review the current implementation.",
+          attachments: [],
+        },
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.6-sol",
+        },
+        runtimeMode: "full-access",
+        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-standalone-review-started"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:01.000Z",
+      threadId: reviewerThreadId,
+      turnId: asTurnId("turn-standalone-review"),
+    });
+    await waitForThread(
+      harness.readModel,
+      (thread) => thread.session?.activeTurnId === "turn-standalone-review",
+      10_000,
+      reviewerThreadId,
+    );
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-standalone-review-report"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:02.000Z",
+      threadId: reviewerThreadId,
+      turnId: asTurnId("turn-standalone-review"),
+      itemId: asItemId("item-standalone-review-report"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail: "The required end-to-end check failed with seven product failures.",
+      },
+    });
+    await waitForThread(
+      harness.readModel,
+      (thread) =>
+        thread.messages.some((message) => message.text.includes("seven product failures")),
+      10_000,
+      reviewerThreadId,
+    );
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-standalone-review-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:03.000Z",
+      threadId: reviewerThreadId,
+      turnId: asTurnId("turn-standalone-review"),
+      payload: { state: "completed" },
+    });
+    const controller = await waitForThread(
+      harness.readModel,
+      (thread) =>
+        thread.appReviews.some((review) => review.id === reviewId && review.status === "failed"),
+      10_000,
+      controllerThreadId,
+    );
+    expect(controller.appReviews.find((review) => review.id === reviewId)?.document.summary).toBe(
+      "The required end-to-end check failed with seven product failures.",
+    );
+  });
+
   it("adopts a terminal nested review document and evidence into the canonical review", async () => {
     const harness = await createHarness();
     const sourceThreadId = asThreadId("thread-1");
