@@ -83,6 +83,7 @@ import { isWorkflowThreadPaused } from "../workflowPause.ts";
 import { isAwaitingWorkflowNudge, WORKFLOW_INTERRUPTION_ERROR_MESSAGE } from "../workflowNudge.ts";
 import { ServerActivation } from "../../serverActivation.ts";
 import { implementationRerunTargetMatchesHalt } from "../implementationRerun.ts";
+import { runUpdateWouldOverwriteNewerTicketState } from "../implementationRunConcurrency.ts";
 import {
   reconcileWorkflowState,
   ticketDependencyState,
@@ -1628,6 +1629,9 @@ const make = Effect.gen(function* () {
       input.run.status !== "canceled" &&
       !resumesCanceledFinalCodeReview
     ) {
+      return;
+    }
+    if (currentRun !== null && runUpdateWouldOverwriteNewerTicketState(currentRun, input.run)) {
       return;
     }
     yield* orchestrationEngine.dispatch({
