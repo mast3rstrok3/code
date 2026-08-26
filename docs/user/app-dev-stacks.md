@@ -46,20 +46,23 @@ deletes either stack automatically.
 
 ## Automatic teardown and protected stacks
 
-When an engineering ticket succeeds, its ticket App Dev Stack starts tiering down at once. The
-ticket carries that tier-down timestamp as durable desired state, so T3 Code sends the stop request
-again after a restart or a temporary controller failure. The request scales the stack down without
-waiting for its pods to finish terminating.
+T3 Code waits to clean up a successful engineering ticket until the integration gate confirms that
+the ticket commit is present in the combined branch. It then deletes the ticket App Dev Stack and
+removes the ticket worktree if Git reports the expected branch, accepted commit, and no working tree
+changes. A dirty, divergent, or unmerged worktree stays on disk so cleanup cannot discard code.
+
+The ticket carries a durable cleanup timestamp. T3 Code retries failed stack deletion and checks a
+retained worktree again after a restart. Once the worktree is clean and its commit is merged, T3 Code
+removes it.
 
 When the workflow succeeds, it protects and keeps the main shared App Dev Stack running, then tiers
 down every other stack the workflow created. The run reports what it stopped in its activity log.
 Stacks you started yourself are untouched, since no workflow owns them.
 
-Expand a stack card and choose **Protect** to keep it out of general workflow teardown. A successful
-engineering workflow still tiers down its ticket stacks and protects only its main shared stack.
-A protected stack shows a **Protected** badge and is the last one the environment stops when the
-host runs low on memory. Press the button again to release it. Protection does not change explicit
-**Stop**, **Restart**, or **Delete** actions.
+Expand a stack card and choose **Protect** to keep it out of general workflow teardown. A protected
+stack shows a **Protected** badge and is the last one the environment stops when the host runs low
+on memory. Press the button again to release it. Protection does not change explicit **Stop**,
+**Restart**, or **Delete** actions.
 
 Under memory pressure an environment can also refuse to start new stacks and stop long-running ones
 to keep the machine responsive. A stack stopped that way says so in the error line on its card, and

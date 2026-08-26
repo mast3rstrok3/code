@@ -594,6 +594,7 @@ function buildImplementationRun(input: {
       worktreePath: null,
       workerResult: null,
       appDevStackTierDownAt: null,
+      resourceCleanupAt: null,
       attemptCount: 0,
       implementationGeneration: 0,
       appReviewGeneration: 0,

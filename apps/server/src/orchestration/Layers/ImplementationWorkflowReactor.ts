@@ -568,6 +568,8 @@ function reopenTicketForRerun(input: {
     }
     const cleared = {
       ...state,
+      appDevStackTierDownAt: null,
+      resourceCleanupAt: null,
       codeReviewThreadId: null,
       codeReviewOutcome: null,
       warningMarkdown: input.continuationMarkdown ?? null,
@@ -586,7 +588,6 @@ function reopenTicketForRerun(input: {
     }
     const withoutAppReview = {
       ...cleared,
-      appDevStackTierDownAt: null,
       appReviewWorkflowRunId: null,
       appReviewOutcome: null,
     };
@@ -2137,10 +2138,11 @@ const make = Effect.gen(function* () {
         });
       }
     } else {
+      const restoringTicketWorktree = existing.branch === plannedWorker.branch;
       yield* gitWorkflow.createWorktree({
         cwd: input.run.orchestratorWorktreePath,
-        refName: worktreeStartRef,
-        newRefName: plannedWorker.branch,
+        refName: restoringTicketWorktree ? plannedWorker.branch : worktreeStartRef,
+        ...(restoringTicketWorktree ? {} : { newRefName: plannedWorker.branch }),
         baseRefName: input.run.baseBranch,
         path: plannedWorker.worktreePath,
       });
@@ -2218,7 +2220,8 @@ const make = Effect.gen(function* () {
                 workerResult: null,
                 branch: plannedWorker.branch,
                 worktreePath: plannedWorker.worktreePath,
-                appDevStackTierDownAt: input.createdAt,
+                appDevStackTierDownAt: null,
+                resourceCleanupAt: null,
                 warningMarkdown:
                   "Skipped. The branch carries its dependencies and no work of its own.",
                 updatedAt: input.createdAt,
@@ -2661,14 +2664,8 @@ const make = Effect.gen(function* () {
     });
   });
 
-  /**
-   * Applies the tier-down stamp carried by a successful ticket.
-   *
-   * `stop` records the scale-down request and returns without waiting for pods
-   * to terminate. Keeping the stamp on the ticket lets the recovery sweep send
-   * the request again after a server restart or a transient controller error.
-   */
-  const tierDownTicketStacks = Effect.fn("ImplementationWorkflowReactor.tierDownTicketStacks")(
+  /** Deletes resources for tickets whose commits reached the integrated branch. */
+  const cleanupTicketResources = Effect.fn("ImplementationWorkflowReactor.cleanupTicketResources")(
     function* (input: {
       readonly run: OrchestrationImplementationRun;
       readonly createdAt: string;
@@ -2681,71 +2678,146 @@ const make = Effect.gen(function* () {
           Effect.gen(function* () {
             if (
               state.status !== "succeeded" ||
-              state.appDevStackTierDownAt === null ||
+              state.resourceCleanupAt === null ||
               state.worktreePath === null ||
               state.worktreePath === input.run.orchestratorWorktreePath
             ) {
               return;
             }
-            const lookup = yield* appDevStackManager
+
+            const stackLookup = yield* appDevStackManager
               .getByWorktree({ worktreePath: state.worktreePath })
               .pipe(Effect.result);
-            if (lookup._tag === "Failure") {
-              yield* Effect.logWarning("ticket App Dev Stack lookup failed during tier-down", {
+            if (stackLookup._tag === "Failure") {
+              yield* Effect.logWarning("ticket App Dev Stack lookup failed during cleanup", {
                 runId: input.run.id,
                 ticketId: state.ticketId,
-                cause: errorDetail(lookup.failure),
+                worktreePath: state.worktreePath,
+                cause: errorDetail(stackLookup.failure),
+              });
+            } else if (stackLookup.success.stack !== null) {
+              const stack = stackLookup.success.stack;
+              if (
+                workflowId === undefined ||
+                normalizeWorkflowWorktreePath(stack.worktreePath) !==
+                  normalizeWorkflowWorktreePath(state.worktreePath) ||
+                stack.workflowId !== workflowId
+              ) {
+                yield* appendActivity({
+                  threadId: input.run.orchestratorThreadId,
+                  tone: "error",
+                  kind: "implementation-ticket-stack-ownership-conflict",
+                  summary: `Ticket ${state.ticketId} App Dev Stack ownership is ambiguous`,
+                  payload: {
+                    runId: input.run.id,
+                    ticketId: state.ticketId,
+                    stackId: stack.id,
+                    expectedWorkflowId: workflowId,
+                    actualWorkflowId: stack.workflowId ?? null,
+                    expectedWorktreePath: state.worktreePath,
+                    actualWorktreePath: stack.worktreePath,
+                  },
+                  createdAt: input.createdAt,
+                });
+              } else {
+                const deleted = yield* appDevStackManager
+                  .delete({ stackId: stack.id })
+                  .pipe(Effect.result);
+                if (deleted._tag === "Failure") {
+                  yield* Effect.logWarning("ticket App Dev Stack cleanup failed", {
+                    runId: input.run.id,
+                    ticketId: state.ticketId,
+                    stackId: stack.id,
+                    cause: errorDetail(deleted.failure),
+                  });
+                } else {
+                  yield* appendActivity({
+                    threadId: input.run.orchestratorThreadId,
+                    tone: "info",
+                    kind: "implementation-ticket-stack-deleted",
+                    summary: `Ticket ${state.ticketId} App Dev Stack deleted`,
+                    payload: {
+                      runId: input.run.id,
+                      ticketId: state.ticketId,
+                      stackId: stack.id,
+                      cleanupRequestedAt: state.resourceCleanupAt,
+                    },
+                    createdAt: input.createdAt,
+                  });
+                }
+              }
+            }
+
+            const worktreeHead = yield* gitWorkflow
+              .resolveCommit({ cwd: state.worktreePath, ref: "HEAD" })
+              .pipe(Effect.option);
+            if (Option.isNone(worktreeHead)) return;
+            const cleanupSafety = yield* Effect.all([
+              gitWorkflow.localStatus({ cwd: state.worktreePath }),
+              verifiedDependency({ run: input.run, ticketId: state.ticketId }),
+            ]).pipe(Effect.result);
+            if (cleanupSafety._tag === "Failure") {
+              yield* Effect.logWarning("ticket worktree cleanup safety check failed", {
+                runId: input.run.id,
+                ticketId: state.ticketId,
+                worktreePath: state.worktreePath,
+                cause: errorDetail(cleanupSafety.failure),
               });
               return;
             }
-            const stack = lookup.success.stack;
-            if (stack === null || stack.status === "stopped" || stack.status === "stopping") return;
-            if (stack.protected === true) return;
+            const [status, accepted] = cleanupSafety.success;
+            const merged = yield* gitWorkflow
+              .isAncestor({
+                cwd: input.run.orchestratorWorktreePath,
+                ancestorRef: accepted.commitSha,
+                descendantRef: "HEAD",
+              })
+              .pipe(Effect.orElseSucceed(() => false));
             if (
-              normalizeWorkflowWorktreePath(stack.worktreePath) !==
-                normalizeWorkflowWorktreePath(state.worktreePath) ||
-              (stack.workflowId != null && stack.workflowId !== workflowId)
+              !status.isRepo ||
+              status.refName !== state.branch ||
+              status.hasWorkingTreeChanges ||
+              worktreeHead.value.commitSha !== accepted.commitSha ||
+              !merged
             ) {
-              yield* appendActivity({
-                threadId: input.run.orchestratorThreadId,
-                tone: "error",
-                kind: "implementation-ticket-stack-ownership-conflict",
-                summary: `Ticket ${state.ticketId} App Dev Stack ownership is ambiguous`,
-                payload: {
-                  runId: input.run.id,
-                  ticketId: state.ticketId,
-                  stackId: stack.id,
-                  expectedWorkflowId: workflowId,
-                  actualWorkflowId: stack.workflowId ?? null,
-                  expectedWorktreePath: state.worktreePath,
-                  actualWorktreePath: stack.worktreePath,
-                },
-                createdAt: input.createdAt,
+              yield* Effect.logWarning("ticket worktree retained because cleanup is not safe", {
+                runId: input.run.id,
+                ticketId: state.ticketId,
+                worktreePath: state.worktreePath,
+                expectedBranch: state.branch,
+                actualBranch: status.refName,
+                hasWorkingTreeChanges: status.hasWorkingTreeChanges,
+                worktreeHead: worktreeHead.value.commitSha,
+                acceptedHead: accepted.commitSha,
+                merged,
               });
               return;
             }
-            const stopped = yield* appDevStackManager
-              .stop({ stackId: stack.id })
+            const removed = yield* gitWorkflow
+              .removeWorktree({
+                cwd: input.run.orchestratorWorktreePath,
+                path: state.worktreePath,
+              })
               .pipe(Effect.result);
-            if (stopped._tag === "Failure") {
-              yield* Effect.logWarning("ticket App Dev Stack tier-down failed", {
+            if (removed._tag === "Failure") {
+              yield* Effect.logWarning("ticket worktree cleanup failed", {
                 runId: input.run.id,
                 ticketId: state.ticketId,
-                stackId: stack.id,
-                cause: errorDetail(stopped.failure),
+                worktreePath: state.worktreePath,
+                cause: errorDetail(removed.failure),
               });
               return;
             }
             yield* appendActivity({
               threadId: input.run.orchestratorThreadId,
               tone: "info",
-              kind: "implementation-ticket-stack-tiered-down",
-              summary: `Ticket ${state.ticketId} App Dev Stack tiered down`,
+              kind: "implementation-ticket-worktree-removed",
+              summary: `Ticket ${state.ticketId} worktree removed`,
               payload: {
                 runId: input.run.id,
                 ticketId: state.ticketId,
-                stackId: stack.id,
-                tierDownAt: state.appDevStackTierDownAt,
+                worktreePath: state.worktreePath,
+                cleanupRequestedAt: state.resourceCleanupAt,
               },
               createdAt: input.createdAt,
             });
@@ -2780,7 +2852,8 @@ const make = Effect.gen(function* () {
           ? {
               ...state,
               status: usableBranch ? ("succeeded" as const) : ("failed" as const),
-              appDevStackTierDownAt: usableBranch ? input.createdAt : null,
+              appDevStackTierDownAt: null,
+              resourceCleanupAt: null,
               codeReviewOutcome: input.codeReviewOutcome,
               codeReviewThreadId: null,
               warningMarkdown: input.warningMarkdown,
@@ -2805,7 +2878,6 @@ const make = Effect.gen(function* () {
         run: reviewedRun,
         createdAt: input.createdAt,
       });
-      yield* tierDownTicketStacks({ run: reviewedRun, createdAt: input.createdAt });
       return;
     }
     const failedIds = new Set(usableBranch ? [] : [input.ticketId]);
@@ -2847,7 +2919,6 @@ const make = Effect.gen(function* () {
       run: completed,
       createdAt: input.createdAt,
     });
-    yield* tierDownTicketStacks({ run: completed, createdAt: input.createdAt });
     const terminal = completed.ticketStates.every(
       (state) => state.status === "succeeded" || state.status === "failed",
     );
@@ -2863,6 +2934,23 @@ const make = Effect.gen(function* () {
       sourceThreadId: input.sourceThreadId,
       run: completed,
       createdAt: input.createdAt,
+    });
+  });
+
+  const restoreTicketWorktreeIfMissing = Effect.fn(
+    "ImplementationWorkflowReactor.restoreTicketWorktreeIfMissing",
+  )(function* (input: { readonly run: OrchestrationImplementationRun; readonly ticketId: string }) {
+    const state = input.run.ticketStates.find((candidate) => candidate.ticketId === input.ticketId);
+    if (state?.branch == null || state.worktreePath == null) return;
+    const existing = yield* gitWorkflow
+      .resolveCommit({ cwd: state.worktreePath, ref: "HEAD" })
+      .pipe(Effect.option);
+    if (Option.isSome(existing)) return;
+    yield* gitWorkflow.createWorktree({
+      cwd: input.run.orchestratorWorktreePath,
+      refName: state.branch,
+      baseRefName: input.run.baseBranch,
+      path: state.worktreePath,
     });
   });
 
@@ -2889,6 +2977,7 @@ const make = Effect.gen(function* () {
         (state.status !== "app-reviewing" && state.status !== "code-reviewing")
       )
         return;
+      yield* restoreTicketWorktreeIfMissing({ run: input.run, ticketId: input.ticketId });
       const cycleBudget = yield* cyclesForStep({
         key: {
           workflowPromptId: WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
@@ -3137,6 +3226,7 @@ const make = Effect.gen(function* () {
       state.appReviewWorkflowRunId != null
     )
       return;
+    yield* restoreTicketWorktreeIfMissing({ run: currentRun, ticketId: input.ticketId });
     if (state.appReviewLaunchCount >= IMPLEMENTATION_STAGE_MAX_LAUNCHES) {
       yield* startTicketCodeReview({
         sourceThreadId: input.sourceThreadId,
@@ -5536,37 +5626,37 @@ const make = Effect.gen(function* () {
           },
           directive.reportedAt,
         );
-        const tierDownStampedRun: OrchestrationImplementationRun = {
+        const completedTicketRun: OrchestrationImplementationRun = {
           ...reviewedRun,
           ticketStates: reviewedRun.ticketStates.map((state) =>
             state.workerThreadId === threadId
-              ? { ...state, appDevStackTierDownAt: directive.reportedAt }
+              ? {
+                  ...state,
+                  appDevStackTierDownAt: null,
+                  resourceCleanupAt: null,
+                }
               : state,
           ),
         };
         yield* updateRun({
           sourceThreadId,
-          run: tierDownStampedRun,
-          createdAt: directive.reportedAt,
-        });
-        yield* tierDownTicketStacks({
-          run: tierDownStampedRun,
+          run: completedTicketRun,
           createdAt: directive.reportedAt,
         });
         if (
-          tierDownStampedRun.ticketStates.every((state) =>
+          completedTicketRun.ticketStates.every((state) =>
             implementationTicketStateIsTerminal(state.status),
           )
         ) {
           yield* integrateCompletedRun({
             sourceThreadId,
-            run: tierDownStampedRun,
+            run: completedTicketRun,
             createdAt: directive.reportedAt,
           });
         } else {
           yield* startReadyWorkers({
             sourceThreadId,
-            run: tierDownStampedRun,
+            run: completedTicketRun,
             createdAt: directive.reportedAt,
           });
         }
@@ -5883,17 +5973,30 @@ const make = Effect.gen(function* () {
         retryableFailure: null,
         updatedAt,
       };
-      if (run.qaExhaustedAt !== null || run.appReviewExhaustedAt !== null) {
+      const cleanupStampedRun: OrchestrationImplementationRun = {
+        ...validatedRun,
+        ticketStates: validatedRun.ticketStates.map((state) =>
+          state.status === "succeeded" && state.resourceCleanupAt === null
+            ? { ...state, resourceCleanupAt: updatedAt }
+            : state,
+        ),
+      };
+      yield* updateRun({ sourceThreadId, run: cleanupStampedRun, createdAt: updatedAt });
+      yield* cleanupTicketResources({ run: cleanupStampedRun, createdAt: updatedAt });
+      if (
+        cleanupStampedRun.qaExhaustedAt !== null ||
+        cleanupStampedRun.appReviewExhaustedAt !== null
+      ) {
         yield* startCodeReview({
           sourceThreadId,
-          run: validatedRun,
+          run: cleanupStampedRun,
           createdAt: updatedAt,
         });
         return;
       }
       yield* startBrowserReview({
         sourceThreadId,
-        run: validatedRun,
+        run: cleanupStampedRun,
         createdAt: updatedAt,
       });
     },
@@ -8919,11 +9022,11 @@ const make = Effect.gen(function* () {
     }
     const nowMs = Date.parse(createdAt);
     for (const run of readModel.implementationRuns) {
+      yield* cleanupTicketResources({ run, createdAt });
       if (run.status === "completed" || run.status === "canceled") {
         yield* teardownWorkflowStacks({ readModel, run, createdAt });
         continue;
       }
-      yield* tierDownTicketStacks({ run, createdAt });
       const failedTicketWarnings = new Map(
         run.ticketStates
           .filter((state) => state.status === "failed")

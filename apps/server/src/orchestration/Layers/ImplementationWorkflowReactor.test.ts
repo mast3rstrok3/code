@@ -27,6 +27,7 @@ import {
   type ServerSettings,
   type T3ProjectFile,
   type VcsCreateWorktreeInput,
+  type VcsRemoveWorktreeInput,
 } from "@t3tools/contracts";
 import { type DeepPartial } from "@t3tools/shared/Struct";
 import * as DateTime from "effect/DateTime";
@@ -364,6 +365,8 @@ interface ImplementationCalls {
   >;
   readonly workflowTeardownInputs: Ref.Ref<ReadonlyArray<{ readonly workflowId: string }>>;
   readonly stopStackIds: Ref.Ref<ReadonlyArray<string>>;
+  readonly deleteStackIds: Ref.Ref<ReadonlyArray<string>>;
+  readonly deletedStackIds: Ref.Ref<ReadonlySet<string>>;
   readonly protectionInputs: Ref.Ref<
     ReadonlyArray<{ readonly stackId: string; readonly protected: boolean }>
   >;
@@ -379,6 +382,9 @@ interface ImplementationCalls {
     }>
   >;
   readonly createWorktreeInputs: Ref.Ref<ReadonlyArray<VcsCreateWorktreeInput>>;
+  readonly removeWorktreeInputs: Ref.Ref<ReadonlyArray<VcsRemoveWorktreeInput>>;
+  readonly activeWorktreePaths: Ref.Ref<ReadonlySet<string>>;
+  readonly removeWorktreeFailuresRemaining: Ref.Ref<number>;
   readonly mergeRefInputs: Ref.Ref<ReadonlyArray<GitMergeRefInput>>;
   readonly localStatusCount: Ref.Ref<number>;
   readonly dirtyWorkerWorktrees: Ref.Ref<boolean>;
@@ -551,6 +557,36 @@ function makeTestLayer(
                       },
                     }),
               ),
+              Effect.tap((result) =>
+                Ref.update(calls.activeWorktreePaths, (paths) =>
+                  new Set(paths).add(result.worktree.path),
+                ),
+              ),
+            ),
+          removeWorktree: (input) =>
+            Ref.update(calls.removeWorktreeInputs, (inputs) => [...inputs, input]).pipe(
+              Effect.andThen(
+                Ref.modify(
+                  calls.removeWorktreeFailuresRemaining,
+                  (remaining) => [remaining > 0, Math.max(0, remaining - 1)] as const,
+                ),
+              ),
+              Effect.flatMap((shouldFail) =>
+                shouldFail
+                  ? Effect.fail(
+                      new GitCommandError({
+                        operation: "GitWorkflowService.removeWorktree",
+                        command: "git worktree remove",
+                        cwd: input.cwd,
+                        detail: "git worktree remove failed",
+                      }),
+                    )
+                  : Ref.update(calls.activeWorktreePaths, (paths) => {
+                      const active = new Set(paths);
+                      active.delete(input.path);
+                      return active;
+                    }),
+              ),
             ),
           resolveCommit: (input) =>
             Effect.gen(function* () {
@@ -559,8 +595,8 @@ function makeTestLayer(
                 input.ref === "HEAD" &&
                 (input.cwd.includes(".worktrees/") || input.cwd.includes("-ticket-"))
               ) {
-                const created = yield* Ref.get(calls.createWorktreeInputs);
-                if (!created.some((candidate) => candidate.path === input.cwd)) {
+                const activeWorktreePaths = yield* Ref.get(calls.activeWorktreePaths);
+                if (!activeWorktreePaths.has(input.cwd)) {
                   return yield* new GitCommandError({
                     operation: "GitWorkflowService.resolveCommit",
                     command: "git rev-parse",
@@ -672,29 +708,39 @@ function makeTestLayer(
       Layer.provide(
         Layer.mock(AppDevStackManager)({
           getByWorktree: (input) =>
-            Effect.succeed({
-              stack: inheritedStackMissing
-                ? null
-                : {
-                    id: input.worktreePath.includes("-ticket-") ? "stack-ticket" : "stack-1",
-                    uuid: input.worktreePath.includes("-ticket-")
-                      ? "stack-ticket-uuid"
-                      : "stack-uuid-1",
-                    userId: "user-1",
-                    worktreePath: input.worktreePath,
-                    composePath: "/tmp/compose.yml",
-                    displayName: "Implementation test",
-                    description: null,
-                    status: autoCreateStackStatus,
-                    services: null,
-                    serviceCount: 0,
-                    lastError: null,
-                    errorCount: 0,
-                    createdAt: now,
-                    updatedAt: now,
-                  },
-              frontendUrl: inheritedStackMissing ? null : "http://127.0.0.1:5173",
-              frontendServiceName: inheritedStackMissing ? null : "frontend",
+            Effect.gen(function* () {
+              const stackId = input.worktreePath.includes("-ticket-") ? "stack-ticket" : "stack-1";
+              const deletedStackIds = yield* Ref.get(calls.deletedStackIds);
+              const autoCreateInputs = yield* Ref.get(calls.autoCreateInputs);
+              const workflowId = autoCreateInputs.findLast(
+                (candidate) => candidate.worktreePath === input.worktreePath,
+              )?.workflowId;
+              const missing = inheritedStackMissing || deletedStackIds.has(stackId);
+              return {
+                stack: missing
+                  ? null
+                  : {
+                      id: stackId,
+                      uuid: input.worktreePath.includes("-ticket-")
+                        ? "stack-ticket-uuid"
+                        : "stack-uuid-1",
+                      userId: "user-1",
+                      worktreePath: input.worktreePath,
+                      ...(workflowId == null ? {} : { workflowId }),
+                      composePath: "/tmp/compose.yml",
+                      displayName: "Implementation test",
+                      description: null,
+                      status: autoCreateStackStatus,
+                      services: null,
+                      serviceCount: 0,
+                      lastError: null,
+                      errorCount: 0,
+                      createdAt: now,
+                      updatedAt: now,
+                    },
+                frontendUrl: missing ? null : "http://127.0.0.1:5173",
+                frontendServiceName: missing ? null : "frontend",
+              };
             }),
           get: (input) =>
             Effect.succeed({
@@ -748,6 +794,15 @@ function makeTestLayer(
                 createdAt: now,
                 updatedAt: now,
               }),
+            ),
+          delete: (input) =>
+            Ref.update(calls.deleteStackIds, (stackIds) => [...stackIds, input.stackId]).pipe(
+              Effect.andThen(
+                Ref.update(calls.deletedStackIds, (stackIds) =>
+                  new Set(stackIds).add(input.stackId),
+                ),
+              ),
+              Effect.as({ deleted: true as const }),
             ),
           setProtected: (input) =>
             Ref.update(calls.protectionInputs, (inputs) => [...inputs, input]).pipe(
@@ -856,6 +911,7 @@ function withSystem<A, E>(
     readonly nonAncestorCommitSha?: string;
     readonly changeRequestGate?: ChangeRequestGate;
     readonly dirtyWorkerWorktrees?: boolean;
+    readonly failRemoveWorktreeAttempts?: number;
     readonly projectFile?: T3ProjectFile;
   },
 ) {
@@ -871,6 +927,8 @@ function withSystem<A, E>(
       [],
     );
     const stopStackIds = yield* Ref.make<ReadonlyArray<string>>([]);
+    const deleteStackIds = yield* Ref.make<ReadonlyArray<string>>([]);
+    const deletedStackIds = yield* Ref.make<ReadonlySet<string>>(new Set());
     const protectionInputs = yield* Ref.make<
       ReadonlyArray<{ readonly stackId: string; readonly protected: boolean }>
     >([]);
@@ -886,6 +944,11 @@ function withSystem<A, E>(
       }>
     >([]);
     const createWorktreeInputs = yield* Ref.make<ReadonlyArray<VcsCreateWorktreeInput>>([]);
+    const removeWorktreeInputs = yield* Ref.make<ReadonlyArray<VcsRemoveWorktreeInput>>([]);
+    const activeWorktreePaths = yield* Ref.make<ReadonlySet<string>>(new Set());
+    const removeWorktreeFailuresRemaining = yield* Ref.make(
+      options?.failRemoveWorktreeAttempts ?? 0,
+    );
     const mergeRefInputs = yield* Ref.make<ReadonlyArray<GitMergeRefInput>>([]);
     const localStatusCount = yield* Ref.make(0);
     const dirtyWorkerWorktrees = yield* Ref.make(options?.dirtyWorkerWorktrees ?? false);
@@ -895,10 +958,15 @@ function withSystem<A, E>(
       autoCreateInputs,
       workflowTeardownInputs,
       stopStackIds,
+      deleteStackIds,
+      deletedStackIds,
       protectionInputs,
       createOrOpenChangeRequestCount,
       createOrOpenChangeRequestInputs,
       createWorktreeInputs,
+      removeWorktreeInputs,
+      activeWorktreePaths,
+      removeWorktreeFailuresRemaining,
       mergeRefInputs,
       localStatusCount,
       dirtyWorkerWorktrees,
@@ -2729,6 +2797,9 @@ describe("ImplementationWorkflowReactor", () => {
               path: run.orchestratorWorktreePath,
             },
           ]);
+          yield* Ref.update(system.activeWorktreePaths, (paths) =>
+            new Set(paths).add(run.orchestratorWorktreePath),
+          );
 
           yield* system.engine.dispatch({
             type: "thread.implementation-run.update",
@@ -3723,24 +3794,93 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("stamps a successful ticket for tier-down and re-applies it during recovery", () =>
+  it.effect("deletes ticket resources only after the ticket commit is integrated", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         const { run, ticket } = yield* launchRun(system);
         yield* appendWorkerResult(system, { run, status: "succeeded" });
 
-        const snapshot = yield* system.query.getSnapshot();
-        const state = snapshot.implementationRuns
+        let snapshot = yield* system.query.getSnapshot();
+        let state = snapshot.implementationRuns
           .find((entry) => entry.id === run.id)
           ?.ticketStates.find((entry) => entry.ticketId === ticket.id);
         expect(state?.status).toBe("succeeded");
-        expect(state?.appDevStackTierDownAt).toBe("2026-01-01T00:00:01.000Z");
-        expect(yield* Ref.get(system.stopStackIds)).toEqual(["stack-ticket"]);
+        expect(state?.appDevStackTierDownAt).toBeNull();
+        expect(state?.resourceCleanupAt).toBeNull();
+        expect(yield* Ref.get(system.deleteStackIds)).toEqual([]);
+        expect(yield* Ref.get(system.removeWorktreeInputs)).toEqual([]);
 
-        yield* Ref.set(system.stopStackIds, []);
+        yield* passMergeGate(system, run);
+
+        snapshot = yield* system.query.getSnapshot();
+        state = snapshot.implementationRuns
+          .find((entry) => entry.id === run.id)
+          ?.ticketStates.find((entry) => entry.ticketId === ticket.id);
+        expect(state?.resourceCleanupAt).toBe("2026-01-01T00:00:02.000Z");
+        expect(yield* Ref.get(system.stopStackIds)).toEqual([]);
+        expect(yield* Ref.get(system.deleteStackIds)).toEqual(["stack-ticket"]);
+        expect(yield* Ref.get(system.removeWorktreeInputs)).toEqual([
+          {
+            cwd: run.orchestratorWorktreePath,
+            path: state?.worktreePath,
+          },
+        ]);
+
         yield* system.reactor.recoverIncompleteStages();
-        expect(yield* Ref.get(system.stopStackIds)).toEqual(["stack-ticket"]);
+        expect(yield* Ref.get(system.stopStackIds)).toEqual([]);
+        expect(yield* Ref.get(system.deleteStackIds)).toHaveLength(1);
+        expect(yield* Ref.get(system.removeWorktreeInputs)).toHaveLength(1);
       }),
+    ),
+  );
+
+  it.effect("retries failed ticket worktree cleanup during recovery", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          yield* appendWorkerResult(system, { run, status: "succeeded" });
+          yield* passMergeGate(system, run);
+
+          expect(yield* Ref.get(system.deleteStackIds)).toEqual(["stack-ticket"]);
+          expect(yield* Ref.get(system.removeWorktreeInputs)).toHaveLength(1);
+          yield* system.reactor.recoverIncompleteStages();
+          expect(yield* Ref.get(system.removeWorktreeInputs)).toHaveLength(2);
+          expect(yield* Ref.get(system.stopStackIds)).toEqual([]);
+        }),
+      { failRemoveWorktreeAttempts: 1 },
+    ),
+  );
+
+  it.effect("retains a ticket worktree until it is clean and fully merged", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          const branch = run.launchSummary.plannedWorkers[0]?.branch;
+          if (branch === undefined) throw new Error("Ticket branch missing.");
+          yield* appendWorkerResult(system, { run, status: "succeeded" });
+          yield* Ref.set(system.dirtyWorkerWorktrees, true);
+          yield* passMergeGate(system, run);
+
+          expect(yield* Ref.get(system.deleteStackIds)).toEqual(["stack-ticket"]);
+          expect(yield* Ref.get(system.removeWorktreeInputs)).toEqual([]);
+
+          yield* Ref.set(system.dirtyWorkerWorktrees, false);
+          yield* Ref.set(system.advancedBranchRefs, new Set([branch]));
+          yield* system.reactor.recoverIncompleteStages();
+          expect(yield* Ref.get(system.removeWorktreeInputs)).toEqual([]);
+
+          yield* Ref.set(system.advancedBranchRefs, new Set());
+          yield* system.reactor.recoverIncompleteStages();
+          expect(yield* Ref.get(system.removeWorktreeInputs)).toEqual([
+            {
+              cwd: run.orchestratorWorktreePath,
+              path: run.launchSummary.plannedWorkers[0]?.worktreePath,
+            },
+          ]);
+        }),
+      { nonAncestorCommitSha: "implementation/checkout-ticket-1@advanced" },
     ),
   );
 

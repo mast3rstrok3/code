@@ -1041,10 +1041,16 @@ export const OrchestrationImplementationTicketState = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   /**
-   * Desired-state stamp written when the ticket no longer needs its App Dev Stack.
-   * The implementation reactor re-applies the tier-down after a restart.
+   * Legacy desired-state stamp for ticket App Dev Stack teardown. New runs leave this null.
    */
   appDevStackTierDownAt: Schema.NullOr(IsoDateTime).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  /**
+   * Desired-state stamp written after the ticket commit reaches the integrated branch.
+   * The implementation reactor retries App Dev Stack and safe worktree cleanup after a restart.
+   */
+  resourceCleanupAt: Schema.NullOr(IsoDateTime).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   appReviewWorkflowRunId: Schema.optionalKey(Schema.NullOr(AppReviewWorkflowRunId)),
