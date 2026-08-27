@@ -428,8 +428,10 @@ export function isRecoverableInterruptedWorktreeHalt(
   if (isLegacyDirtyWorkerLaunchHalt(halt)) return true;
   return (
     halt.ticketId === undefined &&
-    halt.stage === "integration" &&
-    halt.detail.startsWith("Merge Gate requires clean expected HEAD") &&
+    ((halt.stage === "integration" &&
+      halt.detail.startsWith("Merge Gate requires clean expected HEAD")) ||
+      (halt.stage === "final-code-review" &&
+        halt.detail.startsWith("Code Review requires a clean worktree on"))) &&
     halt.detail.endsWith("with uncommitted changes.")
   );
 }
@@ -3747,7 +3749,8 @@ const make = Effect.gen(function* () {
    * still working. Once they are all released, the changes are nobody's, and
    * keeping them as history beats leaving them as a tree no stage may touch.
    *
-   * Returns true when it committed, meaning callers must re-read HEAD.
+   * Returns true when it committed. A false result does not prove the tree
+   * stayed dirty because another recovery may have committed it first.
    */
   const commitAbandonedOrchestratorWork = Effect.fn(
     "ImplementationWorkflowReactor.commitAbandonedOrchestratorWork",
@@ -3825,17 +3828,19 @@ const make = Effect.gen(function* () {
     const cwd = input.run.orchestratorWorktreePath;
     let head = yield* gitWorkflow.resolveCommit({ cwd, ref: "HEAD" });
     let status = yield* gitWorkflow.localStatus({ cwd });
-    if (
+    const attemptedRecovery =
       input.rescueAbandonedWork &&
       status.isRepo &&
       status.refName === input.run.orchestratorBranch &&
-      status.hasWorkingTreeChanges &&
-      (yield* commitAbandonedOrchestratorWork({
+      status.hasWorkingTreeChanges;
+    if (attemptedRecovery) {
+      yield* commitAbandonedOrchestratorWork({
         run: input.run,
         readModel: input.readModel,
         createdAt: input.createdAt,
-      }))
-    ) {
+      });
+      // Another recovery can win after the status read above. Its commit makes
+      // this call report no work, so always read the resulting state again.
       head = yield* gitWorkflow.resolveCommit({ cwd, ref: "HEAD" });
       status = yield* gitWorkflow.localStatus({ cwd });
     }

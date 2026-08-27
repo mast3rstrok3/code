@@ -234,7 +234,7 @@ it("identifies only the obsolete dirty worker launch halt", () => {
   ).toBe(false);
 });
 
-it("recovers dirty merge-gate work while keeping dirty App Review and wrong-branch halts stopped", () => {
+it("recovers dirty run worktree halts while keeping dirty ticket App Review stopped", () => {
   const appReviewHalt = {
     ticketId: "ticket-1",
     stage: "app-review",
@@ -251,6 +251,15 @@ it("recovers dirty merge-gate work while keeping dirty App Review and wrong-bran
       category: "structural-invariant",
       detail:
         "Merge Gate requires clean expected HEAD 'abc' on 'feature', but Git reports 'feature' at 'abc' with uncommitted changes.",
+      haltedAt: now,
+    }),
+  ).toBe(true);
+  expect(
+    isRecoverableInterruptedWorktreeHalt({
+      stage: "final-code-review",
+      category: "structural-invariant",
+      detail:
+        "Code Review requires a clean worktree on 'implementation/calendar', but Git reports 'implementation/calendar' with uncommitted changes.",
       haltedAt: now,
     }),
   ).toBe(true);
@@ -460,6 +469,8 @@ interface ImplementationCalls {
   /** Uncommitted changes sitting in the orchestrator worktree. */
   readonly dirtyOrchestratorWorktree: Ref.Ref<boolean>;
   readonly commitWorktreeInputs: Ref.Ref<ReadonlyArray<{ readonly cwd: string }>>;
+  /** Make a recovery commit look as though another caller committed it first. */
+  readonly concurrentRecoveryWon: Ref.Ref<boolean>;
   /** HEAD of the orchestrator worktree once a recovery commit has moved it. */
   readonly orchestratorHead: Ref.Ref<string | null>;
   readonly advancedBranchRefs: Ref.Ref<ReadonlySet<string>>;
@@ -774,7 +785,10 @@ function makeTestLayer(
               // commit integration recorded.
               yield* Ref.set(calls.dirtyOrchestratorWorktree, false);
               yield* Ref.set(calls.orchestratorHead, recoveredCommitSha);
-              return { commitSha: recoveredCommitSha };
+              const concurrentRecoveryWon = yield* Ref.get(calls.concurrentRecoveryWon);
+              return {
+                commitSha: concurrentRecoveryWon ? null : recoveredCommitSha,
+              };
             }),
           listChangedFiles: () => Effect.succeed([]),
           isAncestor: (input) => Effect.succeed(input.ancestorRef !== nonAncestorCommitSha),
@@ -1094,6 +1108,7 @@ function withSystem<A, E>(
     const dirtyWorkerWorktrees = yield* Ref.make(options?.dirtyWorkerWorktrees ?? false);
     const dirtyOrchestratorWorktree = yield* Ref.make(options?.dirtyOrchestratorWorktree ?? false);
     const commitWorktreeInputs = yield* Ref.make<ReadonlyArray<{ readonly cwd: string }>>([]);
+    const concurrentRecoveryWon = yield* Ref.make(false);
     const orchestratorHead = yield* Ref.make<string | null>(null);
     const advancedBranchRefs = yield* Ref.make<ReadonlySet<string>>(new Set());
     const frontendProbeUrls = yield* Ref.make<ReadonlyArray<string>>([]);
@@ -1116,6 +1131,7 @@ function withSystem<A, E>(
       dirtyWorkerWorktrees,
       dirtyOrchestratorWorktree,
       commitWorktreeInputs,
+      concurrentRecoveryWon,
       orchestratorHead,
       advancedBranchRefs,
       frontendProbeUrls,
@@ -4291,7 +4307,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("rescues abandoned work for run Code Review, not only the Merge Gate", () =>
+  it.effect("rereads Code Review status when another recovery commits first", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         const { run } = yield* launchRun(system);
@@ -4331,6 +4347,7 @@ describe("ImplementationWorkflowReactor", () => {
         );
         yield* Ref.set(system.dirtyOrchestratorWorktree, true);
         yield* Ref.set(system.commitWorktreeInputs, []);
+        yield* Ref.set(system.concurrentRecoveryWon, true);
 
         yield* system.engine.dispatch({
           type: "thread.implementation-run.rerun",
@@ -5273,6 +5290,44 @@ describe("ImplementationWorkflowReactor", () => {
         );
         expect(workers).toHaveLength(1);
         expect(workers[0]?.messages).toHaveLength(1);
+      }),
+    ),
+  );
+
+  it.effect("resumes a final Code Review dirty-worktree halt", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        const haltedAt = "2026-01-01T00:00:02.000Z";
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("persist-final-code-review-dirty-halt"),
+          threadId: sourceThreadId,
+          run: {
+            ...run,
+            status: "needs-human-attention",
+            automationHalt: {
+              stage: "final-code-review",
+              category: "structural-invariant",
+              detail:
+                "Code Review requires a clean worktree on 'implementation/calendar', but Git reports 'implementation/calendar' with uncommitted changes.",
+              haltedAt,
+            },
+            updatedAt: haltedAt,
+          },
+          createdAt: haltedAt,
+        });
+        yield* system.reactor.drain;
+
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+
+        const snapshot = yield* system.query.getSnapshot();
+        const recovered = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(recovered?.automationHalt).toBeNull();
+        expect(recovered?.status).toBe("code-review-fixing");
+        expect(recovered?.fixOrigin).toBe("code-review");
+        expect(recovered?.activeFixerThreadId).not.toBeNull();
       }),
     ),
   );
