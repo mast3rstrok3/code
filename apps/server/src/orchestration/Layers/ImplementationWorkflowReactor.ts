@@ -6340,6 +6340,9 @@ const make = Effect.gen(function* () {
           });
           return;
         }
+        const retryAttemptCount =
+          (run.retryableFailure?.stage === "merge-gate" ? run.retryableFailure.attemptCount : 0) +
+          1;
         const continuingRun: OrchestrationImplementationRun = {
           ...failedRun,
           status: "validating",
@@ -6347,13 +6350,13 @@ const make = Effect.gen(function* () {
             stage: "merge-gate",
             detail: failureDetail,
             failedAt: updatedAt,
-            attemptCount: (run.retryableFailure?.attemptCount ?? 0) + 1,
+            attemptCount: retryAttemptCount,
             maxAttempts: IMPLEMENTATION_STAGE_MAX_LAUNCHES,
             humanBlocked: false,
           },
           updatedAt,
         };
-        if (run.mergeGateAttemptCount >= IMPLEMENTATION_RUN_MAX_MERGE_GATE_ATTEMPTS) {
+        if (retryAttemptCount >= IMPLEMENTATION_STAGE_MAX_LAUNCHES) {
           yield* startFixer({
             sourceThreadId,
             run: continuingRun,
@@ -9990,7 +9993,7 @@ const make = Effect.gen(function* () {
       if (
         run.status === "validating" &&
         run.retryableFailure?.stage === "merge-gate" &&
-        run.mergeGateAttemptCount >= IMPLEMENTATION_RUN_MAX_MERGE_GATE_ATTEMPTS &&
+        run.retryableFailure.attemptCount >= run.retryableFailure.maxAttempts &&
         !hasActiveChild({
           threadId: run.activeValidatorThreadId,
           role: "implementation-validator",

@@ -8884,7 +8884,14 @@ describe("ImplementationWorkflowReactor", () => {
           threadId: sourceThreadId,
           run: {
             ...current,
-            mergeGateAttemptCount: IMPLEMENTATION_RUN_MAX_MERGE_GATE_ATTEMPTS,
+            retryableFailure: {
+              stage: "merge-gate",
+              detail: "The prior validator could not establish the integrated result.",
+              failedAt: "2026-01-01T00:04:00.000Z",
+              attemptCount: 1,
+              maxAttempts: IMPLEMENTATION_STAGE_MAX_LAUNCHES,
+              humanBlocked: false,
+            },
             updatedAt: "2026-01-01T00:05:00.000Z",
           },
           createdAt: "2026-01-01T00:05:00.000Z",
