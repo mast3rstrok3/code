@@ -73,6 +73,7 @@ import {
   workflowIdForRun,
 } from "./ImplementationWorkflowReactor.ts";
 import {
+  ORPHANED_PROVIDER_SESSION_ERROR,
   WORKFLOW_INTERRUPTION_ERROR_MESSAGE,
   WORKFLOW_NUDGE_EXHAUSTED_MESSAGE,
 } from "../workflowNudge.ts";
@@ -95,6 +96,12 @@ import {
 } from "../Services/ProjectionSnapshotQuery.ts";
 
 const now = "2026-01-01T00:00:00.000Z";
+
+/** The run's own worktree, the one every run-level stage shares. */
+const orchestratorWorktreePath = "/tmp/implementation-reactor.worktrees/checkout";
+
+/** HEAD after recovery commits work an interrupted agent left behind. */
+const recoveredCommitSha = "recovered789";
 
 /**
  * Where the clock sits while a test body runs.
@@ -412,6 +419,11 @@ interface ImplementationCalls {
   readonly mergeRefInputs: Ref.Ref<ReadonlyArray<GitMergeRefInput>>;
   readonly localStatusCount: Ref.Ref<number>;
   readonly dirtyWorkerWorktrees: Ref.Ref<boolean>;
+  /** Uncommitted changes sitting in the orchestrator worktree. */
+  readonly dirtyOrchestratorWorktree: Ref.Ref<boolean>;
+  readonly commitWorktreeInputs: Ref.Ref<ReadonlyArray<{ readonly cwd: string }>>;
+  /** HEAD of the orchestrator worktree once a recovery commit has moved it. */
+  readonly orchestratorHead: Ref.Ref<string | null>;
   readonly advancedBranchRefs: Ref.Ref<ReadonlySet<string>>;
   readonly frontendProbeUrls: Ref.Ref<ReadonlyArray<string>>;
 }
@@ -666,6 +678,10 @@ function makeTestLayer(
                       : resolvedCommitSha,
                 };
               }
+              if (input.ref === "HEAD" && input.cwd === orchestratorWorktreePath) {
+                const moved = yield* Ref.get(calls.orchestratorHead);
+                if (moved !== null) return { commitSha: moved };
+              }
               if (input.ref === "HEAD" && input.cwd.includes("-ticket-")) {
                 const created = yield* Ref.get(calls.createWorktreeInputs);
                 const worktree = created.find((candidate) => candidate.path === input.cwd);
@@ -686,8 +702,9 @@ function makeTestLayer(
               Ref.get(calls.createWorktreeInputs),
               Ref.updateAndGet(calls.localStatusCount, (count) => count + 1),
               Ref.get(calls.dirtyWorkerWorktrees),
+              Ref.get(calls.dirtyOrchestratorWorktree),
             ]).pipe(
-              Effect.map(([created, statusCheck, dirtyWorkerWorktrees]) => ({
+              Effect.map(([created, statusCheck, dirtyWorkerWorktrees, dirtyOrchestrator]) => ({
                 isRepo: true,
                 hasPrimaryRemote: true,
                 isDefaultRef: input.cwd === "/tmp/implementation-reactor",
@@ -702,10 +719,25 @@ function makeTestLayer(
                 hasWorkingTreeChanges:
                   (input.cwd === "/tmp/implementation-reactor" &&
                     statusCheck <= dirtySourceStatusChecks) ||
-                  (dirtyWorkerWorktrees && input.cwd.includes("-ticket-")),
+                  (dirtyWorkerWorktrees && input.cwd.includes("-ticket-")) ||
+                  (dirtyOrchestrator && input.cwd === orchestratorWorktreePath),
                 workingTree: { files: [], insertions: 0, deletions: 0 },
               })),
             ),
+          commitWorktree: (input) =>
+            Effect.gen(function* () {
+              yield* Ref.update(calls.commitWorktreeInputs, (inputs) => [
+                ...inputs,
+                { cwd: input.cwd },
+              ]);
+              const dirty = yield* Ref.get(calls.dirtyOrchestratorWorktree);
+              if (!dirty || input.cwd !== orchestratorWorktreePath) return { commitSha: null };
+              // Committing is what makes the tree clean and moves HEAD past the
+              // commit integration recorded.
+              yield* Ref.set(calls.dirtyOrchestratorWorktree, false);
+              yield* Ref.set(calls.orchestratorHead, recoveredCommitSha);
+              return { commitSha: recoveredCommitSha };
+            }),
           listChangedFiles: () => Effect.succeed([]),
           isAncestor: (input) => Effect.succeed(input.ancestorRef !== nonAncestorCommitSha),
           mergeRef: (input) =>
@@ -975,6 +1007,7 @@ function withSystem<A, E>(
     readonly nonAncestorCommitSha?: string;
     readonly changeRequestGate?: ChangeRequestGate;
     readonly dirtyWorkerWorktrees?: boolean;
+    readonly dirtyOrchestratorWorktree?: boolean;
     readonly failRemoveWorktreeAttempts?: number;
     /** Branches git already has, for restoring a worktree whose branch outlived it. */
     readonly existingBranches?: ReadonlyArray<string>;
@@ -1021,6 +1054,9 @@ function withSystem<A, E>(
     const mergeRefInputs = yield* Ref.make<ReadonlyArray<GitMergeRefInput>>([]);
     const localStatusCount = yield* Ref.make(0);
     const dirtyWorkerWorktrees = yield* Ref.make(options?.dirtyWorkerWorktrees ?? false);
+    const dirtyOrchestratorWorktree = yield* Ref.make(options?.dirtyOrchestratorWorktree ?? false);
+    const commitWorktreeInputs = yield* Ref.make<ReadonlyArray<{ readonly cwd: string }>>([]);
+    const orchestratorHead = yield* Ref.make<string | null>(null);
     const advancedBranchRefs = yield* Ref.make<ReadonlySet<string>>(new Set());
     const frontendProbeUrls = yield* Ref.make<ReadonlyArray<string>>([]);
     const calls = {
@@ -1040,6 +1076,9 @@ function withSystem<A, E>(
       mergeRefInputs,
       localStatusCount,
       dirtyWorkerWorktrees,
+      dirtyOrchestratorWorktree,
+      commitWorktreeInputs,
+      orchestratorHead,
       advancedBranchRefs,
       frontendProbeUrls,
     } satisfies ImplementationCalls;
@@ -4151,6 +4190,121 @@ describe("ImplementationWorkflowReactor", () => {
           stage: "implementation",
           category: "stage-failed",
         });
+      }),
+    ),
+  );
+
+  it.effect("commits work an interrupted agent left in the orchestrator worktree", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+
+        let snapshot = yield* system.query.getSnapshot();
+        const validatingRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        const validatorThreadId = validatingRun?.activeValidatorThreadId;
+        if (validatingRun === undefined || validatorThreadId == null) {
+          throw new Error("Validator missing.");
+        }
+
+        // A deploy restarts the server while the validator is mid-edit. Its
+        // session does not survive, and what it had written stays uncommitted.
+        yield* system.engine.dispatch({
+          type: "thread.session.set",
+          commandId: commandId("orphan-validator-session"),
+          threadId: validatorThreadId,
+          session: {
+            threadId: validatorThreadId,
+            status: "error",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: ORPHANED_PROVIDER_SESSION_ERROR,
+            updatedAt: "2026-01-01T00:00:03.000Z",
+          },
+          createdAt: "2026-01-01T00:00:03.000Z",
+        });
+        yield* Ref.set(system.dirtyOrchestratorWorktree, true);
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("reinterrupt-integration"),
+          threadId: sourceThreadId,
+          run: { ...validatingRun, status: "integrating" },
+          createdAt: now,
+        });
+
+        yield* system.reactor.start();
+        yield* system.reactor.drain;
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        const recovered = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(recovered?.automationHalt).toBeNull();
+        expect(recovered?.status).toBe("validating");
+        expect(yield* Ref.get(system.commitWorktreeInputs)).toEqual([
+          { cwd: run.orchestratorWorktreePath },
+        ]);
+        // The gate validates the commit it just rescued, and records it as the
+        // integrated head so App Review and the next gate agree with it.
+        expect(recovered?.activeValidationHeadSha).toBe(recoveredCommitSha);
+        expect(recovered?.integrationHeadSha).toBe(recoveredCommitSha);
+      }),
+    ),
+  );
+
+  it.effect("does not commit a dirty orchestrator worktree while its owner is working", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+
+        let snapshot = yield* system.query.getSnapshot();
+        const validatingRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        const validatorThreadId = validatingRun?.activeValidatorThreadId;
+        if (validatingRun === undefined || validatorThreadId == null) {
+          throw new Error("Validator missing.");
+        }
+
+        // Same dirty worktree, but the validator is alive and still writing to
+        // it. Committing here would take work out from under a running agent.
+        yield* system.engine.dispatch({
+          type: "thread.session.set",
+          commandId: commandId("validator-session-running"),
+          threadId: validatorThreadId,
+          session: {
+            threadId: validatorThreadId,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: "2026-01-01T00:00:03.000Z",
+          },
+          createdAt: "2026-01-01T00:00:03.000Z",
+        });
+        yield* Ref.set(system.dirtyOrchestratorWorktree, true);
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("reinterrupt-integration-live-owner"),
+          threadId: sourceThreadId,
+          run: { ...validatingRun, status: "integrating" },
+          createdAt: now,
+        });
+
+        yield* system.reactor.start();
+        yield* system.reactor.drain;
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        const recovered = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(yield* Ref.get(system.commitWorktreeInputs)).toEqual([]);
+        expect(yield* Ref.get(system.dirtyOrchestratorWorktree)).toBe(true);
+        // A dirty worktree the gate cannot claim still goes to a human, exactly
+        // as it did before recovery could commit anything. That is the point:
+        // work is only ever taken over once nobody is left to finish it.
+        expect(recovered?.automationHalt).toMatchObject({ stage: "integration" });
       }),
     ),
   );

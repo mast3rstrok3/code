@@ -168,6 +168,45 @@ it.effect("uses stable diagnostics for every parsed non-repository command", () 
   }).pipe(Effect.provide(layer));
 });
 
+it.effect("commitWorktree commits everything left in the worktree", () =>
+  Effect.gen(function* () {
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+    const before = (yield* git(cwd, ["rev-parse", "HEAD"])).trim();
+
+    // What an agent leaves behind: an edit, a new file, and a deletion, none
+    // of them staged.
+    yield* writeTextFile(cwd, "README.md", "# edited\n");
+    yield* writeTextFile(cwd, "added.txt", "new\n");
+    yield* git(cwd, ["rm", "--cached", "README.md"]);
+
+    const result = yield* driver.commitWorktree({ cwd, message: "recovered work" });
+
+    assert.notEqual(result.commitSha, null);
+    assert.notEqual(result.commitSha, before);
+    assert.equal((yield* git(cwd, ["status", "--porcelain"])).trim(), "");
+    const files = (yield* git(cwd, ["show", "--name-only", "--format=", "HEAD"])).trim();
+    assert.ok(files.includes("added.txt"));
+    assert.equal((yield* git(cwd, ["log", "-1", "--format=%s"])).trim(), "recovered work");
+  }).pipe(Effect.provide(TestLayer)),
+);
+
+it.effect("commitWorktree reports nothing committed for a clean worktree", () =>
+  Effect.gen(function* () {
+    const driver = yield* GitVcsDriver.GitVcsDriver;
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+    const before = (yield* git(cwd, ["rev-parse", "HEAD"])).trim();
+
+    const result = yield* driver.commitWorktree({ cwd, message: "recovered work" });
+
+    // No empty commit, so a sweep that keeps checking cannot grow history.
+    assert.equal(result.commitSha, null);
+    assert.equal((yield* git(cwd, ["rev-parse", "HEAD"])).trim(), before);
+  }).pipe(Effect.provide(TestLayer)),
+);
+
 it.effect("invalidates origin remote cache when a driver mutation adds origin", () =>
   Effect.gen(function* () {
     const driver = yield* GitVcsDriver.GitVcsDriver;

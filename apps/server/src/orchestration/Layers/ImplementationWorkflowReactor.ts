@@ -28,6 +28,7 @@ import {
   type OrchestrationPlanningTicket,
   type OrchestrationReadModel,
   type OrchestrationThread,
+  type OrchestrationThreadWorkflowRole,
   type WorkflowStageExecution,
   WORKFLOW_AUTOMATION_RUNTIME_MODE,
   type WorkspaceUserId,
@@ -1486,6 +1487,19 @@ function stalledRunHaltStage(
  * clock. The policy itself lives with the inspection so this file and the
  * decider cannot drift apart again.
  */
+/**
+ * Roles that get an orchestrator worktree to write in.
+ *
+ * A ticket worker has its own worktree and never touches this one, so it is not
+ * here. Used to work out who left a dirty tree behind.
+ */
+const WORKTREE_WRITING_WORKFLOW_ROLES: ReadonlySet<OrchestrationThreadWorkflowRole> = new Set([
+  "implementation-validator",
+  "implementation-fixer",
+  "implementation-qa-reviewer",
+  "implementation-code-reviewer",
+]);
+
 function stageThreadIsFinished(input: {
   readonly thread: OrchestrationThread | undefined;
   readonly threads: ReadonlyArray<OrchestrationThread>;
@@ -3613,6 +3627,76 @@ const make = Effect.gen(function* () {
     },
   );
 
+  /**
+   * Commit work an agent left in the orchestrator worktree when it died.
+   *
+   * A dirty worktree has two very different causes and the guards below cannot
+   * tell them apart on their own. Someone may be editing it, which is a reason
+   * to stand down. Or a validator or fixer was killed mid-edit, most often by a
+   * server restart, and the changes are finished work with nobody left to
+   * commit them. That second case used to reach a human with "requires clean
+   * expected HEAD ... with uncommitted changes", and clearing it by hand meant
+   * committing exactly what is committed here.
+   *
+   * So ask who owned the worktree. Every stage that writes to it records its
+   * thread on the run, and `stageClaim` already says whether that thread is
+   * still working. Once they are all released, the changes are nobody's, and
+   * keeping them as history beats leaving them as a tree no stage may touch.
+   *
+   * Returns true when it committed, meaning callers must re-read HEAD.
+   */
+  const commitAbandonedOrchestratorWork = Effect.fn(
+    "ImplementationWorkflowReactor.commitAbandonedOrchestratorWork",
+  )(function* (input: {
+    readonly run: OrchestrationImplementationRun;
+    readonly readModel: OrchestrationReadModel;
+    readonly createdAt: string;
+  }) {
+    const nowMs = Date.parse(input.createdAt);
+    // Ask the threads, not the run's active pointers. A pointer is cleared as
+    // each stage ends, so by the time a gate looks the run often names nobody,
+    // and reading that as "nobody was here" would commit a person's edits.
+    // Threads keep the worktree they were given for as long as they exist, so
+    // they can still say who was writing.
+    const owners = input.readModel.threads.filter(
+      (thread) =>
+        thread.deletedAt === null &&
+        thread.worktreePath === input.run.orchestratorWorktreePath &&
+        thread.workflowRole !== null &&
+        WORKTREE_WRITING_WORKFLOW_ROLES.has(thread.workflowRole),
+    );
+    // Nobody owns this worktree, so nothing here says an agent wrote the
+    // changes. They may be a person's. Leave them and let the guard halt.
+    if (owners.length === 0) return false;
+    const ownerStillWorking = owners.some(
+      (thread) => !stageThreadIsFinished({ thread, threads: input.readModel.threads, nowMs }),
+    );
+    if (ownerStillWorking) return false;
+    const committed = yield* gitWorkflow.commitWorktree({
+      cwd: input.run.orchestratorWorktreePath,
+      message:
+        "chore: recover work left by an interrupted agent\n\nCommitted by recovery so the run can continue. The agent writing these\nchanges stopped before committing them.",
+    });
+    if (committed.commitSha === null) return false;
+    yield* appendActivity({
+      threadId: input.run.orchestratorThreadId,
+      tone: "info",
+      kind: "implementation-recovered-abandoned-work",
+      summary: "Committed work an interrupted agent left behind",
+      payload: {
+        runId: input.run.id,
+        branch: input.run.orchestratorBranch,
+        commitSha: committed.commitSha,
+      },
+      createdAt: input.createdAt,
+    });
+    yield* Effect.logInfo("implementation workflow committed abandoned orchestrator work", {
+      runId: input.run.id,
+      commitSha: committed.commitSha,
+    });
+    return true;
+  });
+
   const startMergeGate = Effect.fn("ImplementationWorkflowReactor.startMergeGate")(
     function* (input: {
       readonly sourceThreadId: ThreadId;
@@ -3666,13 +3750,35 @@ const make = Effect.gen(function* () {
       }
 
       const validatorThreadId = yield* serverThreadId("implementation-validator");
-      const validationHead = yield* gitWorkflow.resolveCommit({
+      let validationHead = yield* gitWorkflow.resolveCommit({
         cwd: input.run.orchestratorWorktreePath,
         ref: "HEAD",
       });
-      const validationStatus = yield* gitWorkflow.localStatus({
+      let validationStatus = yield* gitWorkflow.localStatus({
         cwd: input.run.orchestratorWorktreePath,
       });
+      // Only the integration gate rescues abandoned work. Final validation runs
+      // after Code Review, and a commit made here would not have been reviewed,
+      // so there it stays a halt and a human decides.
+      if (
+        input.kind === "integration" &&
+        validationStatus.isRepo &&
+        validationStatus.refName === input.run.orchestratorBranch &&
+        validationStatus.hasWorkingTreeChanges &&
+        (yield* commitAbandonedOrchestratorWork({
+          run: input.run,
+          readModel,
+          createdAt: input.createdAt,
+        }))
+      ) {
+        validationHead = yield* gitWorkflow.resolveCommit({
+          cwd: input.run.orchestratorWorktreePath,
+          ref: "HEAD",
+        });
+        validationStatus = yield* gitWorkflow.localStatus({
+          cwd: input.run.orchestratorWorktreePath,
+        });
+      }
       const expectedValidationHead =
         input.kind === "final" ? input.run.codeReviewedHeadSha : input.run.integrationHeadSha;
       // The gate's own repairs land on this branch, so an integration HEAD that

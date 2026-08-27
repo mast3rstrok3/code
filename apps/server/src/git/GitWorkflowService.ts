@@ -78,6 +78,18 @@ export class GitWorkflowService extends Context.Service<
     readonly createWorktree: (
       input: VcsCreateWorktreeInput,
     ) => Effect.Effect<VcsCreateWorktreeResult, GitCommandError>;
+    /**
+     * Commits everything in a worktree onto its checked-out branch.
+     *
+     * Narrow on purpose. Recovery uses it to rescue work an agent left behind
+     * when its session died, so the work becomes history a review can read
+     * instead of a dirty tree that stops the run. `commitSha` is null when the
+     * worktree was already clean.
+     */
+    readonly commitWorktree: (input: {
+      readonly cwd: string;
+      readonly message: string;
+    }) => Effect.Effect<{ readonly commitSha: string | null }, GitCommandError>;
     readonly fetchRemote: (input: {
       readonly cwd: string;
       readonly remoteName: string;
@@ -408,6 +420,10 @@ export const make = Effect.gen(function* () {
     createWorktree: (input) =>
       ensureGitCommand("GitWorkflowService.createWorktree", input.cwd).pipe(
         Effect.andThen(git.createWorktree(input)),
+      ),
+    commitWorktree: (input) =>
+      ensureGitCommand("GitWorkflowService.commitWorktree", input.cwd).pipe(
+        Effect.andThen(git.commitWorktree(input)),
       ),
     fetchRemote: (input) =>
       ensureGitCommand("GitWorkflowService.fetchRemote", input.cwd).pipe(

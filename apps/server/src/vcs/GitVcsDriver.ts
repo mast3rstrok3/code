@@ -175,6 +175,16 @@ export interface GitRefreshCheckedOutBranchResult {
   onTarget: boolean;
 }
 
+export interface GitCommitWorktreeInput {
+  cwd: string;
+  message: string;
+}
+
+export interface GitCommitWorktreeResult {
+  /** Null when the worktree was already clean and nothing was committed. */
+  commitSha: string | null;
+}
+
 export interface GitEnsureRemoteInput {
   cwd: string;
   preferredName: string;
@@ -287,6 +297,16 @@ export class GitVcsDriver extends Context.Service<
     readonly refreshCheckedOutBranch: (
       input: GitRefreshCheckedOutBranchInput,
     ) => Effect.Effect<GitRefreshCheckedOutBranchResult, GitCommandError>;
+    /**
+     * Commits everything in the worktree onto the branch it has checked out.
+     *
+     * For rescuing work an agent left behind, so it survives as history instead
+     * of as a dirty tree nobody may touch. `commitSha` is null when there was
+     * nothing to commit.
+     */
+    readonly commitWorktree: (
+      input: GitCommitWorktreeInput,
+    ) => Effect.Effect<GitCommitWorktreeResult, GitCommandError>;
     readonly ensureRemote: (input: GitEnsureRemoteInput) => Effect.Effect<string, GitCommandError>;
     readonly resolvePrimaryRemoteName: (cwd: string) => Effect.Effect<string, GitCommandError>;
     readonly resolveDefaultBranchName: (

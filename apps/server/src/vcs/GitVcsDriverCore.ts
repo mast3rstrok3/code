@@ -3114,6 +3114,55 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     },
   );
 
+  const commitWorktree: GitVcsDriver.GitVcsDriver["Service"]["commitWorktree"] = Effect.fn(
+    "commitWorktree",
+  )(function* (input) {
+    const operation = "GitVcsDriver.commitWorktree";
+    yield* executeGit(operation, input.cwd, ["add", "-A", "--", "."], {
+      timeoutMs: 30_000,
+      fallbackErrorDetail: "git add failed",
+    });
+    // `--no-verify`: hooks belong to whoever owns the repo, and this commit runs
+    // during recovery with nobody watching. `--allow-empty` is deliberately not
+    // set, so a clean worktree reports nothing committed rather than growing an
+    // empty commit every sweep.
+    const commit = yield* executeGit(
+      operation,
+      input.cwd,
+      ["commit", "--no-verify", "-m", input.message],
+      {
+        timeoutMs: 30_000,
+        allowNonZeroExit: true,
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: "T3 Code",
+          GIT_AUTHOR_EMAIL: "t3code@users.noreply.github.com",
+          GIT_COMMITTER_NAME: "T3 Code",
+          GIT_COMMITTER_EMAIL: "t3code@users.noreply.github.com",
+        },
+      },
+    );
+    if (commit.exitCode !== 0) {
+      // git says 1 with "nothing to commit" when the tree matches HEAD. Anything
+      // else is a real failure and has to surface.
+      const output = `${commit.stdout}\n${commit.stderr}`;
+      if (!/nothing to commit|no changes added to commit/i.test(output)) {
+        return yield* new GitCommandError({
+          operation,
+          command: "git commit",
+          cwd: input.cwd,
+          detail: output.trim() || "git commit failed",
+        });
+      }
+      return { commitSha: null };
+    }
+    const head = yield* executeGit(operation, input.cwd, ["rev-parse", "HEAD"], {
+      timeoutMs: 10_000,
+      fallbackErrorDetail: "git rev-parse HEAD failed",
+    });
+    return { commitSha: head.stdout.trim() };
+  });
+
   const initRepo: GitVcsDriver.GitVcsDriver["Service"]["initRepo"] = (input) =>
     executeGit("GitVcsDriver.initRepo", input.cwd, ["init"], {
       timeoutMs: 10_000,
@@ -3191,6 +3240,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     resolveCommit,
     refreshCheckedOutBranch: (input) =>
       withListRefsInvalidation(input.cwd, refreshCheckedOutBranch(input)),
+    commitWorktree: (input) => withListRefsInvalidation(input.cwd, commitWorktree(input)),
     ensureRemote: (input) => withListRefsInvalidation(input.cwd, ensureRemote(input)),
     resolvePrimaryRemoteName,
     resolveDefaultBranchName,
