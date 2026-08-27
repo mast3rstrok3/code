@@ -694,8 +694,17 @@ function clearRunStageForRerun(input: {
     updatedAt: input.updatedAt,
   };
   switch (input.stage) {
+    // Both stages start the gate again, so both have to give it a budget to start
+    // with. The attempt ceiling is what asks a human to read a gate that keeps
+    // failing; once they have and they re-run it, leaving the count spent makes the
+    // halt permanent, because no other path lowers it.
     case "integration":
-      return { ...base, status: "integrating" as const, integrationHeadSha: null };
+      return {
+        ...base,
+        status: "integrating" as const,
+        integrationHeadSha: null,
+        mergeGateAttemptCount: 0,
+      };
     case "merge-gate":
       return {
         ...base,
@@ -705,6 +714,7 @@ function clearRunStageForRerun(input: {
         activeValidationKind: null,
         validatedHeadSha: null,
         finalValidation: null,
+        mergeGateAttemptCount: 0,
       };
     case "app-review":
       return {
@@ -6197,9 +6207,29 @@ const make = Effect.gen(function* () {
               finalCommands: requiredCommands,
               validations: directive.validations,
             });
+      // An integration gate is allowed to repair what it finds, and `startMergeGate`
+      // already accepts a HEAD that moved past the sha integration recorded. Reading
+      // the reported HEAD strictly here contradicted that: the gate that finally
+      // passed was failed for the commit it made to pass, and the run burned its
+      // attempts on the fix rather than the fault. Accept a descendant of the sha we
+      // handed the validator on the same clean branch; the success path re-records
+      // `integrationHeadSha` from HEAD. Final validation stays strict, because a
+      // commit landing after Code Review has not been reviewed.
+      const validationHeadAdvanced =
+        gateKind === "integration" &&
+        run.activeValidationHeadSha !== null &&
+        run.activeValidationHeadSha !== head.commitSha &&
+        status.isRepo &&
+        status.refName === run.orchestratorBranch &&
+        !status.hasWorkingTreeChanges &&
+        (yield* gitWorkflow.isAncestor({
+          cwd: run.orchestratorWorktreePath,
+          ancestorRef: run.activeValidationHeadSha,
+          descendantRef: head.commitSha,
+        }));
       const passed =
         directive.status === "passed" &&
-        run.activeValidationHeadSha === head.commitSha &&
+        (run.activeValidationHeadSha === head.commitSha || validationHeadAdvanced) &&
         status.isRepo &&
         status.refName === run.orchestratorBranch &&
         !status.hasWorkingTreeChanges &&
