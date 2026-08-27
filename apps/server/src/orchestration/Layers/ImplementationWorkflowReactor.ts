@@ -3697,6 +3697,47 @@ const make = Effect.gen(function* () {
     return true;
   });
 
+  /**
+   * Read the orchestrator worktree for a run-level stage, after rescuing any
+   * work an interrupted agent left in it.
+   *
+   * Merge Gate, App Review and Code Review all share this one worktree and each
+   * used to read it for itself. That meant one restart stopped whichever of
+   * them looked next, each with its own wording, and fixing it in one left the
+   * others halting for the same reason. Rescue once, here, and they agree.
+   *
+   * `rescueAbandonedWork` is false where a new commit would invalidate the
+   * stage: final validation runs after Code Review, and a commit made now has
+   * not been reviewed.
+   */
+  const readOrchestratorWorktree = Effect.fn(
+    "ImplementationWorkflowReactor.readOrchestratorWorktree",
+  )(function* (input: {
+    readonly run: OrchestrationImplementationRun;
+    readonly readModel: OrchestrationReadModel;
+    readonly rescueAbandonedWork: boolean;
+    readonly createdAt: string;
+  }) {
+    const cwd = input.run.orchestratorWorktreePath;
+    let head = yield* gitWorkflow.resolveCommit({ cwd, ref: "HEAD" });
+    let status = yield* gitWorkflow.localStatus({ cwd });
+    if (
+      input.rescueAbandonedWork &&
+      status.isRepo &&
+      status.refName === input.run.orchestratorBranch &&
+      status.hasWorkingTreeChanges &&
+      (yield* commitAbandonedOrchestratorWork({
+        run: input.run,
+        readModel: input.readModel,
+        createdAt: input.createdAt,
+      }))
+    ) {
+      head = yield* gitWorkflow.resolveCommit({ cwd, ref: "HEAD" });
+      status = yield* gitWorkflow.localStatus({ cwd });
+    }
+    return { head, status };
+  });
+
   const startMergeGate = Effect.fn("ImplementationWorkflowReactor.startMergeGate")(
     function* (input: {
       readonly sourceThreadId: ThreadId;
@@ -3750,35 +3791,12 @@ const make = Effect.gen(function* () {
       }
 
       const validatorThreadId = yield* serverThreadId("implementation-validator");
-      let validationHead = yield* gitWorkflow.resolveCommit({
-        cwd: input.run.orchestratorWorktreePath,
-        ref: "HEAD",
+      const { head: validationHead, status: validationStatus } = yield* readOrchestratorWorktree({
+        run: input.run,
+        readModel,
+        rescueAbandonedWork: input.kind === "integration",
+        createdAt: input.createdAt,
       });
-      let validationStatus = yield* gitWorkflow.localStatus({
-        cwd: input.run.orchestratorWorktreePath,
-      });
-      // Only the integration gate rescues abandoned work. Final validation runs
-      // after Code Review, and a commit made here would not have been reviewed,
-      // so there it stays a halt and a human decides.
-      if (
-        input.kind === "integration" &&
-        validationStatus.isRepo &&
-        validationStatus.refName === input.run.orchestratorBranch &&
-        validationStatus.hasWorkingTreeChanges &&
-        (yield* commitAbandonedOrchestratorWork({
-          run: input.run,
-          readModel,
-          createdAt: input.createdAt,
-        }))
-      ) {
-        validationHead = yield* gitWorkflow.resolveCommit({
-          cwd: input.run.orchestratorWorktreePath,
-          ref: "HEAD",
-        });
-        validationStatus = yield* gitWorkflow.localStatus({
-          cwd: input.run.orchestratorWorktreePath,
-        });
-      }
       const expectedValidationHead =
         input.kind === "final" ? input.run.codeReviewedHeadSha : input.run.integrationHeadSha;
       // The gate's own repairs land on this branch, so an integration HEAD that
@@ -4379,12 +4397,11 @@ const make = Effect.gen(function* () {
         }
       }
 
-      const reviewHead = yield* gitWorkflow.resolveCommit({
-        cwd: cycleRun.orchestratorWorktreePath,
-        ref: "HEAD",
-      });
-      const reviewStatus = yield* gitWorkflow.localStatus({
-        cwd: input.run.orchestratorWorktreePath,
+      const { head: reviewHead, status: reviewStatus } = yield* readOrchestratorWorktree({
+        run: cycleRun,
+        readModel,
+        rescueAbandonedWork: true,
+        createdAt: input.createdAt,
       });
       if (
         !reviewStatus.isRepo ||
@@ -4686,12 +4703,11 @@ const make = Effect.gen(function* () {
       ) {
         return;
       }
-      const reviewHead = yield* gitWorkflow.resolveCommit({
-        cwd: input.run.orchestratorWorktreePath,
-        ref: "HEAD",
-      });
-      const preflight = yield* gitWorkflow.localStatus({
-        cwd: input.run.orchestratorWorktreePath,
+      const { head: reviewHead, status: preflight } = yield* readOrchestratorWorktree({
+        run: input.run,
+        readModel,
+        rescueAbandonedWork: true,
+        createdAt: input.createdAt,
       });
       if (
         !preflight.isRepo ||

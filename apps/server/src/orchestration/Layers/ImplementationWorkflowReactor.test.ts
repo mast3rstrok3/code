@@ -4253,6 +4253,68 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
+  it.effect("rescues abandoned work for run Code Review, not only the Merge Gate", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+        yield* passMergeGate(system, run);
+
+        // The gate is done and the worktree was clean for it. A restart now
+        // kills whoever picked it up next, so Code Review is the stage that
+        // finds the mess. Every run-level stage shares this worktree, so the one
+        // that looks first should not be the only one that can recover.
+        let snapshot = yield* system.query.getSnapshot();
+        const reviewingRun = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        if (reviewingRun === undefined) throw new Error("Run missing.");
+        // A restart takes down every session at once, so orphan all of them,
+        // not just the validator. A single survivor still owns the worktree and
+        // recovery must leave it alone, which is what the sibling test covers.
+        const worktreeOwners = snapshot.threads.filter(
+          (thread) => thread.worktreePath === run.orchestratorWorktreePath,
+        );
+        expect(worktreeOwners.length).toBeGreaterThan(0);
+        yield* Effect.forEach(worktreeOwners, (owner) =>
+          system.engine.dispatch({
+            type: "thread.session.set",
+            commandId: commandId(`orphan-${owner.id}`),
+            threadId: owner.id,
+            session: {
+              threadId: owner.id,
+              status: "error",
+              providerName: "codex",
+              runtimeMode: "full-access",
+              activeTurnId: null,
+              lastError: ORPHANED_PROVIDER_SESSION_ERROR,
+              updatedAt: "2026-01-01T00:00:04.000Z",
+            },
+            createdAt: "2026-01-01T00:00:04.000Z",
+          }),
+        );
+        yield* Ref.set(system.dirtyOrchestratorWorktree, true);
+        yield* Ref.set(system.commitWorktreeInputs, []);
+
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.rerun",
+          commandId: commandId("rerun-run-code-review-dirty"),
+          threadId: sourceThreadId,
+          runId: run.id,
+          target: { kind: "run", stage: "code-review" },
+          createdAt: "2026-01-01T00:00:05.000Z",
+        });
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        const recovered = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(yield* Ref.get(system.commitWorktreeInputs)).toEqual([
+          { cwd: run.orchestratorWorktreePath },
+        ]);
+        expect(yield* Ref.get(system.dirtyOrchestratorWorktree)).toBe(false);
+        expect(recovered?.automationHalt).toBeNull();
+      }),
+    ),
+  );
+
   it.effect("does not commit a dirty orchestrator worktree while its owner is working", () =>
     withSystem((system) =>
       Effect.gen(function* () {
