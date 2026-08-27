@@ -1,4 +1,4 @@
-import { expect, it } from "vite-plus/test";
+import { describe, expect, it } from "vite-plus/test";
 import {
   AppReviewId,
   AppReviewWorkflowCycleBudget,
@@ -37,6 +37,7 @@ import {
   e2eCheckIdsForCommands,
   emptyAppReviewRepairPlanTurnId,
   effectiveAppReviewScope,
+  appReviewTargetIsGone,
   resolveEffectiveAppReviewScope,
   recoverableFailedAppReviewPhase,
   claimAppReviewFixResultContinuation,
@@ -333,6 +334,52 @@ function review(verdict: "passed" | "failed", withFinding = verdict === "failed"
     updatedAt: now,
   };
 }
+
+describe("appReviewTargetIsGone", () => {
+  const targetThreadId = ThreadId.make("thread-target");
+
+  it("keeps the run alive when the target is simply not in this snapshot", () => {
+    // What actually happened on code-dev: the thread row was present and healthy
+    // the whole time, one read missed it, and the review was failed for good.
+    expect(
+      appReviewTargetIsGone({
+        threadId: targetThreadId,
+        targetResolved: false,
+        threads: [],
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps the run alive when the read model still holds the thread", () => {
+    expect(
+      appReviewTargetIsGone({
+        threadId: targetThreadId,
+        targetResolved: false,
+        threads: [{ id: targetThreadId, deletedAt: null }],
+      }),
+    ).toBe(false);
+  });
+
+  it("ends the run once the thread is deleted", () => {
+    expect(
+      appReviewTargetIsGone({
+        threadId: targetThreadId,
+        targetResolved: false,
+        threads: [{ id: targetThreadId, deletedAt: now }],
+      }),
+    ).toBe(true);
+  });
+
+  it("ends the run when the thread resolved but had nowhere to run", () => {
+    expect(
+      appReviewTargetIsGone({
+        threadId: targetThreadId,
+        targetResolved: true,
+        threads: [{ id: targetThreadId, deletedAt: null }],
+      }),
+    ).toBe(true);
+  });
+});
 
 it("uses separate model scopes for ticket and combined App Review phases", () => {
   expect(

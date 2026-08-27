@@ -113,6 +113,31 @@ export function isAppReviewWorkflowSessionStatus(status: string): boolean {
   return status === "starting" || status === "running" || status === "error";
 }
 
+/**
+ * Whether a review target that would not resolve is gone for good.
+ *
+ * "Not found" and "nowhere to run" are different answers that used to look the
+ * same, and only one of them should end a run. A thread missing from a snapshot
+ * is usually still there and the read simply raced a write. Ending the review on
+ * that reading killed a run whose target thread was present and healthy the
+ * whole time, and a re-run cleared it at once. A thread the read model has and
+ * marks deleted is not coming back, and neither is one that resolved but had no
+ * directory to run in, so those do end the run.
+ */
+export function appReviewTargetIsGone(input: {
+  readonly threadId: ThreadId;
+  /** Whether the target thread resolved but had nowhere to run. */
+  readonly targetResolved: boolean;
+  readonly threads: ReadonlyArray<{
+    readonly id: ThreadId;
+    readonly deletedAt: string | null;
+  }>;
+}): boolean {
+  if (input.targetResolved) return true;
+  const known = input.threads.find((candidate) => candidate.id === input.threadId);
+  return known !== undefined && known.deletedAt !== null;
+}
+
 export function appReviewPhaseModelStepWorkflowPromptId(
   run: Pick<AppReviewWorkflowRun, "caller">,
 ): string {
@@ -1134,6 +1159,20 @@ const make = Effect.gen(function* () {
     return cwd === null ? null : { thread, cwd };
   });
 
+  const targetIsGone = Effect.fn("AppReviewWorkflowReactor.targetIsGone")(function* (
+    threadId: ThreadId,
+  ) {
+    const [thread, readModel] = yield* Effect.all([
+      resolveThread(threadId),
+      projectionSnapshotQuery.getCommandReadModel(),
+    ]);
+    return appReviewTargetIsGone({
+      threadId,
+      targetResolved: thread !== undefined,
+      threads: readModel.threads,
+    });
+  });
+
   /** The target worktree's `e2eCommands` from t3.json; best-effort, absent means none. */
   const e2eCommandsForCwd = Effect.fn("AppReviewWorkflowReactor.e2eCommandsForCwd")(function* (
     cwd: string | null,
@@ -1492,6 +1531,16 @@ const make = Effect.gen(function* () {
     if (isWorkflowThreadPaused(readModel.threads, currentRun.controllerThreadId)) return;
     const target = yield* resolveTarget(currentRun.targetThreadId);
     if (target === null) {
+      if (!(yield* targetIsGone(currentRun.targetThreadId))) {
+        // Momentary. Stand down and let the next sweep start the cycle. If it
+        // never resolves, the implementation run's stall backstop reports a run
+        // that held a working status with nothing working on it.
+        yield* Effect.logWarning("app review target thread was not visible; deferring start", {
+          runId: currentRun.id,
+          targetThreadId: currentRun.targetThreadId,
+        });
+        return;
+      }
       yield* failRun({
         run: currentRun,
         reason: "unknown",
