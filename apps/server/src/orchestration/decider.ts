@@ -62,6 +62,7 @@ import { buildPlanImplementationThreadTitle } from "@t3tools/shared/orchestratio
 import { APP_REVIEW_PARTS_TARGETS } from "@t3tools/shared/appReviewParts";
 import { resolveImplementationValidationCommands } from "@t3tools/shared/t3ProjectFile";
 import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
+import { stageClaimBlocksRestart, stageClaimState } from "./stageClaim.ts";
 import {
   isProductWorkflowPreset,
   isProductWorkflowRoot,
@@ -746,13 +747,18 @@ function liveRerunTargetThreadId(input: {
   readonly readModel: OrchestrationReadModel;
   readonly run: OrchestrationImplementationRun;
   readonly target: OrchestrationImplementationRerunTarget;
+  readonly nowMs: number;
 }): ThreadId | null {
   const liveThread = (threadId: ThreadId | null | undefined): ThreadId | null => {
     if (threadId == null) return null;
     const thread = input.readModel.threads.find((candidate) => candidate.id === threadId);
-    if (thread === undefined || thread.deletedAt !== null) return null;
-    return thread.session?.status === "starting" || thread.session?.status === "running"
-      ? thread.id
+    // The shared policy, not a local re-derivation: a reactor that thought this
+    // stage was dead while the decider thought it live is how a run ends up
+    // asking for the same stage every minute and being refused every minute.
+    return stageClaimBlocksRestart(
+      stageClaimState({ thread, threads: input.readModel.threads, nowMs: input.nowMs }),
+    )
+      ? (thread?.id ?? null)
       : null;
   };
   const liveAppReviewWorkflow = (runId: string | null | undefined): ThreadId | null => {
@@ -3895,6 +3901,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         readModel,
         run: existingRun,
         target,
+        nowMs: Date.parse(command.createdAt),
       });
       if (liveThreadId !== null) {
         return yield* new OrchestrationCommandInvariantError({
@@ -3982,7 +3989,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       }
       // Clearing a stage out from under its own agent would leave that agent
       // writing results the run no longer expects, exactly as a re-run would.
-      const liveThreadId = liveRerunTargetThreadId({ readModel, run: existingRun, target });
+      const liveThreadId = liveRerunTargetThreadId({
+        readModel,
+        run: existingRun,
+        target,
+        nowMs: Date.parse(command.createdAt),
+      });
       if (liveThreadId !== null) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,

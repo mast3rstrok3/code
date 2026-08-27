@@ -12,6 +12,7 @@ import {
   GitCommandError,
   IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
   IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES,
+  IMPLEMENTATION_RUN_MAX_MERGE_GATE_ATTEMPTS,
   IMPLEMENTATION_STAGE_MAX_LAUNCHES,
   MessageId,
   ProviderInstanceId,
@@ -8272,6 +8273,234 @@ describe("ImplementationWorkflowReactor", () => {
         const snapshot = yield* system.query.getSnapshot();
         const resumed = snapshot.implementationRuns.find((entry) => entry.id === run.id);
         expect(resumed?.updatedAt).not.toBe(strandedAt);
+      }),
+    ),
+  );
+  /**
+   * A failed integration gate parks the run at `validating` and keeps its
+   * validator on the run, so the thread gets its grace window before anything
+   * relaunches it. The sweep then proved the validator dead and asked for a new
+   * gate, but `startMergeGate` read the same still-present thread as a live gate
+   * and returned. Nothing recorded a halt, so the run read as running while
+   * nothing moved.
+   */
+  it.effect("restarts the merge gate once its failed validator is finished", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        const staleValidatorThreadId = ThreadId.make("thread-finished-validator");
+        yield* system.engine.dispatch({
+          type: "thread.create",
+          commandId: commandId("create-finished-validator"),
+          threadId: staleValidatorThreadId,
+          projectId,
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+          parentThreadId: run.orchestratorThreadId,
+          workflowRole: "implementation-validator",
+          title: "Implementation merge gate",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          runtimeMode: "full-access",
+          interactionMode: "implementation-workflow",
+          branch: "main",
+          worktreePath: "/tmp/implementation-reactor-review",
+          createdAt: now,
+        });
+        // The gate reported a failure and its session ended. This is the shape
+        // `handleMergeGateResult` leaves behind: still `validating`, no halt,
+        // and the finished validator still claimed.
+        yield* system.engine.dispatch({
+          type: "thread.session.set",
+          commandId: commandId("finished-validator-session"),
+          threadId: staleValidatorThreadId,
+          session: {
+            threadId: staleValidatorThreadId,
+            status: "stopped",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        });
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("gate-failed-with-claimed-validator"),
+          threadId: sourceThreadId,
+          run: {
+            ...run,
+            status: "validating",
+            orchestratorBranch: "main",
+            orchestratorWorktreePath: "/tmp/implementation-reactor-review",
+            integrationHeadSha: "def456",
+            activeValidationKind: "integration",
+            activeValidationHeadSha: null,
+            activeValidatorThreadId: staleValidatorThreadId,
+            validatedHeadSha: null,
+            retryableFailure: {
+              stage: "merge-gate",
+              detail: "Two backend tests are red.",
+              failedAt: now,
+              attemptCount: 1,
+              maxAttempts: IMPLEMENTATION_STAGE_MAX_LAUNCHES,
+              humanBlocked: false,
+            },
+            updatedAt: now,
+          },
+          createdAt: now,
+        });
+
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+
+        const snapshot = yield* system.query.getSnapshot();
+        const restarted = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(restarted?.status).toBe("validating");
+        expect(restarted?.automationHalt).toBeNull();
+        expect(restarted?.activeValidatorThreadId).not.toBe(staleValidatorThreadId);
+        expect(restarted?.activeValidatorThreadId).not.toBeNull();
+        expect(restarted?.activeValidationHeadSha).toBe("def456");
+        // The relaunch carries the prior failure so the gate does not rediscover it.
+        expect(
+          snapshot.threads
+            .find((thread) => thread.id === restarted?.activeValidatorThreadId)
+            ?.messages.at(-1)?.text,
+        ).toContain("Two backend tests are red.");
+      }),
+    ),
+  );
+  it.effect("halts a run that has started its Merge Gate too many times", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("merge-gate-budget-spent"),
+          threadId: sourceThreadId,
+          run: {
+            ...run,
+            status: "validating",
+            orchestratorBranch: "main",
+            orchestratorWorktreePath: "/tmp/implementation-reactor-review",
+            integrationHeadSha: "def456",
+            activeValidationKind: "integration",
+            activeValidationHeadSha: null,
+            activeValidatorThreadId: null,
+            validatedHeadSha: null,
+            mergeGateAttemptCount: IMPLEMENTATION_RUN_MAX_MERGE_GATE_ATTEMPTS,
+            updatedAt: now,
+          },
+          createdAt: now,
+        });
+
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+
+        const snapshot = yield* system.query.getSnapshot();
+        const halted = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(halted?.status).toBe("needs-human-attention");
+        expect(halted?.automationHalt).toMatchObject({ category: "retry-exhausted" });
+        expect(halted?.automationHalt?.detail).toContain("Merge Gate");
+        // The point of the ceiling: no twenty-first validator.
+        expect(
+          snapshot.threads.filter((thread) => thread.workflowRole === "implementation-validator"),
+        ).toHaveLength(0);
+      }),
+    ),
+  );
+
+  /**
+   * The shape every silent stall in this reactor has taken: a working status,
+   * an owner that is gone, and no halt to carry it into anyone's queue. No
+   * specific recovery branch recognises it, which is exactly why the sweep
+   * needs a backstop that does not depend on recognising it.
+   */
+  it.effect("halts a run holding a working status with nothing working on it", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        const strandedAt = DateTime.formatIso(DateTime.makeUnsafe(0));
+        // Clear the launch's workers so the only thing claiming the run is the
+        // reviewer under test. They are stamped at `now`, which the test clock
+        // has not reached, so they would read as still settling forever.
+        const launched = yield* system.query.getSnapshot();
+        for (const child of launched.threads.filter(
+          (thread) => thread.parentThreadId === run.orchestratorThreadId,
+        )) {
+          yield* system.engine.dispatch({
+            type: "thread.delete",
+            commandId: commandId(`delete-launch-child-${child.id}`),
+            threadId: child.id,
+          });
+        }
+        const reviewerThreadId = ThreadId.make("thread-abandoned-qa-reviewer");
+        yield* system.engine.dispatch({
+          type: "thread.create",
+          commandId: commandId("create-abandoned-reviewer"),
+          threadId: reviewerThreadId,
+          projectId,
+          ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+          parentThreadId: run.orchestratorThreadId,
+          workflowRole: "implementation-qa-reviewer",
+          title: "App Review",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          runtimeMode: "full-access",
+          interactionMode: "implementation-workflow",
+          branch: "main",
+          worktreePath: "/tmp/implementation-reactor-review",
+          createdAt: strandedAt,
+        });
+        // `ready` and quiet. The App Review branch only relaunches an `error` or
+        // `stopped` reviewer, so it declines; nothing else claims the run.
+        yield* system.engine.dispatch({
+          type: "thread.session.set",
+          commandId: commandId("abandoned-reviewer-session"),
+          threadId: reviewerThreadId,
+          session: {
+            threadId: reviewerThreadId,
+            status: "ready",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: strandedAt,
+          },
+          createdAt: strandedAt,
+        });
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("stalled-qa-review"),
+          threadId: sourceThreadId,
+          run: {
+            ...run,
+            status: "qa-reviewing",
+            orchestratorBranch: "main",
+            orchestratorWorktreePath: "/tmp/implementation-reactor-review",
+            integrationHeadSha: "def456",
+            appReviewIds: ["app-review-stalled"],
+            activeAppReviewThreadId: reviewerThreadId,
+            activeAppReviewHeadSha: "def456",
+            stageExecutions: [],
+            updatedAt: strandedAt,
+          },
+          createdAt: now,
+        });
+        yield* TestClock.adjust(Duration.minutes(25));
+
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+
+        const snapshot = yield* system.query.getSnapshot();
+        const halted = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(halted?.status).toBe("needs-human-attention");
+        expect(halted?.automationHalt).not.toBeNull();
+        expect(halted?.automationHalt?.detail).toContain("no agent working on it");
       }),
     ),
   );

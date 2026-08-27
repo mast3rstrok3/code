@@ -626,6 +626,16 @@ export const IMPLEMENTATION_RUN_MAX_APP_REVIEW_UNBLOCK_ATTEMPTS = 3;
 export const IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES = 5;
 /** One initial launch plus one automatic retry before a valid stage result. */
 export const IMPLEMENTATION_STAGE_MAX_LAUNCHES = 2;
+/**
+ * How many times one run may start its integration or final gate.
+ *
+ * A runaway backstop, not a budget: a healthy run legitimately re-gates after
+ * every repair and every review cycle, so this sits well above what those add
+ * up to. It exists because `mergeGateAttemptCount` was incremented on every
+ * gate start and read nowhere, which is indistinguishable from having no limit
+ * at all. One run reached twelve.
+ */
+export const IMPLEMENTATION_RUN_MAX_MERGE_GATE_ATTEMPTS = 20;
 /** @deprecated Use IMPLEMENTATION_RUN_MAX_QA_REPAIRS. */
 export const IMPLEMENTATION_RUN_MAX_QA_CYCLES = IMPLEMENTATION_RUN_MAX_QA_REPAIRS;
 /** @deprecated Use IMPLEMENTATION_RUN_MAX_QA_REPAIRS. */

@@ -13,6 +13,7 @@ import {
   AppReviewWorkflowCycleBudget,
   IMPLEMENTATION_RUN_MAX_QA_REPAIRS,
   IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES,
+  IMPLEMENTATION_RUN_MAX_MERGE_GATE_ATTEMPTS,
   IMPLEMENTATION_STAGE_MAX_LAUNCHES,
   MessageId,
   ThreadId,
@@ -81,6 +82,7 @@ import {
 } from "@t3tools/shared/workflowStepCycles";
 import { isWorkflowThreadPaused } from "../workflowPause.ts";
 import { isAwaitingWorkflowNudge, WORKFLOW_INTERRUPTION_ERROR_MESSAGE } from "../workflowNudge.ts";
+import { stageClaimBlocksRestart, stageClaimIsReleased, stageClaimState } from "../stageClaim.ts";
 import { ServerActivation } from "../../serverActivation.ts";
 import { implementationRerunTargetMatchesHalt } from "../implementationRerun.ts";
 import { runUpdateWouldOverwriteNewerTicketState } from "../implementationRunConcurrency.ts";
@@ -1419,16 +1421,6 @@ function changeRequestFailure(input: {
 
 /** App Review is already slow; a hung edge must not hold the reactor's queue. */
 /**
- * How long a stage thread may sit with no session and no turn before recovery
- * treats its launch as lost.
- *
- * Long enough that a provider backed up behind dozens of agents still reports
- * first, short enough that a start dropped by a restart, which nothing else
- * re-drives, does not strand the ticket for the rest of the run.
- */
-const UNREPORTED_STAGE_THREAD_GRACE_MS = 10 * 60 * 1_000;
-
-/**
  * How long a run may sit at `integrating` before recovery re-drives it.
  *
  * Integration is a merge sequence this reactor runs inline, so it holds the
@@ -1438,54 +1430,68 @@ const UNREPORTED_STAGE_THREAD_GRACE_MS = 10 * 60 * 1_000;
 const INTEGRATION_STALL_GRACE_MS = 5 * 60 * 1_000;
 
 /**
- * Whether a stage's thread is done with the work the stage gave it, as opposed
- * to not having reported yet.
+ * How long a run may hold a working status with nothing working before recovery
+ * calls it stalled.
  *
- * Every guard that asks "is this stage still running?" has to agree, because a
- * stage claim is only released by whoever decides it is dead. When the recovery
- * sweep read an idle validator as finished but `startMergeGate` read the same
- * thread as live, the sweep relaunched the gate every minute and the relaunch
- * returned early every minute, on a run carrying no halt and so still reading
- * as running. One predicate, used by both.
+ * Generous on purpose. Every branch of the sweep gets first refusal, so this
+ * only fires on a run no specific recovery recognised, and the cost of being
+ * wrong is a halt on a run that was about to move. Longer than the stage grace
+ * window, so a stage still settling is never mistaken for a stalled run.
+ */
+const RUN_STALL_GRACE_MS = 20 * 60 * 1_000;
+
+/**
+ * The statuses that promise an agent is working.
+ *
+ * `launch-pending` and `needs-human-attention` are left out: the first is
+ * waiting on a handover the sweep has its own branch for, and the second is
+ * already where a stalled run is supposed to end up.
+ */
+const WORKING_RUN_STATUSES: ReadonlySet<OrchestrationImplementationRun["status"]> = new Set([
+  "running",
+  "integrating",
+  "validating",
+  "qa-reviewing",
+  "fixing",
+  "code-reviewing",
+  "code-review-fixing",
+  "publishing-change-request",
+  "babysitting-change-request",
+]);
+
+/** The closest halt stage to a working status, for a stall with no better name. */
+function stalledRunHaltStage(
+  run: OrchestrationImplementationRun,
+): NonNullable<OrchestrationImplementationRun["automationHalt"]>["stage"] {
+  switch (run.status) {
+    case "running":
+      return "implementation";
+    case "qa-reviewing":
+      return "app-review";
+    case "code-reviewing":
+      return "code-review";
+    case "fixing":
+    case "code-review-fixing":
+      return run.fixOrigin === "code-review" ? "code-review" : "integration";
+    default:
+      return "integration";
+  }
+}
+
+/**
+ * Whether automatic recovery may replace the thread a stage points at.
+ *
+ * Thin wrapper over the shared claim vocabulary in `stageClaim.ts`, kept because
+ * every call site here already has the read model's thread list and the sweep's
+ * clock. The policy itself lives with the inspection so this file and the
+ * decider cannot drift apart again.
  */
 function stageThreadIsFinished(input: {
   readonly thread: OrchestrationThread | undefined;
   readonly threads: ReadonlyArray<OrchestrationThread>;
   readonly nowMs: number;
 }): boolean {
-  const { thread, threads, nowMs } = input;
-  if (thread === undefined) return true;
-  if (thread.deletedAt !== null) return true;
-  if (
-    thread.session?.status === "starting" ||
-    thread.session?.status === "running" ||
-    thread.latestTurn?.state === "running" ||
-    isAwaitingWorkflowNudge({ threads, thread, nowMs })
-  ) {
-    return false;
-  }
-  // A thread that has never reported anything, no session and no turn, is a
-  // launch still queued behind a busy provider. It is left alone, but not
-  // forever: a restart drops a queued start with nothing to re-drive it, so
-  // after UNREPORTED_STAGE_THREAD_GRACE_MS silence counts as gone. That
-  // backstop is a floor on how often this can be wrong, not the test itself,
-  // which is why it is generous.
-  if (thread.session === null && thread.latestTurn === null) {
-    return nowMs - Date.parse(thread.createdAt) >= UNREPORTED_STAGE_THREAD_GRACE_MS;
-  }
-  // A live session resting between turns reads as `ready` with no active turn,
-  // which is also how a thread looks when it stopped without reporting.
-  // Reviewers rest there for a minute or two mid-review, and recovering on the
-  // first idle sweep put a second reviewer on the same ticket branch: whichever
-  // one reported first froze the ticket's recorded commit, the other kept
-  // committing, and every later step that compared the branch against that
-  // commit refused. `stopped`, `error` and `interrupted` say the session is
-  // actually over and are recovered at once; only `ready` has to prove it by
-  // staying quiet.
-  if (thread.session?.status === "ready") {
-    return nowMs - Date.parse(thread.session.updatedAt) >= UNREPORTED_STAGE_THREAD_GRACE_MS;
-  }
-  return true;
+  return stageClaimIsReleased(stageClaimState(input));
 }
 
 const FRONTEND_PROBE_TIMEOUT = Duration.seconds(10);
@@ -1898,10 +1904,16 @@ const make = Effect.gen(function* () {
         ? {
             ...(input.ticketId === undefined ? {} : { ticketId: input.ticketId }),
             stage: input.haltStage ?? automationStageForFailure(input.retryableStage),
-            category: humanBlocked
-              ? "structural-invariant"
-              : (input.haltCategory ??
-                (input.retryableStage === undefined ? "review-blocked" : "retry-exhausted")),
+            // An explicit category from the call site wins. `humanBlocked` says
+            // who can clear the halt, not what kind of halt it is, and a caller
+            // that has already named the kind should not have it overwritten.
+            category:
+              input.haltCategory ??
+              (humanBlocked
+                ? "structural-invariant"
+                : input.retryableStage === undefined
+                  ? "review-blocked"
+                  : "retry-exhausted"),
             detail: input.reasonMarkdown,
             haltedAt: input.updatedAt,
           }
@@ -3575,9 +3587,30 @@ const make = Effect.gen(function* () {
       readonly createdAt: string;
     }) {
       if (input.run.automationHalt !== null) return;
+      // Every start claims another attempt. Without a reader the claim was free,
+      // so a gate that kept failing kept being relaunched with nothing counting.
+      if (input.run.mergeGateAttemptCount >= IMPLEMENTATION_RUN_MAX_MERGE_GATE_ATTEMPTS) {
+        yield* blockRun({
+          sourceThreadId: input.sourceThreadId,
+          run: input.run,
+          retryableStage: "merge-gate",
+          reasonMarkdown: `This run started its ${input.kind === "final" ? "final validation" : "Merge Gate"} ${String(input.run.mergeGateAttemptCount)} times without settling it. Automation stops here so the repeated failure gets read rather than retried again.`,
+          updatedAt: input.createdAt,
+          haltCategory: "retry-exhausted",
+          haltStage: input.kind === "final" ? "final-code-review" : "integration",
+          humanBlocked: true,
+        });
+        return;
+      }
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
       const orchestratorThread = findThread(readModel, input.run.orchestratorThreadId);
       if (orchestratorThread === null) return;
+      // A failed integration gate keeps its validator on the run so the thread
+      // gets the grace window to finish or be nudged before anything relaunches
+      // it. That claim is only a reason to stand down while the thread is still
+      // working: reading "the thread still exists" as "the gate is running" left
+      // the run at `validating` with no halt, because the sweep proved the
+      // validator dead and then called this, which returned right back.
       const activeValidator =
         input.run.activeValidatorThreadId === null
           ? undefined
@@ -3585,7 +3618,16 @@ const make = Effect.gen(function* () {
               (thread) =>
                 thread.id === input.run.activeValidatorThreadId && thread.deletedAt === null,
             );
-      if (activeValidator !== undefined) return;
+      if (
+        activeValidator !== undefined &&
+        !stageThreadIsFinished({
+          thread: activeValidator,
+          threads: readModel.threads,
+          nowMs: Date.parse(input.createdAt),
+        })
+      ) {
+        return;
+      }
 
       const validatorThreadId = yield* serverThreadId("implementation-validator");
       const validationHead = yield* gitWorkflow.resolveCommit({
@@ -4488,9 +4530,17 @@ const make = Effect.gen(function* () {
               (thread) =>
                 thread.id === input.run.activeCodeReviewThreadId && thread.deletedAt === null,
             );
+      // Narrow on purpose: a reviewer resting between turns is not a reason to
+      // refuse, only one actually at work on the branch. Same policy the decider
+      // applies to a user's Re-run, so the two cannot answer differently.
       if (
-        activeReviewer?.session?.status === "starting" ||
-        activeReviewer?.session?.status === "running"
+        stageClaimBlocksRestart(
+          stageClaimState({
+            thread: activeReviewer,
+            threads: readModel.threads,
+            nowMs: Date.parse(input.createdAt),
+          }),
+        )
       ) {
         return;
       }
@@ -9710,6 +9760,43 @@ const make = Effect.gen(function* () {
           run.id,
           "change-request-babysitter",
           startChangeRequestBabysitter({ sourceThreadId, run, createdAt }),
+        );
+        continue;
+      }
+
+      // Reaching here means no branch above recognised this run, so nothing in
+      // this reactor is going to move it. That is fine while an agent is at
+      // work. It is not fine when the run holds a working status with no live
+      // stage, no queued execution and no halt: it reads as busy on every
+      // surface, no sweep touches it, and no one is told. Every silent stall
+      // this reactor has produced looked exactly like this, so name it and let
+      // the halt carry it into someone's queue.
+      if (
+        WORKING_RUN_STATUSES.has(run.status) &&
+        nowMs - Date.parse(run.updatedAt) >= RUN_STALL_GRACE_MS &&
+        !childThreads.some((thread) => !stageThreadFinished(thread)) &&
+        !run.stageExecutions.some(
+          (execution) => execution.state === "queued" || execution.state === "starting",
+        ) &&
+        !(readModel.appReviewWorkflowRuns ?? []).some(
+          (nested) =>
+            nested.status === "running" &&
+            nested.caller.type === "implementation" &&
+            nested.caller.implementationRunId === run.id,
+        )
+      ) {
+        yield* recoverRunStage(
+          run.id,
+          "stalled-run",
+          blockRun({
+            sourceThreadId,
+            run,
+            reasonMarkdown: `This run has been \`${run.status}\` since ${run.updatedAt} with no agent working on it, no stage queued, and no reported failure. Automation cannot tell what it was waiting for, so it stops here rather than looking busy. Re-run the stage it should be in.`,
+            updatedAt: createdAt,
+            haltCategory: "structural-invariant",
+            haltStage: stalledRunHaltStage(run),
+            humanBlocked: true,
+          }),
         );
       }
     }
