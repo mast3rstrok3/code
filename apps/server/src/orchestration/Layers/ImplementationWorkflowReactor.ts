@@ -8847,7 +8847,21 @@ const make = Effect.gen(function* () {
     switch (event.payload.activity.kind) {
       case "implementation-worker-result": {
         const directive = asWorkerDirective(event.payload.activity.payload);
-        if (directive !== null) yield* handleWorkerResult(event.payload.threadId, directive);
+        // Stamp the write with when the activity landed, not with the
+        // `reportedAt` inside it. That field is written by the agent, and one
+        // resuming an earlier conversation can repeat a timestamp from hours
+        // ago, which the stale-write guard reads as an out-of-order write and
+        // drops. The worker's own commit is then on the branch with nothing
+        // recording it, and the ticket burns its launches reporting a result
+        // that never lands. The directive keeps its `reportedAt`, so what the
+        // worker said is still what gets stored.
+        if (directive !== null) {
+          yield* handleWorkerResult(
+            event.payload.threadId,
+            directive,
+            event.payload.activity.createdAt,
+          );
+        }
         return;
       }
       case "implementation-merge-gate-result": {

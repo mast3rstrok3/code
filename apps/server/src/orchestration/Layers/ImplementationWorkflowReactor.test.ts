@@ -8689,6 +8689,60 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
   /**
+   * `reportedAt` is written by the agent. A worker resuming an earlier
+   * conversation can repeat a timestamp from hours ago, and dating the write by
+   * it puts the result behind the ticket's own state, where the stale-write
+   * guard drops it. The commit is on the branch with nothing recording it.
+   */
+  it.effect("accepts a worker result whose agent-reported time is stale", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        const before = yield* system.query.getSnapshot();
+        const state = before.implementationRuns.find((entry) => entry.id === run.id)
+          ?.ticketStates[0];
+        if (!state?.workerThreadId) throw new Error("Worker was not started.");
+
+        yield* system.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: commandId("worker-result-stale-reported-at"),
+          threadId: state.workerThreadId,
+          activity: {
+            id: eventId("worker-result-stale-reported-at"),
+            tone: "info",
+            kind: "implementation-worker-result",
+            summary: "Worker succeeded",
+            payload: {
+              type: "implementation-worker-result",
+              ticketId: state.ticketId,
+              workerThreadId: state.workerThreadId,
+              branch: state.branch,
+              worktreePath: state.worktreePath,
+              status: "succeeded",
+              commitSha: `${state.branch}@commit`,
+              validations: requiredValidations(),
+              notesMarkdown: "succeeded",
+              // A day before the ticket state this write has to land on top of.
+              reportedAt: "2025-12-31T00:00:01.000Z",
+            },
+            turnId: null,
+            createdAt: "2026-01-01T00:00:01.000Z",
+          },
+          createdAt: "2026-01-01T00:00:01.000Z",
+        });
+        yield* system.reactor.drain;
+
+        const snapshot = yield* system.query.getSnapshot();
+        const recorded = snapshot.implementationRuns
+          .find((entry) => entry.id === run.id)
+          ?.ticketStates.find((entry) => entry.ticketId === state.ticketId);
+        expect(recorded?.workerResult?.status).toBe("succeeded");
+        expect(recorded?.status).not.toBe("running");
+      }),
+    ),
+  );
+
+  /**
    * An integration gate repairs what it finds, so the commit it makes to pass is
    * the gate working. Failing it for that commit is how a run burns its attempts
    * on the fix rather than the fault.
