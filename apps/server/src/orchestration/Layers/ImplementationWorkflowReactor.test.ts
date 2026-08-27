@@ -37,9 +37,11 @@ import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import * as Layer from "effect/Layer";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import * as Duration from "effect/Duration";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import type * as Scope from "effect/Scope";
+import * as TestClock from "effect/testing/TestClock";
 import { describe } from "vite-plus/test";
 
 import { AppDevStackManager } from "../../appDevStack/AppDevStackManager.ts";
@@ -8060,6 +8062,216 @@ describe("ImplementationWorkflowReactor", () => {
             (thread) => thread.workflowRole === "implementation-code-reviewer",
           ).length,
         ).toBe(1);
+      }),
+    ),
+  );
+
+  /**
+   * A repair the run itself commits moves the orchestrator branch past the sha
+   * integration recorded. Reading that as a tampered workspace halted runs for
+   * doing exactly what the workflow asked of them, and nothing re-recorded the
+   * sha, so both the gate and App Review refused from then on.
+   */
+  const qaReviewingRun = (
+    run: OrchestrationImplementationRun,
+    integrationHeadSha: string | null,
+  ): OrchestrationImplementationRun => ({
+    ...run,
+    status: "qa-reviewing",
+    orchestratorBranch: "main",
+    orchestratorWorktreePath: "/tmp/implementation-reactor-review",
+    integrationHeadSha,
+    activeAppReviewHeadSha: null,
+    activeAppReviewThreadId: null,
+    activeCodeReviewHeadSha: null,
+    activeCodeReviewThreadId: null,
+    appDevStack: {
+      status: "ready",
+      stackId: "stack-1",
+      stackStatus: "running",
+      frontendUrl: "http://127.0.0.1:5173",
+      frontendServiceName: "frontend",
+      displayName: "Implementation test",
+      lastErrorMarkdown: null,
+      requestedAt: now,
+      updatedAt: now,
+    },
+    updatedAt: now,
+  });
+
+  it.effect("reviews an integration head its own repair advanced", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("advanced-app-review-head"),
+          threadId: sourceThreadId,
+          // HEAD resolves to "def456"; the run still records the pre-repair sha.
+          run: qaReviewingRun(run, "abc123"),
+          createdAt: now,
+        });
+
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+
+        const snapshot = yield* system.query.getSnapshot();
+        const reviewed = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(reviewed?.automationHalt).toBeNull();
+        expect(reviewed?.status).not.toBe("needs-human-attention");
+        expect(reviewed?.integrationHeadSha).toBe("def456");
+      }),
+    ),
+  );
+
+  it.effect("halts App Review when the integrated commit is no longer in history", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
+          yield* system.engine.dispatch({
+            type: "thread.implementation-run.update",
+            commandId: commandId("rewritten-app-review-head"),
+            threadId: sourceThreadId,
+            run: qaReviewingRun(run, "abc123"),
+            createdAt: now,
+          });
+
+          yield* system.reactor.recoverIncompleteStages();
+          yield* system.reactor.drain;
+
+          const snapshot = yield* system.query.getSnapshot();
+          const halted = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+          expect(halted?.status).toBe("needs-human-attention");
+          expect(halted?.retryableFailure).toMatchObject({ stage: "app-review" });
+          expect(halted?.retryableFailure?.detail).toContain("recorded integrated HEAD");
+        }),
+      // The branch was rewritten, so the recorded sha no longer descends to HEAD.
+      { nonAncestorCommitSha: "abc123" },
+    ),
+  );
+
+  it.effect("re-records the integration head the Merge Gate accepts", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("advanced-merge-gate-head"),
+          threadId: sourceThreadId,
+          run: {
+            ...run,
+            status: "validating",
+            orchestratorBranch: "main",
+            orchestratorWorktreePath: "/tmp/implementation-reactor-review",
+            integrationHeadSha: "abc123",
+            activeValidationKind: "integration",
+            activeValidationHeadSha: null,
+            activeValidatorThreadId: null,
+            validatedHeadSha: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        });
+
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+
+        const snapshot = yield* system.query.getSnapshot();
+        const gated = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(gated?.automationHalt).toBeNull();
+        expect(gated?.status).toBe("validating");
+        expect(gated?.integrationHeadSha).toBe("def456");
+        expect(gated?.activeValidationHeadSha).toBe("def456");
+      }),
+    ),
+  );
+
+  it.effect("halts a ticket Code Review that has no launch budget left", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        let snapshot = yield* system.query.getSnapshot();
+        const launched = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        if (launched === undefined) throw new Error("Expected the launched run.");
+        // The stage only starts for a ticket that already has a worker and a
+        // worktree, so the launch has to have got that far for this to prove
+        // anything. Leave the implementation claim alone: changing it is what
+        // the decider calls a stale update.
+        expect(launched.ticketStates[0]?.workerThreadId).not.toBeNull();
+        expect(launched.ticketStates[0]?.worktreePath).not.toBeNull();
+
+        // A reviewer that is gone plus a spent budget is what a lost provider
+        // session leaves behind. Starting the stage would claim a third launch,
+        // which the decider refuses, so the sweep used to ask forever.
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("spent-code-review-budget"),
+          threadId: sourceThreadId,
+          run: {
+            ...launched,
+            status: "running",
+            ticketStates: launched.ticketStates.map((state, index) =>
+              index === 0
+                ? {
+                    ...state,
+                    status: "code-reviewing" as const,
+                    codeReviewThreadId: null,
+                    codeReviewLaunchCount: IMPLEMENTATION_STAGE_MAX_LAUNCHES,
+                    updatedAt: now,
+                  }
+                : state,
+            ),
+            updatedAt: now,
+          },
+          createdAt: now,
+        });
+
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        const halted = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(halted?.status).toBe("needs-human-attention");
+        expect(halted?.automationHalt).toMatchObject({
+          stage: "code-review",
+          category: "retry-exhausted",
+        });
+        expect(halted?.automationHalt?.detail).toContain("Code Review launch budget");
+      }),
+    ),
+  );
+
+  it.effect("re-drives a run left stranded mid-integration", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        const strandedAt = DateTime.formatIso(DateTime.makeUnsafe(0));
+
+        // Integration runs inline in the reactor, so a run parked here is one
+        // whose reactor died mid-merge. Only the stall window can tell, and
+        // before this nothing in the sweep drove `integrating` at all.
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("stranded-integration"),
+          threadId: sourceThreadId,
+          run: {
+            ...run,
+            status: "integrating",
+            integrationHeadSha: null,
+            activeValidatorThreadId: null,
+            updatedAt: strandedAt,
+          },
+          createdAt: now,
+        });
+        yield* TestClock.adjust(Duration.minutes(6));
+
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+
+        const snapshot = yield* system.query.getSnapshot();
+        const resumed = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(resumed?.updatedAt).not.toBe(strandedAt);
       }),
     ),
   );

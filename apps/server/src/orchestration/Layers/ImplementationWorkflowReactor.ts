@@ -1428,6 +1428,66 @@ function changeRequestFailure(input: {
  */
 const UNREPORTED_STAGE_THREAD_GRACE_MS = 10 * 60 * 1_000;
 
+/**
+ * How long a run may sit at `integrating` before recovery re-drives it.
+ *
+ * Integration is a merge sequence this reactor runs inline, so it holds the
+ * status for seconds, not minutes, and no thread owns it that liveness could be
+ * read from. Anything past this window is a reactor that died mid-merge.
+ */
+const INTEGRATION_STALL_GRACE_MS = 5 * 60 * 1_000;
+
+/**
+ * Whether a stage's thread is done with the work the stage gave it, as opposed
+ * to not having reported yet.
+ *
+ * Every guard that asks "is this stage still running?" has to agree, because a
+ * stage claim is only released by whoever decides it is dead. When the recovery
+ * sweep read an idle validator as finished but `startMergeGate` read the same
+ * thread as live, the sweep relaunched the gate every minute and the relaunch
+ * returned early every minute, on a run carrying no halt and so still reading
+ * as running. One predicate, used by both.
+ */
+function stageThreadIsFinished(input: {
+  readonly thread: OrchestrationThread | undefined;
+  readonly threads: ReadonlyArray<OrchestrationThread>;
+  readonly nowMs: number;
+}): boolean {
+  const { thread, threads, nowMs } = input;
+  if (thread === undefined) return true;
+  if (thread.deletedAt !== null) return true;
+  if (
+    thread.session?.status === "starting" ||
+    thread.session?.status === "running" ||
+    thread.latestTurn?.state === "running" ||
+    isAwaitingWorkflowNudge({ threads, thread, nowMs })
+  ) {
+    return false;
+  }
+  // A thread that has never reported anything, no session and no turn, is a
+  // launch still queued behind a busy provider. It is left alone, but not
+  // forever: a restart drops a queued start with nothing to re-drive it, so
+  // after UNREPORTED_STAGE_THREAD_GRACE_MS silence counts as gone. That
+  // backstop is a floor on how often this can be wrong, not the test itself,
+  // which is why it is generous.
+  if (thread.session === null && thread.latestTurn === null) {
+    return nowMs - Date.parse(thread.createdAt) >= UNREPORTED_STAGE_THREAD_GRACE_MS;
+  }
+  // A live session resting between turns reads as `ready` with no active turn,
+  // which is also how a thread looks when it stopped without reporting.
+  // Reviewers rest there for a minute or two mid-review, and recovering on the
+  // first idle sweep put a second reviewer on the same ticket branch: whichever
+  // one reported first froze the ticket's recorded commit, the other kept
+  // committing, and every later step that compared the branch against that
+  // commit refused. `stopped`, `error` and `interrupted` say the session is
+  // actually over and are recovered at once; only `ready` has to prove it by
+  // staying quiet.
+  if (thread.session?.status === "ready") {
+    return nowMs - Date.parse(thread.session.updatedAt) >= UNREPORTED_STAGE_THREAD_GRACE_MS;
+  }
+  return true;
+}
+
 const FRONTEND_PROBE_TIMEOUT = Duration.seconds(10);
 const APP_DEV_STACK_DIAGNOSTIC_LIMIT = 24 * 1_024;
 
@@ -3014,6 +3074,22 @@ const make = Effect.gen(function* () {
       ) {
         return;
       }
+      // Starting the stage always claims another launch, and the decider refuses
+      // a claim past the budget. Without this the stage recovery sweep asks for
+      // that refused transition every minute forever, on a run that carries no
+      // halt and so still reads as running.
+      if (state.codeReviewLaunchCount >= IMPLEMENTATION_STAGE_MAX_LAUNCHES) {
+        yield* blockRun({
+          sourceThreadId: input.sourceThreadId,
+          run: input.run,
+          ticketId: state.ticketId,
+          reasonMarkdown: `Ticket '${state.ticketId}' exhausted its Code Review launch budget.`,
+          updatedAt: input.createdAt,
+          haltCategory: "retry-exhausted",
+          haltStage: "code-review",
+        });
+        return;
+      }
       if (state.codeReviewPassCount >= cycleBudget) {
         const head = yield* gitWorkflow.resolveCommit({ cwd: state.worktreePath, ref: "HEAD" });
         yield* finishTicketReviewChain({
@@ -3521,11 +3597,31 @@ const make = Effect.gen(function* () {
       });
       const expectedValidationHead =
         input.kind === "final" ? input.run.codeReviewedHeadSha : input.run.integrationHeadSha;
+      // The gate's own repairs land on this branch, so an integration HEAD that
+      // moved past the sha integration recorded is this run making progress, not
+      // the workspace being edited underneath it. Validate the newer commit when
+      // it descends from what we expected and halt only for a rewritten or
+      // unrelated history. Final validation keeps the strict check: a commit
+      // landing after Code Review has not been reviewed.
+      const integrationHeadAdvanced =
+        input.kind === "integration" &&
+        expectedValidationHead !== null &&
+        expectedValidationHead !== validationHead.commitSha &&
+        validationStatus.isRepo &&
+        validationStatus.refName === input.run.orchestratorBranch &&
+        !validationStatus.hasWorkingTreeChanges &&
+        (yield* gitWorkflow.isAncestor({
+          cwd: input.run.orchestratorWorktreePath,
+          ancestorRef: expectedValidationHead,
+          descendantRef: validationHead.commitSha,
+        }));
       if (
         !validationStatus.isRepo ||
         validationStatus.refName !== input.run.orchestratorBranch ||
         validationStatus.hasWorkingTreeChanges ||
-        (expectedValidationHead !== null && expectedValidationHead !== validationHead.commitSha)
+        (expectedValidationHead !== null &&
+          expectedValidationHead !== validationHead.commitSha &&
+          !integrationHeadAdvanced)
       ) {
         yield* blockRun({
           sourceThreadId: input.sourceThreadId,
@@ -3547,6 +3643,10 @@ const make = Effect.gen(function* () {
         validatedHeadSha: null,
         ...(input.kind === "integration"
           ? {
+              // Re-record the tip the gate accepted, so App Review and a later
+              // gate compare against the commit that is actually integrated
+              // rather than the one a repair superseded.
+              ...(integrationHeadAdvanced ? { integrationHeadSha: validationHead.commitSha } : {}),
               appReviewedHeadSha: null,
               activeAppReviewHeadSha: null,
               activeAppReviewThreadId: null,
@@ -4117,9 +4217,21 @@ const make = Effect.gen(function* () {
         });
         return;
       }
+      // Same allowance the Merge Gate makes: a repair committed on the
+      // orchestrator branch moves HEAD past the recorded integrated sha, and
+      // reviewing the newer commit is what the run wants. Only a history that no
+      // longer contains the integrated commit is worth halting for.
+      const reviewHeadAdvanced =
+        cycleRun.integrationHeadSha !== null &&
+        cycleRun.integrationHeadSha !== reviewHead.commitSha &&
+        (yield* gitWorkflow.isAncestor({
+          cwd: cycleRun.orchestratorWorktreePath,
+          ancestorRef: cycleRun.integrationHeadSha,
+          descendantRef: reviewHead.commitSha,
+        }));
       if (
         cycleRun.integrationHeadSha === null ||
-        cycleRun.integrationHeadSha !== reviewHead.commitSha
+        (cycleRun.integrationHeadSha !== reviewHead.commitSha && !reviewHeadAdvanced)
       ) {
         yield* blockRun({
           sourceThreadId: input.sourceThreadId,
@@ -4250,6 +4362,7 @@ const make = Effect.gen(function* () {
                 updatedAt: input.createdAt,
               },
         appReviewIds: [...ensuringRun.appReviewIds, reviewId],
+        integrationHeadSha: reviewHead.commitSha,
         activeAppReviewHeadSha: reviewHead.commitSha,
         activeAppReviewThreadId: reviewThreadId,
         qaAttemptCount: ensuringRun.qaAttemptCount + 1,
@@ -9101,51 +9214,8 @@ const make = Effect.gen(function* () {
       const awaitingNudge = (thread: OrchestrationThread | undefined) =>
         thread !== undefined &&
         isAwaitingWorkflowNudge({ threads: readModel.threads, thread, nowMs });
-      /**
-       * Whether a stage's thread is done with the work the stage gave it, as
-       * opposed to not having reported yet.
-       *
-       * "No live session" used to be the whole test, and that is also what a
-       * thread looks like between being created and its provider session coming
-       * up. On a loaded machine that gap outlasts the sweep, so every pass
-       * started another thread for the same stage and orphaned the last: one
-       * ticket collected more than 1,900 code reviewers that way.
-       *
-       * A thread that has never reported anything, no session and no turn, is
-       * a launch still queued behind a busy provider. It is left alone, but not
-       * forever: a restart drops a queued start with nothing to re-drive it, so
-       * after UNREPORTED_STAGE_THREAD_GRACE_MS silence counts as gone. That
-       * backstop is a floor on how often the sweep can be wrong, not the test
-       * itself, which is why it is generous.
-       */
-      const stageThreadIsFinished = (thread: OrchestrationThread | undefined) => {
-        if (thread === undefined) return true;
-        if (thread.deletedAt !== null) return true;
-        if (
-          thread.session?.status === "starting" ||
-          thread.session?.status === "running" ||
-          thread.latestTurn?.state === "running" ||
-          awaitingNudge(thread)
-        ) {
-          return false;
-        }
-        if (thread.session === null && thread.latestTurn === null) {
-          return nowMs - Date.parse(thread.createdAt) >= UNREPORTED_STAGE_THREAD_GRACE_MS;
-        }
-        // A live session resting between turns reads as `ready` with no active
-        // turn, which is also how a thread looks when it stopped without
-        // reporting. Reviewers rest there for a minute or two mid-review, and
-        // recovering on the first idle sweep put a second reviewer on the same
-        // ticket branch: whichever one reported first froze the ticket's
-        // recorded commit, the other kept committing, and every later step that
-        // compared the branch against that commit refused. `stopped`, `error`
-        // and `interrupted` say the session is actually over and are recovered
-        // at once; only `ready` has to prove it by staying quiet.
-        if (thread.session?.status === "ready") {
-          return nowMs - Date.parse(thread.session.updatedAt) >= UNREPORTED_STAGE_THREAD_GRACE_MS;
-        }
-        return true;
-      };
+      const stageThreadFinished = (thread: OrchestrationThread | undefined) =>
+        stageThreadIsFinished({ thread, threads: readModel.threads, nowMs });
       const hasActiveChild = (input: {
         readonly threadId: ThreadId | null;
         readonly role:
@@ -9164,7 +9234,7 @@ const make = Effect.gen(function* () {
         // nudge path is re-prompting it in place, and relaunching the stage
         // underneath that would throw away its context and, while a usage limit
         // holds, spawn one dead thread per sweep.
-        return matches.some((thread) => !stageThreadIsFinished(thread));
+        return matches.some((thread) => !stageThreadFinished(thread));
       };
 
       // A Fast feature Build thread is created by the decider but seeded by `ensureFastFeatureRun`,
@@ -9409,7 +9479,7 @@ const make = Effect.gen(function* () {
             state.codeReviewThreadId == null
               ? undefined
               : readModel.threads.find((candidate) => candidate.id === state.codeReviewThreadId);
-          return stageThreadIsFinished(thread);
+          return stageThreadFinished(thread);
         });
         if (interruptedTicketCodeReview !== undefined) {
           yield* recoverRunStage(
@@ -9437,7 +9507,7 @@ const make = Effect.gen(function* () {
               const resultAlreadyReported = thread?.activities.some(
                 (activity) => activity.kind === "implementation-worker-result",
               );
-              return !resultAlreadyReported && stageThreadIsFinished(thread);
+              return !resultAlreadyReported && stageThreadFinished(thread);
             })
             .map((state) => state.ticketId),
         );
@@ -9478,6 +9548,21 @@ const make = Effect.gen(function* () {
           run.id,
           "worker-setup",
           startReadyWorkers({ sourceThreadId, run, createdAt }),
+        );
+        continue;
+      }
+      // Integration runs inline here, so no thread owns it and no liveness check
+      // separates a run that is mid-merge from one whose reactor died mid-merge.
+      // Time does: past the grace window it is the second, and nothing else in
+      // this sweep drives `integrating`, so it would sit there for good.
+      if (
+        run.status === "integrating" &&
+        nowMs - Date.parse(run.updatedAt) >= INTEGRATION_STALL_GRACE_MS
+      ) {
+        yield* recoverRunStage(
+          run.id,
+          "integration",
+          integrateCompletedRun({ sourceThreadId, run, createdAt }),
         );
         continue;
       }
