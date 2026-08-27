@@ -25,6 +25,7 @@ const implementationThreadId = ThreadId.make("thread-implementation-orchestrator
 const appReviewControllerThreadId = ThreadId.make("thread-app-review-orchestrator");
 const nestedReviewerThreadId = ThreadId.make("thread-app-review-reviewer");
 const detachedThreadId = ThreadId.make("thread-detached-workflow");
+const recoveredWorkerThreadId = ThreadId.make("thread-recovered-worker");
 const workflowId = WorkflowId.make("workflow-artifacts-1");
 const implementationWorkflowId = WorkflowId.make("implementation-run-1");
 const appReviewWorkflowId = WorkflowId.make("app-review-workflow-1");
@@ -33,7 +34,13 @@ const ticketId = "planning-ticket-1";
 const readModel = {
   snapshotSequence: 1,
   projects: [],
-  implementationRuns: [],
+  implementationRuns: [
+    {
+      id: "implementation-run-1",
+      specId: "spec-1",
+      orchestratorThreadId: implementationThreadId,
+    },
+  ],
   appReviewWorkflowRuns: [
     {
       id: appReviewWorkflowId,
@@ -222,6 +229,20 @@ const readModel = {
       planningWorkflow: null,
       appReviews: [],
     },
+    {
+      id: recoveredWorkerThreadId,
+      projectId,
+      ownerUserId: DEFAULT_WORKSPACE_USER_ID,
+      parentThreadId: implementationThreadId,
+      workflowContext: {
+        workflowId: WorkflowId.make("recovered-worker-workflow"),
+        parentWorkflowId: null,
+        rootThreadId,
+        ticketScope: [ticketId],
+      },
+      planningWorkflow: null,
+      appReviews: [],
+    },
   ],
 } as unknown as OrchestrationReadModel;
 
@@ -301,6 +322,18 @@ describe("workflow-artifacts toolkit handlers", () => {
       );
       assert.strictEqual(ticket.id, ticketId);
     }).pipe(Effect.provide(Layer.mergeAll(queryLayer, nestedReviewerInvocationLayer))),
+  );
+
+  it.effect("recovers planning artifacts through the owning Implementation Run", () =>
+    Effect.gen(function* () {
+      const snapshot = yield* getWorkflowArtifactsForThread({ threadId: recoveredWorkerThreadId });
+
+      assert.strictEqual(snapshot.spec?.id, "spec-1");
+      assert.deepStrictEqual(
+        snapshot.tickets.map((ticket) => ticket.id),
+        [ticketId],
+      );
+    }).pipe(Effect.provide(queryLayer)),
   );
 
   it.effect("shows the workflow's App Reviews from any level of it", () =>

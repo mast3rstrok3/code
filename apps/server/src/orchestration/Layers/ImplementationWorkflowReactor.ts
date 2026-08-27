@@ -425,7 +425,13 @@ export function isRecoverableInterruptedWorktreeHalt(
 ): boolean {
   if (halt.detail === WORKFLOW_INTERRUPTION_ERROR_MESSAGE) return true;
   if (halt.category !== "structural-invariant") return false;
-  return isLegacyDirtyWorkerLaunchHalt(halt);
+  if (isLegacyDirtyWorkerLaunchHalt(halt)) return true;
+  return (
+    halt.ticketId === undefined &&
+    halt.stage === "integration" &&
+    halt.detail.startsWith("Merge Gate requires clean expected HEAD") &&
+    halt.detail.endsWith("with uncommitted changes.")
+  );
 }
 
 function automationHaltMatchesRunRerun(input: {
@@ -1516,6 +1522,21 @@ function stageThreadIsFinished(input: {
   readonly nowMs: number;
 }): boolean {
   return stageClaimIsReleased(stageClaimState(input));
+}
+
+const MISSING_DEPENDENCY_COMMIT_WARNING = "does not have a successful committed branch";
+const MISSING_WORKFLOW_TICKET_WARNING = "is not in this workflow";
+
+export function workerReportedCurrentAttempt(
+  state: OrchestrationImplementationTicketState,
+  thread: OrchestrationThread | undefined,
+): boolean {
+  return (
+    thread?.activities.some(
+      (activity) =>
+        activity.kind === "implementation-worker-result" && activity.createdAt >= state.updatedAt,
+    ) ?? false
+  );
 }
 
 const FRONTEND_PROBE_TIMEOUT = Duration.seconds(10);
@@ -6177,13 +6198,16 @@ const make = Effect.gen(function* () {
         gitWorkflow.resolveCommit({ cwd: run.orchestratorWorktreePath, ref: "HEAD" }),
         gitWorkflow.localStatus({ cwd: run.orchestratorWorktreePath }),
       ]);
-      const integrated =
+      const integratedResult =
         run.artifactSource === "planning-spec"
           ? yield* verifyIntegratedWorkerCommits(run).pipe(
               Effect.map((integratedHead) => integratedHead === head.commitSha),
-              Effect.orElseSucceed(() => false),
+              Effect.result,
             )
-          : true;
+          : null;
+      const integrated =
+        integratedResult === null ||
+        (integratedResult._tag === "Success" && integratedResult.success === true);
       const changedFiles = yield* gitWorkflow.listChangedFiles({
         cwd: run.orchestratorWorktreePath,
         baseRef: run.pinnedCommit,
@@ -6235,6 +6259,33 @@ const make = Effect.gen(function* () {
         !status.hasWorkingTreeChanges &&
         integrated &&
         validationsPassed;
+
+      const failureDetail = [
+        directive.summaryMarkdown,
+        "",
+        "Merge Gate checks that did not pass:",
+        ...(directive.status === "passed" ? [] : ["- The validator reported a failed gate."]),
+        ...(run.activeValidationHeadSha === head.commitSha || validationHeadAdvanced
+          ? []
+          : [
+              `- HEAD '${head.commitSha}' does not match or descend from the claimed validation HEAD '${run.activeValidationHeadSha ?? "missing"}'.`,
+            ]),
+        ...(status.isRepo ? [] : ["- The orchestrator worktree is not a Git repository."]),
+        ...(status.refName === run.orchestratorBranch
+          ? []
+          : [
+              `- Git is on '${status.refName ?? "detached HEAD"}', expected '${run.orchestratorBranch}'.`,
+            ]),
+        ...(status.hasWorkingTreeChanges ? ["- The orchestrator worktree is dirty."] : []),
+        ...(integratedResult?._tag === "Failure"
+          ? [`- ${errorDetail(integratedResult.failure)}`]
+          : integrated
+            ? []
+            : ["- The integrated HEAD did not match the commit verified from ticket branches."]),
+        ...(validationsPassed
+          ? []
+          : ["- The reported focused validations did not satisfy the integration-gate policy."]),
+      ].join("\n");
 
       yield* appendActivity({
         threadId: run.orchestratorThreadId,
@@ -6292,10 +6343,9 @@ const make = Effect.gen(function* () {
         const continuingRun: OrchestrationImplementationRun = {
           ...failedRun,
           status: "validating",
-          activeValidatorThreadId: run.activeValidatorThreadId,
           retryableFailure: {
             stage: "merge-gate",
-            detail: directive.summaryMarkdown,
+            detail: failureDetail,
             failedAt: updatedAt,
             attemptCount: (run.retryableFailure?.attemptCount ?? 0) + 1,
             maxAttempts: IMPLEMENTATION_STAGE_MAX_LAUNCHES,
@@ -6303,9 +6353,40 @@ const make = Effect.gen(function* () {
           },
           updatedAt,
         };
+        if (run.mergeGateAttemptCount >= IMPLEMENTATION_RUN_MAX_MERGE_GATE_ATTEMPTS) {
+          yield* startFixer({
+            sourceThreadId,
+            run: continuingRun,
+            status: "fixing",
+            origin: "merge-gate",
+            title: "Fix merge gate failures",
+            promptText: buildMergeGateFixPrompt({
+              run: continuingRun,
+              reportMarkdown: failureDetail,
+            }),
+            createdAt: updatedAt,
+          });
+          return;
+        }
         yield* updateRun({
           sourceThreadId,
           run: continuingRun,
+          createdAt: updatedAt,
+        });
+        yield* startMergeGate({
+          sourceThreadId,
+          run: continuingRun,
+          integration: {
+            baseTicketId: null,
+            baseRefName: continuingRun.orchestratorBranch,
+            mergedTicketIds: [],
+            conflictedTicketId: null,
+            conflictedRefName: null,
+            conflictedFiles: [],
+            remainingTicketIds: [],
+            remainingRefNames: [],
+          },
+          kind: "integration",
           createdAt: updatedAt,
         });
         return;
@@ -6514,7 +6595,10 @@ const make = Effect.gen(function* () {
       ...run,
       status: "integrating",
       integrationHeadSha: head.commitSha,
+      mergeGateAttemptCount: run.fixOrigin === "merge-gate" ? 0 : run.mergeGateAttemptCount,
       activeValidationKind: null,
+      activeValidationHeadSha: null,
+      activeValidatorThreadId: null,
       activeFixerThreadId: null,
       fixOrigin: null,
       retryableFailure: null,
@@ -9344,6 +9428,21 @@ const make = Effect.gen(function* () {
         continue;
       }
 
+      const nowMs = Date.parse(createdAt);
+      const orchestratorWorktreeOwners = readModel.threads.filter(
+        (thread) =>
+          thread.deletedAt === null &&
+          thread.worktreePath === run.orchestratorWorktreePath &&
+          thread.workflowRole !== null &&
+          WORKTREE_WRITING_WORKFLOW_ROLES.has(thread.workflowRole),
+      );
+      if (
+        orchestratorWorktreeOwners.some(
+          (thread) => !stageThreadIsFinished({ thread, threads: readModel.threads, nowMs }),
+        )
+      ) {
+        continue;
+      }
       const status = yield* gitWorkflow
         .localStatus({ cwd: run.orchestratorWorktreePath })
         .pipe(Effect.result);
@@ -9438,7 +9537,6 @@ const make = Effect.gen(function* () {
           continue;
         }
       }
-      if (run.automationHalt !== null) continue;
       // A paused run is waiting for the user, not for recovery. Re-entering its
       // stage would create the stage's thread and then fail to start the turn
       // on the paused-ancestor invariant, leaving an orphan thread behind every
@@ -9446,6 +9544,58 @@ const make = Effect.gen(function* () {
       if (isWorkflowThreadPaused(readModel.threads, run.orchestratorThreadId)) continue;
       const sourceThreadId = findRunSourceThreadId({ readModel, run });
       if (sourceThreadId === null) continue;
+      const directlyFailedTicket = run.ticketStates.find(
+        (state) =>
+          state.status === "failed" &&
+          !(state.warningMarkdown ?? "").startsWith("Blocked by failed dependency"),
+      );
+      if (directlyFailedTicket !== undefined) {
+        const warning = directlyFailedTicket.warningMarkdown ?? "";
+        let failureIsRecoverable = false;
+        if (warning.includes(MISSING_DEPENDENCY_COMMIT_WARNING)) {
+          const dependencies = yield* Effect.forEach(
+            directlyFailedTicket.dependencyTicketIds,
+            (ticketId) => verifiedDependency({ run, ticketId }),
+            { concurrency: 4, discard: true },
+          ).pipe(Effect.result);
+          failureIsRecoverable = dependencies._tag === "Success";
+        } else if (
+          warning.includes(MISSING_WORKFLOW_TICKET_WARNING) &&
+          directlyFailedTicket.workerThreadId !== null
+        ) {
+          const worker = findThread(readModel, directlyFailedTicket.workerThreadId);
+          failureIsRecoverable =
+            worker !== null &&
+            readModel.threads.some(
+              (candidate) =>
+                candidate.projectId === worker.projectId &&
+                candidate.workflowContext?.rootThreadId === worker.workflowContext?.rootThreadId &&
+                candidate.planningWorkflow?.spec?.id === run.specId &&
+                candidate.planningWorkflow.tickets.some(
+                  (ticket) => ticket.id === directlyFailedTicket.ticketId,
+                ),
+            );
+        }
+        if (failureIsRecoverable) {
+          const resumedRun = reopenTicketForRerun({
+            run: { ...run, automationHalt: null, retryableFailure: null },
+            ticketId: directlyFailedTicket.ticketId,
+            stage: "implementation",
+            updatedAt: createdAt,
+            continuationMarkdown:
+              "Recovery verified that the setup condition which stopped this ticket is now valid.",
+          });
+          yield* recoverRunStage(
+            run.id,
+            "recovered-ticket-setup",
+            updateRun({ sourceThreadId, run: resumedRun, createdAt }).pipe(
+              Effect.andThen(startReadyWorkers({ sourceThreadId, run: resumedRun, createdAt })),
+            ),
+          );
+          continue;
+        }
+      }
+      if (run.automationHalt !== null) continue;
       // Reap the ticket App Reviews no ticket is waiting on any more. A clear
       // or a re-run cancels the review it rewinds past, but one whose cancel
       // never landed has nothing left pointing at it: no stage will finish it,
@@ -9768,9 +9918,7 @@ const make = Effect.gen(function* () {
               const thread = readModel.threads.find(
                 (candidate) => candidate.id === state.workerThreadId,
               );
-              const resultAlreadyReported = thread?.activities.some(
-                (activity) => activity.kind === "implementation-worker-result",
-              );
+              const resultAlreadyReported = workerReportedCurrentAttempt(state, thread);
               return !resultAlreadyReported && stageThreadFinished(thread);
             })
             .map((state) => state.ticketId),
@@ -9827,6 +9975,38 @@ const make = Effect.gen(function* () {
           run.id,
           "integration",
           integrateCompletedRun({ sourceThreadId, run, createdAt }),
+        );
+        continue;
+      }
+      if (
+        run.status === "validating" &&
+        run.retryableFailure?.stage === "merge-gate" &&
+        run.mergeGateAttemptCount >= IMPLEMENTATION_RUN_MAX_MERGE_GATE_ATTEMPTS &&
+        !hasActiveChild({
+          threadId: run.activeValidatorThreadId,
+          role: "implementation-validator",
+        })
+      ) {
+        const repairRun = {
+          ...run,
+          activeValidatorThreadId: null,
+          automationHalt: null,
+        };
+        yield* recoverRunStage(
+          run.id,
+          "exhausted-merge-gate",
+          startFixer({
+            sourceThreadId,
+            run: repairRun,
+            status: "fixing",
+            origin: "merge-gate",
+            title: "Fix merge gate failures",
+            promptText: buildMergeGateFixPrompt({
+              run: repairRun,
+              reportMarkdown: run.retryableFailure.detail,
+            }),
+            createdAt,
+          }),
         );
         continue;
       }

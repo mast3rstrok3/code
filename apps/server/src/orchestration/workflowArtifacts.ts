@@ -119,7 +119,7 @@ export const getWorkflowArtifactsForThread = Effect.fn("getWorkflowArtifactsForT
         candidate.workflowContext?.rootThreadId === context.rootThreadId &&
         familyWorkflowIds.has(candidate.workflowContext.workflowId),
     );
-    const planningWorkflow = workflowLineage
+    const lineagePlanningWorkflow = workflowLineage
       .flatMap((workflowId) =>
         workflowThreads
           .filter((candidate) => candidate.workflowContext?.workflowId === workflowId)
@@ -130,6 +130,39 @@ export const getWorkflowArtifactsForThread = Effect.fn("getWorkflowArtifactsForT
           (workflow?.spec !== null && workflow?.spec !== undefined) ||
           (workflow?.wayfinderMap !== null && workflow?.wayfinderMap !== undefined),
       );
+    // A durable implementation child can outlive the workflow-membership row
+    // that linked its generated workflow back to Planning. The thread tree and
+    // Implementation Run still provide an exact, project-local link to the
+    // source Spec, so use that link instead of returning an empty artifact set.
+    // A thread that merely shares the root does not gain access.
+    const ancestorThreadIds = new Set<ThreadId>();
+    let ancestorThread: (typeof readModel.threads)[number] | undefined = thread;
+    while (ancestorThread !== undefined && !ancestorThreadIds.has(ancestorThread.id)) {
+      ancestorThreadIds.add(ancestorThread.id);
+      ancestorThread =
+        ancestorThread.parentThreadId === null
+          ? undefined
+          : readModel.threads.find(
+              (candidate) =>
+                candidate.projectId === thread.projectId &&
+                candidate.id === ancestorThread?.parentThreadId,
+            );
+    }
+    const relatedImplementationRun = readModel.implementationRuns.find((run) =>
+      ancestorThreadIds.has(run.orchestratorThreadId),
+    );
+    const runPlanningWorkflow =
+      relatedImplementationRun?.specId == null
+        ? undefined
+        : readModel.threads
+            .filter(
+              (candidate) =>
+                candidate.projectId === thread.projectId &&
+                candidate.workflowContext?.rootThreadId === context.rootThreadId,
+            )
+            .map((candidate) => candidate.planningWorkflow)
+            .find((workflow) => workflow?.spec?.id === relatedImplementationRun.specId);
+    const planningWorkflow = lineagePlanningWorkflow ?? runPlanningWorkflow;
     const spec = planningWorkflow?.spec ?? null;
     const wayfinderMap = planningWorkflow?.wayfinderMap ?? null;
     const implementationRuns = readModel.implementationRuns.filter(

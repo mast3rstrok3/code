@@ -70,6 +70,7 @@ import {
   ImplementationWorkflowReactorLive,
   nestedAppReviewAwaitsPreviewRefresh,
   ticketAppReviewClaimIsAhead,
+  workerReportedCurrentAttempt,
   workflowIdForRun,
 } from "./ImplementationWorkflowReactor.ts";
 import {
@@ -136,6 +137,34 @@ it("treats reviewed successes and best-effort failures as terminal tickets", () 
   expect(implementationTicketStateIsTerminal("failed")).toBe(true);
   expect(implementationTicketStateIsTerminal("app-reviewing")).toBe(false);
   expect(implementationTicketStateIsTerminal("code-reviewing")).toBe(false);
+});
+
+it("does not let an old worker result claim a later ticket attempt", () => {
+  const state = {
+    updatedAt: "2026-01-01T00:05:00.000Z",
+  } as OrchestrationImplementationTicketState;
+  const thread = {
+    activities: [
+      {
+        kind: "implementation-worker-result",
+        createdAt: "2026-01-01T00:04:00.000Z",
+      },
+    ],
+  } as unknown as OrchestrationReadModel["threads"][number];
+
+  expect(workerReportedCurrentAttempt(state, thread)).toBe(false);
+  expect(
+    workerReportedCurrentAttempt(state, {
+      ...thread,
+      activities: [
+        ...thread.activities,
+        {
+          ...thread.activities[0]!,
+          createdAt: "2026-01-01T00:06:00.000Z",
+        },
+      ],
+    }),
+  ).toBe(true);
 });
 
 it("detects a paused ancestor before handling an implementation re-run", () => {
@@ -205,7 +234,7 @@ it("identifies only the obsolete dirty worker launch halt", () => {
   ).toBe(false);
 });
 
-it("keeps dirty App Review and wrong-branch halts stopped", () => {
+it("recovers dirty merge-gate work while keeping dirty App Review and wrong-branch halts stopped", () => {
   const appReviewHalt = {
     ticketId: "ticket-1",
     stage: "app-review",
@@ -216,6 +245,15 @@ it("keeps dirty App Review and wrong-branch halts stopped", () => {
   } as const;
 
   expect(isRecoverableInterruptedWorktreeHalt(appReviewHalt)).toBe(false);
+  expect(
+    isRecoverableInterruptedWorktreeHalt({
+      stage: "integration",
+      category: "structural-invariant",
+      detail:
+        "Merge Gate requires clean expected HEAD 'abc' on 'feature', but Git reports 'feature' at 'abc' with uncommitted changes.",
+      haltedAt: now,
+    }),
+  ).toBe(true);
   expect(
     isRecoverableInterruptedWorktreeHalt({
       ...appReviewHalt,
@@ -4609,6 +4647,139 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
+  it.effect("reopens a failed setup ticket after its dependency commit becomes valid", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, tickets } = yield* launchRun(system, {
+          tickets: [planningTicket("TICKET-1"), planningTicket("TICKET-2", ["TICKET-1"])],
+        });
+        const dependency = tickets[0]!;
+        const dependent = tickets[1]!;
+        yield* appendWorkerResult(system, {
+          run,
+          status: "succeeded",
+          ticketId: dependency.id,
+        });
+
+        let snapshot = yield* system.query.getSnapshot();
+        const current = snapshot.implementationRuns.find((candidate) => candidate.id === run.id);
+        const dependentState = current?.ticketStates.find(
+          (state) => state.ticketId === dependent.id,
+        );
+        if (current === undefined || dependentState?.workerThreadId == null) {
+          throw new Error("Dependent worker missing.");
+        }
+        yield* system.engine.dispatch({
+          type: "thread.session.set",
+          commandId: commandId("failed-setup-worker-stopped"),
+          threadId: dependentState.workerThreadId,
+          session: {
+            threadId: dependentState.workerThreadId,
+            status: "stopped",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: "2026-01-01T00:05:00.000Z",
+          },
+          createdAt: "2026-01-01T00:05:00.000Z",
+        });
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("failed-setup-ticket"),
+          threadId: sourceThreadId,
+          run: {
+            ...current,
+            status: "running",
+            ticketStates: current.ticketStates.map((state) =>
+              state.ticketId === dependent.id
+                ? {
+                    ...state,
+                    status: "failed" as const,
+                    warningMarkdown: `Ticket worker setup failed: Dependency ticket '${dependency.id}' does not have a successful committed branch.`,
+                    updatedAt: "2026-01-01T00:05:00.000Z",
+                  }
+                : state,
+            ),
+            updatedAt: "2026-01-01T00:05:00.000Z",
+          },
+          createdAt: "2026-01-01T00:05:00.000Z",
+        });
+        yield* system.reactor.drain;
+
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        const recovered = snapshot.implementationRuns.find((candidate) => candidate.id === run.id);
+        expect(recovered?.status).toBe("running");
+        expect(
+          recovered?.ticketStates.find((state) => state.ticketId === dependent.id)?.status,
+        ).toBe("running");
+        expect(recovered?.automationHalt).toBeNull();
+      }),
+    ),
+  );
+
+  it.effect("reopens a ticket after its planning artifacts become visible again", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        let snapshot = yield* system.query.getSnapshot();
+        const current = snapshot.implementationRuns.find((candidate) => candidate.id === run.id);
+        const state = current?.ticketStates[0];
+        if (current === undefined || state?.workerThreadId == null) {
+          throw new Error("Worker missing.");
+        }
+        yield* system.engine.dispatch({
+          type: "thread.session.set",
+          commandId: commandId("artifact-worker-stopped"),
+          threadId: state.workerThreadId,
+          session: {
+            threadId: state.workerThreadId,
+            status: "stopped",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: "2026-01-01T00:05:00.000Z",
+          },
+          createdAt: "2026-01-01T00:05:00.000Z",
+        });
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("artifact-ticket-failed"),
+          threadId: sourceThreadId,
+          run: {
+            ...current,
+            status: "running",
+            ticketStates: current.ticketStates.map((candidate) => ({
+              ...candidate,
+              status: "failed" as const,
+              warningMarkdown:
+                'The workflow context authorizes this ticket ID, but workflow_ticket_get returned "is not in this workflow".',
+              updatedAt: "2026-01-01T00:05:00.000Z",
+            })),
+            updatedAt: "2026-01-01T00:05:00.000Z",
+          },
+          createdAt: "2026-01-01T00:05:00.000Z",
+        });
+        yield* system.reactor.drain;
+
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        const recovered = snapshot.implementationRuns.find((candidate) => candidate.id === run.id);
+        expect(recovered?.status).toBe("running");
+        expect(recovered?.ticketStates[0]?.status).toBe("running");
+        expect(recovered?.ticketStates[0]?.warningMarkdown).toContain(
+          "setup condition which stopped this ticket is now valid",
+        );
+      }),
+    ),
+  );
+
   it.effect("sends final integration failures directly to a fixer with the Git error", () =>
     withSystem(
       (system) =>
@@ -8685,6 +8856,65 @@ describe("ImplementationWorkflowReactor", () => {
             .find((thread) => thread.id === restarted?.activeValidatorThreadId)
             ?.messages.at(-1)?.text,
         ).toContain("Two backend tests are red.");
+      }),
+    ),
+  );
+
+  it.effect("hands an exhausted failed merge gate to a fixer with the failed checks", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+        let snapshot = yield* system.query.getSnapshot();
+        const current = snapshot.implementationRuns.find((candidate) => candidate.id === run.id);
+        const validator = snapshot.threads.find(
+          (thread) => thread.id === current?.activeValidatorThreadId,
+        );
+        if (current === undefined || validator === undefined) {
+          throw new Error("Merge gate missing.");
+        }
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("exhaust-merge-gate"),
+          threadId: sourceThreadId,
+          run: {
+            ...current,
+            mergeGateAttemptCount: IMPLEMENTATION_RUN_MAX_MERGE_GATE_ATTEMPTS,
+            updatedAt: "2026-01-01T00:05:00.000Z",
+          },
+          createdAt: "2026-01-01T00:05:00.000Z",
+        });
+        yield* system.reactor.drain;
+        yield* system.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: commandId("exhausted-merge-gate-result"),
+          threadId: validator.id,
+          activity: {
+            id: eventId("exhausted-merge-gate-result"),
+            tone: "error",
+            kind: "implementation-merge-gate-result",
+            summary: "Merge gate failed",
+            payload: {
+              type: "implementation-merge-gate-result",
+              runId: run.id,
+              status: "failed",
+              validations: requiredValidations(),
+              summaryMarkdown: "The validator could not establish the integrated result.",
+            },
+            turnId: null,
+            createdAt: "2026-01-01T00:05:01.000Z",
+          },
+          createdAt: "2026-01-01T00:05:01.000Z",
+        });
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        const fixing = snapshot.implementationRuns.find((candidate) => candidate.id === run.id);
+        const fixer = snapshot.threads.find((thread) => thread.id === fixing?.activeFixerThreadId);
+        expect(fixing?.status).toBe("fixing");
+        expect(fixing?.fixOrigin).toBe("merge-gate");
+        expect(fixing?.automationHalt).toBeNull();
+        expect(fixer?.messages.at(-1)?.text).toContain("The validator reported a failed gate.");
       }),
     ),
   );
