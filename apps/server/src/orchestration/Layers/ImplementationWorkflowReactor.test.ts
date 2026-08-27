@@ -4638,7 +4638,7 @@ describe("ImplementationWorkflowReactor", () => {
           const snapshot = yield* system.query.getSnapshot();
           const updated = snapshot.implementationRuns.find((candidate) => candidate.id === run.id);
           expect(updated?.status).toBe("needs-human-attention");
-          expect(updated?.ticketStates[1]?.status).toBe("blocked");
+          expect(updated?.ticketStates[1]).toMatchObject({ status: "blocked", attemptCount: 0 });
           expect(
             snapshot.threads.filter((thread) => thread.workflowRole === "implementation-worker"),
           ).toHaveLength(1);
@@ -4722,6 +4722,127 @@ describe("ImplementationWorkflowReactor", () => {
         ).toBe("running");
         expect(recovered?.ticketStates[2]?.status).toBe("blocked");
         expect(recovered?.automationHalt).toBeNull();
+      }),
+    ),
+  );
+
+  it.effect("parks a setup retry while its dependency is still in Code Review", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run, tickets } = yield* launchRun(system, {
+          appReviewStrategy: "nested-workflow",
+          tickets: [planningTicket("TICKET-1"), planningTicket("TICKET-2", ["TICKET-1"])],
+        });
+        const dependency = tickets[0]!;
+        const dependent = tickets[1]!;
+        yield* appendWorkerResult(system, {
+          run,
+          status: "succeeded",
+          ticketId: dependency.id,
+          completeTicketReview: false,
+        });
+
+        let snapshot = yield* system.query.getSnapshot();
+        let current = snapshot.implementationRuns.find((candidate) => candidate.id === run.id);
+        if (current === undefined) throw new Error("Implementation run missing.");
+        expect(current.ticketStates.find((state) => state.ticketId === dependency.id)?.status).toBe(
+          "code-reviewing",
+        );
+        expect(current.ticketStates.find((state) => state.ticketId === dependent.id)?.status).toBe(
+          "blocked",
+        );
+
+        const prematurelyReadyAt = "2026-01-01T00:04:59.000Z";
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("premature-dependent-ready"),
+          threadId: sourceThreadId,
+          run: {
+            ...current,
+            ticketStates: current.ticketStates.map((state) =>
+              state.ticketId === dependent.id
+                ? {
+                    ...state,
+                    status: "ready" as const,
+                    attemptCount: 1,
+                    updatedAt: prematurelyReadyAt,
+                  }
+                : state,
+            ),
+            updatedAt: prematurelyReadyAt,
+          },
+          createdAt: prematurelyReadyAt,
+        });
+        yield* system.reactor.drain;
+        yield* system.reactor.recoverIncompleteStages();
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        current = snapshot.implementationRuns.find((candidate) => candidate.id === run.id);
+        if (current === undefined) throw new Error("Recovered implementation run missing.");
+        expect(current.automationHalt).toBeNull();
+        expect(current.ticketStates.find((state) => state.ticketId === dependent.id)).toMatchObject(
+          {
+            status: "blocked",
+            attemptCount: 1,
+          },
+        );
+
+        const failedAt = "2026-01-01T00:05:00.000Z";
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("premature-dependent-setup-failure"),
+          threadId: sourceThreadId,
+          run: {
+            ...current,
+            status: "needs-human-attention",
+            retryableFailure: {
+              ticketId: dependent.id,
+              stage: "worker-setup",
+              detail: `Dependency ticket '${dependency.id}' does not have a successful committed branch.`,
+              failedAt,
+              attemptCount: 1,
+              maxAttempts: IMPLEMENTATION_STAGE_MAX_LAUNCHES,
+              humanBlocked: false,
+            },
+            ticketStates: current.ticketStates.map((state) =>
+              state.ticketId === dependent.id
+                ? {
+                    ...state,
+                    status: "failed" as const,
+                    attemptCount: 1,
+                    warningMarkdown: "Ticket worker setup failed before its dependency finished.",
+                    updatedAt: failedAt,
+                  }
+                : state,
+            ),
+            updatedAt: failedAt,
+          },
+          createdAt: failedAt,
+        });
+        yield* system.reactor.drain;
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.retry",
+          commandId: commandId("retry-premature-dependent"),
+          threadId: sourceThreadId,
+          runId: run.id,
+          createdAt: "2026-01-01T00:05:01.000Z",
+        });
+        yield* system.reactor.drain;
+
+        snapshot = yield* system.query.getSnapshot();
+        const retried = snapshot.implementationRuns.find((candidate) => candidate.id === run.id);
+        expect(retried?.status).toBe("running");
+        expect(retried?.automationHalt).toBeNull();
+        expect(
+          retried?.ticketStates.find((state) => state.ticketId === dependency.id)?.status,
+        ).toBe("code-reviewing");
+        expect(
+          retried?.ticketStates.find((state) => state.ticketId === dependent.id),
+        ).toMatchObject({ status: "blocked", attemptCount: 1, warningMarkdown: null });
+        expect(
+          snapshot.threads.filter((thread) => thread.workflowRole === "implementation-worker"),
+        ).toHaveLength(1);
       }),
     ),
   );

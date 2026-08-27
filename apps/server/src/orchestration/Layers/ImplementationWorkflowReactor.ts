@@ -2538,6 +2538,30 @@ const make = Effect.gen(function* () {
         readonly result: { readonly _tag: "Success" | "Failure"; readonly failure?: unknown };
       }[] = [];
       for (let pass = 0; pass <= input.run.ticketStates.length; pass += 1) {
+        const waitingTicketIds = new Set(
+          workingRun.ticketStates
+            .filter(
+              (ticketState) =>
+                ticketState.status === "ready" &&
+                ticketDependencyState(workingRun, ticketState) !== "eligible",
+            )
+            .map((ticketState) => ticketState.ticketId),
+        );
+        if (waitingTicketIds.size > 0) {
+          workingRun = Object.assign({}, workingRun, {
+            ticketStates: workingRun.ticketStates.map((ticketState) =>
+              waitingTicketIds.has(ticketState.ticketId)
+                ? {
+                    ...ticketState,
+                    status: "blocked" as const,
+                    warningMarkdown: null,
+                    updatedAt: input.createdAt,
+                  }
+                : ticketState,
+            ),
+            updatedAt: input.createdAt,
+          });
+        }
         const readyTicketIds = workingRun.ticketStates
           .filter((ticketState) => ticketState.status === "ready")
           .map((ticketState) => ticketState.ticketId);
@@ -2556,6 +2580,55 @@ const make = Effect.gen(function* () {
             updatedAt: input.createdAt,
             haltCategory: "retry-exhausted",
             haltStage: "implementation",
+          });
+        }
+        const dependencyPreflights = yield* Effect.forEach(
+          readyTicketIds,
+          (ticketId) => {
+            const state = workingRun.ticketStates.find(
+              (candidate) => candidate.ticketId === ticketId,
+            );
+            if (state === undefined) return Effect.succeed({ ticketId, failure: null });
+            return Effect.forEach(
+              state.dependencyTicketIds,
+              (dependencyTicketId) =>
+                verifiedDependency({ run: workingRun, ticketId: dependencyTicketId }),
+              { concurrency: 4, discard: true },
+            ).pipe(
+              Effect.match({
+                onFailure: (failure) => ({ ticketId, failure }),
+                onSuccess: () => ({ ticketId, failure: null }),
+              }),
+            );
+          },
+          { concurrency: 4 },
+        );
+        const failedDependencyPreflights = dependencyPreflights.filter(
+          (result) => result.failure !== null,
+        );
+        if (failedDependencyPreflights.length > 0) {
+          const firstFailure = failedDependencyPreflights[0];
+          const failureDetail = `Ticket worker setup failed: ${errorDetail(firstFailure?.failure)}`;
+          const failedRun = failImplementationTickets(
+            workingRun,
+            new Map(
+              failedDependencyPreflights.map(({ ticketId, failure }) => [
+                ticketId,
+                `Ticket worker setup failed: ${errorDetail(failure)}`,
+              ]),
+            ),
+            input.createdAt,
+          );
+          return yield* blockRun({
+            sourceThreadId: input.sourceThreadId,
+            run: failedRun,
+            ...(firstFailure === undefined ? {} : { ticketId: firstFailure.ticketId }),
+            retryableStage: "worker-setup",
+            reasonMarkdown: failureDetail,
+            updatedAt: input.createdAt,
+            humanBlocked:
+              structuralGitFailure(failureDetail) ||
+              failureDetail.includes("durable Implementation thread"),
           });
         }
         const allIdentities = workingRun.launchSummary.plannedWorkers;
@@ -5954,7 +6027,8 @@ const make = Effect.gen(function* () {
         workerResults: [...run.workerResults, acceptedDirective],
         retryableFailure:
           run.automationHalt === null &&
-          run.retryableFailure?.stage === "worker-execution" &&
+          (run.retryableFailure?.stage === "worker-setup" ||
+            run.retryableFailure?.stage === "worker-execution") &&
           run.retryableFailure.ticketId === directive.ticketId
             ? null
             : run.retryableFailure,
@@ -7969,8 +8043,12 @@ const make = Effect.gen(function* () {
             state.status === "failed"
               ? {
                   ...state,
-                  status: "ready" as const,
+                  status:
+                    ticketDependencyState(input.run, state) === "eligible"
+                      ? ("ready" as const)
+                      : ("blocked" as const),
                   workerResult: null,
+                  warningMarkdown: null,
                   updatedAt: input.createdAt,
                 }
               : state,
@@ -10520,6 +10598,7 @@ const make = Effect.gen(function* () {
             return {
               ...ticket,
               status: "ready" as const,
+              warningMarkdown: null,
               stageExecutions: ticket.stageExecutions.map((execution) =>
                 execution.failure?.category === "dependency-failed" && execution.state === "halted"
                   ? {
@@ -10562,7 +10641,12 @@ const make = Effect.gen(function* () {
           return {
             ...ticket,
             status: "blocked" as const,
-            stageExecutions: [...ticket.stageExecutions, dependencyExecution],
+            stageExecutions: [
+              ...ticket.stageExecutions.filter(
+                (execution) => execution.executionId !== dependencyExecution.executionId,
+              ),
+              dependencyExecution,
+            ],
             updatedAt: createdAt,
           };
         });

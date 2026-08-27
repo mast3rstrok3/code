@@ -318,6 +318,36 @@ describe("workflow stage reconciliation", () => {
     expect(actions.some((action) => action.type === "derive-dependency-eligibility")).toBe(true);
   });
 
+  it("keeps dependents blocked while the dependency is in Code Review", () => {
+    const actions = reconcileWorkflowState(
+      model(
+        run({
+          tickets: [
+            ticket({
+              ticketId: "upstream",
+              status: "code-reviewing",
+              executions: [
+                execution({
+                  ticketId: "upstream",
+                  state: "succeeded",
+                  updatedAt: now,
+                }),
+              ],
+            }),
+            ticket({
+              ticketId: "downstream",
+              status: "blocked",
+              dependencies: ["upstream"],
+            }),
+          ],
+        }),
+      ),
+      now,
+    );
+
+    expect(actions.some((action) => action.type === "derive-dependency-eligibility")).toBe(false);
+  });
+
   it("resets planned restart recovery without spending product counters", () => {
     const active = execution({
       ticketId: "ticket-a",

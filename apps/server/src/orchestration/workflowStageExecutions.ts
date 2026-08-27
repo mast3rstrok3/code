@@ -615,19 +615,8 @@ export function ticketDependencyState(
   for (const dependencyId of ticket.dependencyTicketIds) {
     const dependency = run.ticketStates.find((candidate) => candidate.ticketId === dependencyId);
     if (dependency === undefined) return "blocked";
-    if (dependency.status === "succeeded") continue;
-    const executions = [...latestExecutions(dependency.stageExecutions).values()].sort(
-      (left, right) => right.updatedAt.localeCompare(left.updatedAt),
-    );
-    const current = executions[0];
-    if (current?.state === "succeeded" || current?.state === "skipped") continue;
-    if (current?.state === "halted") return "blocked";
-    if (current !== undefined) {
-      waiting = true;
-      continue;
-    }
     if (dependency.status === "failed") return "blocked";
-    waiting = true;
+    if (dependency.status !== "succeeded") waiting = true;
   }
   return waiting ? "waiting" : "eligible";
 }
@@ -718,6 +707,7 @@ export function reconcileWorkflowState(
           commandId: reconciliationCommandId(
             "derive-dependency-block",
             `${run.id}:${ticket.ticketId}`,
+            ticket.implementationGeneration,
           ),
           runId: run.id,
           ticketId: ticket.ticketId,
@@ -729,6 +719,7 @@ export function reconcileWorkflowState(
           commandId: reconciliationCommandId(
             "derive-dependency-eligibility",
             `${run.id}:${ticket.ticketId}`,
+            ticket.implementationGeneration,
           ),
           runId: run.id,
           ticketId: ticket.ticketId,
