@@ -5620,7 +5620,15 @@ const make = Effect.gen(function* () {
   });
 
   const handleWorkerResult = Effect.fn("ImplementationWorkflowReactor.handleWorkerResult")(
-    function* (threadId: ThreadId, directive: WorkerDirective) {
+    function* (threadId: ThreadId, directive: WorkerDirective, writeStampedAt?: string) {
+      // When this write happened, which is not when the worker reported. They are
+      // the same for a live result and differ for a replay: recovery re-applies a
+      // stored result whose `reportedAt` predates the write recovery just made,
+      // and `runUpdateWouldOverwriteNewerTicketState` reads that older stamp as a
+      // stale write and drops it. The ticket then sits at `running` with its
+      // result recorded and nothing to move it. The directive keeps its own
+      // `reportedAt`, so what the worker said is still what gets stored.
+      const writeAt = writeStampedAt ?? directive.reportedAt;
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
       const run = findRunByWorkerThreadId(readModel, threadId);
       if (run === null) return;
@@ -5645,7 +5653,7 @@ const make = Effect.gen(function* () {
           ticketId: currentState.ticketId,
           retryableStage: "worker-execution",
           reasonMarkdown: `Worker result identity does not match the active assignment for thread '${threadId}'.`,
-          updatedAt: directive.reportedAt,
+          updatedAt: writeAt,
           humanBlocked: true,
         });
         return;
@@ -5661,7 +5669,7 @@ const make = Effect.gen(function* () {
           ticketId: directive.ticketId,
           status: directive.status,
         },
-        createdAt: directive.reportedAt,
+        createdAt: writeAt,
       });
 
       if (
@@ -5673,13 +5681,13 @@ const make = Effect.gen(function* () {
             run: { ...run, automationHalt: null, retryableFailure: null },
             ticketId: directive.ticketId,
             stage: "implementation",
-            updatedAt: directive.reportedAt,
+            updatedAt: writeAt,
             preserveImplementationAttemptCount: true,
           });
           yield* updateRun({
             sourceThreadId,
             run: parkedRun,
-            createdAt: directive.reportedAt,
+            createdAt: writeAt,
           });
           return;
         }
@@ -5688,7 +5696,7 @@ const make = Effect.gen(function* () {
           run,
           ticketId: directive.ticketId,
           reasonMarkdown: directive.notesMarkdown,
-          createdAt: directive.reportedAt,
+          createdAt: writeAt,
           preserveRetryBudget: true,
         });
         return;
@@ -5705,10 +5713,10 @@ const make = Effect.gen(function* () {
             workerResults: [...run.workerResults, directive],
           },
           new Map([[directive.ticketId, warningMarkdown]]),
-          directive.reportedAt,
+          writeAt,
         );
         if (run.automationHalt !== null) {
-          yield* updateRun({ sourceThreadId, run: failedRun, createdAt: directive.reportedAt });
+          yield* updateRun({ sourceThreadId, run: failedRun, createdAt: writeAt });
           return;
         }
         yield* blockRun({
@@ -5716,7 +5724,7 @@ const make = Effect.gen(function* () {
           run: failedRun,
           ticketId: directive.ticketId,
           reasonMarkdown: warningMarkdown,
-          updatedAt: directive.reportedAt,
+          updatedAt: writeAt,
           haltCategory: "stage-failed",
           haltStage: "implementation",
         });
@@ -5745,7 +5753,7 @@ const make = Effect.gen(function* () {
                 run,
                 ticketId: currentState.ticketId,
                 reasonMarkdown: detail,
-                createdAt: directive.reportedAt,
+                createdAt: writeAt,
               });
               return null;
             }
@@ -5759,7 +5767,7 @@ const make = Effect.gen(function* () {
                         ...state,
                         status: "failed" as const,
                         workerResult: directive,
-                        updatedAt: directive.reportedAt,
+                        updatedAt: writeAt,
                       }
                     : state,
                 ),
@@ -5767,7 +5775,7 @@ const make = Effect.gen(function* () {
               retryableStage: "worker-execution",
               ticketId: currentState.ticketId,
               reasonMarkdown: detail,
-              updatedAt: directive.reportedAt,
+              updatedAt: writeAt,
               humanBlocked: structuralGitFailure(detail),
             });
             return null;
@@ -5786,7 +5794,7 @@ const make = Effect.gen(function* () {
                 branch: directive.branch,
                 worktreePath: directive.worktreePath,
                 workerResult: acceptedDirective,
-                updatedAt: directive.reportedAt,
+                updatedAt: writeAt,
               }
             : state,
         ),
@@ -5797,7 +5805,7 @@ const make = Effect.gen(function* () {
           run.retryableFailure.ticketId === directive.ticketId
             ? null
             : run.retryableFailure,
-        updatedAt: directive.reportedAt,
+        updatedAt: writeAt,
       };
 
       if (run.automationHalt !== null) {
@@ -5816,7 +5824,7 @@ const make = Effect.gen(function* () {
         yield* updateRun({
           sourceThreadId,
           run: recordedRun,
-          createdAt: directive.reportedAt,
+          createdAt: writeAt,
         });
         return;
       }
@@ -5831,7 +5839,7 @@ const make = Effect.gen(function* () {
                 : state,
             ),
           },
-          directive.reportedAt,
+          writeAt,
         );
         const completedTicketRun: OrchestrationImplementationRun = {
           ...reviewedRun,
@@ -5848,7 +5856,7 @@ const make = Effect.gen(function* () {
         yield* updateRun({
           sourceThreadId,
           run: completedTicketRun,
-          createdAt: directive.reportedAt,
+          createdAt: writeAt,
         });
         if (
           completedTicketRun.ticketStates.every((state) =>
@@ -5858,24 +5866,24 @@ const make = Effect.gen(function* () {
           yield* integrateCompletedRun({
             sourceThreadId,
             run: completedTicketRun,
-            createdAt: directive.reportedAt,
+            createdAt: writeAt,
           });
         } else {
           yield* startReadyWorkers({
             sourceThreadId,
             run: completedTicketRun,
-            createdAt: directive.reportedAt,
+            createdAt: writeAt,
           });
         }
         return;
       }
 
-      yield* updateRun({ sourceThreadId, run: succeededRun, createdAt: directive.reportedAt });
+      yield* updateRun({ sourceThreadId, run: succeededRun, createdAt: writeAt });
       yield* startTicketAppReview({
         sourceThreadId,
         run: succeededRun,
         ticketId: directive.ticketId,
-        createdAt: directive.reportedAt,
+        createdAt: writeAt,
       });
     },
   );
@@ -9111,10 +9119,14 @@ const make = Effect.gen(function* () {
 
         for (const state of reportedStates) {
           if (state.workerThreadId === null || state.workerResult === null) continue;
-          yield* handleWorkerResult(state.workerThreadId, {
-            ...state.workerResult,
-            type: "implementation-worker-result",
-          });
+          yield* handleWorkerResult(
+            state.workerThreadId,
+            { ...state.workerResult, type: "implementation-worker-result" },
+            // Recovery is writing now. Stamping the replay with the worker's
+            // original report time would date it before the resume above and
+            // the stale-write guard would drop it.
+            createdAt,
+          );
         }
         if (!reportedStates.some((state) => state.ticketId === halt.ticketId)) {
           const refreshedReadModel = yield* projectionSnapshotQuery.getCommandReadModel();
