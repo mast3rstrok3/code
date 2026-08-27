@@ -4651,7 +4651,11 @@ describe("ImplementationWorkflowReactor", () => {
     withSystem((system) =>
       Effect.gen(function* () {
         const { run, tickets } = yield* launchRun(system, {
-          tickets: [planningTicket("TICKET-1"), planningTicket("TICKET-2", ["TICKET-1"])],
+          tickets: [
+            planningTicket("TICKET-1"),
+            planningTicket("TICKET-2", ["TICKET-1"]),
+            planningTicket("TICKET-3", ["TICKET-2"]),
+          ],
         });
         const dependency = tickets[0]!;
         const dependent = tickets[1]!;
@@ -4716,6 +4720,7 @@ describe("ImplementationWorkflowReactor", () => {
         expect(
           recovered?.ticketStates.find((state) => state.ticketId === dependent.id)?.status,
         ).toBe("running");
+        expect(recovered?.ticketStates[2]?.status).toBe("blocked");
         expect(recovered?.automationHalt).toBeNull();
       }),
     ),

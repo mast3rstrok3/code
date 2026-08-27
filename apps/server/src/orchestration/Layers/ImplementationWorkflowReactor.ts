@@ -9519,7 +9519,13 @@ const make = Effect.gen(function* () {
             state.warningMarkdown?.trim() || "Implementation did not complete.",
           ]),
       );
-      if (failedTicketWarnings.size > 0) {
+      const hasRecoverableSetupFailureShape = run.ticketStates.some(
+        (state) =>
+          state.status === "failed" &&
+          ((state.warningMarkdown ?? "").includes(MISSING_DEPENDENCY_COMMIT_WARNING) ||
+            (state.warningMarkdown ?? "").includes(MISSING_WORKFLOW_TICKET_WARNING)),
+      );
+      if (failedTicketWarnings.size > 0 && !hasRecoverableSetupFailureShape) {
         const reconciledRun = failImplementationTickets(run, failedTicketWarnings, createdAt);
         const hasStrandedDependent = run.ticketStates.some(
           (state, index) =>
@@ -9549,7 +9555,10 @@ const make = Effect.gen(function* () {
           state.status === "failed" &&
           !(state.warningMarkdown ?? "").startsWith("Blocked by failed dependency"),
       );
-      if (directlyFailedTicket !== undefined) {
+      if (
+        directlyFailedTicket !== undefined &&
+        (run.status === "running" || run.status === "needs-human-attention")
+      ) {
         const warning = directlyFailedTicket.warningMarkdown ?? "";
         let failureIsRecoverable = false;
         if (warning.includes(MISSING_DEPENDENCY_COMMIT_WARNING)) {
