@@ -95,6 +95,20 @@ import {
 } from "../Services/ProjectionSnapshotQuery.ts";
 
 const now = "2026-01-01T00:00:00.000Z";
+
+/**
+ * Where the clock sits while a test body runs.
+ *
+ * Fixtures stamp their own events by hand, from `now` to about five minutes
+ * past it, while the reactor stamps its writes from the clock. Left at
+ * TestClock's epoch default, every reactor write reads as older than the state
+ * it updates, `runUpdateWouldOverwriteNewerTicketState` drops it, and the run
+ * stops moving for a reason no assertion names. So sit just past the fixture
+ * timeline — and still well inside `STAGE_CLAIM_GRACE_MS`, so a thread created
+ * at `now` reads as quiet rather than abandoned. Tests that want a released
+ * stage advance the clock themselves.
+ */
+const testClockStart = "2026-01-01T00:06:00.000Z";
 const decodeImplementationRun = Schema.decodeUnknownEffect(OrchestrationImplementationRun);
 
 it("queues only implementation directive activities", () => {
@@ -387,6 +401,13 @@ interface ImplementationCalls {
   readonly createWorktreeInputs: Ref.Ref<ReadonlyArray<VcsCreateWorktreeInput>>;
   readonly removeWorktreeInputs: Ref.Ref<ReadonlyArray<VcsRemoveWorktreeInput>>;
   readonly activeWorktreePaths: Ref.Ref<ReadonlySet<string>>;
+  /**
+   * Branches git actually has, so `refs/heads/<branch>` can be missing.
+   *
+   * Without this the fake answered every ref, which is how a change that stopped
+   * creating ticket branches altogether still looked plausible here.
+   */
+  readonly createdBranches: Ref.Ref<ReadonlySet<string>>;
   readonly removeWorktreeFailuresRemaining: Ref.Ref<number>;
   readonly mergeRefInputs: Ref.Ref<ReadonlyArray<GitMergeRefInput>>;
   readonly localStatusCount: Ref.Ref<number>;
@@ -556,7 +577,10 @@ function makeTestLayer(
                   : Effect.succeed({
                       worktree: {
                         path: input.path ?? "/tmp/generated-worktree",
-                        refName: input.newRefName ?? "HEAD",
+                        // Attaching checks out `refName`; only `newRefName` makes
+                        // a branch. Reporting "HEAD" for an attach made a restored
+                        // worktree look like it was on no branch at all.
+                        refName: input.newRefName ?? input.refName,
                       },
                     }),
               ),
@@ -564,6 +588,13 @@ function makeTestLayer(
                 Ref.update(calls.activeWorktreePaths, (paths) =>
                   new Set(paths).add(result.worktree.path),
                 ),
+              ),
+              Effect.tap(() =>
+                input.newRefName === undefined
+                  ? Effect.void
+                  : Ref.update(calls.createdBranches, (branches) =>
+                      new Set(branches).add(input.newRefName as string),
+                    ),
               ),
             ),
           removeWorktree: (input) =>
@@ -594,6 +625,22 @@ function makeTestLayer(
           resolveCommit: (input) =>
             Effect.gen(function* () {
               const advancedBranchRefs = yield* Ref.get(calls.advancedBranchRefs);
+              // A fully qualified branch ref is a question about what git has,
+              // and it is allowed to answer "nothing". Every other ref shape
+              // keeps resolving, so only branch existence is modelled here.
+              if (input.ref.startsWith("refs/heads/")) {
+                const branch = input.ref.slice("refs/heads/".length);
+                const createdBranches = yield* Ref.get(calls.createdBranches);
+                if (!createdBranches.has(branch)) {
+                  return yield* new GitCommandError({
+                    operation: "GitWorkflowService.resolveCommit",
+                    command: "git rev-parse",
+                    cwd: input.cwd,
+                    detail: `unknown revision '${input.ref}'`,
+                  });
+                }
+                return { commitSha: `${branch}@commit` };
+              }
               if (
                 input.ref === "HEAD" &&
                 (input.cwd.includes(".worktrees/") || input.cwd.includes("-ticket-"))
@@ -621,9 +668,10 @@ function makeTestLayer(
               }
               if (input.ref === "HEAD" && input.cwd.includes("-ticket-")) {
                 const created = yield* Ref.get(calls.createWorktreeInputs);
-                const branch = created.find(
-                  (candidate) => candidate.path === input.cwd,
-                )?.newRefName;
+                const worktree = created.find((candidate) => candidate.path === input.cwd);
+                // An attached worktree carries its branch in `refName`; only a
+                // freshly created one has `newRefName`.
+                const branch = worktree?.newRefName ?? worktree?.refName;
                 return {
                   commitSha:
                     resolvedCommitSha === "def456" && branch
@@ -643,9 +691,14 @@ function makeTestLayer(
                 isRepo: true,
                 hasPrimaryRemote: true,
                 isDefaultRef: input.cwd === "/tmp/implementation-reactor",
-                refName:
-                  created.find((candidate) => candidate.path === input.cwd)?.newRefName ??
-                  (input.cwd === "/tmp/implementation-reactor" ? sourceRefName : "main"),
+                refName: (() => {
+                  const worktree = created.find((candidate) => candidate.path === input.cwd);
+                  return (
+                    worktree?.newRefName ??
+                    worktree?.refName ??
+                    (input.cwd === "/tmp/implementation-reactor" ? sourceRefName : "main")
+                  );
+                })(),
                 hasWorkingTreeChanges:
                   (input.cwd === "/tmp/implementation-reactor" &&
                     statusCheck <= dirtySourceStatusChecks) ||
@@ -712,21 +765,29 @@ function makeTestLayer(
         Layer.mock(AppDevStackManager)({
           getByWorktree: (input) =>
             Effect.gen(function* () {
-              const stackId = input.worktreePath.includes("-ticket-") ? "stack-ticket" : "stack-1";
+              const isTicketWorktree = input.worktreePath.includes("-ticket-");
+              const stackId = isTicketWorktree ? "stack-ticket" : "stack-1";
               const deletedStackIds = yield* Ref.get(calls.deletedStackIds);
               const autoCreateInputs = yield* Ref.get(calls.autoCreateInputs);
-              const workflowId = autoCreateInputs.findLast(
+              const created = autoCreateInputs.findLast(
                 (candidate) => candidate.worktreePath === input.worktreePath,
-              )?.workflowId;
-              const missing = inheritedStackMissing || deletedStackIds.has(stackId);
+              );
+              const workflowId = created?.workflowId;
+              // The orchestrator worktree inherits its stack from Planning, so it
+              // is there without this run standing one up. A ticket worktree has
+              // no such source: its stack exists only once something created it,
+              // and it belongs to the workflow that did. Conjuring an ownerless
+              // one made cleanup's ownership check read as a cleanup bug.
+              const missing =
+                inheritedStackMissing ||
+                deletedStackIds.has(stackId) ||
+                (isTicketWorktree && created === undefined);
               return {
                 stack: missing
                   ? null
                   : {
                       id: stackId,
-                      uuid: input.worktreePath.includes("-ticket-")
-                        ? "stack-ticket-uuid"
-                        : "stack-uuid-1",
+                      uuid: isTicketWorktree ? "stack-ticket-uuid" : "stack-uuid-1",
                       userId: "user-1",
                       worktreePath: input.worktreePath,
                       ...(workflowId == null ? {} : { workflowId }),
@@ -915,6 +976,8 @@ function withSystem<A, E>(
     readonly changeRequestGate?: ChangeRequestGate;
     readonly dirtyWorkerWorktrees?: boolean;
     readonly failRemoveWorktreeAttempts?: number;
+    /** Branches git already has, for restoring a worktree whose branch outlived it. */
+    readonly existingBranches?: ReadonlyArray<string>;
     readonly projectFile?: T3ProjectFile;
   },
 ) {
@@ -949,6 +1012,9 @@ function withSystem<A, E>(
     const createWorktreeInputs = yield* Ref.make<ReadonlyArray<VcsCreateWorktreeInput>>([]);
     const removeWorktreeInputs = yield* Ref.make<ReadonlyArray<VcsRemoveWorktreeInput>>([]);
     const activeWorktreePaths = yield* Ref.make<ReadonlySet<string>>(new Set());
+    const createdBranches = yield* Ref.make<ReadonlySet<string>>(
+      new Set(options?.existingBranches ?? []),
+    );
     const removeWorktreeFailuresRemaining = yield* Ref.make(
       options?.failRemoveWorktreeAttempts ?? 0,
     );
@@ -969,6 +1035,7 @@ function withSystem<A, E>(
       createWorktreeInputs,
       removeWorktreeInputs,
       activeWorktreePaths,
+      createdBranches,
       removeWorktreeFailuresRemaining,
       mergeRefInputs,
       localStatusCount,
@@ -979,6 +1046,7 @@ function withSystem<A, E>(
 
     return yield* Effect.scoped(
       Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(testClockStart));
         const engine = yield* OrchestrationEngineService;
         const query = yield* ProjectionSnapshotQuery;
         const reactor = yield* ImplementationWorkflowReactor;
@@ -1138,6 +1206,35 @@ function launchRun(
     });
     yield* system.reactor.drain;
     return { ticket, tickets, run: legacyRun };
+  });
+}
+
+/**
+ * Stand a ticket's App Dev Stack up, owned by the run, the way ticket App Review
+ * does. Cleanup only deletes a stack whose workflow matches the run's, so a
+ * ticket that never had one has nothing to delete.
+ */
+function seedTicketStack(
+  system: ImplementationSystem,
+  input: {
+    readonly run: OrchestrationImplementationRun;
+    readonly ticketId: string;
+  },
+) {
+  return Effect.gen(function* () {
+    const snapshot = yield* system.query.getSnapshot();
+    const worktreePath = snapshot.implementationRuns
+      .find((entry) => entry.id === input.run.id)
+      ?.ticketStates.find((entry) => entry.ticketId === input.ticketId)?.worktreePath;
+    if (worktreePath == null) throw new Error("Ticket worktree missing.");
+    const workflowId = snapshot.threads.find(
+      (thread) => thread.id === input.run.orchestratorThreadId,
+    )?.workflowContext?.workflowId;
+    if (workflowId == null) throw new Error("Run workflow id missing.");
+    yield* Ref.update(system.autoCreateInputs, (inputs) => [
+      ...inputs,
+      { worktreePath, displayName: "Ticket stack", workflowId },
+    ]);
   });
 }
 
@@ -3813,6 +3910,7 @@ describe("ImplementationWorkflowReactor", () => {
         expect(yield* Ref.get(system.deleteStackIds)).toEqual([]);
         expect(yield* Ref.get(system.removeWorktreeInputs)).toEqual([]);
 
+        yield* seedTicketStack(system, { run, ticketId: ticket.id });
         yield* passMergeGate(system, run);
 
         snapshot = yield* system.query.getSnapshot();
@@ -3841,8 +3939,9 @@ describe("ImplementationWorkflowReactor", () => {
     withSystem(
       (system) =>
         Effect.gen(function* () {
-          const { run } = yield* launchRun(system);
+          const { run, ticket } = yield* launchRun(system);
           yield* appendWorkerResult(system, { run, status: "succeeded" });
+          yield* seedTicketStack(system, { run, ticketId: ticket.id });
           yield* passMergeGate(system, run);
 
           expect(yield* Ref.get(system.deleteStackIds)).toEqual(["stack-ticket"]);
@@ -3859,10 +3958,11 @@ describe("ImplementationWorkflowReactor", () => {
     withSystem(
       (system) =>
         Effect.gen(function* () {
-          const { run } = yield* launchRun(system);
+          const { run, ticket } = yield* launchRun(system);
           const branch = run.launchSummary.plannedWorkers[0]?.branch;
           if (branch === undefined) throw new Error("Ticket branch missing.");
           yield* appendWorkerResult(system, { run, status: "succeeded" });
+          yield* seedTicketStack(system, { run, ticketId: ticket.id });
           yield* Ref.set(system.dirtyWorkerWorktrees, true);
           yield* passMergeGate(system, run);
 

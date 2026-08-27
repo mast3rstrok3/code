@@ -2148,6 +2148,39 @@ const make = Effect.gen(function* () {
     } satisfies BranchIntegration;
   });
 
+  /**
+   * Materialise a ticket worktree, letting git say whether the branch is new.
+   *
+   * `ticketStates[].branch` is claimed before the worktree exists: it records
+   * what the branch will be called, not that git has it. Reading it as "the
+   * branch is there" is what left tickets asking `git worktree add` to attach to
+   * a ref nobody had created. So ask git. Attach when the branch exists, create
+   * it from `startRef` when it does not.
+   */
+  const ensureTicketWorktree = Effect.fn("ImplementationWorkflowReactor.ensureTicketWorktree")(
+    function* (input: {
+      readonly cwd: string;
+      readonly branch: string;
+      readonly path: string;
+      readonly startRef: string;
+      readonly baseRefName: string;
+    }) {
+      // Fully qualified, so a tag or a remote ref of the same name cannot answer
+      // for a local branch that is missing.
+      const branchHead = yield* gitWorkflow
+        .resolveCommit({ cwd: input.cwd, ref: `refs/heads/${input.branch}` })
+        .pipe(Effect.option);
+      const branchExists = Option.isSome(branchHead);
+      yield* gitWorkflow.createWorktree({
+        cwd: input.cwd,
+        refName: branchExists ? input.branch : input.startRef,
+        ...(branchExists ? {} : { newRefName: input.branch }),
+        baseRefName: input.baseRefName,
+        path: input.path,
+      });
+    },
+  );
+
   const createWorker = Effect.fn("ImplementationWorkflowReactor.createWorker")(function* (input: {
     readonly sourceThreadId: ThreadId;
     readonly orchestratorThread: OrchestrationThread;
@@ -2218,13 +2251,12 @@ const make = Effect.gen(function* () {
         });
       }
     } else {
-      const restoringTicketWorktree = existing.branch === plannedWorker.branch;
-      yield* gitWorkflow.createWorktree({
+      yield* ensureTicketWorktree({
         cwd: input.run.orchestratorWorktreePath,
-        refName: restoringTicketWorktree ? plannedWorker.branch : worktreeStartRef,
-        ...(restoringTicketWorktree ? {} : { newRefName: plannedWorker.branch }),
-        baseRefName: input.run.baseBranch,
+        branch: plannedWorker.branch,
         path: plannedWorker.worktreePath,
+        startRef: worktreeStartRef,
+        baseRefName: input.run.baseBranch,
       });
     }
 
@@ -3026,11 +3058,15 @@ const make = Effect.gen(function* () {
       .resolveCommit({ cwd: state.worktreePath, ref: "HEAD" })
       .pipe(Effect.option);
     if (Option.isSome(existing)) return;
-    yield* gitWorkflow.createWorktree({
+    // The claim records the branch before `createWorker` creates it, so a server
+    // that died in that window leaves a ticket whose branch is named but absent.
+    // Restoring has to be able to create it, not only attach to it.
+    yield* ensureTicketWorktree({
       cwd: input.run.orchestratorWorktreePath,
-      refName: state.branch,
-      baseRefName: input.run.baseBranch,
+      branch: state.branch,
       path: state.worktreePath,
+      startRef: input.run.orchestratorBranch,
+      baseRefName: input.run.baseBranch,
     });
   });
 
