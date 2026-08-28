@@ -67,10 +67,14 @@ const screenshotBackedFailureDocument = {
   nextSteps: ["Repair checkout submission."],
 } as const;
 
-const makeReview = (evidence: AppReviewEvidence): AppReviewRecord => ({
+const makeReview = (
+  evidence: AppReviewEvidence,
+  appReviewScope?: AppReviewRecord["appReviewScope"],
+): AppReviewRecord => ({
   id: reviewId,
   sourceThreadId: ThreadId.make("thread-source"),
   reviewThreadId: threadId,
+  ...(appReviewScope === undefined ? {} : { appReviewScope }),
   sourceTurnId: null,
   status: "running",
   document: emptyDocument,
@@ -312,6 +316,19 @@ describe("app-review toolkit handlers", () => {
       assert.match(error.message, /app_review_recording_start/);
       assert.match(error.message, /failed/);
       assert.strictEqual(harness.dispatched.length, 0);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("accepts an e2e-only pass without browser evidence", () => {
+    const harness = makeHarness({
+      review: makeReview(EMPTY_APP_REVIEW_EVIDENCE, "e2e"),
+    });
+
+    return Effect.gen(function* () {
+      const updated = yield* handlers.app_review_update({ reviewId, status: "passed" });
+      assert.strictEqual(updated.status, "passed");
+      assert.strictEqual(harness.dispatched.length, 1);
+      assert.strictEqual(harness.dispatched[0]?.type, "thread.app-review.update");
     }).pipe(Effect.provide(harness.layer));
   });
 

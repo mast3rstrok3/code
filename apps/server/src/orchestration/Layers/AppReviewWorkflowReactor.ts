@@ -137,19 +137,36 @@ export function renewAppReviewPhaseExecutionLease(
   occurredAt: string,
 ): AppReviewWorkflowRun {
   const execution = run.phaseExecution;
-  if (
-    run.status !== "running" ||
-    run.activeThreadId !== threadId ||
-    execution === null ||
-    execution.state !== "running" ||
-    execution.leaseExpiresAt === null
-  ) {
+  if (run.status !== "running" || run.activeThreadId !== threadId || execution === null) {
     return run;
   }
   const occurredAtMs = Date.parse(occurredAt);
+  if (Number.isNaN(occurredAtMs)) return run;
+  const leaseExpiresAt = DateTime.formatIso(
+    DateTime.add(DateTime.makeUnsafe(occurredAtMs), {
+      milliseconds: WORKFLOW_PROVIDER_LEASE_MS,
+    }),
+  );
+  if (execution.state === "reconciling") {
+    return {
+      ...run,
+      phaseExecution: {
+        ...execution,
+        state: "running",
+        claimedAt: occurredAt,
+        leaseRenewedAt: occurredAt,
+        leaseExpiresAt,
+        lastProgressAt: occurredAt,
+        failure: null,
+        recovery: null,
+        updatedAt: occurredAt,
+      },
+      updatedAt: occurredAt,
+    };
+  }
+  if (execution.state !== "running" || execution.leaseExpiresAt === null) return run;
   const leaseExpiresAtMs = Date.parse(execution.leaseExpiresAt);
   if (
-    Number.isNaN(occurredAtMs) ||
     Number.isNaN(leaseExpiresAtMs) ||
     leaseExpiresAtMs - occurredAtMs > WORKFLOW_PROVIDER_LEASE_MS / 2
   ) {
@@ -160,11 +177,7 @@ export function renewAppReviewPhaseExecutionLease(
     phaseExecution: {
       ...execution,
       leaseRenewedAt: occurredAt,
-      leaseExpiresAt: DateTime.formatIso(
-        DateTime.add(DateTime.makeUnsafe(occurredAtMs), {
-          milliseconds: WORKFLOW_PROVIDER_LEASE_MS,
-        }),
-      ),
+      leaseExpiresAt,
       lastProgressAt: occurredAt,
       updatedAt: occurredAt,
     },
@@ -519,6 +532,7 @@ export function recoverableFailedAppReviewPhase(input: {
   const phase = failure?.phase ?? null;
   const recoveryContinuationCount = cycle?.recoveryContinuationCount ?? 0;
   const missingFixResult = isMissingAppReviewFixResult(failure);
+  const retryableFailure = failure?.retryable === true || missingFixResult;
   const phaseLaunchCount =
     cycle === undefined || phase === null ? null : appReviewPhaseLaunchCount(cycle, phase);
   if (
@@ -528,6 +542,7 @@ export function recoverableFailedAppReviewPhase(input: {
     recoveryContinuationCount > 1 ||
     phaseLaunchCount === null ||
     phaseLaunchCount < APP_REVIEW_PHASE_MAX_LAUNCHES ||
+    !retryableFailure ||
     !failure?.detailMarkdown.includes(
       `${phase} exhausted its ${String(APP_REVIEW_PHASE_MAX_LAUNCHES)} phase launches.`,
     ) ||
@@ -701,6 +716,26 @@ export function appReviewPhaseTurnPending(
     );
   }
   return thread.latestTurn.state === "running" && !sessionIsActive;
+}
+
+/** A recovered phase claim whose replacement provider turn never started. */
+export function appReviewPhaseLaunchNeedsRetry(
+  run: AppReviewWorkflowRun,
+  cycle: AppReviewWorkflowCycle,
+  thread: {
+    readonly latestTurn: { readonly requestedAt: string } | null;
+    readonly session: { readonly status: string; readonly activeTurnId?: string | null } | null;
+  },
+): boolean {
+  if ((cycle.recoveryContinuationCount ?? 0) === 0) return false;
+  const sessionIsActive =
+    thread.session?.status === "starting" ||
+    thread.session?.status === "running" ||
+    (thread.session?.activeTurnId ?? null) !== null;
+  return (
+    !sessionIsActive &&
+    (thread.latestTurn === null || thread.latestTurn.requestedAt < run.updatedAt)
+  );
 }
 
 export function appReviewRecoveryEvidenceIsCurrent(
@@ -1322,6 +1357,7 @@ const make = Effect.gen(function* () {
     readonly reason: AppReviewWorkflowFailureReason;
     readonly detailMarkdown: string;
     readonly occurredAt: string;
+    readonly retryable?: boolean;
   }) {
     if (terminalStatuses.has(input.run.status)) return;
     const cycleNumber = input.run.cycles.at(-1)?.cycleNumber ?? null;
@@ -1340,6 +1376,7 @@ const make = Effect.gen(function* () {
         reason: input.reason,
         phase: input.run.activePhase,
         cycleNumber,
+        ...(input.retryable === undefined ? {} : { retryable: input.retryable }),
         detailMarkdown: input.detailMarkdown,
         failedAt: input.occurredAt,
       },
@@ -1353,6 +1390,7 @@ const make = Effect.gen(function* () {
                 reason: input.reason,
                 phase: input.run.activePhase,
                 cycleNumber,
+                ...(input.retryable === undefined ? {} : { retryable: input.retryable }),
                 detailMarkdown: input.detailMarkdown,
                 failedAt: input.occurredAt,
               },
@@ -1524,6 +1562,7 @@ const make = Effect.gen(function* () {
         sourceThreadId: run.controllerThreadId,
         reviewThreadId: cycle.reviewerThreadId,
         reviewId: cycle.reviewId,
+        appReviewScope: reviewScope,
         planningTicketIds: [...(controller.workflowContext?.ticketScope ?? [])],
         message,
         modelSelection: yield* modelForPrompt(
@@ -1779,6 +1818,7 @@ const make = Effect.gen(function* () {
     readonly reason: AppReviewWorkflowFailureReason;
     readonly detailMarkdown: string;
     readonly occurredAt: string;
+    readonly retryable: boolean;
   }) {
     const run = input.run;
     if (terminalStatuses.has(run.status)) return;
@@ -1796,6 +1836,7 @@ const make = Effect.gen(function* () {
       reason: input.reason,
       phase,
       cycleNumber: cycle.cycleNumber,
+      retryable: input.retryable,
       detailMarkdown: input.detailMarkdown,
       failedAt: input.occurredAt,
     };
@@ -1816,6 +1857,7 @@ const make = Effect.gen(function* () {
         reason: input.reason,
         detailMarkdown: `${phase} exhausted its ${String(APP_REVIEW_PHASE_MAX_LAUNCHES)} phase launches.\n\n${input.detailMarkdown}`,
         occurredAt: input.occurredAt,
+        retryable: input.retryable,
       });
       return;
     }
@@ -2065,6 +2107,10 @@ const make = Effect.gen(function* () {
       !["passed", "failed"].includes(review.status) ||
       !appReviewRecoveryEvidenceIsCurrent(run, cycle, review.updatedAt)
     ) {
+      if (appReviewPhaseLaunchNeedsRetry(run, cycle, reviewer)) {
+        yield* ensureReviewLaunch(run, cycle);
+        return;
+      }
       if (appReviewPhaseTurnPending(run, cycle, reviewer)) return;
       const failed = threadTurnFailed(reviewer);
       const completedWithoutReview = phaseTurnCompleted(reviewer) && hasSettledCheckpoint(reviewer);
@@ -2073,6 +2119,7 @@ const make = Effect.gen(function* () {
       yield* failCycle({
         run,
         reason: "review-blocked",
+        retryable: true,
         detailMarkdown:
           reviewer.session?.lastError ??
           "Browser App Review stopped without producing a terminal durable review.",
@@ -2089,7 +2136,8 @@ const make = Effect.gen(function* () {
     const e2eCommands = yield* e2eCommandsForCwd(target.cwd);
     // Null here means Settings turned the parts off after the cycle launched;
     // judge the finished review leniently rather than retroactively.
-    const reviewScope = yield* reviewScopeForRun(stableRun, e2eCommands.length);
+    const reviewScope =
+      review.appReviewScope ?? (yield* reviewScopeForRun(stableRun, e2eCommands.length));
     const passFailure = terminalReviewPassFailure({
       run: stableRun,
       review,
@@ -2297,12 +2345,25 @@ const make = Effect.gen(function* () {
     // the reviewer, and their plans still have to reconcile.
     const planner = yield* resolveThread(cycle.plannerThreadId ?? cycle.reviewerThreadId);
     if (planner === undefined) return;
+    if (appReviewPhaseLaunchNeedsRetry(run, cycle, planner)) {
+      const controller = yield* resolveThread(run.controllerThreadId);
+      const review = controller === undefined ? null : reviewRecordForCycle(controller, cycle);
+      if (review === null || cycle.actionableFindingsMarkdown === null) return;
+      yield* startPlanning({
+        run,
+        review,
+        actionableFindingsMarkdown: cycle.actionableFindingsMarkdown,
+        occurredAt,
+      });
+      return;
+    }
     if (appReviewPhaseTurnPending(run, cycle, planner)) return;
     if (threadTurnFailed(planner) && !hasSettledCheckpoint(planner)) {
       if ((yield* phaseThreadState(planner)) === "nudging") return;
       yield* failCycle({
         run,
         reason: "plan-missing",
+        retryable: true,
         detailMarkdown:
           planner.session?.lastError ??
           "The non-interactive planning turn stopped without a settled plan checkpoint.",
@@ -2317,6 +2378,7 @@ const make = Effect.gen(function* () {
       yield* failCycle({
         run,
         reason: "plan-missing",
+        retryable: true,
         detailMarkdown: "The non-interactive planning turn did not complete successfully.",
         occurredAt,
       });
@@ -2342,6 +2404,7 @@ const make = Effect.gen(function* () {
       yield* failCycle({
         run,
         reason: "plan-missing",
+        retryable: true,
         detailMarkdown: "The App Review thread completed gap analysis without repair tickets.",
         occurredAt,
       });
@@ -2400,6 +2463,7 @@ const make = Effect.gen(function* () {
       yield* failCycle({
         run,
         reason: "plan-malformed",
+        retryable: false,
         detailMarkdown:
           "The App Review thread must persist unique, consecutively numbered child repair tickets under one parent key.",
         occurredAt,
@@ -2507,6 +2571,10 @@ const make = Effect.gen(function* () {
       if ((cycle.repairTickets?.length ?? 0) > 0) yield* ensureFixerLaunch(run, cycle);
       return;
     }
+    if (appReviewPhaseLaunchNeedsRetry(run, cycle, fixer)) {
+      yield* ensureFixerLaunch(run, cycle);
+      return;
+    }
     const result = parseFixResult(fixer, run, cycle);
     if (result === null) {
       if (appReviewFixResultContinuationNeedsLaunch(run, cycle, fixer)) {
@@ -2525,6 +2593,7 @@ const make = Effect.gen(function* () {
       yield* failCycle({
         run,
         reason: completedWithoutResult ? "fix-result-missing" : "fixer-failed",
+        retryable: true,
         detailMarkdown:
           fixer.session?.lastError ??
           (completedWithoutResult
@@ -2539,6 +2608,7 @@ const make = Effect.gen(function* () {
       yield* failCycle({
         run,
         reason: "fixer-failed",
+        retryable: false,
         detailMarkdown: result.notesMarkdown || `The App Review implementation ${result.status}.`,
         occurredAt,
       });
@@ -2551,6 +2621,7 @@ const make = Effect.gen(function* () {
       yield* failCycle({
         run,
         reason: "fixer-failed",
+        retryable: false,
         detailMarkdown:
           "The App Review implementation thread did not report successful focused validation.",
         occurredAt,
@@ -2860,7 +2931,13 @@ const make = Effect.gen(function* () {
           `The ${run.activePhase ?? "workflow"} provider session failed.`;
         yield* phaseReason === null
           ? failRun({ run, reason: "unknown", detailMarkdown, occurredAt: event.occurredAt })
-          : failCycle({ run, reason: phaseReason, detailMarkdown, occurredAt: event.occurredAt });
+          : failCycle({
+              run,
+              reason: phaseReason,
+              retryable: true,
+              detailMarkdown,
+              occurredAt: event.occurredAt,
+            });
         return;
       }
     }

@@ -51,6 +51,7 @@ it.effect("round-trips App Review records with browser evidence", () =>
       id: " app-review-1 ",
       sourceThreadId: "thread-source",
       reviewThreadId: "thread-review",
+      appReviewScope: "e2e",
       sourceTurnId: null,
       status: "running",
       document: emptyDocument,
@@ -59,12 +60,14 @@ it.effect("round-trips App Review records with browser evidence", () =>
       updatedAt: "2026-01-01T00:00:01.000Z",
     });
     assert.strictEqual(record.id, "app-review-1");
+    assert.strictEqual(record.appReviewScope, "e2e");
     assert.strictEqual(record.evidence.recording.status, "saved");
     assert.strictEqual(record.evidence.recording.sizeBytes, 2048);
     assert.strictEqual(record.evidence.screenshots[0]?.id, "shot-1");
     assert.strictEqual(record.evidence.screenshots[0]?.mimeType, "image/png");
 
     const encoded = yield* encodeAppReviewRecord(record);
+    assert.strictEqual(encoded.appReviewScope, "e2e");
     assert.deepStrictEqual(encoded.evidence, savedEvidence);
   }),
 );

@@ -62,6 +62,7 @@ const seedAppReview = (reviewId: AppReviewId, evidence: AppReviewEvidence) => {
     reviewId,
     sourceThreadId: ThreadId.make("thread-source"),
     reviewThreadId: ThreadId.make("thread-review"),
+    appReviewScope: null,
     sourceProposedPlan: null,
     sourceTurnId: null,
     status: "running",

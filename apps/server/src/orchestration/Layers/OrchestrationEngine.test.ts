@@ -362,6 +362,7 @@ describe("OrchestrationEngine", () => {
         sourceThreadId: ThreadId.make("thread-app-review-source"),
         reviewThreadId: ThreadId.make("thread-app-review-review"),
         reviewId: AppReviewId.make("app-review-1"),
+        appReviewScope: "e2e",
         message: {
           messageId: asMessageId("msg-app-review-launch"),
           role: "user",
@@ -390,6 +391,7 @@ describe("OrchestrationEngine", () => {
     expect(reviewThread?.title).toBe("Browser App Review");
     expect(sourceThread?.appReviews[0]).toEqual(reviewThread?.appReviews[0]);
     expect(sourceThread?.appReviews[0]?.status).toBe("running");
+    expect(sourceThread?.appReviews[0]?.appReviewScope).toBe("e2e");
     expect(sourceThread?.appReviews[0]?.evidence).toEqual(EMPTY_APP_REVIEW_EVIDENCE);
     expect(reviewThread?.messages.map((message) => message.id)).toEqual(["msg-app-review-launch"]);
 

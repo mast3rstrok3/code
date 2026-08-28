@@ -24,6 +24,7 @@ import {
   APP_REVIEW_FIX_RESULT_MAX_CONTINUATIONS,
   APP_REVIEW_RECOVERY_SWEEP_INTERVAL_MS,
   appReviewFixResultContinuationNeedsLaunch,
+  appReviewPhaseLaunchNeedsRetry,
   appReviewRepairPlanAction,
   appReviewPhaseModelStepWorkflowPromptId,
   appReviewPhaseFailureAction,
@@ -337,6 +338,63 @@ it("renews an active phase lease from provider activity", () => {
   });
 });
 
+it("promotes a reconciling phase when its provider reports activity", () => {
+  const threadId = ThreadId.make("thread-reviewer");
+  const recovering = run({
+    activePhase: "review",
+    activeThreadId: threadId,
+    phaseExecution: {
+      target: {
+        kind: "app-review-phase",
+        runId: AppReviewWorkflowRunId.make("app-review-workflow-thread-controller"),
+        cycleNumber: 1,
+        phase: "review",
+      },
+      generation: 0,
+      executionId: "execution-review-1",
+      state: "reconciling",
+      queuedAt: "2026-01-01T00:00:00.000Z",
+      claimedAt: null,
+      leaseRenewedAt: null,
+      leaseExpiresAt: null,
+      lastProgressAt: "2026-01-01T00:00:00.000Z",
+      durableJobId: null,
+      failure: {
+        category: "planned-restart",
+        detail: "Resume the same provider turn.",
+        failedAt: "2026-01-01T00:01:00.000Z",
+        nextAction: "continue-stage",
+      },
+      recovery: {
+        cause: "planned-restart",
+        startedAt: "2026-01-01T00:01:00.000Z",
+        deadlineAt: null,
+        attempts: 0,
+        selectedModel: null,
+        fallbackHistory: [],
+        retryAt: null,
+      },
+      updatedAt: "2026-01-01T00:01:00.000Z",
+    },
+  });
+
+  const promoted = renewAppReviewPhaseExecutionLease(
+    recovering,
+    threadId,
+    "2026-01-01T00:03:00.000Z",
+  );
+
+  expect(promoted.phaseExecution).toMatchObject({
+    state: "running",
+    claimedAt: "2026-01-01T00:03:00.000Z",
+    leaseRenewedAt: "2026-01-01T00:03:00.000Z",
+    leaseExpiresAt: "2026-01-01T00:08:00.000Z",
+    lastProgressAt: "2026-01-01T00:03:00.000Z",
+    failure: null,
+    recovery: null,
+  });
+});
+
 function review(verdict: "passed" | "failed", withFinding = verdict === "failed"): AppReviewRecord {
   return {
     id: AppReviewId.make("app-review-1"),
@@ -553,6 +611,7 @@ function failedImplementationReview(
     reason: "fixer-failed" as const,
     phase: "fixing" as const,
     cycleNumber: 1,
+    retryable: true,
     detailMarkdown,
     failedAt: now,
   };
@@ -595,6 +654,42 @@ function failedImplementationReview(
     completedAt: now,
   });
 }
+
+it("does not reopen a deterministic failed phase", () => {
+  const recoverable = failedImplementationReview("TICKET-1");
+  const failure = {
+    ...recoverable.failure!,
+    retryable: false,
+    detailMarkdown:
+      "fixing exhausted its 2 phase launches.\n\nThe target repository cannot satisfy the requested evidence policy.",
+  };
+  const failed = run({
+    ...recoverable,
+    failure,
+    cycles: [{ ...recoverable.cycles[0]!, failure }],
+  });
+  const parent = {
+    id: "implementation-run-1",
+    status: "needs-human-attention",
+    automationHalt: {
+      ticketId: "TICKET-1",
+      stage: "app-review",
+      category: "review-blocked",
+      detail: failure.detailMarkdown,
+      haltedAt: now,
+    },
+    appReviewWorkflowRunIds: [],
+    ticketStates: [
+      {
+        ticketId: "TICKET-1",
+        status: "app-reviewing",
+        appReviewWorkflowRunId: failed.id,
+      },
+    ],
+  } as unknown as OrchestrationImplementationRun;
+
+  expect(recoverableFailedAppReviewPhase({ run: failed, implementationRuns: [parent] })).toBeNull();
+});
 
 it("claims one result-only continuation for a missing fixer result", () => {
   const original = failedImplementationReview("TICKET-1");
@@ -764,6 +859,41 @@ it("waits for the current phase launch to replace the phase thread's old turn", 
     appReviewPhaseTurnPending(active, cycle, {
       latestTurn: { requestedAt: "2026-01-01T00:00:02.000Z", state: "running" },
       session: { status: "starting" },
+    }),
+  ).toBe(false);
+});
+
+it("retries a recovered phase claim whose provider turn never started", () => {
+  const failed = failedImplementationReview("TICKET-1");
+  const active = run({
+    ...failed,
+    status: "running",
+    outcome: null,
+    activePhase: "fixing",
+    activeThreadId: ThreadId.make("thread-fixer"),
+    cycles: [{ ...failed.cycles[0]!, status: "fixing", recoveryContinuationCount: 1 }],
+    failure: null,
+    updatedAt: "2026-01-01T00:00:02.000Z",
+    completedAt: null,
+  });
+  const cycle = active.cycles[0]!;
+
+  expect(
+    appReviewPhaseLaunchNeedsRetry(active, cycle, {
+      latestTurn: { requestedAt: "2026-01-01T00:00:01.000Z" },
+      session: { status: "ready", activeTurnId: null },
+    }),
+  ).toBe(true);
+  expect(
+    appReviewPhaseLaunchNeedsRetry(active, cycle, {
+      latestTurn: { requestedAt: "2026-01-01T00:00:01.000Z" },
+      session: { status: "running", activeTurnId: "turn-new" },
+    }),
+  ).toBe(false);
+  expect(
+    appReviewPhaseLaunchNeedsRetry(active, cycle, {
+      latestTurn: { requestedAt: "2026-01-01T00:00:02.000Z" },
+      session: { status: "ready", activeTurnId: null },
     }),
   ).toBe(false);
 });

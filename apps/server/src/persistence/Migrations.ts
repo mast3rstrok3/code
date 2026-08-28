@@ -85,6 +85,7 @@ import Migration0079 from "./Migrations/079_PlanningTicketAppReviewScope.ts";
 import Migration0080 from "./Migrations/080_ProjectionThreadWorkflowStepReviewParts.ts";
 import Migration0082 from "./Migrations/082_ProjectionThreadWorkflowImplementationSettings.ts";
 import Migration0083 from "./Migrations/083_OrchestrationCommandReceiptResults.ts";
+import Migration0084 from "./Migrations/084_AppReviewScope.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -182,6 +183,7 @@ export const migrationEntries = [
   [81, "AuthSessionClientConnectionCompatibility", Migration0041],
   [82, "ProjectionThreadWorkflowImplementationSettings", Migration0082],
   [83, "OrchestrationCommandReceiptResults", Migration0083],
+  [84, "AppReviewScope", Migration0084],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

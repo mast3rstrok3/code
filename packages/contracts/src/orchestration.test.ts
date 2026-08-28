@@ -1038,6 +1038,7 @@ it.effect("accepts Browser App Review launch commands", () =>
       sourceThreadId: "thread-source",
       reviewThreadId: "thread-review",
       reviewId: "app-review-1",
+      appReviewScope: "e2e",
       message: {
         messageId: "msg-app-review-launch",
         role: "user",
@@ -1056,6 +1057,7 @@ it.effect("accepts Browser App Review launch commands", () =>
     assert.strictEqual(parsed.type, "thread.app-review.launch");
     if (parsed.type !== "thread.app-review.launch") return;
     assert.strictEqual(parsed.reviewId, "app-review-1");
+    assert.strictEqual(parsed.appReviewScope, "e2e");
     assert.strictEqual(parsed.workflowPromptId, "implementation.browser-app-review.codex");
   }),
 );

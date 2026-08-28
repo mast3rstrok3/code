@@ -346,6 +346,59 @@ export function implementationRunAcceptsNestedAppReviewUpdate(
   return run.appReviewWorkflowRunIds.at(-1) === nestedRunId;
 }
 
+type ResourceCleanupRetention = NonNullable<
+  OrchestrationImplementationTicketState["resourceCleanupRetention"]
+>;
+
+export function unsafeTicketWorktreeRetention(input: {
+  readonly isRepo: boolean;
+  readonly expectedBranch: string | null;
+  readonly actualBranch: string | null;
+  readonly hasWorkingTreeChanges: boolean;
+  readonly worktreeHead: string;
+  readonly acceptedHead: string;
+  readonly merged: boolean;
+  readonly retainedAt: string;
+}): ResourceCleanupRetention | null {
+  if (!input.isRepo) {
+    return {
+      reason: "not-repository",
+      detailMarkdown:
+        "Cleanup kept the worktree because Git no longer recognizes it as a repository.",
+      retainedAt: input.retainedAt,
+    };
+  }
+  if (input.actualBranch !== input.expectedBranch) {
+    return {
+      reason: "branch-mismatch",
+      detailMarkdown: `Cleanup kept the worktree because it is on '${input.actualBranch ?? "detached HEAD"}' instead of '${input.expectedBranch ?? "the expected branch"}'.`,
+      retainedAt: input.retainedAt,
+    };
+  }
+  if (input.hasWorkingTreeChanges) {
+    return {
+      reason: "dirty-worktree",
+      detailMarkdown: "Cleanup kept the worktree because it contains uncommitted changes.",
+      retainedAt: input.retainedAt,
+    };
+  }
+  if (input.worktreeHead !== input.acceptedHead) {
+    return {
+      reason: "head-mismatch",
+      detailMarkdown: `Cleanup kept the worktree because HEAD '${input.worktreeHead}' differs from accepted commit '${input.acceptedHead}'.`,
+      retainedAt: input.retainedAt,
+    };
+  }
+  if (!input.merged) {
+    return {
+      reason: "commit-not-integrated",
+      detailMarkdown: `Cleanup kept the worktree because accepted commit '${input.acceptedHead}' is not in the integrated branch.`,
+      retainedAt: input.retainedAt,
+    };
+  }
+  return null;
+}
+
 function findRunByWorkerThreadId(
   readModel: OrchestrationReadModel,
   workerThreadId: ThreadId,
@@ -514,6 +567,20 @@ export function ticketAwaitsAppReviewRun(
   );
 }
 
+/** Whether the implementation still owns this running nested App Review. */
+export function implementationAwaitsAppReviewRun(
+  run: Pick<OrchestrationImplementationRun, "status" | "ticketStates" | "appReviewWorkflowRunIds">,
+  nestedRun: Pick<AppReviewWorkflowRun, "id" | "caller">,
+): boolean {
+  if (nestedRun.caller.type !== "implementation") return false;
+  const ticketId = nestedRun.caller.ticketId;
+  if (ticketId === undefined) {
+    return run.status === "qa-reviewing" && run.appReviewWorkflowRunIds.at(-1) === nestedRun.id;
+  }
+  const state = run.ticketStates.find((candidate) => candidate.ticketId === ticketId);
+  return state !== undefined && ticketAwaitsAppReviewRun(state, nestedRun.id);
+}
+
 /** A local App Review claim that a lagging projection has not exposed yet. */
 export function ticketAppReviewClaimIsAhead(input: {
   readonly local: OrchestrationImplementationRun;
@@ -635,6 +702,7 @@ function reopenTicketForRerun(input: {
       ...state,
       appDevStackTierDownAt: null,
       resourceCleanupAt: null,
+      resourceCleanupRetention: null,
       codeReviewThreadId: null,
       codeReviewOutcome: null,
       warningMarkdown: input.continuationMarkdown ?? null,
@@ -2430,6 +2498,7 @@ const make = Effect.gen(function* () {
                 worktreePath: plannedWorker.worktreePath,
                 appDevStackTierDownAt: null,
                 resourceCleanupAt: null,
+                resourceCleanupRetention: null,
                 warningMarkdown:
                   "Skipped. The branch carries its dependencies and no work of its own.",
                 updatedAt: input.createdAt,
@@ -2953,7 +3022,7 @@ const make = Effect.gen(function* () {
     }) {
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
       const workflowIds = workflowIdsForRun(readModel, input.run);
-      yield* Effect.forEach(
+      const retentionResults = yield* Effect.forEach(
         input.run.ticketStates,
         (state) =>
           Effect.gen(function* () {
@@ -2963,7 +3032,7 @@ const make = Effect.gen(function* () {
               state.worktreePath === null ||
               state.worktreePath === input.run.orchestratorWorktreePath
             ) {
-              return;
+              return null;
             }
 
             const stackLookup = yield* appDevStackManager
@@ -3030,10 +3099,12 @@ const make = Effect.gen(function* () {
               }
             }
 
+            if (state.resourceCleanupRetention !== null) return null;
+
             const worktreeHead = yield* gitWorkflow
               .resolveCommit({ cwd: state.worktreePath, ref: "HEAD" })
               .pipe(Effect.option);
-            if (Option.isNone(worktreeHead)) return;
+            if (Option.isNone(worktreeHead)) return null;
             const cleanupSafety = yield* Effect.all([
               gitWorkflow.localStatus({ cwd: state.worktreePath }),
               verifiedDependency({ run: input.run, ticketId: state.ticketId }),
@@ -3045,7 +3116,7 @@ const make = Effect.gen(function* () {
                 worktreePath: state.worktreePath,
                 cause: errorDetail(cleanupSafety.failure),
               });
-              return;
+              return null;
             }
             const [status, accepted] = cleanupSafety.success;
             const merged = yield* gitWorkflow
@@ -3055,25 +3126,32 @@ const make = Effect.gen(function* () {
                 descendantRef: "HEAD",
               })
               .pipe(Effect.orElseSucceed(() => false));
-            if (
-              !status.isRepo ||
-              status.refName !== state.branch ||
-              status.hasWorkingTreeChanges ||
-              worktreeHead.value.commitSha !== accepted.commitSha ||
-              !merged
-            ) {
-              yield* Effect.logWarning("ticket worktree retained because cleanup is not safe", {
-                runId: input.run.id,
-                ticketId: state.ticketId,
-                worktreePath: state.worktreePath,
-                expectedBranch: state.branch,
-                actualBranch: status.refName,
-                hasWorkingTreeChanges: status.hasWorkingTreeChanges,
-                worktreeHead: worktreeHead.value.commitSha,
-                acceptedHead: accepted.commitSha,
-                merged,
+            const retention = unsafeTicketWorktreeRetention({
+              isRepo: status.isRepo,
+              expectedBranch: state.branch,
+              actualBranch: status.refName,
+              hasWorkingTreeChanges: status.hasWorkingTreeChanges,
+              worktreeHead: worktreeHead.value.commitSha,
+              acceptedHead: accepted.commitSha,
+              merged,
+              retainedAt: input.createdAt,
+            });
+            if (retention !== null) {
+              yield* appendActivity({
+                threadId: input.run.orchestratorThreadId,
+                tone: "info",
+                kind: "implementation-ticket-worktree-retained",
+                summary: `Ticket ${state.ticketId} worktree retained`,
+                payload: {
+                  runId: input.run.id,
+                  ticketId: state.ticketId,
+                  worktreePath: state.worktreePath,
+                  cleanupRequestedAt: state.resourceCleanupAt,
+                  ...retention,
+                },
+                createdAt: input.createdAt,
               });
-              return;
+              return { ticketId: state.ticketId, retention };
             }
             const removed = yield* gitWorkflow
               .removeWorktree({
@@ -3088,7 +3166,7 @@ const make = Effect.gen(function* () {
                 worktreePath: state.worktreePath,
                 cause: errorDetail(removed.failure),
               });
-              return;
+              return null;
             }
             yield* appendActivity({
               threadId: input.run.orchestratorThreadId,
@@ -3103,9 +3181,39 @@ const make = Effect.gen(function* () {
               },
               createdAt: input.createdAt,
             });
+            return null;
           }),
-        { concurrency: 4, discard: true },
+        { concurrency: 4 },
       );
+      const retainedByTicket = new Map(
+        retentionResults
+          .filter((result) => result !== null)
+          .map((result) => [result.ticketId, result.retention] as const),
+      );
+      if (retainedByTicket.size === 0) return input.run;
+      const sourceThreadId = findRunSourceThreadId({ readModel, run: input.run });
+      if (sourceThreadId === null) {
+        yield* Effect.logWarning("ticket worktree retention could not be persisted", {
+          runId: input.run.id,
+          ticketIds: [...retainedByTicket.keys()],
+        });
+        return input.run;
+      }
+      const retainedRun: OrchestrationImplementationRun = {
+        ...input.run,
+        ticketStates: input.run.ticketStates.map((state) => ({
+          ...state,
+          resourceCleanupRetention:
+            retainedByTicket.get(state.ticketId) ?? state.resourceCleanupRetention,
+        })),
+        updatedAt: input.createdAt,
+      };
+      yield* updateRun({
+        sourceThreadId,
+        run: retainedRun,
+        createdAt: input.createdAt,
+      });
+      return retainedRun;
     },
   );
 
@@ -3136,6 +3244,7 @@ const make = Effect.gen(function* () {
               status: usableBranch ? ("succeeded" as const) : ("failed" as const),
               appDevStackTierDownAt: null,
               resourceCleanupAt: null,
+              resourceCleanupRetention: null,
               codeReviewOutcome: input.codeReviewOutcome,
               codeReviewThreadId: null,
               warningMarkdown: input.warningMarkdown,
@@ -6184,6 +6293,7 @@ const make = Effect.gen(function* () {
                   ...state,
                   appDevStackTierDownAt: null,
                   resourceCleanupAt: null,
+                  resourceCleanupRetention: null,
                 }
               : state,
           ),
@@ -6615,21 +6725,21 @@ const make = Effect.gen(function* () {
         ),
       };
       yield* updateRun({ sourceThreadId, run: cleanupStampedRun, createdAt: updatedAt });
-      yield* cleanupTicketResources({ run: cleanupStampedRun, createdAt: updatedAt });
-      if (
-        cleanupStampedRun.qaExhaustedAt !== null ||
-        cleanupStampedRun.appReviewExhaustedAt !== null
-      ) {
+      const postCleanupRun = yield* cleanupTicketResources({
+        run: cleanupStampedRun,
+        createdAt: updatedAt,
+      });
+      if (postCleanupRun.qaExhaustedAt !== null || postCleanupRun.appReviewExhaustedAt !== null) {
         yield* startCodeReview({
           sourceThreadId,
-          run: cleanupStampedRun,
+          run: postCleanupRun,
           createdAt: updatedAt,
         });
         return;
       }
       yield* startBrowserReview({
         sourceThreadId,
-        run: cleanupStampedRun,
+        run: postCleanupRun,
         createdAt: updatedAt,
       });
     },
@@ -9847,33 +9957,31 @@ const make = Effect.gen(function* () {
           continue;
         }
       }
-      if (run.automationHalt !== null) continue;
-      // Reap the ticket App Reviews no ticket is waiting on any more. A clear
-      // or a re-run cancels the review it rewinds past, but one whose cancel
-      // never landed has nothing left pointing at it: no stage will finish it,
-      // and the App Review reactor resumes every running review on restart, so
-      // it would otherwise outlive the run that started it.
+      // Reap nested App Reviews the implementation no longer owns. A clear,
+      // rerun, or stage transition can leave a running nested workflow behind.
       for (const nestedRun of readModel.appReviewWorkflowRuns ?? []) {
         if (nestedRun.status !== "running") continue;
         if (nestedRun.caller.type !== "implementation") continue;
         if (nestedRun.caller.implementationRunId !== run.id) continue;
+        if (implementationAwaitsAppReviewRun(run, nestedRun)) continue;
         const ticketId = nestedRun.caller.ticketId;
-        if (ticketId === undefined) continue;
-        const state = run.ticketStates.find((candidate) => candidate.ticketId === ticketId);
-        if (state !== undefined && ticketAwaitsAppReviewRun(state, nestedRun.id)) continue;
         yield* recoverRunStage(
           run.id,
-          "orphaned-ticket-app-review",
+          ticketId === undefined ? "orphaned-run-app-review" : "orphaned-ticket-app-review",
           orchestrationEngine.dispatch({
             type: "thread.app-review-workflow.cancel",
             commandId: yield* serverCommandId("implementation-orphaned-app-review-cancel"),
             threadId: nestedRun.controllerThreadId,
             runId: nestedRun.id,
-            reason: "Its ticket is no longer waiting on this App Review.",
+            reason:
+              ticketId === undefined
+                ? "The implementation is no longer waiting on this App Review."
+                : "Its ticket is no longer waiting on this App Review.",
             createdAt,
           }),
         );
       }
+      if (run.automationHalt !== null) continue;
       const childThreads = readModel.threads.filter(
         (thread) => thread.parentThreadId === run.orchestratorThreadId && thread.deletedAt === null,
       );

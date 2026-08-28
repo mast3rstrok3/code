@@ -141,6 +141,8 @@ export const AppReviewWorkflowFailure = Schema.Struct({
   reason: AppReviewWorkflowFailureReason,
   phase: Schema.NullOr(AppReviewWorkflowPhase),
   cycleNumber: Schema.NullOr(PositiveInt),
+  /** Whether an unattended recovery sweep may reopen this failure. */
+  retryable: Schema.optionalKey(Schema.Boolean),
   detailMarkdown: TrimmedNonEmptyString,
   failedAt: IsoDateTime,
 });
@@ -389,6 +391,8 @@ export const AppReviewRecord = Schema.Struct({
   id: AppReviewId,
   sourceThreadId: ThreadId,
   reviewThreadId: ThreadId,
+  /** The effective scope fixed at launch. Absent records require browser evidence. */
+  appReviewScope: Schema.optionalKey(AppReviewScope),
   planningTicketIds: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
   sourceProposedPlan: Schema.optionalKey(AppReviewSourceProposedPlan),
   sourceTurnId: Schema.NullOr(TurnId),

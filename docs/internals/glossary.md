@@ -163,7 +163,7 @@ The persistent thread that owns one App Review run and keeps the original brief 
 
 #### App Review cycle
 
-One complete App Review budget unit: one reviewer thread that owns both declared E2E commands and browser review, gap analysis and planning in a second thread after a product failure, and repair in a third thread. Each phase thread gets one turn. The initial review is cycle 1. A pass completes its cycle without the unnecessary planning and repair steps; the final failed product review still implements its plan before the run becomes exhausted. Provider and runtime failures replace only their current phase thread, with a bounded launch budget, and do not consume another product-review cycle.
+One complete App Review budget unit: one reviewer thread that owns the configured E2E commands and browser review, gap analysis and planning in a second thread after a product failure, and repair in a third thread. The durable review record stores the effective scope fixed at launch. E2E-only reviews pass from command checks without browser media, while scopes that include the browser require a saved recording and screenshot. Each phase thread gets one turn. The initial review is cycle 1. A pass completes its cycle without the planning and repair steps; the final failed product review still implements its plan before the run becomes exhausted. Provider and runtime failures replace only their current phase thread, with a bounded launch budget, and do not consume another product-review cycle. Recovery reopens failures marked retryable and reissues a claimed turn that never started. An explicit failed or blocked phase result stays terminal.
 
 #### App Review outcome
 
@@ -219,7 +219,7 @@ The maximum number of durable thread IDs a workflow stage may claim. Another tur
 
 #### Stage execution
 
-The canonical ownership record for one Implementation stage, ticket stage, or nested App Review phase. It combines a target, generation, execution ID, explicit state, claim and lease times, last progress, failure, recovery episode, and optional durable job ID. Compatibility run and ticket statuses are derived from these records.
+The canonical ownership record for one Implementation stage, ticket stage, or nested App Review phase. It combines a target, generation, execution ID, explicit state, claim and lease times, last progress, failure, recovery episode, and optional durable job ID. Compatibility run and ticket statuses are derived from these records. Provider activity from the owned phase changes a planned-restart `reconciling` execution back to `running` and starts a fresh lease.
 
 #### Recovery episode
 
@@ -243,7 +243,7 @@ The server shutdown state used for updates and signals. It writes a planned-rest
 
 #### Implementation run
 
-One orchestrated execution of a Spec's tickets: a dedicated worktree, dependency-chained TDD workers, programmatic merges, App Review, and Code Review, driven by [ImplementationWorkflowReactor.ts][29]. Each ticket allocates one durable Implementation thread. Recovery adds continuation turns to that thread. An explicit rerun creates a new stage generation.
+One orchestrated execution of a Spec's tickets: a dedicated worktree, dependency-chained TDD workers, programmatic merges, App Review, and Code Review, driven by [ImplementationWorkflowReactor.ts][29]. Each ticket allocates one durable Implementation thread. Recovery adds continuation turns to that thread. An explicit rerun creates a new stage generation. Cleanup removes a ticket worktree only when its branch, accepted commit, integration ancestry, and clean status agree. Otherwise the ticket records a terminal retention reason and leaves the worktree for manual inspection. The recovery sweep also cancels ticket and run-level App Reviews that the implementation no longer owns.
 
 #### Workflow nudge
 

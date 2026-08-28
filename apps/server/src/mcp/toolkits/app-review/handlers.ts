@@ -137,7 +137,7 @@ export const handlers = {
       if (input.status === undefined && input.document === undefined) {
         return yield* reviewError(review.id, "Provide status, document, or both.");
       }
-      if (input.status === "passed") {
+      if (input.status === "passed" && review.appReviewScope !== "e2e") {
         const { recording, screenshots } = review.evidence;
         if (!hasCompleteAppReviewEvidence(review.evidence)) {
           return yield* reviewError(

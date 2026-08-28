@@ -62,6 +62,7 @@ import {
   fastFeatureBuildContractProblems,
   implementationTicketReviewWarningLines,
   implementationRunAcceptsNestedAppReviewUpdate,
+  implementationAwaitsAppReviewRun,
   implementationTicketStateIsTerminal,
   implementationRunRerunIsPaused,
   isImplementationWorkflowActivityKind,
@@ -72,6 +73,7 @@ import {
   ImplementationWorkflowReactorLive,
   nestedAppReviewAwaitsPreviewRefresh,
   ticketAppReviewClaimIsAhead,
+  unsafeTicketWorktreeRetention,
   workerReportedCurrentAttempt,
   workflowIdForRun,
   workflowIdsForRun,
@@ -328,6 +330,53 @@ it("does not resolve a stale embedded App Review update as awaiting a preview re
       parked.id,
     ),
   ).toBeNull();
+});
+
+it("keeps only the current nested App Review owned by its implementation stage", () => {
+  const current = AppReviewWorkflowRunId.make("app-review-current");
+  const runLevel = {
+    id: current,
+    caller: {
+      type: "implementation",
+      implementationRunId: "implementation-run-1",
+      orchestratorThreadId: ThreadId.make("thread-orchestrator"),
+    },
+  } as const;
+  const implementation = {
+    status: "qa-reviewing",
+    appReviewWorkflowRunIds: [current],
+    ticketStates: [],
+  } as unknown as OrchestrationImplementationRun;
+
+  expect(implementationAwaitsAppReviewRun(implementation, runLevel)).toBe(true);
+  expect(
+    implementationAwaitsAppReviewRun({ ...implementation, status: "validating" }, runLevel),
+  ).toBe(false);
+  expect(
+    implementationAwaitsAppReviewRun(implementation, {
+      ...runLevel,
+      id: AppReviewWorkflowRunId.make("app-review-stale"),
+    }),
+  ).toBe(false);
+});
+
+it("classifies unsafe ticket worktrees before cleanup", () => {
+  expect(
+    unsafeTicketWorktreeRetention({
+      isRepo: true,
+      expectedBranch: "ticket-1",
+      actualBranch: "ticket-1",
+      hasWorkingTreeChanges: true,
+      worktreeHead: "abc123",
+      acceptedHead: "abc123",
+      merged: true,
+      retainedAt: now,
+    }),
+  ).toEqual({
+    reason: "dirty-worktree",
+    detailMarkdown: "Cleanup kept the worktree because it contains uncommitted changes.",
+    retainedAt: now,
+  });
 });
 
 it("recognizes a ticket App Review claim hidden by projection lag", () => {
@@ -4135,7 +4184,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("retains a ticket worktree until it is clean and fully merged", () =>
+  it.effect("records a dirty ticket worktree as retained and stops retrying its removal", () =>
     withSystem(
       (system) =>
         Effect.gen(function* () {
@@ -4150,6 +4199,16 @@ describe("ImplementationWorkflowReactor", () => {
           expect(yield* Ref.get(system.deleteStackIds)).toEqual(["stack-ticket"]);
           expect(yield* Ref.get(system.removeWorktreeInputs)).toEqual([]);
 
+          let snapshot = yield* system.query.getSnapshot();
+          let state = snapshot.implementationRuns
+            .find((entry) => entry.id === run.id)
+            ?.ticketStates.find((entry) => entry.ticketId === ticket.id);
+          expect(state?.resourceCleanupRetention).toMatchObject({
+            reason: "dirty-worktree",
+            retainedAt: "2026-01-01T00:00:02.000Z",
+          });
+          const statusChecksAfterRetention = yield* Ref.get(system.localStatusCount);
+
           yield* Ref.set(system.dirtyWorkerWorktrees, false);
           yield* Ref.set(system.advancedBranchRefs, new Set([branch]));
           yield* system.reactor.recoverIncompleteStages();
@@ -4157,12 +4216,14 @@ describe("ImplementationWorkflowReactor", () => {
 
           yield* Ref.set(system.advancedBranchRefs, new Set());
           yield* system.reactor.recoverIncompleteStages();
-          expect(yield* Ref.get(system.removeWorktreeInputs)).toEqual([
-            {
-              cwd: run.orchestratorWorktreePath,
-              path: run.launchSummary.plannedWorkers[0]?.worktreePath,
-            },
-          ]);
+          expect(yield* Ref.get(system.removeWorktreeInputs)).toEqual([]);
+          expect(yield* Ref.get(system.localStatusCount)).toBe(statusChecksAfterRetention);
+
+          snapshot = yield* system.query.getSnapshot();
+          state = snapshot.implementationRuns
+            .find((entry) => entry.id === run.id)
+            ?.ticketStates.find((entry) => entry.ticketId === ticket.id);
+          expect(state?.resourceCleanupRetention?.reason).toBe("dirty-worktree");
         }),
       { nonAncestorCommitSha: "implementation/checkout-ticket-1@advanced" },
     ),

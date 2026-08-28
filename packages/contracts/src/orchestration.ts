@@ -1063,6 +1063,20 @@ export const OrchestrationImplementationTicketState = Schema.Struct({
   resourceCleanupAt: Schema.NullOr(IsoDateTime).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+  /** A worktree that cleanup kept to protect local changes or unexpected Git state. */
+  resourceCleanupRetention: Schema.NullOr(
+    Schema.Struct({
+      reason: Schema.Literals([
+        "not-repository",
+        "branch-mismatch",
+        "dirty-worktree",
+        "head-mismatch",
+        "commit-not-integrated",
+      ]),
+      detailMarkdown: TrimmedNonEmptyString,
+      retainedAt: IsoDateTime,
+    }),
+  ).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   appReviewWorkflowRunId: Schema.optionalKey(Schema.NullOr(AppReviewWorkflowRunId)),
   appReviewOutcome: Schema.optionalKey(
     Schema.NullOr(Schema.Literals(["passed", "failed", "exhausted", "skipped"])),
@@ -2668,6 +2682,7 @@ const ThreadAppReviewLaunchCommand = Schema.Struct({
   sourceThreadId: ThreadId,
   reviewThreadId: ThreadId,
   reviewId: AppReviewId,
+  appReviewScope: Schema.optionalKey(AppReviewScope),
   planningTicketIds: Schema.optional(Schema.Array(OrchestrationPlanningTicketId)),
   message: Schema.Struct({
     messageId: MessageId,

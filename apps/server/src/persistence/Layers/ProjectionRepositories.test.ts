@@ -213,6 +213,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         reviewId,
         sourceThreadId: ThreadId.make("thread-source"),
         reviewThreadId: ThreadId.make("thread-review"),
+        appReviewScope: "e2e",
         sourceProposedPlan: {
           threadId: ThreadId.make("thread-source"),
           planId: "plan-app-review-anchor",
@@ -250,6 +251,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
 
       const persisted = yield* appReviews.getById({ reviewId });
       assert.deepStrictEqual(Option.getOrNull(persisted)?.evidence, evidence);
+      assert.strictEqual(Option.getOrNull(persisted)?.appReviewScope, "e2e");
     }),
   );
 
