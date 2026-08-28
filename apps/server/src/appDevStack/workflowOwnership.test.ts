@@ -22,6 +22,36 @@ const stack = (id: string, worktreePath: string, workflowId?: string): AppDevSta
 });
 
 describe("appDevStackWorkflowConflicts", () => {
+  it("accepts a stack inherited from the parent workflow", () => {
+    const readModel = {
+      threads: [
+        {
+          id: "orchestrator-1",
+          workflowContext: {
+            workflowId: "implementation-run-1",
+            parentWorkflowId: "workflow-root-1",
+            rootThreadId: "root-1",
+          },
+        },
+      ],
+      implementationRuns: [
+        {
+          id: "run-1",
+          orchestratorThreadId: "orchestrator-1",
+          orchestratorWorktreePath: "/repo/worktrees/feature",
+          ticketStates: [{ worktreePath: "/repo/worktrees/ticket-1" }],
+        },
+      ],
+    } as unknown as OrchestrationReadModel;
+
+    expect(
+      appDevStackWorkflowConflicts(
+        [stack("stack-1", "/repo/worktrees/ticket-1", "workflow-root-1")],
+        readModel,
+      ),
+    ).toEqual([]);
+  });
+
   it("accepts shared and ticket stacks on distinct worktrees in one workflow", () => {
     const readModel = {
       threads: [

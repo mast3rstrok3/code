@@ -26,9 +26,13 @@ export function appDevStackWorkflowConflicts(
   const workflowsByPath = new Map<string, Set<string>>();
 
   for (const run of readModel.implementationRuns) {
-    const workflowId = threadsById.get(run.orchestratorThreadId)?.workflowContext?.workflowId;
-    if (workflowId === undefined) continue;
-    const addExpected = (path: string, role: "shared" | "ticket") => {
+    const context = threadsById.get(run.orchestratorThreadId)?.workflowContext;
+    if (context === undefined || context === null) continue;
+    const workflowIds: string[] = [context.workflowId];
+    if (context.parentWorkflowId !== null && context.parentWorkflowId !== undefined) {
+      workflowIds.push(context.parentWorkflowId);
+    }
+    const addExpected = (workflowId: string, path: string, role: "shared" | "ticket") => {
       const normalizedPath = normalizeWorkflowWorktreePath(path);
       const paths = expectedByWorkflow.get(workflowId) ?? new Map();
       const expected = paths.get(normalizedPath) ?? {
@@ -43,9 +47,11 @@ export function appDevStackWorkflowConflicts(
       workflows.add(workflowId);
       workflowsByPath.set(normalizedPath, workflows);
     };
-    addExpected(run.orchestratorWorktreePath, "shared");
-    for (const state of run.ticketStates ?? []) {
-      if (state.worktreePath !== null) addExpected(state.worktreePath, "ticket");
+    for (const workflowId of workflowIds) {
+      addExpected(workflowId, run.orchestratorWorktreePath, "shared");
+      for (const state of run.ticketStates ?? []) {
+        if (state.worktreePath !== null) addExpected(workflowId, state.worktreePath, "ticket");
+      }
     }
   }
 

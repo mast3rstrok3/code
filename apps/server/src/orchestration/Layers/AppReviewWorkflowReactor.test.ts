@@ -48,9 +48,11 @@ import {
   findAppReviewParentTicket,
   isSupersededAppReviewPhaseThread,
   isAppReviewWorkflowActivityKind,
+  isAppReviewProviderProgressActivityKind,
   isAppReviewWorkflowSessionStatus,
   nextAppReviewWorkflowAction,
   phaseTurnCompleted,
+  renewAppReviewPhaseExecutionLease,
   retryReviewPhaseInCycle,
   selectReviewRunToStart,
   selectStandalonePreviewTargets,
@@ -74,6 +76,13 @@ it("queues only App Review control and directive activities", () => {
   expect(isAppReviewWorkflowActivityKind("app-review-fix-result")).toBe(true);
   expect(isAppReviewWorkflowActivityKind("tool.updated")).toBe(false);
   expect(isAppReviewWorkflowActivityKind("context-window.updated")).toBe(false);
+});
+
+it("queues provider activity that renews an active App Review phase", () => {
+  expect(isAppReviewProviderProgressActivityKind("tool.updated")).toBe(true);
+  expect(isAppReviewProviderProgressActivityKind("context-window.updated")).toBe(true);
+  expect(isAppReviewProviderProgressActivityKind("task.progress")).toBe(true);
+  expect(isAppReviewProviderProgressActivityKind("chat.message")).toBe(false);
 });
 
 it("queues only App Review session states that can advance or stop a phase", () => {
@@ -291,6 +300,42 @@ function run(overrides: Partial<AppReviewWorkflowRun> = {}): AppReviewWorkflowRu
     ...overrides,
   };
 }
+
+it("renews an active phase lease from provider activity", () => {
+  const threadId = ThreadId.make("thread-reviewer");
+  const active = run({
+    activePhase: "review",
+    activeThreadId: threadId,
+    phaseExecution: {
+      target: {
+        kind: "app-review-phase",
+        runId: AppReviewWorkflowRunId.make("app-review-workflow-thread-controller"),
+        cycleNumber: 1,
+        phase: "review",
+      },
+      generation: 0,
+      executionId: "execution-review-1",
+      state: "running",
+      queuedAt: "2026-01-01T00:00:00.000Z",
+      claimedAt: "2026-01-01T00:00:00.000Z",
+      leaseRenewedAt: "2026-01-01T00:00:00.000Z",
+      leaseExpiresAt: "2026-01-01T00:05:00.000Z",
+      lastProgressAt: "2026-01-01T00:00:00.000Z",
+      durableJobId: null,
+      failure: null,
+      recovery: null,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    },
+  });
+
+  const renewed = renewAppReviewPhaseExecutionLease(active, threadId, "2026-01-01T00:03:00.000Z");
+
+  expect(renewed.phaseExecution).toMatchObject({
+    leaseRenewedAt: "2026-01-01T00:03:00.000Z",
+    leaseExpiresAt: "2026-01-01T00:08:00.000Z",
+    lastProgressAt: "2026-01-01T00:03:00.000Z",
+  });
+});
 
 function review(verdict: "passed" | "failed", withFinding = verdict === "failed"): AppReviewRecord {
   return {

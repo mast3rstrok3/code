@@ -32,6 +32,7 @@ import {
   type WorkflowStageExecution,
   WORKFLOW_AUTOMATION_RUNTIME_MODE,
   type WorkspaceUserId,
+  type VcsRef,
 } from "@t3tools/contracts";
 import {
   appReviewScopeForParts,
@@ -285,16 +286,64 @@ function findRunById(
 }
 
 export function workflowIdForRun(
-  readModel: {
-    readonly threads: ReadonlyArray<{
-      readonly id: ThreadId;
-      readonly workflowContext?: { readonly workflowId: string } | null;
-    }>;
-  },
+  readModel: Pick<OrchestrationReadModel, "threads">,
   run: Pick<OrchestrationImplementationRun, "orchestratorThreadId">,
 ): string | undefined {
-  return readModel.threads.find((thread) => thread.id === run.orchestratorThreadId)?.workflowContext
-    ?.workflowId;
+  return workflowIdsForRun(readModel, run)[0];
+}
+
+export function workflowIdsForRun(
+  readModel: Pick<OrchestrationReadModel, "threads">,
+  run: Pick<OrchestrationImplementationRun, "orchestratorThreadId">,
+): ReadonlyArray<string> {
+  const context = readModel.threads.find(
+    (thread) => thread.id === run.orchestratorThreadId,
+  )?.workflowContext;
+  if (context === undefined || context === null) return [];
+  const workflowIds: string[] = [context.workflowId];
+  if (context.parentWorkflowId !== undefined && context.parentWorkflowId !== null) {
+    workflowIds.push(context.parentWorkflowId);
+  }
+  return workflowIds;
+}
+
+function workflowOwnsStack(
+  readModel: Parameters<typeof workflowIdsForRun>[0],
+  run: Pick<OrchestrationImplementationRun, "orchestratorThreadId">,
+  workflowId: string | null | undefined,
+): boolean {
+  return (
+    workflowId !== null &&
+    workflowId !== undefined &&
+    workflowIdsForRun(readModel, run).includes(workflowId)
+  );
+}
+
+function remoteBranchName(ref: VcsRef): string {
+  if (ref.remoteName !== undefined && ref.name.startsWith(`${ref.remoteName}/`)) {
+    return ref.name.slice(ref.remoteName.length + 1);
+  }
+  const separator = ref.name.indexOf("/");
+  return separator < 0 ? ref.name : ref.name.slice(separator + 1);
+}
+
+export function selectPublicationBaseBranch(
+  configuredBaseBranch: string,
+  refs: ReadonlyArray<VcsRef>,
+): string | null {
+  const remoteRefs = refs.filter((ref) => ref.isRemote === true);
+  if (remoteRefs.some((ref) => remoteBranchName(ref) === configuredBaseBranch)) {
+    return configuredBaseBranch;
+  }
+  const defaultRef = remoteRefs.find((ref) => ref.isDefault);
+  return defaultRef === undefined ? null : remoteBranchName(defaultRef);
+}
+
+export function implementationRunAcceptsNestedAppReviewUpdate(
+  run: Pick<OrchestrationImplementationRun, "appReviewWorkflowRunIds">,
+  nestedRunId: AppReviewWorkflowRunId,
+): boolean {
+  return run.appReviewWorkflowRunIds.at(-1) === nestedRunId;
 }
 
 function findRunByWorkerThreadId(
@@ -2903,7 +2952,7 @@ const make = Effect.gen(function* () {
       readonly createdAt: string;
     }) {
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
-      const workflowId = workflowIdForRun(readModel, input.run);
+      const workflowIds = workflowIdsForRun(readModel, input.run);
       yield* Effect.forEach(
         input.run.ticketStates,
         (state) =>
@@ -2930,10 +2979,10 @@ const make = Effect.gen(function* () {
             } else if (stackLookup.success.stack !== null) {
               const stack = stackLookup.success.stack;
               if (
-                workflowId === undefined ||
+                workflowIds.length === 0 ||
                 normalizeWorkflowWorktreePath(stack.worktreePath) !==
                   normalizeWorkflowWorktreePath(state.worktreePath) ||
-                stack.workflowId !== workflowId
+                !workflowOwnsStack(readModel, input.run, stack.workflowId)
               ) {
                 yield* appendActivity({
                   threadId: input.run.orchestratorThreadId,
@@ -2944,7 +2993,8 @@ const make = Effect.gen(function* () {
                     runId: input.run.id,
                     ticketId: state.ticketId,
                     stackId: stack.id,
-                    expectedWorkflowId: workflowId,
+                    expectedWorkflowId: workflowIds[0],
+                    acceptedWorkflowIds: workflowIds,
                     actualWorkflowId: stack.workflowId ?? null,
                     expectedWorktreePath: state.worktreePath,
                     actualWorktreePath: stack.worktreePath,
@@ -3589,13 +3639,14 @@ const make = Effect.gen(function* () {
         workflowId: orchestratorThread.workflowContext?.workflowId,
       })
       .pipe(Effect.result);
+    const acceptedWorkflowIds = workflowIdsForRun(readModel, currentRun);
     if (
       stackResult._tag === "Success" &&
       stackResult.success.stack !== null &&
       (normalizeWorkflowWorktreePath(stackResult.success.stack.worktreePath) !==
         normalizeWorkflowWorktreePath(state.worktreePath) ||
         (stackResult.success.stack.workflowId != null &&
-          stackResult.success.stack.workflowId !== orchestratorThread.workflowContext?.workflowId))
+          !acceptedWorkflowIds.includes(stackResult.success.stack.workflowId)))
     ) {
       yield* blockRun({
         sourceThreadId: input.sourceThreadId,
@@ -5353,6 +5404,58 @@ const make = Effect.gen(function* () {
       });
       return;
     }
+    const remoteRefsResult = yield* gitWorkflow
+      .listRefs({
+        cwd: input.run.orchestratorWorktreePath,
+        query: input.run.baseBranch,
+        includeMatchingRemoteRefs: true,
+        refKind: "remote",
+        refresh: true,
+      })
+      .pipe(Effect.result);
+    const fallbackRefsResult =
+      remoteRefsResult._tag === "Success" &&
+      selectPublicationBaseBranch(input.run.baseBranch, remoteRefsResult.success.refs) === null
+        ? yield* gitWorkflow
+            .listRefs({
+              cwd: input.run.orchestratorWorktreePath,
+              includeMatchingRemoteRefs: true,
+              refKind: "remote",
+              refresh: true,
+            })
+            .pipe(Effect.result)
+        : remoteRefsResult;
+    const publicationBaseBranch =
+      fallbackRefsResult._tag === "Success"
+        ? selectPublicationBaseBranch(input.run.baseBranch, fallbackRefsResult.success.refs)
+        : null;
+    if (publicationBaseBranch === null) {
+      const lookupFailure =
+        fallbackRefsResult._tag === "Failure" ? ` ${errorDetail(fallbackRefsResult.failure)}` : "";
+      yield* blockRun({
+        sourceThreadId: input.sourceThreadId,
+        run: input.run,
+        retryableStage: "change-request",
+        reasonMarkdown: `Cannot publish because remote base branch '${input.run.baseBranch}' does not exist and the repository default branch could not be resolved.${lookupFailure}`,
+        updatedAt: input.createdAt,
+        humanBlocked: true,
+      });
+      return;
+    }
+    if (publicationBaseBranch !== input.run.baseBranch) {
+      yield* appendActivity({
+        threadId: input.run.orchestratorThreadId,
+        tone: "info",
+        kind: "implementation-change-request-base-resolved",
+        summary: `Publishing against remote default branch ${publicationBaseBranch}`,
+        payload: {
+          runId: input.run.id,
+          configuredBaseBranch: input.run.baseBranch,
+          publicationBaseBranch,
+        },
+        createdAt: input.createdAt,
+      });
+    }
     const reviewOutcomeNote = changeRequestReviewNote(input.run);
     const publishingRun: OrchestrationImplementationRun = {
       ...input.run,
@@ -5385,7 +5488,7 @@ const make = Effect.gen(function* () {
       .createOrOpenChangeRequest({
         cwd: claimedRun.orchestratorWorktreePath,
         actionId: claimedRun.id,
-        baseRefName: claimedRun.baseBranch,
+        baseRefName: publicationBaseBranch,
         headRefName: claimedRun.orchestratorBranch,
         expectedHeadSha,
         threadId: claimedRun.orchestratorThreadId,
@@ -7105,14 +7208,23 @@ const make = Effect.gen(function* () {
           (reportedCommit !== null &&
             Option.isSome(reportedCommit) &&
             reportedCommit.value.commitSha === head.commitSha);
+        const focusedValidationCommands = [
+          ...run.launchSummary.validationCommands,
+          NATIVE_MOBILE_VALIDATION_COMMAND,
+        ];
+        const reportedValidations =
+          directive.validations.length > 0
+            ? directive.validations
+            : directive.status === "clean" &&
+                state.workerResult?.status === "succeeded" &&
+                state.workerResult.commitSha === head.commitSha
+              ? state.workerResult.validations
+              : directive.validations;
         const validationValid =
           directive.status === "blocked" ||
           focusedRepairValidationsPassed({
-            finalCommands: [
-              ...run.launchSummary.validationCommands,
-              NATIVE_MOBILE_VALIDATION_COMMAND,
-            ],
-            validations: directive.validations,
+            finalCommands: focusedValidationCommands,
+            validations: reportedValidations,
           });
         const warningParts = [state.warningMarkdown ?? ""];
         if (directive.status === "blocked") warningParts.push(directive.reportMarkdown);
@@ -8765,6 +8877,51 @@ const make = Effect.gen(function* () {
         updatedAt: event.occurredAt,
       });
       return;
+    }
+    const latestNestedRunId = run.appReviewWorkflowRunIds.at(-1);
+    if (
+      event.type === "thread.app-review-workflow-updated" &&
+      !implementationRunAcceptsNestedAppReviewUpdate(run, nestedRun.id)
+    ) {
+      return;
+    }
+    if (
+      event.type === "thread.app-review-workflow-launched" &&
+      latestNestedRunId !== undefined &&
+      latestNestedRunId !== nestedRun.id
+    ) {
+      const supersededRun = (readModel.appReviewWorkflowRuns ?? []).find(
+        (candidate) => candidate.id === latestNestedRunId,
+      );
+      if (supersededRun !== undefined) {
+        const supersededThreadIds = new Set(
+          supersededRun.cycles.flatMap((cycle) => [
+            cycle.reviewerThreadId,
+            cycle.plannerThreadId,
+            cycle.fixerThreadId,
+          ]),
+        );
+        if (supersededRun.activeThreadId !== null) {
+          supersededThreadIds.add(supersededRun.activeThreadId);
+        }
+        for (const threadId of supersededThreadIds) {
+          if (threadId === null || threadId === undefined) continue;
+          const thread = readModel.threads.find((candidate) => candidate.id === threadId);
+          if (
+            thread?.session?.status !== "starting" &&
+            thread?.session?.status !== "running" &&
+            thread?.session?.activeTurnId == null
+          ) {
+            continue;
+          }
+          yield* orchestrationEngine.dispatch({
+            type: "thread.session.stop",
+            commandId: yield* serverCommandId("implementation-superseded-app-review-stop"),
+            threadId,
+            createdAt: event.occurredAt,
+          });
+        }
+      }
     }
     const runIds = run.appReviewWorkflowRunIds.includes(nestedRun.id)
       ? run.appReviewWorkflowRunIds

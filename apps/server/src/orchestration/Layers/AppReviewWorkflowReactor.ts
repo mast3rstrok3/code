@@ -68,6 +68,7 @@ import {
   isAwaitingWorkflowNudge,
   type WorkflowNudgeThread,
 } from "../workflowNudge.ts";
+import { WORKFLOW_PROVIDER_LEASE_MS } from "../workflowStageExecutions.ts";
 import { isWorkflowThreadPaused } from "../workflowPause.ts";
 import { parseWorkflowDirectiveFromMarkdown } from "../workflowDirectives.ts";
 import {
@@ -100,6 +101,19 @@ const APP_REVIEW_WORKFLOW_ACTIVITY_KINDS = new Set<string>([
   "app-review-repair-tickets",
   "app-review-fix-result",
 ]);
+const APP_REVIEW_PROVIDER_PROGRESS_ACTIVITY_KINDS = new Set<string>([
+  "context-compaction",
+  "context-window.updated",
+  "task.completed",
+  "task.progress",
+  "task.started",
+  "task.updated",
+  "tool.completed",
+  "tool.progress",
+  "tool.started",
+  "tool.updated",
+  "turn.plan.updated",
+]);
 const APP_REVIEW_IMPLEMENT_SKILL_ID = "matt-pocock.implement";
 const APP_REVIEW_TO_TICKETS_SKILL_ID = "matt-pocock.to-tickets";
 export const APP_REVIEW_FIXER_IMPLEMENTATION_ONLY_INSTRUCTION =
@@ -109,8 +123,53 @@ export function isAppReviewWorkflowActivityKind(kind: string): boolean {
   return APP_REVIEW_WORKFLOW_ACTIVITY_KINDS.has(kind);
 }
 
+export function isAppReviewProviderProgressActivityKind(kind: string): boolean {
+  return APP_REVIEW_PROVIDER_PROGRESS_ACTIVITY_KINDS.has(kind);
+}
+
 export function isAppReviewWorkflowSessionStatus(status: string): boolean {
   return status === "starting" || status === "running" || status === "error";
+}
+
+export function renewAppReviewPhaseExecutionLease(
+  run: AppReviewWorkflowRun,
+  threadId: ThreadId,
+  occurredAt: string,
+): AppReviewWorkflowRun {
+  const execution = run.phaseExecution;
+  if (
+    run.status !== "running" ||
+    run.activeThreadId !== threadId ||
+    execution === null ||
+    execution.state !== "running" ||
+    execution.leaseExpiresAt === null
+  ) {
+    return run;
+  }
+  const occurredAtMs = Date.parse(occurredAt);
+  const leaseExpiresAtMs = Date.parse(execution.leaseExpiresAt);
+  if (
+    Number.isNaN(occurredAtMs) ||
+    Number.isNaN(leaseExpiresAtMs) ||
+    leaseExpiresAtMs - occurredAtMs > WORKFLOW_PROVIDER_LEASE_MS / 2
+  ) {
+    return run;
+  }
+  return {
+    ...run,
+    phaseExecution: {
+      ...execution,
+      leaseRenewedAt: occurredAt,
+      leaseExpiresAt: DateTime.formatIso(
+        DateTime.add(DateTime.makeUnsafe(occurredAtMs), {
+          milliseconds: WORKFLOW_PROVIDER_LEASE_MS,
+        }),
+      ),
+      lastProgressAt: occurredAt,
+      updatedAt: occurredAt,
+    },
+    updatedAt: occurredAt,
+  };
 }
 
 /**
@@ -1266,6 +1325,7 @@ const make = Effect.gen(function* () {
   }) {
     if (terminalStatuses.has(input.run.status)) return;
     const cycleNumber = input.run.cycles.at(-1)?.cycleNumber ?? null;
+    yield* interruptActivePhaseTurn(input.run, input.occurredAt);
     yield* updateRun({
       ...input.run,
       status: "failed",
@@ -1304,6 +1364,15 @@ const make = Effect.gen(function* () {
       completedAt: input.occurredAt,
     });
   });
+
+  const renewActivePhaseLease = Effect.fn("AppReviewWorkflowReactor.renewActivePhaseLease")(
+    function* (run: AppReviewWorkflowRun, threadId: ThreadId, occurredAt: string) {
+      const renewedRun = renewAppReviewPhaseExecutionLease(run, threadId, occurredAt);
+      if (renewedRun === run) return run;
+      yield* updateRun(renewedRun);
+      return renewedRun;
+    },
+  );
 
   const assertStableRevision = Effect.fn("AppReviewWorkflowReactor.assertStableRevision")(
     function* (run: AppReviewWorkflowRun, cwd: string, occurredAt: string) {
@@ -2796,7 +2865,14 @@ const make = Effect.gen(function* () {
       }
     }
     const run = yield* runForEvent(event);
-    if (run !== null) yield* reconcileRun(run, event.occurredAt);
+    if (run !== null) {
+      const currentRun =
+        event.type === "thread.activity-appended" &&
+        isAppReviewProviderProgressActivityKind(event.payload.activity.kind)
+          ? yield* renewActivePhaseLease(run, event.payload.threadId, event.occurredAt)
+          : run;
+      yield* reconcileRun(currentRun, event.occurredAt);
+    }
   });
 
   const processEventSafely = (event: AppReviewWorkflowEvent) =>
@@ -3076,7 +3152,8 @@ const make = Effect.gen(function* () {
       Stream.runForEach(domainEvents, (event) => {
         if (
           event.type === "thread.activity-appended" &&
-          !isAppReviewWorkflowActivityKind(event.payload.activity.kind)
+          !isAppReviewWorkflowActivityKind(event.payload.activity.kind) &&
+          !isAppReviewProviderProgressActivityKind(event.payload.activity.kind)
         ) {
           return Effect.void;
         }

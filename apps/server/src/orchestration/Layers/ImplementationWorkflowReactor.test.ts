@@ -5,6 +5,7 @@ import {
   CommandId,
   DEFAULT_WORKSPACE_USER_ID,
   AppReviewId,
+  AppReviewWorkflowRunId,
   type AppReviewWorkflowCycle,
   type AppReviewWorkflowFailure,
   type AppReviewWorkflowRun,
@@ -60,6 +61,7 @@ import {
   automationHaltMatchesTicketRerun,
   fastFeatureBuildContractProblems,
   implementationTicketReviewWarningLines,
+  implementationRunAcceptsNestedAppReviewUpdate,
   implementationTicketStateIsTerminal,
   implementationRunRerunIsPaused,
   isImplementationWorkflowActivityKind,
@@ -72,6 +74,8 @@ import {
   ticketAppReviewClaimIsAhead,
   workerReportedCurrentAttempt,
   workflowIdForRun,
+  workflowIdsForRun,
+  selectPublicationBaseBranch,
 } from "./ImplementationWorkflowReactor.ts";
 import {
   ORPHANED_PROVIDER_SESSION_ERROR,
@@ -560,6 +564,11 @@ function makeTestLayer(
   inheritedStackMissing = false,
   nonAncestorCommitSha?: string,
   changeRequestGate?: ChangeRequestGate,
+  remoteRefs: ReadonlyArray<{
+    readonly name: string;
+    readonly remoteName: string;
+    readonly isDefault: boolean;
+  }> = [{ name: "origin/main", remoteName: "origin", isDefault: true }],
   projectFile?: T3ProjectFile,
 ) {
   const coreLayer = Layer.mergeAll(
@@ -790,6 +799,23 @@ function makeTestLayer(
                 commitSha: concurrentRecoveryWon ? null : recoveredCommitSha,
               };
             }),
+          listRefs: (input) => {
+            const refs = remoteRefs
+              .filter((ref) => input.query === undefined || ref.name.includes(input.query))
+              .map((ref) => ({
+                ...ref,
+                isRemote: true,
+                current: false,
+                worktreePath: null,
+              }));
+            return Effect.succeed({
+              refs,
+              isRepo: true,
+              hasPrimaryRemote: true,
+              nextCursor: null,
+              totalCount: refs.length,
+            });
+          },
           listChangedFiles: () => Effect.succeed([]),
           isAncestor: (input) => Effect.succeed(input.ancestorRef !== nonAncestorCommitSha),
           mergeRef: (input) =>
@@ -1063,6 +1089,11 @@ function withSystem<A, E>(
     readonly failRemoveWorktreeAttempts?: number;
     /** Branches git already has, for restoring a worktree whose branch outlived it. */
     readonly existingBranches?: ReadonlyArray<string>;
+    readonly remoteRefs?: ReadonlyArray<{
+      readonly name: string;
+      readonly remoteName: string;
+      readonly isDefault: boolean;
+    }>;
     readonly projectFile?: T3ProjectFile;
   },
 ) {
@@ -1174,6 +1205,7 @@ function withSystem<A, E>(
           options?.inheritedStackMissing,
           options?.nonAncestorCommitSha,
           options?.changeRequestGate,
+          options?.remoteRefs,
           options?.projectFile,
         ),
       ),
@@ -1951,8 +1983,64 @@ it("omits workflow ownership for legacy orchestrator threads without workflow co
   const orchestratorThreadId = ThreadId.make("thread-legacy-orchestrator");
 
   expect(
-    workflowIdForRun({ threads: [{ id: orchestratorThreadId }] }, { orchestratorThreadId }),
+    workflowIdForRun(
+      { threads: [{ id: orchestratorThreadId }] } as unknown as Pick<
+        OrchestrationReadModel,
+        "threads"
+      >,
+      { orchestratorThreadId },
+    ),
   ).toBeUndefined();
+});
+
+it("accepts the implementation and parent workflow identities for inherited stacks", () => {
+  const orchestratorThreadId = ThreadId.make("thread-lineage-orchestrator");
+
+  expect(
+    workflowIdsForRun(
+      {
+        threads: [
+          {
+            id: orchestratorThreadId,
+            workflowContext: {
+              workflowId: "implementation-run-1",
+              parentWorkflowId: "workflow-root-1",
+            },
+          },
+        ],
+      } as unknown as Pick<OrchestrationReadModel, "threads">,
+      { orchestratorThreadId },
+    ),
+  ).toEqual(["implementation-run-1", "workflow-root-1"]);
+});
+
+it("uses the remote default when a local workflow base was never published", () => {
+  expect(
+    selectPublicationBaseBranch("local-feature-base", [
+      {
+        name: "origin/dev",
+        remoteName: "origin",
+        isRemote: true,
+        current: false,
+        isDefault: true,
+        worktreePath: null,
+      },
+    ]),
+  ).toBe("dev");
+});
+
+it("ignores terminal updates from a superseded nested App Review", () => {
+  expect(
+    implementationRunAcceptsNestedAppReviewUpdate(
+      {
+        appReviewWorkflowRunIds: [
+          AppReviewWorkflowRunId.make("app-review-workflow-old"),
+          AppReviewWorkflowRunId.make("app-review-workflow-current"),
+        ],
+      },
+      AppReviewWorkflowRunId.make("app-review-workflow-old"),
+    ),
+  ).toBe(false);
 });
 
 describe("ImplementationWorkflowReactor", () => {
@@ -5505,7 +5593,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("stops ticket Code Review after the first clean cycle", () =>
+  it.effect("reuses worker validation when a clean ticket review omits duplicate receipts", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         const { run } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
@@ -5554,7 +5642,7 @@ describe("ImplementationWorkflowReactor", () => {
               runId: run.id,
               ticketId: reviewedTicketId,
               status: "clean",
-              validations: requiredValidations("2026-01-01T00:00:01.500Z"),
+              validations: [],
               reportMarkdown: "## Standards\n- clean\n\n## Spec\n- clean",
             },
             turnId: null,
