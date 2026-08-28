@@ -131,6 +131,22 @@ export function isAppReviewWorkflowSessionStatus(status: string): boolean {
   return status === "starting" || status === "running" || status === "error";
 }
 
+export function appReviewFixValidationsPassed(input: {
+  readonly completeValidationCommands: ReadonlyArray<string>;
+  readonly validations: ReadonlyArray<AppReviewWorkflowFixResult["validations"][number]>;
+}): boolean {
+  const completeCommands = new Set(
+    input.completeValidationCommands.map((command) => command.trim()),
+  );
+  const focusedValidations = input.validations.filter(
+    (validation) => !completeCommands.has(validation.command.trim()),
+  );
+  return (
+    focusedValidations.length > 0 &&
+    focusedValidations.every((validation) => validation.status === "passed")
+  );
+}
+
 export function renewAppReviewPhaseExecutionLease(
   run: AppReviewWorkflowRun,
   threadId: ThreadId,
@@ -2614,9 +2630,18 @@ const make = Effect.gen(function* () {
       });
       return;
     }
+    const caller = run.caller;
+    const completeValidationCommands =
+      caller.type === "implementation"
+        ? ((yield* projectionSnapshotQuery.getCommandReadModel()).implementationRuns.find(
+            (candidate) => candidate.id === caller.implementationRunId,
+          )?.launchSummary.validationCommands ?? [])
+        : [];
     if (
-      result.validations.length === 0 ||
-      result.validations.some((validation) => validation.status !== "passed")
+      !appReviewFixValidationsPassed({
+        completeValidationCommands,
+        validations: result.validations,
+      })
     ) {
       yield* failCycle({
         run,

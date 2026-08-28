@@ -998,6 +998,86 @@ describe("StaleTurnReconciler", () => {
     ),
   );
 
+  it.live("waits for ingestion while a completed provider session is ready", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const readyThreadId = ThreadId.make("thread-stale-ready");
+          const orphanThreadId = ThreadId.make("thread-stale-ready-orphan");
+          const readyTurnId = TurnId.make("turn-stale-ready");
+          yield* seedProject(system);
+          yield* createPlainThread(system, readyThreadId, "ready");
+          yield* createPlainThread(system, orphanThreadId, "orphan");
+          yield* setThreadSession(system, {
+            threadId: readyThreadId,
+            status: "running",
+            activeTurnId: readyTurnId,
+            tag: "ready",
+          });
+          yield* setThreadSession(system, {
+            threadId: orphanThreadId,
+            status: "running",
+            activeTurnId: TurnId.make("turn-stale-ready-orphan"),
+            tag: "orphan",
+          });
+          const readyAt = DateTime.formatIso(yield* DateTime.now);
+          yield* Ref.set(system.liveSessions, [
+            {
+              provider: ProviderDriverKind.make("codex"),
+              status: "ready",
+              runtimeMode: "full-access",
+              threadId: readyThreadId,
+              createdAt: readyAt,
+              updatedAt: readyAt,
+            },
+          ]);
+
+          yield* system.reconciler.start();
+          yield* waitUntil(
+            sessionStatus(system, orphanThreadId).pipe(Effect.map((status) => status === "error")),
+            "orphaned sentinel to settle",
+          );
+
+          expect(yield* sessionStatus(system, readyThreadId)).toBe("running");
+        }),
+      { reconciler: bootOnlyOptions },
+    ),
+  );
+
+  it.live("recovers after a ready provider session outlives the ingestion grace", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const threadId = ThreadId.make("thread-stale-ready-expired");
+          yield* seedProject(system);
+          yield* createPlainThread(system, threadId, "ready expired");
+          yield* setThreadSession(system, {
+            threadId,
+            status: "running",
+            activeTurnId: TurnId.make("turn-stale-ready-expired"),
+            tag: "ready-expired",
+          });
+          yield* Ref.set(system.liveSessions, [
+            {
+              provider: ProviderDriverKind.make("codex"),
+              status: "ready",
+              runtimeMode: "full-access",
+              threadId,
+              createdAt: now,
+              updatedAt: now,
+            },
+          ]);
+
+          yield* system.reconciler.start();
+          yield* waitUntil(
+            sessionStatus(system, threadId).pipe(Effect.map((status) => status === "error")),
+            "ready session past its ingestion grace to settle",
+          );
+        }),
+      { reconciler: { ...bootOnlyOptions, readyProviderIngestionGraceMs: 0 } },
+    ),
+  );
+
   it.live("leaves fresh sessions alone until the grace period elapses", () =>
     withSystem(
       (system) =>
@@ -1446,6 +1526,43 @@ describe("StaleTurnReconciler", () => {
           expect(yield* nudgeMessages(system, workerThreadId)).toHaveLength(1);
           const binding = Option.getOrUndefined(yield* system.directory.getBinding(workerThreadId));
           expect(binding?.status).toBe("stopped");
+        }),
+      { reconciler: bootOnlyOptions },
+    ),
+  );
+
+  it.live("nudges a failed turn when the adapter lists a ready session", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          const workerThreadId = requireWorkerThreadId(run);
+          const failedTurnId = TurnId.make("turn-nudge-listed-ready");
+          const blockedAt = DateTime.formatIso(
+            DateTime.subtract(yield* DateTime.now, { hours: 9 }),
+          );
+          yield* blockThreadOnFailedTurn(system, {
+            threadId: workerThreadId,
+            turnId: failedTurnId,
+            tag: "nudge-listed-ready",
+            blockedAt,
+          });
+          yield* Ref.set(system.liveSessions, [
+            {
+              threadId: workerThreadId,
+              provider: ProviderDriverKind.make("codex"),
+              providerInstanceId: ProviderInstanceId.make("codex"),
+              status: "ready",
+              runtimeMode: "full-access",
+              createdAt: blockedAt,
+              updatedAt: blockedAt,
+            },
+          ]);
+
+          yield* system.reconciler.start();
+
+          expect(yield* nudgeActivities(system, workerThreadId)).toHaveLength(1);
+          expect(yield* nudgeMessages(system, workerThreadId)).toHaveLength(1);
         }),
       { reconciler: bootOnlyOptions },
     ),

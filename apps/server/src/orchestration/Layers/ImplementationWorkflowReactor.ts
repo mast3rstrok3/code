@@ -983,12 +983,12 @@ function focusedRepairValidationsPassed(input: {
   readonly validations: ReadonlyArray<OrchestrationImplementationValidationResult>;
 }): boolean {
   const finalCommands = new Set(input.finalCommands.map((command) => command.trim()));
+  const focusedValidations = input.validations.filter(
+    (validation) => !finalCommands.has(validation.command.trim()),
+  );
   return (
-    input.validations.length > 0 &&
-    input.validations.every(
-      (validation) =>
-        validation.status === "passed" && !finalCommands.has(validation.command.trim()),
-    )
+    focusedValidations.length > 0 &&
+    focusedValidations.every((validation) => validation.status === "passed")
   );
 }
 
@@ -1641,6 +1641,68 @@ function stageThreadIsFinished(input: {
   readonly nowMs: number;
 }): boolean {
   return stageClaimIsReleased(stageClaimState(input));
+}
+
+export function implementationReviewStageHasConflict(input: {
+  readonly requestedStage: "app-review" | "code-review";
+  readonly run: OrchestrationImplementationRun;
+  readonly threads: ReadonlyArray<OrchestrationThread>;
+  readonly appReviewWorkflowRuns: ReadonlyArray<AppReviewWorkflowRun>;
+  readonly nowMs: number;
+}): boolean {
+  if (input.requestedStage === "app-review") {
+    const activeCodeReviewer = input.threads.find(
+      (thread) => thread.id === input.run.activeCodeReviewThreadId && thread.deletedAt === null,
+    );
+    return stageClaimBlocksRestart(
+      stageClaimState({
+        thread: activeCodeReviewer,
+        threads: input.threads,
+        nowMs: input.nowMs,
+      }),
+    );
+  }
+
+  const activeNestedAppReview = input.appReviewWorkflowRuns.some(
+    (candidate) =>
+      candidate.caller.type === "implementation" &&
+      candidate.caller.implementationRunId === input.run.id &&
+      candidate.caller.ticketId === undefined &&
+      candidate.status === "running",
+  );
+  if (activeNestedAppReview) return true;
+
+  const activeAppReviewer = input.threads.find(
+    (thread) => thread.id === input.run.activeAppReviewThreadId && thread.deletedAt === null,
+  );
+  return stageClaimBlocksRestart(
+    stageClaimState({
+      thread: activeAppReviewer,
+      threads: input.threads,
+      nowMs: input.nowMs,
+    }),
+  );
+}
+
+export function cleanDescendantAppReviewFailureCanRestart(input: {
+  readonly failureReason: string | undefined;
+  readonly isRepo: boolean;
+  readonly expectedBranch: string;
+  readonly actualBranch: string | null;
+  readonly hasWorkingTreeChanges: boolean;
+  readonly reviewedHeadSha: string;
+  readonly currentHeadSha: string;
+  readonly reviewedHeadIsAncestor: boolean;
+}): boolean {
+  return (
+    input.failureReason === "workspace-stale" &&
+    input.isRepo &&
+    input.actualBranch === input.expectedBranch &&
+    !input.hasWorkingTreeChanges &&
+    input.reviewedHeadSha !== "pending" &&
+    input.reviewedHeadSha !== input.currentHeadSha &&
+    input.reviewedHeadIsAncestor
+  );
 }
 
 const MISSING_DEPENDENCY_COMMIT_WARNING = "does not have a successful committed branch";
@@ -4374,6 +4436,17 @@ const make = Effect.gen(function* () {
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
       const orchestratorThread = findThread(readModel, cycleRun.orchestratorThreadId);
       if (orchestratorThread === null) return;
+      if (
+        implementationReviewStageHasConflict({
+          requestedStage: "app-review",
+          run: cycleRun,
+          threads: readModel.threads,
+          appReviewWorkflowRuns: readModel.appReviewWorkflowRuns ?? [],
+          nowMs: Date.parse(input.createdAt),
+        })
+      ) {
+        return;
+      }
       const continueWithoutBrowserReview = Effect.fn(
         "ImplementationWorkflowReactor.continueWithoutBrowserReview",
       )(function* (run: OrchestrationImplementationRun) {
@@ -4908,6 +4981,17 @@ const make = Effect.gen(function* () {
       const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
       const orchestratorThread = findThread(readModel, input.run.orchestratorThreadId);
       if (orchestratorThread === null) return;
+      if (
+        implementationReviewStageHasConflict({
+          requestedStage: "code-review",
+          run: input.run,
+          threads: readModel.threads,
+          appReviewWorkflowRuns: readModel.appReviewWorkflowRuns ?? [],
+          nowMs: Date.parse(input.createdAt),
+        })
+      ) {
+        return;
+      }
       const finalPass = isFinalCodeReviewPass(input.run);
       const cycleBudget = finalPass
         ? yield* cyclesForStep({
@@ -9104,6 +9188,58 @@ const make = Effect.gen(function* () {
       return;
     }
     if (nestedRun.status === "failed" || nestedRun.status === "exhausted") {
+      if (nestedRun.status === "failed" && nestedRun.failure?.reason === "workspace-stale") {
+        const status = yield* gitWorkflow
+          .localStatus({ cwd: run.orchestratorWorktreePath })
+          .pipe(Effect.result);
+        const head = yield* gitWorkflow
+          .resolveCommit({ cwd: run.orchestratorWorktreePath, ref: "HEAD" })
+          .pipe(Effect.result);
+        const reviewedHeadSha = nestedRun.workspaceRevision.headSha;
+        const reviewedHeadIsAncestor =
+          status._tag === "Success" &&
+          head._tag === "Success" &&
+          reviewedHeadSha !== "pending" &&
+          reviewedHeadSha !== head.success.commitSha
+            ? yield* gitWorkflow
+                .isAncestor({
+                  cwd: run.orchestratorWorktreePath,
+                  ancestorRef: reviewedHeadSha,
+                  descendantRef: head.success.commitSha,
+                })
+                .pipe(Effect.orElseSucceed(() => false))
+            : false;
+        if (
+          status._tag === "Success" &&
+          head._tag === "Success" &&
+          cleanDescendantAppReviewFailureCanRestart({
+            failureReason: nestedRun.failure.reason,
+            isRepo: status.success.isRepo,
+            expectedBranch: run.orchestratorBranch,
+            actualBranch: status.success.refName,
+            hasWorkingTreeChanges: status.success.hasWorkingTreeChanges,
+            reviewedHeadSha,
+            currentHeadSha: head.success.commitSha,
+            reviewedHeadIsAncestor,
+          })
+        ) {
+          const recoveredRun: OrchestrationImplementationRun = {
+            ...linkedRun,
+            status: "qa-reviewing",
+            integrationHeadSha: head.success.commitSha,
+            latestAppReviewWorkflowOutcome: null,
+            retryableFailure: null,
+            updatedAt: event.occurredAt,
+          };
+          yield* updateRun({ sourceThreadId, run: recoveredRun, createdAt: event.occurredAt });
+          yield* startBrowserReview({
+            sourceThreadId,
+            run: recoveredRun,
+            createdAt: event.occurredAt,
+          });
+          return;
+        }
+      }
       const failedHeadSha = nestedRun.finalHeadSha ?? nestedRun.workspaceRevision.headSha;
       const failedRun: OrchestrationImplementationRun = {
         ...linkedRun,

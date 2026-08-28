@@ -24,6 +24,7 @@ import {
   APP_REVIEW_FIX_RESULT_MAX_CONTINUATIONS,
   APP_REVIEW_RECOVERY_SWEEP_INTERVAL_MS,
   appReviewFixResultContinuationNeedsLaunch,
+  appReviewFixValidationsPassed,
   appReviewPhaseLaunchNeedsRetry,
   appReviewRepairPlanAction,
   appReviewPhaseModelStepWorkflowPromptId,
@@ -77,6 +78,41 @@ it("queues only App Review control and directive activities", () => {
   expect(isAppReviewWorkflowActivityKind("app-review-fix-result")).toBe(true);
   expect(isAppReviewWorkflowActivityKind("tool.updated")).toBe(false);
   expect(isAppReviewWorkflowActivityKind("context-window.updated")).toBe(false);
+});
+
+it("judges embedded fixes by focused validation while preserving full-suite diagnostics", () => {
+  expect(
+    appReviewFixValidationsPassed({
+      completeValidationCommands: ["pnpm check:full"],
+      validations: [
+        {
+          command: "pnpm e2e:review",
+          status: "passed",
+          outputMarkdown: "5 passed",
+          completedAt: now,
+        },
+        {
+          command: "pnpm check:full",
+          status: "failed",
+          outputMarkdown: "An unrelated package failed.",
+          completedAt: now,
+        },
+      ],
+    }),
+  ).toBe(true);
+  expect(
+    appReviewFixValidationsPassed({
+      completeValidationCommands: ["pnpm check:full"],
+      validations: [
+        {
+          command: "pnpm check:full",
+          status: "passed",
+          outputMarkdown: "ok",
+          completedAt: now,
+        },
+      ],
+    }),
+  ).toBe(false);
 });
 
 it("queues provider activity that renews an active App Review phase", () => {

@@ -59,9 +59,11 @@ import { T3ProjectFileLoader } from "../../project/T3ProjectFileLoader.ts";
 import {
   appDevStackBackendHealthUrl,
   automationHaltMatchesTicketRerun,
+  cleanDescendantAppReviewFailureCanRestart,
   fastFeatureBuildContractProblems,
   implementationTicketReviewWarningLines,
   implementationRunAcceptsNestedAppReviewUpdate,
+  implementationReviewStageHasConflict,
   implementationAwaitsAppReviewRun,
   implementationTicketStateIsTerminal,
   implementationRunRerunIsPaused,
@@ -356,6 +358,68 @@ it("keeps only the current nested App Review owned by its implementation stage",
     implementationAwaitsAppReviewRun(implementation, {
       ...runLevel,
       id: AppReviewWorkflowRunId.make("app-review-stale"),
+    }),
+  ).toBe(false);
+});
+
+it("serializes App Review and Code Review writers", () => {
+  const run = {
+    id: "implementation-run-1",
+    activeAppReviewThreadId: null,
+    activeCodeReviewThreadId: null,
+  } as unknown as OrchestrationImplementationRun;
+  const nestedReview = {
+    caller: {
+      type: "implementation",
+      implementationRunId: run.id,
+      orchestratorThreadId: ThreadId.make("thread-orchestrator"),
+    },
+    status: "running",
+  } as unknown as AppReviewWorkflowRun;
+
+  expect(
+    implementationReviewStageHasConflict({
+      requestedStage: "code-review",
+      run,
+      threads: [],
+      appReviewWorkflowRuns: [nestedReview],
+      nowMs: Date.parse(now),
+    }),
+  ).toBe(true);
+  expect(
+    implementationReviewStageHasConflict({
+      requestedStage: "code-review",
+      run,
+      threads: [],
+      appReviewWorkflowRuns: [{ ...nestedReview, status: "passed" }],
+      nowMs: Date.parse(now),
+    }),
+  ).toBe(false);
+});
+
+it("restarts App Review when another stage committed a clean descendant", () => {
+  const input = {
+    failureReason: "workspace-stale",
+    isRepo: true,
+    expectedBranch: "implementation/checkout",
+    actualBranch: "implementation/checkout",
+    hasWorkingTreeChanges: false,
+    reviewedHeadSha: "abc123",
+    currentHeadSha: "def456",
+    reviewedHeadIsAncestor: true,
+  } as const;
+
+  expect(cleanDescendantAppReviewFailureCanRestart(input)).toBe(true);
+  expect(
+    cleanDescendantAppReviewFailureCanRestart({
+      ...input,
+      hasWorkingTreeChanges: true,
+    }),
+  ).toBe(false);
+  expect(
+    cleanDescendantAppReviewFailureCanRestart({
+      ...input,
+      reviewedHeadIsAncestor: false,
     }),
   ).toBe(false);
 });

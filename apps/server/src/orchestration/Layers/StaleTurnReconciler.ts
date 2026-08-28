@@ -65,6 +65,7 @@ import {
 const DEFAULT_SWEEP_INTERVAL_MS = 60 * 1000;
 const DEFAULT_GRACE_MS = 60 * 1000;
 const DEFAULT_STARTING_PROVIDER_LAUNCH_GRACE_MS = 5 * 60 * 1000;
+const DEFAULT_READY_PROVIDER_INGESTION_GRACE_MS = 5 * 60 * 1000;
 const DEFAULT_CONFIRM_DELAY_MS = 15 * 1000;
 const DEFAULT_MAX_RESUME_ATTEMPTS = 2;
 const RATE_LIMIT_PARK_MS = 5 * 60 * 60 * 1_000;
@@ -105,6 +106,26 @@ interface WorkflowRecoveryAttemptPayload {
 
 function providerSessionSuppressesRecovery(session: ProviderSession): boolean {
   return session.status === "connecting" || session.status === "running";
+}
+
+/**
+ * A ready provider session has finished its turn, but provider-event ingestion
+ * may not have persisted that completion yet. Give ingestion a bounded window
+ * before treating the projected running turn as orphaned. The bound keeps a
+ * lost completion event from parking a workflow until the session reaper runs.
+ */
+function providerSessionPreventsOrphanRecovery(
+  session: ProviderSession,
+  nowEpochMs: number,
+  readyProviderIngestionGraceMs: number,
+): boolean {
+  if (providerSessionSuppressesRecovery(session)) return true;
+  if (session.status !== "ready") return false;
+  const updatedAtEpochMs = Date.parse(session.updatedAt);
+  return (
+    !Number.isFinite(updatedAtEpochMs) ||
+    nowEpochMs - updatedAtEpochMs < readyProviderIngestionGraceMs
+  );
 }
 
 function boundedEnds(text: string, maxChars: number): string {
@@ -252,6 +273,7 @@ export interface StaleTurnReconcilerLiveOptions {
   readonly sweepIntervalMs?: number;
   readonly graceMs?: number;
   readonly startingProviderLaunchGraceMs?: number;
+  readonly readyProviderIngestionGraceMs?: number;
   readonly confirmDelayMs?: number;
   readonly maxResumeAttempts?: number;
   readonly nudgeIntervalMs?: number;
@@ -614,6 +636,10 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
     const startingProviderLaunchGraceMs = Math.max(
       graceMs,
       options?.startingProviderLaunchGraceMs ?? DEFAULT_STARTING_PROVIDER_LAUNCH_GRACE_MS,
+    );
+    const readyProviderIngestionGraceMs = Math.max(
+      graceMs,
+      options?.readyProviderIngestionGraceMs ?? DEFAULT_READY_PROVIDER_INGESTION_GRACE_MS,
     );
     const confirmDelayMs = Math.max(0, options?.confirmDelayMs ?? DEFAULT_CONFIRM_DELAY_MS);
     const maxResumeAttempts = Math.max(
@@ -1498,16 +1524,20 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
       Effect.gen(function* () {
         const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
         const liveSessions = yield* providerService.listSessions();
-        const liveThreadIds = new Set<ThreadId>(
-          liveSessions.filter(providerSessionSuppressesRecovery).map((session) => session.threadId),
-        );
         const now = yield* Clock.currentTimeMillis;
+        const liveProviderThreadIds = new Set<ThreadId>(
+          liveSessions
+            .filter((session) =>
+              providerSessionPreventsOrphanRecovery(session, now, readyProviderIngestionGraceMs),
+            )
+            .map((session) => session.threadId),
+        );
 
         const candidates: StaleTurnCandidate[] = [];
         for (const thread of readModel.threads) {
           if (thread.deletedAt !== null) continue;
 
-          const sessionLost = !liveThreadIds.has(thread.id);
+          const sessionLost = !liveProviderThreadIds.has(thread.id);
           const running =
             sessionLost &&
             hasRunningTurnSignature(thread) &&
@@ -1582,9 +1612,21 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
         // (or changed) in the window is dropped instead of clobbered.
         const confirmedModel = yield* projectionSnapshotQuery.getCommandReadModel();
         const confirmedLiveSessions = yield* providerService.listSessions();
-        const confirmedLiveThreadIds = new Set<ThreadId>(
+        const confirmedNow = yield* Clock.currentTimeMillis;
+        const confirmedLiveWorkingThreadIds = new Set<ThreadId>(
           confirmedLiveSessions
             .filter(providerSessionSuppressesRecovery)
+            .map((session) => session.threadId),
+        );
+        const confirmedLiveProviderThreadIds = new Set<ThreadId>(
+          confirmedLiveSessions
+            .filter((session) =>
+              providerSessionPreventsOrphanRecovery(
+                session,
+                confirmedNow,
+                readyProviderIngestionGraceMs,
+              ),
+            )
             .map((session) => session.threadId),
         );
         const updatedAt = DateTime.formatIso(yield* DateTime.now);
@@ -1633,7 +1675,13 @@ const makeStaleTurnReconciler = (options?: StaleTurnReconcilerLiveOptions) =>
         for (const candidate of candidates) {
           const thread = confirmedModel.threads.find((entry) => entry.id === candidate.threadId);
           if (thread === undefined || thread.deletedAt !== null) continue;
-          if (confirmedLiveThreadIds.has(thread.id)) continue;
+          if (
+            candidate.kind === "nudge"
+              ? confirmedLiveWorkingThreadIds.has(thread.id)
+              : confirmedLiveProviderThreadIds.has(thread.id)
+          ) {
+            continue;
+          }
 
           let pinnedTurnId: TurnId | null = candidate.pinnedTurnId;
           let detail: OrchestrationThread | undefined;
