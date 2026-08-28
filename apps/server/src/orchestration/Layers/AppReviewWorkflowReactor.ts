@@ -2944,8 +2944,11 @@ const make = Effect.gen(function* () {
     const run = yield* runForEvent(event);
     if (run !== null) {
       const currentRun =
-        event.type === "thread.activity-appended" &&
-        isAppReviewProviderProgressActivityKind(event.payload.activity.kind)
+        (event.type === "thread.activity-appended" &&
+          isAppReviewProviderProgressActivityKind(event.payload.activity.kind)) ||
+        (event.type === "thread.session-set" &&
+          (event.payload.session.status === "starting" ||
+            event.payload.session.status === "running"))
           ? yield* renewActivePhaseLease(run, event.payload.threadId, event.occurredAt)
           : run;
       yield* reconcileRun(currentRun, event.occurredAt);
@@ -3186,7 +3189,19 @@ const make = Effect.gen(function* () {
       }
       if (run.status !== "running") continue;
       if (isWorkflowThreadPaused(readModel.threads, run.controllerThreadId)) continue;
-      yield* reconcileRun(run, occurredAt).pipe(
+      const activeThread =
+        run.activeThreadId === null
+          ? undefined
+          : readModel.threads.find((thread) => thread.id === run.activeThreadId);
+      const sessionIsLive =
+        activeThread?.session?.status === "starting" ||
+        activeThread?.session?.status === "running" ||
+        (activeThread?.session?.activeTurnId ?? null) !== null;
+      const currentRun =
+        sessionIsLive && run.activeThreadId !== null
+          ? yield* renewActivePhaseLease(run, run.activeThreadId, occurredAt)
+          : run;
+      yield* reconcileRun(currentRun, occurredAt).pipe(
         Effect.catchCause((cause) =>
           Cause.hasInterruptsOnly(cause)
             ? Effect.failCause(cause)
