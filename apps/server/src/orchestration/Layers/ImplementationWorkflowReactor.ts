@@ -7757,6 +7757,20 @@ const make = Effect.gen(function* () {
           return;
         }
 
+        if (directive.status === "clean") {
+          yield* blockRun({
+            sourceThreadId,
+            run: { ...reviewedRun, validatedHeadSha: null },
+            retryableStage: "code-review",
+            reasonMarkdown: [
+              "Final Code Review found no code changes, but complete validation did not pass exactly once for every configured command.",
+              "Repair the validation failure or its environment, then retry Code Review. Starting another reviewer on the same HEAD would repeat the same gate without changing the result.",
+            ].join("\n\n"),
+            updatedAt,
+          });
+          return;
+        }
+
         if (!atCeiling) {
           const nextCycleRun: OrchestrationImplementationRun = {
             ...reviewedRun,

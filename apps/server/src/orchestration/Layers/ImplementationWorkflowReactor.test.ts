@@ -6531,7 +6531,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("starts a fresh Final Code Review cycle when complete validation is duplicated", () =>
+  it.effect("surfaces duplicated complete validation without starting another review", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         const { run } = yield* launchRun(system);
@@ -6553,16 +6553,20 @@ describe("ImplementationWorkflowReactor", () => {
 
         const snapshot = yield* system.query.getSnapshot();
         const retrying = snapshot.implementationRuns.find((entry) => entry.id === run.id);
-        expect(retrying?.status).toBe("code-reviewing");
-        expect(retrying?.codeReviewAttemptCount).toBe(2);
+        expect(retrying?.status).toBe("needs-human-attention");
+        expect(retrying?.codeReviewAttemptCount).toBe(1);
         expect(retrying?.finalCodeReviewPassCount).toBe(1);
-        expect(retrying?.activeCodeReviewThreadId).not.toBe(reviewer.id);
+        expect(retrying?.activeCodeReviewThreadId).toBeNull();
         expect(retrying?.automationHalt).toBeNull();
+        expect(retrying?.retryableFailure?.stage).toBe("code-review");
+        expect(retrying?.retryableFailure?.detail).toContain(
+          "Starting another reviewer on the same HEAD would repeat the same gate",
+        );
         expect(
           snapshot.threads.filter(
             (thread) => thread.workflowRole === "implementation-code-reviewer",
           ),
-        ).toHaveLength(2);
+        ).toHaveLength(1);
         expect(
           snapshot.threads.filter((thread) => thread.workflowRole === "implementation-validator"),
         ).toHaveLength(1);
@@ -6571,7 +6575,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("publishes with a warning when complete validation fails at the review ceiling", () =>
+  it.effect("surfaces failed complete validation at the review ceiling", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         const { run } = yield* launchRun(system);
@@ -6615,23 +6619,22 @@ describe("ImplementationWorkflowReactor", () => {
               : validation,
           ),
         });
-        yield* passChangeRequestBabysit(system, run, "2026-01-01T00:00:07.000Z");
-
         snapshot = yield* system.query.getSnapshot();
         const completed = snapshot.implementationRuns.find((entry) => entry.id === run.id);
         expect(completed?.codeReviewAttemptCount).toBe(IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES);
         expect(completed?.finalCodeReviewPassCount).toBe(IMPLEMENTATION_RUN_MAX_REVIEW_GATE_CYCLES);
-        expect(completed?.status).toBe("completed");
-        expect(completed?.codeReviewExhaustedAt).not.toBeNull();
-        expect(completed?.codeReviewExhaustionReason).toContain("complete validation did not pass");
+        expect(completed?.status).toBe("needs-human-attention");
+        expect(completed?.codeReviewExhaustedAt).toBeNull();
+        expect(completed?.codeReviewExhaustionReason).toBeNull();
+        expect(completed?.retryableFailure?.stage).toBe("code-review");
         expect(completed?.finalValidation?.status).toBe("failed");
-        expect(completed?.validatedHeadSha).toBe("def456");
-        expect(completed?.changeRequest).not.toBeNull();
+        expect(completed?.validatedHeadSha).toBeNull();
+        expect(completed?.changeRequest).toBeNull();
         expect(completed?.automationHalt).toBeNull();
         expect(
           snapshot.threads.filter((thread) => thread.workflowRole === "implementation-fixer"),
         ).toHaveLength(0);
-        expect(yield* Ref.get(system.createOrOpenChangeRequestCount)).toBe(1);
+        expect(yield* Ref.get(system.createOrOpenChangeRequestCount)).toBe(0);
         const orchestrator = snapshot.threads.find(
           (thread) => thread.id === run.orchestratorThreadId,
         );
@@ -6639,7 +6642,7 @@ describe("ImplementationWorkflowReactor", () => {
           orchestrator?.activities.some(
             (activity) => activity.kind === "implementation-code-review-exhausted",
           ),
-        ).toBe(true);
+        ).toBe(false);
       }),
     ),
   );
@@ -6978,7 +6981,7 @@ describe("ImplementationWorkflowReactor", () => {
       ),
   );
 
-  it.effect("concurrent recovery sweeps cannot duplicate a Final Code Review cycle", () =>
+  it.effect("concurrent recovery sweeps preserve a clean review validation failure", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         const { run } = yield* launchRun(system);
@@ -7010,16 +7013,17 @@ describe("ImplementationWorkflowReactor", () => {
 
         const snapshot = yield* system.query.getSnapshot();
         const retrying = snapshot.implementationRuns.find((entry) => entry.id === run.id);
-        expect(retrying?.status).toBe("code-reviewing");
+        expect(retrying?.status).toBe("needs-human-attention");
         expect(retrying?.finalCodeReviewPassCount).toBe(1);
-        expect(retrying?.activeCodeReviewThreadId).not.toBe(reviewer.id);
+        expect(retrying?.activeCodeReviewThreadId).toBeNull();
+        expect(retrying?.retryableFailure?.stage).toBe("code-review");
         expect(retrying?.changeRequest).toBeNull();
         expect(yield* Ref.get(system.createOrOpenChangeRequestCount)).toBe(0);
         expect(
           snapshot.threads.filter(
             (thread) => thread.workflowRole === "implementation-code-reviewer",
           ),
-        ).toHaveLength(2);
+        ).toHaveLength(1);
       }),
     ),
   );
@@ -7384,7 +7388,7 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
-  it.effect("starts a fresh Final Code Review cycle after complete validation fails", () =>
+  it.effect("surfaces failed complete validation without starting another review", () =>
     withSystem((system) =>
       Effect.gen(function* () {
         const { run } = yield* launchRun(system);
@@ -7409,15 +7413,16 @@ describe("ImplementationWorkflowReactor", () => {
 
         const snapshot = yield* system.query.getSnapshot();
         const current = snapshot.implementationRuns.find((entry) => entry.id === run.id);
-        expect(current?.status).toBe("code-reviewing");
+        expect(current?.status).toBe("needs-human-attention");
         expect(current?.finalCodeReviewPassCount).toBe(1);
-        expect(current?.finalCodeReviewGeneration).toBe(1);
-        expect(current?.activeCodeReviewThreadId).not.toBe(firstReviewer.id);
+        expect(current?.finalCodeReviewGeneration).toBe(0);
+        expect(current?.activeCodeReviewThreadId).toBeNull();
+        expect(current?.retryableFailure?.stage).toBe("code-review");
         expect(
           snapshot.threads.filter(
             (thread) => thread.workflowRole === "implementation-code-reviewer",
           ),
-        ).toHaveLength(2);
+        ).toHaveLength(1);
         expect(
           snapshot.threads.filter((thread) => thread.workflowRole === "implementation-validator"),
         ).toHaveLength(1);
