@@ -7017,6 +7017,7 @@ describe("ImplementationWorkflowReactor", () => {
         expect(retrying?.finalCodeReviewPassCount).toBe(1);
         expect(retrying?.activeCodeReviewThreadId).toBeNull();
         expect(retrying?.retryableFailure?.stage).toBe("code-review");
+        expect(retrying?.retryableFailure?.humanBlocked).toBe(true);
         expect(retrying?.changeRequest).toBeNull();
         expect(yield* Ref.get(system.createOrOpenChangeRequestCount)).toBe(0);
         expect(
@@ -7462,6 +7463,7 @@ describe("ImplementationWorkflowReactor", () => {
         expect(current?.finalCodeReviewGeneration).toBe(0);
         expect(current?.activeCodeReviewThreadId).toBeNull();
         expect(current?.retryableFailure?.stage).toBe("code-review");
+        expect(current?.retryableFailure?.humanBlocked).toBe(true);
         expect(
           snapshot.threads.filter(
             (thread) => thread.workflowRole === "implementation-code-reviewer",

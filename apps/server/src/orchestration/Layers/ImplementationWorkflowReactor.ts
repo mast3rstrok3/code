@@ -2108,6 +2108,7 @@ const make = Effect.gen(function* () {
       | "change-request-babysit";
     readonly automaticRecovery?: boolean;
     readonly automaticRecoveryWaiting?: boolean;
+    readonly recordAutomationHalt?: boolean;
     /**
      * Set when only a human can clear the condition (a moved source branch, a
      * conflicting worktree). `recoverRetryableRuns` skips these, so the attempt
@@ -2146,24 +2147,25 @@ const make = Effect.gen(function* () {
               maxAttempts: IMPLEMENTATION_STAGE_MAX_LAUNCHES,
               humanBlocked,
             },
-      automationHalt: automationStopped
-        ? {
-            ...(input.ticketId === undefined ? {} : { ticketId: input.ticketId }),
-            stage: input.haltStage ?? automationStageForFailure(input.retryableStage),
-            // An explicit category from the call site wins. `humanBlocked` says
-            // who can clear the halt, not what kind of halt it is, and a caller
-            // that has already named the kind should not have it overwritten.
-            category:
-              input.haltCategory ??
-              (humanBlocked
-                ? "structural-invariant"
-                : input.retryableStage === undefined
-                  ? "review-blocked"
-                  : "retry-exhausted"),
-            detail: input.reasonMarkdown,
-            haltedAt: input.updatedAt,
-          }
-        : input.run.automationHalt,
+      automationHalt:
+        automationStopped && input.recordAutomationHalt !== false
+          ? {
+              ...(input.ticketId === undefined ? {} : { ticketId: input.ticketId }),
+              stage: input.haltStage ?? automationStageForFailure(input.retryableStage),
+              // An explicit category from the call site wins. `humanBlocked` says
+              // who can clear the halt, not what kind of halt it is, and a caller
+              // that has already named the kind should not have it overwritten.
+              category:
+                input.haltCategory ??
+                (humanBlocked
+                  ? "structural-invariant"
+                  : input.retryableStage === undefined
+                    ? "review-blocked"
+                    : "retry-exhausted"),
+              detail: input.reasonMarkdown,
+              haltedAt: input.updatedAt,
+            }
+          : input.run.automationHalt,
       updatedAt: input.updatedAt,
     };
     yield* updateRun({
@@ -7781,6 +7783,8 @@ const make = Effect.gen(function* () {
               "Repair the validation failure or its environment, then retry Code Review. Starting another reviewer on the same HEAD would repeat the same gate without changing the result.",
             ].join("\n\n"),
             updatedAt,
+            humanBlocked: true,
+            recordAutomationHalt: false,
           });
           return;
         }
