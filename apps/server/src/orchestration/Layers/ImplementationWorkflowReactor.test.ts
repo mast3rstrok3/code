@@ -62,6 +62,7 @@ import {
   cleanDescendantAppReviewFailureCanRestart,
   fastFeatureBuildContractProblems,
   implementationTicketReviewWarningLines,
+  implementationAppReviewNeedsCodeReviewRecovery,
   implementationRunAcceptsNestedAppReviewUpdate,
   implementationReviewStageHasConflict,
   implementationAwaitsAppReviewRun,
@@ -358,6 +359,37 @@ it("keeps only the current nested App Review owned by its implementation stage",
     implementationAwaitsAppReviewRun(implementation, {
       ...runLevel,
       id: AppReviewWorkflowRunId.make("app-review-stale"),
+    }),
+  ).toBe(false);
+});
+
+it("continues a terminal nested App Review to Code Review instead of launching it again", () => {
+  const base = {
+    status: "qa-reviewing",
+    appReviewStrategy: "nested-workflow",
+    latestAppReviewWorkflowOutcome: "passed",
+    appReviewedHeadSha: "reviewed-head",
+    integrationHeadSha: "reviewed-head",
+    appReviewExhaustedAt: null,
+  } as const;
+
+  expect(implementationAppReviewNeedsCodeReviewRecovery(base)).toBe(true);
+  expect(
+    implementationAppReviewNeedsCodeReviewRecovery({
+      ...base,
+      latestAppReviewWorkflowOutcome: null,
+    }),
+  ).toBe(true);
+  expect(
+    implementationAppReviewNeedsCodeReviewRecovery({
+      ...base,
+      status: "code-reviewing",
+    }),
+  ).toBe(false);
+  expect(
+    implementationAppReviewNeedsCodeReviewRecovery({
+      ...base,
+      appReviewedHeadSha: "older-head",
     }),
   ).toBe(false);
 });

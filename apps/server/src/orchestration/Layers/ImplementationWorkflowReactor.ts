@@ -581,6 +581,26 @@ export function implementationAwaitsAppReviewRun(
   return state !== undefined && ticketAwaitsAppReviewRun(state, nestedRun.id);
 }
 
+/** A terminal combined App Review whose result still needs the Code Review handoff. */
+export function implementationAppReviewNeedsCodeReviewRecovery(
+  run: Pick<
+    OrchestrationImplementationRun,
+    | "status"
+    | "appReviewStrategy"
+    | "latestAppReviewWorkflowOutcome"
+    | "appReviewedHeadSha"
+    | "integrationHeadSha"
+    | "appReviewExhaustedAt"
+  >,
+): boolean {
+  if (run.status !== "qa-reviewing" || run.appReviewStrategy !== "nested-workflow") return false;
+  if (run.latestAppReviewWorkflowOutcome === "skipped") return true;
+  return (
+    (run.appReviewedHeadSha !== null && run.appReviewedHeadSha === run.integrationHeadSha) ||
+    run.appReviewExhaustedAt !== null
+  );
+}
+
 /** A local App Review claim that a lagging projection has not exposed yet. */
 export function ticketAppReviewClaimIsAhead(input: {
   readonly local: OrchestrationImplementationRun;
@@ -9175,7 +9195,12 @@ const make = Effect.gen(function* () {
       const reviewedHeadSha = nestedRun.finalHeadSha ?? nestedRun.workspaceRevision.headSha;
       const passedRun: OrchestrationImplementationRun = {
         ...linkedRun,
-        status: "qa-reviewing",
+        // Claim the next stage before starting it. The nested run's terminal
+        // event can arrive ahead of its read-model projection, and Code Review
+        // correctly waits while that projection still calls the review active.
+        // Keeping `qa-reviewing` here made recovery launch the same App Review
+        // again on the same HEAD instead of retrying this handoff.
+        status: "code-reviewing",
         integrationHeadSha: reviewedHeadSha,
         appReviewedHeadSha: reviewedHeadSha,
         qaAttemptCount: nestedRun.cyclesUsed,
@@ -9269,14 +9294,18 @@ const make = Effect.gen(function* () {
         updatedAt: event.occurredAt,
       };
       if (nestedRun.status === "exhausted") {
+        const codeReviewRun: OrchestrationImplementationRun = {
+          ...failedRun,
+          status: "code-reviewing",
+        };
         yield* updateRun({
           sourceThreadId,
-          run: failedRun,
+          run: codeReviewRun,
           createdAt: event.occurredAt,
         });
         yield* startCodeReview({
           sourceThreadId,
-          run: failedRun,
+          run: codeReviewRun,
           createdAt: event.occurredAt,
         });
         return;
@@ -10549,6 +10578,27 @@ const make = Effect.gen(function* () {
         ((activeReviewer.session?.status === "error" ||
           activeReviewer.session?.status === "stopped") &&
           !awaitingNudge(activeReviewer));
+      if (implementationAppReviewNeedsCodeReviewRecovery(run)) {
+        const continuedRun: OrchestrationImplementationRun = {
+          ...run,
+          status: "code-reviewing",
+          updatedAt: createdAt,
+        };
+        yield* recoverRunStage(
+          run.id,
+          "app-review-result",
+          updateRun({ sourceThreadId, run: continuedRun, createdAt }).pipe(
+            Effect.andThen(
+              startCodeReview({
+                sourceThreadId,
+                run: continuedRun,
+                createdAt,
+              }),
+            ),
+          ),
+        );
+        continue;
+      }
       if (run.status === "qa-reviewing" && reviewerNeedsRelaunch) {
         yield* startBrowserReview({
           sourceThreadId,
