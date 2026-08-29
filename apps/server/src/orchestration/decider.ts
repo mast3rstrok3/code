@@ -3843,6 +3843,33 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Implementation Run '${command.runId}' does not have a retryable failure.`,
         });
       }
+      const failure = existingRun.retryableFailure;
+      const queuedStates = new Set(["queued", "starting"]);
+      const queuedRunStage =
+        failure.ticketId === undefined
+          ? failure.stage === "worktree-setup" || failure.stage === "source-dirty"
+            ? "integration"
+            : failure.stage === "merge-gate" ||
+                failure.stage === "integration" ||
+                failure.stage === "app-review" ||
+                failure.stage === "code-review"
+              ? failure.stage
+              : null
+          : null;
+      const stageAlreadyQueued =
+        queuedRunStage !== null &&
+        existingRun.stageExecutions.some(
+          (execution) =>
+            queuedStates.has(execution.state) &&
+            execution.target.kind === "run" &&
+            execution.target.stage === queuedRunStage,
+        );
+      if (stageAlreadyQueued) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Implementation Run '${command.runId}' already has a stage queued or starting.`,
+        });
+      }
       return {
         ...(yield* withEventBase({
           aggregateKind: "thread",
