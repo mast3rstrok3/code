@@ -54,6 +54,7 @@ import { WORKFLOW_PROMPT_IDS } from "../../provider/WorkflowPromptRegistry.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
+import * as ProjectSetupScriptRunner from "../../project/ProjectSetupScriptRunner.ts";
 import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
 import { T3ProjectFileLoader } from "../../project/T3ProjectFileLoader.ts";
 import {
@@ -602,6 +603,9 @@ interface ImplementationCalls {
     }>
   >;
   readonly createWorktreeInputs: Ref.Ref<ReadonlyArray<VcsCreateWorktreeInput>>;
+  readonly setupScriptInputs: Ref.Ref<
+    ReadonlyArray<ProjectSetupScriptRunner.ProjectSetupScriptRunnerInput>
+  >;
   readonly removeWorktreeInputs: Ref.Ref<ReadonlyArray<VcsRemoveWorktreeInput>>;
   readonly activeWorktreePaths: Ref.Ref<ReadonlySet<string>>;
   /**
@@ -715,6 +719,7 @@ function makeTestLayer(
     readonly isDefault: boolean;
   }> = [{ name: "origin/main", remoteName: "origin", isDefault: true }],
   projectFile?: T3ProjectFile,
+  failIntegratedSetup = false,
 ) {
   const coreLayer = Layer.mergeAll(
     OrchestrationEngineLive.pipe(
@@ -740,6 +745,26 @@ function makeTestLayer(
     ImplementationWorkflowReactorLive.pipe(
       Layer.provide(coreLayer),
       Layer.provide(serverSettingsLayerTest(serverSettings)),
+      Layer.provide(
+        Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({
+          runForThread: (input) =>
+            Ref.update(calls.setupScriptInputs, (inputs) => [...inputs, input]).pipe(
+              Effect.andThen(
+                failIntegratedSetup
+                  ? Effect.fail(
+                      new ProjectSetupScriptRunner.ProjectSetupScriptOperationError({
+                        threadId: input.threadId,
+                        ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
+                        worktreePath: input.worktreePath,
+                        operation: "executeCommand",
+                        cause: "dependency install failed",
+                      }),
+                    )
+                  : Effect.succeed({ status: "no-script" as const }),
+              ),
+            ),
+        }),
+      ),
       Layer.provide(
         Layer.succeed(
           T3ProjectFileLoader,
@@ -1240,6 +1265,7 @@ function withSystem<A, E>(
       readonly isDefault: boolean;
     }>;
     readonly projectFile?: T3ProjectFile;
+    readonly failIntegratedSetup?: boolean;
   },
 ) {
   return Effect.gen(function* () {
@@ -1271,6 +1297,9 @@ function withSystem<A, E>(
       }>
     >([]);
     const createWorktreeInputs = yield* Ref.make<ReadonlyArray<VcsCreateWorktreeInput>>([]);
+    const setupScriptInputs = yield* Ref.make<
+      ReadonlyArray<ProjectSetupScriptRunner.ProjectSetupScriptRunnerInput>
+    >([]);
     const removeWorktreeInputs = yield* Ref.make<ReadonlyArray<VcsRemoveWorktreeInput>>([]);
     const activeWorktreePaths = yield* Ref.make<ReadonlySet<string>>(new Set());
     const createdBranches = yield* Ref.make<ReadonlySet<string>>(
@@ -1298,6 +1327,7 @@ function withSystem<A, E>(
       createOrOpenChangeRequestCount,
       createOrOpenChangeRequestInputs,
       createWorktreeInputs,
+      setupScriptInputs,
       removeWorktreeInputs,
       activeWorktreePaths,
       createdBranches,
@@ -1352,6 +1382,7 @@ function withSystem<A, E>(
           options?.changeRequestGate,
           options?.remoteRefs,
           options?.projectFile,
+          options?.failIntegratedSetup,
         ),
       ),
     );
@@ -6189,6 +6220,52 @@ describe("ImplementationWorkflowReactor", () => {
           snapshot.implementationRuns.find((entry) => entry.id === run.id)?.ticketStates[0]?.status,
         ).toBe("code-reviewing");
       }),
+    ),
+  );
+
+  it.effect("refreshes repository setup after integrating ticket branches", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system);
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+
+        expect(yield* Ref.get(system.setupScriptInputs)).toEqual([
+          {
+            threadId: run.orchestratorThreadId,
+            projectId,
+            worktreePath: run.orchestratorWorktreePath,
+          },
+        ]);
+        const snapshot = yield* system.query.getSnapshot();
+        expect(
+          snapshot.threads.filter((thread) => thread.workflowRole === "implementation-validator"),
+        ).toHaveLength(1);
+      }),
+    ),
+  );
+
+  it.effect("blocks before the merge gate when integrated repository setup fails", () =>
+    withSystem(
+      (system) =>
+        Effect.gen(function* () {
+          const { run } = yield* launchRun(system);
+          yield* appendWorkerResult(system, { run, status: "succeeded" });
+
+          const snapshot = yield* system.query.getSnapshot();
+          const blocked = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+          expect(blocked?.status).toBe("needs-human-attention");
+          expect(blocked?.retryableFailure).toMatchObject({
+            stage: "worktree-setup",
+            humanBlocked: false,
+          });
+          expect(blocked?.retryableFailure?.detail).toContain(
+            "Integrated worktree dependency setup failed",
+          );
+          expect(
+            snapshot.threads.filter((thread) => thread.workflowRole === "implementation-validator"),
+          ).toHaveLength(0);
+        }),
+      { failIntegratedSetup: true },
     ),
   );
 

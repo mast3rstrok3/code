@@ -60,6 +60,7 @@ import * as SynchronizedRef from "effect/SynchronizedRef";
 import { AppDevStackManager } from "../../appDevStack/AppDevStackManager.ts";
 import { normalizeWorkflowWorktreePath } from "../../appDevStack/workflowOwnership.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
+import * as ProjectSetupScriptRunner from "../../project/ProjectSetupScriptRunner.ts";
 import {
   appendWorkflowSkillCommandSection,
   WORKFLOW_PROMPT_IDS,
@@ -1758,6 +1759,7 @@ const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+  const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   const gitWorkflow = yield* GitWorkflowService;
   const appDevStackManager = yield* AppDevStackManager;
   const serverSettingsService = yield* ServerSettingsService;
@@ -4436,6 +4438,43 @@ const make = Effect.gen(function* () {
         run: integratedRun,
         createdAt: input.createdAt,
       });
+
+      const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+      const orchestratorThread = findThread(readModel, integratedRun.orchestratorThreadId);
+      if (orchestratorThread === null) {
+        yield* blockRun({
+          sourceThreadId: input.sourceThreadId,
+          run: integratedRun,
+          retryableStage: "worktree-setup",
+          reasonMarkdown:
+            "The integrated workflow worktree cannot refresh its dependencies because its orchestrator thread is missing.",
+          updatedAt: input.createdAt,
+          humanBlocked: true,
+        });
+        return;
+      }
+      const setupResult = yield* projectSetupScriptRunner
+        .runForThread({
+          threadId: integratedRun.orchestratorThreadId,
+          projectId: orchestratorThread.projectId,
+          worktreePath: integratedRun.orchestratorWorktreePath,
+        })
+        .pipe(
+          Effect.flatMap((result) =>
+            result.status === "started" ? result.completion : Effect.void,
+          ),
+          Effect.result,
+        );
+      if (setupResult._tag === "Failure") {
+        yield* blockRun({
+          sourceThreadId: input.sourceThreadId,
+          run: integratedRun,
+          retryableStage: "worktree-setup",
+          reasonMarkdown: `Integrated worktree dependency setup failed.\n\n\`\`\`\n${errorDetail(setupResult.failure)}\n\`\`\``,
+          updatedAt: input.createdAt,
+        });
+        return;
+      }
 
       yield* startMergeGate({
         sourceThreadId: input.sourceThreadId,
@@ -8223,6 +8262,22 @@ const make = Effect.gen(function* () {
           run: input.run,
           createdAt: input.createdAt,
         });
+        return;
+      }
+      if (failure.stage === "worktree-setup") {
+        if (input.run.artifactSource === "proposed-plan") {
+          yield* ensureFastFeatureRun({
+            sourceThreadId: input.sourceThreadId,
+            run: input.run,
+            createdAt: input.createdAt,
+          });
+        } else {
+          yield* integrateCompletedRun({
+            sourceThreadId: input.sourceThreadId,
+            run: input.run,
+            createdAt: input.createdAt,
+          });
+        }
         return;
       }
       if (failure.stage === "merge-gate") {

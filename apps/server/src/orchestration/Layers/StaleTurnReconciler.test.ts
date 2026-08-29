@@ -39,6 +39,7 @@ import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import * as ProviderSessionRuntime from "../../persistence/ProviderSessionRuntime.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
+import * as ProjectSetupScriptRunner from "../../project/ProjectSetupScriptRunner.ts";
 import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
 import { T3ProjectFileLoader } from "../../project/T3ProjectFileLoader.ts";
 import { WORKFLOW_PROMPT_IDS } from "../../provider/WorkflowPromptRegistry.ts";
@@ -157,6 +158,11 @@ function makeTestLayer(
   const reactorLayer = ImplementationWorkflowReactorLive.pipe(
     Layer.provide(coreLayer),
     Layer.provide(serverSettingsLayerTest(settingsOverrides)),
+    Layer.provide(
+      Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({
+        runForThread: () => Effect.succeed({ status: "no-script" as const }),
+      }),
+    ),
     Layer.provide(
       Layer.succeed(T3ProjectFileLoader, {
         load: () => Effect.succeed(Option.none()),
