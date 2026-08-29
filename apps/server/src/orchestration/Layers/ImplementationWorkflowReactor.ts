@@ -6834,9 +6834,23 @@ const make = Effect.gen(function* () {
         createdAt: updatedAt,
       });
       if (postCleanupRun.qaExhaustedAt !== null || postCleanupRun.appReviewExhaustedAt !== null) {
+        const freshCodeReviewRun: OrchestrationImplementationRun = {
+          ...postCleanupRun,
+          status: "code-reviewing",
+          activeCodeReviewThreadId: null,
+          activeCodeReviewHeadSha: null,
+          codeReviewedHeadSha: null,
+          finalCodeReviewGeneration: postCleanupRun.finalCodeReviewGeneration + 1,
+          finalCodeReviewLaunchCount: 0,
+          finalCodeReviewPassCount: 0,
+          codeReviewExhaustedAt: null,
+          codeReviewExhaustionReason: null,
+          updatedAt,
+        };
+        yield* updateRun({ sourceThreadId, run: freshCodeReviewRun, createdAt: updatedAt });
         yield* startCodeReview({
           sourceThreadId,
-          run: postCleanupRun,
+          run: freshCodeReviewRun,
           createdAt: updatedAt,
         });
         return;

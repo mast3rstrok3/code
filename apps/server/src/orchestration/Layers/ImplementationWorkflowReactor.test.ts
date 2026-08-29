@@ -7144,6 +7144,50 @@ describe("ImplementationWorkflowReactor", () => {
     ),
   );
 
+  it.effect("resets stale Code Review launch claims after exhausted App Review", () =>
+    withSystem((system) =>
+      Effect.gen(function* () {
+        const { run } = yield* launchRun(system, { appReviewStrategy: "nested-workflow" });
+        yield* appendWorkerResult(system, { run, status: "succeeded" });
+
+        let snapshot = yield* system.query.getSnapshot();
+        const validating = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        if (validating === undefined) throw new Error("Validating run missing.");
+        yield* system.engine.dispatch({
+          type: "thread.implementation-run.update",
+          commandId: commandId("seed-exhausted-app-review-code-review-claim"),
+          threadId: sourceThreadId,
+          run: {
+            ...validating,
+            qaExhaustedAt: "2026-01-01T00:00:02.500Z",
+            appReviewExhaustedAt: "2026-01-01T00:00:02.500Z",
+            codeReviewAttemptCount: 2,
+            finalCodeReviewLaunchCount: 2,
+            finalCodeReviewPassCount: 1,
+            updatedAt: "2026-01-01T00:00:02.500Z",
+          },
+          createdAt: "2026-01-01T00:00:02.500Z",
+        });
+
+        yield* passMergeGate(system, run);
+
+        snapshot = yield* system.query.getSnapshot();
+        const reviewing = snapshot.implementationRuns.find((entry) => entry.id === run.id);
+        expect(reviewing?.status).toBe("code-reviewing");
+        expect(reviewing?.finalCodeReviewGeneration).toBe(1);
+        expect(reviewing?.finalCodeReviewLaunchCount).toBe(1);
+        expect(reviewing?.finalCodeReviewPassCount).toBe(0);
+        expect(reviewing?.codeReviewAttemptCount).toBe(3);
+        expect(reviewing?.activeCodeReviewThreadId).not.toBeNull();
+        expect(reviewing?.retryableFailure).toBeNull();
+        expect(
+          snapshot.threads.some((thread) => thread.id === reviewing?.activeCodeReviewThreadId),
+        ).toBe(true);
+        expect(snapshot.appReviewWorkflowRuns).toHaveLength(0);
+      }),
+    ),
+  );
+
   it.effect("numbers malformed QA replacements monotonically and halts before an eleventh", () =>
     withSystem((system) =>
       Effect.gen(function* () {
