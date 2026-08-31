@@ -170,6 +170,25 @@ describe("AppStackPanel list management", () => {
     ).toEqual(["current", "other"]);
   });
 
+  it("keeps the worktree's prod stack beside its current dev stack", () => {
+    const dev = makeStack({ id: "hero-dev", worktreePath: "/repo/hero", variant: "dev" });
+    const prod = makeStack({
+      id: "hero-prod",
+      worktreePath: "/repo/hero",
+      composePath: "infra/compose/compose.app-prod.yml",
+      variant: "prod",
+    });
+    const staleDev = makeStack({ id: "hero-dev-old", worktreePath: "/repo/hero", variant: "dev" });
+
+    expect(
+      orderAppStacksForPanel({
+        currentStack: dev,
+        listedStacks: [staleDev, prod, dev],
+        currentWorktreePath: "/repo/hero",
+      }).map((stack) => stack.id),
+    ).toEqual(["hero-dev", "hero-prod"]);
+  });
+
   it("reconciles stale selection and derives tri-state select-all state", () => {
     const first = makeStack({ id: "first" });
     const second = makeStack({ id: "second" });

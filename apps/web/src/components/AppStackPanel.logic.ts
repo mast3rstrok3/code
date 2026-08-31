@@ -6,6 +6,7 @@ import type {
   AppStackService,
 } from "@t3tools/contracts";
 import { normalizePreviewUrl } from "@t3tools/shared/preview";
+import { appStackVariantForComposePath } from "@t3tools/shared/appStack";
 
 type WorkflowConflict = NonNullable<AppStackListResult["workflowConflicts"]>[number];
 
@@ -88,6 +89,9 @@ function normalizeWorktreePath(value: string): string {
   return normalized === "" ? "/" : normalized;
 }
 
+const stackVariant = (stack: AppStack) =>
+  stack.variant ?? appStackVariantForComposePath(stack.composePath);
+
 export function orderAppStacksForPanel(input: {
   readonly currentStack: AppStack | null | undefined;
   readonly listedStacks: ReadonlyArray<AppStack>;
@@ -102,12 +106,17 @@ export function orderAppStacksForPanel(input: {
     seenIds.add(input.currentStack.id);
   }
 
+  // The by-worktree lookup answers for one variant; the same worktree's other
+  // variant only ever arrives through the list, so keep it. A listed stack of
+  // the current stack's own variant is a stale twin the lookup superseded.
+  const currentVariant = input.currentStack ? stackVariant(input.currentStack) : null;
   for (const stack of input.listedStacks) {
     if (seenIds.has(stack.id)) continue;
     if (
       input.currentStack &&
       normalizeWorktreePath(stack.worktreePath) ===
-        normalizeWorktreePath(input.currentStack.worktreePath)
+        normalizeWorktreePath(input.currentStack.worktreePath) &&
+      stackVariant(stack) === currentVariant
     ) {
       continue;
     }
