@@ -13,7 +13,6 @@ import type {
   ThreadId,
   WorkflowPreset,
   ImplementationWorkflowSettings,
-  TurnId,
 } from "@t3tools/contracts";
 import {
   ProviderDriverKind,
@@ -145,10 +144,11 @@ import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommand
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
 import {
-  resolveComposerPrimaryMode,
+  ComposerModeControl,
   resolveWorkflowPresetForPicker,
   type ComposerBuildSkill,
   type ComposerModeCatalog,
+  type ComposerModeControls,
 } from "./ComposerModePicker";
 import { ComposerModeCatalogDialog } from "./ComposerModeCatalogDialog";
 import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
@@ -164,7 +164,6 @@ import {
   renderProviderTraitsMenuContent,
   renderProviderTraitsPicker,
 } from "./composerProviderState";
-import type { ComposerModeControls } from "./TraitsPicker";
 import { ContextWindowMeter } from "./ContextWindowMeter";
 import { resolveContextWindowModelDisplayName } from "./ContextWindowMeter.logic";
 import {
@@ -314,7 +313,6 @@ import {
   CircleAlertIcon,
   FileIcon,
   PaperclipIcon,
-  PencilRulerIcon,
   PlayIcon,
   type LucideIcon,
   LockIcon,
@@ -1625,7 +1623,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     modelOptions: composerModelOptions?.[selectedInstanceId],
     prompt,
     onPromptChange: setPromptFromTraits,
-    ...(composerModeControls ? { modeControls: composerModeControls } : {}),
     planModeEnabled: settings.planModeEnabled,
   });
   const pendingPrimaryAction = useMemo(
@@ -4290,6 +4287,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                           {providerTraitsPicker}
                         </>
                       ) : null}
+                      {composerModeControls ? (
+                        <>
+                          <Separator
+                            orientation="vertical"
+                            className="mx-0.5 hidden h-4 sm:block"
+                          />
+                          <ComposerModeControl controls={composerModeControls} />
+                        </>
+                      ) : null}
                       <ComposerFooterAccessControl
                         runtimeMode={runtimeMode}
                         onRuntimeModeChange={handleRuntimeModeChange}
@@ -4392,11 +4398,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       {composerModeControls ? (
         <ComposerModeCatalogDialog
           catalog={modeCatalog}
-          activePreset={
-            resolveComposerPrimaryMode(composerModeControls) === "workflow"
-              ? resolveWorkflowPresetForPicker(composerModeControls)
-              : null
-          }
+          activePreset={resolveWorkflowPresetForPicker(composerModeControls)}
           buildSkills={composerModeControls.buildSkills}
           selectedBuildSkillId={composerModeControls.selectedBuildSkillId}
           workflowAvailable={composerModeControls.workflowAvailable}

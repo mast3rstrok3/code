@@ -2,25 +2,25 @@
 
 The Settings catalog separates workflow automation into three layers:
 
-- **Workflows** contains two Plan presets and three Engineering presets. **Wayfinder** is visible while it is under development but cannot start yet.
+- **Workflows** contains the Engineering workflow variants. **Wayfinder** is visible while it is under development but cannot start yet.
 - **Skills** are focused engineering instructions. The catalog includes all 18 skills from Matt Pocock's engineering collection plus T3-native orchestration skills.
 - **Docs** are supporting references used by those skills, such as ADR, context, testing, and browser-QA formats.
 
 All three catalogs are read-only and versioned with the T3 Code server; the default model per step, on the same Workflows page, is yours to change. Skills are sorted alphabetically. Each skill shows a **Build** pill when it can be invoked directly and workflow pills for every guided workflow that uses it. Document pills link to the supporting references associated with that skill.
 
-To invoke a skill directly, open the composer's model settings next to the model name, go to **Mode**, and choose **Skills**. T3 Code opens the skill catalog in a dialog. Select a skill to use it, or open its help button to read the full instructions first. The composer control then names the skill. That skill applies to the next turn and clears after the turn starts successfully. This path is built into T3 Code and works independently of provider-installed project or personal skills. `$skill` mentions still invoke skills discovered from the active provider.
+To invoke a skill directly, open the composer's mode selector next to the reasoning control and choose **Skills**. T3 Code opens the skill catalog in a dialog. Select a skill to use it, or open its help button to read the full instructions first. The composer control then names the skill. That skill applies to the next turn and clears after the turn starts successfully. This path is built into T3 Code and works independently of provider-installed project or personal skills. `$skill` mentions still invoke skills discovered from the active provider.
 
 ## Choosing a workflow
 
-Workflows live in the same composer control as skills. Open the model settings next to the model name, go to **Mode**, and choose **Workflows**. The dialog groups the presets under **Plan** and **Engineering**. Each help button shows the workflow steps. Selecting an available preset opens its model, cycle, review-part, and optional-stage settings before the composer switches modes. Changes made there apply only to that run. Build and Plan appear alongside these catalogs only while the legacy plan mode setting is on. Workflows and skills do not depend on it.
+Workflows live in the same separate mode control as Build, Plan, and Skills. Choose **Engineering workflow** to open its settings directly. The selector in the dialog header switches variants and applies that variant's step defaults. Model, cycle, review-part, and optional-step changes apply only to that run. Build and Plan appear while the legacy plan mode setting is on. Engineering workflow and Skills do not depend on it.
 
-- **Quick Plan** uses the provider CLI's Plan mode, answers its questions automatically, builds and validates the change, then stops.
-- **Fast Plan** adds the combined App Review, final Code Review, pull-request creation, and pull-request babysitting to Quick Plan.
-- **Fast Engineering** runs the Engineering Workflow with ticket and combined App Reviews off by default.
-- **Engineering Workflow** begins with Grill with Docs, then proceeds through Planning and the full Implementation workflow.
+- **Quick Feature** uses the provider CLI's Plan mode, answers its questions automatically, builds and validates the change, then stops.
+- **Fast Feature** adds Final App Review, Final Code Review, pull-request creation, and pull-request babysitting to Quick Feature.
+- **Fast Engineering** runs the full engineering sequence with ticket and Final App Reviews off by default.
+- **Full Engineering** begins with Grill with Docs, then proceeds through Planning and the full Implementation workflow.
 - **Wayfinder** will replace Grill with Docs with a Wayfinder planning phase. It is under development.
 
-These names are presets, not fixed workflow types. You can turn any optional stage on or off before starting. Ticket App Review and the combined App Review have separate switches. Turning pull-request creation off also turns babysitting off; turning babysitting on turns pull-request creation on. The choices are stored with the run and do not change later runs.
+These names are variants of the Engineering workflow, not separate workflow types. You can turn any optional step on or off before starting. Ticket App Review, Final App Review, and Final Code Review have separate switches. Turning pull-request creation off also turns babysitting off; turning babysitting on turns pull-request creation on. The choices are stored with the run and do not change later runs.
 
 Control the grill in the initial prompt using ordinary language: for example, “ask product questions only,” “focus on engineering decisions,” or “ask at most five questions.” Without a constraint, Grill with Docs covers the complete product, engineering, and domain frontier.
 
@@ -32,11 +32,11 @@ After a workflow starts, its Planning steps appear in the Workflows side panel e
 
 ## Phase details
 
-**Quick Plan and Fast Plan** create a shared worktree and start the provider's native CLI Plan mode. T3 Code answers structured planning questions without pausing the run: it chooses a valid explicit recommendation, otherwise the first option, otherwise asks the agent to use its best judgment. The proposed plan launches Build in the same worktree. Quick Plan stops after focused validation unless you enable later stages. Fast Plan enables the combined App Review, final Code Review, pull-request creation, and pull-request babysitting by default.
+**Quick Feature and Fast Feature** create a shared worktree and start the provider's native CLI Plan mode. T3 Code answers structured planning questions without pausing the run: it chooses a valid explicit recommendation, otherwise the first option, otherwise asks the agent to use its best judgment. The proposed plan launches Build in the same worktree. Quick Feature stops after focused validation unless you enable later stages. Fast Feature enables Final App Review, Final Code Review, pull-request creation, and pull-request babysitting by default.
 
-**Fast Engineering** follows the same Planning and Implementation sequence as Engineering Workflow. It skips each ticket's App Review and the combined post-merge App Review by default. Code Reviews, pull-request creation, and pull-request babysitting remain enabled.
+**Fast Engineering** follows the same Planning and Implementation sequence as Full Engineering. It skips each ticket's App Review and Final App Review by default. Code Reviews, pull-request creation, and pull-request babysitting remain enabled.
 
-**Engineering Workflow** creates a prepared workspace and starts Grill with Docs against the submitted prompt. It continues through Spec authoring, durable tickets, ticket review, ticket implementation, ticket App Reviews and Code Reviews, merge, combined App Review, final Code Review, pull-request creation, and pull-request babysitting.
+**Full Engineering** creates a prepared workspace and starts Grill with Docs against the submitted prompt. It continues through Spec authoring, durable tickets, ticket review, ticket implementation, ticket App Reviews and Code Reviews, merge, Final App Review, Final Code Review, pull-request creation, and pull-request babysitting.
 
 Its eleven phases are: prepare the shared worktree and App Stack; Grill with Docs; author the Spec; author tickets; review and revise tickets; execute dependency-ready ticket waves; merge ticket branches; run Final App Review; run Final Code Review; create the pull request; and babysit the pull request.
 

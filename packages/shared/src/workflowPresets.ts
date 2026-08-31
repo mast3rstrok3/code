@@ -177,8 +177,8 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
   },
   {
     id: "quick-plan",
-    label: "Quick Plan",
-    description: "Plan with the provider CLI, build the change, validate it, and stop.",
+    label: "Quick Feature",
+    description: "Plan with the provider CLI, build and validate the change, then stop.",
     route: "product",
     interactionMode: "plan",
     workflowPromptId: "planning.fast-feature.codex",
@@ -195,7 +195,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
   },
   {
     id: "fast-plan",
-    label: "Fast Plan",
+    label: "Fast Feature",
     description: "Plan and build with the provider CLI, then review and publish the change.",
     route: "product",
     interactionMode: "plan",
@@ -407,7 +407,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
   },
   {
     id: "planning",
-    label: "Engineering Workflow",
+    label: "Full Engineering",
     description:
       "Plan, run every ready ticket concurrently, then use one thread for each ticket or root step.",
     route: "planning",
@@ -506,7 +506,7 @@ const FAST_ENGINEERING_WORKFLOW_DEFINITION: WorkflowPresetDefinition = {
   id: "fast-engineering",
   label: "Fast Engineering",
   description:
-    "Run the Engineering Workflow with ticket and combined App Reviews skipped by default.",
+    "Run the full engineering sequence with ticket and Final App Reviews skipped by default.",
   implementationDefaults: {
     ...FULL_IMPLEMENTATION_DEFAULTS,
     ticketAppReviewEnabled: false,

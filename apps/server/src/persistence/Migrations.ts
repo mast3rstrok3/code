@@ -188,6 +188,10 @@ export const migrationEntries = [
   [82, "ProjectionThreadWorkflowImplementationSettings", Migration0082],
   [83, "OrchestrationCommandReceiptResults", Migration0083],
   [84, "AppReviewScope", Migration0084],
+  // Fork databases may already be at migration 84, which means upstream's
+  // 42/43 migrations are skipped. Re-run their idempotent effects at new IDs.
+  [85, "ProjectionThreadLinkedPullRequestCompatibility", Migration0042],
+  [86, "ProjectionThreadsUnsettledAtCompatibility", Migration0043],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

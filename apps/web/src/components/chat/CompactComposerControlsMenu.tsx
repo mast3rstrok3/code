@@ -10,8 +10,11 @@ import {
   MenuSeparator as MenuDivider,
   MenuTrigger,
 } from "../ui/menu";
-import { ComposerModePickerContent, resolveComposerPrimaryMode } from "./ComposerModePicker";
-import type { ComposerModeControls } from "./TraitsPicker";
+import {
+  ComposerModePickerContent,
+  resolveComposerPrimaryMode,
+  type ComposerModeControls,
+} from "./ComposerModePicker";
 
 /**
  * The narrow footer's single overflow menu: traits, mode and access in one

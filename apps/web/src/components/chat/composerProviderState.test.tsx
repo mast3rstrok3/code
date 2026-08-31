@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
-  EnvironmentId,
   ProviderDriverKind,
-  ProviderInstanceId,
   type ProviderOptionDescriptor,
   type ProviderOptionSelection,
   type ServerProviderModel,
@@ -13,7 +11,6 @@ import {
   renderProviderTraitsMenuContent,
   renderProviderTraitsPicker,
 } from "./composerProviderState";
-import type { ComposerModeControls } from "./TraitsPicker";
 import { DraftId } from "../../composerDraftStore";
 
 // Everything in composerProviderState is now data-driven by the model's
@@ -22,37 +19,6 @@ import { DraftId } from "../../composerDraftStore";
 
 const PROVIDER: ProviderDriverKind = ProviderDriverKind.make("codex");
 const MODEL = "test-model";
-
-const MODE_CONTROLS: ComposerModeControls = {
-  interactionMode: "default",
-  workflowPreset: null,
-  lastWorkflowPreset: null,
-  workflowAvailable: true,
-  showPrimaryModes: false,
-  buildSkills: [],
-  selectedBuildSkillId: null,
-  workflowDefaults: {
-    environmentId: EnvironmentId.make("environment-1"),
-    rootModelSelection: {
-      instanceId: ProviderInstanceId.make("codex"),
-      model: MODEL,
-    },
-    stepModels: [],
-    stepCycles: [],
-    stepReviewParts: [],
-    implementationSettings: {
-      ticketAppReviewEnabled: true,
-      appReviewEnabled: true,
-      finalCodeReviewEnabled: true,
-      pullRequestCreationEnabled: true,
-      pullRequestBabysittingEnabled: true,
-    },
-    onChange: () => {},
-  },
-  onOpenCatalog: () => {},
-  onInteractionModeChange: () => {},
-  onBuildSkillChange: () => {},
-};
 
 function selectDescriptor(
   id: string,
@@ -430,7 +396,7 @@ describe("provider traits render guards", () => {
     expect(renderProviderTraitsMenuContent(args)).toBeNull();
   });
 
-  it("still renders the picker for a traitless model when mode controls are passed", () => {
+  it("returns null for a traitless model", () => {
     const args = {
       provider: PROVIDER,
       draftId: DraftId.make("draft-1"),
@@ -441,10 +407,7 @@ describe("provider traits render guards", () => {
       onPromptChange: () => {},
     };
 
-    // Without the mode section there is nothing to show; with it, the workflow
-    // and skill lists still need a home.
     expect(renderProviderTraitsPicker(args)).toBeNull();
-    expect(renderProviderTraitsPicker({ ...args, modeControls: MODE_CONTROLS })).not.toBeNull();
     expect(renderProviderTraitsMenuContent(args)).toBeNull();
   });
 });

@@ -52,7 +52,8 @@ function PlanWorkflowStageControls(props: {
   readonly onChange: (settings: ImplementationWorkflowSettings) => void;
 }) {
   const entries = [
-    ["Combined App Review", "appReviewEnabled"],
+    ["Ticket App Review", "ticketAppReviewEnabled"],
+    ["Final App Review", "appReviewEnabled"],
     ["Final Code Review", "finalCodeReviewEnabled"],
     ["Create pull request", "pullRequestCreationEnabled"],
     ["Babysit pull request", "pullRequestBabysittingEnabled"],

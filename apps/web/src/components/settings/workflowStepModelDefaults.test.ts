@@ -9,6 +9,7 @@ import {
   setWorkflowStepModelDefault,
   setWorkflowStepModelDefaults,
   engineeringWorkflowDefaultSteps,
+  skippableImplementationSettingForStep,
 } from "./workflowStepModelDefaults.ts";
 
 const selection: ModelSelection = {
@@ -82,10 +83,25 @@ it("keeps nested worker and review agents under their workflow step", () => {
     "Ticket Code Review",
   ]);
   expect(appReview?.subSteps.map((subStep) => subStep.label)).toEqual([
-    "E2E tests & browser review",
+    "End-to-end test",
+    "Browser review",
     "Gap analysis & repair tickets",
     "Repair implementation",
   ]);
+});
+
+it("maps the final workflow steps to their run switches", () => {
+  const settingsByLabel = Object.fromEntries(
+    engineeringWorkflowDefaultSteps().map((step) => [
+      step.label,
+      skippableImplementationSettingForStep(step),
+    ]),
+  );
+
+  expect(settingsByLabel["Final App Review"]).toBe("appReviewEnabled");
+  expect(settingsByLabel["Final Code Review"]).toBe("finalCodeReviewEnabled");
+  expect(settingsByLabel["Create pull request"]).toBe("pullRequestCreationEnabled");
+  expect(settingsByLabel["Babysit pull request"]).toBe("pullRequestBabysittingEnabled");
 });
 
 it("replaces a default in place and clears it without leaving an empty key", () => {

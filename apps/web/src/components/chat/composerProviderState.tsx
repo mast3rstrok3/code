@@ -16,12 +16,7 @@ import type { ReactNode } from "react";
 
 import type { DraftId } from "../../composerDraftStore";
 import { getProviderModelCapabilities } from "../../providerModels";
-import {
-  shouldRenderTraitsControls,
-  TraitsMenuContent,
-  TraitsPicker,
-  type ComposerModeControls,
-} from "./TraitsPicker";
+import { shouldRenderTraitsControls, TraitsMenuContent, TraitsPicker } from "./TraitsPicker";
 
 export type ComposerProviderStateInput = {
   provider: ProviderDriverKind;
@@ -53,11 +48,6 @@ type TraitsRenderInput = {
   modelOptions: ReadonlyArray<ProviderOptionSelection> | undefined;
   prompt: string;
   onPromptChange: (prompt: string) => void;
-  /**
-   * Composer-only. When present the control also renders the mode section, so
-   * it must survive providers whose model advertises no traits at all.
-   */
-  modeControls?: ComposerModeControls;
   planModeEnabled?: boolean;
 };
 
@@ -164,13 +154,9 @@ export function renderProviderTraitsMenuContent(input: TraitsRenderInput): React
 
 export function renderProviderTraitsPicker(input: TraitsRenderInput): ReactNode {
   const props = traitsControlProps(input);
-  // The mode section is reason enough to render: a model with no reasoning or
-  // context-window options still needs somewhere to pick a workflow.
-  if (!props || (!props.hasTraits && !input.modeControls)) {
+  if (!props?.hasTraits) {
     return null;
   }
   const { hasTraits: _hasTraits, ...rest } = props;
-  return (
-    <TraitsPicker {...rest} {...(input.modeControls ? { modeControls: input.modeControls } : {})} />
-  );
+  return <TraitsPicker {...rest} />;
 }

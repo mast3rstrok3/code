@@ -66,19 +66,19 @@ Concurrency is scoped by step. Every unblocked ticket may run concurrently becau
 
 Workflow threads read canonical artifacts through the read-only `workflow-artifacts` MCP toolkit: `workflow_context_get`, `workflow_spec_get`, `workflow_wayfinder_map_get`, `workflow_tickets_list`, `workflow_ticket_get`, `workflow_app_reviews_list`, `workflow_app_review_get`, and `workflow_doc_get`. Interactive grill threads additionally hold the `user-input` capability and its single write-side tool, `workflow_request_user_input`.
 
-## Composer workflow presets
+## Composer workflow variants
 
-The composer groups five presets under Plan and Engineering. Quick Plan, Fast Plan, Fast Engineering, and Engineering Workflow are launchable. Wayfinder is visible but disabled while its planning phase is under development. Previously shipped Fast Feature, Full Feature, standalone Planning, standalone Implementation, Fix, and App Review identities remain decodable for historical runs.
+The composer has one Engineering workflow mode with five variants in its settings header. Quick Feature, Fast Feature, Fast Engineering, and Full Engineering are launchable. Wayfinder remains visible but disabled while its planning phase is under development. Previously shipped Full Feature, standalone Planning, standalone Implementation, Fix, and App Review identities remain decodable for historical runs.
 
-Quick Plan and Fast Plan use the existing Plan workflow controller. Their root turn uses the provider's native `plan` interaction mode and `planning.fast-feature.codex`; a proposed plan launches the existing Build controller in the prepared worktree. `ProductWorkflowReactor` consumes canonical `user-input.requested` activities for only these two presets. It chooses a valid `recommendation.optionLabel`, otherwise the first option label, otherwise `Use your best judgment and continue.` The resulting `thread.user-input.respond` command uses the request ID in its deterministic command ID, and startup reconciliation repeats unresolved requests safely after a restart.
+Quick Feature and Fast Feature use the existing Plan workflow controller. Their root turn uses the provider's native `plan` interaction mode and `planning.fast-feature.codex`; a proposed plan launches the existing Build controller in the prepared worktree. `ProductWorkflowReactor` consumes canonical `user-input.requested` activities for only these two variants. It chooses a valid `recommendation.optionLabel`, otherwise the first option label, otherwise `Use your best judgment and continue.` The resulting `thread.user-input.respond` command uses the request ID in its deterministic command ID, and startup reconciliation repeats unresolved requests safely after a restart.
 
-Fast Engineering and Engineering Workflow share the Planning and Implementation controllers. Both begin with Grill with Docs, produce a Spec and reviewed tickets, then launch Implementation in the same prepared workspace. Wayfinder will replace Grill with Docs with its separate Wayfinder phase.
+Fast Engineering and Full Engineering share the Planning and Implementation controllers. Both begin with Grill with Docs, produce a Spec and reviewed tickets, then launch Implementation in the same prepared workspace. Wayfinder will replace Grill with Docs with its separate Wayfinder phase.
 
-Each definition supplies `ImplementationWorkflowSettings` defaults. The composer copies them into `workflowImplementationSettings` on the thread, and that durable run configuration becomes the Implementation skip list. Quick Plan disables combined App Review, final Code Review, pull-request creation, and babysitting. Fast Plan enables all four. Fast Engineering disables ticket and combined App Reviews but keeps Code Reviews and pull-request automation. Engineering Workflow enables the full sequence. Ticket App Reviews use ticket skip targets; the combined App Review uses its run skip target. Pull-request creation and babysitting are normalized as a dependency.
+Each variant supplies `ImplementationWorkflowSettings` defaults. The composer copies them into `workflowImplementationSettings` on the thread, and that durable run configuration becomes the Implementation skip list. Quick Feature disables Final App Review, Final Code Review, pull-request creation, and babysitting. Fast Feature enables the full sequence. Fast Engineering disables ticket and Final App Reviews but keeps Code Reviews and pull-request automation. Full Engineering also enables the full sequence. Ticket App Reviews use ticket skip targets; Final App Review uses its run skip target. Pull-request creation and babysitting are normalized as a dependency.
 
 App Review remains independently launchable from its panel and reusable as a nested stage. It is not a composer preset.
 
-The following preset descriptions document historical runs and the controllers reused by Engineering Workflow.
+The following preset descriptions document historical runs and the controllers reused by the Engineering workflow.
 
 ### Fast Feature
 

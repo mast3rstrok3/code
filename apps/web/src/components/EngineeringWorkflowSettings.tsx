@@ -7,6 +7,7 @@ import type {
 
 import {
   engineeringWorkflowDefaultSteps,
+  skippableImplementationSettingForStep,
   type EngineeringWorkflowDefaultStep,
 } from "./settings/workflowStepModelDefaults";
 import {
@@ -107,35 +108,10 @@ export interface EngineeringWorkflowSettingsProps {
   readonly implementationSettingsScope?: "defaults" | "run" | undefined;
 }
 
-type SkippableImplementationSetting = keyof Pick<
-  ImplementationWorkflowSettings,
-  | "appReviewEnabled"
-  | "finalCodeReviewEnabled"
-  | "pullRequestCreationEnabled"
-  | "pullRequestBabysittingEnabled"
->;
-
-function skippableSettingForStep(
-  step: EngineeringWorkflowDefaultStep,
-): SkippableImplementationSetting | null {
-  switch (step.label) {
-    case "App Review":
-      return "appReviewEnabled";
-    case "Final Code Review":
-      return "finalCodeReviewEnabled";
-    case "Create pull request":
-      return "pullRequestCreationEnabled";
-    case "Babysit pull request":
-      return "pullRequestBabysittingEnabled";
-    default:
-      return null;
-  }
-}
-
 function EngineeringWorkflowStepEnabledControl(
   props: EngineeringWorkflowSettingsProps & { readonly target: EngineeringWorkflowDefaultStep },
 ) {
-  const setting = skippableSettingForStep(props.target);
+  const setting = skippableImplementationSettingForStep(props.target);
   const implementationSettings = props.implementationSettings;
   const onSetImplementationSettings = props.onSetImplementationSettings;
   if (

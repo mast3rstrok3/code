@@ -25,6 +25,13 @@ describe("workflow presets", () => {
       "engineering",
       "engineering",
     ]);
+    expect(WORKFLOW_PRESET_DEFINITIONS.map((definition) => definition.label)).toEqual([
+      "Quick Feature",
+      "Fast Feature",
+      "Fast Engineering",
+      "Full Engineering",
+      "Wayfinder",
+    ]);
     expect(WORKFLOW_PRESET_DEFINITION_BY_ID.wayfinder.availability).toBe("under-development");
   });
 
@@ -126,7 +133,7 @@ describe("workflow presets", () => {
 
   it("offers Planning and Implementation as phases of Engineering Workflow", () => {
     const planning = WORKFLOW_PRESET_DEFINITIONS.find((definition) => definition.id === "planning");
-    expect(planning?.label).toBe("Engineering Workflow");
+    expect(planning?.label).toBe("Full Engineering");
     expect(planning?.helpSteps[1]?.label).toContain("Grill with Docs");
     expect(planning?.helpSteps.map((step) => step.label)).toContain("Spec authoring");
     expect(planning?.helpSteps.map((step) => step.label)).toContain("Execute ticket waves");

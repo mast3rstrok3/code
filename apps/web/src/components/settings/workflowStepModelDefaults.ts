@@ -1,4 +1,4 @@
-import type { ModelSelection } from "@t3tools/contracts";
+import type { ImplementationWorkflowSettings, ModelSelection } from "@t3tools/contracts";
 import type { WorkflowStepModelOverride } from "@t3tools/contracts";
 import {
   WORKFLOW_PRESET_DEFINITION_BY_ID,
@@ -19,6 +19,33 @@ export interface EngineeringWorkflowDefaultStep {
   readonly modelMode: "none" | "workflow" | "configurable";
   readonly workflowPromptId?: string | undefined;
   readonly subSteps: ReadonlyArray<WorkflowPresetSubStep>;
+}
+
+export type SkippableImplementationSetting = keyof Pick<
+  ImplementationWorkflowSettings,
+  | "appReviewEnabled"
+  | "finalCodeReviewEnabled"
+  | "pullRequestCreationEnabled"
+  | "pullRequestBabysittingEnabled"
+>;
+
+export function skippableImplementationSettingForStep(
+  step: EngineeringWorkflowDefaultStep,
+): SkippableImplementationSetting | null {
+  switch (step.label) {
+    case "App Review":
+    case "Run App Review":
+    case "Final App Review":
+      return "appReviewEnabled";
+    case "Final Code Review":
+      return "finalCodeReviewEnabled";
+    case "Create pull request":
+      return "pullRequestCreationEnabled";
+    case "Babysit pull request":
+      return "pullRequestBabysittingEnabled";
+    default:
+      return null;
+  }
 }
 
 /** "Planning phase · Spec authoring" reads as "Spec authoring" outside a run. */
