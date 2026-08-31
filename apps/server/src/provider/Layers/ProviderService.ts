@@ -63,6 +63,7 @@ import * as WorkflowUserInputBroker from "../../mcp/WorkflowUserInputBroker.ts";
 import {
   isAppReviewMcpWorkflowPromptId,
   isInteractiveStructuredInputWorkflowPromptId,
+  isPreviewMcpWorkflowPromptId,
   isRegisteredWorkflowPromptId,
 } from "../WorkflowPromptRegistry.ts";
 import * as ServerSettings from "../../serverSettings.ts";
@@ -208,9 +209,9 @@ function mcpCapabilitiesForWorkflowPromptId(
   workflowPromptId: string | undefined,
 ): ReadonlySet<McpCapability> | undefined {
   if (isAppReviewMcpWorkflowPromptId(workflowPromptId)) {
-    // App review drives the app through the upstream preview_* browser tools
-    // and attaches evidence via the app_review_* tools.
-    return new Set<McpCapability>(["preview", "app-review", "workflow-artifacts"]);
+    const capabilities = new Set<McpCapability>(["app-review", "workflow-artifacts"]);
+    if (isPreviewMcpWorkflowPromptId(workflowPromptId)) capabilities.add("preview");
+    return capabilities;
   }
   if (isInteractiveStructuredInputWorkflowPromptId(workflowPromptId)) {
     // Grills are the only workflows allowed to park a turn on a human, so

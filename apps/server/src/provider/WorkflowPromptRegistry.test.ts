@@ -50,6 +50,7 @@ describe("WorkflowPromptRegistry", () => {
       WORKFLOW_PROMPT_IDS.planningGrillStageCodex,
       WORKFLOW_PROMPT_IDS.planningAutomaticEngineeringGrillCodex,
       WORKFLOW_PROMPT_IDS.planningWayfinderCodex,
+      WORKFLOW_PROMPT_IDS.implementationE2eAppReviewCodex,
       WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
       WORKFLOW_PROMPT_IDS.implementationCodeReviewCodex,
     ];
@@ -429,6 +430,9 @@ describe("WorkflowPromptRegistry", () => {
     NodeAssert.match(rendered, /status passed or failed/);
     NodeAssert.match(rendered, /every browser lane in the listed order/);
     NodeAssert.match(rendered, /T3 workflow children do not run acceptance lanes/);
+    NodeAssert.match(rendered, /isolated E2E thread/);
+    NodeAssert.doesNotMatch(rendered, /replayUrl/);
+    NodeAssert.doesNotMatch(rendered, /APP_REVIEW_PREVIEW_URL/);
     NodeAssert.doesNotMatch(rendered, /workflow-subagents-create/);
     NodeAssert.doesNotMatch(rendered, /agent-browser/i);
     NodeAssert.doesNotMatch(rendered, /rrweb/i);
@@ -439,6 +443,25 @@ describe("WorkflowPromptRegistry", () => {
     );
     NodeAssert.ok(
       isAppReviewMcpWorkflowPromptId(WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex),
+    );
+  });
+
+  it("renders the E2E App Review without browser control", () => {
+    const rendered = resolveWorkflowPromptText(WORKFLOW_PROMPT_IDS.implementationE2eAppReviewCodex);
+
+    NodeAssert.match(rendered, /End-to-end App Review/);
+    NodeAssert.match(rendered, /APP_REVIEW_PREVIEW_URL/);
+    NodeAssert.match(rendered, /app_review_get/);
+    NodeAssert.match(rendered, /app_review_update/);
+    NodeAssert.match(rendered, /replayUrl/);
+    NodeAssert.doesNotMatch(rendered, /preview_open/);
+    NodeAssert.doesNotMatch(rendered, /preview_navigate/);
+    NodeAssert.equal(
+      isPreviewMcpWorkflowPromptId(WORKFLOW_PROMPT_IDS.implementationE2eAppReviewCodex),
+      false,
+    );
+    NodeAssert.ok(
+      isAppReviewMcpWorkflowPromptId(WORKFLOW_PROMPT_IDS.implementationE2eAppReviewCodex),
     );
   });
 

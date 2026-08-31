@@ -207,7 +207,7 @@ The durable map of decision tickets for efforts too large to specify in one pass
 
 #### App review
 
-The bounded QA stage of an implementation run. A run may use up to ten cycles. Each cycle has an E2E and browser review thread, a gap-analysis thread when actionable findings exist, and a TDD repair thread. A passing review stops the run early. Budget exhaustion records unresolved findings and lets Implementation continue to Code Review. Ticket App Review resolves its effective scope before creating a ticket App Stack. A missing preview, stale workspace, dirty embedded worktree, or invalid workspace identity still requires human attention.
+The bounded QA stage of an implementation run. A run may use up to ten cycles. Each cycle has up to four consecutive phase threads: enabled E2E testing, enabled browser review, gap analysis when actionable findings exist, and TDD repair. E2E testing and browser review write separate durable App Review sections. E2E checks may link to a runner-published web replay, while browser review owns recordings and screenshots. Passing every enabled review section stops the run early. Budget exhaustion records unresolved findings and lets Implementation continue to Code Review. Ticket App Review resolves its effective scope before creating a ticket App Stack. A missing preview, stale workspace, dirty embedded worktree, or invalid workspace identity still requires human attention.
 
 #### Code review
 

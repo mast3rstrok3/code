@@ -52,7 +52,7 @@ describe("workflow presets", () => {
     });
   });
 
-  it("makes App Review one looping step over its three agents", () => {
+  it("makes App Review one looping step over its four agents", () => {
     const appReview = WORKFLOW_PRESET_DEFINITION_BY_ID["app-review"];
     // Sending in this mode launches a run instead of starting a turn, so the
     // preset carries no entry prompt of its own.
@@ -60,6 +60,7 @@ describe("workflow presets", () => {
     expect(interactionModeForWorkflowPreset("app-review")).toBe("default");
     expect(appReview?.helpSteps).toHaveLength(1);
     expect(appReview?.helpSteps[0]?.subSteps?.map((subStep) => subStep.workflowPromptId)).toEqual([
+      "implementation.e2e-app-review.codex",
       "implementation.browser-app-review.codex",
       "matt-pocock.to-tickets",
       "matt-pocock.implement",

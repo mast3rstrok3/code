@@ -87,6 +87,7 @@ const makeHarness = (input: {
   readonly review: AppReviewRecord;
   readonly brokerResults?: Partial<Record<string, unknown>>;
   readonly brokerFailure?: PreviewAutomationExecutionError;
+  readonly capabilities?: ReadonlyArray<McpInvocationContext.McpCapability>;
 }) => {
   const dispatched: OrchestrationCommand[] = [];
   const brokerInvocations: Array<{
@@ -101,7 +102,7 @@ const makeHarness = (input: {
       threadId,
       providerSessionId: "provider-session-1",
       providerInstanceId,
-      capabilities: new Set(["preview", "app-review"] as const),
+      capabilities: new Set(input.capabilities ?? (["preview", "app-review"] as const)),
       issuedAt: 1,
     }),
     Layer.mock(ProjectionSnapshotQuery)({
@@ -160,6 +161,20 @@ const brokerFailure = new PreviewAutomationExecutionError({
 });
 
 describe("app-review toolkit handlers", () => {
+  it.effect("withholds browser evidence from an isolated E2E section", () => {
+    const harness = makeHarness({
+      review: makeReview(EMPTY_APP_REVIEW_EVIDENCE, "e2e"),
+      capabilities: ["app-review"],
+    });
+
+    return Effect.gen(function* () {
+      const result = yield* Effect.exit(handlers.app_review_recording_start({ reviewId }));
+      assert.strictEqual(result._tag, "Failure");
+      assert.deepStrictEqual(harness.brokerInvocations, []);
+      assert.deepStrictEqual(harness.dispatched, []);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("recording start invokes the broker and persists recording evidence", () => {
     const harness = makeHarness({
       review: makeReview(EMPTY_APP_REVIEW_EVIDENCE),

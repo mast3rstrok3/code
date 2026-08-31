@@ -85,7 +85,13 @@ it.effect("keeps a check's origin cycle when it was carried forward, and omits i
         verdict: "passed",
         checks: [
           { id: "login", label: "Login", status: "passed", notes: "", carriedFromCycle: 1 },
-          { id: "submit-recovery", label: "Submit recovery", status: "passed", notes: "" },
+          {
+            id: "submit-recovery",
+            label: "Submit recovery",
+            status: "passed",
+            notes: "",
+            replayUrl: "https://preview.example.test/replays/e2e-1",
+          },
         ],
       },
       evidence: savedEvidence,
@@ -94,6 +100,10 @@ it.effect("keeps a check's origin cycle when it was carried forward, and omits i
     });
     assert.strictEqual(record.document.checks[0]?.carriedFromCycle, 1);
     assert.strictEqual(record.document.checks[1]?.carriedFromCycle, undefined);
+    assert.strictEqual(
+      record.document.checks[1]?.replayUrl,
+      "https://preview.example.test/replays/e2e-1",
+    );
 
     const encoded = yield* encodeAppReviewRecord(record);
     assert.deepStrictEqual(encoded.document.checks[1], {
@@ -101,6 +111,7 @@ it.effect("keeps a check's origin cycle when it was carried forward, and omits i
       label: "Submit recovery",
       status: "passed",
       notes: "",
+      replayUrl: "https://preview.example.test/replays/e2e-1",
     });
   }),
 );

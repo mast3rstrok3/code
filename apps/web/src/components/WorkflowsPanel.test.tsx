@@ -28,7 +28,8 @@ describe("TicketAppReviewCycles", () => {
       "app-review-cycle:group-1:app-review-run-1:1": true,
     });
 
-    expect(markup).toContain("E2E and browser review");
+    expect(markup).toContain("End-to-end test");
+    expect(markup).toContain("Browser review");
     expect(markup).toContain("Gap analysis &amp; repair tickets");
     expect(markup).toContain("TDD repair");
     expect(markup).not.toContain("TICKET-1 · Fix the workflow panel");

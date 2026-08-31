@@ -119,7 +119,8 @@ export function AppReviewDocument(props: {
   const statusLabel = record.status[0]?.toUpperCase() + record.status.slice(1);
   const recording = record.evidence.recording;
   const screenshots = record.evidence.screenshots;
-  const recordingSaved = recording.status === "saved";
+  const showsBrowserEvidence = record.appReviewScope !== "e2e";
+  const recordingSaved = showsBrowserEvidence && recording.status === "saved";
 
   const evidenceResources = useMemo<AssetResource[]>(() => {
     const resources: AssetResource[] = [];
@@ -130,15 +131,17 @@ export function AppReviewDocument(props: {
         evidenceId: APP_REVIEW_RECORDING_EVIDENCE_ID,
       });
     }
-    for (const screenshot of screenshots) {
-      resources.push({
-        _tag: "app-review-evidence",
-        reviewId: record.id,
-        evidenceId: screenshot.id,
-      });
+    if (showsBrowserEvidence) {
+      for (const screenshot of screenshots) {
+        resources.push({
+          _tag: "app-review-evidence",
+          reviewId: record.id,
+          evidenceId: screenshot.id,
+        });
+      }
     }
     return resources;
-  }, [record.id, recordingSaved, screenshots]);
+  }, [record.id, recordingSaved, screenshots, showsBrowserEvidence]);
   const evidenceUrls = useAssetUrls(props.environmentId, evidenceResources);
   const recordingUrl = recordingSaved ? (evidenceUrls[0] ?? null) : null;
   const screenshotUrls = recordingSaved ? evidenceUrls.slice(1) : evidenceUrls;
@@ -172,48 +175,52 @@ export function AppReviewDocument(props: {
         )}
       </div>
 
-      <RecordingSection recording={recording} recordingUrl={recordingUrl} />
+      {showsBrowserEvidence ? (
+        <>
+          <RecordingSection recording={recording} recordingUrl={recordingUrl} />
 
-      <section className="border-b border-border px-4 py-3">
-        <h3 className="text-xs font-semibold uppercase tracking-normal text-muted-foreground">
-          Screenshots
-        </h3>
-        {screenshots.length === 0 ? (
-          <p className="mt-2 text-sm text-muted-foreground">No screenshots captured.</p>
-        ) : (
-          <div className="mt-2 grid grid-cols-2 gap-3 md:grid-cols-3">
-            {screenshots.map((screenshot, index) => {
-              const src = screenshotUrls[index] ?? null;
-              return (
-                <figure key={screenshot.id} className="min-w-0">
-                  {src ? (
-                    <button
-                      type="button"
-                      className="block w-full cursor-zoom-in"
-                      onClick={() => openScreenshot(screenshot.id)}
-                      aria-label={`Expand screenshot ${screenshot.id}`}
-                    >
-                      <img
-                        src={src}
-                        alt={screenshot.caption || screenshot.id}
-                        className="aspect-video w-full rounded-md border border-border bg-black object-contain"
-                      />
-                    </button>
-                  ) : (
-                    <div className="flex aspect-video w-full items-center justify-center rounded-md border border-border text-xs text-muted-foreground">
-                      Loading...
-                    </div>
-                  )}
-                  <figcaption className="mt-1 truncate text-xs text-muted-foreground">
-                    <span className="font-medium">{screenshot.id}</span>
-                    {screenshot.caption ? ` · ${screenshot.caption}` : null}
-                  </figcaption>
-                </figure>
-              );
-            })}
-          </div>
-        )}
-      </section>
+          <section className="border-b border-border px-4 py-3">
+            <h3 className="text-xs font-semibold uppercase tracking-normal text-muted-foreground">
+              Screenshots
+            </h3>
+            {screenshots.length === 0 ? (
+              <p className="mt-2 text-sm text-muted-foreground">No screenshots captured.</p>
+            ) : (
+              <div className="mt-2 grid grid-cols-2 gap-3 md:grid-cols-3">
+                {screenshots.map((screenshot, index) => {
+                  const src = screenshotUrls[index] ?? null;
+                  return (
+                    <figure key={screenshot.id} className="min-w-0">
+                      {src ? (
+                        <button
+                          type="button"
+                          className="block w-full cursor-zoom-in"
+                          onClick={() => openScreenshot(screenshot.id)}
+                          aria-label={`Expand screenshot ${screenshot.id}`}
+                        >
+                          <img
+                            src={src}
+                            alt={screenshot.caption || screenshot.id}
+                            className="aspect-video w-full rounded-md border border-border bg-black object-contain"
+                          />
+                        </button>
+                      ) : (
+                        <div className="flex aspect-video w-full items-center justify-center rounded-md border border-border text-xs text-muted-foreground">
+                          Loading...
+                        </div>
+                      )}
+                      <figcaption className="mt-1 truncate text-xs text-muted-foreground">
+                        <span className="font-medium">{screenshot.id}</span>
+                        {screenshot.caption ? ` · ${screenshot.caption}` : null}
+                      </figcaption>
+                    </figure>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        </>
+      ) : null}
 
       <section className="border-b border-border px-4 py-3">
         <h3 className="text-xs font-semibold uppercase tracking-normal text-muted-foreground">
@@ -237,6 +244,16 @@ export function AppReviewDocument(props: {
                   <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
                     {check.notes}
                   </p>
+                ) : null}
+                {check.replayUrl ? (
+                  <a
+                    href={check.replayUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mt-1 inline-flex text-xs font-medium text-info hover:underline"
+                  >
+                    Open web replay
+                  </a>
                 ) : null}
               </div>
             ))}

@@ -40,7 +40,11 @@ export function appReviewRunContainsThread(run: AppReviewWorkflowRun, threadId: 
     run.targetThreadId === threadId ||
     run.controllerThreadId === threadId ||
     run.cycles.some(
-      (cycle) => cycle.reviewerThreadId === threadId || cycle.fixerThreadId === threadId,
+      (cycle) =>
+        cycle.e2eThreadId === threadId ||
+        cycle.reviewerThreadId === threadId ||
+        cycle.plannerThreadId === threadId ||
+        cycle.fixerThreadId === threadId,
     )
   );
 }
@@ -109,13 +113,15 @@ export function appReviewRunStatusLabel(run: AppReviewWorkflowRun): string {
   if (run.status !== "running") return run.outcome ?? run.status;
   const cycle = run.cycles.at(-1)?.cycleNumber ?? Math.min(run.cyclesUsed + 1, run.cycleBudget);
   const phase =
-    run.activePhase === "review"
-      ? "UI review"
-      : run.activePhase === "planning"
-        ? "Gap analysis & plan"
-        : run.activePhase === "fixing"
-          ? "Implementing plan"
-          : "Refreshing preview";
+    run.activePhase === "e2e"
+      ? "End-to-end test"
+      : run.activePhase === "review"
+        ? "UI review"
+        : run.activePhase === "planning"
+          ? "Gap analysis & plan"
+          : run.activePhase === "fixing"
+            ? "Implementing plan"
+            : "Refreshing preview";
   return `${phase} · Cycle ${Math.max(1, cycle)} of ${run.cycleBudget}`;
 }
 
@@ -123,23 +129,42 @@ export type AppReviewCycleStepStatus = "complete" | "current" | "pending" | "not
 
 export function appReviewCycleStepStatuses(
   cycle: AppReviewWorkflowCycle,
-): readonly [AppReviewCycleStepStatus, AppReviewCycleStepStatus, AppReviewCycleStepStatus] {
-  // A spent cycle names the step that broke, so the two after it read as never
+): readonly [
+  AppReviewCycleStepStatus,
+  AppReviewCycleStepStatus,
+  AppReviewCycleStepStatus,
+  AppReviewCycleStepStatus,
+] {
+  // A spent cycle names the step that broke, so the steps after it read as never
   // reached rather than as work still to come. Cycles recorded before the
   // failure moved onto the cycle blame the review, where the run used to end.
   const brokeAt = cycle.status === "failed" ? (cycle.failure?.phase ?? "review") : null;
+  const hasE2e = cycle.e2eThreadId != null || cycle.e2eReviewId != null;
+  const hasBrowser = cycle.appReviewScope !== "e2e";
+  const e2eComplete = cycle.e2eVerdict === "passed" || cycle.e2eVerdict === "failed";
   const reviewPassed = cycle.reviewVerdict === "passed";
   const reviewComplete = cycle.reviewVerdict !== null && cycle.reviewVerdict !== "pending";
   const planComplete = cycle.planId !== null;
   const fixComplete = cycle.fixResult?.status === "succeeded";
   return [
-    brokeAt === "review"
-      ? "failed"
-      : reviewComplete
-        ? "complete"
-        : cycle.status === "reviewing"
-          ? "current"
-          : "pending",
+    !hasE2e
+      ? "not-needed"
+      : brokeAt === "e2e"
+        ? "failed"
+        : e2eComplete
+          ? "complete"
+          : cycle.status === "e2e-testing"
+            ? "current"
+            : "pending",
+    !hasBrowser
+      ? "not-needed"
+      : brokeAt === "review"
+        ? "failed"
+        : reviewComplete
+          ? "complete"
+          : cycle.status === "reviewing"
+            ? "current"
+            : "pending",
     brokeAt === "planning"
       ? "failed"
       : reviewPassed

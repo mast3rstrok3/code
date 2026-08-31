@@ -194,7 +194,8 @@ describe("resolveWorkflowCurrentPath", () => {
   });
 
   it.each([
-    ["review", "E2E and browser review"],
+    ["e2e", "End-to-end test"],
+    ["review", "Browser review"],
     ["planning", "Gap analysis"],
     ["fixing", "TDD repair"],
   ] as const)("names App Review %s in the current cycle", (activePhase, phaseLabel) => {

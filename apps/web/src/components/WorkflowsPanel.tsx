@@ -842,6 +842,7 @@ function PlanningArtifacts(props: {
 
 /** The Models-list pin each App Review phase reads. */
 const APP_REVIEW_PHASE_PIN = {
+  e2e: { workflowPromptId: "implementation.e2e-app-review.codex" },
   review: { workflowPromptId: "implementation.browser-app-review.codex" },
   planning: {
     workflowPromptId: "matt-pocock.to-tickets",
@@ -878,11 +879,14 @@ function appReviewPhaseRerunDisabledReason(input: {
   }
   // A browser review redo runs a new cycle rather than overwriting this one, so
   // it needs a cycle left to run in.
-  if (input.phase === "review" && input.cyclesUsed >= input.cycleBudget) {
+  if (
+    (input.phase === "e2e" || input.phase === "review") &&
+    input.cyclesUsed >= input.cycleBudget
+  ) {
     return `Every one of the ${String(input.cycleBudget)} review cycles has been used.`;
   }
   if (input.phase === "planning" && input.cycle.actionableFindingsMarkdown === null) {
-    return "Gap analysis needs findings from this cycle's browser review.";
+    return "Gap analysis needs findings from this cycle's review sections.";
   }
   if (input.phase === "fixing" && (input.cycle.repairTickets?.length ?? 0) === 0) {
     return "The repair needs the tickets gap analysis writes.";
@@ -934,12 +938,26 @@ export function TicketAppReviewCycles(props: {
         .map((cycle) => {
           const steps = [
             {
-              label: "E2E and browser review",
+              label: "End-to-end test",
+              phase: "e2e" as const,
+              detail:
+                cycle.e2eThreadId == null
+                  ? "not needed"
+                  : (cycle.e2eVerdict ??
+                    (cycle.status === "e2e-testing" ? "in progress" : "pending")),
+              threadId: cycle.e2eThreadId,
+              thread: threadRow(cycle.e2eThreadId ?? null),
+            },
+            {
+              label: "Browser review",
               phase: "review" as const,
               detail:
-                cycle.reviewVerdict ?? (cycle.status === "reviewing" ? "in progress" : "pending"),
-              threadId: cycle.reviewerThreadId,
-              thread: threadRow(cycle.reviewerThreadId),
+                cycle.appReviewScope === "e2e"
+                  ? "not needed"
+                  : (cycle.reviewVerdict ??
+                    (cycle.status === "reviewing" ? "in progress" : "pending")),
+              threadId: cycle.appReviewScope === "e2e" ? null : cycle.reviewerThreadId,
+              thread: cycle.appReviewScope === "e2e" ? null : threadRow(cycle.reviewerThreadId),
             },
             {
               label: "Gap analysis & repair tickets",
@@ -951,8 +969,17 @@ export function TicketAppReviewCycles(props: {
                   : "pending",
               // Gap analysis has run in a thread of its own since it moved out
               // of the reviewer; older cycles still carry only the reviewer.
-              threadId: cycle.plannerThreadId ?? cycle.reviewerThreadId,
-              thread: threadRow(cycle.plannerThreadId ?? cycle.reviewerThreadId),
+              threadId:
+                cycle.plannerThreadId ??
+                (cycle.appReviewScope === "e2e"
+                  ? (cycle.e2eThreadId ?? cycle.reviewerThreadId)
+                  : cycle.reviewerThreadId),
+              thread: threadRow(
+                cycle.plannerThreadId ??
+                  (cycle.appReviewScope === "e2e"
+                    ? (cycle.e2eThreadId ?? cycle.reviewerThreadId)
+                    : cycle.reviewerThreadId),
+              ),
             },
             {
               label: "TDD repair",
@@ -1775,9 +1802,12 @@ function TicketPhases(props: {
               );
               const currentAppReviewThreadIds = new Set(
                 (appReviewRun?.cycles ?? []).flatMap((cycle) =>
-                  [cycle.reviewerThreadId, cycle.plannerThreadId, cycle.fixerThreadId].flatMap(
-                    (threadId) => (threadId === null ? [] : [threadId]),
-                  ),
+                  [
+                    cycle.e2eThreadId,
+                    cycle.reviewerThreadId,
+                    cycle.plannerThreadId,
+                    cycle.fixerThreadId,
+                  ].flatMap((threadId) => (threadId == null ? [] : [threadId])),
                 ),
               );
               const earlierAppReviewThreads = appReviewThreads.filter(

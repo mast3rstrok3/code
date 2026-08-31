@@ -67,7 +67,7 @@ export const AppReviewWorkflowRunStatus = Schema.Literals([
 ]);
 export type AppReviewWorkflowRunStatus = typeof AppReviewWorkflowRunStatus.Type;
 
-export const AppReviewWorkflowPhase = Schema.Literals(["review", "planning", "fixing"]);
+export const AppReviewWorkflowPhase = Schema.Literals(["e2e", "review", "planning", "fixing"]);
 export type AppReviewWorkflowPhase = typeof AppReviewWorkflowPhase.Type;
 
 export const AppReviewWorkflowCaller = Schema.Union([
@@ -149,6 +149,7 @@ export const AppReviewWorkflowFailure = Schema.Struct({
 export type AppReviewWorkflowFailure = typeof AppReviewWorkflowFailure.Type;
 
 export const AppReviewWorkflowCycleStatus = Schema.Literals([
+  "e2e-testing",
   "reviewing",
   "review-failed",
   "planning",
@@ -162,6 +163,13 @@ export type AppReviewWorkflowCycleStatus = typeof AppReviewWorkflowCycleStatus.T
 export const AppReviewWorkflowCycle = Schema.Struct({
   cycleNumber: PositiveInt,
   status: AppReviewWorkflowCycleStatus,
+  /** The effective parts fixed when this cycle starts. */
+  appReviewScope: Schema.optionalKey(AppReviewScope),
+  /** The isolated end-to-end section. Absent on browser-only and historical cycles. */
+  e2eReviewId: Schema.optionalKey(Schema.NullOr(AppReviewId)),
+  e2eThreadId: Schema.optionalKey(Schema.NullOr(ThreadId)),
+  e2eLaunchCount: Schema.optionalKey(NonNegativeInt),
+  e2eVerdict: Schema.optionalKey(Schema.NullOr(Schema.Literals(["pending", "passed", "failed"]))),
   reviewId: AppReviewId,
   reviewerThreadId: ThreadId,
   /** Provider launches for the current phase. Runtime failures retry in-cycle. */
@@ -272,18 +280,19 @@ export type AppReviewVerdict = typeof AppReviewVerdict.Type;
 /**
  * One acceptance check in a review's matrix.
  *
- * `carriedFromCycle` names the earlier cycle of the same run whose pass still
- * stands, and is set only when this cycle did not exercise the check again. A
- * repair usually cannot reach most of what already passed, and re-driving the
- * whole flow through the browser every cycle is the run's biggest cost, so a
- * carried check keeps the matrix complete without paying for it twice. The
- * absence of the field means the browser did the work this cycle.
+ * `carriedFromCycle` names the earlier cycle of the same run whose browser pass
+ * still stands, and is set only when this cycle did not exercise the check
+ * again. E2E checks always run fresh and never carry. A repair usually cannot
+ * reach most of what already passed in the browser, so carrying those checks
+ * keeps that section complete without driving the whole flow twice.
  */
 export const AppReviewCheck = Schema.Struct({
   id: TrimmedNonEmptyString,
   label: TrimmedNonEmptyString,
   status: AppReviewCheckStatus,
   notes: Schema.String,
+  /** A test runner's inspectable web replay for this check, when it publishes one. */
+  replayUrl: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isPattern(/^https?:\/\//i))),
   carriedFromCycle: Schema.optionalKey(PositiveInt),
 });
 export type AppReviewCheck = typeof AppReviewCheck.Type;

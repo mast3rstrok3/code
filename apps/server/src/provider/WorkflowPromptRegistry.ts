@@ -24,6 +24,7 @@ export const WORKFLOW_PROMPT_IDS = {
   implementationOrchestratorPlanningCodex: "implementation.orchestrator-planning.codex",
   implementationTddCodex: "implementation.tdd.codex",
   implementationMergeGateCodex: "implementation.merge-gate.codex",
+  implementationE2eAppReviewCodex: "implementation.e2e-app-review.codex",
   implementationBrowserAppReviewCodex: "implementation.browser-app-review.codex",
   implementationFixCodex: "implementation.fix.codex",
   implementationCodeReviewCodex: "implementation.code-review.codex",
@@ -963,7 +964,7 @@ T3's Planning workflow owns publication and approval:
 - Draft the complete tracer-bullet set and blocking graph using the upstream process and templates.
 - Store tickets through the planning-tickets-artifact requested by the stage launch prompt; do not create local files or external tracker issues.
 - Classify every ticket programmatically with \`appReviewEligible\`. Set it only when a human-style UI review can verify the ticket in isolation.
-- When the repository declares \`e2eCommands\` in \`t3.json\`, plan verification e2e-first: every UI-verifiable ticket's acceptance criteria must include extending the project's e2e suite with that ticket's flow, written test-first with the implementation. App Review runs those commands as part one of every review cycle against the ticket's own stack, so coverage planned here is what verifies the ticket programmatically.
+- When the repository declares \`e2eCommands\` in \`t3.json\`, plan verification e2e-first: every UI-verifiable ticket's acceptance criteria must include extending the project's e2e suite with that ticket's flow, written test-first with the implementation. App Review runs those commands in the first isolated phase of every review cycle against the ticket's own stack, so coverage planned here is what verifies the ticket programmatically.
 - Set \`appReviewScope\` on every eligible ticket: \`"e2e"\` when the planned e2e coverage fully verifies the flow, \`"browser"\` when the flow cannot be meaningfully covered by the suite, and \`"both"\` when the tests prove the functional path but visual or interaction quality still needs eyes. Omit it on ineligible tickets. Without repository \`e2eCommands\` every scope runs as a browser review.
 - Every eligible ticket must carry a concrete \`appReviewPlanMarkdown\`: which App Stack surface to start, the UI entry point, user actions, visible assertions, and required evidence. Scope it to what the ticket's e2e coverage cannot prove — visual and interaction quality, states impractical to automate, and the evidence to capture — and do not restate flows the planned e2e tests already exercise end-to-end. Use \`null\` for ineligible tickets. This is T3's programmatic attachment to the upstream ticket shape.
 - Stop after drafting. The separate automatic Ticket Review stage owns completeness review, adjustment cycles, and final approval.
@@ -1634,11 +1635,7 @@ This thread is the durable Browser App Review owner. Use the linked preview_* an
 
 When the launch brief contains \`## App Review topology\`, treat it as the execution contract. Exercise every browser lane in the listed order in this durable reviewer thread. Use the authoritative Feature URL, required setup, state reset instructions, and expected observations for each lane. Record any required deviation in the review summary.
 
-Keep canonical recording, screenshots, checks, findings, and the terminal verdict in this thread. Provider-native agents and T3 workflow children do not run acceptance lanes for this review.
-
-When the launch message lists end-to-end test commands, they are part one of the review. Run them from the selected worktree in a terminal, one at a time, with the environment variable APP_REVIEW_PREVIEW_URL set to the authoritative preview target, and record each as a check with the exact id the launch message assigns it. A failing command is a failed check whose notes name the failing tests, and each distinct product failure it reveals is an actionable finding. Rerun the commands fresh every cycle; never carry an e2e check forward. Part two is the browser review, scoped to what the tests did not prove — acceptance criteria without e2e coverage, visual and interaction quality, and every failure the run surfaced — rather than re-driving flows a passing test already exercises end-to-end.
-
-When the launch message says the review is end-to-end only, the test run is the entire verification: skip the browser, do not call preview_* tools or start a recording, and the recording and screenshot requirements in the numbered flow do not apply. Load the record with app_review_get, run the commands, and write the complete document — checks, findings, questions, next steps — and the verdict with app_review_update.
+Keep canonical recording, screenshots, browser checks, findings, and the terminal verdict in this thread. Provider-native agents and T3 workflow children do not run acceptance lanes for this review. The isolated E2E thread owns all configured end-to-end commands and any web replay links they publish. Do not rerun those commands or copy their checks into this section.
 
 When this Browser App Review is linked to a durable App Review record:
 
@@ -1655,7 +1652,16 @@ When this Browser App Review is linked to a durable App Review record:
 
 If no durable App Review record is linked, this is focused feedback mode. Use preview_* tools only, call preview_open with show: false, do not call app_review_* tools, and do not record or capture evidence unless the focused question itself requires a screenshot. Finish with exactly one workflow-subagent-result directive containing concise observations, reproduction steps, blockers, and recommendations.
 
-Use only the preview_* tools in feedback mode and preview_* plus app_review_* tools in full mode. Running the launch message's end-to-end test commands in a terminal is required and is not browser automation; beyond that, do not use external browsers, browser MCP servers, standalone Playwright scripts, or shell-driven browser automation. See preview-browser-qa.md for the full preview toolset guidance.
+Use only the preview_* tools in feedback mode and preview_* plus app_review_* tools in full mode. Do not use terminal-driven browser tests, external browsers, browser MCP servers, standalone Playwright scripts, or shell-driven browser automation. See preview-browser-qa.md for the full preview toolset guidance.
+</collaboration_mode>`;
+
+const IMPLEMENTATION_E2E_APP_REVIEW_PROMPT = `<collaboration_mode># End-to-end App Review
+
+Run the end-to-end commands in the launch message and publish their result as one durable App Review section. This thread owns the automated test run only. The workflow starts Browser App Review in a separate thread after this section reaches a terminal status.
+
+Call app_review_get before testing. Run every command from the selected worktree with APP_REVIEW_PREVIEW_URL set exactly as the launch message says. Record every command under its assigned check id. When the runner prints an inspectable web replay URL, copy it into the check's replayUrl field. Write in-scope product failures as actionable findings and keep unrelated failures in the check notes or as note-severity findings.
+
+Call app_review_update with the complete document and a passed or failed status. A pass requires every required check to be present and passed. Do not edit files, repair failures, call preview_* tools, start a recording, or perform a manual browser review.
 </collaboration_mode>`;
 
 const IMPLEMENTATION_FIX_PROMPT = `<collaboration_mode># Implementation Workflow: Fix
@@ -2227,8 +2233,18 @@ export const WORKFLOW_PROMPT_REGISTRY = [
     associatedDocs: [APP_STACK_ASSOCIATED_DOC, RESOLVING_MERGE_CONFLICTS_ASSOCIATED_DOC],
   },
   {
-    id: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+    id: WORKFLOW_PROMPT_IDS.implementationE2eAppReviewCodex,
     order: 1,
+    workflow: "app-review",
+    role: "app-review-reviewer",
+    stage: "e2e-app-review",
+    title: "End-to-end App Review",
+    description: "Runs the configured E2E commands and publishes their durable review section.",
+    promptText: IMPLEMENTATION_E2E_APP_REVIEW_PROMPT,
+  },
+  {
+    id: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
+    order: 2,
     workflow: "app-review",
     role: "app-review-reviewer",
     stage: "browser-app-review",
@@ -2638,6 +2654,12 @@ export function isBrowserAppReviewWorkflowPromptId(
   );
 }
 
+export function isE2eAppReviewWorkflowPromptId(
+  workflowPromptId: string | null | undefined,
+): boolean {
+  return workflowPromptId === WORKFLOW_PROMPT_IDS.implementationE2eAppReviewCodex;
+}
+
 export function isInteractiveStructuredInputWorkflowPromptId(
   workflowPromptId: string | null | undefined,
 ): boolean {
@@ -2670,7 +2692,10 @@ export function isPreviewMcpWorkflowPromptId(workflowPromptId: string | null | u
 export function isAppReviewMcpWorkflowPromptId(
   workflowPromptId: string | null | undefined,
 ): boolean {
-  return isBrowserAppReviewWorkflowPromptId(workflowPromptId);
+  return (
+    isE2eAppReviewWorkflowPromptId(workflowPromptId) ||
+    isBrowserAppReviewWorkflowPromptId(workflowPromptId)
+  );
 }
 
 function renderAssociatedDocReference(

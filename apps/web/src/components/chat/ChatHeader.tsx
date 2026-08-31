@@ -91,7 +91,7 @@ export function workflowProgressLabel(input: {
       case "validating":
         return "Implementation · Merge gate";
       case "qa-reviewing":
-        return "Implementation · Browser App Review";
+        return "Implementation · App Review";
       case "fixing":
         if (run.fixOrigin === "app-dev-stack" || run.fixOrigin === "app-review") {
           return `${run.artifactSource === "proposed-plan" ? planLabel : "Implementation"} · TDD repair · ${run.qaCycleCount}/${IMPLEMENTATION_RUN_MAX_QA_REPAIRS}`;
@@ -141,11 +141,11 @@ export function workflowProgressLabel(input: {
     case "implementation-validator":
       return "Implementation · Merge gate";
     case "implementation-qa-reviewer":
-      return "Implementation · Browser App Review";
+      return "Implementation · App Review";
     case "app-review-orchestrator":
       return "App Review · Controller";
     case "app-review-reviewer":
-      return "App Review · Browser review";
+      return "App Review · Review";
     case "app-review-planner":
       return "App Review · Gap analysis";
     case "app-review-fixer":

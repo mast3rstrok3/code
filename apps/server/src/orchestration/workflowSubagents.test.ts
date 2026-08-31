@@ -471,7 +471,7 @@ describe("resolveWorkflowStepModelSelection", () => {
         modelSelection: gapAnalysisSelection,
       },
     ];
-    // The reactor scopes all three agents of a cycle to the App Review step.
+    // The reactor scopes all four agents of a cycle to the App Review step.
     const modelFor = (workflowPromptId: string) =>
       resolveWorkflowStepModelSelection({
         workflowPromptId,
@@ -483,6 +483,7 @@ describe("resolveWorkflowStepModelSelection", () => {
       }).modelSelection;
 
     expect(modelFor("matt-pocock.to-tickets")).toEqual(gapAnalysisSelection);
+    expect(modelFor(WORKFLOW_PROMPT_IDS.implementationE2eAppReviewCodex)).toEqual(pinnedSelection);
     expect(modelFor(WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex)).toEqual(
       pinnedSelection,
     );

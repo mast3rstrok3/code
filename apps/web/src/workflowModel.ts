@@ -428,7 +428,14 @@ function entrySkillIds<TThread extends WorkflowModelThread>(
     case "implementation-validator":
       return new Set(["implementation.merge-gate.codex"]);
     case "implementation-qa-reviewer":
-    case "app-review-reviewer":
+    case "app-review-reviewer": {
+      const title = entry.row.thread.title?.toLowerCase() ?? "";
+      return new Set([
+        title.includes("end-to-end")
+          ? "implementation.e2e-app-review.codex"
+          : "implementation.browser-app-review.codex",
+      ]);
+    }
     case "app-review-orchestrator":
       return new Set(["implementation.browser-app-review.codex"]);
     case "implementation-code-reviewer":
@@ -610,7 +617,7 @@ export interface WorkflowCurrentPath {
   readonly appReviewRunId: string | null;
   readonly cycleNumber: number | null;
   readonly cycleBudget: number | null;
-  readonly appReviewPhase: "review" | "planning" | "fixing" | null;
+  readonly appReviewPhase: "e2e" | "review" | "planning" | "fixing" | null;
   readonly threadId: string | null;
   readonly activeTicketCount: number;
   readonly subtitle: string;
@@ -756,13 +763,15 @@ export function resolveWorkflowCurrentPath<TThread extends WorkflowModelThread>(
             : null;
       const appReviewPhase = appReviewRun?.activePhase ?? null;
       const phaseLabel =
-        appReviewPhase === "review"
-          ? "E2E and browser review"
-          : appReviewPhase === "planning"
-            ? "Gap analysis"
-            : appReviewPhase === "fixing"
-              ? "TDD repair"
-              : null;
+        appReviewPhase === "e2e"
+          ? "End-to-end test"
+          : appReviewPhase === "review"
+            ? "Browser review"
+            : appReviewPhase === "planning"
+              ? "Gap analysis"
+              : appReviewPhase === "fixing"
+                ? "TDD repair"
+                : null;
       const segments = [
         input.workflowLabel,
         "Execute ticket waves",
@@ -841,13 +850,15 @@ export function resolveWorkflowCurrentPath<TThread extends WorkflowModelThread>(
       : (combinedAppReviewCycle?.cycleNumber ?? null);
     const appReviewPhase = combinedAppReview?.activePhase ?? null;
     const appReviewPhaseLabel =
-      appReviewPhase === "review"
-        ? "E2E and browser review"
-        : appReviewPhase === "planning"
-          ? "Gap analysis"
-          : appReviewPhase === "fixing"
-            ? "TDD repair"
-            : null;
+      appReviewPhase === "e2e"
+        ? "End-to-end test"
+        : appReviewPhase === "review"
+          ? "Browser review"
+          : appReviewPhase === "planning"
+            ? "Gap analysis"
+            : appReviewPhase === "fixing"
+              ? "TDD repair"
+              : null;
     const status =
       run.status === "needs-human-attention"
         ? "blocked"
@@ -1322,6 +1333,7 @@ export function resolveWorkflowStageDetailStatus(detail: string): WorkflowStepSt
   if (value.startsWith("skipped")) return "skipped";
   if (
     value === "running" ||
+    value === "e2e-testing" ||
     value === "in review" ||
     value === "in progress" ||
     value === "reviewing" ||

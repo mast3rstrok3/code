@@ -100,14 +100,19 @@ describe("App Review workflow panel logic", () => {
 
   it("shows review and planning in one cycle before implementation", () => {
     const run = makeAppReviewWorkflowRun();
-    expect(appReviewCycleStepStatuses(run.cycles[0]!)).toEqual(["complete", "complete", "pending"]);
+    expect(appReviewCycleStepStatuses(run.cycles[0]!)).toEqual([
+      "not-needed",
+      "complete",
+      "complete",
+      "pending",
+    ]);
     expect(
       appReviewCycleStepStatuses({
         ...run.cycles[0]!,
         status: "fixing",
         fixerThreadId: ThreadId.make("thread-fixer"),
       }),
-    ).toEqual(["complete", "complete", "current"]);
+    ).toEqual(["not-needed", "complete", "complete", "current"]);
     expect(
       appReviewCycleStepStatuses({
         ...run.cycles[0]!,
@@ -116,7 +121,43 @@ describe("App Review workflow panel logic", () => {
         planId: null,
         fixerThreadId: null,
       }),
-    ).toEqual(["complete", "not-needed", "not-needed"]);
+    ).toEqual(["not-needed", "complete", "not-needed", "not-needed"]);
+  });
+
+  it("shows E2E and browser review as consecutive steps", () => {
+    const run = makeAppReviewWorkflowRun();
+    const cycle = {
+      ...run.cycles[0]!,
+      appReviewScope: "both" as const,
+      status: "reviewing" as const,
+      e2eReviewId: AppReviewId.make("review-e2e-1"),
+      e2eThreadId: ThreadId.make("thread-e2e"),
+      e2eVerdict: "passed" as const,
+      reviewVerdict: null,
+      planId: null,
+    };
+
+    expect(appReviewCycleStepStatuses(cycle)).toEqual([
+      "complete",
+      "current",
+      "pending",
+      "pending",
+    ]);
+  });
+
+  it("skips browser review for an E2E-only cycle", () => {
+    const run = makeAppReviewWorkflowRun();
+    expect(
+      appReviewCycleStepStatuses({
+        ...run.cycles[0]!,
+        appReviewScope: "e2e",
+        status: "planning",
+        e2eReviewId: AppReviewId.make("review-e2e-1"),
+        e2eThreadId: ThreadId.make("thread-e2e"),
+        e2eVerdict: "failed",
+        reviewVerdict: "failed",
+      }),
+    ).toEqual(["complete", "not-needed", "current", "pending"]);
   });
 
   it("marks the step a spent cycle broke on and leaves the rest unreached", () => {
@@ -135,13 +176,18 @@ describe("App Review workflow panel logic", () => {
         failedAt: "2026-01-01T00:01:00.000Z",
       },
     };
-    expect(appReviewCycleStepStatuses(spent)).toEqual(["failed", "pending", "pending"]);
+    expect(appReviewCycleStepStatuses(spent)).toEqual([
+      "not-needed",
+      "failed",
+      "pending",
+      "pending",
+    ]);
     expect(
       appReviewCycleStepStatuses({
         ...spent,
         failure: { ...spent.failure, phase: "planning" as const },
       }),
-    ).toEqual(["pending", "failed", "pending"]);
+    ).toEqual(["not-needed", "pending", "failed", "pending"]);
   });
 
   it("blames the review when a spent cycle predates per-cycle failures", () => {
@@ -154,7 +200,7 @@ describe("App Review workflow panel logic", () => {
         planId: null,
         fixerThreadId: null,
       }),
-    ).toEqual(["failed", "pending", "pending"]);
+    ).toEqual(["not-needed", "failed", "pending", "pending"]);
   });
 
   it("selects the latest run controlled by the open thread", () => {

@@ -144,6 +144,15 @@ const WORKFLOW_SUBAGENT_SPAWN_DEFINITIONS: ReadonlyArray<WorkflowSubagentSpawnDe
     allowedParentWorkflowRoles: [null, "implementation-orchestrator"],
   },
   {
+    workflowPromptId: WORKFLOW_PROMPT_IDS.implementationE2eAppReviewCodex,
+    interactionMode: "implementation-workflow",
+    workflowRole: "implementation-qa-reviewer",
+    threadIdTag: "workflow-implementation-e2e-reviewer",
+    defaultTitlePrefix: "End-to-end App Review",
+    expectedResult: "app-review-document",
+    allowedParentWorkflowRoles: "any",
+  },
+  {
     workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex,
     interactionMode: "implementation-workflow",
     workflowRole: "implementation-qa-reviewer",
@@ -505,7 +514,7 @@ export function rerunTargetStepPin(target: OrchestrationImplementationRerunTarge
 /**
  * The step pin one App Review phase reads.
  *
- * All three agents run under the App Review step, so they resolve as its
+ * All four agents run under the App Review step, so they resolve as its
  * sub-steps and carry it as `stepWorkflowPromptId`. Matches the sub-step ids
  * the Workflows panel already writes pins against.
  */
@@ -514,6 +523,8 @@ export function appReviewPhaseStepPin(phase: AppReviewWorkflowPhase): {
   readonly stepWorkflowPromptId?: string;
 } {
   switch (phase) {
+    case "e2e":
+      return { workflowPromptId: WORKFLOW_PROMPT_IDS.implementationE2eAppReviewCodex };
     case "review":
       return { workflowPromptId: WORKFLOW_PROMPT_IDS.implementationBrowserAppReviewCodex };
     case "planning":

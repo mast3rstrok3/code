@@ -6,7 +6,7 @@ export interface WorkflowStepCycleKey {
   readonly stepWorkflowPromptId?: string | undefined;
 }
 
-/** The prompt shared by standalone, combined, and ticket App Review steps. */
+/** The configuration key shared by standalone, final, and ticket App Review steps. */
 export const APP_REVIEW_WORKFLOW_PROMPT_ID = "implementation.browser-app-review.codex";
 
 /** One configurable cycle target and its accepted bounds. */
@@ -32,7 +32,7 @@ export const WORKFLOW_STEP_CYCLE_TARGETS: ReadonlyArray<WorkflowStepCycleTarget>
     key: { workflowPromptId: APP_REVIEW_WORKFLOW_PROMPT_ID },
     label: "App Review cycles",
     description:
-      "One browser review, the gap analysis that writes repair tickets, and the fix. The review ends unresolved when the budget runs out.",
+      "An E2E test, browser review, gap analysis, and fix. The review ends unresolved when the budget runs out.",
     defaultCycles: 10,
     maxCycles: 10,
   },
@@ -43,7 +43,7 @@ export const WORKFLOW_STEP_CYCLE_TARGETS: ReadonlyArray<WorkflowStepCycleTarget>
     },
     label: "Ticket App Review cycles",
     description:
-      "The same three phases, for the App Review a single ticket runs before its Code Review.",
+      "The same four phases, for the App Review a single ticket runs before its Code Review.",
     defaultCycles: 10,
     maxCycles: 10,
   },

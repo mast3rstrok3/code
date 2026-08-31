@@ -834,8 +834,8 @@ function canRerunCanceledFinalCodeReview(input: {
 /**
  * The thread still working an App Review run's current phase, when there is one.
  *
- * The three phases share one worktree and one durable review record, so a phase
- * cannot start again underneath the agent that owns them.
+ * The four phases share one worktree. E2E and browser review own separate
+ * durable records, so no phase can restart beneath its current agent.
  */
 function liveAppReviewPhaseThreadId(input: {
   readonly readModel: OrchestrationReadModel;
@@ -4443,7 +4443,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       }
       // A redo of the browser review runs a new cycle rather than overwriting
       // the one that disappointed, so it needs budget left to run in.
-      if (command.phase === "review" && existing.cyclesUsed >= existing.cycleBudget) {
+      if (
+        (command.phase === "e2e" || command.phase === "review") &&
+        existing.cyclesUsed >= existing.cycleBudget
+      ) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: `App Review Workflow '${command.runId}' has used all ${String(existing.cycleBudget)} of its cycles.`,
@@ -4586,7 +4589,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
       const workflowReviewCycle = (readModel.appReviewWorkflowRuns ?? [])
         .flatMap((run) => run.cycles.map((cycle) => ({ run, cycle })))
-        .find(({ cycle }) => cycle.reviewId === command.reviewId);
+        .find(
+          ({ cycle }) =>
+            cycle.reviewId === command.reviewId || cycle.e2eReviewId === command.reviewId,
+        );
       const threadCreatedEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -4614,8 +4620,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             : {}),
           title:
             workflowReviewCycle === undefined
-              ? "Browser App Review"
-              : `Browser App Review · Cycle ${workflowReviewCycle.cycle.cycleNumber} of ${workflowReviewCycle.run.cycleBudget}`,
+              ? command.appReviewScope === "e2e"
+                ? "End-to-end test"
+                : "Browser App Review"
+              : command.appReviewScope === "e2e"
+                ? `End-to-end test · Cycle ${workflowReviewCycle.cycle.cycleNumber} of ${workflowReviewCycle.run.cycleBudget}`
+                : `Browser App Review · Cycle ${workflowReviewCycle.cycle.cycleNumber} of ${workflowReviewCycle.run.cycleBudget}`,
           modelSelection: command.modelSelection,
           runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
           interactionMode:

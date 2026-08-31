@@ -73,7 +73,7 @@ describe("workflowModelQuickActions", () => {
     });
   });
 
-  it("reports mixed when ticket and combined browser review models differ", () => {
+  it("reports mixed when ticket and standalone App Review models differ", () => {
     const keys = workflowModelQuickActions("planning").find(
       (action) => action.id === "e2e-browser-review",
     )!.pinKeys;

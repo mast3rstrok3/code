@@ -71,7 +71,7 @@ export const WorkflowStageTarget = Schema.Union([
     kind: Schema.Literal("app-review-phase"),
     runId: TrimmedNonEmptyString,
     cycleNumber: PositiveInt,
-    phase: Schema.Literals(["review", "planning", "fixing"]),
+    phase: Schema.Literals(["e2e", "review", "planning", "fixing"]),
   }),
 ]);
 export type WorkflowStageTarget = typeof WorkflowStageTarget.Type;

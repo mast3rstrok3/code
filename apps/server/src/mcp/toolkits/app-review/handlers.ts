@@ -117,6 +117,12 @@ const invokeBrowser = Effect.fn("AppReviewToolkit.invokeBrowser")(function* <A>(
   operation: "recordingStart" | "recordingStop" | "snapshot",
   tabId: PreviewTabId | undefined,
 ) {
+  if (!scope.capabilities.has("preview")) {
+    return yield* reviewError(
+      undefined,
+      "Browser evidence tools are unavailable in this isolated App Review phase.",
+    );
+  }
   const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
   return (yield* broker.invoke({
     scope,

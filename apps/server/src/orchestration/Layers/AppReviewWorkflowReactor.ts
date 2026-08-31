@@ -29,7 +29,6 @@ import {
   ALL_APP_REVIEW_PARTS,
   appReviewPartsForScope,
   appReviewScopeForParts,
-  describeAppReviewParts,
   intersectAppReviewParts,
   resolveLayeredAppReviewStepParts,
   type AppReviewParts,
@@ -314,7 +313,14 @@ export function selectStandalonePreviewTargets(input: {
 
 export function nextAppReviewWorkflowAction(
   run: AppReviewWorkflowRun,
-): "none" | "review" | "exhaust" | "reconcile-review" | "reconcile-plan" | "reconcile-fix" {
+):
+  | "none"
+  | "review"
+  | "exhaust"
+  | "reconcile-e2e"
+  | "reconcile-review"
+  | "reconcile-plan"
+  | "reconcile-fix" {
   if (run.status !== "running") return "none";
   switch (run.activePhase) {
     case null:
@@ -328,6 +334,8 @@ export function nextAppReviewWorkflowAction(
       // here rather than only where the last cycle ended is what lets a restart
       // finish a run whose final cycle landed and whose close did not.
       return run.cyclesUsed < run.cycleBudget ? "review" : "exhaust";
+    case "e2e":
+      return "reconcile-e2e";
     case "review":
       return "reconcile-review";
     case "planning":
@@ -504,6 +512,8 @@ export function appReviewPhaseLaunchCount(
   phase: AppReviewWorkflowPhase,
 ): number {
   switch (phase) {
+    case "e2e":
+      return cycle.e2eLaunchCount ?? (cycle.e2eThreadId == null ? 0 : 1);
     case "review":
       return cycle.reviewLaunchCount ?? 1;
     case "planning":
@@ -598,11 +608,13 @@ export function recoverableFailedAppReviewPhase(input: {
     }
   }
   const threadId =
-    phase === "review"
-      ? cycle.reviewerThreadId
-      : phase === "planning"
-        ? (cycle.plannerThreadId ?? null)
-        : cycle.fixerThreadId;
+    phase === "e2e"
+      ? (cycle.e2eThreadId ?? null)
+      : phase === "review"
+        ? cycle.reviewerThreadId
+        : phase === "planning"
+          ? (cycle.plannerThreadId ?? null)
+          : cycle.fixerThreadId;
   if (threadId === null) return null;
   return {
     phase,
@@ -635,26 +647,34 @@ export function reopenFailedAppReviewPhase(input: {
     finalHeadSha: null,
     activePhase: input.phase,
     activeThreadId:
-      input.phase === "review"
-        ? cycle.reviewerThreadId
-        : input.phase === "planning"
-          ? (cycle.plannerThreadId ?? null)
-          : cycle.fixerThreadId,
+      input.phase === "e2e"
+        ? (cycle.e2eThreadId ?? null)
+        : input.phase === "review"
+          ? cycle.reviewerThreadId
+          : input.phase === "planning"
+            ? (cycle.plannerThreadId ?? null)
+            : cycle.fixerThreadId,
     workspaceRevision: input.workspaceRevision,
     cycles: input.run.cycles.map((entry) =>
       entry.cycleNumber === cycle.cycleNumber
         ? {
             ...entry,
             status:
-              input.phase === "review"
-                ? ("reviewing" as const)
-                : input.phase === "planning"
-                  ? ("planning" as const)
-                  : ("fixing" as const),
+              input.phase === "e2e"
+                ? ("e2e-testing" as const)
+                : input.phase === "review"
+                  ? ("reviewing" as const)
+                  : input.phase === "planning"
+                    ? ("planning" as const)
+                    : ("fixing" as const),
             reviewLaunchCount:
               input.phase === "review" && input.incrementReviewLaunchCount !== false
                 ? appReviewPhaseLaunchCount(entry, "review") + 1
                 : appReviewPhaseLaunchCount(entry, "review"),
+            e2eLaunchCount:
+              input.phase === "e2e" && input.incrementReviewLaunchCount !== false
+                ? appReviewPhaseLaunchCount(entry, "e2e") + 1
+                : appReviewPhaseLaunchCount(entry, "e2e"),
             recoveryContinuationCount:
               (entry.recoveryContinuationCount ?? 0) +
               (input.incrementRecoveryCount === false ? 0 : 1),
@@ -795,6 +815,32 @@ export function retryReviewPhaseInCycle(input: {
   };
 }
 
+export function retryE2ePhaseInCycle(input: {
+  readonly cycle: AppReviewWorkflowCycle;
+  readonly failure: AppReviewWorkflowFailure;
+  readonly workspaceRevision: AppReviewWorkflowWorkspaceRevision;
+}): AppReviewWorkflowCycle {
+  return {
+    ...input.cycle,
+    status: "e2e-testing",
+    e2eLaunchCount: appReviewPhaseLaunchCount(input.cycle, "e2e") + 1,
+    e2eVerdict: "pending",
+    reviewLaunchCount: 0,
+    reviewVerdict: null,
+    actionableFindingsMarkdown: null,
+    planId: null,
+    plannerThreadId: null,
+    plannerTurnId: null,
+    fixerThreadId: null,
+    repairTickets: [],
+    ticketingTurnId: null,
+    fixResult: null,
+    failure: input.failure,
+    workspaceRevision: input.workspaceRevision,
+    completedAt: null,
+  };
+}
+
 export function rerunPlanningPhaseInCycle(input: {
   readonly cycle: AppReviewWorkflowCycle;
   readonly workspaceRevision: AppReviewWorkflowWorkspaceRevision;
@@ -823,6 +869,7 @@ export function isSupersededAppReviewPhaseThread(
   if (run.activeThreadId === threadId) return false;
   return run.cycles.some(
     (cycle) =>
+      cycle.e2eThreadId === threadId ||
       cycle.reviewerThreadId === threadId ||
       cycle.plannerThreadId === threadId ||
       cycle.fixerThreadId === threadId ||
@@ -852,6 +899,7 @@ export function priorCycleChecks(input: {
   readonly run: AppReviewWorkflowRun;
   readonly currentCycleNumber: number;
   readonly priorReviews: ReadonlyArray<AppReviewRecord>;
+  readonly recordScope?: "e2e" | "browser" | "both";
 }): {
   readonly findingIds: ReadonlyArray<string>;
   readonly carryable: ReadonlyArray<CarryableAppReviewCheck>;
@@ -861,15 +909,27 @@ export function priorCycleChecks(input: {
     .filter((cycle) => cycle.cycleNumber < input.currentCycleNumber)
     .toSorted((left, right) => left.cycleNumber - right.cycleNumber);
   const reviewById = new Map(input.priorReviews.map((review) => [review.id, review]));
+  const reviewIdsForCycle = (cycle: AppReviewWorkflowCycle) =>
+    input.recordScope === "e2e"
+      ? [cycle.e2eReviewId]
+      : input.recordScope === "browser"
+        ? [cycle.reviewId]
+        : [cycle.e2eReviewId, cycle.reviewId];
   const findingIds = priorCycles
-    .flatMap((cycle) => reviewById.get(cycle.reviewId)?.document.findings ?? [])
+    .flatMap((cycle) =>
+      reviewIdsForCycle(cycle).flatMap((reviewId) =>
+        reviewId == null ? [] : (reviewById.get(reviewId)?.document.findings ?? []),
+      ),
+    )
     .filter((finding) => finding.severity !== "note")
     .map((finding) => finding.id);
   const findingIdSet = new Set(findingIds);
   const carryable = new Map<string, CarryableAppReviewCheck>();
   const passedCheckIdsByCycle = new Map<number, ReadonlySet<string>>();
   for (const cycle of priorCycles) {
-    const checks = reviewById.get(cycle.reviewId)?.document.checks ?? [];
+    const checks = reviewIdsForCycle(cycle).flatMap((reviewId) =>
+      reviewId == null ? [] : (reviewById.get(reviewId)?.document.checks ?? []),
+    );
     passedCheckIdsByCycle.set(
       cycle.cycleNumber,
       new Set(checks.filter((check) => check.status === "passed").map((check) => check.id)),
@@ -950,33 +1010,35 @@ export function terminalReviewPassFailure(input: {
   /** Required e2e check ids when the project configures `e2eCommands`. */
   readonly e2eCheckIds?: ReadonlyArray<string>;
 }): string | null {
+  const sectionLabel =
+    input.review.appReviewScope === "e2e" ? "End-to-end test" : "Browser App Review";
   if (input.review.status !== "passed" || input.review.document.verdict !== "passed") return null;
   const checks = input.review.document.checks;
   if (checks.length === 0) {
-    return "Browser App Review reported a pass without a check matrix.";
+    return `${sectionLabel} reported a pass without a check matrix.`;
   }
   const incompleteChecks = checks.filter((check) => check.status !== "passed");
   if (incompleteChecks.length > 0) {
-    return `Browser App Review reported a pass with incomplete checks: ${incompleteChecks
+    return `${sectionLabel} reported a pass with incomplete checks: ${incompleteChecks
       .map((check) => `${check.id}=${check.status}`)
       .join(", ")}.`;
   }
   const checksById = new Map(checks.map((check) => [check.id, check]));
   const missingE2eChecks = (input.e2eCheckIds ?? []).filter((id) => !checksById.has(id));
   if (missingE2eChecks.length > 0) {
-    return `Browser App Review reported a pass without the required end-to-end checks: ${missingE2eChecks.join(", ")}.`;
+    return `${sectionLabel} reported a pass without the required end-to-end checks: ${missingE2eChecks.join(", ")}.`;
   }
   const carriedE2eChecks = (input.e2eCheckIds ?? []).filter(
     (id) => checksById.get(id)?.carriedFromCycle !== undefined,
   );
   if (carriedE2eChecks.length > 0) {
-    return `Browser App Review carried end-to-end checks forward instead of rerunning them: ${carriedE2eChecks.join(", ")}.`;
+    return `${sectionLabel} carried end-to-end checks forward instead of rerunning them: ${carriedE2eChecks.join(", ")}.`;
   }
   const actionableFindings = input.review.document.findings.filter(
     (finding) => finding.severity !== "note",
   );
   if (actionableFindings.length > 0) {
-    return `Browser App Review reported a pass with unresolved findings: ${actionableFindings
+    return `${sectionLabel} reported a pass with unresolved findings: ${actionableFindings
       .map((finding) => finding.id)
       .join(", ")}.`;
   }
@@ -986,12 +1048,13 @@ export function terminalReviewPassFailure(input: {
     run: input.run,
     currentCycleNumber: currentCycle,
     priorReviews: input.priorReviews,
+    recordScope: input.review.appReviewScope ?? "both",
   });
   const carriedFindingChecks = checks.filter(
     (check) => check.carriedFromCycle !== undefined && prior.findingIds.includes(check.id),
   );
   if (carriedFindingChecks.length > 0) {
-    return `Browser App Review carried prior findings forward instead of verifying them: ${carriedFindingChecks
+    return `${sectionLabel} carried prior findings forward instead of verifying them: ${carriedFindingChecks
       .map((check) => check.id)
       .join(", ")}.`;
   }
@@ -1001,7 +1064,7 @@ export function terminalReviewPassFailure(input: {
       !(prior.passedCheckIdsByCycle.get(check.carriedFromCycle)?.has(check.id) ?? false),
   );
   if (unsupportedCarries.length > 0) {
-    return `Browser App Review carried checks forward from cycles that never passed them: ${unsupportedCarries
+    return `${sectionLabel} carried checks forward from cycles that never passed them: ${unsupportedCarries
       .map((check) => `${check.id}@${String(check.carriedFromCycle)}`)
       .join(", ")}.`;
   }
@@ -1010,37 +1073,64 @@ export function terminalReviewPassFailure(input: {
     (findingId) => !passedCheckIds.has(findingId),
   );
   if (missingFindingChecks.length > 0) {
-    return `Browser App Review did not explicitly verify prior findings: ${missingFindingChecks.join(", ")}.`;
+    return `${sectionLabel} did not explicitly verify prior findings: ${missingFindingChecks.join(", ")}.`;
   }
   return null;
 }
 
+/** The isolated test runner's contract for one cycle. */
+export function buildE2eReviewPrompt(input: {
+  readonly run: AppReviewWorkflowRun;
+  readonly cycle: AppReviewWorkflowCycle;
+  readonly e2eCommands: ReadonlyArray<string>;
+  readonly priorFindingIds: ReadonlyArray<string>;
+}): string {
+  return appendWorkflowSkillCommandSection(
+    [
+      `Run the end-to-end test phase for App Review cycle ${input.cycle.cycleNumber} of ${input.run.cycleBudget}.`,
+      "This phase owns only the automated test run. The workflow starts a separate Browser App Review thread after this thread finishes.",
+      "",
+      "The original brief is the acceptance boundary:",
+      input.run.briefMarkdown,
+      ...(input.run.supportingContextMarkdown === null
+        ? []
+        : ["", "Supporting source context:", input.run.supportingContextMarkdown]),
+      "",
+      `Run every command below from the selected worktree, in order, with ${APP_REVIEW_PREVIEW_URL_ENV}=${input.run.previewTargets[0] ?? "the-authoritative-preview-target"}:`,
+      ...input.e2eCommands.map((command, index) => `- e2e-${index + 1}: ${command}`),
+      "Record each command as one check with the exact id shown. Summarize the suite result in notes. When command output publishes an inspectable web replay URL, copy it into that check's replayUrl field so a human can open it from the App Review panel.",
+      "A failing command is a failed check. Turn each distinct in-scope product failure into an actionable finding. Keep unrelated or pre-existing failures in check notes or note-severity findings.",
+      ...(input.priorFindingIds.length === 0
+        ? []
+        : [
+            "",
+            "This cycle verifies a repair. The test run must verify every earlier actionable finding and add a passed check with the same id before this section can pass:",
+            ...input.priorFindingIds.map((findingId) => `- ${findingId}`),
+          ]),
+      "",
+      "Call app_review_get first, then run the commands. Do not call preview_* tools, start a recording, inspect the UI manually, edit files, or fix failures. Finish by writing the complete E2E App Review document and a passed or failed status with app_review_update.",
+      "A passed verdict requires a non-empty check matrix in which every check passed. Run every command fresh in every cycle and never carry an E2E check forward.",
+    ].join("\n"),
+    WORKFLOW_PROMPT_IDS.implementationE2eAppReviewCodex,
+  );
+}
+
 /**
- * What the reviewer is told to do this cycle.
+ * What the isolated browser reviewer is told to do this cycle.
  *
  * A repair cycle is scoped rather than replayed: the prior findings are
  * exercised again in the browser, and what already passed is carried forward by
- * id unless the repair could plausibly have reached it. The reviewer still owns
- * that judgement, because only it can see what the repair touched.
+ * id unless the repair could plausibly have reached it.
  */
 export function buildReviewPrompt(input: {
   readonly run: AppReviewWorkflowRun;
   readonly cycle: AppReviewWorkflowCycle;
   readonly priorFindingIds: ReadonlyArray<string>;
   readonly carryableChecks: ReadonlyArray<CarryableAppReviewCheck>;
-  /** The project's `e2eCommands` from t3.json; empty or absent skips the e2e step. */
-  readonly e2eCommands?: ReadonlyArray<string>;
-  /** The run's effective scope; absent derives from whether e2e commands exist. */
-  readonly reviewScope?: AppReviewScope;
+  readonly e2eSummaryMarkdown?: string;
 }): string {
   const { run, cycle } = input;
-  const scope: AppReviewScope =
-    input.reviewScope ?? ((input.e2eCommands?.length ?? 0) > 0 ? "both" : "browser");
-  const e2eCommands = scope === "browser" ? [] : (input.e2eCommands ?? []);
-  // E2e checks are rerun every cycle, so a prior cycle's pass is never offered
-  // back as carryable.
-  const e2eCheckIds = new Set(e2eCheckIdsForCommands(e2eCommands));
-  const carryableChecks = input.carryableChecks.filter((check) => !e2eCheckIds.has(check.id));
+  const carryableChecks = input.carryableChecks.filter((check) => !check.id.startsWith("e2e-"));
   return appendWorkflowSkillCommandSection(
     [
       run.reviewOnly === true
@@ -1057,22 +1147,12 @@ export function buildReviewPrompt(input: {
       ...run.previewTargets.map((target) => `- ${target}`),
       "These preview targets are authoritative for this App Review cycle. Do not substitute deployment URLs from repository documentation, supporting source context, browser history, or environment conventions. If every listed target is unavailable, report the review failed with concrete details.",
       "",
-      `Review parts for this run — ${describeAppReviewParts(appReviewPartsForScope(scope))}. A part marked no is off for this review and must not be run.`,
-      ...(e2eCommands.length === 0
+      "Review parts for this thread: E2E tests: no · Browser review: yes. The E2E phase has already finished in its own thread.",
+      ...(input.e2eSummaryMarkdown === undefined
         ? []
-        : [
-            "",
-            `Part one of this review is the end-to-end test run. Run each command from the selected worktree, in order, with the environment variable ${APP_REVIEW_PREVIEW_URL_ENV} set to the first preview target above, and record each command as a check with the exact id shown:`,
-            ...e2eCommands.map((command, index) => `- e2e-${index + 1}: ${command}`),
-            "A passing command is a passed check whose notes summarize the suite result. A failing command is a failed check whose notes name the failing tests. Only failures inside the original acceptance brief, caused by the work under review, or blocking verification of that brief are actionable findings. Record unrelated or pre-existing failures in the check notes or as note-severity findings; do not turn them into repair work for this run. Run these commands fresh every cycle and never carry an e2e check forward.",
-            scope === "e2e"
-              ? "This review is end-to-end only: the test run is the verification. Skip the browser entirely — do not open the preview or start a recording, and no screenshots are required. Base the verdict on the check matrix."
-              : "Part two is the browser review, scoped to what the tests did not prove: acceptance criteria without e2e coverage, visual and interaction quality, and every failure the run surfaced. Do not re-drive a flow a passing e2e test already exercises end-to-end. Evidence requirements are unchanged: still record the session and capture screenshots of the states you verify.",
-          ]),
+        : ["", "End-to-end section result:", input.e2eSummaryMarkdown]),
       "",
-      scope === "e2e"
-        ? "Use the linked durable App Review record and report every actionable finding."
-        : "Use the linked durable App Review record. Record the complete flow, capture captioned screenshots, and report every actionable finding. A missing or unavailable preview is a failed review.",
+      "Use the linked durable App Review record. Record the complete flow, capture captioned screenshots, and report every actionable finding. A missing or unavailable preview is a failed review.",
       ...(run.reviewOnly === true
         ? [
             "This run reviews only. Nothing you find will be repaired, so the findings you record are the whole deliverable: state every one concretely enough that someone else can reproduce and fix it. Do not edit files.",
@@ -1083,9 +1163,7 @@ export function buildReviewPrompt(input: {
         ? []
         : [
             "",
-            scope === "e2e"
-              ? "This is a repair verification cycle. Verify each prior actionable finding again through the test run and add one passed check with the exact same id before reporting passed:"
-              : "This is a repair verification cycle. Exercise each prior actionable finding in the browser again and add one passed check with the exact same id before reporting passed:",
+            "This is a repair verification cycle. Exercise each prior actionable finding in the browser again and add one passed check with the exact same id before reporting passed:",
             ...input.priorFindingIds.map((findingId) => `- ${findingId}`),
           ]),
       ...(carryableChecks.length === 0
@@ -1544,20 +1622,12 @@ const make = Effect.gen(function* () {
       run,
       currentCycleNumber: cycle.cycleNumber,
       priorReviews: controller.appReviews,
+      recordScope: "browser",
     });
-    const target = yield* resolveTarget(run.targetThreadId);
-    const e2eCommands = yield* e2eCommandsForCwd(target?.cwd ?? null);
-    const reviewScope = yield* reviewScopeForRun(run, e2eCommands.length);
-    if (reviewScope === null) {
-      yield* failRun({
-        run,
-        reason: "automation-unavailable",
-        detailMarkdown:
-          "App Review is turned off for this step in Settings → Workflows (E2E tests: no · Browser review: no), so no cycle can verify anything.",
-        occurredAt: run.updatedAt,
-      });
-      return;
-    }
+    const e2eReview =
+      cycle.e2eReviewId == null
+        ? null
+        : (controller.appReviews.find((review) => review.id === cycle.e2eReviewId) ?? null);
     const message = {
       messageId: yield* serverMessageId("app-review-workflow-review"),
       role: "user" as const,
@@ -1566,8 +1636,20 @@ const make = Effect.gen(function* () {
         cycle,
         priorFindingIds: prior.findingIds,
         carryableChecks: prior.carryable,
-        e2eCommands,
-        reviewScope,
+        ...(e2eReview === null
+          ? {}
+          : {
+              e2eSummaryMarkdown: [
+                `Verdict: ${e2eReview.document.verdict}`,
+                e2eReview.document.summary,
+                ...e2eReview.document.findings.map(
+                  (finding) =>
+                    `- [${finding.severity}] ${finding.id}: ${finding.title}\n  ${finding.details}`,
+                ),
+              ]
+                .filter(Boolean)
+                .join("\n"),
+            }),
       }),
       attachments: [],
     };
@@ -1578,7 +1660,7 @@ const make = Effect.gen(function* () {
         sourceThreadId: run.controllerThreadId,
         reviewThreadId: cycle.reviewerThreadId,
         reviewId: cycle.reviewId,
-        appReviewScope: reviewScope,
+        appReviewScope: "browser",
         planningTicketIds: [...(controller.workflowContext?.ticketScope ?? [])],
         message,
         modelSelection: yield* modelForPrompt(
@@ -1639,6 +1721,103 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const ensureE2eLaunch = Effect.fn("AppReviewWorkflowReactor.ensureE2eLaunch")(function* (
+    run: AppReviewWorkflowRun,
+    cycle: AppReviewWorkflowCycle,
+  ) {
+    if (cycle.e2eThreadId == null || cycle.e2eReviewId == null) return;
+    const [tester, controller, target] = yield* Effect.all([
+      resolveThread(cycle.e2eThreadId),
+      resolveThread(run.controllerThreadId),
+      resolveTarget(run.targetThreadId),
+    ]);
+    if (controller === undefined || target === null) return;
+    const e2eCommands = yield* e2eCommandsForCwd(target.cwd);
+    if (e2eCommands.length === 0) {
+      yield* failRun({
+        run,
+        reason: "automation-unavailable",
+        detailMarkdown: "The end-to-end phase started without any configured e2eCommands.",
+        occurredAt: run.updatedAt,
+      });
+      return;
+    }
+    const prior = priorCycleChecks({
+      run,
+      currentCycleNumber: cycle.cycleNumber,
+      priorReviews: controller.appReviews,
+      recordScope: "e2e",
+    });
+    const message = {
+      messageId: yield* serverMessageId("app-review-workflow-e2e"),
+      role: "user" as const,
+      text: buildE2eReviewPrompt({
+        run,
+        cycle,
+        e2eCommands,
+        priorFindingIds: prior.findingIds,
+      }),
+      attachments: [],
+    };
+    if (tester === undefined) {
+      yield* orchestrationEngine.dispatch({
+        type: "thread.app-review.launch",
+        commandId: yield* serverCommandId("app-review-workflow-e2e-launch"),
+        sourceThreadId: run.controllerThreadId,
+        reviewThreadId: cycle.e2eThreadId,
+        reviewId: cycle.e2eReviewId,
+        appReviewScope: "e2e",
+        planningTicketIds: [...(controller.workflowContext?.ticketScope ?? [])],
+        message,
+        modelSelection: yield* modelForPrompt(
+          WORKFLOW_PROMPT_IDS.implementationE2eAppReviewCodex,
+          controller,
+          run,
+        ),
+        runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
+        workflowPromptId: WORKFLOW_PROMPT_IDS.implementationE2eAppReviewCodex,
+        createdAt: run.updatedAt,
+      });
+      return;
+    }
+    if (tester.deletedAt !== null) {
+      yield* failRun({
+        run,
+        reason: "unknown",
+        detailMarkdown: `The durable App Review E2E thread '${tester.id}' was deleted.`,
+        occurredAt: run.updatedAt,
+      });
+      return;
+    }
+    yield* orchestrationEngine.dispatch({
+      type: "thread.app-review.update",
+      commandId: yield* serverCommandId("app-review-workflow-e2e-reset"),
+      threadId: run.controllerThreadId,
+      reviewId: cycle.e2eReviewId,
+      status: "running",
+      document: {
+        verdict: "pending",
+        summary: "",
+        checks: [],
+        findings: [],
+        questions: [],
+        nextSteps: [],
+      },
+      updatedAt: run.updatedAt,
+      createdAt: run.updatedAt,
+    });
+    yield* orchestrationEngine.dispatch({
+      type: "thread.turn.start",
+      commandId: yield* serverCommandId("app-review-workflow-e2e-retry"),
+      threadId: tester.id,
+      message,
+      workflowPromptId: WORKFLOW_PROMPT_IDS.implementationE2eAppReviewCodex,
+      runtimeMode: WORKFLOW_AUTOMATION_RUNTIME_MODE,
+      interactionMode: tester.interactionMode,
+      createdAt: run.updatedAt,
+    });
+  });
+
   const startReview = Effect.fn("AppReviewWorkflowReactor.startReview")(function* (
     inputRun: AppReviewWorkflowRun,
     occurredAt: string,
@@ -1694,13 +1873,32 @@ const make = Effect.gen(function* () {
         return;
       }
     }
+    const e2eCommands = yield* e2eCommandsForCwd(cwd);
+    const reviewScope = yield* reviewScopeForRun(run, e2eCommands.length);
+    if (reviewScope === null) {
+      yield* failRun({
+        run,
+        reason: "automation-unavailable",
+        detailMarkdown:
+          "App Review is turned off for this step in Settings → Workflows (E2E tests: no · Browser review: no), so no cycle can verify anything.",
+        occurredAt,
+      });
+      return;
+    }
+    const includesE2e = reviewScope === "e2e" || reviewScope === "both";
     const cycleNumber = run.cyclesUsed + 1;
+    const e2eThreadId = includesE2e ? yield* serverThreadId("app-review-e2e") : null;
     const cycle: AppReviewWorkflowCycle = {
       cycleNumber,
-      status: "reviewing",
+      appReviewScope: reviewScope,
+      status: includesE2e ? "e2e-testing" : "reviewing",
+      e2eReviewId: includesE2e ? yield* serverReviewId() : null,
+      e2eThreadId,
+      e2eLaunchCount: includesE2e ? 1 : 0,
+      e2eVerdict: includesE2e ? "pending" : null,
       reviewId: yield* serverReviewId(),
       reviewerThreadId: yield* serverThreadId("app-review-reviewer"),
-      reviewLaunchCount: 1,
+      reviewLaunchCount: includesE2e ? 0 : 1,
       planningLaunchCount: 0,
       fixingLaunchCount: 0,
       supersededThreadIds: [],
@@ -1718,19 +1916,23 @@ const make = Effect.gen(function* () {
       ...run,
       cyclesUsed: cycleNumber,
       cycles: [...run.cycles, cycle],
-      activePhase: "review",
-      activeThreadId: cycle.reviewerThreadId,
+      activePhase: includesE2e ? "e2e" : "review",
+      activeThreadId: includesE2e ? cycle.e2eThreadId! : cycle.reviewerThreadId,
       updatedAt: occurredAt,
     };
     yield* updateRun(reviewingRun);
-    yield* ensureReviewLaunch(reviewingRun, cycle);
+    if (includesE2e) yield* ensureE2eLaunch(reviewingRun, cycle);
+    else yield* ensureReviewLaunch(reviewingRun, cycle);
   });
 
   const reviewRecordForCycle = (
     controller: OrchestrationThread,
     cycle: AppReviewWorkflowCycle,
   ): AppReviewRecord | null =>
-    controller.appReviews.find((review) => review.id === cycle.reviewId) ?? null;
+    controller.appReviews.find((review) => review.id === cycle.reviewId) ??
+    (cycle.e2eReviewId == null
+      ? null
+      : (controller.appReviews.find((review) => review.id === cycle.e2eReviewId) ?? null));
 
   const hasSettledCheckpoint = (thread: OrchestrationThread): boolean => {
     const turn = thread.latestTurn;
@@ -1824,10 +2026,10 @@ const make = Effect.gen(function* () {
   /**
    * Retry a failed phase without spending the product-review cycle.
    *
-   * One cycle owns one combined E2E/browser review, one gap-analysis plan when
-   * that review finds defects, and one repair. Provider and runtime failures
-   * relaunch only the phase that failed. A bounded phase budget stops a broken
-   * provider from turning the ten-cycle product budget into a retry loop.
+   * One cycle owns separate E2E and browser sections, one gap-analysis plan
+   * when either section finds defects, and one repair. Provider and runtime
+   * failures relaunch only the phase that failed. A bounded phase budget stops
+   * a broken provider from turning the ten-cycle product budget into a retry loop.
    */
   const failCycle = Effect.fn("AppReviewWorkflowReactor.failCycle")(function* (input: {
     readonly run: AppReviewWorkflowRun;
@@ -1879,6 +2081,24 @@ const make = Effect.gen(function* () {
     }
 
     switch (phase) {
+      case "e2e": {
+        const retryCycle = retryE2ePhaseInCycle({
+          cycle,
+          failure,
+          workspaceRevision,
+        });
+        const e2eRun: AppReviewWorkflowRun = {
+          ...retryBase,
+          activePhase: "e2e",
+          activeThreadId: retryCycle.e2eThreadId ?? null,
+          cycles: retryBase.cycles.map((entry) =>
+            entry.cycleNumber === cycle.cycleNumber ? retryCycle : entry,
+          ),
+        };
+        yield* updateRun(e2eRun);
+        yield* ensureE2eLaunch(e2eRun, retryCycle);
+        return;
+      }
       case "review": {
         const retryCycle = retryReviewPhaseInCycle({
           cycle,
@@ -2103,6 +2323,118 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const startBrowserReview = Effect.fn("AppReviewWorkflowReactor.startBrowserReview")(function* (
+    run: AppReviewWorkflowRun,
+    occurredAt: string,
+  ) {
+    const cycle = run.cycles.at(-1);
+    if (cycle === undefined) return;
+    const reviewingCycle: AppReviewWorkflowCycle = {
+      ...cycle,
+      status: "reviewing",
+      reviewLaunchCount: appReviewPhaseLaunchCount(cycle, "review") + 1,
+      failure: null,
+    };
+    const reviewingRun: AppReviewWorkflowRun = {
+      ...run,
+      activePhase: "review",
+      activeThreadId: cycle.reviewerThreadId,
+      cycles: run.cycles.map((entry) =>
+        entry.cycleNumber === cycle.cycleNumber ? reviewingCycle : entry,
+      ),
+      updatedAt: occurredAt,
+    };
+    yield* updateRun(reviewingRun);
+    yield* ensureReviewLaunch(reviewingRun, reviewingCycle);
+  });
+
+  const reconcileE2e = Effect.fn("AppReviewWorkflowReactor.reconcileE2e")(function* (
+    run: AppReviewWorkflowRun,
+    occurredAt: string,
+  ) {
+    const cycle = run.cycles.at(-1);
+    if (
+      run.activePhase !== "e2e" ||
+      cycle === undefined ||
+      cycle.e2eThreadId == null ||
+      cycle.e2eReviewId == null
+    ) {
+      return;
+    }
+    const [controller, tester] = yield* Effect.all([
+      resolveThread(run.controllerThreadId),
+      resolveThread(cycle.e2eThreadId),
+    ]);
+    if (tester === undefined) {
+      yield* ensureE2eLaunch(run, cycle);
+      return;
+    }
+    const review = controller?.appReviews.find((entry) => entry.id === cycle.e2eReviewId) ?? null;
+    if (
+      review === null ||
+      !["passed", "failed"].includes(review.status) ||
+      !appReviewRecoveryEvidenceIsCurrent(run, cycle, review.updatedAt)
+    ) {
+      if (appReviewPhaseLaunchNeedsRetry(run, cycle, tester)) {
+        yield* ensureE2eLaunch(run, cycle);
+        return;
+      }
+      if (appReviewPhaseTurnPending(run, cycle, tester)) return;
+      const failed = threadTurnFailed(tester);
+      const completedWithoutReview = phaseTurnCompleted(tester) && hasSettledCheckpoint(tester);
+      if (!failed && !completedWithoutReview) return;
+      if (failed && (yield* phaseThreadState(tester)) === "nudging") return;
+      yield* failCycle({
+        run,
+        reason: "review-blocked",
+        retryable: true,
+        detailMarkdown:
+          tester.session?.lastError ??
+          "The end-to-end test thread stopped without producing its durable App Review section.",
+        occurredAt,
+      });
+      return;
+    }
+    if (!hasSettledCheckpoint(tester)) return;
+    const target = yield* resolveTarget(run.targetThreadId);
+    if (target === null) return;
+    const stableRun = yield* assertStableRevision(run, target.cwd, occurredAt);
+    if (stableRun === null) return;
+    const e2eVerdict =
+      review.status === "passed" && review.document.verdict === "passed" ? "passed" : "failed";
+    const completedE2eRun: AppReviewWorkflowRun = {
+      ...stableRun,
+      cycles: stableRun.cycles.map((entry) =>
+        entry.cycleNumber === cycle.cycleNumber ? { ...entry, e2eVerdict } : entry,
+      ),
+      updatedAt: occurredAt,
+    };
+    if (cycle.appReviewScope === "both") {
+      yield* startBrowserReview(completedE2eRun, occurredAt);
+      return;
+    }
+    const e2eCommands = yield* e2eCommandsForCwd(target.cwd);
+    const passFailure = terminalReviewPassFailure({
+      run: completedE2eRun,
+      review,
+      priorReviews: controller?.appReviews ?? [],
+      e2eCheckIds: e2eCheckIdsForCommands(e2eCommands),
+    });
+    if (e2eVerdict === "passed" && passFailure === null) {
+      yield* finishPassed(completedE2eRun, review, occurredAt);
+      return;
+    }
+    yield* startPlanning({
+      run: completedE2eRun,
+      review,
+      actionableFindingsMarkdown:
+        [passFailure, findingsMarkdown(review), review.document.summary]
+          .filter((value): value is string => Boolean(value))
+          .join("\n\n") || "The end-to-end test failed without details.",
+      occurredAt,
+    });
+  });
+
   const reconcileReview = Effect.fn("AppReviewWorkflowReactor.reconcileReview")(function* (
     run: AppReviewWorkflowRun,
     occurredAt: string,
@@ -2117,7 +2449,7 @@ const make = Effect.gen(function* () {
       yield* ensureReviewLaunch(run, cycle);
       return;
     }
-    const review = controller === undefined ? null : reviewRecordForCycle(controller, cycle);
+    const review = controller?.appReviews.find((entry) => entry.id === cycle.reviewId) ?? null;
     if (
       review === null ||
       !["passed", "failed"].includes(review.status) ||
@@ -2150,53 +2482,53 @@ const make = Effect.gen(function* () {
     if (stableRun === null) return;
     const action = terminalReviewAction(review);
     const e2eCommands = yield* e2eCommandsForCwd(target.cwd);
-    // Null here means Settings turned the parts off after the cycle launched;
-    // judge the finished review leniently rather than retroactively.
-    const reviewScope =
-      review.appReviewScope ?? (yield* reviewScopeForRun(stableRun, e2eCommands.length));
     const passFailure = terminalReviewPassFailure({
       run: stableRun,
       review,
       priorReviews: controller?.appReviews ?? [],
-      e2eCheckIds:
-        reviewScope === "e2e" || reviewScope === "both" ? e2eCheckIdsForCommands(e2eCommands) : [],
+      e2eCheckIds: [],
     });
-    if (passFailure !== null) {
-      yield* startPlanning({
-        run: stableRun,
-        review,
-        actionableFindingsMarkdown: passFailure,
-        occurredAt,
-      });
-      return;
-    }
-    // An e2e-only review has no browser part, so recordings and screenshots
-    // are not part of its contract.
-    const evidenceFailure =
-      reviewScope === "e2e" || reviewScope === null
+    const evidenceFailure = terminalReviewEvidenceFailure(action, review);
+    const e2eReview =
+      cycle.e2eReviewId == null
         ? null
-        : terminalReviewEvidenceFailure(action, review);
-    if (evidenceFailure !== null) {
-      yield* startPlanning({
-        run: stableRun,
-        review,
-        actionableFindingsMarkdown: evidenceFailure,
-        occurredAt,
-      });
-      return;
-    }
-    if (action === "passed") {
+        : (controller?.appReviews.find((entry) => entry.id === cycle.e2eReviewId) ?? null);
+    const e2eAction = e2eReview === null ? "passed" : terminalReviewAction(e2eReview);
+    const e2ePassFailure =
+      e2eReview === null
+        ? null
+        : terminalReviewPassFailure({
+            run: stableRun,
+            review: e2eReview,
+            priorReviews: controller?.appReviews ?? [],
+            e2eCheckIds: e2eCheckIdsForCommands(e2eCommands),
+          });
+    if (
+      action === "passed" &&
+      e2eAction === "passed" &&
+      passFailure === null &&
+      e2ePassFailure === null &&
+      evidenceFailure === null
+    ) {
       yield* finishPassed(stableRun, review, occurredAt);
       return;
     }
-    const actionableFindingsMarkdown =
-      findingsMarkdown(review) ||
-      review.document.summary ||
-      "The App Review failed without details.";
+    const actionableFindingsMarkdown = [
+      e2ePassFailure,
+      e2eReview === null ? null : findingsMarkdown(e2eReview),
+      e2eReview?.document.summary,
+      passFailure,
+      evidenceFailure,
+      findingsMarkdown(review),
+      review.document.summary,
+    ]
+      .filter((value): value is string => Boolean(value))
+      .join("\n\n");
     yield* startPlanning({
       run: stableRun,
       review,
-      actionableFindingsMarkdown,
+      actionableFindingsMarkdown:
+        actionableFindingsMarkdown || "The App Review failed without details.",
       occurredAt,
     });
   });
@@ -2216,7 +2548,11 @@ const make = Effect.gen(function* () {
       });
       return;
     }
-    const reviewer = yield* resolveThread(cycle.reviewerThreadId);
+    const reviewOwnerThreadId =
+      cycle.appReviewScope === "e2e"
+        ? (cycle.e2eThreadId ?? cycle.reviewerThreadId)
+        : cycle.reviewerThreadId;
+    const reviewer = yield* resolveThread(reviewOwnerThreadId);
     const target = yield* resolveThread(run.targetThreadId);
     if (reviewer === undefined || target === undefined) return;
     const declaredE2eCommands = yield* e2eCommandsForCwd(
@@ -2279,7 +2615,10 @@ const make = Effect.gen(function* () {
     yield* orchestrationEngine.dispatch({
       type: "thread.interaction-mode.set",
       commandId: yield* serverCommandId("app-review-workflow-default-mode"),
-      threadId: cycle.reviewerThreadId,
+      threadId:
+        cycle.appReviewScope === "e2e"
+          ? (cycle.e2eThreadId ?? cycle.reviewerThreadId)
+          : cycle.reviewerThreadId,
       interactionMode: "default",
       createdAt: input.occurredAt,
     });
@@ -2725,6 +3064,9 @@ const make = Effect.gen(function* () {
       case "exhaust":
         yield* finishExhausted(run, occurredAt);
         return;
+      case "reconcile-e2e":
+        yield* reconcileE2e(run, occurredAt);
+        return;
       case "reconcile-review":
         yield* reconcileReview(run, occurredAt);
         return;
@@ -2781,7 +3123,7 @@ const make = Effect.gen(function* () {
       updatedAt: occurredAt,
     };
 
-    if (phase === "review") {
+    if (phase === "e2e" || phase === "review") {
       yield* updateRun(reopened);
       yield* startReview(reopened, occurredAt);
       return;
@@ -2850,8 +3192,13 @@ const make = Effect.gen(function* () {
     const runs = readModel.appReviewWorkflowRuns ?? [];
     if (event.type === "thread.app-review-updated") {
       return (
-        runs.find((run) => run.cycles.some((cycle) => cycle.reviewId === event.payload.reviewId)) ??
-        null
+        runs.find((run) =>
+          run.cycles.some(
+            (cycle) =>
+              cycle.reviewId === event.payload.reviewId ||
+              cycle.e2eReviewId === event.payload.reviewId,
+          ),
+        ) ?? null
       );
     }
     const threadId = event.payload.threadId;
@@ -2863,6 +3210,7 @@ const make = Effect.gen(function* () {
             run.activeThreadId === threadId ||
             run.cycles.some(
               (cycle) =>
+                cycle.e2eThreadId === threadId ||
                 cycle.reviewerThreadId === threadId ||
                 cycle.plannerThreadId === threadId ||
                 cycle.fixerThreadId === threadId,
@@ -2875,15 +3223,7 @@ const make = Effect.gen(function* () {
     event: AppReviewWorkflowEvent,
   ) {
     if (event.type === "thread.app-review-workflow-cancel-requested") {
-      const cycle = event.payload.run.cycles.at(-1);
-      const activeThreadId =
-        cycle?.status === "reviewing"
-          ? cycle.reviewerThreadId
-          : cycle?.status === "fixing"
-            ? cycle.fixerThreadId
-            : cycle?.status === "planning"
-              ? event.payload.run.controllerThreadId
-              : null;
+      const activeThreadId = event.payload.run.activeThreadId;
       if (activeThreadId !== null && activeThreadId !== undefined) {
         yield* orchestrationEngine.dispatch({
           type: "thread.turn.interrupt",
@@ -2946,7 +3286,7 @@ const make = Effect.gen(function* () {
         const phaseReason =
           run.activePhase === "fixing"
             ? ("fixer-failed" as const)
-            : run.activePhase === "review"
+            : run.activePhase === "review" || run.activePhase === "e2e"
               ? ("review-blocked" as const)
               : run.activePhase === "planning"
                 ? ("plan-missing" as const)
@@ -3013,7 +3353,18 @@ const make = Effect.gen(function* () {
   ) => {
     if (!hasSettledCheckpoint(thread)) return false;
     if (phase === "review") {
-      const review = controller === undefined ? null : reviewRecordForCycle(controller, cycle);
+      const review = controller?.appReviews.find((entry) => entry.id === cycle.reviewId) ?? null;
+      return (
+        review !== null &&
+        (review.status === "passed" || review.status === "failed") &&
+        appReviewRecoveryEvidenceIsCurrent(run, cycle, review.updatedAt)
+      );
+    }
+    if (phase === "e2e") {
+      const review =
+        cycle.e2eReviewId == null || controller === undefined
+          ? null
+          : (controller.appReviews.find((entry) => entry.id === cycle.e2eReviewId) ?? null);
       return (
         review !== null &&
         (review.status === "passed" || review.status === "failed") &&
@@ -3178,6 +3529,8 @@ const make = Effect.gen(function* () {
     if (reopenedCycle === undefined) return false;
     if (replayableResult || observeExistingClaim) {
       yield* reconcileRun(reopened, input.occurredAt);
+    } else if (claim.phase === "e2e") {
+      yield* ensureE2eLaunch(reopened, reopenedCycle);
     } else if (claim.phase === "review") {
       yield* ensureReviewLaunch(reopened, reopenedCycle);
     } else if (claim.phase === "planning") {

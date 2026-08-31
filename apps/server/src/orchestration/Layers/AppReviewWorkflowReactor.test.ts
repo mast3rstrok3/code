@@ -35,6 +35,7 @@ import {
   appReviewPhaseThreadState,
   buildAppReviewFixPrompt,
   buildAppReviewFixResultContinuationPrompt,
+  buildE2eReviewPrompt,
   buildReviewPrompt,
   e2eCheckIdsForCommands,
   emptyAppReviewRepairPlanTurnId,
@@ -55,6 +56,7 @@ import {
   nextAppReviewWorkflowAction,
   phaseTurnCompleted,
   renewAppReviewPhaseExecutionLease,
+  retryE2ePhaseInCycle,
   retryReviewPhaseInCycle,
   selectReviewRunToStart,
   selectStandalonePreviewTargets,
@@ -546,8 +548,19 @@ it("uses separate model scopes for ticket and combined App Review phases", () =>
   ).toBe("implementation.browser-app-review.codex");
 });
 
-it("always begins a nonterminal run with Browser App Review", () => {
+it("starts a new review cycle for a nonterminal run", () => {
   expect(nextAppReviewWorkflowAction(run())).toBe("review");
+});
+
+it("reconciles the isolated end-to-end phase before browser review", () => {
+  expect(
+    nextAppReviewWorkflowAction(
+      run({
+        activePhase: "e2e",
+        activeThreadId: ThreadId.make("thread-e2e"),
+      }),
+    ),
+  ).toBe("reconcile-e2e");
 });
 
 function reviewingRun(cyclesUsed = 1): AppReviewWorkflowRun {
@@ -631,6 +644,37 @@ it("reuses the reviewer thread when retrying a review phase", () => {
   expect(retried.repairTickets).toEqual([]);
   expect(retried.failure).toEqual(failure);
   expect(retried.workspaceRevision).toEqual(workspaceRevision);
+});
+
+it("retries the E2E thread without starting browser review", () => {
+  const cycle: AppReviewWorkflowCycle = {
+    ...reviewingRun().cycles[0]!,
+    appReviewScope: "both",
+    status: "e2e-testing",
+    e2eReviewId: AppReviewId.make("app-review-e2e-1"),
+    e2eThreadId: ThreadId.make("thread-e2e"),
+    e2eLaunchCount: 1,
+    e2eVerdict: "pending",
+    reviewLaunchCount: 0,
+  };
+  const failure = {
+    reason: "review-blocked",
+    phase: "e2e",
+    cycleNumber: 1,
+    detailMarkdown: "The E2E provider stopped.",
+    failedAt: now,
+  } as const;
+
+  const retried = retryE2ePhaseInCycle({
+    cycle,
+    failure,
+    workspaceRevision: cycle.workspaceRevision,
+  });
+
+  expect(retried.e2eThreadId).toBe(cycle.e2eThreadId);
+  expect(retried.e2eLaunchCount).toBe(2);
+  expect(retried.reviewLaunchCount).toBe(0);
+  expect(retried.status).toBe("e2e-testing");
 });
 
 it("fails the run after the current phase exhausts its bounded launches", () => {
@@ -1388,6 +1432,54 @@ it("offers only what an earlier cycle passed and the repair has not touched", ()
   expect(prompt).not.toContain("- checkout (cycle");
 });
 
+it("keeps prior E2E and browser checks in their own sections", () => {
+  const e2eReview = {
+    ...carryReview({
+      id: "app-review-e2e-1",
+      verdict: "failed",
+      checks: [{ id: "e2e-1", label: "E2E suite", status: "failed", notes: "Failed." }],
+      findingIds: ["e2e-finding"],
+    }),
+    appReviewScope: "e2e" as const,
+  };
+  const browserReview = {
+    ...cycleOneReview,
+    appReviewScope: "browser" as const,
+  };
+  const scopedRun = run({
+    cyclesUsed: 2,
+    cycles: [
+      {
+        ...carryCycle(1, browserReview.id),
+        appReviewScope: "both",
+        e2eReviewId: e2eReview.id,
+      },
+      {
+        ...carryCycle(2, AppReviewId.make("app-review-2")),
+        appReviewScope: "both",
+        e2eReviewId: AppReviewId.make("app-review-e2e-2"),
+      },
+    ],
+  });
+
+  expect(
+    priorCycleChecks({
+      run: scopedRun,
+      currentCycleNumber: 2,
+      priorReviews: [e2eReview, browserReview],
+      recordScope: "e2e",
+    }).findingIds,
+  ).toEqual(["e2e-finding"]);
+  expect(
+    priorCycleChecks({
+      run: scopedRun,
+      currentCycleNumber: 2,
+      priorReviews: [e2eReview, browserReview],
+      recordScope: "browser",
+    }).findingIds,
+  ).toEqual(["finding-1"]);
+});
+
 it("tells a review-only reviewer that its findings are the whole deliverable", () => {
   const reviewOnlyRun = run({
     reviewOnly: true,
@@ -1491,54 +1583,44 @@ it("degrades every scope to browser when the project declares no e2e commands", 
   expect(effectiveAppReviewScope({}, 1)).toBe("both");
 });
 
-it("tells an e2e-only reviewer to skip the browser and its evidence", () => {
-  const prompt = buildReviewPrompt({
+it("keeps the end-to-end test in its own durable section", () => {
+  const prompt = buildE2eReviewPrompt({
     run: run(),
     cycle: carryCycle(1, AppReviewId.make("app-review-1")),
     priorFindingIds: [],
-    carryableChecks: [],
     e2eCommands: ["pnpm e2e:review"],
-    reviewScope: "e2e",
   });
-  // Assert on the launch section only; the embedded skill text legitimately
-  // describes the browser part for reviews that have one.
   const launchSection = prompt.split("<workflow-skill")[0]!;
   expect(launchSection).toContain("- e2e-1: pnpm e2e:review");
-  expect(launchSection).toContain("This review is end-to-end only");
-  expect(launchSection).not.toContain("Part two is the browser review");
-  expect(launchSection).not.toContain("Record the complete flow, capture captioned screenshots");
+  expect(launchSection).toContain("separate Browser App Review thread");
+  expect(launchSection).toContain("replayUrl");
+  expect(launchSection).toContain("Do not call preview_* tools");
 });
 
-it("omits the e2e part for a browser-only review even when commands are declared", () => {
+it("keeps the browser prompt free of E2E commands", () => {
   const prompt = buildReviewPrompt({
     run: run(),
     cycle: carryCycle(1, AppReviewId.make("app-review-1")),
     priorFindingIds: [],
     carryableChecks: [],
-    e2eCommands: ["pnpm e2e:review"],
-    reviewScope: "browser",
   });
   const launchSection = prompt.split("<workflow-skill")[0]!;
   expect(launchSection).not.toContain("e2e-1");
   expect(launchSection).toContain("Record the complete flow, capture captioned screenshots");
 });
 
-it("puts the project's e2e commands before browser work with their check ids", () => {
-  const prompt = buildReviewPrompt({
+it("gives the E2E thread every project command with a stable check id", () => {
+  const prompt = buildE2eReviewPrompt({
     run: run(),
     cycle: carryCycle(1, AppReviewId.make("app-review-1")),
     priorFindingIds: [],
-    carryableChecks: [],
     e2eCommands: ["pnpm test:e2e", "pnpm test:e2e:mobile"],
   });
   expect(prompt).toContain("- e2e-1: pnpm test:e2e");
   expect(prompt).toContain("- e2e-2: pnpm test:e2e:mobile");
   expect(prompt).toContain("APP_REVIEW_PREVIEW_URL");
-  expect(prompt.indexOf("Part one of this review is the end-to-end test run")).toBeLessThan(
-    prompt.indexOf("Use the linked durable App Review record"),
-  );
-  expect(prompt).toContain("Only failures inside the original acceptance brief");
-  expect(prompt).toContain("do not turn them into repair work for this run");
+  expect(prompt).toContain("original brief is the acceptance boundary");
+  expect(prompt).toContain("unrelated or pre-existing failures");
 });
 
 it("says nothing about e2e commands when the project declares none", () => {
@@ -1560,7 +1642,6 @@ it("never offers an e2e check back as carryable", () => {
       { id: "e2e-1", label: "pnpm test:e2e", cycleNumber: 1 },
       { id: "login", label: "Login", cycleNumber: 1 },
     ],
-    e2eCommands: ["pnpm test:e2e"],
   });
   expect(prompt).toContain("- login (cycle 1): Login");
   expect(prompt).not.toContain("- e2e-1 (cycle 1)");

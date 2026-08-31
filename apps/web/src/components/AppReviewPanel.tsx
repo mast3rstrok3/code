@@ -68,7 +68,10 @@ export function AppReviewPanel(props: {
   const activeRun = relevantRuns.find((run) => run.status === "running") ?? null;
   const [expandedRunIds, setExpandedRunIds] = useState<Record<string, boolean>>({});
   const legacyRecords = records.filter(
-    (record) => !runs.some((run) => run.cycles.some((cycle) => cycle.reviewId === record.id)),
+    (record) =>
+      !runs.some((run) =>
+        run.cycles.some((cycle) => cycle.reviewId === record.id || cycle.e2eReviewId === record.id),
+      ),
   );
 
   return (
@@ -253,8 +256,10 @@ function RunDetails(props: {
           <div className="space-y-3 p-4">
             {props.run.cycles.map((cycle) => {
               const record = recordById.get(cycle.reviewId);
+              const e2eRecord =
+                cycle.e2eReviewId == null ? undefined : recordById.get(cycle.e2eReviewId);
               const cycleOpen = expandedCycles[cycle.cycleNumber] ?? false;
-              const [reviewStatus, planningStatus, implementationStatus] =
+              const [e2eStatus, reviewStatus, planningStatus, implementationStatus] =
                 appReviewCycleStepStatuses(cycle);
               return (
                 <article key={cycle.cycleNumber} className="overflow-hidden rounded-lg border">
@@ -288,26 +293,45 @@ function RunDetails(props: {
                       <ol className="space-y-2 border-b border-t px-3 py-3">
                         <CycleStep
                           number={1}
+                          title="End-to-end test"
+                          description="Run the configured E2E suite and publish its checks and replay links."
+                          status={e2eStatus}
+                          actionLabel="E2E thread"
+                          {...(cycle.e2eThreadId
+                            ? { onOpen: () => props.onOpenThread(cycle.e2eThreadId!) }
+                            : {})}
+                        />
+                        <CycleStep
+                          number={2}
                           title="Human-style UI review"
                           description="Use the app UI, test the acceptance brief, and save evidence."
                           status={reviewStatus}
                           actionLabel="Review thread"
-                          onOpen={() => props.onOpenThread(cycle.reviewerThreadId)}
+                          {...(cycle.appReviewScope === "e2e"
+                            ? {}
+                            : { onOpen: () => props.onOpenThread(cycle.reviewerThreadId) })}
                         />
                         <CycleStep
-                          number={2}
+                          number={3}
                           title="Gap analysis & repair tickets"
-                          description="Analyze failures and create durable child tickets in the same review thread."
+                          description="Analyze both review sections and create durable child tickets in a separate planning thread."
                           status={planningStatus}
                           actionLabel={
                             cycle.repairTickets?.length
                               ? `${cycle.repairTickets.length} repair ticket${cycle.repairTickets.length === 1 ? "" : "s"}`
                               : "Review thread"
                           }
-                          onOpen={() => props.onOpenThread(cycle.reviewerThreadId)}
+                          onOpen={() =>
+                            props.onOpenThread(
+                              cycle.plannerThreadId ??
+                                (cycle.appReviewScope === "e2e"
+                                  ? (cycle.e2eThreadId ?? cycle.reviewerThreadId)
+                                  : cycle.reviewerThreadId),
+                            )
+                          }
                         />
                         <CycleStep
-                          number={3}
+                          number={4}
                           title="Implement the repair tickets"
                           description="Use the Implement skill in a fresh thread and validate every child ticket."
                           status={implementationStatus}
@@ -327,13 +351,29 @@ function RunDetails(props: {
                           {cycle.actionableFindingsMarkdown}
                         </p>
                       ) : null}
+                      {e2eRecord ? (
+                        <section className="border-b border-border">
+                          <h3 className="px-4 pt-3 text-xs font-semibold uppercase tracking-normal text-muted-foreground">
+                            End-to-end test
+                          </h3>
+                          <AppReviewDocument
+                            record={e2eRecord}
+                            environmentId={props.environmentId}
+                          />
+                        </section>
+                      ) : null}
                       {record ? (
-                        <AppReviewDocument record={record} environmentId={props.environmentId} />
-                      ) : (
+                        <section>
+                          <h3 className="px-4 pt-3 text-xs font-semibold uppercase tracking-normal text-muted-foreground">
+                            Browser review
+                          </h3>
+                          <AppReviewDocument record={record} environmentId={props.environmentId} />
+                        </section>
+                      ) : cycle.appReviewScope !== "e2e" ? (
                         <p className="px-3 py-4 text-xs text-muted-foreground">
                           Review evidence is still being prepared.
                         </p>
-                      )}
+                      ) : null}
                     </>
                   ) : null}
                 </article>

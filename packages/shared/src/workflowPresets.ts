@@ -56,16 +56,19 @@ const FULL_IMPLEMENTATION_DEFAULTS: ImplementationWorkflowSettings = {
 };
 
 /**
- * The three agents an App Review cycle runs in order, each in its own thread:
- * the review (the project's e2e commands first, then the browser), the gap
- * analysis that writes repair tickets, and the fix. Their threads never overlap
- * within one review cadence.
+ * The four agents an App Review cycle runs in order, each in its own thread:
+ * end-to-end tests, browser review, gap analysis, and the fix.
  */
 const APP_REVIEW_SUB_STEPS: ReadonlyArray<WorkflowPresetSubStep> = [
   {
-    label: "E2E tests & browser review",
+    label: "End-to-end test",
+    workflowPromptId: "implementation.e2e-app-review.codex",
+    note: "runs the project's e2eCommands when t3.json declares them",
+  },
+  {
+    label: "Browser review",
     workflowPromptId: "implementation.browser-app-review.codex",
-    note: "runs the project's e2eCommands first when t3.json declares them",
+    note: "reviews what the automated tests cannot prove and saves browser evidence",
   },
   {
     label: "Gap analysis & repair tickets",
@@ -278,7 +281,7 @@ const GUIDED_WORKFLOW_PRESET_DEFINITIONS: ReadonlyArray<WorkflowPresetDefinition
     route: "review",
     interactionMode: "default",
     // No entry prompt: sending in this mode dispatches an App Review launch
-    // rather than a turn, and the run's reactor owns all three agents' prompts.
+    // rather than a turn, and the run's reactor owns all four agents' prompts.
     helpSteps: [
       {
         label: "App Review cycles",
