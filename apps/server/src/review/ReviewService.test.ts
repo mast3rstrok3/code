@@ -88,6 +88,7 @@ function makeLayer(input: {
               archivedAt: null,
               settledOverride: null,
               settledAt: null,
+              unsettledAt: null,
               snoozedUntil: null,
               snoozedAt: null,
               pinnedAt: null,

@@ -119,6 +119,7 @@ describe("OrchestrationEngine", () => {
             detail: "historical replay should not be used during bootstrap",
           }),
         ),
+      hasEventAfter: () => Effect.succeed(false),
     };
 
     const projectionSnapshot = {
@@ -388,7 +389,7 @@ describe("OrchestrationEngine", () => {
     );
     expect(sourceThread?.appReviews).toHaveLength(1);
     expect(reviewThread?.appReviews).toHaveLength(1);
-    expect(reviewThread?.title).toBe("Browser App Review");
+    expect(reviewThread?.title).toBe("End-to-end test");
     expect(sourceThread?.appReviews[0]).toEqual(reviewThread?.appReviews[0]);
     expect(sourceThread?.appReviews[0]?.status).toBe("running");
     expect(sourceThread?.appReviews[0]?.appReviewScope).toBe("e2e");
@@ -1320,6 +1321,7 @@ describe("OrchestrationEngine", () => {
         readFromSequence: (sequenceExclusive) =>
           Stream.fromIterable(events.filter((event) => event.sequence > sequenceExclusive)),
         readAll: () => Stream.fromIterable(events),
+        hasEventAfter: () => Effect.succeed(false),
       };
       const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
         prefix: "t3-orchestration-engine-priority-test-",
@@ -1417,6 +1419,7 @@ describe("OrchestrationEngine", () => {
       readAll() {
         return Stream.fromIterable(events);
       },
+      hasEventAfter: () => Effect.succeed(false),
     };
 
     const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
@@ -1656,6 +1659,7 @@ describe("OrchestrationEngine", () => {
       readAll() {
         return Stream.fromIterable(events);
       },
+      hasEventAfter: () => Effect.succeed(false),
     };
 
     let shouldFailProjection = true;

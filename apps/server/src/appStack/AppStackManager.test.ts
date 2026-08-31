@@ -54,6 +54,7 @@ const derivedPaths = {
   providerStatusCacheDir: "/tmp/t3-app-dev-stack-manager-test/caches",
   worktreesDir: "/tmp/t3-app-dev-stack-manager-test/worktrees",
   attachmentsDir: "/tmp/t3-app-dev-stack-manager-test/state/attachments",
+  environmentThemesDir: "/tmp/t3-app-dev-stack-manager-test/state/themes",
   logsDir: "/tmp/t3-app-dev-stack-manager-test/state/logs",
   serverLogPath: "/tmp/t3-app-dev-stack-manager-test/state/logs/server.log",
   serverTracePath: "/tmp/t3-app-dev-stack-manager-test/state/logs/server.trace.ndjson",

@@ -263,6 +263,7 @@ function ServerBrowserCanvas(props: {
 
   const wrapperStyle = resolveHostedBrowserWebviewWrapperStyle({
     active,
+    renderingActive: active,
     rect: lastRect,
     hiddenSize,
   });

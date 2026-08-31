@@ -129,11 +129,11 @@ describe("OrchestrationReactor", () => {
               started.push("thread-deletion-reactor");
               return Effect.void;
             },
-            drain: Effect.void,
             cleanupEmptyWorkflowShells: Effect.sync(() => {
               started.push("workflow-shell-cleanup");
               return 0;
             }),
+            drainThrough: () => Effect.void,
           }),
         ),
         Layer.provideMerge(

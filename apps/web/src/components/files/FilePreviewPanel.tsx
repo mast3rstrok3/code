@@ -18,13 +18,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { resolveAssetUrl } from "~/assets/assetUrls";
 import { isBrowserPreviewFile, openFileInPreview } from "~/browser/openFileInPreview";
-import ChatMarkdown from "~/components/ChatMarkdown";
 import { OpenInPicker } from "~/components/chat/OpenInPicker";
 import { MediaPreviewSurface } from "~/components/media/MediaPreviewSurface";
 import { useRemoteOpenState } from "~/remoteOpen";
 import { useClientSettings } from "~/hooks/useSettings";
 import { useTheme } from "~/hooks/useTheme";
 import { getLocalStorageItem, setLocalStorageItem, useLocalStorage } from "~/hooks/useLocalStorage";
+import { useWorkspaceMutationRefresh } from "~/hooks/useWorkspaceMutationRefresh";
 import { DIFF_SURFACE_THEME_UNSAFE_CSS, resolveDiffThemeName } from "~/lib/diffRendering";
 import { cn } from "~/lib/utils";
 import { isPreviewSupportedInRuntime } from "~/previewStateStore";
@@ -45,6 +45,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { useAtomQueryRunner } from "~/state/use-atom-query-runner";
 
 import FileBrowserPanel from "./FileBrowserPanel";
+import { FileMarkdownPreview } from "./FileMarkdownPreview";
 import {
   type FileCommentAnnotationEntry,
   type FileCommentAnnotationGroup,
@@ -85,6 +86,8 @@ interface FilePreviewPanelProps {
   revealRequestId: number;
   onOpenFile: (relativePath: string) => void;
   onPendingChange: (relativePath: string, pending: boolean) => void;
+  selectedFilePending: boolean;
+  workspaceMutationId: string | null;
 }
 
 const FILE_EXPLORER_STORAGE_KEY = "t3code.fileExplorerOpen";
@@ -706,11 +709,11 @@ function RenderedMarkdownSurface({
 
   return (
     <ScrollArea className="min-h-0 flex-1">
-      <ChatMarkdown
+      <FileMarkdownPreview
         text={contents}
         cwd={cwd}
+        relativePath={relativePath}
         threadRef={threadRef}
-        className="mx-auto max-w-4xl px-6 py-5"
         onTaskListChange={({ markerOffset, checked }) => {
           const currentContents =
             getOptimisticProjectFileQueryData(environmentId, cwd, relativePath)?.contents ??
@@ -789,6 +792,8 @@ export default function FilePreviewPanel({
   revealRequestId,
   onOpenFile,
   onPendingChange,
+  selectedFilePending,
+  workspaceMutationId,
 }: FilePreviewPanelProps) {
   const { resolvedTheme } = useTheme();
   const wordWrap = useClientSettings((settings) => settings.wordWrap);
@@ -869,6 +874,18 @@ export default function FilePreviewPanel({
     (mediaPreviewKind !== null && mediaAsset.data !== null && !mediaUrl
       ? "The environment returned an invalid asset URL."
       : null);
+  useWorkspaceMutationRefresh({
+    enabled: relativePath !== null && mediaPreviewKind === null && !selectedFilePending,
+    mutationId: workspaceMutationId,
+    refresh: file.refresh,
+    resourceKey: `file:${environmentId}:${cwd}:${relativePath ?? ""}`,
+  });
+  useWorkspaceMutationRefresh({
+    enabled: relativePath !== null && mediaPreviewKind !== null && !selectedFilePending,
+    mutationId: workspaceMutationId,
+    refresh: mediaAsset.refresh,
+    resourceKey: `media:${environmentId}:${cwd}:${relativePath ?? ""}`,
+  });
 
   useEffect(() => {
     const currentCrumb = breadcrumbRef.current?.querySelector<HTMLElement>(
@@ -1138,6 +1155,7 @@ export default function FilePreviewPanel({
               selectedPath={relativePath}
               selectedPathRevealId={revealRequestId}
               onOpenFile={onOpenFile}
+              workspaceMutationId={workspaceMutationId}
               {...(relativePath && mediaPreviewKind === null
                 ? { onRefreshSelectedFile: file.refresh }
                 : {})}
